@@ -29,7 +29,10 @@ const PROJECT_CREATE_SCOPE: &str = "projects.create";
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/projects", get(list_projects).post(create_project))
-        .route("/api/v1/projects/{id}", get(get_project))
+        .route(
+            "/api/v1/projects/{id}",
+            get(get_project).patch(update_project),
+        )
         .route("/api/v1/projects/{id}/archive", post(archive_project))
         .route(
             "/api/v1/projects/{id}/navigation",
@@ -129,6 +132,13 @@ struct CreateProjectRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ArchiveProjectRequest {
     expected_version: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct UpdateProjectRequest {
+    expected_version: i64,
+    name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -576,6 +586,67 @@ async fn get_project(
     principal: AuthenticatedActor,
     ApiPath(project_id): ApiPath<Uuid>,
 ) -> Result<Json<ProjectView>, AppError> {
+    Ok(Json(fetch_project(&state, &principal, project_id).await?))
+}
+
+/// Renames a project from its settings, as `project_update` does over MCP:
+/// whoever may manage it, against the version they read. The key stays, and
+/// the Messages space keeps its name.
+async fn update_project(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath(project_id): ApiPath<Uuid>,
+    ApiJson(request): ApiJson<UpdateProjectRequest>,
+) -> Result<Json<ProjectView>, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    let name = normalize_project_name(&request.name)?;
+    let mut transaction = state.pool.begin().await?;
+    let project = lock_project_membership(&mut transaction, principal.actor_id, project_id)
+        .await?
+        .ok_or(AppError::NotFound("project"))?;
+    authorize_project_action(&principal, &project, Action::ProjectManage)?;
+    if project.archived_at.is_some() {
+        return Err(AppError::ProjectArchived);
+    }
+    if project.version != request.expected_version {
+        return Err(AppError::VersionConflict {
+            resource: "project",
+            current_version: project.version,
+        });
+    }
+    let (kind, current_name) =
+        sqlx::query_as::<_, (String, String)>("SELECT kind, name FROM projects WHERE id = $1")
+            .bind(project_id)
+            .fetch_one(&mut *transaction)
+            .await?;
+    if kind == "direct" {
+        return Err(AppError::Forbidden);
+    }
+    if current_name != name {
+        sqlx::query(
+            "UPDATE projects SET name = $2, version = version + 1, updated_at = now() WHERE id = $1",
+        )
+        .bind(project_id)
+        .bind(&name)
+        .execute(&mut *transaction)
+        .await?;
+        insert_audit_event(
+            &mut transaction,
+            &headers,
+            &principal,
+            Some(project_id),
+            "project.renamed",
+            "project",
+            project_id,
+            serde_json::json!({
+                "previous_name": current_name,
+                "previous_version": project.version,
+            }),
+        )
+        .await?;
+    }
+    transaction.commit().await?;
     Ok(Json(fetch_project(&state, &principal, project_id).await?))
 }
 

@@ -8,6 +8,7 @@ import {
   Banner,
   Button,
   Checkbox,
+  ConfirmDialog,
   Dialog,
   EmptyState,
   ErrorState,
@@ -21,6 +22,7 @@ import {
   StatusChip,
   TextArea,
   TextField,
+  describeError,
   formatRelative,
   showToast,
 } from '../ui'
@@ -30,7 +32,7 @@ import './launch.css'
 
 function errorText(error: unknown, fallback: string) {
   if (isApiError(error) && error.code === 'version_conflict') return 'Someone changed this first. Close this and try again.'
-  return isApiError(error) && error.message ? error.message : fallback
+  return isApiError(error) && error.message ? error.message : [fallback, describeError(error).message].filter(Boolean).join(' ')
 }
 
 /** A project's environments: where launched agents work, with the default marked. */
@@ -38,20 +40,13 @@ export function EnvironmentSettings({ projectId }: { projectId: string }) {
   const environments = useEnvironments(projectId)
   const action = useEnvironmentAction(projectId)
   const [editing, setEditing] = useState<Environment | 'new' | null>(null)
+  // Archived environments can't be restored here, so archiving asks first.
+  const [archiving, setArchiving] = useState<Environment | null>(null)
   const addButton = useRef<HTMLButtonElement>(null)
 
   if (environments.isPending) return <ListSkeleton label="Loading environments" rows={2} />
   if (environments.isError) {
-    return (
-      <ErrorState
-        action={
-          <Button onClick={() => void environments.refetch()} size="sm">
-            Retry
-          </Button>
-        }
-        title="Environments didn’t load."
-      />
-    )
+    return <ErrorState error={environments.error} onRetry={() => void environments.refetch()} title="Environments didn’t load" />
   }
   const list = environments.data
   const run = (environment: Environment, kind: 'archive' | 'default' | 'check') =>
@@ -60,12 +55,20 @@ export function EnvironmentSettings({ projectId }: { projectId: string }) {
       {
         onSuccess: (result) => {
           if (kind === 'check' && result) {
-            showToast({ tone: result.ok ? 'success' : 'danger', title: result.ok ? `${environment.name} is ready.` : `${environment.name} didn’t pass.`, description: result.message })
+            showToast({ tone: result.ok ? 'success' : 'danger', title: result.ok ? `${environment.name} is ready` : `${environment.name} didn’t pass its check`, description: result.message })
           } else if (kind === 'archive') {
-            showToast({ title: `${environment.name} was archived. Queued launches there won’t start.` })
+            setArchiving(null)
+            showToast({ tone: 'success', title: `Archived ${environment.name}`, description: 'Queued runs there won’t start.' })
+          } else if (kind === 'default') {
+            showToast({ tone: 'success', title: `${environment.name} is the default now` })
           }
         },
-        onError: (error) => showToast({ tone: 'danger', title: 'That didn’t work.', description: errorText(error, 'Try again.') }),
+        onError: (error) =>
+          showToast({
+            tone: 'danger',
+            title: kind === 'check' ? `${environment.name} wasn’t checked` : kind === 'archive' ? `${environment.name} wasn’t archived` : `${environment.name} isn’t the default`,
+            description: errorText(error, ''),
+          }),
       },
     )
 
@@ -83,7 +86,7 @@ export function EnvironmentSettings({ projectId }: { projectId: string }) {
                       { label: 'Check it', icon: 'check', onSelect: () => run(environment, 'check') },
                       ...(environment.isDefault ? [] : [{ label: 'Make default', icon: 'star' as const, onSelect: () => run(environment, 'default') }]),
                       { separator: true as const },
-                      { label: 'Archive', icon: 'archive', danger: true, onSelect: () => run(environment, 'archive') },
+                      { label: 'Archive…', icon: 'archive', danger: true, onSelect: () => setArchiving(environment) },
                     ]}
                     label={`${environment.name} actions`}
                     trigger={<IconButton icon="more" label={`${environment.name} actions`} size="sm" />}
@@ -128,8 +131,18 @@ export function EnvironmentSettings({ projectId }: { projectId: string }) {
           </Button>
         </div>
       ) : (
-        <p className="aw-launch__note">Project admins add and change environments.</p>
+        <p className="aw-launch__note">Only project admins add and change environments.</p>
       )}
+      <ConfirmDialog
+        busy={action.isPending}
+        confirmLabel="Archive environment"
+        onClose={() => setArchiving(null)}
+        onConfirm={() => archiving && run(archiving, 'archive')}
+        open={archiving !== null}
+        title={`Archive ${archiving?.name ?? 'this environment'}?`}
+      >
+        Runs waiting for it won’t start, and it can’t be chosen for new launches.
+      </ConfirmDialog>
       {editing ? (
         <EnvironmentDialog
           environment={editing === 'new' ? null : editing}
@@ -187,7 +200,7 @@ function EnvironmentDialog({
       },
       {
         onSuccess: (saved) => {
-          showToast({ tone: 'success', title: environment ? `${saved.name} was saved.` : `${saved.name} was added.` })
+          showToast({ tone: 'success', title: environment ? `Saved ${saved.name}` : `Added ${saved.name}` })
           onClose()
         },
       },
@@ -199,7 +212,7 @@ function EnvironmentDialog({
       description="An environment is somewhere an agent can work. For a cloud agent it names the provider’s environment, which has your repository and setup."
       footer={
         <>
-          <Button onClick={onClose} variant="ghost">
+          <Button onClick={onClose} variant="secondary">
             Cancel
           </Button>
           <Button busy={save.isPending} disabled={!name.trim() || !harness || (needsId && !providerEnvironmentId.trim())} type="submit" variant="primary">
@@ -207,6 +220,7 @@ function EnvironmentDialog({
           </Button>
         </>
       }
+      dirty={name !== (environment?.name ?? '') || providerEnvironmentId !== (environment?.providerEnvironmentId ?? '') || branch !== (environment?.branch ?? '') || setupNotes !== (environment?.setupNotes ?? '')}
       onClose={onClose}
       onSubmit={submit}
       open
@@ -216,7 +230,7 @@ function EnvironmentDialog({
     >
       <div className="aw-form__grid">
         <TextField data-autofocus id="environment-name" label="Name" maxLength={80} onChange={(event) => setName(event.target.value)} required value={name} />
-        <SelectField disabled={Boolean(environment)} id="environment-harness" label="Agent" onChange={(event) => setHarness(event.target.value)} value={harness}>
+        <SelectField disabled={Boolean(environment)} id="environment-harness" label="Runs on" onChange={(event) => setHarness(event.target.value)} value={harness}>
           {list.harnesses.map((candidate) => (
             <option key={candidate.kind} value={candidate.kind}>
               {candidate.displayName}
@@ -249,7 +263,7 @@ function EnvironmentDialog({
       {environment ? null : <Checkbox checked={makeDefault} label="Make it the project’s default" onChange={setMakeDefault} />}
       {save.isError ? (
         <Banner role="alert" tone="danger">
-          {errorText(save.error, 'The environment didn’t save. Try again.')}
+          {errorText(save.error, 'The environment didn’t save.')}
         </Banner>
       ) : null}
     </Dialog>

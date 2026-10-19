@@ -1,12 +1,13 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   AuthenticatedSessionProvider,
   type AuthenticatedSession,
 } from '../auth/session'
 import { useProjects, useSwitchProject } from './hooks'
+import { homeGreeting } from './greeting'
 import { HomePage } from './HomePage'
 import type { Project } from './types'
 
@@ -20,6 +21,10 @@ vi.mock('./HomeSections', () => ({
   SetupCard: () => null,
   WorkingNow: () => null,
   YourTasks: () => null,
+}))
+
+vi.mock('../shell/homeSpace', () => ({
+  useInboxUnread: () => 0,
 }))
 
 vi.mock('./hooks', () => ({
@@ -71,6 +76,8 @@ function LocationProbe() {
 describe('HomePage recent Projects', () => {
   const switchProject = vi.fn()
 
+  afterEach(cleanup)
+
   beforeEach(() => {
     switchProject.mockReset()
     vi.mocked(useProjects).mockReturnValue({
@@ -105,5 +112,43 @@ describe('HomePage recent Projects', () => {
       ),
     )
     expect(switchProject).not.toHaveBeenCalled()
+  })
+
+  it('opens a project at once and records the visit in the background', async () => {
+    switchProject.mockReturnValue(new Promise(() => undefined))
+    const writable: Project = {
+      ...viewerProject,
+      capabilities: { ...viewerProject.capabilities, navigationWrite: true },
+    }
+    vi.mocked(useProjects).mockReturnValue({
+      data: { projects: [writable] },
+      isError: false,
+      isPending: false,
+      isSuccess: true,
+    } as ReturnType<typeof useProjects>)
+    render(
+      <AuthenticatedSessionProvider session={session}>
+        <MemoryRouter initialEntries={['/home']}>
+          <Routes>
+            <Route element={<HomePage />} path="/home" />
+            <Route element={<LocationProbe />} path="*" />
+          </Routes>
+        </MemoryRouter>
+      </AuthenticatedSessionProvider>,
+    )
+
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(/^Good (morning|afternoon|evening), Project$/)
+    fireEvent.click(screen.getByRole('link', { name: /Viewer Project/ }))
+    expect(screen.getByLabelText('Current route')).toHaveTextContent(writable.navigation.href)
+    expect(switchProject).toHaveBeenCalledWith(expect.objectContaining({ projectId: writable.id }))
+  })
+})
+
+describe('homeGreeting', () => {
+  it('welcomes someone who has opened nothing yet, and greets by the time of day after', () => {
+    expect(homeGreeting('Mischa', true)).toBe('Welcome, Mischa')
+    expect(homeGreeting('Mischa', false, new Date(2026, 9, 19, 9))).toBe('Good morning, Mischa')
+    expect(homeGreeting('Mischa', false, new Date(2026, 9, 19, 14))).toBe('Good afternoon, Mischa')
+    expect(homeGreeting('Mischa', false, new Date(2026, 9, 19, 22))).toBe('Good evening, Mischa')
   })
 })

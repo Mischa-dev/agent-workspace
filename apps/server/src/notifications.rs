@@ -1149,6 +1149,9 @@ pub struct SubjectView {
 pub struct NotificationActor {
     pub id: Uuid,
     pub name: String,
+    /// The actor's kind (human, external_agent, execution_worker, ...), so
+    /// an agent reads as an agent.
+    pub kind: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1183,6 +1186,7 @@ struct NotificationRow {
     direct_space: bool,
     actor_id: Option<Uuid>,
     actor_name: Option<String>,
+    actor_kind: Option<String>,
     repeat_count: i32,
     read: bool,
     archived: bool,
@@ -1202,6 +1206,8 @@ struct NotificationRow {
     work_item_key: Option<String>,
     work_item_title: Option<String>,
     run_failure: Option<String>,
+    run_state: Option<String>,
+    run_agent_name: Option<String>,
     approval_id: Option<Uuid>,
     approval_kind: Option<String>,
     approval_status: Option<String>,
@@ -1220,6 +1226,7 @@ fn list_sql(view_condition: &str, extra: &str) -> String {
                    AS project_name,
                project.kind = 'direct' AS direct_space,
                n.actor_id, actor_member.display_name AS actor_name,
+               actor.kind AS actor_kind,
                n.repeat_count, n.read_at IS NOT NULL AS read,
                n.archived_at IS NOT NULL AS archived,
                CASE WHEN n.snoozed_until > now() THEN
@@ -1241,6 +1248,7 @@ fn list_sql(view_condition: &str, extra: &str) -> String {
                project.project_key || '-' || item.number::text AS work_item_key,
                item.title AS work_item_title,
                left(run.failure_reason, {PREVIEW_CHARACTERS}) AS run_failure,
+               run.state AS run_state, run_agent.display_name AS run_agent_name,
                n.approval_id, approval.kind AS approval_kind, approval.status AS approval_status,
                left(approval.summary, {PREVIEW_CHARACTERS}) AS approval_summary,
                approval.options AS approval_options,
@@ -1250,11 +1258,15 @@ fn list_sql(view_condition: &str, extra: &str) -> String {
         JOIN projects project ON project.id = n.project_id
         LEFT JOIN project_memberships actor_member
           ON actor_member.project_id = n.project_id AND actor_member.actor_id = n.actor_id
+        LEFT JOIN actors actor ON actor.id = n.actor_id
         LEFT JOIN conversations conversation ON conversation.id = n.conversation_id
         LEFT JOIN messages message ON message.id = n.message_id
         LEFT JOIN work_item_comments comment ON comment.id = n.comment_id
         LEFT JOIN work_items item ON item.id = n.work_item_id
         LEFT JOIN agent_runs run ON run.id = n.agent_run_id
+        LEFT JOIN execution_workers run_worker ON run_worker.id = run.execution_worker_id
+        LEFT JOIN project_memberships run_agent
+          ON run_agent.project_id = n.project_id AND run_agent.actor_id = run_worker.actor_id
         LEFT JOIN agent_approvals approval ON approval.id = n.approval_id
         LEFT JOIN github_pull_requests pr ON pr.id = n.pull_request_id
         WHERE n.recipient_actor_id = $1
@@ -1428,6 +1440,13 @@ fn conversation_href(row: &NotificationRow) -> Option<String> {
     ))
 }
 
+/// "Muse's run", or "Your run" when the agent has no name here.
+fn run_owner(row: &NotificationRow) -> String {
+    row.run_agent_name
+        .as_ref()
+        .map_or_else(|| "Your run".to_owned(), |agent| format!("{agent}'s run"))
+}
+
 fn view(row: NotificationRow) -> NotificationView {
     let who = row
         .actor_name
@@ -1496,20 +1515,29 @@ fn view(row: NotificationRow) -> NotificationView {
                 .or_else(|| row.work_item_title.clone()),
         ),
         kind::APPROVAL_REQUESTED => (
-            if question {
-                format!("A run in {place} has a question for you")
-            } else {
-                format!("A run in {place} needs your approval")
+            match (&row.run_agent_name, question) {
+                (Some(agent), true) => format!("{agent} has a question for you in {place}"),
+                (Some(agent), false) => format!("{agent} needs your approval in {place}"),
+                (None, true) => format!("A run in {place} has a question for you"),
+                (None, false) => format!("A run in {place} needs your approval"),
             },
             row.approval_summary.clone(),
         ),
         kind::RUN_WAITING => (
-            format!("Your run in {place} is waiting for an answer"),
+            row.run_agent_name.as_ref().map_or_else(
+                || format!("Your run in {place} is waiting on you"),
+                |agent| format!("{agent} is waiting on you in {place}"),
+            ),
             row.approval_summary.clone(),
         ),
-        kind::RUN_COMPLETED => (format!("Your run in {place} finished"), None),
+        kind::RUN_COMPLETED => (format!("{} in {place} is done", run_owner(&row)), None),
         kind::RUN_FAILED => (
-            format!("Your run in {place} stopped"),
+            // Failures and interruptions both land here; say which.
+            match row.run_state.as_deref() {
+                Some("interrupted") => format!("{} in {place} was interrupted", run_owner(&row)),
+                Some("canceled") => format!("{} in {place} was stopped", run_owner(&row)),
+                _ => format!("{} in {place} failed", run_owner(&row)),
+            },
             row.run_failure.clone(),
         ),
         kind::CHECKS_FAILED => (
@@ -1636,7 +1664,11 @@ fn view(row: NotificationRow) -> NotificationView {
         actor: row
             .actor_id
             .zip(row.actor_name)
-            .map(|(id, name)| NotificationActor { id, name }),
+            .map(|(id, name)| NotificationActor {
+                id,
+                name,
+                kind: row.actor_kind.unwrap_or_else(|| "human".to_owned()),
+            }),
         count: row.repeat_count,
         read: row.read,
         archived: row.archived,

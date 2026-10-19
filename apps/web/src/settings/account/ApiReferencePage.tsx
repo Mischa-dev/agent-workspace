@@ -106,7 +106,7 @@ export default function ApiReferencePage() {
             OpenAPI document
           </a>
         }
-        icon="terminal"
+        icon="circle-help"
         title="API reference"
       >
         Everything the app and agents can do, as REST. Each operation is a POST of JSON to{' '}
@@ -116,9 +116,7 @@ export default function ApiReferencePage() {
       {openapi.isPending ? (
         <ListSkeleton label="Loading the API reference" rows={4} />
       ) : openapi.isError ? (
-        <ErrorState action={<Button onClick={() => void openapi.refetch()}>Try again</Button>} title="The API reference didn’t load">
-          Check your connection and try again.
-        </ErrorState>
+        <ErrorState error={openapi.error} onRetry={() => void openapi.refetch()} title="The API reference didn’t load" />
       ) : (
         <>
           <Section id="api-basics-heading" title="How it works">
@@ -214,7 +212,10 @@ function OperationCard({ base, document, entry }: { base: string; document: Open
           <Button
             icon="copy"
             onClick={() => {
-              void navigator.clipboard?.writeText(curl).then(() => showToast({ title: 'Copied' }))
+              const failed = () =>
+                showToast({ tone: 'danger', title: 'Couldn’t copy', description: 'Select the command and copy it yourself.' })
+              if (!navigator.clipboard) failed()
+              else navigator.clipboard.writeText(curl).then(() => showToast({ title: 'Command copied' }), failed)
             }}
             size="sm"
             variant="ghost"

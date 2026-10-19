@@ -2,9 +2,9 @@ import { useMemo, useState, type KeyboardEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 
 import { useMilestoneList } from '../work-items/planningHooks'
-import { Banner, Button, Checkbox, EmptyState, ErrorState, Icon, PageHeader, PageSkeleton, SegmentedControl, SelectField, StatusChip } from '../ui'
+import { Banner, Button, Checkbox, EmptyState, ErrorState, Icon, PageSkeleton, SegmentedControl, SelectField, StatusChip, countLabel } from '../ui'
 import type { Graph, GraphEdge, GraphNode } from './api'
-import { PlanningFrame } from './frame'
+import { PlanningFrame, PlanningIntro } from './frame'
 import { NODE_HEIGHT, NODE_WIDTH, edgePath, layoutGraph } from './graphLayout'
 import { useDecideSuggestion, useGraph } from './hooks'
 import { aiErrorMessage, planningHref } from './links'
@@ -15,7 +15,7 @@ const narrow = () => typeof window !== 'undefined' && typeof window.matchMedia =
 
 const shorten = (text: string, length: number) => (text.length > length ? `${text.slice(0, length - 1)}…` : text)
 
-/** V7: what blocks what, what can start now, and the longest chain of open work. */
+/** What blocks what, what can start now, and the longest chain of open work. */
 export function GraphPage() {
   return (
     <PlanningFrame label="Loading the graph" tab="graph" wide>
@@ -35,10 +35,10 @@ function GraphBody({ projectId }: { projectId: string }) {
 
   return (
     <>
-      <PageHeader icon="branch" title="Dependency graph">
+      <PlanningIntro>
         Each line runs from a task to the task it blocks. Tasks on the left can start first; the highlighted chain is the longest run of open
-        work. Dashed lines are the AI’s suggestions.
-      </PageHeader>
+        work. Dashed lines are suggested.
+      </PlanningIntro>
       <div className="aw-ai-toolbar">
         <SegmentedControl<View>
           label="Show as"
@@ -50,7 +50,7 @@ function GraphBody({ projectId }: { projectId: string }) {
           value={view}
         />
         {milestones.data?.milestones.length ? (
-          <SelectField className="aw-ai-toolbar__select" label="Milestone" onChange={(event) => setMilestoneId(event.target.value)} value={milestoneId}>
+          <SelectField aria-label="Milestone" className="aw-ai-toolbar__select" compact onChange={(event) => setMilestoneId(event.target.value)} value={milestoneId}>
             <option value="">All milestones</option>
             {milestones.data.milestones.map((milestone) => (
               <option key={milestone.id} value={milestone.id}>
@@ -62,19 +62,15 @@ function GraphBody({ projectId }: { projectId: string }) {
         <Checkbox checked={includeFinished} label="Show finished tasks" onChange={setIncludeFinished} />
       </div>
       {graph.isPending ? <PageSkeleton cards={2} label="Loading the graph" /> : null}
-      {graph.isError ? (
-        <ErrorState action={<Button onClick={() => void graph.refetch()}>Try again</Button>} title="The graph didn’t load">
-          Check your connection and try again.
-        </ErrorState>
-      ) : null}
+      {graph.isError ? <ErrorState error={graph.error} onRetry={() => void graph.refetch()} title="The graph didn’t load" /> : null}
       {graph.isSuccess && !graph.data.nodes.length ? (
         <EmptyState icon="branch" title="No dependencies to show">
-          Tasks show up here once one blocks another. Add “blocked by” on a task, or let the AI suggest some from{' '}
+          Tasks show up here once one blocks another. Add “blocked by” on a task, or review what’s suggested in{' '}
           <Link to={planningHref(projectId, 'suggestions')}>Suggestions</Link>.
         </EmptyState>
       ) : null}
       {graph.data?.truncated ? (
-        <Banner role="note" tone="info">
+        <Banner className="aw-page__banner" role="note" tone="info">
           This project has more open tasks than the graph can show at once. Pick a milestone to see all of its tasks.
         </Banner>
       ) : null}
@@ -85,7 +81,7 @@ function GraphBody({ projectId }: { projectId: string }) {
           <GraphList graph={graph.data} />
         )
       ) : null}
-      {graph.isSuccess ? <Legend /> : null}
+      {graph.isSuccess && graph.data.nodes.length ? <Legend /> : null}
       {suggested.length ? (
         <SuggestedEdges canEdit={graph.data?.canEdit ?? false} edges={suggested} graph={graph.data!} projectId={projectId} selected={selected} />
       ) : null}
@@ -134,7 +130,7 @@ function GraphCanvas({ graph, onSelectEdge, selected }: { graph: Graph; onSelect
 
   return (
     <div className="aw-ai-graph" tabIndex={-1}>
-      <svg aria-label={`Dependency graph of ${graph.nodes.length} tasks`} height={layout.height} role="group" viewBox={`0 0 ${layout.width} ${layout.height}`} width={layout.width}>
+      <svg aria-label={`Dependency graph of ${countLabel(graph.nodes.length, 'task')}`} height={layout.height} role="group" viewBox={`0 0 ${layout.width} ${layout.height}`} width={layout.width}>
         <defs>
           <marker id="aw-ai-arrow" markerHeight="8" markerWidth="8" orient="auto-start-reverse" refX="8" refY="4" viewBox="0 0 8 8">
             <path d="M 0 0 L 8 4 L 0 8 z" fill="context-stroke" />
@@ -192,7 +188,7 @@ function GraphCanvas({ graph, onSelectEdge, selected }: { graph: Graph; onSelect
               <rect height={NODE_HEIGHT} rx="8" width={NODE_WIDTH} />
               <text className="aw-ai-node__key" x="12" y="21">
                 {node.key}
-                {node.estimate ? ` · ${node.estimate}` : ''}
+                {node.estimate ? ` · ${node.estimate} pt` : ''}
               </text>
               <text className="aw-ai-node__status" textAnchor="end" x={NODE_WIDTH - 12} y="21">
                 {shorten(node.statusName, 14)}

@@ -1,0 +1,45 @@
+/* Pages and decisions: the bits the shared page styles don't cover. */
+
+.aw-memory__excerpt {
+  display: -webkit-box;
+  margin: var(--space-1) 0 0;
+  overflow: hidden;
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+/* A page's chips and who edited it, spaced like the title line. */
+.aw-memory__meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+}
+
+/* The replaced-decisions switch sits apart from the list under it. */
+.aw-memory__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-4);
+}
+
+/* An old version, scrolled to when it opens, under the sticky header. */
+.aw-memory__viewing {
+  scroll-margin-top: var(--space-6);
+  outline: none;
+}
+
+.aw-memory__anchor {
+  scroll-margin-top: var(--space-10);
+}
+
+/* The decision a link pointed at, marked for a moment. */
+.aw-row.aw-memory__found {
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
+  transition: background-color 600ms ease-out;
+}

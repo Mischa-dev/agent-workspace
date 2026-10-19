@@ -28,7 +28,7 @@ describe('appearance preferences', () => {
         textSize: 'huge',
         overrides: { 'sidebar-bg': 'url(https://attacker.invalid)', accent: '#AABBCC', 'not-a-slot': '#000000' },
       }),
-    ).toEqual({ theme: 'indigo', density: 'comfortable', textSize: 'default', overrides: { accent: '#aabbcc' } })
+    ).toEqual({ theme: 'system', density: 'comfortable', textSize: 'default', overrides: { accent: '#aabbcc' } })
   })
 
   it('stores one versioned presentation record and no application state', () => {
@@ -44,9 +44,17 @@ describe('appearance preferences', () => {
     expect(storage.values.get(APPEARANCE_STORAGE_KEY)).not.toMatch(/token|password|credential|actor|project/i)
   })
 
+  it('follows the device until someone picks a theme, and keeps a theme they picked', () => {
+    expect(readAppearancePreferences(memoryStorage())).toMatchObject({ theme: 'system' })
+    const picked = memoryStorage({ [APPEARANCE_STORAGE_KEY]: '{"theme":"indigo"}' })
+    expect(readAppearancePreferences(picked)).toMatchObject({ theme: 'indigo' })
+  })
+
   it('carries a pre-redesign dark choice forward and recovers when storage is unavailable', () => {
     const legacy = memoryStorage({ 'agent-workspace:appearance:v1': '{"theme":"dark","density":"compact"}' })
     expect(readAppearancePreferences(legacy)).toMatchObject({ theme: 'midnight', density: 'compact' })
+    const light = memoryStorage({ 'agent-workspace:appearance:v1': '{"theme":"light"}' })
+    expect(readAppearancePreferences(light)).toMatchObject({ theme: 'indigo' })
     expect(readAppearancePreferences({ getItem: () => { throw new Error('disabled') } })).toEqual(DEFAULT_APPEARANCE)
     expect(resolvePreset('system', true)).toBe('midnight')
     expect(resolvePreset('system', false)).toBe('indigo')

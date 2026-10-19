@@ -2,6 +2,8 @@ import { Suspense, lazy, useState, type FormEvent, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
+import { queryKeys } from '../api/queryKeys'
+
 import { aiKeys, getRanking } from '../ai/api'
 import { toastError } from '../app/mutations'
 import { useAuthenticatedSession } from '../auth/session'
@@ -11,27 +13,30 @@ import { projectKeyPattern, suggestKey } from '../projects/projectKey'
 import type { Project } from '../projects/types'
 import { findPage } from '../settings/registry'
 import type { SettingsGroup } from '../settings/types'
-import { Banner, Button, EmptyState, ListSkeleton, Row, RowList, SelectField, SettingsSkeleton, TextArea, TextField, showToast } from '../ui'
+import { getWorkspace, renameWorkspace, workspaceKeys } from '../settings/workspace/api'
+import { Banner, Button, ButtonLink, EmptyState, ListSkeleton, Row, RowList, SelectField, SettingsSkeleton, TextArea, TextField, describeError, showToast } from '../ui'
 import { createWorkItem } from '../work-items/api'
 import { onboardingKeys, STEP_TITLES, updateOnboarding, type Onboarding, type OnboardingChange, type OnboardingStepId } from './api'
 
 type PanelProps = { onboarding: Onboarding; project: Project | null; projects: Project[] }
+type GoTo = (step: OnboardingStepId) => void
 
 const INTRO: Record<OnboardingStepId, string> = {
   workspace: 'This is the name everyone in the workspace sees. You can change it later in settings.',
-  project: 'A project holds its own tasks, channels, repositories and agents. Runs launch from a project’s tasks.',
-  github: 'Install the GitHub App so agents can read the code and open pull requests. It ticks as soon as GitHub reports the install.',
+  project: 'A project holds its own tasks, channels, repositories and agents. Agents start work from a project’s tasks.',
+  github: 'Install the GitHub App so agents can read the code and open pull requests. This ticks as soon as GitHub reports the install.',
   repository: 'Pick the repository agents work in for this project.',
-  account: 'Sign in a provider account to run agents on. Any harness works: each run uses the account its project points at.',
-  environment: 'Choose where runs happen and the defaults they start with: harness, model, reasoning and speed.',
+  account: 'Sign in to the service your agents run on, such as your coding assistant’s subscription. Each run uses the account its project points at.',
+  environment: 'Choose where agents work and what each run starts with, such as the model and how fast it goes.',
   tasks: 'Write the first things you want done. A description and a few acceptance criteria make a task ready for an agent.',
-  agent: 'Connect an agent of your own, such as a harness you run elsewhere, so it can pick up tasks too. You can skip this.',
-  launch: 'Start an agent on a ready task. It runs in the environment you chose, on the provider account you connected.',
+  agent: 'Connect an agent of your own, such as one you run elsewhere, so it can pick up tasks too. You can skip this.',
+  launch: 'Start an agent on a ready task. It works in the environment you chose, on the account you connected.',
 }
 
 /** One step of the first-run path, with what it needs right there. */
-export function StepPanel({ step, ...props }: PanelProps & { step: OnboardingStepId }) {
+export function StepPanel({ onGoTo, step, ...props }: PanelProps & { onGoTo: GoTo; step: OnboardingStepId }) {
   const status = props.onboarding.steps.find((candidate) => candidate.id === step)
+  const next = props.onboarding.nextStep
   return (
     <>
       <div className="aw-onboarding__panelhead">
@@ -39,9 +44,22 @@ export function StepPanel({ step, ...props }: PanelProps & { step: OnboardingSte
           {STEP_TITLES[step]}
         </h2>
         <p className="aw-onboarding__intro">{INTRO[step]}</p>
-        {status?.done ? <Banner tone="success">Done. Go on to the next step whenever you’re ready.</Banner> : null}
+        {status?.done ? (
+          <Banner
+            action={
+              next && next !== step ? (
+                <Button iconEnd="chevron-right" onClick={() => onGoTo(next)} size="sm">
+                  Next: {STEP_TITLES[next]}
+                </Button>
+              ) : null
+            }
+            tone="success"
+          >
+            Done.{next ? '' : ' That was the last step.'}
+          </Banner>
+        ) : null}
       </div>
-      <Body step={step} {...props} />
+      <Body onGoTo={onGoTo} step={step} {...props} />
     </>
   )
 }
@@ -55,12 +73,20 @@ function useChange(onboarding: Onboarding) {
   })
 }
 
-function Body({ onboarding, project, projects, step }: PanelProps & { step: OnboardingStepId }) {
+function Body({ onGoTo, onboarding, project, projects, step }: PanelProps & { onGoTo: GoTo; step: OnboardingStepId }) {
   const needsProject = !['workspace', 'project', 'account'].includes(step)
   if (needsProject && !project) {
     return (
-      <EmptyState icon="home" title="Choose a project first">
-        This step belongs to a project. Create or pick one in the project step.
+      <EmptyState
+        action={
+          <Button onClick={() => onGoTo('project')} variant="primary">
+            Choose a project
+          </Button>
+        }
+        icon="home"
+        title="Choose a project first"
+      >
+        This step belongs to a project. Create or pick one first.
       </EmptyState>
     )
   }
@@ -81,7 +107,7 @@ function Body({ onboarding, project, projects, step }: PanelProps & { step: Onbo
     case 'agent':
       return <AgentStep onboarding={onboarding} project={project} projects={projects} />
     case 'launch':
-      return <LaunchStep project={project as Project} />
+      return <LaunchStep onGoTo={onGoTo} project={project as Project} />
   }
 }
 
@@ -117,26 +143,61 @@ function RunSetupStep({ onboarding, project, projects }: PanelProps) {
   )
 }
 
-function WorkspaceStep({ onboarding, projects }: Omit<PanelProps, 'project'>) {
+/** Just the name: confirming it (changed or not) is what ticks the step. */
+function WorkspaceStep({ onboarding }: Omit<PanelProps, 'project'>) {
+  const queryClient = useQueryClient()
   const change = useChange(onboarding)
+  const organizationId = onboarding.organizationId
+  const workspace = useQuery({
+    queryKey: workspaceKeys.workspace(organizationId),
+    queryFn: () => getWorkspace(organizationId),
+    enabled: onboarding.canManageWorkspace,
+  })
+  const [typed, setTyped] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const current = workspace.data?.name ?? onboarding.organizationName
+  const name = typed ?? current
+  const renamed = name.trim() !== current
+  const rename = useMutation({
+    mutationFn: (version: number) => renameWorkspace(organizationId, name.trim(), version),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(workspaceKeys.workspace(organizationId), updated)
+      void queryClient.invalidateQueries({ queryKey: queryKeys.session })
+      setTyped(null)
+      change.mutate({ confirm: 'workspace' })
+    },
+    onError: (reason) => setError(describeError(reason).message),
+  })
   if (!onboarding.canManageWorkspace) {
     return <p className="aw-onboarding__intro">An owner or admin names the workspace. You’re set to go on.</p>
   }
+  if (workspace.isPending) return <SettingsSkeleton label="Loading the workspace" sections={1} />
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!name.trim()) {
+      setError('Give the workspace a name.')
+      return
+    }
+    setError(null)
+    if (renamed && workspace.data) rename.mutate(workspace.data.version)
+    else change.mutate({ confirm: 'workspace' })
+  }
   return (
-    <Embedded
-      after={
-        <div className="aw-onboarding__actions">
-          <Button busy={change.isPending} onClick={() => change.mutate({ confirm: 'workspace' })} variant="primary">
-            The name is right
-          </Button>
-        </div>
-      }
-      group="workspace"
-      id="general"
-      onboarding={onboarding}
-      project={null}
-      projects={projects}
-    />
+    <form className="aw-form aw-onboarding__form" noValidate onSubmit={submit}>
+      <TextField
+        error={error ?? undefined}
+        id="onboarding-workspace-name"
+        label="Workspace name"
+        maxLength={120}
+        onChange={(event) => setTyped(event.target.value)}
+        value={name}
+      />
+      <div className="aw-onboarding__actions">
+        <Button busy={rename.isPending || change.isPending} type="submit" variant="primary">
+          {renamed ? 'Save and continue' : 'Use this name'}
+        </Button>
+      </div>
+    </form>
   )
 }
 
@@ -205,7 +266,7 @@ function ProjectStep({ onboarding, project, projects }: PanelProps) {
           </div>
         </form>
       ) : inWorkspace.length === 0 ? (
-        <p className="aw-onboarding__intro">Ask an owner or admin to create a project and invite you.</p>
+        <p className="aw-onboarding__intro">Ask a workspace owner or admin to create a project and add you to it.</p>
       ) : null}
     </div>
   )
@@ -251,7 +312,14 @@ function TasksStep({ onboarding, project }: { onboarding: Onboarding; project: P
     <div className="aw-onboarding__stack">
       <form className="aw-form aw-onboarding__form" noValidate onSubmit={submit}>
         <TextField id="onboarding-task-title" label="Title" maxLength={300} onChange={(event) => setTitle(event.target.value)} placeholder="e.g. Add a dark theme" required value={title} />
-        <TextArea id="onboarding-task-description" label="What should be done" onChange={(event) => setDescription(event.target.value)} rows={3} value={description} />
+        <TextArea
+          hint="What should be done, and anything an agent should know."
+          id="onboarding-task-description"
+          label="Description"
+          onChange={(event) => setDescription(event.target.value)}
+          rows={3}
+          value={description}
+        />
         <TextArea
           hint="One per line. An agent checks its work against these."
           id="onboarding-task-criteria"
@@ -264,9 +332,9 @@ function TasksStep({ onboarding, project }: { onboarding: Onboarding; project: P
           <Button busy={create.isPending} disabled={!title.trim()} type="submit" variant="primary">
             Add task
           </Button>
-          <Link className="aw-btn aw-btn--ghost aw-btn--md" to={`/projects/${encodeURIComponent(project.id)}/work-items`}>
-            <span className="aw-btn__label">Open {project.name}’s tasks</span>
-          </Link>
+          <ButtonLink to={`/projects/${encodeURIComponent(project.id)}/work-items`} variant="ghost">
+            Open {project.name}’s tasks
+          </ButtonLink>
         </div>
       </form>
       {added.length > 0 ? (
@@ -322,23 +390,28 @@ function AgentStep(props: PanelProps) {
   )
 }
 
-function LaunchStep({ project }: { project: Project }) {
+function LaunchStep({ onGoTo, project }: { onGoTo: GoTo; project: Project }) {
   const filters = { scope: 'agents' as const, limit: 5 }
   const ranking = useQuery({ queryKey: aiKeys.ranking(project.id, filters), queryFn: () => getRanking(project.id, filters) })
   if (ranking.isPending) return <ListSkeleton label="Finding ready tasks" rows={3} />
   if (ranking.isError) {
     return (
-      <Banner tone="danger">
-        Ready tasks didn’t load.{' '}
-        <Button onClick={() => void ranking.refetch()} size="sm" variant="ghost">
-          Try again
-        </Button>
+      <Banner onRetry={() => void ranking.refetch()} tone="danger">
+        Ready tasks didn’t load.
       </Banner>
     )
   }
   if (ranking.data.tasks.length === 0) {
     return (
-      <EmptyState icon="checklist" title="No task is ready for an agent yet">
+      <EmptyState
+        action={
+          <Button onClick={() => onGoTo('tasks')} variant="primary">
+            Add a task
+          </Button>
+        }
+        icon="checklist"
+        title="No task is ready for an agent yet"
+      >
         Give a task a description and acceptance criteria, and make sure the project has a repository. It shows here once it’s ready.
       </EmptyState>
     )

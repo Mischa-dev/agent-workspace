@@ -44,7 +44,9 @@ describe('inbox model', () => {
 
   it('applies changes optimistically per view', () => {
     expect(applyUpdate(base, 'inbox', { action: 'read', ids: ['n1'] })?.read).toBe(true)
-    expect(applyUpdate(base, 'unread', { action: 'read', ids: ['n1'] })).toBeNull()
+    // In Unread, a row you read stays (as read) so you can still act on it; "all" empties the view.
+    expect(applyUpdate(base, 'unread', { action: 'read', ids: ['n1'] })?.read).toBe(true)
+    expect(applyUpdate(base, 'unread', { action: 'read', all: true })).toBeNull()
     expect(applyUpdate(base, 'inbox', { action: 'archive', ids: ['n1'] })).toBeNull()
     expect(applyUpdate(base, 'inbox', { action: 'archive', ids: ['other'] })).toBe(base)
     expect(applyUpdate(base, 'inbox', { action: 'read', all: true })?.read).toBe(true)
@@ -62,6 +64,14 @@ describe('inbox model', () => {
   it('offers snoozes in the future', () => {
     const now = new Date('2026-10-16T08:00:00')
     for (const choice of snoozeChoices(now)) expect(choice.until.getTime()).toBeGreaterThan(now.getTime())
-    expect(snoozeChoices(now)[2].until.getDay()).toBe(1)
+    expect(snoozeChoices(now).find((choice) => choice.id === 'next-week')?.until.getDay()).toBe(1)
+  })
+
+  it('only offers "later today" while the day has some left, and the next morning after a late night', () => {
+    expect(snoozeChoices(new Date('2026-10-16T23:00:00')).map((choice) => choice.id)).toEqual(['tomorrow', 'next-week'])
+    const night = new Date('2026-10-16T01:00:00')
+    const morning = snoozeChoices(night).find((choice) => choice.id === 'tomorrow')!
+    expect(morning.until.getDate()).toBe(16)
+    expect(morning.until.getHours()).toBe(9)
   })
 })

@@ -1,6 +1,7 @@
 import { priorityLabel } from './constants'
 import type { FilterValues } from './listModel'
 import type { Milestone, ProjectLabel, WorkItemPriority, WorkItemWorkflow } from './types'
+import { formatDateLabel } from '../ui/dateModel'
 
 /** The filters a person adds from the Filter menu, in the order the menu lists them. */
 export type FilterField =
@@ -55,9 +56,7 @@ export type FilterLookups = {
 }
 
 function formatDay(value: string) {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
-  if (!match) return value
-  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  return formatDateLabel(value) || value
 }
 
 /** The words on a filter chip, such as "Status is In progress". Null when the field isn't set. */
@@ -89,7 +88,7 @@ export function chipText(field: FilterField, filters: FilterValues, lookups: Fil
     }
     case 'parent':
       if (!filters.parentId) return null
-      return filters.parentId === 'none' ? 'Top-level only' : `Subtasks of ${lookups.parentKey ?? 'a work item'}`
+      return filters.parentId === 'none' ? 'Top-level only' : `Subtasks of ${lookups.parentKey ?? 'a task'}`
     case 'type': {
       if (!filters.typeId) return null
       const type = lookups.workflow?.types.find((entry) => entry.id === filters.typeId)

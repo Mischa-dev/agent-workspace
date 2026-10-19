@@ -71,6 +71,7 @@ describe('invitation acceptance', () => {
   afterEach(() => {
     cleanup()
     vi.restoreAllMocks()
+    window.sessionStorage.clear()
     document.cookie = 'agent_workspace_csrf=; Max-Age=0; Path=/'
   })
 
@@ -109,10 +110,10 @@ describe('invitation acceptance', () => {
     fireEvent.change(screen.getByLabelText('Display name'), {
       target: { value: 'New Human' },
     })
-    fireEvent.change(screen.getByLabelText('Login name'), {
+    fireEvent.change(screen.getByLabelText('Username'), {
       target: { value: 'new.human' },
     })
-    fireEvent.change(screen.getByLabelText('Project handle'), {
+    fireEvent.change(screen.getByLabelText('Handle'), {
       target: { value: 'new_human' },
     })
     fireEvent.change(screen.getByLabelText('Password'), {
@@ -164,9 +165,9 @@ describe('invitation acceptance', () => {
     renderJoin()
     await screen.findByText(resolvedInvitation.projectName)
     await waitFor(() => {
-      expect(screen.queryByLabelText('Login name')).not.toBeInTheDocument()
+      expect(screen.queryByLabelText('Username')).not.toBeInTheDocument()
     })
-    fireEvent.change(screen.getByLabelText('Project handle'), {
+    fireEvent.change(screen.getByLabelText('Handle'), {
       target: { value: 'existing_human' },
     })
     fireEvent.click(screen.getByRole('button', { name: 'Accept invitation' }))
@@ -198,7 +199,7 @@ describe('invitation acceptance', () => {
     expect(await screen.findByRole('heading', { name: 'Join a workspace' })).toBeVisible()
     expect(screen.getByText('Mischa Personal')).toBeVisible()
     fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'New Human' } })
-    fireEvent.change(screen.getByLabelText('Login name'), { target: { value: 'new.human' } })
+    fireEvent.change(screen.getByLabelText('Username'), { target: { value: 'new.human' } })
     fireEvent.change(screen.getByLabelText('Handle'), { target: { value: 'new_human' } })
     fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'correct horse battery staple' } })
     fireEvent.change(screen.getByLabelText('Confirm password'), { target: { value: 'correct horse battery staple' } })
@@ -238,8 +239,8 @@ describe('invitation acceptance', () => {
     renderJoin()
     await screen.findByText(resolvedInvitation.projectName)
     fireEvent.click(screen.getByLabelText('Use my existing account'))
-    fireEvent.change(screen.getByLabelText('Login name'), { target: { value: 'new.human' } })
-    fireEvent.change(screen.getByLabelText('Project handle'), { target: { value: 'new_human' } })
+    fireEvent.change(screen.getByLabelText('Username'), { target: { value: 'new.human' } })
+    fireEvent.change(screen.getByLabelText('Handle'), { target: { value: 'new_human' } })
     fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'correct horse battery staple' } })
     fireEvent.click(screen.getByRole('button', { name: 'Sign in and join' }))
 
@@ -250,6 +251,30 @@ describe('invitation acceptance', () => {
     expect(await screen.findByRole('heading', { name: 'Workspace home' })).toBeVisible()
     const second = requests.find(({ path }) => path.endsWith('/auth/login/two-factor'))
     expect(JSON.parse(String(second?.init?.body))).toEqual({ challenge: 'challenge-1', code: '123456' })
+  })
+
+  it('keeps the invitation through a reload after the address bar was cleaned', async () => {
+    const resolved: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input)
+        if (path.endsWith('/api/v1/auth/session')) return jsonResponse(signedOutSession)
+        if (path.endsWith('/api/v1/project-invitations/resolve')) {
+          resolved.push(JSON.parse(String(init?.body)).token)
+          return jsonResponse(resolvedInvitation)
+        }
+        throw new Error(`Unexpected request: ${path}`)
+      }),
+    )
+
+    renderJoin()
+    await screen.findByText(resolvedInvitation.projectName)
+    cleanup()
+    expect(window.location.hash).toBe('')
+    renderJoin()
+    await screen.findByText(resolvedInvitation.projectName)
+    expect(resolved).toEqual([invitationToken, invitationToken])
   })
 
   it('fails closed without a fragment token', async () => {

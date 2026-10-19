@@ -1,36 +1,21 @@
-import { Banner, Button, IconButton } from '../ui'
+import { showToast, type ToastTone } from '../ui'
 
+/** What the list and board say after a change: a toast, with Undo or a follow-up when there is one. */
 export type Notice = {
-  message: string
-  tone: 'success' | 'warning' | 'danger' | 'info'
+  /** Stands alone, so no full stop. */
+  title: string
+  description?: string
+  tone: Exclude<ToastTone, 'agent'>
   action?: { label: string; run: () => void }
+  onUndo?: () => void | Promise<unknown>
 }
 
-export function NoticeBar({ notice, onDismiss }: { notice: Notice | null; onDismiss: () => void }) {
-  if (!notice) return null
-  return (
-    <Banner
-      action={
-        <span className="aw-notice__actions">
-          {notice.action ? (
-            <Button
-              onClick={() => {
-                notice.action?.run()
-                onDismiss()
-              }}
-              size="sm"
-            >
-              {notice.action.label}
-            </Button>
-          ) : null}
-          <IconButton icon="x" label="Dismiss" onClick={onDismiss} size="sm" tooltip={false} />
-        </span>
-      }
-      className="aw-notice"
-      role={notice.tone === 'danger' ? 'alert' : 'status'}
-      tone={notice.tone}
-    >
-      {notice.message}
-    </Banner>
-  )
+export function notify(notice: Notice) {
+  showToast({
+    title: notice.title,
+    description: notice.description,
+    tone: notice.tone,
+    action: notice.action ? { label: notice.action.label, onSelect: notice.action.run } : undefined,
+    onUndo: notice.onUndo,
+  })
 }

@@ -9,13 +9,13 @@ import type { Timeline } from './threadTypes'
 
 // What a run action failed to do, for its error toast.
 const ACTION_ERRORS: Record<string, string> = {
-  start: 'Couldn’t start the run',
-  interrupt: 'Couldn’t stop the run',
-  retry: 'Couldn’t run it again',
-  publish: 'Couldn’t publish the branch',
-  'pull-request': 'Couldn’t open the pull request',
-  'pull-request-refresh': 'Couldn’t check GitHub',
-  'acknowledge-failure': 'Couldn’t dismiss the failure',
+  start: 'The run wasn’t started',
+  interrupt: 'The run wasn’t stopped',
+  retry: 'The run wasn’t restarted',
+  publish: 'The branch wasn’t published',
+  'pull-request': 'The pull request wasn’t opened',
+  'pull-request-refresh': 'GitHub status wasn’t refreshed',
+  'acknowledge-failure': 'The failure wasn’t dismissed',
 }
 
 const post = (path: string, idempotencyKey: string, json: unknown = {}) =>
@@ -86,7 +86,7 @@ export function useThreadRunActions({
   )
   const action = useInstantMutation({
     mutationFn: ({ request }: { key: string; request: () => Promise<unknown> }) => request(),
-    errorTitle: ({ key }) => ACTION_ERRORS[key] ?? (key.includes(':') ? 'Couldn’t send your answer' : 'That didn’t work'),
+    errorTitle: ({ key }) => ACTION_ERRORS[key] ?? (key.includes(':') ? 'Your answer wasn’t sent' : 'The request wasn’t sent'),
     invalidate: () => [queryKeys.timeline(projectId, threadId, includeArchived)],
     onSuccess: (_result, { key }) => {
       if (key === 'start') setPrompt('')

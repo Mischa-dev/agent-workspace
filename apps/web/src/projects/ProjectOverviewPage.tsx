@@ -1,28 +1,51 @@
-import { Suspense, lazy } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Suspense, lazy, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 
+import { requestJson } from '../api/client'
 import { useAuthenticatedSession } from '../auth/session'
 import { useProjectConversationSidebar } from '../conversations/hooks'
 import type { SidebarChannel, SidebarThread } from '../conversations/types'
+import { inboxKeys, isExternalHref, normalizePage, useUpdateInbox, type InboxNotification } from '../inbox/api'
+import { FAILURE_KINDS, KIND_ICON } from '../inbox/kinds'
+import { projectSettingsHref } from '../settings/paths'
 import { AppShell } from '../shell/AppShell'
-import { Avatar, Banner, Button, Dots, EmptyState, Icon, ListSkeleton, PageHeader, Row, RowList, Section, actorKind } from '../ui'
+import {
+  Avatar,
+  Banner,
+  Button,
+  ButtonLink,
+  Dots,
+  EmptyState,
+  Icon,
+  ListSkeleton,
+  PageHeader,
+  Row,
+  RowList,
+  Section,
+  actorKind,
+  countLabel,
+  formatFullDate,
+  formatRelative,
+} from '../ui'
 import { useWorkItems } from '../work-items/hooks'
 import { StatusIcon } from '../work-items/WorkItemIcons'
 import { roleLabel } from './format'
-import { NavigationSyncAlert } from './NavigationSyncAlert'
-import { ProjectPageError, ProjectPageLoading } from './ProjectPageStates'
-import { ProjectInitials } from './ProjectInitials'
 import { useProject } from './hooks'
+import { MoreLink } from './MoreLink'
+import { NavigationSyncAlert } from './NavigationSyncAlert'
+import './overview.css'
+import { ProjectInitials } from './ProjectInitials'
+import { ProjectPageError, ProjectPageLoading } from './ProjectPageStates'
 import type { Project } from './types'
 import { useRememberProjectLocation } from './useRememberProjectLocation'
-import { projectSettingsHref } from '../settings/paths'
 
-// The project's boards load in the whiteboards' own small chunk.
-const LinkedWhiteboards = lazy(() =>
-  import('../whiteboards/LinkedWhiteboards').then((module) => ({ default: module.LinkedWhiteboards })),
-)
+// The project's whiteboards and the New channel dialog load in their own small chunks.
+const ProjectWhiteboards = lazy(() => import('./ProjectWhiteboards'))
+const ChannelCreator = lazy(() => import('../shell/ChannelCreator'))
 
 const RECENT_WORK = { limit: 5 }
+const SHOWN = 5
 
 export function ProjectOverviewPage() {
   const session = useAuthenticatedSession()
@@ -35,6 +58,7 @@ export function ProjectOverviewPage() {
     project.data?.navigation,
   )
 
+  // While it loads, the shell finds the project from the address, so its sidebar stays put.
   if (project.isPending) {
     return (
       <AppShell user={session.user}>
@@ -45,7 +69,7 @@ export function ProjectOverviewPage() {
   if (project.isError) {
     return (
       <AppShell user={session.user}>
-        <ProjectPageError onRetry={() => void project.refetch()} />
+        <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
       </AppShell>
     )
   }
@@ -58,36 +82,30 @@ export function ProjectOverviewPage() {
         <PageHeader
           actions={
             project.data.capabilities.manage && !project.data.archivedAt ? (
-              <Link className="aw-btn aw-btn--secondary aw-btn--md" to={projectSettingsHref(project.data.id)}>
-                <Icon name="settings" />
-                <span className="aw-btn__label">Project settings</span>
-              </Link>
+              <ButtonLink icon="settings" to={projectSettingsHref(project.data.id)}>
+                Project settings
+              </ButtonLink>
             ) : null
           }
           mark={<ProjectInitials project={project.data} size={40} />}
           title={project.data.name}
         >
           {project.data.key} · {roleLabel(project.data.role)}
-          {project.data.attentionCount
-            ? ` · ${project.data.attentionCount} ${project.data.attentionCount === 1 ? 'thing needs' : 'things need'} you`
-            : ''}
         </PageHeader>
         {project.data.archivedAt && (
-          <Banner className="aw-page__banner" icon="archive" title="This Project is archived.">
+          <Banner className="aw-page__banner" icon="archive" title="This project is archived.">
             You can read everything in it, but nothing new can be added.
           </Banner>
         )}
         <div className="aw-overview">
-          <Conversations base={base} project={project.data} />
-          <RecentWork base={base} projectId={project.data.id} />
+          <div className="aw-overview__column">
+            <NeedsYouHere base={base} project={project.data} />
+            <Channels base={base} project={project.data} />
+          </div>
+          <RecentTasks base={base} canCreate={project.data.role !== 'viewer' && !project.data.archivedAt} projectId={project.data.id} />
         </div>
         <Suspense fallback={null}>
-          <LinkedWhiteboards
-            canEdit={project.data.role !== 'viewer' && !project.data.archivedAt}
-            projectId={project.data.id}
-            targetId={project.data.id}
-            targetKind="project"
-          />
+          <ProjectWhiteboards canEdit={project.data.role !== 'viewer' && !project.data.archivedAt} projectId={project.data.id} />
         </Suspense>
       </div>
     </AppShell>
@@ -96,51 +114,125 @@ export function ProjectOverviewPage() {
 
 const WAITING: SidebarThread['attention'][] = ['response_required', 'failed']
 
-function channelMeta(channel: SidebarChannel) {
-  if (channel.unread) return 'New messages'
-  const count = channel.threads.filter((thread) => !thread.archivedAt).length
-  if (!count) return channel.hasMoreThreads ? undefined : 'No threads yet'
-  return `${count}${channel.hasMoreThreads ? '+' : ''} ${count === 1 && !channel.hasMoreThreads ? 'thread' : 'threads'}`
-}
+type ThreadInChannel = SidebarThread & { channelName: string }
 
-function Conversations({ base, project }: { base: string; project: Project }) {
-  const sidebar = useProjectConversationSidebar(project.id)
-  if (sidebar.isPending) {
-    return (
-      <Section title="Needs you">
-        <ListSkeleton label="Loading conversations" rows={2} />
-      </Section>
-    )
-  }
-  if (sidebar.isError) {
-    return (
-      <Section title="Needs you">
-        <Banner action={<Button onClick={() => void sidebar.refetch()} size="sm" variant="ghost">Try again</Button>} tone="danger">
-          Conversations didn’t load.
-        </Banner>
-      </Section>
-    )
-  }
-  const channels = sidebar.data.channels.filter((channel) => !channel.archivedAt)
-  const threads = channels.flatMap((channel) =>
+function liveThreads(channels: SidebarChannel[]): ThreadInChannel[] {
+  return channels.flatMap((channel) =>
     channel.threads.filter((thread) => !thread.archivedAt).map((thread) => ({ ...thread, channelName: channel.name })),
   )
-  const waiting = threads.filter((thread) => WAITING.includes(thread.attention))
-  const working = threads.filter((thread) => thread.attention === 'active')
+}
 
-  return (
-    <div className="aw-overview__column">
-      <Section description="Threads waiting on an answer or a decision from you." title="Needs you">
-        {waiting.length ? (
-          <RowList label="Threads that need you">
-            {waiting.map((thread) => (
-              <ThreadRow base={base} key={thread.id} thread={thread} />
-            ))}
-          </RowList>
-        ) : (
-          <p className="aw-quiet">Nothing is waiting on you here.</p>
-        )}
+/** The page a notification opens, without the message it points at. */
+function pathOf(href: string) {
+  return href.split(/[?#]/)[0]
+}
+
+/** This project's unread inbox items, under the inbox's key so reading one anywhere refreshes it. */
+function useProjectUnread(projectId: string) {
+  return useQuery({
+    queryKey: [...inboxKeys.root, 'project', projectId],
+    queryFn: async () => {
+      const search = new URLSearchParams({ view: 'unread', category: 'all', projectId, limit: '20' })
+      return normalizePage(await requestJson<unknown>(`/api/v1/inbox?${search}`))
+    },
+  })
+}
+
+/**
+ * What needs you in this project, from the same places the header, the rail
+ * badge and the Inbox count: unread inbox items here, then threads waiting on
+ * an answer that the inbox doesn't already list.
+ */
+function NeedsYouHere({ base, project }: { base: string; project: Project }) {
+  const unread = useProjectUnread(project.id)
+  const sidebar = useProjectConversationSidebar(project.id)
+  const update = useUpdateInbox('unread', 'all')
+  if (unread.isPending || sidebar.isPending) {
+    return (
+      <Section title="Needs you">
+        <ListSkeleton label="Loading what needs you" rows={2} />
       </Section>
+    )
+  }
+  const notifications = unread.data?.notifications ?? []
+  const listed = new Set(notifications.map((item) => pathOf(item.href)))
+  const waiting = liveThreads((sidebar.data?.channels ?? []).filter((channel) => !channel.archivedAt)).filter(
+    (thread) => WAITING.includes(thread.attention) && !listed.has(`${base}/threads/${encodeURIComponent(thread.id)}`),
+  )
+  // The list is the whole count when it fits on one page; past that, the project's count says how many.
+  const unreadTotal = unread.data?.nextCursor ? Math.max(project.attentionCount, notifications.length) : notifications.length
+  const total = unreadTotal + waiting.length
+  const shownNotifications = notifications.slice(0, SHOWN)
+  const shownThreads = waiting.slice(0, Math.max(0, SHOWN - shownNotifications.length))
+  const hidden = total - shownNotifications.length - shownThreads.length
+  const markRead = (item: InboxNotification) => {
+    if (!item.read) update.mutate({ action: 'read', ids: [item.id] })
+  }
+  return (
+    <Section actions={<MoreLink to="/inbox">Inbox</MoreLink>} id="overview-needs-you" title="Needs you">
+      {unread.isError || sidebar.isError ? (
+        <Banner
+          onRetry={() => {
+            if (unread.isError) void unread.refetch()
+            if (sidebar.isError) void sidebar.refetch()
+          }}
+          tone="danger"
+        >
+          {unread.isError ? 'The inbox didn’t load.' : 'Conversations didn’t load.'}
+        </Banner>
+      ) : null}
+      {total === 0 && !unread.isError && !sidebar.isError ? <p className="aw-quiet">Nothing here needs you.</p> : null}
+      {shownNotifications.length + shownThreads.length > 0 ? (
+        <RowList label="Needs you">
+          {shownNotifications.map((item) => (
+            <Row
+              className="aw-row--link"
+              key={item.id}
+              leading={
+                <span className={FAILURE_KINDS.has(item.kind) ? 'aw-row__tile aw-row__tile--failed' : 'aw-row__tile'}>
+                  <Icon name={KIND_ICON[item.kind] ?? 'inbox'} size={16} />
+                </span>
+              }
+              meta={<span title={formatFullDate(item.at)}>{formatRelative(item.at)}</span>}
+              title={
+                isExternalHref(item.href) ? (
+                  <a className="aw-row__link" href={item.href} onClick={() => markRead(item)} rel="noopener noreferrer" target="_blank">
+                    {item.title}
+                  </a>
+                ) : (
+                  <Link className="aw-row__link" onClick={() => markRead(item)} to={item.href}>
+                    {item.title}
+                  </Link>
+                )
+              }
+            />
+          ))}
+          {shownThreads.map((thread) => (
+            <ThreadRow base={base} key={thread.id} thread={thread} />
+          ))}
+        </RowList>
+      ) : null}
+      {hidden > 0 ? <p className="aw-overview__more">And {hidden} more in the inbox.</p> : null}
+    </Section>
+  )
+}
+
+/** Every channel reads the same way: anything new first, then how many threads it has. */
+function channelMeta(channel: SidebarChannel) {
+  const count = channel.threads.filter((thread) => !thread.archivedAt).length
+  const threads = count ? (channel.hasMoreThreads ? `${count}+ threads` : countLabel(count, 'thread')) : null
+  return [channel.unread ? 'New messages' : null, threads].filter(Boolean).join(' · ') || 'Nothing new'
+}
+
+function Channels({ base, project }: { base: string; project: Project }) {
+  const sidebar = useProjectConversationSidebar(project.id)
+  const navigate = useNavigate()
+  const [creating, setCreating] = useState(false)
+  const canCreate = Boolean(sidebar.data?.capabilities.createChannel) && !project.archivedAt
+  const channels = (sidebar.data?.channels ?? []).filter((channel) => !channel.archivedAt)
+  const working = liveThreads(channels).filter((thread) => thread.attention === 'active')
+  return (
+    <>
       {working.length > 0 && (
         <Section title="Working now">
           <RowList label="Threads with work running">
@@ -150,8 +242,38 @@ function Conversations({ base, project }: { base: string; project: Project }) {
           </RowList>
         </Section>
       )}
-      <Section title="Channels">
-        {channels.length ? (
+      <Section
+        actions={
+          canCreate && channels.length > 0 ? (
+            <Button icon="plus" onClick={() => setCreating(true)} size="sm" variant="ghost">
+              New channel
+            </Button>
+          ) : null
+        }
+        title="Channels"
+      >
+        {sidebar.isPending ? <ListSkeleton label="Loading channels" rows={3} /> : null}
+        {sidebar.isError ? (
+          <Banner onRetry={() => void sidebar.refetch()} tone="danger">
+            Channels didn’t load.
+          </Banner>
+        ) : null}
+        {sidebar.isSuccess && channels.length === 0 ? (
+          <EmptyState
+            action={
+              canCreate ? (
+                <Button icon="plus" onClick={() => setCreating(true)} variant="primary">
+                  New channel
+                </Button>
+              ) : null
+            }
+            icon="hash"
+            title="No channels yet"
+          >
+            Channels are where this project’s conversations happen.
+          </EmptyState>
+        ) : null}
+        {channels.length > 0 ? (
           <RowList label="Channels">
             {channels.map((channel) => (
               <Row
@@ -168,15 +290,18 @@ function Conversations({ base, project }: { base: string; project: Project }) {
               />
             ))}
           </RowList>
-        ) : (
-          <p className="aw-quiet">No channels yet. Start one from the Project menu in the sidebar.</p>
-        )}
+        ) : null}
       </Section>
-    </div>
+      {creating ? (
+        <Suspense fallback={null}>
+          <ChannelCreator onClose={() => setCreating(false)} onCreated={(to) => navigate(to)} open projectId={project.id} />
+        </Suspense>
+      ) : null}
+    </>
   )
 }
 
-function ThreadRow({ base, thread }: { base: string; thread: SidebarThread & { channelName: string } }) {
+function ThreadRow({ base, thread }: { base: string; thread: ThreadInChannel }) {
   return (
     <Row
       actions={<Icon className="aw-row__chev" name="chevron-right" />}
@@ -200,37 +325,34 @@ function ThreadRow({ base, thread }: { base: string; thread: SidebarThread & { c
   )
 }
 
-function RecentWork({ base, projectId }: { base: string; projectId: string }) {
+function RecentTasks({ base, canCreate, projectId }: { base: string; canCreate: boolean; projectId: string }) {
   const work = useWorkItems(projectId, RECENT_WORK)
-  const viewAll = (
-    <Link className="aw-textlink" to={`${base}/work-items`}>
-      View all
-    </Link>
-  )
   return (
     <div className="aw-overview__column">
-      <Section actions={viewAll} title="Recent work items">
-        {work.isPending && <ListSkeleton label="Loading work items" rows={3} />}
+      <Section actions={<MoreLink to={`${base}/work-items`}>All tasks</MoreLink>} title="Recent tasks">
+        {work.isPending && <ListSkeleton label="Loading tasks" rows={3} />}
         {work.isError && (
-          <Banner action={<Button onClick={() => void work.refetch()} size="sm" variant="ghost">Try again</Button>} tone="danger">
-            Work items didn’t load.
+          <Banner onRetry={() => void work.refetch()} tone="danger">
+            Tasks didn’t load.
           </Banner>
         )}
         {work.isSuccess && !work.data.items.length && (
           <EmptyState
             action={
-              <Link className="aw-btn aw-btn--secondary aw-btn--md" to={`${base}/work-items`}>
-                <span className="aw-btn__label">Open work items</span>
-              </Link>
+              canCreate ? (
+                <ButtonLink icon="plus" to={`${base}/work-items?create=task`} variant="primary">
+                  New task
+                </ButtonLink>
+              ) : null
             }
             icon="work"
-            title="No work items yet"
+            title="No tasks yet"
           >
             Track what needs doing here, then hand it to a person or an agent.
           </EmptyState>
         )}
         {work.isSuccess && work.data.items.length > 0 && (
-          <RowList label="Recent work items">
+          <RowList label="Recent tasks">
             {work.data.items.map((item) => (
               <Row
                 actions={

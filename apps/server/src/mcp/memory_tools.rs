@@ -181,7 +181,11 @@ pub(super) async fn search_tool(
                 .map(|hit| SearchResult {
                     kind: hit.kind,
                     id: hit.id.to_string(),
-                    title: hit.title,
+                    // Agents read the status in the title, as "Name (status)".
+                    title: match hit.status {
+                        Some(status) => format!("{} ({status})", hit.title),
+                        None => hit.title,
+                    },
                     snippet: hit.snippet,
                     project: hit.project_name,
                     conversation_id: hit.conversation_id.map(|id| id.to_string()),

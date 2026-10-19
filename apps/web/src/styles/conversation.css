@@ -239,13 +239,25 @@ button.aw-convhead__title[aria-expanded="true"] {
   padding-bottom: 2px;
 }
 
+/* With a mouse, a message lights up while it's pointed at or holds keyboard
+   focus, not after a click; touch screens have no hover, so a tap (focus)
+   shows it there. */
 .aw-msg:hover,
-.aw-msg:focus-within {
+.aw-msg:has(:focus-visible) {
   background: var(--content-hover);
 }
 
-.aw-msg.is-highlighted,
+/* Mentions you: a faint warm tint and an accent bar, in light and dark. */
+.aw-msg.is-highlighted {
+  background: color-mix(in oklch, var(--warning) 7%, transparent);
+  box-shadow: inset 3px 0 0 var(--warning);
+}
+
 .aw-msg.is-highlighted:hover,
+.aw-msg.is-highlighted:has(:focus-visible) {
+  background: color-mix(in oklch, var(--warning) 11%, transparent);
+}
+
 .aw-msg.is-linked {
   background: var(--highlight-bg);
 }
@@ -274,7 +286,7 @@ button.aw-convhead__title[aria-expanded="true"] {
 }
 
 .aw-msg.is-continued:hover .aw-msg__gutter-time,
-.aw-msg.is-continued:focus-within .aw-msg__gutter-time {
+.aw-msg.is-continued:has(:focus-visible) .aw-msg__gutter-time {
   visibility: visible;
 }
 
@@ -344,7 +356,7 @@ button.aw-convhead__title[aria-expanded="true"] {
 }
 
 .aw-msg:hover .aw-msg__toolbar,
-.aw-msg:focus-within .aw-msg__toolbar {
+.aw-msg:has(:focus-visible) .aw-msg__toolbar {
   display: flex;
 }
 
@@ -360,13 +372,25 @@ button.aw-convhead__title[aria-expanded="true"] {
 }
 
 @media (pointer: coarse) {
+  .aw-msg:focus-within {
+    background: var(--content-hover);
+  }
+
+  .aw-msg:focus-within .aw-msg__toolbar {
+    display: flex;
+  }
+
+  .aw-msg.is-continued:focus-within .aw-msg__gutter-time {
+    visibility: visible;
+  }
+
   .aw-msg__toolbar {
-    top: -22px;
+    top: -26px;
   }
 
   .aw-msg__toolbar .aw-iconbtn {
-    width: 40px;
-    height: 40px;
+    width: 44px;
+    height: 44px;
   }
 }
 
@@ -379,7 +403,7 @@ button.aw-convhead__title[aria-expanded="true"] {
 }
 
 .aw-mention.is-you {
-  background: color-mix(in oklch, var(--warning) 22%, var(--highlight-bg));
+  background: color-mix(in oklch, var(--warning) 24%, transparent);
   color: var(--content-fg);
 }
 
@@ -402,8 +426,15 @@ button.aw-convhead__title[aria-expanded="true"] {
   vertical-align: baseline;
 }
 
+/* A task chip is a box, never underlined, also inside Markdown. */
+.aw-md a.aw-workref,
 a.aw-workref:hover {
-  text-decoration: underline;
+  color: var(--mention-fg);
+  text-decoration: none;
+}
+
+a.aw-workref:hover {
+  background: color-mix(in oklch, var(--mention-fg) 16%, var(--mention-bg));
 }
 
 .aw-workref[data-archived="true"] {
@@ -443,46 +474,6 @@ a.aw-workref:hover {
 
 .aw-workref__status.is-done {
   background: currentColor;
-}
-
-.aw-threadlink {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  max-width: 100%;
-  margin: 6px 0 2px -5px;
-  padding: 3px var(--space-2) 3px 6px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  color: var(--content-fg-muted);
-  font: var(--t-small);
-  text-decoration: none;
-}
-
-.aw-threadlink .aw-icon {
-  color: var(--link);
-}
-
-.aw-threadlink__name {
-  overflow: hidden;
-  color: var(--link);
-  font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.aw-threadlink__chev {
-  opacity: 0;
-  color: var(--content-fg-muted);
-}
-
-.aw-threadlink:hover {
-  border-color: var(--content-border);
-  background: var(--surface-raised);
-}
-
-.aw-threadlink:hover .aw-threadlink__chev {
-  opacity: 1;
 }
 
 /* Activity rows */
@@ -789,6 +780,7 @@ h2.aw-card__title {
 .aw-composer__send {
   display: grid;
   place-items: center;
+  flex: none;
   width: 34px;
   height: var(--size-control-sm);
   padding: 0;
@@ -809,6 +801,18 @@ h2.aw-card__title {
   background: transparent;
   color: var(--content-fg-muted);
   cursor: default;
+}
+
+@media (pointer: coarse) {
+  .aw-composer__send {
+    width: 48px;
+    height: 44px;
+  }
+
+  .aw-older__button {
+    height: 44px;
+    padding: 0 var(--space-4);
+  }
 }
 
 .aw-composer__hint,
@@ -1150,8 +1154,13 @@ h2.aw-card__title {
   list-style: none;
 }
 
+.aw-threadboard {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .aw-threadboard__item {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-1);
   width: 100%;
   padding: var(--space-2);
@@ -1181,12 +1190,15 @@ h2.aw-card__title {
 }
 
 .aw-threadboard__name {
+  display: -webkit-box;
   flex: 1;
   min-width: 0;
   overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   font: var(--t-ui-strong);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .aw-threadboard__meta,
@@ -1195,29 +1207,58 @@ h2.aw-card__title {
   color: var(--content-fg-muted);
 }
 
-/* A DM or group thread, open beside the conversation */
+/* A thread open beside its channel, DM or group. The messages run edge to
+   edge like the main timeline, so the panel keeps its padding for the head. */
 .aw-threadpanel {
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
   height: 100%;
-  padding-bottom: 0;
+  padding: var(--space-3) 0 0;
 }
 
+/* Top-aligned, so the buttons stay put when a long name takes two lines. */
 .aw-threadpanel__head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--space-2);
+  padding: 0 var(--space-3) 0 var(--space-4);
 }
 
+.aw-threadpanel .aw-msg,
+.aw-threadpanel .aw-event {
+  padding-left: var(--space-3);
+  padding-right: var(--space-3);
+}
+
+.aw-threadpanel .aw-msg__toolbar {
+  right: var(--space-3);
+}
+
+.aw-threadpanel .aw-composer-wrap {
+  padding: 0 var(--space-3) var(--space-1);
+}
+
+.aw-threadpanel .aw-timeline__card {
+  padding-left: var(--space-3);
+  padding-right: var(--space-3);
+}
+
+/* A long thread name gets two lines before it's cut. */
 .aw-threadpanel__title {
+  display: -webkit-box;
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  padding-top: max(0px, calc((var(--size-control-sm) - 22px * var(--text-scale)) / 2));
+  overflow-wrap: anywhere;
 }
 
 .aw-threadpanel__outcome {
-  margin: 0;
+  margin: 0 var(--space-3) 0 var(--space-4);
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-sm);
   background: var(--surface-sunken);
@@ -1423,8 +1464,8 @@ button.aw-reaction:hover {
 }
 
 button.aw-reaction:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
+  box-shadow: var(--focus-ring);
+  outline: none;
 }
 
 .aw-reaction.is-mine {
@@ -1440,7 +1481,7 @@ button.aw-reaction:focus-visible {
 
 @media (pointer: coarse) {
   .aw-reaction {
-    min-height: 32px;
+    min-height: 36px;
     padding: 2px var(--space-3);
   }
 }
@@ -1499,10 +1540,18 @@ a.aw-forward__meta:hover .aw-forward__author {
 .aw-forward__removed {
   margin: var(--space-1) 0 0;
   overflow-wrap: anywhere;
+}
+
+.aw-forward__removed {
   white-space: pre-wrap;
 }
 
 .aw-forward__removed {
   color: var(--content-fg-muted);
   font-style: italic;
+}
+
+/* Messages sidebar while it loads */
+.aw-sidebar__skeleton {
+  padding: 0 var(--space-2);
 }

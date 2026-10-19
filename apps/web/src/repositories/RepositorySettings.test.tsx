@@ -54,7 +54,7 @@ describe('RepositorySettings', () => {
     expect(
       await screen.findByRole('heading', { name: 'Mischa-dev/agent-workspace' }),
     ).toBeVisible()
-    expect(screen.getByRole('button', { name: 'Prepare mirror' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Prepare for runs' })).toBeEnabled()
     expect(screen.queryByText(/mirror\.git/)).not.toBeInTheDocument()
   })
 
@@ -81,7 +81,7 @@ describe('RepositorySettings', () => {
       await screen.findByRole('heading', { name: 'Mischa-dev/agent-workspace' }),
     ).toBeVisible()
     expect(screen.getByText(/git prepare failed/i)).toBeVisible()
-    expect(screen.queryByRole('button', { name: 'Prepare mirror' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Prepare for runs' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Archive repository' })).not.toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Register GitHub repository' })).not.toBeInTheDocument()
   })

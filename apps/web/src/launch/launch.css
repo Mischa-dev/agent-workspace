@@ -75,3 +75,9 @@
     display: none;
   }
 }
+
+/* The dialog body is a grid that scrolls; a banner's fixed minimum height would
+   become its row height there and its text would spill out. Size it to its text. */
+.aw-launch__banner {
+  min-height: auto;
+}

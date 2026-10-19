@@ -1,4 +1,4 @@
-import { Suspense, lazy, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
+import { Suspense, lazy, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 
@@ -8,19 +8,17 @@ import { useDirectOverview } from '../direct/api'
 import { projectLocationHref } from '../projects/locations'
 import { useProjects, useSwitchProject } from '../projects/hooks'
 import type { Project } from '../projects/types'
-import { Avatar, Badge, Icon, Menu, Tooltip, swatchFor, type IconName } from '../ui'
+import { Avatar, Badge, Icon, Menu, Tooltip, showToast, swatchFor, type IconName } from '../ui'
 import { useOptionalRealtime } from '../realtime/realtimeContext'
 import { openCommandMenu, useCommandState } from './commandStore'
-import { inHomeSpace, inboxUnreadCount } from './homeSpace'
+import { inHomeSpace, useInboxUnread } from './homeSpace'
 import { loadShellLazy } from './loadShellLazy'
+import { isMobileWidth } from './mobileNavigation'
+import { usePausedUntil } from './pauseStatus'
+import { railProjects } from './railProjects'
 
 // Loaded after the first paint: whether you've paused notifications.
 const PausedMark = lazy(() => loadShellLazy().then((module) => ({ default: module.PausedMark })))
-
-function projectRecency(project: Project) {
-  const value = project.navigation.lastOpenedAt
-  return value ? Date.parse(value) || 0 : 0
-}
 
 function projectHref(project: Project) {
   return projectLocationHref(project.id, project.navigation.location)
@@ -81,8 +79,8 @@ function UtilityTile({
 }
 
 /**
- * The far-left column: Home, Messages, each Project, and the account. Home's
- * own pages (Inbox, My work, Later...) live in its sidebar, so Projects get the room.
+ * The far-left column: Home, Messages, each project, and the account. Home's
+ * own pages (Inbox, My work, Later...) live in its sidebar, so projects get the room.
  */
 export function ProjectRail({
   currentProjectId,
@@ -95,7 +93,7 @@ export function ProjectRail({
   mobileOpen: boolean
   onNavigate: () => void
   /**
-   * Called instead of onNavigate when Home, Messages or a Project is chosen. On phones
+   * Called instead of onNavigate when Home, Messages or a project is chosen. On phones
    * the drawer stays open so its sidebar can show that space's channels.
    */
   onSpaceSelected?: () => void
@@ -112,62 +110,50 @@ export function ProjectRail({
   const connection = useOptionalRealtime()?.connection
   const presence = connection === 'live' ? 'online' : connection ? 'away' : undefined
   const commandMenuOpen = useCommandState().open === 'commands'
-  const [status, setStatus] = useState<string | null>(null)
+  const pausedUntil = usePausedUntil()
   const projects = (projectsQuery.data?.projects ?? []).filter((project) => !project.archivedAt)
-  const inboxUnread = inboxUnreadCount(projectsQuery.data?.projects)
-  const pinned = projects.filter((project) => project.navigation.pinned)
-  const recent = projects
-    .filter((project) => !project.navigation.pinned)
-    .sort((left, right) => projectRecency(right) - projectRecency(left))
-    .slice(0, 5)
-  const activeProject = projects.find((project) => project.id === currentProjectId)
-  const visibleProjects = [...pinned, ...recent]
-  if (activeProject && !visibleProjects.some((project) => project.id === activeProject.id)) {
-    visibleProjects.push(activeProject)
-  }
+  const inboxUnread = useInboxUnread() ?? 0
+  const visibleProjects = railProjects(projects, currentProjectId)
 
-  const selectProject = async (project: Project, event: MouseEvent<HTMLAnchorElement>) => {
+  // Opens the project at once from what's cached, then records the visit
+  // (the rail's "recent") in the background. The page says if the project is gone.
+  const selectProject = (project: Project, event: MouseEvent<HTMLAnchorElement>) => {
     if (!unmodifiedPrimaryClick(event)) return
     event.preventDefault()
-    setStatus(null)
-    if (!project.capabilities.navigationWrite) {
-      onSpaceSelected()
-      navigate(projectHref(project))
+    onSpaceSelected()
+    if (project.id === currentProjectId) {
+      // The project's own tile leads to its overview; on a phone the drawer already shows its sidebar.
+      const overview = `/projects/${encodeURIComponent(project.id)}`
+      if (!isMobileWidth() && location.pathname !== overview) navigate(overview)
       return
     }
-    try {
-      const result = await switchProject.mutateAsync({
-        projectId: project.id,
-        expectedVersion: project.navigation.version,
-        navigation: project.navigation,
-      })
-      onSpaceSelected()
-      navigate(result.href)
-    } catch (reason) {
-      setStatus(isApiError(reason) ? reason.message : 'Couldn’t switch Projects. Try again.')
+    navigate(projectHref(project))
+    if (project.capabilities.navigationWrite) {
+      switchProject
+        .mutateAsync({ projectId: project.id, expectedVersion: project.navigation.version, navigation: project.navigation })
+        .catch(() => undefined)
     }
   }
 
   const signOut = async () => {
-    setStatus(null)
     try {
       await logout()
       clearAuthenticatedQueryCache(queryClient)
       onNavigate()
       navigate('/sign-in', { replace: true })
     } catch (reason) {
-      setStatus(isApiError(reason) ? reason.message : 'Couldn’t sign out. Try again.')
+      showToast({ tone: 'danger', title: 'You’re still signed in', description: isApiError(reason) ? reason.message : 'Try again in a moment.' })
     }
   }
 
   const inMessages = location.pathname.startsWith('/messages')
-  // Settings open on the Project you were in.
+  // Settings open on the project you were in.
   const fromProjectId = /^\/projects\/([^/]+)/.exec(location.pathname)?.[1]
   const settingsState = fromProjectId && fromProjectId !== 'new' ? { fromProjectId } : undefined
 
   return (
     <>
-      <nav aria-label="Projects" className="aw-rail" data-mobile-open={mobileOpen} data-region="rail" id="project-rail">
+      <nav aria-label="Spaces" className="aw-rail" data-mobile-open={mobileOpen} data-region="rail" id="project-rail">
         <UtilityTile
           active={inHomeSpace(location.pathname)}
           badge={inboxUnread}
@@ -185,18 +171,18 @@ export function ProjectRail({
           to="/messages"
         />
         <span className="aw-rail__divider" role="separator" />
-        <div aria-label="Pinned and recent Projects" className="aw-rail__projects project-list" role="group">
-          {projectsQuery.isPending ? <span aria-label="Loading Projects" className="aw-rail__loading" role="status" /> : null}
+        <div aria-label="Pinned and recent projects" className="aw-rail__projects project-list" role="group">
+          {projectsQuery.isPending ? <span aria-label="Loading projects" className="aw-rail__loading" role="status" /> : null}
           {visibleProjects.map((project) => {
             const active = project.id === currentProjectId
             return (
               <Tooltip key={project.id} label={project.name} side="right">
                 <a
                   aria-current={active ? 'page' : undefined}
-                  aria-label={`${project.name}${project.attentionCount ? `, ${project.attentionCount} items need attention` : ''}`}
+                  aria-label={`${project.name}${project.attentionCount ? `, ${project.attentionCount} unread` : ''}`}
                   className={`aw-tile aw-tile--space${active ? ' is-active' : ''}${project.attentionCount ? ' is-unread' : ''}`}
                   href={projectHref(project)}
-                  onClick={(event) => void selectProject(project, event)}
+                  onClick={(event) => selectProject(project, event)}
                 >
                   <TileFace swatch={swatchFor(project.id)}>{project.key.slice(0, 2)}</TileFace>
                   {project.attentionCount > 0 ? (
@@ -208,7 +194,7 @@ export function ProjectRail({
           })}
         </div>
         {user.capabilities.createProject ? (
-          <UtilityTile icon="plus" label="Create Project" onClick={onNavigate} to="/projects/new" />
+          <UtilityTile icon="plus" label="New project" onClick={onNavigate} to="/projects/new" />
         ) : null}
         <span className="aw-rail__spacer" />
         <Tooltip label="Go anywhere or run a command" shortcut="⌘K" side="right">
@@ -218,7 +204,6 @@ export function ProjectRail({
             aria-label="Search and commands"
             className="aw-tile aw-tile--utility aw-tile--quiet"
             onClick={(event) => {
-              setStatus(null)
               // Focus comes back here when the menu closes, also after a tap.
               event.currentTarget.focus()
               onNavigate()
@@ -242,14 +227,24 @@ export function ProjectRail({
         <Menu
           items={[
             { heading: user.displayName },
-            {
-              label: 'Pause or resume notifications',
-              icon: 'moon',
-              onSelect: () => {
-                onNavigate()
-                openCommandMenu('Pause notifications')
-              },
-            },
+            // The choices (an hour, until morning) and the resume live in the command menu.
+            pausedUntil
+              ? {
+                  label: 'Resume notifications',
+                  icon: 'play',
+                  onSelect: () => {
+                    onNavigate()
+                    openCommandMenu('Resume notifications')
+                  },
+                }
+              : {
+                  label: 'Pause notifications',
+                  icon: 'moon',
+                  onSelect: () => {
+                    onNavigate()
+                    openCommandMenu('Pause notifications')
+                  },
+                },
             { label: 'Settings', icon: 'settings', onSelect: () => { onNavigate(); navigate('/settings', { state: settingsState }) } },
             { label: 'Appearance', icon: 'palette', onSelect: () => { onNavigate(); navigate('/settings/account/appearance') } },
             { separator: true },
@@ -266,14 +261,11 @@ export function ProjectRail({
             </button>
           }
         />
-        <p aria-live="assertive" className="visually-hidden" role={status ? 'alert' : undefined}>
-          {status}
-        </p>
       </nav>
 
       {location.pathname === '/home' && projectsQuery.isError && (
         <p className="visually-hidden" role="alert">
-          Projects could not be loaded.
+          Projects didn’t load.
         </p>
       )}
     </>

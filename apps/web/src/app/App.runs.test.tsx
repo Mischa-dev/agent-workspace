@@ -389,7 +389,8 @@ describe('App Thread runs, approvals and GitHub', () => {
     render(<App />)
 
     expect(await screen.findByText('Checks passed')).toBeVisible()
-    expect(screen.getByText(/review approved · ready/)).toBeVisible()
+    expect(screen.getByText('Approved')).toBeVisible()
+    expect(screen.getByText('Ready to merge')).toBeVisible()
     fireEvent.click(
       screen.getByRole('button', { name: 'Refresh GitHub status' }),
     )

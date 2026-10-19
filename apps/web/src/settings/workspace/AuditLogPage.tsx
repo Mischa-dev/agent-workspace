@@ -17,7 +17,7 @@ import {
   formatDateTime,
   formatTime,
 } from '../../ui'
-import { actionDetail, actionPhrase } from '../auditActions'
+import { OTHER_CHANGE, actionDetail, actionPhrase, targetWords } from '../auditActions'
 import type { SettingsPageProps } from '../types'
 import { getAuditFacets, listAuditEvents, workspaceKeys, type AuditEvent, type AuditFilters } from './api'
 
@@ -27,14 +27,32 @@ function appLabel(app: AuditEvent['app']) {
     case 'browser':
       return 'Browser'
     case 'mcp':
-      return 'App (MCP)'
+      return 'Connected app'
     case 'host_cli':
-      return 'Host command'
+      return 'Server command line'
     case 'system':
       return 'System'
     default:
       return null
   }
+}
+
+/** The server names some filters its own way; these read the way the app does. */
+const APP_FILTER_LABELS: Record<string, string> = { mcp: 'Connected apps', host_cli: 'Server command line' }
+const KIND_FILTER_LABELS: Record<string, string> = {
+  work_item: 'Tasks',
+  work_item_label: 'Labels',
+  external_agent: 'Agents',
+  external_execution: 'Run requests',
+  agent_profile: 'Agent profiles',
+  project_template: 'Project templates',
+  task_template: 'Task templates',
+  recurring_task: 'Recurring tasks',
+  saved_view: 'Saved views',
+  webhook: 'Webhooks',
+  harness: 'Harnesses',
+  automation: 'Automation rules',
+  environment: 'Environments',
 }
 
 /** A date input's day as the start (or end) of that day here, in RFC 3339. */
@@ -102,7 +120,7 @@ export default function AuditLogPage({ workspace }: SettingsPageProps) {
 
   return (
     <>
-      <PageHeader icon="activity" title="Audit log">
+      <PageHeader icon="clock" title="Audit log">
         What people, agents and apps changed in {workspace.name}, and through which app.
       </PageHeader>
       <div aria-label="Filter the audit log" className="aw-audit__filters" role="group">
@@ -119,7 +137,7 @@ export default function AuditLogPage({ workspace }: SettingsPageProps) {
           <option value="">Any app</option>
           {facets.data?.apps.map((option) => (
             <option key={option.value} value={option.value}>
-              {option.label}
+              {APP_FILTER_LABELS[option.value] ?? option.label}
             </option>
           ))}
         </SelectField>
@@ -127,12 +145,12 @@ export default function AuditLogPage({ workspace }: SettingsPageProps) {
           <option value="">Everything</option>
           {facets.data?.kinds.map((option) => (
             <option key={option.value} value={option.value}>
-              {option.label}
+              {KIND_FILTER_LABELS[option.value] ?? option.label}
             </option>
           ))}
         </SelectField>
         <SelectField id="audit-project" label="Project" onChange={(event) => setProjectId(event.target.value)} value={projectId}>
-          <option value="">Any Project</option>
+          <option value="">Any project</option>
           {facets.data?.projects.map((project) => (
             <option key={project.id} value={project.id}>
               {project.name}
@@ -151,9 +169,7 @@ export default function AuditLogPage({ workspace }: SettingsPageProps) {
       {events.isPending ? (
         <ListSkeleton avatars label="Loading the audit log" rows={6} />
       ) : events.isError ? (
-        <ErrorState action={<Button onClick={() => void events.refetch()}>Try again</Button>} title="The audit log didn’t load">
-          Check your connection and try again.
-        </ErrorState>
+        <ErrorState error={events.error} onRetry={() => void events.refetch()} title="The audit log didn’t load" />
       ) : all.length === 0 ? (
         <EmptyState icon="activity" title={filtered ? 'Nothing matches these filters' : 'Nothing recorded yet'}>
           {filtered ? 'Try a wider date range or fewer filters.' : 'Changes appear here as people and agents make them.'}
@@ -208,7 +224,7 @@ function AuditRow({ event }: { event: AuditEvent }) {
       </span>
       <div className="aw-row__main">
         <div className="aw-row__title">
-          <strong>{who}</strong> {phrase ?? <code className="aw-inline-code">{event.action}</code>}
+          <strong>{who}</strong> {phrase ?? <span title={event.action}>{OTHER_CHANGE}</span>}
           {detail && (
             <>
               {' '}
@@ -222,7 +238,7 @@ function AuditRow({ event }: { event: AuditEvent }) {
           </time>
           {via && <span>via {via}</span>}
           {event.project && <span>{event.project.name}</span>}
-          {event.target.kind && <span>{event.target.kind.replaceAll('_', ' ')}</span>}
+          {event.target.kind && <span>{targetWords(event.target.kind)}</span>}
         </div>
         {open && hasMetadata && <pre className="aw-code aw-audit__metadata">{JSON.stringify(event.metadata, null, 2)}</pre>}
       </div>

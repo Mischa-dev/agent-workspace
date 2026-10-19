@@ -1,9 +1,9 @@
 import { SWATCHES, swatchFor, type Swatch } from '../ui'
 import type { AgentPresence } from './api'
 
-/** What the agent is doing, in a few words: "Working on KEY-12", "Waiting for you" or "Idle". */
+/** What the agent is doing, in a few words: "Working on KEY-12", "Waiting on you" or "Idle". */
 export function presenceLabel(agent: Pick<AgentPresence, 'state' | 'taskKey' | 'taskTitle' | 'threadName' | 'active'>) {
-  if (agent.state === 'waiting') return 'Waiting for you'
+  if (agent.state === 'waiting') return 'Waiting on you'
   if (agent.state === 'working') {
     const what = agent.taskKey ?? agent.taskTitle ?? agent.threadName
     const more = agent.active > 1 ? ` and ${agent.active - 1} more` : ''

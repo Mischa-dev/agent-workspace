@@ -32,7 +32,7 @@
 }
 
 .aw-onboarding__step:hover {
-  background: var(--surface-raised);
+  background: var(--content-hover);
 }
 
 .aw-onboarding__step:focus-visible {
@@ -41,7 +41,7 @@
 }
 
 .aw-onboarding__step[aria-current='step'] {
-  background: var(--surface-raised);
+  background: var(--content-hover);
   font-weight: 600;
 }
 
@@ -95,7 +95,7 @@
 
 .aw-onboarding__title {
   margin: 0;
-  font-size: 1.25rem;
+  font: var(--t-title);
 }
 
 .aw-onboarding__intro {
@@ -108,6 +108,19 @@
 .aw-onboarding__embed {
   display: grid;
   gap: var(--space-6);
+  min-width: 0;
+}
+
+/* A settings page shown in a step: the step's own title and intro stand in
+   for the page's header, so it doesn't repeat it bigger underneath. */
+.aw-onboarding__embed .aw-pagehead {
+  display: none;
+}
+
+.aw-onboarding__embed .aw-pagehead + .aw-pagesection,
+.aw-onboarding__embed .aw-pagehead + .aw-page__banner + .aw-pagesection {
+  padding-top: 0;
+  border-top: 0;
 }
 
 .aw-onboarding__form {
@@ -122,9 +135,14 @@
 }
 
 @media (max-width: 760px) {
+  /* minmax(0, …) so the scrolling strip of steps can't widen the page. */
   .aw-onboarding__layout {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--space-4);
+  }
+
+  .aw-onboarding__steps {
+    min-width: 0;
   }
 
   /* Positioned so the steps' screen-reader text (absolutely positioned) is

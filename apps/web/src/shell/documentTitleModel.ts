@@ -3,10 +3,13 @@ import { useEffect, useSyncExternalStore } from 'react'
 import type { DirectConversation } from '../direct/api'
 import type { Project } from '../projects/types'
 
-/** What needs you: Project attention plus unread DMs and groups. */
-export function unreadCount(projects: Pick<Project, 'attentionCount' | 'archivedAt'>[], conversations: Pick<DirectConversation, 'unread'>[]) {
-  const projectCount = projects.reduce((sum, project) => sum + (project.archivedAt ? 0 : Math.max(0, project.attentionCount)), 0)
-  return projectCount + conversations.filter((conversation) => conversation.unread).length
+/**
+ * What needs you, for the tab title and the app badge: the inbox's unread
+ * count (which covers every project, DMs and reminders) plus DMs and groups
+ * with unread messages.
+ */
+export function unreadCount(inboxUnread: number, conversations: Pick<DirectConversation, 'unread'>[]) {
+  return Math.max(0, inboxUnread) + conversations.filter((conversation) => conversation.unread).length
 }
 
 let override: string | null = null
@@ -40,12 +43,23 @@ export function usePageTitle(title: string | null | undefined) {
 
 const STATIC_TITLES: [RegExp, string][] = [
   [/^\/home\/?$/, 'Home'],
+  [/^\/inbox\/?$/, 'Inbox'],
+  [/^\/my-work\/?$/, 'My work'],
+  [/^\/later\/?$/, 'Later'],
+  [/^\/runs\/?$/, 'Runs'],
+  [/^\/runs\/.+$/, 'Run'],
+  [/^\/whiteboards\/?$/, 'Whiteboards'],
+  [/^\/whiteboards\/.+$/, 'Whiteboard'],
   [/^\/messages\/agents\/?$/, 'Agents'],
   [/^\/messages(\/.*)?$/, 'Messages'],
   [/^\/search\/?$/, 'Search'],
-  [/^\/settings\/appearance\/?$/, 'Appearance'],
-  [/^\/settings\/account\/?$/, 'Account settings'],
-  [/^\/projects\/new\/?$/, 'Create project'],
+  [/^\/welcome\/?$/, 'Setup'],
+  [/^\/new-task\/?$/, 'New task'],
+  [/^\/share\/?$/, 'Share'],
+  [/^\/settings\/account\/appearance\/?$/, 'Appearance'],
+  [/^\/settings(\/.*)?$/, 'Settings'],
+  [/^\/projects\/new\/?$/, 'New project'],
+  [/^\/projects\/?$/, 'Projects'],
   [/^\/dev\/ui\/?$/, 'UI kit'],
 ]
 
@@ -53,14 +67,25 @@ const PROJECT_TITLES: [RegExp, string][] = [
   [/^\/?$/, ''],
   [/^\/work-items\/?$/, 'Tasks'],
   [/^\/work-items\/.+$/, 'Task'],
+  [/^\/milestones\/?$/, 'Milestones'],
+  [/^\/timeline\/?$/, 'Timeline'],
+  [/^\/next\/?$/, 'Planning'],
+  [/^\/suggestions\/?$/, 'Suggestions'],
+  [/^\/graph\/?$/, 'Dependency graph'],
+  [/^\/plan-import\/?$/, 'Import a plan'],
   [/^\/settings\/?$/, 'Settings'],
-  [/^\/launches\/?$/, 'Launches'],
+  [/^\/launches\/?$/, 'Runs'],
   [/^\/pages(\/.*)?$/, 'Pages'],
   [/^\/decisions\/?$/, 'Decisions'],
   [/^\/conversations\/archived\/?$/, 'Archived conversations'],
   [/^\/channels\/.+$/, 'Channel'],
   [/^\/threads\/.+$/, 'Thread'],
 ]
+
+/** The name of a page outside any project ("Search", "Settings"), or empty. */
+export function staticPageTitle(pathname: string) {
+  return STATIC_TITLES.find(([pattern]) => pattern.test(pathname))?.[1] ?? ''
+}
 
 export function pageTitleFor(pathname: string, search: string, projects: Pick<Project, 'id' | 'name'>[], pageOverride: string | null) {
   const projectMatch = /^\/projects\/([^/]+)(\/.*)?$/.exec(pathname)
@@ -73,5 +98,5 @@ export function pageTitleFor(pathname: string, search: string, projects: Pick<Pr
     return [section, project?.name].filter(Boolean).join(' · ')
   }
   if (pageOverride) return pageOverride
-  return STATIC_TITLES.find(([pattern]) => pattern.test(pathname))?.[1] ?? ''
+  return staticPageTitle(pathname)
 }

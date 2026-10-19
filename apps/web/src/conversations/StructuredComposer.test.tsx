@@ -191,8 +191,26 @@ describe('StructuredComposer', () => {
 
     type('literal @agent text')
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+    // Nobody has that handle: it says so first, and sending again sends it as typed.
+    expect(await screen.findByRole('alert')).toHaveTextContent('@agent isn’t anyone here.')
+    expect(onSubmit).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
     expect(onSubmit.mock.calls[0][0].content.nodes).toEqual([{ type: 'text', text: 'literal @agent text' }])
+  })
+
+  it('makes a handle typed without the list into a mention when it matches someone', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    const searchActors = vi.fn().mockResolvedValue([worker])
+    render(<StructuredComposer onSubmit={onSubmit} searchActors={searchActors} />)
+
+    type('@Agent can you look')
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
+    expect(onSubmit.mock.calls[0][0].content.nodes).toEqual([
+      { type: 'mention', actorId: worker.id },
+      { type: 'text', text: ' can you look' },
+    ])
   })
 
   it('references a work item with # and submits only its canonical ID', async () => {

@@ -9,7 +9,7 @@ import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageSta
 import { useProject } from '../projects/hooks'
 import { AppShell } from '../shell/AppShell'
 import { WorkTabs } from '../shell/ProjectTabs'
-import { Banner, Button, Checkbox, EmptyState, ErrorState, ListSkeleton, PageHeader, SegmentedControl, SelectField, showToast } from '../ui'
+import { Banner, Button, ButtonLink, Checkbox, EmptyState, ErrorState, ListSkeleton, PageHeader, SegmentedControl, SelectField, countLabel, describeError, showToast } from '../ui'
 import { updateWorkItem } from '../work-items/api'
 import { workItemHref } from '../work-items/links'
 import { updateMilestone } from '../work-items/planningApi'
@@ -115,7 +115,7 @@ export function TimelinePage() {
   if (project.isError) {
     return (
       <AppShell user={session.user}>
-        <ProjectPageError onRetry={() => void project.refetch()} />
+        <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
       </AppShell>
     )
   }
@@ -212,40 +212,52 @@ export function TimelinePage() {
               }
         await updateWorkItem({ projectId, workItemId: task.id, patch: { expectedVersion: task.version, ...patch }, idempotencyKey: crypto.randomUUID() })
       }
+      // Wait for the new dates before letting go of the preview, so the bar
+      // doesn't jump back to where it was and then forward again.
+      await queryClient.invalidateQueries({ queryKey: queryKeys.workItemsRoot(projectId) })
       showToast({ tone: 'success', title: `Moved ${changedName ?? 'it'} to ${changedDay ? dayLabel(changedDay) : 'its new date'}` })
       setChange(null)
     } catch (reason) {
       showToast({
         tone: 'danger',
-        title: isApiError(reason) && reason.code === 'version_conflict' ? 'Someone changed it first. The timeline is up to date now; try again.' : isApiError(reason) ? reason.message : 'That didn’t save. Try again.',
+        title: `${changedName ?? 'It'} wasn’t moved`,
+        description:
+          isApiError(reason) && reason.code === 'version_conflict'
+            ? 'Someone changed it first. The timeline is up to date now, so try again.'
+            : describeError(reason).message,
       })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.workItemsRoot(projectId) })
     } finally {
       setSaving(false)
-      void queryClient.invalidateQueries({ queryKey: queryKeys.workItemsRoot(projectId) })
     }
   }
 
-  const months: { label: string; left: number }[] = []
+  // Each month spans to the next; its name sticks beside the labels while any of it is in view.
+  const months: { label: string; left: number; width: number }[] = []
   const weeks: number[] = []
   for (let day = first; day <= last; day += 1) {
     const iso = dayFromNumber(day)
     if (iso.endsWith('-01') || day === first) {
       const date = new Date(day * 86_400_000)
-      months.push({ label: date.toLocaleDateString([], { month: 'short', year: 'numeric', timeZone: 'UTC' }), left: x(day) })
+      const previous = months.at(-1)
+      if (previous) previous.width = x(day) - previous.left
+      months.push({ label: date.toLocaleDateString([], { month: 'short', year: 'numeric', timeZone: 'UTC' }), left: x(day), width: 0 })
     }
     if (new Date(day * 86_400_000).getUTCDay() === 1) weeks.push(x(day))
   }
+  const lastMonth = months.at(-1)
+  if (lastMonth) lastMonth.width = x(last + 1) - lastMonth.left
 
   const slipCount = slipped?.tasks.size ?? 0
   return (
     <AppShell mainClassName="aw-main--page" project={project.data} user={session.user}>
       <div className="aw-page aw-page--wide aw-timeline">
-        <WorkTabs current="timeline" projectId={project.data.id} />
         <PageHeader icon="clock" title="Timeline">
           Milestones and tasks in {project.data.name} by date. Drag one, or focus it and press ← or →, to see what slips.
         </PageHeader>
+        <WorkTabs current="timeline" projectId={project.data.id} />
         <div className="aw-timeline__toolbar">
-          <SelectField aria-label="Milestone" onChange={(event) => setParameter('milestoneId', event.target.value || null)} value={milestoneId}>
+          <SelectField aria-label="Milestone" compact onChange={(event) => setParameter('milestoneId', event.target.value || null)} value={milestoneId}>
             <option value="">All milestones</option>
             {(data?.milestones ?? []).map((milestone) => (
               <option key={milestone.id} value={milestone.id}>
@@ -269,25 +281,21 @@ export function TimelinePage() {
           <div aria-live="polite" className={`aw-timeline__pending${slipCount ? ' is-slipping' : ''}`} role="status">
             <span>
               Moving <strong>{changedName}</strong> to {changedDay ? dayLabel(changedDay) : '…'}.{' '}
-              {slipCount ? `${slipCount} ${slipCount === 1 ? 'task slips' : 'tasks slip'}: ${[...(slipped?.tasks.keys() ?? [])].map((id) => data?.tasks.find((task) => task.id === id)?.key).filter(Boolean).slice(0, 6).join(', ')}${slipCount > 6 ? '…' : ''}.` : 'Nothing slips.'}
+              {slipCount ? `${countLabel(slipCount, 'task slips', 'tasks slip')}: ${[...(slipped?.tasks.keys() ?? [])].map((id) => data?.tasks.find((task) => task.id === id)?.key).filter(Boolean).slice(0, 6).join(', ')}${slipCount > 6 ? '…' : ''}.` : 'Nothing slips.'}
             </span>
             <Button busy={saving} onClick={() => void save()} size="sm" variant="primary">
               Save
             </Button>
-            <Button onClick={() => setChange(null)} size="sm" variant="ghost">
+            <Button onClick={() => setChange(null)} size="sm" variant="secondary">
               Cancel
             </Button>
           </div>
         ) : null}
         {timeline.isPending ? <ListSkeleton label="Loading the timeline" rows={6} /> : null}
-        {timeline.isError ? (
-          <ErrorState action={<Button onClick={() => void timeline.refetch()}>Try again</Button>} title="The timeline didn’t load">
-            Check your connection and try again.
-          </ErrorState>
-        ) : null}
+        {timeline.isError ? <ErrorState error={timeline.error} onRetry={() => void timeline.refetch()} title="The timeline didn’t load" /> : null}
         {data && !rows.length ? (
           <EmptyState
-            action={<Button onClick={() => navigate(`/projects/${encodeURIComponent(projectId)}/milestones`)}>Open milestones</Button>}
+            action={<ButtonLink to={`/projects/${encodeURIComponent(projectId)}/milestones`}>Open milestones</ButtonLink>}
             icon="clock"
             title="Nothing dated in this stretch"
           >
@@ -305,8 +313,10 @@ export function TimelinePage() {
               <div className="aw-timeline__head" style={{ height: HEADER_HEIGHT }}>
                 <span className="aw-timeline__corner" style={{ width: labelWidth }} />
                 {months.map((month) => (
-                  <span className="aw-timeline__month" key={month.left} style={{ left: month.left }}>
-                    {month.label}
+                  <span className="aw-timeline__month" key={month.left} style={{ left: month.left, width: month.width }}>
+                    <span className="aw-timeline__monthname" style={{ left: labelWidth }}>
+                      {month.label}
+                    </span>
                   </span>
                 ))}
               </div>
@@ -341,7 +351,7 @@ export function TimelinePage() {
                     return (
                       <li className="aw-timeline__row aw-timeline__row--heading" key={`h-${row.id}`} style={{ height: ROW_HEIGHT }}>
                         <span className="aw-timeline__label" style={{ width: labelWidth }}>
-                          {row.name}
+                          <span className="aw-timeline__name">{row.name}</span>
                         </span>
                       </li>
                     )
@@ -352,8 +362,8 @@ export function TimelinePage() {
                     const late = slipped?.milestones.has(row.id)
                     return (
                       <li className="aw-timeline__row aw-timeline__row--milestone" key={`m-${row.id}`} style={{ height: ROW_HEIGHT }}>
-                        <span className="aw-timeline__label" style={{ width: labelWidth }}>
-                          {row.name}
+                        <span className="aw-timeline__label" style={{ width: labelWidth }} title={row.name}>
+                          <span className="aw-timeline__name">{row.name}</span>
                           {row.targetDate ? <span className="aw-timeline__date">{dayLabel(target === null ? row.targetDate : dayFromNumber(target))}</span> : <span className="aw-timeline__date">No target date</span>}
                         </span>
                         {target !== null ? (
@@ -377,8 +387,9 @@ export function TimelinePage() {
                   const done = task.statusCategory === 'completed' || task.statusCategory === 'canceled'
                   return (
                     <li className="aw-timeline__row" key={task.id} style={{ height: ROW_HEIGHT }}>
-                      <span className="aw-timeline__label" style={{ width: labelWidth }}>
-                        <span className="aw-timeline__key">{task.key}</span> {task.title}
+                      <span className="aw-timeline__label" style={{ width: labelWidth }} title={`${task.key} ${task.title}`}>
+                        <span className="aw-timeline__key">{task.key}</span>
+                        <span className="aw-timeline__name">{task.title}</span>
                       </span>
                       {span ? (
                         <button
@@ -392,7 +403,12 @@ export function TimelinePage() {
                           title={reason ?? `${task.key} ${task.title}`}
                           type="button"
                         >
-                          <span className="aw-timeline__bartext">{task.assigneeName ?? ''}</span>
+                          {task.assigneeName ? (
+                            // Sticks just right of the names, so a bar that starts off-screen still shows who has it.
+                            <span className="aw-timeline__bartext" style={{ left: labelWidth + 4 }}>
+                              {task.assigneeName}
+                            </span>
+                          ) : null}
                           {canEdit ? <span aria-hidden="true" className="aw-timeline__handle" data-edge="end" /> : null}
                         </button>
                       ) : null}
@@ -405,7 +421,7 @@ export function TimelinePage() {
         ) : null}
         {data && data.undated > 0 ? (
           <p className="aw-timeline__note">
-            {data.undated === 1 ? '1 task has' : `${data.undated.toLocaleString()} tasks have`} no dates, so {data.undated === 1 ? 'it isn’t' : 'they aren’t'} shown.
+            {countLabel(data.undated, 'task has', 'tasks have')} no dates, so {data.undated === 1 ? 'it isn’t' : 'they aren’t'} shown.
           </p>
         ) : null}
       </div>

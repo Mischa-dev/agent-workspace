@@ -1,6 +1,6 @@
 import { Banner, Button } from '../ui'
 
-/** Shown when the app couldn't remember where you were in a Project. Nothing else is affected. */
+/** Shown when the app couldn't remember where you were in a project. Nothing else is affected. */
 export function NavigationSyncAlert({ error, retry }: { error: string | null; retry: () => void }) {
   if (!error) return null
   return (
@@ -8,11 +8,11 @@ export function NavigationSyncAlert({ error, retry }: { error: string | null; re
       <Banner
         action={
           <Button onClick={retry} size="sm" variant="ghost">
-            Try saving again
+            Try again
           </Button>
         }
         role="alert"
-        title="Couldn’t remember your place here."
+        title="Your place here wasn’t saved."
         tone="warning"
       >
         {error}

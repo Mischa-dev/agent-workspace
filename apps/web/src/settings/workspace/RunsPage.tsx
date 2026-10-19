@@ -47,7 +47,7 @@ function WorkspaceRuns({ projects, workspace }: { projects: Project[]; workspace
         description={
           <>
             New runs use these unless the launch, the agent or the project picks something else. Where nothing is set here,
-            the defaults of the <Link to={accountSettingsHref('provider-accounts')}>provider account</Link> that runs it apply.
+            the defaults of the <Link to={accountSettingsHref('provider-accounts')}>account</Link> that runs it apply.
           </>
         }
         id="defaults"

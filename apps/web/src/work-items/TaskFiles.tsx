@@ -5,7 +5,7 @@ import { Attachments } from '../files/Attachments'
 import { removeFile, uploadFile, type FileAttachment } from '../files/api'
 import { UploadChips } from '../files/UploadChips'
 import { useUploads } from '../files/useUploads'
-import { Banner, IconButton } from '../ui'
+import { Banner, ConfirmDialog, IconButton, describeError, describeLoadError, showToast } from '../ui'
 import { taskFilesKey, useTaskFiles } from './hooks'
 import { TaskSection } from './TaskSection'
 import type { WorkItem } from './types'
@@ -22,6 +22,10 @@ export function TaskFiles({ disabled, handle, item }: { disabled: boolean; handl
   const files = useTaskFiles(item.projectId, item.id)
   const input = useRef<HTMLInputElement>(null)
   const [error, setError] = useState<string | null>(null)
+  // Removing deletes the file for everyone, so it asks first.
+  const [removing, setRemoving] = useState<FileAttachment | null>(null)
+  const [removeBusy, setRemoveBusy] = useState(false)
+  const [removeError, setRemoveError] = useState<string | null>(null)
   const refresh = () => queryClient.invalidateQueries({ queryKey: taskFilesKey(item.projectId, item.id) })
   const upload = uploadFile({ kind: 'task', projectId: item.projectId, workItemId: item.id })
   const uploads = useUploads(async (file, onProgress, signal) => {
@@ -36,12 +40,33 @@ export function TaskFiles({ disabled, handle, item }: { disabled: boolean; handl
   // A finished upload shows in the list; only running and failed ones stay as chips.
   const waiting = uploads.items.filter((entry) => !entry.file)
   const own = (files.data ?? []).filter((file) => !file.commentId)
-  const remove = (file: FileAttachment) => {
-    setError(null)
+  const confirmRemove = () => {
+    if (!removing) return
+    const file = removing
+    setRemoveBusy(true)
+    setRemoveError(null)
     removeFile(file.id)
-      .then(refresh)
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'The file wasn’t removed.'))
+      .then(async () => {
+        setRemoving(null)
+        await refresh()
+        showToast({ title: `Removed ${file.name}`, tone: 'success' })
+      })
+      .catch((reason: unknown) => setRemoveError(`The file wasn’t removed. ${describeError(reason).message}`))
+      .finally(() => setRemoveBusy(false))
   }
+  const dialog = (
+    <ConfirmDialog
+      busy={removeBusy}
+      confirmLabel="Remove file"
+      error={removeError}
+      onClose={() => setRemoving(null)}
+      onConfirm={confirmRemove}
+      open={removing !== null}
+      title={`Remove ${removing?.name ?? 'this file'}?`}
+    >
+      It’s deleted from this task for everyone.
+    </ConfirmDialog>
+  )
   const picker = disabled ? null : (
     <input
       aria-label="Choose files to attach"
@@ -65,10 +90,27 @@ export function TaskFiles({ disabled, handle, item }: { disabled: boolean; handl
       title="Files"
     >
       {picker}
-      {files.isError ? <Banner tone="danger">Files didn’t load.</Banner> : null}
+      {files.isError ? (
+        <Banner onRetry={() => void files.refetch()} title="Files didn’t load" tone="danger">
+          {describeLoadError(files.error)}
+        </Banner>
+      ) : null}
       {error ? <Banner tone="danger">{error}</Banner> : null}
       <UploadChips items={waiting} onRemove={uploads.remove} />
-      {own.length ? <Attachments files={own} onRemove={disabled ? undefined : remove} /> : null}
+      {own.length ? (
+        <Attachments
+          files={own}
+          onRemove={
+            disabled
+              ? undefined
+              : (file) => {
+                  setRemoveError(null)
+                  setRemoving(file)
+                }
+          }
+        />
+      ) : null}
+      {dialog}
     </TaskSection>
   )
 }

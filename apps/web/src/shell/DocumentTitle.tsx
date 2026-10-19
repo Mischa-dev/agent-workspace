@@ -6,6 +6,7 @@ import { useDirectOverview } from '../direct/api'
 import { useProjects } from '../projects/hooks'
 import { loadShellLazy } from './loadShellLazy'
 import { pageTitleFor, unreadCount, usePageTitleOverride } from './documentTitleModel'
+import { useInboxUnread } from './homeSpace'
 
 const BASE_ICON = '/icons/icon.svg'
 
@@ -88,10 +89,8 @@ export function DocumentTitle() {
   const projects = useProjects()
   const direct = useDirectOverview()
   const override = usePageTitleOverride()
-  const count = useMemo(
-    () => unreadCount(projects.data?.projects ?? [], direct.data?.conversations ?? []),
-    [direct.data?.conversations, projects.data?.projects],
-  )
+  const inboxUnread = useInboxUnread() ?? 0
+  const count = useMemo(() => unreadCount(inboxUnread, direct.data?.conversations ?? []), [direct.data?.conversations, inboxUnread])
   const title = pageTitleFor(location.pathname, location.search, projects.data?.projects ?? [], override)
 
   useEffect(() => {

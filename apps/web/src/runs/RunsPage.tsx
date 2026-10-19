@@ -2,8 +2,25 @@ import { useInfiniteQuery } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
+import { launchesHref } from '../launch/launchModel'
+import { useProjects } from '../projects/hooks'
 import { AppShell } from '../shell/AppShell'
-import { Button, EmptyState, ErrorState, ListSkeleton, PageHeader, Row, RowList, SegmentedControl, StatusChip, Switch, formatRelative } from '../ui'
+import {
+  Button,
+  ButtonLink,
+  EmptyState,
+  ErrorState,
+  ListSkeleton,
+  PageHeader,
+  Row,
+  RowList,
+  SegmentedControl,
+  SelectField,
+  StatusChip,
+  Switch,
+  formatFullDate,
+  formatRelative,
+} from '../ui'
 import { listRuns, runKeys, type RunListFilter, type RunStatusFilter, type RunSummary } from './api'
 import { RunUsage } from './RunUsage'
 import { formatCost, formatTokens, isLiveRun, runStatus, runTitle, totalTokens } from './runModel'
@@ -13,20 +30,29 @@ const TABS: { value: RunStatusFilter; label: string }[] = [
   { value: 'all', label: 'All' },
   { value: 'active', label: 'Active' },
   { value: 'needs_you', label: 'Needs you' },
-  { value: 'finished', label: 'Finished' },
+  { value: 'finished', label: 'Done' },
   { value: 'failed', label: 'Failed' },
 ]
 
 const EMPTY: Record<RunStatusFilter, string> = {
   all: 'Runs agents do on your tasks show up here.',
   active: 'Nothing is running right now.',
-  needs_you: 'No run is waiting for you.',
-  finished: 'No run has finished yet.',
+  needs_you: 'No run is waiting on you.',
+  finished: 'No run is done yet.',
   failed: 'No run has failed.',
 }
 
-/** Runs refresh on their own while any of them is still going. */
+/**
+ * Runs refresh on their own while any of them is still going; a run that only
+ * waits on someone changes rarely, so it's checked less often.
+ */
 const LIVE_REFRESH_MS = 15_000
+const WAITING_REFRESH_MS = 60_000
+
+function refreshInterval(runs: RunSummary[]) {
+  if (runs.some((run) => isLiveRun(run.state) && run.state !== 'blocked')) return LIVE_REFRESH_MS
+  return runs.some((run) => run.state === 'blocked') ? WAITING_REFRESH_MS : false
+}
 
 function statusParam(value: string | null): RunStatusFilter {
   return TABS.some((tab) => tab.value === value) ? (value as RunStatusFilter) : 'all'
@@ -46,10 +72,13 @@ export function RunsPage() {
     queryFn: ({ pageParam }) => listRuns(filter, pageParam),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (page) => page.nextCursor ?? undefined,
-    refetchInterval: (query) =>
-      query.state.data?.pages.some((page) => page.runs.some((run) => isLiveRun(run.state))) ? LIVE_REFRESH_MS : false,
+    refetchInterval: (query) => refreshInterval(query.state.data?.pages.flatMap((page) => page.runs) ?? []),
   })
   const list = runs.data?.pages.flatMap((page) => page.runs) ?? []
+  const projects = useProjects()
+  const choices = (projects.data?.projects ?? []).filter((project) => !project.archivedAt)
+  // Where a new run starts: the chosen project, or the first one you're in.
+  const launchProject = projectId ?? choices[0]?.id
 
   const update = (key: string, value: string | null) => {
     const next = new URLSearchParams(params)
@@ -66,16 +95,34 @@ export function RunsPage() {
         </PageHeader>
         <div className="aw-runs__filters">
           <SegmentedControl label="Show runs" onChange={(value) => update('status', value === 'all' ? null : value)} options={TABS} value={status} />
+          {choices.length > 1 ? (
+            <SelectField aria-label="Project" compact onChange={(event) => update('project', event.target.value || null)} value={projectId ?? ''}>
+              <option value="">All projects</option>
+              {choices.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name}
+                </option>
+              ))}
+            </SelectField>
+          ) : null}
           <Switch checked={mine} label="Only runs I started" onChange={(checked) => update('mine', checked ? '1' : null)} />
         </div>
         {runs.isPending ? <ListSkeleton label="Loading runs" rows={6} /> : null}
-        {runs.isError ? (
-          <ErrorState action={<Button onClick={() => void runs.refetch()}>Try again</Button>} title="Runs didn’t load">
-            {runs.error.message}
-          </ErrorState>
-        ) : null}
+        {runs.isError ? <ErrorState error={runs.error} onRetry={() => void runs.refetch()} title="Runs didn’t load" /> : null}
         {runs.data && list.length === 0 ? (
-          <EmptyState icon="activity" title="No runs here">
+          <EmptyState
+            action={
+              status === 'all' && !mine && launchProject ? (
+                <ButtonLink icon="play" to={launchesHref(launchProject)} variant="primary">
+                  Launch agents on ready tasks
+                </ButtonLink>
+              ) : status !== 'all' || mine ? (
+                <Button onClick={() => setParams(projectId ? { project: projectId } : {}, { replace: true })}>Show all runs</Button>
+              ) : null
+            }
+            icon="activity"
+            title="No runs here"
+          >
             {EMPTY[status]}
           </EmptyState>
         ) : null}
@@ -112,9 +159,11 @@ function RunRow({ run }: { run: RunSummary }) {
           <span>{run.projectName}</span>
           {run.harnessName ? <span>{run.harnessName}</span> : null}
           {run.agentName ? <span>{run.agentName}</span> : null}
-          <span>{tokens > 0 ? `${formatTokens(tokens)} tokens` : 'No tokens yet'}</span>
+          {tokens > 0 ? <span>{formatTokens(tokens)} tokens</span> : isLiveRun(run.state) ? <span>No tokens yet</span> : null}
           {cost ? <span>{cost}</span> : null}
-          <span>{formatRelative(run.createdAt)}</span>
+          <time dateTime={run.createdAt} title={formatFullDate(run.createdAt)}>
+            {formatRelative(run.createdAt)}
+          </time>
         </>
       }
       title={

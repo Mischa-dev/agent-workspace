@@ -16,10 +16,18 @@ const LIMIT = 12
 const keyFor = (actorId: string) => `aw.recent-places.${actorId}`
 
 /** Pages that are already one keystroke away, or that aren't a place. */
-const SKIPPED = [/^\/home\/?$/, /^\/inbox\/?$/, /^\/later\/?$/, /^\/my-work\/?$/, /^\/search\/?$/, /^\/settings(\/|$)/, /^\/messages\/?$/, /^\/projects\/new\/?$/, /^\/dev\//, /^\/welcome\/?$/, /^\/new-task\/?$/, /^\/share\/?$/]
+const SKIPPED = [/^\/home\/?$/, /^\/inbox\/?$/, /^\/later\/?$/, /^\/my-work\/?$/, /^\/search\/?$/, /^\/settings(\/|$)/, /^\/messages\/?$/, /^\/projects\/?$/, /^\/projects\/new\/?$/, /^\/dev\//, /^\/welcome\/?$/, /^\/new-task\/?$/, /^\/share\/?$/]
 
 /** Addresses whose title comes from the page once it has loaded. */
-const NAMED_BY_PAGE = [/\/channels\/[^/]+\/?$/, /\/threads\/[^/]+\/?$/, /^\/messages\/(?!agents)[^/]+\/?$/, /\/work-items\/[^/]+\/?$/, /\/pages\/[^/]+\/?$/]
+const NAMED_BY_PAGE = [
+  /\/channels\/[^/]+\/?$/,
+  /\/threads\/[^/]+\/?$/,
+  /^\/messages\/(?!agents)[^/]+\/?$/,
+  /\/work-items\/[^/]+\/?$/,
+  /\/pages\/[^/]+\/?$/,
+  /^\/runs\/[^/]+\/?$/,
+  /^\/whiteboards\/[^/]+\/?$/,
+]
 
 /** Whether a page is worth remembering, given its title and whether the page named itself. */
 export function isRememberedPlace(path: string, title: string, namedByPage: boolean) {

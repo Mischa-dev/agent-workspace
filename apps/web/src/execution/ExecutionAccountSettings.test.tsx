@@ -35,12 +35,37 @@ describe('ExecutionAccountSettings', () => {
     })
 
     renderSettings()
-    expect(await screen.findByText(/never shared with anyone else/i)).toBeVisible()
+    expect(await screen.findByText(/you can use it in any of your projects/i)).toBeVisible()
     fireEvent.click(screen.getByRole('button', { name: 'Connect Demo harness' }))
 
     expect(await screen.findByRole('heading', { name: 'My demo account' })).toBeVisible()
     expect(screen.getByText('Used here')).toBeVisible()
     expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(true)
+  })
+
+  it('adds a second account under its own name without switching the project to it', async () => {
+    const secondId = '019fb600-0000-7000-8000-000000000106'
+    let accounts: ProviderAccount[] = [account({ name: 'Demo harness' })]
+    const paths: string[] = []
+    stubFetch((method, path, body) => {
+      paths.push(`${method} ${path}`)
+      if (path === `${base}/harnesses`) return { harnesses: [harness()] }
+      if (path === `${base}/provider-accounts` && method === 'GET') return { accounts }
+      if (path === `${base}/provider-accounts` && method === 'POST') {
+        expect(body).toEqual({ adapterKind: 'demo', name: 'Demo harness account 2' })
+        const created = account({ id: secondId, name: 'Demo harness account 2', preferred: false, profileId: null })
+        accounts = [...accounts, created]
+        return created
+      }
+      if (path.startsWith(`${base}/provider-accounts/`) && method === 'GET') return accountStatus()
+      return undefined
+    })
+
+    renderSettings()
+    fireEvent.click(await screen.findByRole('button', { name: 'Add another account' }))
+
+    expect(await screen.findByRole('heading', { name: 'Demo harness account 2' })).toBeVisible()
+    expect(paths.some((entry) => entry.endsWith('/use'))).toBe(false)
   })
 
   it('offers only the sign-in methods the harness lists and shows a device code', async () => {

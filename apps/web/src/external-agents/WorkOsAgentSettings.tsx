@@ -2,13 +2,12 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { requestJson } from '../api/client'
-import { isApiError } from '../api/errors'
-import { Banner, Button, ListSkeleton, Row, RowList, TextField } from '../ui'
+import { Banner, Button, ListSkeleton, Row, RowList, TextField, describeError, describeLoadError } from '../ui'
 import type { ExternalAgentConnection } from './api'
 
 type Binding = { id: string; kind: 'blueprint' | 'registration'; subjectId: string; revokedAt: string | null }
 
-/** WorkOS sign-in for one agent: short-lived tokens in place of its connection token. */
+/** Single sign-on for one agent: short-lived tokens from the organization’s sign-in in place of its connection token. */
 export function WorkOsAgentSettings({ connection }: { connection: ExternalAgentConnection }) {
   const path = `/api/v1/projects/${encodeURIComponent(connection.projectId)}/external-agents/${encodeURIComponent(connection.id)}/workos`
   const client = useQueryClient()
@@ -29,42 +28,36 @@ export function WorkOsAgentSettings({ connection }: { connection: ExternalAgentC
       setRegistrationId('')
       await client.invalidateQueries({ queryKey })
     },
-    onError: (reason) => setError(isApiError(reason) ? reason.message : 'Agent sign-in wasn’t updated. Try again.'),
+    onError: (reason) => setError(`Single sign-on for this agent wasn’t changed. ${describeError(reason).message}`),
   })
   const headingId = `workos-heading-${connection.id}`
 
-  if (bindings.isPending) return <ListSkeleton label="Loading WorkOS sign-in" rows={1} />
+  if (bindings.isPending) return <ListSkeleton label="Loading single sign-on" rows={1} />
   if (bindings.isError) {
     return (
-      <Banner
-        action={
-          <Button onClick={() => void bindings.refetch()} size="sm">
-            Try again
-          </Button>
-        }
-        tone="danger"
-      >
-        WorkOS sign-in for this agent didn’t load.
+      <Banner onRetry={() => void bindings.refetch()} title="Single sign-on for this agent didn’t load." tone="danger">
+        {describeLoadError(bindings.error)}
       </Banner>
     )
   }
-  if (!bindings.data.enabled) return <p className="aw-quiet">WorkOS sign-in for agents isn’t set up on this host.</p>
+  // Nothing to do here until whoever runs the server turns it on.
+  if (!bindings.data.enabled) return null
   const active = bindings.data.bindings.filter((binding) => !binding.revokedAt)
   const pending = update.isPending ? update.variables : null
   return (
     <section aria-labelledby={headingId} className="aw-webhook">
       <h3 className="aw-row__title" id={headingId}>
-        WorkOS sign-in
+        Single sign-on
       </h3>
       <p className="aw-quiet">
-        Use short-lived tokens with this agent’s existing account and project memberships.{' '}
+        Lets the agent use short-lived tokens from your organization’s sign-in, with the same account and projects.{' '}
         <a className="aw-textlink" href="/auth.md" rel="noreferrer" target="_blank">
           How agents sign in
         </a>
       </p>
       {error ? <Banner tone="danger">{error}</Banner> : null}
       {active.length ? (
-        <RowList label={`WorkOS sign-ins for ${connection.displayName}`}>
+        <RowList label={`Single sign-on for ${connection.displayName}`}>
           {active.map((binding) => (
             <Row
               actions={
@@ -79,27 +72,31 @@ export function WorkOsAgentSettings({ connection }: { connection: ExternalAgentC
                 </Button>
               }
               key={binding.id}
-              meta={<code>{binding.subjectId}</code>}
-              title={binding.kind === 'blueprint' ? 'Agent tokens on' : 'External registration attached'}
-            />
+              title={binding.kind === 'blueprint' ? 'Short-lived tokens on' : 'Registered agent attached'}
+            >
+              <details className="aw-disclosure">
+                <summary>Details</summary>
+                <code>{binding.subjectId}</code>
+              </details>
+            </Row>
           ))}
         </RowList>
       ) : null}
       <div className="aw-card__actions">
         <Button busy={pending != null && !pending.revoke && !pending.registrationId} disabled={update.isPending} onClick={() => update.mutate({})} size="sm">
-          {active.some((binding) => binding.kind === 'blueprint') ? 'Reconnect after token rotation' : 'Turn on WorkOS tokens'}
+          {active.some((binding) => binding.kind === 'blueprint') ? 'Reconnect after a new token' : 'Turn on short-lived tokens'}
         </Button>
       </div>
       <p className="aw-quiet">
-        The agent trades its connection token for a five-minute WorkOS token. After you rotate the connection token,
-        reconnect here. Turning the agent off stops both kinds of token.
+        The agent trades its token for one that lasts five minutes. After you make it a new token, reconnect here. Disabling
+        the agent stops both kinds of token.
       </p>
       {bindings.data.registrationEnabled ? (
         <>
           <TextField
-            hint="For an agent following auth.md. Link your WorkOS account and claim the registration first."
+            hint="For an agent that registered itself with your organization’s sign-in. Link your single sign-on account and claim the registration first."
             id={`workos-registration-${connection.id}`}
-            label="Claimed WorkOS registration ID"
+            label="Registration ID"
             maxLength={100}
             onChange={(event) => setRegistrationId(event.target.value)}
             placeholder="agent_reg_…"
@@ -112,7 +109,7 @@ export function WorkOsAgentSettings({ connection }: { connection: ExternalAgentC
               onClick={() => update.mutate({ registrationId })}
               size="sm"
             >
-              Attach claimed agent
+              Attach registered agent
             </Button>
           </div>
         </>

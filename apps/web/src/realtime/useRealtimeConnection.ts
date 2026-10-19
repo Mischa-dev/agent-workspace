@@ -132,6 +132,8 @@ export function useRealtimeConnection(): RealtimeContextValue {
             query.queryKey[1] === projectId &&
             query.queryKey[2] !== 'work-items',
         })
+        // My work lists tasks across projects, so it isn't under the project key.
+        void queryClient.invalidateQueries({ queryKey: ['my-work'] })
       }, INVALIDATION_DELAY_MS)
       invalidationTimers.set(key, timer)
     }

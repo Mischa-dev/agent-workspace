@@ -32,8 +32,11 @@ describe('keyboard shortcuts', () => {
 
   it('moves between conversations and marks all read, also from the composer', () => {
     const press = createShortcutMatcher()
+    const wrap = document.createElement('div')
+    wrap.className = 'aw-composer-wrap'
     const composer = document.createElement('textarea')
-    document.body.appendChild(composer)
+    wrap.appendChild(composer)
+    document.body.appendChild(wrap)
     expect(press(key('ArrowDown', { altKey: true, target: composer }))).toBe('next-conversation')
     expect(press(key('ArrowUp', { altKey: true }))).toBe('previous-conversation')
     expect(press(key('ArrowDown', { altKey: true, shiftKey: true }))).toBe('next-unread')
@@ -41,7 +44,13 @@ describe('keyboard shortcuts', () => {
     expect(press(key('Escape', { shiftKey: true, target: composer }))).toBe('mark-all-read')
     expect(press(key('Escape'))).toBeNull()
     expect(press(key('ArrowDown'))).toBeNull()
-    composer.remove()
+    wrap.remove()
+    // Any other field keeps ⌥↑ and ⌥↓ for moving the cursor, so a page being edited stays put.
+    const editor = document.createElement('textarea')
+    document.body.appendChild(editor)
+    expect(press(key('ArrowDown', { altKey: true, target: editor }))).toBeNull()
+    expect(press(key('Escape', { shiftKey: true, target: editor }))).toBeNull()
+    editor.remove()
     // A menu or dialog keeps its own arrows.
     const menu = document.createElement('div')
     menu.setAttribute('role', 'menu')
@@ -96,13 +105,16 @@ describe('command menu filtering', () => {
 describe('document title', () => {
   const projects = [{ id: 'p1', name: 'Agent Workspace', attentionCount: 2, archivedAt: null }, { id: 'p2', name: 'Old', attentionCount: 5, archivedAt: '2026-01-01' }]
 
-  it('counts what needs you, skipping archived Projects', () => {
-    expect(unreadCount(projects, [{ unread: true }, { unread: false }])).toBe(3)
+  it('counts the inbox’s unread and the conversations with unread messages', () => {
+    expect(unreadCount(2, [{ unread: true }, { unread: false }])).toBe(3)
   })
 
-  it('names the page and its Project', () => {
+  it('names the page and its project', () => {
     expect(pageTitleFor('/projects/p1/work-items', '?view=board', projects, null)).toBe('Board · Agent Workspace')
     expect(pageTitleFor('/projects/p1/channels/c1', '', projects, '#general')).toBe('#general · Agent Workspace')
+    expect(pageTitleFor('/projects/p1/next', '', projects, null)).toBe('Planning · Agent Workspace')
     expect(pageTitleFor('/messages', '', projects, null)).toBe('Messages')
+    expect(pageTitleFor('/settings/account/appearance', '', projects, null)).toBe('Appearance')
+    expect(pageTitleFor('/settings/workspace/members', '', projects, null)).toBe('Settings')
   })
 })

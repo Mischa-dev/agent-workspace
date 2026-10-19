@@ -83,11 +83,11 @@ describe('App Project creation and settings', () => {
     fireEvent.change(screen.getByLabelText('Project key'), {
       target: { value: 'tri' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Create Project' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create project' }))
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'The request could not be completed.',
     )
-    fireEvent.click(screen.getByRole('button', { name: 'Create Project' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create project' }))
 
     await waitFor(() => expect(createAttempts).toBe(2))
     expect(idempotencyKeys[0]).toBeTruthy()
@@ -122,7 +122,7 @@ describe('App Project creation and settings', () => {
     installStandardApi(sessionWithMixedRoles)
     render(<App />)
 
-    const selector = await screen.findByLabelText('Organization')
+    const selector = await screen.findByLabelText('Workspace')
     expect(selector).toHaveValue(adminOrganizationId)
     expect(
       within(selector).queryByRole('option', {
@@ -154,11 +154,11 @@ describe('App Project creation and settings', () => {
 
     expect(
       await screen.findByRole('heading', {
-        name: 'Project creation unavailable',
+        name: 'You can’t create projects here',
       }),
     ).toBeVisible()
     expect(
-      screen.queryByRole('button', { name: 'Create Project' }),
+      screen.queryByRole('button', { name: 'Create project' }),
     ).not.toBeInTheDocument()
   })
 
@@ -204,7 +204,7 @@ describe('App Project creation and settings', () => {
 
     expect(await screen.findByRole('heading', { level: 1, name: 'General' })).toBeVisible()
     fireEvent.click(
-      within(screen.getByRole('navigation', { name: 'Projects' })).getByRole('link', {
+      within(screen.getByRole('navigation', { name: 'Spaces' })).getByRole('link', {
         name: /^Beta Project/,
       }),
     )
@@ -258,7 +258,7 @@ describe('App Project creation and settings', () => {
     render(<App />)
 
     const archiveButton = await screen.findByRole('button', {
-      name: 'Archive Project',
+      name: 'Archive project',
     })
     expect(archiveButton).toBeDisabled()
     fireEvent.change(screen.getByLabelText(/Type BETA to confirm/), {
@@ -346,11 +346,11 @@ describe('App Project creation and settings', () => {
       await screen.findByLabelText(/Type BETA to confirm/),
       { target: { value: 'BETA' } },
     )
-    fireEvent.click(screen.getByRole('button', { name: 'Archive Project' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Archive project' }))
 
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent(
-      code === 'version_conflict' ? 'Someone changed this Project' : message,
+      code === 'version_conflict' ? 'Someone changed this project' : message,
     )
     await waitFor(() => expect(alert).toHaveFocus())
     expect(window.location.pathname).toBe(
@@ -367,7 +367,7 @@ describe('App Project creation and settings', () => {
     )
     if (code === 'version_conflict') {
       fireEvent.click(
-        screen.getByRole('button', { name: 'Archive Project' }),
+        screen.getByRole('button', { name: 'Archive project' }),
       )
       await waitFor(() =>
         expect(
@@ -436,7 +436,7 @@ describe('App Project creation and settings', () => {
       await screen.findByRole('heading', { level: 1, name: 'General' }),
     ).toBeVisible()
     expect(
-      screen.queryByRole('button', { name: 'Archive Project' }),
+      screen.queryByRole('button', { name: 'Archive project' }),
     ).not.toBeInTheDocument()
     expect(screen.getByText('Viewer')).toBeVisible()
     expect(screen.getByRole('note')).toHaveTextContent('Viewer access is read-only')

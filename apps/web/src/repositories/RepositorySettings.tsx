@@ -1,10 +1,10 @@
 import { useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { isApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
+import { describeError } from '../app/mutations'
 import { humanize } from '../projects/format'
-import { Banner, Button, Checkbox, ErrorState, Icon, ListSkeleton, Row, RowList, StatusChip, TextField } from '../ui'
+import { Banner, Button, Checkbox, ConfirmDialog, ErrorState, Icon, ListSkeleton, Row, RowList, StatusChip, TextField, showToast } from '../ui'
 import { archiveRepository, listRepositories, prepareRepository, registerRepository, type Repository } from './api'
 
 function RepositoryState({ repository }: { repository: Repository }) {
@@ -59,18 +59,21 @@ export function RepositorySettings({
     mutationFn: (repositoryId: string) => prepareRepository(projectId, repositoryId, crypto.randomUUID()),
     onSuccess: update,
   })
+  const [archiving, setArchiving] = useState<Repository | null>(null)
   const archive = useMutation({
     mutationFn: (repository: Repository) => archiveRepository(projectId, repository.id, repository.version, crypto.randomUUID()),
-    onSuccess: update,
+    onSuccess: (archived) => {
+      setArchiving(null)
+      update(archived)
+      showToast({ tone: 'success', title: `${archived.owner}/${archived.name} archived` })
+    },
   })
   const [error, setError] = useState<string | null>(null)
 
   if (repositories.isPending) return <ListSkeleton label="Loading repositories" rows={2} />
   if (repositories.isError) {
     return (
-      <ErrorState action={<Button onClick={() => void repositories.refetch()}>Try again</Button>} title="Repositories didn’t load">
-        Check your connection and try again.
-      </ErrorState>
+      <ErrorState error={repositories.error} onRetry={() => void repositories.refetch()} title="Repositories didn’t load" />
     )
   }
   const canManage = repositories.data.canManage
@@ -94,11 +97,13 @@ export function RepositorySettings({
                           icon="retry"
                           onClick={() => {
                             setError(null)
-                            prepare.mutate(repository.id, { onError: (reason) => setError(errorMessage(reason)) })
+                            prepare.mutate(repository.id, {
+                              onError: (reason) => setError(`It wasn’t prepared. ${describeError(reason).message}`),
+                            })
                           }}
                           size="sm"
                         >
-                          Prepare mirror
+                          Prepare for runs
                         </Button>
                       )}
                       <Button
@@ -106,7 +111,7 @@ export function RepositorySettings({
                         icon="archive"
                         onClick={() => {
                           setError(null)
-                          archive.mutate(repository, { onError: (reason) => setError(errorMessage(reason)) })
+                          setArchiving(repository)
                         }}
                         size="sm"
                         variant="ghost"
@@ -134,8 +139,8 @@ export function RepositorySettings({
             >
               {repository.preparationFailureCategory && !repository.archivedAt && (
                 <p className="aw-row__note">
-                  Setting up the server’s copy failed: {humanize(repository.preparationFailureCategory).toLocaleLowerCase()}. Prepare the
-                  mirror again, or check the host.
+                  Setting up the server’s copy failed: {humanize(repository.preparationFailureCategory).toLocaleLowerCase()}. Prepare it
+                  for runs again; if it keeps failing, ask whoever runs this server to look at it.
                 </p>
               )}
             </Row>
@@ -143,10 +148,24 @@ export function RepositorySettings({
         </RowList>
       ) : (
         <p className="aw-quiet">
-          No repositories yet.{canManage ? (showRegistration ? ' Register one below to start runs against it.' : ' Add one from GitHub above.') : ''}
+          No repositories yet.{canManage ? (showRegistration ? ' Register one below to start runs against it.' : ' Add one above.') : ''}
         </p>
       )}
       {canManage && showRegistration && <RepositoryRegistrationForm onCreated={update} projectId={projectId} />}
+      <ConfirmDialog
+        busy={archive.isPending}
+        confirmLabel="Archive repository"
+        error={archive.isError ? `It wasn’t archived. ${describeError(archive.error).message}` : null}
+        onClose={() => {
+          setArchiving(null)
+          archive.reset()
+        }}
+        onConfirm={() => archiving && archive.mutate(archiving)}
+        open={archiving !== null}
+        title={archiving ? `Archive ${archiving.owner}/${archiving.name}?` : 'Archive this repository?'}
+      >
+        Runs in this project can’t use it any more, and it can’t be restored from here.
+      </ConfirmDialog>
     </div>
   )
 }
@@ -178,7 +197,7 @@ export function RepositoryRegistrationForm({ onCreated, projectId }: { onCreated
       setDefaultBranch('main')
       setTrusted(false)
     },
-    onError: (reason) => setError(errorMessage(reason)),
+    onError: (reason) => setError(`The repository wasn’t added. ${describeError(reason).message}`),
   })
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -193,11 +212,11 @@ export function RepositoryRegistrationForm({ onCreated, projectId }: { onCreated
         <h3 className="aw-formcard__title" id="register-repository-heading">
           Register GitHub repository
         </h3>
-        <p className="aw-formcard__desc">Add a repository from GitHub so runs in this Project can work in it.</p>
+        <p className="aw-formcard__desc">Add a repository from GitHub so runs in this project can work in it.</p>
       </div>
       <div className="aw-form__grid">
-        <TextField id="repository-owner" label="Owner" onChange={(event) => setOwner(event.target.value)} placeholder="Mischa-dev" value={owner} />
-        <TextField id="repository-name" label="Repository" onChange={(event) => setName(event.target.value)} placeholder="agent-workspace" value={name} />
+        <TextField id="repository-owner" label="Owner" onChange={(event) => setOwner(event.target.value)} placeholder="my-org" value={owner} />
+        <TextField id="repository-name" label="Repository" onChange={(event) => setName(event.target.value)} placeholder="my-repo" value={name} />
         <TextField
           hint="The number in the repository’s GitHub API record."
           id="github-repository-id"
@@ -228,8 +247,4 @@ export function RepositoryRegistrationForm({ onCreated, projectId }: { onCreated
       </div>
     </form>
   )
-}
-
-function errorMessage(reason: unknown) {
-  return isApiError(reason) ? reason.message : 'That didn’t work. Try again.'
 }

@@ -7,6 +7,8 @@ import {
   composerScalarValues,
   createIdempotencyKey,
   draftFromContent,
+  renameHandles,
+  typedHandles,
 } from './composerModel'
 
 const actor = (id: string, handle: string): ConversationActor => ({
@@ -113,6 +115,14 @@ describe('composer helpers', () => {
     expect(activeTrigger('x@ad', 4, true)).toBeNull()
     expect(activeTrigger('#AW', 3, false)).toBeNull()
     expect(activeTrigger('@'.concat('a'.repeat(41)), 42, true)).toBeNull()
+  })
+
+  it('finds handles typed without picking anyone, and spells them as stored', () => {
+    const muse = actor('actor-9', 'muse')
+    expect(typedHandles('@Muse can you look? cc @everyone, me@example.com', [])).toEqual(['Muse'])
+    expect(typedHandles('ask @muse. And @MUSE (@mara-)', [muse])).toEqual(['mara'])
+    expect(typedHandles('`@code` stays', [])).toEqual([])
+    expect(renameHandles('@Muse, then (@MUSE.)', new Map([['muse', 'muse']]))).toBe('@muse, then (@muse.)')
   })
 
   it('uses the platform UUID generator for idempotency keys', () => {

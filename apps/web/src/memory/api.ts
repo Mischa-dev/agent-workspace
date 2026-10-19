@@ -59,6 +59,8 @@ export type Decision = {
   supersededByDecisionId: string | null
   sourceConversationId: string | null
   sourceConversationName: string | null
+  /** channel, thread, dm or group; missing from servers older than this field. */
+  sourceConversationKind?: string | null
   sourceMessageId: string | null
   decidedBy: string
   via: string | null

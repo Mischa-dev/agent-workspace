@@ -9,7 +9,7 @@ import { useProjectByKey } from '../shell/useProjectByKey'
 import { Button, EmptyState, ErrorState, PageSkeleton } from '../ui'
 import { searchWorkItemReferences } from '../work-items/api'
 
-/** `/AWD-12` opens task 12 of the Project whose key is AWD. */
+/** `/AWD-12` opens task 12 of the project whose key is AWD. */
 export function TaskKeyRedirect() {
   const session = useAuthenticatedSession()
   const navigate = useNavigate()
@@ -35,45 +35,50 @@ export function TaskKeyRedirect() {
   const loading = Boolean(parsed) && (byKey.pending || (Boolean(project) && lookup.isPending))
   const failed = Boolean(parsed) && !loading && Boolean(byKey.error || lookup.isError)
   const choosing = Boolean(parsed) && !loading && !failed && !project && byKey.matches.length > 1
+  const retry = () => {
+    byKey.retry()
+    if (project) void lookup.refetch()
+  }
   return (
     <AppShell mainClassName="aw-main--page" project={project} user={session.user}>
       <div className="aw-page" role={loading || failed ? undefined : 'alert'}>
         {loading ? (
           <PageSkeleton label={`Opening ${parsed?.key ?? 'task'}`} />
         ) : failed ? (
-          <ErrorState
-            action={
-              <Button
-                onClick={() => {
-                  byKey.retry()
-                  if (project) void lookup.refetch()
-                }}
-                variant="primary"
-              >
-                Try again
-              </Button>
-            }
-            title={`Couldn’t open ${parsed?.key}`}
-          >
-            Check your connection and try again.
-          </ErrorState>
+          <ErrorState error={byKey.error ?? lookup.error} onRetry={retry} title={`${parsed?.key ?? 'The task'} didn’t open`} />
         ) : choosing ? (
-          <EmptyState icon="search" title={`Which ${parsed?.projectKey} Project?`}>
-            <p>More than one Project you can see uses this key.</p>
-            <div className="aw-stack">
-              {byKey.matches.map((match) => (
-                <Button key={match.id} onClick={() => setChosenId(match.id)}>
-                  {`Open ${parsed?.key} in ${match.name}`}
-                </Button>
-              ))}
-            </div>
+          <EmptyState
+            action={
+              <div className="aw-empty-choices">
+                {byKey.matches.map((match) => (
+                  <Button key={match.id} onClick={() => setChosenId(match.id)}>
+                    {`Open ${parsed?.key} in ${match.name}`}
+                  </Button>
+                ))}
+              </div>
+            }
+            icon="search"
+            title={`Which ${parsed?.projectKey} project?`}
+          >
+            More than one project you can see uses this key.
           </EmptyState>
         ) : (
           <EmptyState
             action={
-              <Button onClick={() => navigate(project ? `/projects/${encodeURIComponent(project.id)}/work-items` : '/home')} variant="primary">
-                {project ? `Go to ${project.name} tasks` : 'Go to Home'}
-              </Button>
+              <div className="aw-empty-choices">
+                <Button onClick={() => navigate(project ? `/projects/${encodeURIComponent(project.id)}/work-items` : '/home')} variant="primary">
+                  {project ? `Go to ${project.name} tasks` : 'Go to Home'}
+                </Button>
+                {project
+                  ? byKey.matches
+                      .filter((match) => match.id !== project.id)
+                      .map((match) => (
+                        <Button key={match.id} onClick={() => setChosenId(match.id)}>
+                          {`Try ${match.name}`}
+                        </Button>
+                      ))
+                  : null}
+              </div>
             }
             icon="search"
             title={parsed ? `${parsed.key} wasn’t found` : 'Page not found'}
@@ -81,19 +86,8 @@ export function TaskKeyRedirect() {
             {parsed
               ? project
                 ? 'That task may have been removed, or you may not have access to it.'
-                : 'No Project you can see uses that key.'
+                : 'No project you can see uses that key.'
               : 'That address isn’t part of this workspace. It may have moved, or the link may be old.'}
-            {project && byKey.matches.length > 1 ? (
-              <div className="aw-stack">
-                {byKey.matches
-                  .filter((match) => match.id !== project.id)
-                  .map((match) => (
-                    <Button key={match.id} onClick={() => setChosenId(match.id)}>
-                      {`Try ${match.name}`}
-                    </Button>
-                  ))}
-              </div>
-            ) : null}
           </EmptyState>
         )}
       </div>

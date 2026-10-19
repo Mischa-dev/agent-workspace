@@ -31,11 +31,11 @@ describe('App shell and Project navigation', () => {
     const { container } = render(<App />)
 
     expect(
-      await screen.findByRole('heading', { name: /Welcome back/ }),
+      await screen.findByRole('heading', { name: /^(Welcome|Good (morning|afternoon|evening)), / }),
     ).toBeVisible()
     expect(
       await screen.findByRole('link', {
-        name: 'Agent Workspace, 3 items need attention',
+        name: 'Agent Workspace, 3 unread',
       }),
     ).toBeVisible()
     const searchButton = screen.getByRole('button', { name: 'Search and commands' })
@@ -51,7 +51,7 @@ describe('App shell and Project navigation', () => {
 
     const projectsButton = screen.getByRole('button', { name: 'Home: open navigation' })
     fireEvent.click(projectsButton)
-    expect(screen.getByRole('navigation', { name: 'Projects' })).toHaveAttribute(
+    expect(screen.getByRole('navigation', { name: 'Spaces' })).toHaveAttribute(
       'data-mobile-open',
       'true',
     )
@@ -147,7 +147,7 @@ describe('App shell and Project navigation', () => {
     installStandardApi()
     const firstRender = render(<App />)
     const projectALink = await screen.findByRole('link', {
-      name: 'Agent Workspace, 3 items need attention',
+      name: 'Agent Workspace, 3 unread',
     })
     fireEvent.click(projectALink)
     expect(
@@ -157,9 +157,9 @@ describe('App shell and Project navigation', () => {
       `/projects/${projectAId}/threads/${threadId}`,
     )
 
-    fireEvent.click(within(screen.getByRole('navigation', { name: 'Projects' })).getByRole('link', { name: /^Home/ }))
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Spaces' })).getByRole('link', { name: /^Home/ }))
     fireEvent.click(
-      await within(screen.getByRole('navigation', { name: 'Projects' })).findByRole('link', {
+      await within(screen.getByRole('navigation', { name: 'Spaces' })).findByRole('link', {
         name: 'Beta Project',
       }),
     )
@@ -168,10 +168,10 @@ describe('App shell and Project navigation', () => {
     ).toBeVisible()
     expect(window.location.pathname).toBe(`/projects/${projectBId}`)
 
-    fireEvent.click(within(screen.getByRole('navigation', { name: 'Projects' })).getByRole('link', { name: /^Home/ }))
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Spaces' })).getByRole('link', { name: /^Home/ }))
     fireEvent.click(
       await screen.findByRole('link', {
-        name: 'Agent Workspace, 3 items need attention',
+        name: 'Agent Workspace, 3 unread',
       }),
     )
     expect(
@@ -182,7 +182,7 @@ describe('App shell and Project navigation', () => {
     installStandardApi(signedOutSession)
     window.history.replaceState({}, '', '/sign-in')
     render(<App />)
-    fireEvent.change(await screen.findByLabelText('Login name'), {
+    fireEvent.change(await screen.findByLabelText('Username'), {
       target: { value: 'mischa' },
     })
     fireEvent.change(screen.getByLabelText('Password'), {
@@ -190,11 +190,11 @@ describe('App shell and Project navigation', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
     expect(
-      await screen.findByRole('heading', { name: /Welcome back/ }),
+      await screen.findByRole('heading', { name: /^(Welcome|Good (morning|afternoon|evening)), / }),
     ).toBeVisible()
     fireEvent.click(
       await screen.findByRole('link', {
-        name: 'Agent Workspace, 3 items need attention',
+        name: 'Agent Workspace, 3 unread',
       }),
     )
     expect(
@@ -363,15 +363,15 @@ describe('App shell and Project navigation', () => {
     render(<App />)
 
     // The overview's other panels aren't stubbed and show their own alerts.
-    const alert = (await screen.findByText('Navigation could not be saved.')).closest<HTMLElement>('[role="alert"]')!
+    const alert = (await screen.findByText('Your place here wasn’t saved.')).closest<HTMLElement>('[role="alert"]')!
     expect(navigationWrites).toBe(2)
     fireEvent.click(
-      within(alert).getByRole('button', { name: 'Try saving again' }),
+      within(alert).getByRole('button', { name: 'Try again' }),
     )
     await waitFor(() => expect(navigationWrites).toBe(3))
     await waitFor(() =>
       expect(
-        screen.queryByText('Navigation could not be saved.'),
+        screen.queryByText('Your place here wasn’t saved.'),
       ).not.toBeInTheDocument(),
     )
   })

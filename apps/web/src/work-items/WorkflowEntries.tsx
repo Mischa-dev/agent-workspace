@@ -1,4 +1,4 @@
-import { IconButton, SelectField, TextField } from '../ui'
+import { Icon, IconButton, SelectField, TextField, countLabel } from '../ui'
 import { CATEGORY_LABELS } from './filterModel'
 import { SEMANTIC_CATEGORIES } from './listModel'
 import type { DraftEntry, DraftStatus } from './workflowModel'
@@ -49,10 +49,20 @@ export function WorkflowEntries<T extends DraftEntry>({ disabled, entries, noun,
               </SelectField>
             ) : null}
             <label className="aw-wf__default">
-              <input checked={entry.isDefault} disabled={disabled} name={`default-${noun}`} onChange={() => onDefault(entry.ref)} type="radio" />
+              <span className="aw-wf__mark">
+                <input
+                  checked={entry.isDefault}
+                  className="aw-check__input"
+                  disabled={disabled}
+                  name={`default-${noun}`}
+                  onChange={() => onDefault(entry.ref)}
+                  type="radio"
+                />
+                <span aria-hidden="true" className="aw-check__box aw-wf__radio" />
+              </span>
               Default
             </label>
-            <span className="aw-wf__count">{entry.taskCount ? `${entry.taskCount} ${entry.taskCount === 1 ? 'task' : 'tasks'}` : entry.id ? 'No tasks' : 'New'}</span>
+            <span className="aw-wf__count">{entry.taskCount ? countLabel(entry.taskCount, 'task') : entry.id ? 'No tasks' : 'New'}</span>
             <span className="aw-wf__buttons">
               <IconButton disabled={disabled || index === 0} icon="arrow-up" label={`Move ${name} up`} onClick={() => onMove(index, -1)} size="sm" />
               <IconButton
@@ -110,13 +120,19 @@ export function TransitionMatrix({
                       —
                     </span>
                   ) : (
-                    <input
-                      aria-label={`Allow ${from.name || 'Unnamed'} to ${to.name || 'Unnamed'}`}
-                      checked={allowed.has(`${from.ref}|${to.ref}`)}
-                      disabled={disabled}
-                      onChange={() => onToggle(from.ref, to.ref)}
-                      type="checkbox"
-                    />
+                    <span className="aw-wf__mark">
+                      <input
+                        aria-label={`Allow ${from.name || 'Unnamed'} to ${to.name || 'Unnamed'}`}
+                        checked={allowed.has(`${from.ref}|${to.ref}`)}
+                        className="aw-check__input"
+                        disabled={disabled}
+                        onChange={() => onToggle(from.ref, to.ref)}
+                        type="checkbox"
+                      />
+                      <span aria-hidden="true" className="aw-check__box">
+                        <Icon name="check" size={12} />
+                      </span>
+                    </span>
                   )}
                 </td>
               ))}

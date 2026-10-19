@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import type { ComponentProps, ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 
 import { Icon, type IconName } from './icons'
@@ -150,5 +150,32 @@ export function Row({
       </div>
       {actions ? <div className="aw-row__actions">{actions}</div> : null}
     </li>
+  )
+}
+
+/** A link that looks like a Button: same variants, sizes and icons. */
+export function ButtonLink({
+  children,
+  className,
+  icon,
+  iconEnd,
+  size = 'md',
+  to,
+  variant = 'secondary',
+  ...props
+}: Omit<ComponentProps<typeof Link>, 'className'> & {
+  className?: string
+  icon?: IconName
+  iconEnd?: IconName
+  size?: 'sm' | 'md' | 'lg'
+  variant?: 'primary' | 'secondary' | 'ghost' | 'danger'
+}) {
+  const iconSize = size === 'sm' ? 14 : 16
+  return (
+    <Link className={['aw-btn', `aw-btn--${variant}`, `aw-btn--${size}`, className].filter(Boolean).join(' ')} to={to} {...props}>
+      {icon ? <Icon name={icon} size={iconSize} /> : null}
+      {children != null ? <span className="aw-btn__label">{children}</span> : null}
+      {iconEnd ? <Icon name={iconEnd} size={iconSize} /> : null}
+    </Link>
   )
 }

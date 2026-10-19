@@ -1,31 +1,14 @@
 import { useMutation, useQueryClient, type QueryClient, type QueryKey } from '@tanstack/react-query'
 
-import { isApiError } from '../api/errors'
-import { showToast, type ToastInput } from '../ui'
+import { describeError, showToast, type ToastInput } from '../ui'
+
+export { describeError }
 
 /**
  * One way to change things from the web: update the screen at once, say what
  * happened in a toast (with Undo where it can be undone), and on failure put
  * the screen back and explain what went wrong. Nothing tells you to reload.
  */
-
-/** A plain sentence for a failed request, and whether fresh data would fix it. */
-export function describeError(error: unknown): { message: string; stale: boolean } {
-  if (isApiError(error)) {
-    if (error.status === 409 || error.code.includes('conflict')) {
-      return { message: 'Someone changed this first. You’re now looking at the latest version.', stale: true }
-    }
-    if (error.status === 403) return { message: 'You don’t have permission to do that here.', stale: false }
-    if (error.status === 404) return { message: 'It’s no longer there. It may have been removed.', stale: true }
-    if (error.status === 429) return { message: 'That’s a lot at once. Wait a moment and try again.', stale: false }
-    if (error.status >= 500) return { message: 'The server had a problem. Try again in a moment.', stale: false }
-    return { message: error.message, stale: false }
-  }
-  if (error instanceof TypeError || (typeof navigator !== 'undefined' && navigator.onLine === false)) {
-    return { message: 'You seem to be offline. Check your connection and try again.', stale: false }
-  }
-  return { message: error instanceof Error && error.message ? error.message : 'Something went wrong. Try again.', stale: false }
-}
 
 /** Show a failure as a toast. Returns whether the data on screen is out of date. */
 export function toastError(title: string, error: unknown) {

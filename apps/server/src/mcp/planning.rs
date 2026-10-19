@@ -681,8 +681,13 @@ pub(super) struct MilestoneValue {
     /// YYYY-MM-DD, if it has one.
     pub target_date: Option<String>,
     pub archived: bool,
+    /// Its tasks, not counting canceled ones.
     pub total: i64,
+    /// Completed tasks.
     pub finished: i64,
+    /// Canceled tasks, left out of total and progress.
+    #[serde(default)]
+    pub canceled: i64,
     /// Open tasks past the target date make it overdue.
     pub overdue: bool,
     /// Pass as expectedVersion to milestone_write.
@@ -691,7 +696,7 @@ pub(super) struct MilestoneValue {
     /// Tasks not yet finished.
     #[serde(default)]
     pub open: i64,
-    /// Finished over total, from 0 to 1.
+    /// Completed over total, from 0 to 1.
     #[serde(default)]
     pub progress: f64,
 }
@@ -717,6 +722,7 @@ fn milestone_value(state: &AppState, project_id: Uuid, view: MilestoneView) -> M
         archived: view.archived,
         total: view.total,
         finished: view.finished,
+        canceled: view.canceled,
         overdue: view.overdue,
         version: view.version,
         open: view.open,

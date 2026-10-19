@@ -3,8 +3,9 @@ import { useLocation, useNavigate } from 'react-router-dom'
 
 import { useProjectConversationSidebar } from '../conversations/hooks'
 import type { SidebarThread } from '../conversations/types'
+import { useUpdateProjectNavigation } from '../projects/hooks'
 import type { Project } from '../projects/types'
-import { IconButton, type MenuEntry } from '../ui'
+import { IconButton, showToast, type MenuEntry } from '../ui'
 import { projectSection } from './projectSections'
 import { SidebarFrame, SidebarLink, SidebarSection, type SidebarAttention } from './SidebarParts'
 import { projectSettingsHref } from '../settings/paths'
@@ -36,6 +37,7 @@ export function ProjectSidebar({
   const location = useLocation()
   const navigate = useNavigate()
   const [creating, setCreating] = useState(false)
+  const updateNavigation = useUpdateProjectNavigation()
   const expandSelected = new URLSearchParams(location.search).get('threads') === 'all'
   const sidebar = useProjectConversationSidebar(project.id, selectedChannelId, {
     expandedChannelId: expandSelected && selectedChannelId ? selectedChannelId : undefined,
@@ -46,8 +48,23 @@ export function ProjectSidebar({
     onNavigate()
     navigate(to)
   }
+  const pinned = project.navigation.pinned
+  const togglePin = () => {
+    updateNavigation
+      .mutateAsync({ projectId: project.id, expectedVersion: project.navigation.version, navigation: project.navigation, pinned: !pinned })
+      .then(() => showToast({ tone: 'success', title: pinned ? `${project.name} unpinned from the rail` : `${project.name} pinned to the rail` }))
+      .catch((reason: unknown) =>
+        showToast({ tone: 'danger', title: 'The pin didn’t change', description: reason instanceof Error ? reason.message : undefined }),
+      )
+  }
   const menu: MenuEntry[] = [
     ...(canCreate ? [{ label: 'New channel', icon: 'plus' as const, onSelect: () => setCreating(true) }] : []),
+    ...(project.capabilities.manage
+      ? [{ label: 'Invite people', icon: 'user-plus' as const, onSelect: () => go(projectSettingsHref(project.id, 'members')) }]
+      : []),
+    ...(project.capabilities.navigationWrite
+      ? [{ label: pinned ? 'Unpin from the rail' : 'Pin to the rail', icon: 'star' as const, onSelect: togglePin }]
+      : []),
     { label: 'Archived conversations', icon: 'archive', onSelect: () => go(`${base}/conversations/archived`) },
     { label: 'Project settings', icon: 'settings', onSelect: () => go(projectSettingsHref(project.id)) },
   ]
@@ -68,6 +85,7 @@ export function ProjectSidebar({
       label={`${project.name} navigation`}
       menu={menu}
       mobileOpen={mobileOpen}
+      space={`project:${project.id}`}
       title={project.name}
     >
       <ul className="aw-section__list aw-sidebar__top">
@@ -75,12 +93,12 @@ export function ProjectSidebar({
         <SidebarLink
           active={section === 'work'}
           icon="work"
-          label="Work items"
+          label="Tasks"
           onNavigate={onNavigate}
           to={`${base}/work-items`}
         />
         <SidebarLink active={section === 'pages'} icon="list" label="Pages" onNavigate={onNavigate} to={`${base}/pages`} />
-        <SidebarLink icon="play" label="Launches" onNavigate={onNavigate} to={`${base}/launches`} />
+        <SidebarLink icon="activity" label="Runs" onNavigate={onNavigate} to={`${base}/launches`} />
       </ul>
       <Suspense fallback={null}>
         <PinnedViews onNavigate={onNavigate} projectId={project.id} />

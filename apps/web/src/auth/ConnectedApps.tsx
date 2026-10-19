@@ -2,20 +2,24 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { requestJson } from '../api/client'
-import { isApiError } from '../api/errors'
 import {
   Banner,
   Button,
+  ConfirmDialog,
   EmptyState,
   IconButton,
+  ListSkeleton,
   Row,
   RowList,
   Section,
   StatusChip,
   Switch,
+  describeError,
+  describeLoadError,
   formatFullDate,
   formatRelative,
   formatShortDate,
+  showToast,
 } from '../ui'
 
 type ConnectedApp = {
@@ -34,25 +38,30 @@ type ConnectedAppsResponse = { mcpUrl: string; guideUrl: string; apps: Connected
 const key = ['connected-apps'] as const
 
 function CopyLine({ label, value }: { label: string; value: string }) {
-  const [copied, setCopied] = useState(false)
+  const [copied, setCopied] = useState<'yes' | 'failed' | null>(null)
+  const copy = () => {
+    if (!navigator.clipboard) {
+      setCopied('failed')
+      return
+    }
+    navigator.clipboard.writeText(value).then(
+      () => {
+        setCopied('yes')
+        window.setTimeout(() => setCopied(null), 1500)
+      },
+      () => setCopied('failed'),
+    )
+  }
   return (
     <div className="aw-copyline">
       <span className="aw-copyline__label">{label}</span>
       <code className="aw-copyline__value">{value}</code>
-      <IconButton
-        icon={copied ? 'check' : 'copy'}
-        label={copied ? 'Copied' : `Copy ${label}`}
-        onClick={() =>
-          void navigator.clipboard
-            ?.writeText(value)
-            .then(() => {
-              setCopied(true)
-              window.setTimeout(() => setCopied(false), 1500)
-            })
-            .catch(() => undefined)
-        }
-        size="sm"
-      />
+      <IconButton icon={copied === 'yes' ? 'check' : 'copy'} label={copied === 'yes' ? 'Copied' : `Copy ${label}`} onClick={copy} size="sm" />
+      {copied === 'failed' ? (
+        <span className="aw-copyline__note" role="status">
+          Couldn’t copy. Select the text and copy it yourself.
+        </span>
+      ) : null}
     </div>
   )
 }
@@ -60,20 +69,22 @@ function CopyLine({ label, value }: { label: string; value: string }) {
 /** Apps connected to this account over MCP, and how to connect another. */
 export function ConnectedAppsSection() {
   const client = useQueryClient()
-  const [error, setError] = useState<string | null>(null)
+  const [revoking, setRevoking] = useState<ConnectedApp | null>(null)
   const apps = useQuery({ queryKey: key, queryFn: () => requestJson<ConnectedAppsResponse>('/api/v1/account/connected-apps') })
   const refresh = () => client.invalidateQueries({ queryKey: key })
-  const onError = (reason: unknown) => setError(isApiError(reason) ? reason.message : 'That didn’t work. Try again.')
   const toggle = useMutation({
     mutationFn: (input: { id: string; showVia: boolean }) =>
       requestJson(`/api/v1/account/connected-apps/${encodeURIComponent(input.id)}`, { method: 'PATCH', json: { showVia: input.showVia } }),
     onSuccess: refresh,
-    onError,
   })
   const revoke = useMutation({
-    mutationFn: (id: string) => requestJson(`/api/v1/account/connected-apps/${encodeURIComponent(id)}/revoke`, { method: 'POST' }),
-    onSuccess: refresh,
-    onError,
+    mutationFn: (app: ConnectedApp) =>
+      requestJson(`/api/v1/account/connected-apps/${encodeURIComponent(app.id)}/revoke`, { method: 'POST' }),
+    onSuccess: (_, app) => {
+      setRevoking(null)
+      showToast({ tone: 'success', title: `${app.clientName} revoked` })
+      void refresh()
+    },
   })
   const mcpUrl = apps.data?.mcpUrl ?? `${window.location.origin}/api/v1/mcp`
   const guideUrl = apps.data?.guideUrl ?? `${window.location.origin}/connect.md`
@@ -83,19 +94,25 @@ export function ConnectedAppsSection() {
         description="Coding agents and chat apps that act as you: they see what you see and, with full access, can send messages and change tasks and pages for you."
         title="Connected apps"
       >
-        {error ? <Banner tone="danger">{error}</Banner> : null}
-        {apps.isError ? <Banner tone="danger">Connected apps didn’t load.</Banner> : null}
-        {apps.data && apps.data.apps.length === 0 ? (
-          <EmptyState icon="key" title="Nothing connected yet">
-            Connect an app below. It will ask you to approve it here.
-          </EmptyState>
+        {toggle.isError ? (
+          <Banner tone="danger">That label setting wasn’t saved. {describeError(toggle.error).message}</Banner>
         ) : null}
-        {apps.data && apps.data.apps.length > 0 ? (
+        {apps.isPending ? (
+          <ListSkeleton label="Loading connected apps" rows={2} />
+        ) : apps.isError ? (
+          <Banner onRetry={() => void apps.refetch()} title="Connected apps didn’t load." tone="danger">
+            {describeLoadError(apps.error)}
+          </Banner>
+        ) : apps.data.apps.length === 0 ? (
+          <EmptyState icon="link" title="Nothing connected yet">
+            Connect an app below. It asks you to approve it here.
+          </EmptyState>
+        ) : (
           <RowList label="Connected apps">
             {apps.data.apps.map((app) => (
               <Row
                 actions={
-                  <Button busy={revoke.isPending && revoke.variables === app.id} onClick={() => revoke.mutate(app.id)} size="sm" variant="danger">
+                  <Button onClick={() => setRevoking(app)} size="sm" variant="danger">
                     Revoke
                   </Button>
                 }
@@ -120,7 +137,7 @@ export function ConnectedAppsSection() {
                   <Switch
                     checked={app.showVia}
                     description="Messages and edits it makes show “via” the app next to your name."
-                    disabled={toggle.isPending}
+                    disabled={toggle.isPending && toggle.variables?.id === app.id}
                     label={`Label what it writes “via ${app.clientName}”`}
                     onChange={(showVia) => toggle.mutate({ id: app.id, showVia })}
                   />
@@ -128,25 +145,36 @@ export function ConnectedAppsSection() {
               </Row>
             ))}
           </RowList>
-        ) : null}
+        )}
+        <ConfirmDialog
+          busy={revoke.isPending}
+          confirmLabel="Revoke"
+          error={revoke.isError ? `It wasn’t revoked. ${describeError(revoke.error).message}` : null}
+          onClose={() => {
+            setRevoking(null)
+            revoke.reset()
+          }}
+          onConfirm={() => revoking && revoke.mutate(revoking)}
+          open={revoking !== null}
+          title={`Revoke ${revoking?.clientName ?? 'this app'}?`}
+        >
+          It stops working right away. To use it again, connect it again and approve it here.
+        </ConfirmDialog>
       </Section>
       <Section
-        description="Give your app this address. It opens a page here asking you to approve it, where you choose full or read-only access."
+        description="Add this server address to your MCP client’s settings. The app opens a page here asking you to approve it, where you choose full or read-only access."
         title="Connect an app"
       >
         <div className="aw-connect">
-          <CopyLine label="Setup guide for a bot" value={guideUrl} />
-          <p className="aw-connect__note">
-            Send this link to any agent. It explains how to connect, whether it works for you or has its own agent
-            account.
-          </p>
           <CopyLine label="MCP address" value={mcpUrl} />
-          <CopyLine label="Claude Code" value={`claude mcp add --scope user --transport http agent-workspace ${mcpUrl}`} />
-          <CopyLine label="Codex config.toml" value={`[mcp_servers.agent_workspace]\nurl = "${mcpUrl}"`} />
-          <CopyLine label="Then in Codex" value="codex mcp login agent_workspace" />
           <p className="aw-connect__note">
-            In Claude Code, run /mcp to sign in after adding it. In claude.ai or ChatGPT, add a custom connector with the MCP address.
-            Then ask it to start with the briefing tool: it lists what needs you.
+            In a chat app, add a custom connector with this address. Then ask it to start with the briefing tool: it lists what
+            needs you.
+          </p>
+          <CopyLine label="Connect an agent" value={guideUrl} />
+          <p className="aw-connect__note">
+            Send this setup guide to any agent. It has the steps for each kind of client, whether the agent works as you or has
+            its own agent account.
           </p>
         </div>
       </Section>

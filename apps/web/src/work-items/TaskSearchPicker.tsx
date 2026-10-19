@@ -47,7 +47,7 @@ export function TaskSearchPicker({
       {extra}
       <ComboboxList
         createLabel={(text) => `Use ${text.toUpperCase()}`}
-        emptyText={results.isError ? 'Search didn’t work. Try again.' : typed ? 'No work items match' : 'Type a key or a few words'}
+        emptyText={results.isError ? 'The search didn’t load. Try again.' : typed ? 'No tasks match' : 'Type a key or a few words'}
         label={label}
         loading={results.isFetching}
         onClose={onClose}

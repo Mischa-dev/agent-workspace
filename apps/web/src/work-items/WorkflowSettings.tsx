@@ -1,7 +1,7 @@
 import { useState } from 'react'
 
 import { isApiError } from '../api/errors'
-import { Banner, Button, MessageSkeleton, Section, SegmentedControl, SelectField, Switch } from '../ui'
+import { Banner, Button, Section, SegmentedControl, SelectField, SettingsSkeleton, Switch, countLabel, describeError, describeLoadError, showToast } from '../ui'
 import { useWorkItemWorkflow } from './hooks'
 import { useSaveWorkflow } from './planningHooks'
 import type { EstimateUnit, WorkItemWorkflow } from './types'
@@ -26,19 +26,19 @@ import './work.css'
 function saveError(error: unknown) {
   if (isApiError(error) && error.code === 'version_conflict') return 'Someone else changed the workflow while you were editing. Discard your changes to see theirs, then make yours again.'
   if (isApiError(error) && error.message) return error.message
-  return 'The workflow didn’t save. Check your connection and try again.'
+  return `The workflow didn’t save. ${describeError(error).message}`
 }
 
-/** A Project's statuses, types, allowed status changes and estimate unit. Owners and admins edit it. */
+/** A project's statuses, types, allowed status changes and estimate unit. Owners and admins edit it. */
 export function WorkflowSettings({ projectId }: { projectId: string }) {
   const workflow = useWorkItemWorkflow(projectId)
-  // Lives here so "Workflow saved" survives the editor starting over on the new version.
+  // Lives here so a failed save survives the editor starting over on the new version.
   const save = useSaveWorkflow()
-  if (workflow.isPending) return <MessageSkeleton label="Loading workflow" rows={4} />
+  if (workflow.isPending) return <SettingsSkeleton label="Loading the workflow" />
   if (workflow.isError) {
     return (
-      <Banner action={<Button onClick={() => void workflow.refetch()} size="sm">Try again</Button>} tone="danger">
-        The workflow didn’t load.
+      <Banner onRetry={() => void workflow.refetch()} title="The workflow didn’t load" tone="danger">
+        {describeLoadError(workflow.error)}
       </Banner>
     )
   }
@@ -73,14 +73,17 @@ function WorkflowEditor({
   const submit = () => {
     setTried(true)
     if (problem || save.isPending) return
-    save.mutate({ projectId, workflow: workflowUpdate(draft, saved), idempotencyKey: crypto.randomUUID() })
+    save.mutate(
+      { projectId, workflow: workflowUpdate(draft, saved), idempotencyKey: crypto.randomUUID() },
+      { onSuccess: () => showToast({ title: 'Workflow saved', tone: 'success' }) },
+    )
   }
 
   return (
     <div className="aw-wf">
       {readOnly ? (
         <Banner className="aw-page__banner" icon="lock">
-          Only Project owners and admins can change the workflow.
+          Only project owners and admins can change the workflow.
         </Banner>
       ) : null}
       <Section
@@ -96,7 +99,7 @@ function WorkflowEditor({
             </Button>
           )
         }
-        description="The steps a work item goes through, in board order. What each one means decides what counts as done or in progress."
+        description="The steps a task goes through, in board order. What each one means decides what counts as done or in progress."
         id="workflow-statuses-heading"
         title="Statuses"
       >
@@ -138,13 +141,13 @@ function WorkflowEditor({
         />
       </Section>
       {goneStatuses.length || goneTypes.length ? (
-        <Section description="Work items in what you removed move to what you choose here when you save." id="workflow-moves-heading" title="Where removed work goes">
+        <Section description="Tasks in what you removed move to what you choose here when you save." id="workflow-moves-heading" title="Where removed work goes">
           <div className="aw-wf__moves">
             {[...goneStatuses.map((entry) => ({ entry, options: draft.statuses })), ...goneTypes.map((entry) => ({ entry, options: draft.types }))].map(({ entry, options }) => (
               <SelectField
                 disabled={disabled}
                 key={entry.id}
-                label={`${entry.taskCount} ${entry.taskCount === 1 ? 'task' : 'tasks'} in ${entry.name} move to`}
+                label={`${countLabel(entry.taskCount, 'task')} in ${entry.name} move to`}
                 onChange={(event) => edit((current) => ({ ...current, replacements: { ...current.replacements, [entry.id]: event.target.value } }))}
                 value={draft.replacements[entry.id] ?? ''}
               >
@@ -178,7 +181,7 @@ function WorkflowEditor({
           />
         )}
       </Section>
-      <Section description="How work items are sized." id="workflow-estimate-heading" title="Estimates">
+      <Section description="How tasks are sized." id="workflow-estimate-heading" title="Estimates">
         <SegmentedControl<EstimateUnit>
           label="Estimate unit"
           onChange={(estimateUnit) => {
@@ -195,7 +198,6 @@ function WorkflowEditor({
         <div className="aw-wf__save" role="group" aria-label="Save workflow">
           {tried && problem ? <Banner tone="warning">{problem}</Banner> : null}
           {save.isError ? <Banner tone="danger">{saveError(save.error)}</Banner> : null}
-          {save.isSuccess && !dirty ? <Banner tone="success">Workflow saved.</Banner> : null}
           <div className="aw-wf__savebuttons">
             <Button
               disabled={!dirty || save.isPending}

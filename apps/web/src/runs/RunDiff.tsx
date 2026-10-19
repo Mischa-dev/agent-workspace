@@ -1,21 +1,40 @@
-import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useRef, useState } from 'react'
 
-import { Banner, Button, ListSkeleton } from '../ui'
-import { getRunDiff, runKeys, type ChangedFile } from './api'
+import { Banner, Button, ListSkeleton, describeError } from '../ui'
+import { getRunDiff, runKeys, type RunDetail } from './api'
 import { splitPatch, type PatchFile } from './runModel'
 
 const STATUS_LABEL: Record<string, string> = { added: 'Added', modified: 'Changed', deleted: 'Deleted', renamed: 'Renamed' }
 
-/** The files the run changed, with the diff fetched only when asked for. */
-export function RunDiff({ files, runId }: { files: ChangedFile[] | null; runId: string }) {
-  const [wanted, setWanted] = useState(false)
-  const diff = useQuery({ queryKey: runKeys.diff(runId), queryFn: () => getRunDiff(runId), enabled: wanted })
+/** Why a run has no files to list: not started, no branch, or its branch is gone. */
+function noFilesText(run: Pick<RunDetail, 'agentName' | 'baseCommit' | 'publishedCommit'>, live: boolean) {
+  if (live) return `Changes show up here once ${run.agentName ?? 'the agent'} edits files.`
+  if (!run.baseCommit) return 'This run didn’t work on a branch, so it has no changes to show.'
+  if (!run.publishedCommit) return 'The run’s branch is gone and was never published, so its changes can’t be read any more.'
+  return 'The run’s changes can’t be read right now.'
+}
 
-  if (files === null) {
-    return <p className="aw-runs__quiet">The run’s branch is gone, so its changes can’t be read any more.</p>
+/** The files the run changed, with the diff fetched only when asked for. */
+export function RunDiff({ live, run }: { live: boolean; run: Pick<RunDetail, 'agentName' | 'baseCommit' | 'files' | 'id' | 'publishedCommit'> }) {
+  const { files } = run
+  const [wanted, setWanted] = useState(false)
+  const queryClient = useQueryClient()
+  const diff = useQuery({ queryKey: runKeys.diff(run.id), queryFn: () => getRunDiff(run.id), enabled: wanted })
+
+  // A run that keeps editing files gets a fresh diff, not the one from when it was opened.
+  const signature = files?.map((file) => `${file.status}:${file.path}:${file.added ?? ''}:${file.removed ?? ''}`).join('|') ?? ''
+  const seen = useRef(signature)
+  useEffect(() => {
+    if (seen.current === signature) return
+    seen.current = signature
+    if (wanted) void queryClient.invalidateQueries({ queryKey: runKeys.diff(run.id) })
+  }, [queryClient, run.id, signature, wanted])
+
+  if (files === null) return <p className="aw-runs__quiet">{noFilesText(run, live)}</p>
+  if (files.length === 0) {
+    return <p className="aw-runs__quiet">{live ? `No files changed yet. They show up here as ${run.agentName ?? 'the agent'} edits them.` : 'The run didn’t change any files.'}</p>
   }
-  if (files.length === 0) return <p className="aw-runs__quiet">The run hasn’t changed any files.</p>
 
   const patches = diff.data?.patch ? splitPatch(diff.data.patch) : []
   const tooBig = diff.data?.state === 'ready' && (diff.data.truncated || !diff.data.patch)
@@ -28,7 +47,9 @@ export function RunDiff({ files, runId }: { files: ChangedFile[] | null; runId: 
             <code className="aw-rundiff__path">{file.path}</code>
             <span className="aw-rundiff__stat">
               {STATUS_LABEL[file.status] ?? file.status}
-              {file.added === null ? ' · binary' : (
+              {file.added === null ? (
+                ' · binary'
+              ) : (
                 <>
                   {' · '}
                   <span className="aw-rundiff__added">+{file.added}</span> <span className="aw-rundiff__removed">−{file.removed ?? 0}</span>
@@ -45,8 +66,8 @@ export function RunDiff({ files, runId }: { files: ChangedFile[] | null; runId: 
       ) : null}
       {wanted && diff.isPending ? <ListSkeleton label="Loading the diff" rows={3} /> : null}
       {diff.isError ? (
-        <Banner action={<Button onClick={() => void diff.refetch()}>Try again</Button>} tone="danger" title="The diff didn’t load.">
-          {diff.error.message}
+        <Banner onRetry={() => void diff.refetch()} tone="danger" title="The diff didn’t load.">
+          {describeError(diff.error).message}
         </Banner>
       ) : null}
       {diff.data?.state === 'unavailable' ? (
@@ -80,17 +101,26 @@ function PatchView({ patch }: { patch: PatchFile }) {
   const [open, setOpen] = useState(true)
   return (
     <div className="aw-rundiff__patch">
-      <Button aria-expanded={open} icon={open ? 'chevron-down' : 'chevron-right'} onClick={() => setOpen(!open)} size="sm" variant="ghost">
+      <Button
+        aria-expanded={open}
+        className="aw-rundiff__toggle"
+        icon={open ? 'chevron-down' : 'chevron-right'}
+        onClick={() => setOpen(!open)}
+        size="sm"
+        variant="ghost"
+      >
         <code>{patch.path}</code>
       </Button>
       {open ? (
         <pre className="aw-runs__pre aw-rundiff__pre">
-          {patch.text.split('\n').map((line, index) => (
-            <span className={lineClass(line)} key={index}>
-              {line}
-              {'\n'}
-            </span>
-          ))}
+          {/* One block per line, inside a box as wide as the longest, so a line's colour runs the full width when scrolled. */}
+          <span className="aw-rundiff__lines">
+            {patch.text.split('\n').map((line, index) => (
+              <span className={lineClass(line)} key={index}>
+                {line || ' '}
+              </span>
+            ))}
+          </span>
         </pre>
       ) : null}
     </div>

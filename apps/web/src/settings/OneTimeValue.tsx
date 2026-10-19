@@ -20,7 +20,7 @@ export function OneTimeValue({
   title: string
   value: string
 }) {
-  const [copied, setCopied] = useState(false)
+  const [copied, setCopied] = useState<'yes' | 'failed' | null>(null)
   const timer = useRef<number | undefined>(undefined)
   const heading = useRef<HTMLHeadingElement>(null)
   useEffect(() => {
@@ -28,14 +28,19 @@ export function OneTimeValue({
     return () => window.clearTimeout(timer.current)
   }, [])
   const copy = () => {
-    void navigator.clipboard
-      ?.writeText(value)
-      .then(() => {
-        setCopied(true)
+    // Without a clipboard (an insecure page, a refused permission) say so, so nobody closes it thinking it's copied.
+    if (!navigator.clipboard) {
+      setCopied('failed')
+      return
+    }
+    navigator.clipboard.writeText(value).then(
+      () => {
+        setCopied('yes')
         window.clearTimeout(timer.current)
-        timer.current = window.setTimeout(() => setCopied(false), 2000)
-      })
-      .catch(() => undefined)
+        timer.current = window.setTimeout(() => setCopied(null), 2000)
+      },
+      () => setCopied('failed'),
+    )
   }
   return (
     <aside aria-label={title} className="aw-card aw-token">
@@ -48,12 +53,17 @@ export function OneTimeValue({
       <p>{children}</p>
       <code className="aw-token__value">{value}</code>
       <div className="aw-card__actions aw-onetime__actions">
-        <Button icon={copied ? 'check' : 'copy'} onClick={copy} variant="primary">
-          {copied ? 'Copied' : copyLabel}
+        <Button icon={copied === 'yes' ? 'check' : 'copy'} onClick={copy} variant="primary">
+          {copied === 'yes' ? 'Copied' : copyLabel}
         </Button>
         {extra}
         <Button onClick={onDone}>Done</Button>
       </div>
+      {copied === 'failed' ? (
+        <p className="aw-quiet" role="status">
+          Couldn’t copy. Select the text above and copy it yourself.
+        </p>
+      ) : null}
     </aside>
   )
 }

@@ -82,11 +82,10 @@ export function TaskDetail({
     return (
       <TaskFrame layout={layout} onClose={onClose} projectId={projectId}>
         <ErrorState
-          action={<Button onClick={() => void Promise.all([item.refetch(), workflow.refetch()])}>Try again</Button>}
-          title="This task isn’t available"
-        >
-          It may have been removed, or your access may have changed. If your connection dropped, try again.
-        </ErrorState>
+          error={item.error ?? workflow.error}
+          onRetry={() => void Promise.all([item.refetch(), workflow.refetch()])}
+          title="This task didn’t load"
+        />
       </TaskFrame>
     )
   }

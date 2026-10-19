@@ -3,29 +3,29 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
+import { queryKeys } from '../api/queryKeys'
+import { toastError } from '../app/mutations'
 import { useAuthenticatedSession } from '../auth/session'
-import {
-  continueConversation,
-  getConversationTimeline,
-  retryReplyRequest,
-  stopReplyRequest,
-  sendConversationMessage,
-} from '../conversations/api'
+import { continueConversation, getConversationTimeline, retryReplyRequest, stopReplyRequest } from '../conversations/api'
 import { ConversationHeader } from '../conversations/ConversationHeader'
-import type { ComposerSubmission } from '../conversations/composerModel'
-import { useConversationTimeline } from '../conversations/hooks'
+import { useConversationTimeline } from '../conversations/useConversationTimeline'
 import { useMessageActions } from '../conversations/MessageActions'
 import { useConversationTools } from '../later/useConversationTools'
 import { ReplyStatusList } from '../conversations/ReplyStatus'
+import { groupReplyRequests } from '../conversations/replyStatusModel'
 import { StructuredComposer } from '../conversations/StructuredComposer'
-import { ThreadBoard, ThreadStatusChip } from '../conversations/threadBoard'
+import { ThreadBoard } from '../conversations/threadBoard'
+import { ThreadChip } from '../conversations/ThreadChip'
+import { threadChipFacts } from '../conversations/threadChipModel'
 import { useRefreshThreads, useThreads } from '../conversations/threadModel'
 import { ThreadDialog } from '../conversations/ThreadDialog'
-import { ConversationTimeline, OlderMessagesButton, PendingMessageRow, TimelineEntries } from '../conversations/Timeline'
-import type { ConversationActor, ConversationTimelineEntry, ReplyRequest, ThreadSummary } from '../conversations/types'
+import { ConversationTimeline, OlderMessagesButton, PendingMessages, TimelineEntries } from '../conversations/Timeline'
+import type { ConversationActor, ConversationTimelineEntry, ThreadSummary } from '../conversations/types'
 import { useAutoMarkSeen } from '../conversations/useAutoMarkSeen'
+import { useFirstUnread } from '../conversations/useFirstUnread'
 import { useLiveOlderEntries } from '../conversations/useLiveOlderEntries'
-import { MessageMemoryActions, PinnedBar } from '../memory/ConversationMemory'
+import { useMessageSender } from '../conversations/useMessageSender'
+import { PinnedBar } from '../memory/ConversationMemory'
 import { AppShell } from '../shell/AppShell'
 import {
   ActorTag,
@@ -33,13 +33,15 @@ import {
   AvatarStack,
   Banner,
   Button,
+  ConfirmDialog,
   ConversationIntro,
   ErrorState,
-  Icon,
   IconButton,
   MessageSkeleton,
   SelectField,
   actorKind,
+  describeError,
+  showToast,
 } from '../ui'
 import { addGroupMember, conversationTitle, directQueryKey, removeGroupMember, useDirectOverview } from './api'
 import { usePageTitle } from '../shell/documentTitleModel'
@@ -47,6 +49,8 @@ import { ThreadPanel } from '../threads/ThreadPanel'
 import { uploadFile } from '../files/api'
 
 const NO_ENTRIES: ConversationTimelineEntry[] = []
+
+type SidePanel = 'members' | 'threads'
 
 function listNames(names: string[]) {
   if (names.length <= 1) return names.join('')
@@ -56,20 +60,28 @@ function listNames(names: string[]) {
 export function DirectConversationPage() {
   const session = useAuthenticatedSession()
   const { conversationId = '' } = useParams()
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const overview = useDirectOverview()
   const projectId = overview.data?.projectId ?? ''
   const timeline = useConversationTimeline(projectId, conversationId)
-  const [pending, setPending] = useState<{ key: string; text?: string }[]>([])
-  const [membersOpen, setMembersOpen] = useState(false)
-  const [boardOpen, setBoardOpen] = useState(false)
-  const [threadDialog, setThreadDialog] = useState<{ messageId: string; text: string; author: string } | null>(null)
+  // Kept per conversation: the page stays mounted from one DM to the next.
+  const [side, setSide] = useState<{ conversationId: string; panel: SidePanel } | null>(null)
+  const panel = side?.conversationId === conversationId ? side.panel : null
+  const togglePanel = (next: SidePanel) => setSide(panel === next ? null : { conversationId, panel: next })
+  const [threadDialog, setThreadDialog] = useState<{
+    conversationId: string
+    origin: { messageId: string; text: string; author: string }
+  } | null>(null)
+  const [leaving, setLeaving] = useState<string | null>(null)
+  const [continuing, setContinuing] = useState(false)
   const [searchParams, setSearchParams] = useSearchParams()
   const openThreadId = searchParams.get('thread')
   const threads = useThreads(projectId, conversationId)
   const refreshThreads = useRefreshThreads()
   const page = timeline.data
   const viewerId = session.user.actorId
+  const viewer = { actorId: viewerId, displayName: session.user.displayName }
   const summary = overview.data?.conversations.find((conversation) => conversation.id === conversationId)
   const members = summary?.members ?? []
   const valid = page?.conversation.id === conversationId && (page.conversation.kind === 'dm' || page.conversation.kind === 'group')
@@ -79,7 +91,7 @@ export function DirectConversationPage() {
   const older = useLiveOlderEntries({
     conversationId,
     newestEntries: valid && page ? page.entries : NO_ENTRIES,
-    newestCursor: valid ? page?.nextCursor ?? null : null,
+    newestCursor: valid ? (page?.nextCursor ?? null) : null,
     loadPage: async (cursor) => {
       const result = await getConversationTimeline(conversationId, cursor)
       if (result.conversation.id !== conversationId || (result.conversation.kind !== 'dm' && result.conversation.kind !== 'group')) {
@@ -90,14 +102,16 @@ export function DirectConversationPage() {
   })
   const entries = older.entries
   const olderCursor = older.cursor
+  const unread = useFirstUnread({
+    conversationId,
+    entries,
+    fresh: timeline.isFetchedAfterMount,
+    hasOlder: Boolean(olderCursor),
+    page: valid ? page : null,
+    viewerId,
+  })
 
-  const requestsByMessage = useMemo(() => {
-    const byMessage = new Map<string, ReplyRequest[]>()
-    for (const request of valid ? page?.replyRequests ?? [] : []) {
-      byMessage.set(request.messageId, [...(byMessage.get(request.messageId) ?? []), request])
-    }
-    return byMessage
-  }, [page?.replyRequests, valid])
+  const requestsByMessage = useMemo(() => groupReplyRequests(valid ? (page?.replyRequests ?? []) : []), [page?.replyRequests, valid])
   const threadsByMessage = useMemo(() => {
     const byMessage = new Map<string, ThreadSummary[]>()
     for (const thread of threads.data ?? []) {
@@ -121,7 +135,7 @@ export function DirectConversationPage() {
       conversationId,
       highestSequence: valid && page ? page.highestSequence : 0,
       highestSeenSequence: valid && page ? page.readState.highestSeenSequence : 0,
-      ready: Boolean(valid && page?.capabilities.markSeen),
+      ready: Boolean(valid && page?.capabilities.markSeen && entries.at(-1)?.sequence === page.highestSequence),
     },
     onSeen,
   )
@@ -135,9 +149,12 @@ export function DirectConversationPage() {
     )
   }
 
+  const canPost = Boolean(valid && page?.capabilities.sendMessage)
+  const startThread = (origin: { messageId: string; text: string; author: string }) => setThreadDialog({ conversationId, origin })
   const messageActions = useMessageActions({
     projectId,
     conversationId,
+    direct: true,
     viewerId,
     capabilities: valid ? page?.capabilities : null,
     searchActors: searchMembers,
@@ -146,49 +163,47 @@ export function DirectConversationPage() {
       older.replaceEntry(entry)
       void timeline.refetch()
     },
-    actionsFor: (message) => {
-      if (!valid || !page?.capabilities.sendMessage) return null
+    onMarkedUnread: (entry) => unread.markUnreadFrom(entry.sequence),
+    primaryFor: (message) => {
       const existing = threadsByMessage.get(message.id)?.[0]
+      if (existing) return <IconButton icon="messages" label="Open thread" onClick={() => openThread(existing.id)} size="sm" />
+      if (!canPost) return null
       return (
-        <>
-          {existing ? (
-            <IconButton icon="messages" label="Open thread" onClick={() => openThread(existing.id)} size="sm" />
-          ) : (
-            <IconButton
-              icon="messages"
-              label="Start a thread"
-              onClick={() => setThreadDialog({ messageId: message.id, text: message.plainText, author: message.author.displayName })}
-              size="sm"
-            />
-          )}
-          <MessageMemoryActions conversationId={conversationId} message={message} projectId={projectId} />
-        </>
+        <IconButton
+          icon="messages"
+          label="Start a thread"
+          onClick={() => startThread({ messageId: message.id, text: message.plainText, author: message.author.displayName })}
+          size="sm"
+        />
       )
     },
   })
 
-  const send = async (submission: ComposerSubmission) => {
-    if (!page) return
-    setPending((current) => [...current, { key: submission.idempotencyKey, text: submission.text }])
-    try {
-      await sendConversationMessage({ conversationId, kind: page.conversation.kind, ...submission })
-      await timeline.refetch()
-      void queryClient.invalidateQueries({ queryKey: directQueryKey })
-    } finally {
-      setPending((current) => current.filter((item) => item.key !== submission.idempotencyKey))
-    }
-  }
+  const sender = useMessageSender({
+    conversationId,
+    kind: page?.conversation.kind ?? (isGroup ? 'group' : 'dm'),
+    onSent: () => void queryClient.invalidateQueries({ queryKey: directQueryKey }),
+    queryKey: queryKeys.timeline(projectId, conversationId, false),
+  })
 
-  const title = summary ? conversationTitle(summary, viewerId) : page?.conversation.name ?? 'Conversation'
+  const title = summary ? conversationTitle(summary, viewerId) : (page?.conversation.name ?? 'Conversation')
   usePageTitle(summary || page ? title : null)
 
   const tools = useConversationTools({
-    canPost: Boolean(valid && page?.capabilities.sendMessage),
+    canPost,
     conversationId,
     kind: isGroup ? 'group' : 'dm',
     latestMessageId: entries.at(-1)?.message?.id,
     projectId,
   })
+
+  const letContinue = () => {
+    setContinuing(true)
+    void continueConversation(conversationId)
+      .then(() => timeline.refetch())
+      .catch((reason: unknown) => toastError('The agents weren’t asked to continue', reason))
+      .finally(() => setContinuing(false))
+  }
 
   if (isApiError(timeline.error) && timeline.error.status === 404) {
     return <Navigate replace to="/messages" />
@@ -201,17 +216,15 @@ export function DirectConversationPage() {
   const threadsButton = (
     <IconButton
       icon="messages"
-      label={boardOpen ? 'Hide threads' : 'Threads'}
+      label={panel === 'threads' ? 'Hide threads' : 'Threads'}
       onClick={() => {
         openThread(null)
-        setMembersOpen(false)
-        setBoardOpen((open) => !open)
+        togglePanel('threads')
       }}
-      pressed={boardOpen}
+      pressed={panel === 'threads'}
       side="bottom"
     />
   )
-
 
   const header = isGroup ? (
     <ConversationHeader
@@ -219,13 +232,12 @@ export function DirectConversationPage() {
         <>
           {threadsButton}
           <button
-            aria-expanded={membersOpen}
+            aria-expanded={panel === 'members'}
             aria-label={`${members.length} members`}
             className="aw-convhead__members"
             onClick={() => {
               openThread(null)
-              setBoardOpen(false)
-              setMembersOpen((open) => !open)
+              togglePanel('members')
             }}
             type="button"
           >
@@ -235,7 +247,10 @@ export function DirectConversationPage() {
         </>
       }
       icon="users"
-      menu={tools.levelMenu}
+      menu={[
+        ...tools.levelMenu,
+        ...(summary ? [{ separator: true as const }, { label: 'Leave group…', icon: 'log-out' as const, danger: true, onSelect: () => setLeaving(conversationId) }] : []),
+      ]}
       subtitle={othersNames.length ? `With ${listNames(othersNames)}` : undefined}
       tag={tools.levelMark}
       title={title}
@@ -277,6 +292,8 @@ export function DirectConversationPage() {
     </ConversationIntro>
   ) : null
 
+  const dialog = threadDialog?.conversationId === conversationId ? threadDialog : null
+
   return (
     <AppShell
       context={
@@ -288,54 +305,71 @@ export function DirectConversationPage() {
             parentId={conversationId}
             projectId={projectId}
             threadId={openThreadId}
-            viewer={{ actorId: viewerId, displayName: session.user.displayName }}
+            viewer={viewer}
           />
-        ) : boardOpen ? (
+        ) : panel === 'threads' ? (
           <ThreadBoard
             conversationId={conversationId}
             projectId={projectId}
-            onClose={() => setBoardOpen(false)}
+            onClose={() => setSide(null)}
             onOpen={(thread) => {
-              setBoardOpen(false)
+              setSide(null)
               openThread(thread.id)
             }}
           />
-        ) : isGroup && membersOpen ? (
+        ) : isGroup && panel === 'members' ? (
           <GroupMembers
             conversationId={conversationId}
             members={members}
-            onClose={() => setMembersOpen(false)}
+            onClose={() => setSide(null)}
+            onLeave={() => setLeaving(conversationId)}
             people={overview.data?.people ?? []}
             viewerId={viewerId}
           />
         ) : undefined
       }
-      contextKey={openThreadId ?? (boardOpen ? 'threads' : membersOpen ? 'members' : undefined)}
+      contextKey={openThreadId ?? panel ?? undefined}
       direct
       mainClassName="aw-main--conversation"
       onContextDismiss={() => {
         if (openThreadId) openThread(null)
-        setBoardOpen(false)
-        setMembersOpen(false)
+        setSide(null)
       }}
       user={session.user}
     >
       {header}
       {tools.banner}
-      {valid && projectId ? <PinnedBar canEdit={Boolean(page?.capabilities.sendMessage)} conversationId={conversationId} direct projectId={projectId} /> : null}
-      <ConversationTimeline busy={timeline.isPending} label={`Messages with ${title}`} revision={`${page?.highestSequence ?? 0}:${pending.length}:${page?.replyRequests.map((request) => request.status).join(',') ?? ''}`}>
+      {valid && projectId ? <PinnedBar canEdit={canPost} conversationId={conversationId} direct projectId={projectId} /> : null}
+      <ConversationTimeline
+        busy={timeline.isPending || older.loading}
+        hasOlder={Boolean(olderCursor)}
+        key={conversationId}
+        label={`Messages with ${title}`}
+        olderKey={older.olderCount}
+        onLoadOlder={() => void older.loadOlder()}
+        revision={`${page?.highestSequence ?? 0}:${sender.pending.length}:${page?.replyRequests.map((request) => request.status).join(',') ?? ''}`}
+        stickKey={sender.sent}
+        unread={unread.unread}
+      >
         {olderCursor ? <OlderMessagesButton busy={older.loading} onClick={() => void older.loadOlder()} /> : null}
-        {older.error ? <Banner tone="danger">{older.error}</Banner> : null}
-        {overview.isPending || timeline.isPending ? <MessageSkeleton /> : null}
-        {timeline.isError && !isApiError(timeline.error) ? (
-          <ErrorState action={<Button onClick={() => void timeline.refetch()}>Try again</Button>} title="This conversation didn’t load">
-            Check your connection and try again.
-          </ErrorState>
+        {older.error ? (
+          <Banner onRetry={() => void older.loadOlder()} title="Earlier messages didn’t load." tone="danger">
+            {older.error}
+          </Banner>
+        ) : null}
+        {overview.isError ? (
+          <ErrorState error={overview.error} onRetry={() => void overview.refetch()} title="Your messages didn’t load" />
+        ) : (overview.isPending || timeline.isPending) && !timeline.isError ? (
+          <MessageSkeleton />
+        ) : null}
+        {timeline.isError ? (
+          <ErrorState error={timeline.error} onRetry={() => void timeline.refetch()} title="This conversation didn’t load" />
         ) : null}
         {valid && !olderCursor ? intro : null}
         <TimelineEntries
           conversationId={conversationId}
           entries={entries}
+          firstUnreadSequence={unread.firstUnreadSequence}
           onOpenHistory={messageActions.openHistory}
           renderEditor={messageActions.editorFor}
           renderExtras={(entry) =>
@@ -343,20 +377,17 @@ export function DirectConversationPage() {
               <>
                 {entry.message.removed ? null : (
                   <ReplyStatusList
-                    onRetry={(requestId) => void retryReplyRequest(requestId).then(() => timeline.refetch())}
+                    onRetry={(requestId) => retryReplyRequest(requestId).then(() => timeline.refetch())}
                     onStop={page?.capabilities.sendMessage ? (requestId) => stopReplyRequest(requestId).then(() => timeline.refetch()) : undefined}
                     requests={requestsByMessage.get(entry.message.id) ?? []}
                   />
                 )}
-                {(threadsByMessage.get(entry.message.id) ?? []).map((thread) => (
-                  <button className="aw-threadlink" key={thread.id} onClick={() => openThread(thread.id)} type="button">
-                    <Icon name="messages" size={14} />
-                    <span className="aw-threadlink__name">{thread.name}</span>
-                    <ThreadStatusChip status={thread.status} />
-                    {thread.outcome ? <span className="aw-threadlink__state">{thread.outcome}</span> : null}
-                    <Icon className="aw-threadlink__chev" name="chevron-right" size={14} />
-                  </button>
-                ))}
+                {(threadsByMessage.get(entry.message.id) ?? []).map((thread) => {
+                  const facts = threadChipFacts(thread)
+                  return facts ? (
+                    <ThreadChip current={thread.id === openThreadId} key={thread.id} onOpen={() => openThread(thread.id)} thread={facts} />
+                  ) : null
+                })}
               </>
             ) : null
           }
@@ -364,20 +395,12 @@ export function DirectConversationPage() {
           renderToolbar={messageActions.toolbarFor}
           viewerId={viewerId}
         />
-        {pending.map((item, index) => (
-          <PendingMessageRow
-            continued={index > 0 || entries.at(-1)?.message?.author.id === viewerId}
-            key={item.key}
-            name={session.user.displayName}
-            seed={viewerId}
-            text={item.text}
-          />
-        ))}
+        <PendingMessages entries={entries} items={sender.pending} viewer={viewer} />
       </ConversationTimeline>
       {waitingForContinue ? (
         <Banner
           action={
-            <Button onClick={() => void continueConversation(conversationId).then(() => timeline.refetch())} size="sm" variant="primary">
+            <Button busy={continuing} onClick={letContinue} size="sm" variant="primary">
               Let them continue
             </Button>
           }
@@ -388,20 +411,22 @@ export function DirectConversationPage() {
           They’ll wait here until someone steps in.
         </Banner>
       ) : null}
-      {valid && page?.capabilities.sendMessage ? (
+      {canPost ? (
         <StructuredComposer
           autoFocus={searchParams.get('compose') === '1'}
           draftKey={conversationId}
-          upload={uploadFile({ kind: 'conversation', conversationId: conversationId })}
+          focusOnOpen={!openThreadId}
           label={`Message ${title}`}
-          onSubmit={send}
+          onEditLast={() => messageActions.editLast(entries)}
+          onSubmit={sender.send}
           placeholder={`Message ${title}`}
           searchActors={searchMembers}
+          upload={uploadFile({ kind: 'conversation', conversationId })}
           {...tools.composer}
         />
       ) : null}
       {messageActions.dialogs}
-      {threadDialog ? (
+      {dialog ? (
         <ThreadDialog
           channelId={conversationId}
           onClose={() => setThreadDialog(null)}
@@ -410,10 +435,57 @@ export function DirectConversationPage() {
             openThread(threadId)
           }}
           open
-          origin={threadDialog}
+          origin={dialog.origin}
         />
       ) : null}
+      <LeaveGroupDialog
+        conversationId={conversationId}
+        onClose={() => setLeaving(null)}
+        onLeft={() => navigate('/messages')}
+        open={leaving === conversationId}
+        title={title}
+        viewerId={viewerId}
+      />
     </AppShell>
+  )
+}
+
+/** Leaving can't be undone from here: only someone still in the group can add you back. */
+function LeaveGroupDialog({
+  conversationId,
+  onClose,
+  onLeft,
+  open,
+  title,
+  viewerId,
+}: {
+  conversationId: string
+  onClose: () => void
+  onLeft: () => void
+  open: boolean
+  title: string
+  viewerId: string
+}) {
+  const queryClient = useQueryClient()
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const leave = () => {
+    setBusy(true)
+    setError(null)
+    void removeGroupMember(conversationId, viewerId)
+      .then(async () => {
+        await queryClient.invalidateQueries({ queryKey: directQueryKey })
+        showToast({ tone: 'success', title: `Left ${title}` })
+        onClose()
+        onLeft()
+      })
+      .catch((reason: unknown) => setError(describeError(reason).message))
+      .finally(() => setBusy(false))
+  }
+  return (
+    <ConfirmDialog busy={busy} confirmLabel="Leave group" error={error} onClose={onClose} onConfirm={leave} open={open} title="Leave this group?">
+      You’ll stop seeing its messages. Someone still in it can add you back.
+    </ConfirmDialog>
   )
 }
 
@@ -421,35 +493,52 @@ function GroupMembers({
   conversationId,
   members,
   onClose,
+  onLeave,
   people,
   viewerId,
 }: {
   conversationId: string
   members: ConversationActor[]
   onClose: () => void
+  onLeave: () => void
   people: ConversationActor[]
   viewerId: string
 }) {
   const queryClient = useQueryClient()
-  const navigate = useNavigate()
   const [adding, setAdding] = useState('')
-  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState<string | null>(null)
   const memberIds = new Set(members.map((member) => member.id))
   const candidates = people.filter((person) => !memberIds.has(person.id))
-  const run = (action: Promise<void>, after?: () => void) => {
-    setError(null)
-    void action
+  const refresh = () => queryClient.invalidateQueries({ queryKey: directQueryKey })
+
+  const add = (person: ConversationActor, quiet = false) => {
+    setBusy(person.id)
+    return addGroupMember(conversationId, person.id)
       .then(async () => {
-        await queryClient.invalidateQueries({ queryKey: directQueryKey })
-        after?.()
+        await refresh()
+        if (!quiet) showToast({ tone: 'success', title: `Added ${person.displayName}` })
       })
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'That didn’t work. Try again.'))
+      .catch((reason: unknown) => toastError(`${person.displayName} wasn’t added`, reason))
+      .finally(() => setBusy(null))
   }
+
+  // Someone removed can be added back, so it happens at once with Undo.
+  const remove = (member: ConversationActor) => {
+    setBusy(member.id)
+    void removeGroupMember(conversationId, member.id)
+      .then(async () => {
+        await refresh()
+        showToast({ tone: 'success', title: `Removed ${member.displayName}`, onUndo: () => add(member, true) })
+      })
+      .catch((reason: unknown) => toastError(`${member.displayName} wasn’t removed`, reason))
+      .finally(() => setBusy(null))
+  }
+
   return (
     <aside aria-label="Group members" className="context-drawer aw-members">
       <div className="aw-members__head">
         <h2>Members</h2>
-        <IconButton icon="x" label="Close members" onClick={onClose} size="sm" />
+        <IconButton className="aw-panelclose" icon="x" label="Close members" onClick={onClose} size="sm" />
       </div>
       <ul className="aw-members__list">
         {members.map((member) => {
@@ -464,7 +553,10 @@ function GroupMembers({
               </span>
               <ActorTag kind={kind} />
               <Button
-                onClick={() => run(removeGroupMember(conversationId, member.id), you ? () => navigate('/messages') : undefined)}
+                aria-label={you ? 'Leave this group' : `Remove ${member.displayName}`}
+                busy={busy === member.id}
+                disabled={busy !== null}
+                onClick={() => (you ? onLeave() : remove(member))}
                 size="sm"
                 variant="ghost"
               >
@@ -479,14 +571,17 @@ function GroupMembers({
           className="aw-members__add"
           onSubmit={(event) => {
             event.preventDefault()
-            if (adding) run(addGroupMember(conversationId, adding), () => setAdding(''))
+            const person = candidates.find((candidate) => candidate.id === adding)
+            if (person) void add(person).then(() => setAdding(''))
           }}
         >
           <SelectField
-            hint="They'll see everything said here so far."
+            hint="They’ll see everything said here so far."
             id="group-add-member"
             label="Add someone"
-            onChange={(event) => setAdding(event.target.value)} value={adding}>
+            onChange={(event) => setAdding(event.target.value)}
+            value={adding}
+          >
             <option value="">Choose a person or agent…</option>
             {candidates.map((person) => (
               <option key={person.id} value={person.id}>
@@ -494,12 +589,11 @@ function GroupMembers({
               </option>
             ))}
           </SelectField>
-          <Button disabled={!adding} type="submit" variant="primary">
+          <Button busy={busy === adding && adding !== ''} disabled={!adding || busy !== null} type="submit" variant="primary">
             Add
           </Button>
         </form>
       ) : null}
-      {error ? <Banner tone="danger">{error}</Banner> : null}
     </aside>
   )
 }

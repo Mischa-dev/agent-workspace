@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
-import { Banner, Button, ListSkeleton, formatDateTime, formatFullDate, formatShortDate } from '../../ui'
+import { Banner, Button, ListSkeleton, countLabel, describeLoadError, formatDateTime, formatFullDate, formatShortDate } from '../../ui'
 import { getHistory, usageKeys, type AccountHistory, type WindowHistory } from './usageApi'
 
 /**
@@ -26,8 +26,8 @@ export function UsageHistory({ accountId }: { accountId: string }) {
       ) : history.isPending ? (
         <ListSkeleton label="Loading usage history" rows={3} />
       ) : history.isError ? (
-        <Banner tone="danger">
-          The history didn’t load. <Button onClick={() => void history.refetch()} size="sm" variant="ghost">Try again</Button>
+        <Banner onRetry={() => void history.refetch()} title="The history didn’t load." tone="danger">
+          {describeLoadError(history.error)}
         </Banner>
       ) : (
         <HistoryBody history={history.data} />
@@ -137,12 +137,12 @@ function UsageChart({ label, points }: { label: string; points: { at: string; us
 
 function ProjectTable({ history }: { history: AccountHistory }) {
   if (history.projects.length === 0) {
-    return <p className="aw-usage__at">No runs on this account in the last {history.projectDays} days.</p>
+    return <p className="aw-usage__at">No runs on this account in the last {countLabel(history.projectDays, 'day')}.</p>
   }
   return (
     <div className="aw-history__tablewrap">
       <table className="aw-history__table">
-        <caption className="aw-history__caption">Runs per project, last {history.projectDays} days</caption>
+        <caption className="aw-history__caption">Runs per project, last {countLabel(history.projectDays, 'day')}</caption>
         <thead>
           <tr>
             <th scope="col">Project</th>

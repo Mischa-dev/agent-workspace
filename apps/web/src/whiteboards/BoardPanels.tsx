@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
 import { useProjects } from '../projects/hooks'
-import { Banner, Button, Dialog, EmptyState, IconButton, Row, RowList, SelectField, formatFullDate, formatRelative } from '../ui'
+import { Banner, Button, Dialog, EmptyState, IconButton, Row, RowList, SelectField, countLabel, describeError, formatFullDate, formatRelative } from '../ui'
 import {
   linkWhiteboard,
   restoreRevision,
@@ -12,7 +12,6 @@ import {
   type WhiteboardDetail,
   type WhiteboardLink,
 } from './api'
-import { errorText } from './errors'
 
 const KIND_LABEL: Record<WhiteboardLink['targetKind'], string> = {
   project: 'Project',
@@ -20,8 +19,8 @@ const KIND_LABEL: Record<WhiteboardLink['targetKind'], string> = {
   page: 'Page',
 }
 
-/** Where a board is linked, and a way to add it to a project. Tasks and
- * pages link it from their own pages. */
+/** Where a whiteboard is linked, and a way to add it to a project. Tasks
+ * and pages link it from their own pages. */
 export function LinksDialog({
   canEdit,
   detail,
@@ -51,12 +50,12 @@ export function LinksDialog({
     setError(null)
     void action()
       .then(() => queryClient.invalidateQueries({ queryKey: whiteboardKeys.all }))
-      .catch((reason: unknown) => setError(errorText(reason, 'That link didn’t change.')))
+      .catch((reason: unknown) => setError(describeError(reason).message))
       .finally(() => setBusy(null))
   }
   return (
     <Dialog
-      description="One board can sit on many tasks, projects and pages. Taking a link off never deletes the board."
+      description="One whiteboard can sit on many tasks, projects and pages. Taking a link off never deletes the whiteboard."
       footer={<Button onClick={onClose}>Done</Button>}
       onClose={onClose}
       open={open}
@@ -146,12 +145,12 @@ export function HistoryDialog({
         setRestored(revision)
         void queryClient.invalidateQueries({ queryKey: whiteboardKeys.all })
       })
-      .catch((reason: unknown) => setError(errorText(reason, 'That version wasn’t restored.')))
+      .catch((reason: unknown) => setError(describeError(reason).message))
       .finally(() => setBusy(null))
   }
   return (
     <Dialog
-      description="The board saves a version every few minutes while people draw, and before anything removes a lot. Restoring saves the current drawing first."
+      description="The whiteboard saves a version every few minutes while people draw, and before anything removes a lot. Restoring saves the current drawing first."
       footer={<Button onClick={onClose}>Close</Button>}
       onClose={onClose}
       open={open}
@@ -160,7 +159,7 @@ export function HistoryDialog({
     >
       {detail.revisions.length === 0 ? (
         <EmptyState icon="clock" title="No saved versions yet">
-          The first one is saved once the board changes.
+          The first one is saved once the whiteboard changes.
         </EmptyState>
       ) : (
         <RowList label="Saved versions">
@@ -183,7 +182,7 @@ export function HistoryDialog({
                 <>
                   <span title={formatFullDate(revision.createdAt)}>{formatRelative(revision.createdAt)}</span>
                   {revision.author ? <span>{revision.author}</span> : null}
-                  <span>{revision.elementCount === 1 ? '1 element' : `${revision.elementCount} elements`}</span>
+                  <span>{countLabel(revision.elementCount, 'element')}</span>
                 </>
               }
               title={revision.note ?? `Version ${revision.revision}`}
@@ -191,7 +190,7 @@ export function HistoryDialog({
           ))}
         </RowList>
       )}
-      {restored ? <Banner tone="success">Restored. Everyone with the board open sees it now.</Banner> : null}
+      {restored ? <Banner tone="success">Restored. Everyone with the whiteboard open sees it now.</Banner> : null}
       {error ? <Banner tone="danger">{error}</Banner> : null}
     </Dialog>
   )

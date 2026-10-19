@@ -15,7 +15,7 @@ describe('settings addresses', () => {
     [`/projects/${projectBId}/settings`, `/settings/projects/${projectBId}/general`],
     [`/projects/${projectBId}/settings?tab=members`, `/settings/projects/${projectBId}/members`],
     [`/projects/${projectBId}/settings?tab=agents`, `/settings/projects/${projectBId}/agents`],
-    [`/projects/${projectBId}/settings?tab=codex`, `/settings/projects/${projectBId}/codex-runs`],
+    [`/projects/${projectBId}/settings?tab=codex`, `/settings/projects/${projectBId}/run-requests`],
     [`/projects/${projectBId}/settings?tab=repositories`, `/settings/projects/${projectBId}/repositories`],
     [`/projects/${projectBId}/settings?tab=github`, `/settings/projects/${projectBId}/repositories`],
   ])('sends the old link %s to %s', async (from, to) => {
@@ -50,6 +50,14 @@ describe('settings addresses', () => {
       to: `/settings/projects/${projectBId}/general`,
     })
     expect(parseSettingsPath('nowhere/at/all')).toEqual({ kind: 'redirect', to: '/settings/account/profile' })
+    expect(parseSettingsPath(`projects/${projectBId}/codex-runs`)).toEqual({
+      kind: 'redirect',
+      to: `/settings/projects/${projectBId}/run-requests`,
+    })
+    expect(parseSettingsPath(`projects/${projectBId}/automation`)).toEqual({
+      kind: 'redirect',
+      to: `/settings/projects/${projectBId}/automations`,
+    })
   })
 
   it('says why GitHub didn’t connect when the return has no Project in it', async () => {

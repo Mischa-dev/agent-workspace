@@ -6,7 +6,7 @@ import { formatBytes, uploadFile } from '../files/api'
 import { FileGlyph, Paperclip } from '../files/icons'
 import { MAX_ATTACHMENTS } from '../files/useUploads'
 import '../files/files.css'
-import { Banner, Button, Dialog, Icon, IconButton, SelectField, TextArea, TextField, showToast } from '../ui'
+import { Banner, Button, Dialog, Icon, IconButton, SelectField, TextArea, TextField, countLabel, describeError, showToast } from '../ui'
 import { workItemPriorities } from './constants'
 import { useCreateWorkItem } from './hooks'
 import { useTaskDraft } from './taskDraft'
@@ -23,7 +23,8 @@ export function CreateWorkItemDialog({
   onClose: () => void
   onCreated: (id: string) => void
   projectId: string
-  returnFocusRef: RefObject<HTMLButtonElement | null>
+  /** Where focus goes when it closes; otherwise back to what had it before. */
+  returnFocusRef?: RefObject<HTMLButtonElement | null>
   workflow: WorkItemWorkflow
 }) {
   const mutation = useCreateWorkItem()
@@ -57,7 +58,7 @@ export function CreateWorkItemDialog({
     if (failed) {
       showToast({
         tone: 'danger',
-        title: `${failed} ${failed === 1 ? 'file' : 'files'} didn’t upload`,
+        title: `${countLabel(failed, 'file')} didn’t upload`,
         description: 'Add them again from the task’s Files section.',
       })
     }
@@ -101,19 +102,21 @@ export function CreateWorkItemDialog({
     <Dialog
       footer={
         <>
-          <Button onClick={onClose} variant="ghost">
+          <Button onClick={onClose} variant="secondary">
             Cancel
           </Button>
           <Button busy={mutation.isPending || attaching} disabled={!title.trim()} type="submit" variant="primary">
-            Create work item
+            Create task
           </Button>
         </>
       }
+      // The words stay in this browser either way; a stray click outside shouldn't close on them.
+      dirty={Boolean(title.trim() || description.trim() || files.length)}
       onClose={onClose}
       onSubmit={submit}
       open
       returnFocus={returnFocusRef}
-      title="New work item"
+      title="New task"
       width={560}
     >
       <TextField
@@ -219,7 +222,7 @@ export function CreateWorkItemDialog({
       {offline ? (
         <Banner tone="offline">No connection. This task is saved here and will be created when you’re back online.</Banner>
       ) : mutation.isError ? (
-        <Banner tone="danger">{mutation.error.message}</Banner>
+        <Banner tone="danger">{describeError(mutation.error).message}</Banner>
       ) : null}
     </Dialog>
   )

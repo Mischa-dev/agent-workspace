@@ -243,6 +243,10 @@ export function installStandardApi(
       if (path.startsWith('/api/v1/inbox?')) {
         return jsonResponse({ notifications: [], nextCursor: null, unreadCount: 0 })
       }
+      if (path === '/api/v1/inbox/summary') return jsonResponse({ unreadCount: 0 })
+      if (path === '/api/v1/auth/workos') {
+        return jsonResponse({ enabled: false, signupEnabled: false, googleEnabled: false, linked: false, email: null })
+      }
       if (path === '/api/v1/usage') return jsonResponse({ accounts: [] })
       if (path === '/api/v1/my-work') {
         const empty = { items: [], total: 0 }

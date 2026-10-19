@@ -1,9 +1,11 @@
 import { useState, type FormEvent } from 'react'
+import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { requestJson } from '../../api/client'
 import { describeError, toastError } from '../../app/mutations'
-import { Banner, Button, Section, SettingsSkeleton, StatusChip, TextField, formatRelative, showToast } from '../../ui'
+import { Banner, Button, ConfirmDialog, Section, SettingsSkeleton, StatusChip, TextField, describeLoadError, formatFullDate, formatRelative, showToast } from '../../ui'
+import { workspaceSettingsHref } from '../paths'
 import { notificationKeys } from './usageApi'
 
 export type AccountEmail = {
@@ -20,12 +22,17 @@ const setEmail = (address: string) => requestJson<AccountEmail>('/api/v1/account
 const removeEmail = () => requestJson<void>('/api/v1/account/email', { method: 'DELETE' })
 const resend = () => requestJson<AccountEmail>('/api/v1/account/email/resend', { method: 'POST', json: {} })
 
-/** Profile › Email address: where password resets and email notifications go, once confirmed. */
-export function EmailSection() {
+/**
+ * Profile › Email address: where password resets and email notifications go,
+ * once confirmed. `canSetUpEmail` links the owner of the workspace to the page
+ * where its email is set up.
+ */
+export function EmailSection({ canSetUpEmail = false }: { canSetUpEmail?: boolean }) {
   const queryClient = useQueryClient()
   const email = useQuery({ queryKey: emailKey, queryFn: getEmail })
   const [draft, setDraft] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [confirmRemove, setConfirmRemove] = useState(false)
   const settle = (next: AccountEmail | undefined) => {
     setError(null)
     setDraft(null)
@@ -37,9 +44,9 @@ export function EmailSection() {
     mutationFn: (address: string) => setEmail(address),
     onSuccess: (next) => {
       settle(next)
-      if (!next.verified) showToast({ tone: 'success', title: 'Check your inbox', description: `We sent a confirmation link to ${next.address}.` })
+      if (!next.verified) showToast({ tone: 'success', title: 'Check your inbox', description: `Confirmation link sent to ${next.address}.` })
     },
-    onError: (reason) => setError(describeError(reason).message),
+    onError: (reason) => setError(`The address wasn’t saved. ${describeError(reason).message}`),
   })
   const again = useMutation({
     mutationFn: resend,
@@ -51,8 +58,11 @@ export function EmailSection() {
   })
   const remove = useMutation({
     mutationFn: removeEmail,
-    onSuccess: () => settle(undefined),
-    onError: (reason) => toastError('The address wasn’t removed', reason),
+    onSuccess: () => {
+      setConfirmRemove(false)
+      settle(undefined)
+      showToast({ tone: 'success', title: 'Email address removed' })
+    },
   })
 
   const current = email.data
@@ -72,8 +82,8 @@ export function EmailSection() {
       {email.isPending ? (
         <SettingsSkeleton label="Loading your email address" sections={1} />
       ) : email.isError ? (
-        <Banner action={<Button onClick={() => void email.refetch()} size="sm">Try again</Button>} tone="danger">
-          Your email address didn’t load.
+        <Banner onRetry={() => void email.refetch()} title="Your email address didn’t load." tone="danger">
+          {describeLoadError(email.error)}
         </Banner>
       ) : (
         <>
@@ -84,13 +94,25 @@ export function EmailSection() {
               ) : (
                 <StatusChip tone="warning">Waiting for confirmation</StatusChip>
               )}{' '}
-              {!current.verified && current.confirmationSentAt
-                ? `Link sent ${formatRelative(current.confirmationSentAt)}. Open it from your inbox to confirm.`
-                : null}
+              {!current.verified && current.confirmationSentAt ? (
+                <>
+                  Link sent <span title={formatFullDate(current.confirmationSentAt)}>{formatRelative(current.confirmationSentAt)}</span>.
+                  Open it from your inbox to confirm.
+                </>
+              ) : null}
             </p>
           )}
           {!current?.mailAvailable && !current?.address ? (
-            <p className="aw-quiet">None of your workspaces send email yet. A workspace owner sets it up in Workspace › Email.</p>
+            <p className="aw-quiet">
+              None of your workspaces send email yet.{' '}
+              {canSetUpEmail ? (
+                <>
+                  Set it up in <Link to={workspaceSettingsHref('email')}>Workspace › Email</Link>.
+                </>
+              ) : (
+                'A workspace owner sets it up in Workspace › Email.'
+              )}
+            </p>
           ) : (
             <form className="aw-inline-form" onSubmit={submit}>
               <TextField
@@ -120,12 +142,26 @@ export function EmailSection() {
               </Button>
             )}
             {current?.address && (
-              <Button busy={remove.isPending} onClick={() => remove.mutate()} size="sm" variant="ghost">
+              <Button onClick={() => setConfirmRemove(true)} size="sm" variant="ghost">
                 Remove
               </Button>
             )}
           </div>
           {error && <Banner tone="warning">{error}</Banner>}
+          <ConfirmDialog
+            busy={remove.isPending}
+            confirmLabel="Remove address"
+            error={remove.error ? `The address wasn’t removed. ${describeError(remove.error).message}` : null}
+            onClose={() => {
+              setConfirmRemove(false)
+              remove.reset()
+            }}
+            onConfirm={() => remove.mutate()}
+            open={confirmRemove}
+            title={`Remove ${current?.address ?? 'your email address'}?`}
+          >
+            Password reset links and email notifications stop until you add an address again.
+          </ConfirmDialog>
         </>
       )}
     </Section>

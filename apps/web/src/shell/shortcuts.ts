@@ -58,10 +58,16 @@ function inOwnKeysRegion(target: EventTarget | null) {
   return target instanceof HTMLElement && Boolean(target.closest('[role="dialog"], [role="menu"], [role="listbox"]'))
 }
 
+/** The message composer, where the conversation keys work as they do in Slack. */
+function inComposer(target: EventTarget | null) {
+  return target instanceof HTMLElement && Boolean(target.closest('.aw-composer-wrap'))
+}
+
 /**
  * Turns key presses into shortcut actions. Single letters only count outside
  * text fields; ⌘K works everywhere, and the conversation keys (⌥↑, ⇧Esc)
- * work in the composer too, as in Slack. Call `press` for each keydown.
+ * work in the message composer too, as in Slack. In any other field ⌥↑ and
+ * ⌥↓ keep moving the cursor by paragraph. Call `press` for each keydown.
  */
 export function createShortcutMatcher(now: () => number = Date.now) {
   let pending: { key: string; at: number } | null = null
@@ -73,7 +79,8 @@ export function createShortcutMatcher(now: () => number = Date.now) {
       pending = null
       return 'command-menu'
     }
-    if (!event.metaKey && !event.ctrlKey && !inOwnKeysRegion(event.target)) {
+    const conversationKeys = !inOwnKeysRegion(event.target) && (!isTypingTarget(event.target) || inComposer(event.target))
+    if (!event.metaKey && !event.ctrlKey && conversationKeys) {
       if (event.altKey && (key === 'ArrowUp' || key === 'ArrowDown')) {
         pending = null
         const up = key === 'ArrowUp'
@@ -111,7 +118,7 @@ export function createShortcutMatcher(now: () => number = Date.now) {
   }
 }
 
-/** A task key such as "AWD-12": a Project key, a dash and a number. */
+/** A task key such as "AWD-12": a project key, a dash and a number. */
 export const TASK_KEY_PATTERN = /^([A-Za-z][A-Za-z0-9]{1,9})-([1-9][0-9]{0,8})$/
 
 export function parseTaskKey(value: string): { projectKey: string; number: number; key: string } | null {

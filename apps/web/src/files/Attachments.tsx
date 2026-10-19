@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
-import { Icon, IconButton, type IconGlyph } from '../ui'
+import { toastError } from '../app/mutations'
+import { Icon, IconButton, showToast, type IconGlyph } from '../ui'
 import {
   fileContentUrl,
   fileThumbnailUrl,
@@ -183,6 +184,15 @@ function hostOf(url: string) {
   }
 }
 
+/** How long Undo is offered before a hidden preview is hidden for everyone; the toast stays as long. */
+const HIDE_DELAY = 8_000
+
+/**
+ * Hides waiting for their Undo to pass, by preview. Outside the component, so
+ * moving to another conversation meanwhile still sends them.
+ */
+const pendingHides = new Map<string, number>()
+
 /** Cards for the pages a message links to. The author can hide one; it stays hidden for everyone. */
 export function LinkPreviews({
   conversationId,
@@ -196,15 +206,36 @@ export function LinkPreviews({
   previews: LinkPreview[]
 }) {
   const [hidden, setHidden] = useState<string[]>([])
-  const shown = previews.filter((preview) => !hidden.includes(preview.id))
-  if (shown.length === 0) return null
+  const shown = previews.filter((preview) => !hidden.includes(preview.id) && !pendingHides.has(preview.id))
+  const show = (previewId: string) => setHidden((current) => current.filter((id) => id !== previewId))
+  // Hidden here at once; for everyone once Undo has passed, since there's no
+  // bringing a preview back after that.
   const hide = (preview: LinkPreview) => {
     if (!conversationId) return
     setHidden((current) => [...current, preview.id])
-    hideLinkPreview({ conversationId, messageId, previewId: preview.id }).catch(() =>
-      setHidden((current) => current.filter((id) => id !== preview.id)),
+    window.clearTimeout(pendingHides.get(preview.id))
+    pendingHides.set(
+      preview.id,
+      window.setTimeout(() => {
+        pendingHides.delete(preview.id)
+        hideLinkPreview({ conversationId, messageId, previewId: preview.id }).catch((reason: unknown) => {
+          show(preview.id)
+          toastError('The preview wasn’t removed', reason)
+        })
+      }, HIDE_DELAY),
     )
+    showToast({
+      duration: HIDE_DELAY,
+      title: 'Preview removed',
+      tone: 'success',
+      onUndo: () => {
+        window.clearTimeout(pendingHides.get(preview.id))
+        pendingHides.delete(preview.id)
+        show(preview.id)
+      },
+    })
   }
+  if (shown.length === 0) return null
   return (
     <div className="aw-previews">
       {shown.map((preview) => (

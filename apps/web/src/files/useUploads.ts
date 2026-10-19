@@ -62,7 +62,7 @@ export function useUploads(upload: Uploader | undefined, initial: FileAttachment
         .then((uploaded) => update(item.localId, { file: uploaded, progress: 1 }))
         .catch((reason: unknown) => {
           if (controller.signal.aborted) return
-          update(item.localId, { error: reason instanceof Error ? reason.message : 'The upload didn’t work.' })
+          update(item.localId, { error: reason instanceof Error ? reason.message : 'The file wasn’t uploaded.' })
         })
         .finally(() => controllers.current.delete(item.localId))
     }

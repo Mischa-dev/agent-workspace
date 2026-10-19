@@ -1,11 +1,11 @@
 import { useQuery } from '@tanstack/react-query'
 
 import { queryKeys } from '../api/queryKeys'
-import { Banner, Button, Dialog, MessageSkeleton } from '../ui'
+import { Banner, Button, Dialog, MessageSkeleton, describeLoadError } from '../ui'
 import { getMessageRevisions } from './api'
 import { EDIT_HISTORY_HINT } from './composerModel'
 import { MessageContent } from './MessageContent'
-import { formatFullDate } from './timeFormat'
+import { formatDateTime, formatFullDate } from '../ui/time'
 import type { ConversationMessage, MessageContentV1, MessageRevision } from './types'
 
 function revisionLabel(revision: MessageRevision) {
@@ -57,7 +57,11 @@ export function MessageHistoryDialog({
       title="Edit history"
     >
       {history.isPending ? <MessageSkeleton label="Loading earlier versions" rows={2} /> : null}
-      {history.isError ? <Banner tone="danger">The earlier versions didn’t load. Close this and try again.</Banner> : null}
+      {history.isError ? (
+        <Banner onRetry={() => void history.refetch()} title="The earlier versions didn’t load." tone="danger">
+          {describeLoadError(history.error)}
+        </Banner>
+      ) : null}
       {data?.removed ? <Banner tone="offline">This message was removed, and the text of every version was deleted.</Banner> : null}
       {revisions.length > 0 ? (
         <ol className="aw-history">
@@ -66,7 +70,9 @@ export function MessageHistoryDialog({
               <p className="aw-history__meta">
                 <strong>{revisionLabel(revision)}</strong>
                 <span aria-hidden="true"> · </span>
-                <time dateTime={revision.writtenAt}>{formatFullDate(revision.writtenAt)}</time>
+                <time dateTime={revision.writtenAt} title={formatFullDate(revision.writtenAt)}>
+                  {formatDateTime(revision.writtenAt)}
+                </time>
                 {revision.via ? <span> · via {revision.via}</span> : null}
                 {!data?.removed && revision.revision === data?.revision ? (
                   <span className="aw-history__current">Current</span>

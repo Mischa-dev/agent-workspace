@@ -2,16 +2,16 @@ import { PageTabs } from '../ui'
 
 export type WorkTab = 'items' | 'milestones' | 'timeline' | 'planning'
 
-/** Tabs across the pages under a Project's Work items, which the sidebar shows as one row. */
+/** Tabs across the pages under a project's Tasks, which the sidebar shows as one row. */
 export function WorkTabs({ current, projectId }: { current: WorkTab; projectId: string }) {
   const base = `/projects/${encodeURIComponent(projectId)}`
   return (
     <PageTabs
       current={current}
-      label="Work items"
+      label="Tasks"
       replace={false}
       tabs={[
-        { id: 'items', label: 'Work items', to: `${base}/work-items`, icon: 'work' },
+        { id: 'items', label: 'Tasks', to: `${base}/work-items`, icon: 'work' },
         { id: 'milestones', label: 'Milestones', to: `${base}/milestones`, icon: 'checklist' },
         { id: 'timeline', label: 'Timeline', to: `${base}/timeline`, icon: 'clock' },
         { id: 'planning', label: 'Planning', to: `${base}/next`, icon: 'branch' },
@@ -20,7 +20,7 @@ export function WorkTabs({ current, projectId }: { current: WorkTab; projectId: 
   )
 }
 
-/** Tabs between a Project's Pages and its Decisions. */
+/** Tabs between a project's Pages and its Decisions. */
 export function MemoryTabs({ current, projectId }: { current: 'pages' | 'decisions'; projectId: string }) {
   const base = `/projects/${encodeURIComponent(projectId)}`
   return (

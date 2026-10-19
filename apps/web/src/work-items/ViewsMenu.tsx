@@ -2,8 +2,7 @@ import { useRef, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 
-import { isApiError } from '../api/errors'
-import { Button, Dialog, Menu, showToast, Switch, TextField, type MenuEntry } from '../ui'
+import { Button, ConfirmDialog, Dialog, Menu, describeError, showToast, Switch, TextField, type MenuEntry } from '../ui'
 import { createView, deleteView, listViews, pinView, updateView, viewKeys, type SavedView, type ViewDraft } from '../views/api'
 import { VIEW_FIELDS, writeListState, type ListState } from './listModel'
 import type { UpdateListState } from './useListState'
@@ -33,8 +32,8 @@ function sameQuery(view: SavedView, draft: Omit<ViewDraft, 'name' | 'shared'>) {
 }
 
 /**
- * The Views button on the work items page: open a saved view, save the
- * current one, pin it to the sidebar, and pick the list's columns.
+ * The Views button on the tasks page: open a saved view, save the current
+ * one, pin it to the sidebar, and pick the list's columns.
  */
 export default function ViewsMenu({
   actorId,
@@ -53,20 +52,20 @@ export default function ViewsMenu({
   const queryClient = useQueryClient()
   const views = useQuery({ queryKey: viewKeys.views(projectId), queryFn: () => listViews(projectId) })
   const [saving, setSaving] = useState<'new' | 'rename' | null>(null)
+  const [deleting, setDeleting] = useState<SavedView | null>(null)
   const current = views.data?.views.find((view) => view.id === state.savedView) ?? null
   const draft = draftFrom(state, actorId)
   const changed = current ? !sameQuery(current, draft) : false
   const refresh = () => queryClient.invalidateQueries({ queryKey: viewKeys.views(projectId) })
-  const failed = (reason: unknown) =>
-    showToast({ tone: 'danger', title: isApiError(reason) ? reason.message : 'That didn’t save. Try again.' })
+  const failed = (title: string) => (reason: unknown) => showToast({ tone: 'danger', title, description: describeError(reason).message })
 
   const save = useMutation({
     mutationFn: (view: SavedView) => updateView(projectId, view, draft, crypto.randomUUID()),
     onSuccess: (view) => {
       void refresh()
-      showToast({ title: `Saved “${view.name}”` })
+      showToast({ tone: 'success', title: `Saved “${view.name}”` })
     },
-    onError: failed,
+    onError: failed('The view didn’t save'),
   })
   const pin = useMutation({
     mutationFn: (view: SavedView) => pinView(projectId, view.id, !view.pinned, crypto.randomUUID()),
@@ -74,20 +73,20 @@ export default function ViewsMenu({
       void refresh()
       showToast({ title: view.pinned ? `“${view.name}” is in the sidebar` : `“${view.name}” left the sidebar` })
     },
-    onError: failed,
+    onError: failed('The sidebar didn’t change'),
   })
   const remove = useMutation({
     mutationFn: (view: SavedView) => deleteView(projectId, view, crypto.randomUUID()),
-    onSuccess: () => {
+    onSuccess: (_result, view) => {
+      setDeleting(null)
       void refresh()
       update((state) => ({ ...state, savedView: null }))
-      showToast({ title: 'View deleted' })
+      showToast({ title: `Deleted “${view.name}”` })
     },
-    onError: failed,
   })
 
   const items: MenuEntry[] = []
-  if (views.isError) items.push({ label: 'Views didn’t load. Try again', icon: 'retry', onSelect: () => void views.refetch() })
+  if (views.isError) items.push({ label: 'Views didn’t load. Try again', icon: 'retry', keepOpen: true, onSelect: () => void views.refetch() })
   for (const view of views.data?.views ?? []) {
     items.push({
       label: view.shared || view.builtin ? view.name : `${view.name} (only you)`,
@@ -103,7 +102,7 @@ export default function ViewsMenu({
   if (current) {
     items.push({ label: current.pinned ? 'Unpin from sidebar' : 'Pin to sidebar', icon: 'star', onSelect: () => pin.mutate(current) })
     if (current.canEdit && !readOnly) items.push({ label: 'Rename…', icon: 'pencil', onSelect: () => setSaving('rename') })
-    if (current.canDelete && !readOnly) items.push({ label: 'Delete view', icon: 'trash', danger: true, onSelect: () => remove.mutate(current) })
+    if (current.canDelete && !readOnly) items.push({ label: 'Delete view…', icon: 'trash', danger: true, onSelect: () => setDeleting(current) })
   }
   if (state.view === 'list') {
     items.push({ heading: 'Columns' })
@@ -112,6 +111,7 @@ export default function ViewsMenu({
       items.push({
         label: FIELD_LABELS[field] ?? field,
         checked: shown.includes(field),
+        keepOpen: true,
         onSelect: () => {
           const next = shown.includes(field) ? shown.filter((entry) => entry !== field) : VIEW_FIELDS.filter((entry) => entry === field || shown.includes(entry))
           update((state) => ({ ...state, fields: next.length === VIEW_FIELDS.length ? null : next }), { replace: true })
@@ -126,7 +126,7 @@ export default function ViewsMenu({
         items={items}
         label="Views"
         trigger={
-          <Button iconEnd="chevron-down" size="sm" variant="secondary">
+          <Button iconEnd="chevron-down" variant="secondary">
             {current ? `${current.name}${changed ? ' (changed)' : ''}` : 'Views'}
           </Button>
         }
@@ -145,6 +145,20 @@ export default function ViewsMenu({
           renaming={saving === 'rename' ? current : null}
         />
       ) : null}
+      <ConfirmDialog
+        busy={remove.isPending}
+        confirmLabel="Delete view"
+        error={remove.isError ? describeError(remove.error).message : undefined}
+        onClose={() => {
+          setDeleting(null)
+          remove.reset()
+        }}
+        onConfirm={() => deleting && remove.mutate(deleting)}
+        open={deleting !== null}
+        title={`Delete “${deleting?.name ?? ''}”?`}
+      >
+        {deleting?.shared ? 'Everyone who uses this view loses it. Its tasks stay as they are.' : 'Its tasks stay as they are.'}
+      </ConfirmDialog>
     </>
   )
 }
@@ -184,7 +198,7 @@ function SaveViewDialog({
       onSaved(view)
     } catch (reason) {
       idempotencyKey.current = crypto.randomUUID()
-      setError(isApiError(reason) ? reason.message : 'The view wasn’t saved. Try again.')
+      setError(describeError(reason).message)
     } finally {
       setBusy(false)
     }
@@ -195,7 +209,9 @@ function SaveViewDialog({
       description={renaming ? undefined : 'Saves the filters, sort, grouping, layout and columns you have now.'}
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose} variant="secondary">
+            Cancel
+          </Button>
           <Button busy={busy} disabled={!name.trim()} type="submit" variant="primary">
             {renaming ? 'Save' : 'Save view'}
           </Button>
@@ -217,9 +233,9 @@ function SaveViewDialog({
         value={name}
       />
       {canShare && !renaming?.builtin ? (
-        <Switch checked={shared} description="Everyone in the Project sees it. Otherwise it’s yours alone." label="Share with the Project" onChange={setShared} />
+        <Switch checked={shared} description="Everyone in the project sees it. Otherwise it’s yours alone." label="Share with the project" onChange={setShared} />
       ) : null}
-      <Switch checked={pinned} description="One click from the Project’s sidebar." label="Pin to sidebar" onChange={setPinned} />
+      <Switch checked={pinned} description="One click from the project’s sidebar." label="Pin to sidebar" onChange={setPinned} />
     </Dialog>
   )
 }

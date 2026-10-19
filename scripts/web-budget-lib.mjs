@@ -16,8 +16,12 @@ export const WEB_ASSET_LIMITS = Object.freeze({
   // 430,500 raw; the inbox page itself loads with its route. The settings
   // area (Settings in the rail and command menu, the account's saved theme)
   // brings it to 431,830 / 135,187; its pages and two-factor sign-in load lazily.
+  // The polish pass added plain error sentences, shortcut labels for each
+  // keyboard, confirm dialogs and steadier sidebars, and moved 9 KB of
+  // conversation calls the shell doesn't need out of it: from 418,331 /
+  // 136,131 to 419,086 / 137,030 (October 2026).
   initialJavascriptRawBytes: 424 * 1024,
-  initialJavascriptGzipBytes: 133 * 1024,
+  initialJavascriptGzipBytes: 135 * 1024,
   // index.html's stylesheets: the design system's five theme presets,
   // components and page layouts. Measured 101,925 raw bytes; the UI kit
   // (toasts, command menu, shortcut sheet, skeletons) and Markdown styles

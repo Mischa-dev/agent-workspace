@@ -7,13 +7,19 @@ import { AuthenticatedSessionProvider, type AuthenticatedSession } from '../auth
 import { useProjects } from '../projects/hooks'
 import type { Project } from '../projects/types'
 import { createWorkItem } from '../work-items/api'
-import { getOnboarding, type Onboarding, type OnboardingStepId } from './api'
+import { getWorkspace, renameWorkspace, type Workspace } from '../settings/workspace/api'
+import { getOnboarding, updateOnboarding, type Onboarding, type OnboardingStepId } from './api'
 import { OnboardingPage } from './OnboardingPage'
 
 vi.mock('../shell/AppShell', () => ({ AppShell: ({ children }: { children: React.ReactNode }) => children }))
 vi.mock('../projects/hooks', () => ({ useProjects: vi.fn(), useCreateProject: vi.fn(() => ({ isPending: false })) }))
 vi.mock('../work-items/api', () => ({ createWorkItem: vi.fn() }))
-vi.mock('./api', async (actual) => ({ ...(await actual<typeof import('./api')>()), getOnboarding: vi.fn() }))
+vi.mock('./api', async (actual) => ({ ...(await actual<typeof import('./api')>()), getOnboarding: vi.fn(), updateOnboarding: vi.fn() }))
+vi.mock('../settings/workspace/api', async (actual) => ({
+  ...(await actual<typeof import('../settings/workspace/api')>()),
+  getWorkspace: vi.fn(),
+  renameWorkspace: vi.fn(),
+}))
 
 const organizationId = '019fb600-0000-7000-8000-000000000004'
 const project = {
@@ -96,5 +102,21 @@ describe('OnboardingPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Create a project/ }))
     expect(screen.getByRole('heading', { name: 'Create a project' })).toBeInTheDocument()
     expect(screen.getByText(/^Done\./)).toBeInTheDocument()
+  })
+
+  it('ticks the workspace step when its name is confirmed, renaming it first if it changed', async () => {
+    vi.mocked(getOnboarding).mockResolvedValue(onboarding([]))
+    vi.mocked(getWorkspace).mockResolvedValue({ id: organizationId, name: 'Acme', version: 4 } as Workspace)
+    vi.mocked(renameWorkspace).mockResolvedValue({ id: organizationId, name: 'Acme Labs', version: 5 } as Workspace)
+    vi.mocked(updateOnboarding).mockResolvedValue(onboarding(['workspace']))
+    renderPage()
+
+    const field = await screen.findByLabelText('Workspace name')
+    await waitFor(() => expect(field).toHaveValue('Acme'))
+    fireEvent.change(field, { target: { value: 'Acme Labs' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save and continue' }))
+
+    await waitFor(() => expect(updateOnboarding).toHaveBeenCalledWith(organizationId, { confirm: 'workspace' }))
+    expect(renameWorkspace).toHaveBeenCalledWith(organizationId, 'Acme Labs', 4)
   })
 })

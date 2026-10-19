@@ -61,7 +61,7 @@ export const COLUMN_FIELDS: Array<{ value: BoardColumnsBy; label: string }> = [
 ]
 
 export const LANE_FIELDS: Array<{ value: LaneBy; label: string }> = [
-  { value: 'none', label: 'No swimlanes' },
+  { value: 'none', label: 'No lanes' },
   { value: 'assignee', label: 'Assignee' },
   { value: 'priority', label: 'Priority' },
   { value: 'milestone', label: 'Milestone' },

@@ -111,7 +111,8 @@ describe('ExternalAgentSettings', () => {
       ).violations,
     ).toEqual([])
 
-    fireEvent.click(screen.getByRole('button', { name: 'Disable' }))
+    fireEvent.click(screen.getByRole('button', { name: `${hostileName} actions` }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Disable' }))
     await waitFor(() => {
       const mutation = requests.find(({ init }) => init?.method === 'PATCH')
       expect(JSON.parse(String(mutation?.init?.body))).toEqual({
@@ -123,14 +124,17 @@ describe('ExternalAgentSettings', () => {
       )
     })
 
-    fireEvent.click(screen.getByRole('button', { name: 'Remove…' }))
-    expect(
-      screen.getByRole('button', { name: 'Confirm removal' }),
-    ).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: `${hostileName} actions` }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Remove…' }))
+    const confirm = await screen.findByRole('dialog', { name: `Remove ${hostileName}?` })
+    expect(confirm).toBeVisible()
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
-    expect(
-      screen.queryByRole('button', { name: 'Confirm removal' }),
-    ).not.toBeInTheDocument()
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('dialog', { name: `Remove ${hostileName}?` }),
+      ).not.toBeInTheDocument(),
+    )
+    expect(requests.some(({ path }) => path.endsWith('/remove'))).toBe(false)
   })
 
   it('shows a created bearer once, copies it, and never puts it in a URL', async () => {
@@ -158,7 +162,7 @@ describe('ExternalAgentSettings', () => {
     )
 
     renderSettings()
-    await screen.findByText('No agents connected yet.')
+    await screen.findByText('No agents connected yet')
     fireEvent.change(screen.getByLabelText('Connection name'), {
       target: { value: 'Hermes M9' },
     })
@@ -207,7 +211,7 @@ describe('ExternalAgentSettings', () => {
     )
 
     renderSettings()
-    await screen.findByText('No agents connected yet.')
+    await screen.findByText('No agents connected yet')
     fireEvent.click(screen.getByRole('radio', { name: 'Codex' }))
     expect(screen.getByLabelText('Handle')).toHaveValue('codex')
     fireEvent.change(screen.getByLabelText('Runner URL (optional)'), {

@@ -1,42 +1,50 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 
-import { isApiError } from '../api/errors'
+import { toastError } from '../app/mutations'
 import { useAuthenticatedSession } from '../auth/session'
-import { formatFullDate } from '../conversations/timeFormat'
+import { atPhrase } from '../later/when'
 import { AppShell } from '../shell/AppShell'
 import {
   Avatar,
-  Banner,
   Button,
   EmptyState,
   ErrorState,
   Icon,
+  IconButton,
   Kbd,
-  Menu,
-  MessageSkeleton,
+  ListSkeleton,
   PageHeader,
   SegmentedControl,
-  StatusChip,
-  type IconName,
+  countLabel,
+  formatFullDate,
+  formatRelativeShort,
+  formatShortDate,
+  formatTime,
+  plainPreview,
+  showToast,
+  type ToastInput,
 } from '../ui'
 import {
   groupBySubject,
   invalidateInbox,
   isExternalHref,
+  postUpdate,
   respondToApproval,
   snoozeChoices,
+  unreadIds,
   useInbox,
   useUpdateInbox,
   type InboxCategory,
   type InboxNotification,
   type InboxUpdate,
+  type InboxUpdateResult,
   type InboxView,
 } from './api'
-import { relativeTime } from './time'
+import { FAILURE_KINDS, KIND_ICON } from './kinds'
+import { NotificationDetail } from './NotificationDetail'
 import './inbox.css'
-import { BatchLaunch } from './BatchLaunch'
 
 const VIEWS: { value: InboxView; label: string }[] = [
   { value: 'inbox', label: 'Inbox' },
@@ -45,34 +53,17 @@ const VIEWS: { value: InboxView; label: string }[] = [
   { value: 'archived', label: 'Archived' },
 ]
 
-const CATEGORIES: { value: InboxCategory; label: string }[] = [
-  { value: 'all', label: 'All' },
-  { value: 'mentions', label: 'Mentions' },
-  { value: 'tasks', label: 'Tasks' },
-  { value: 'runs', label: 'Runs' },
-  { value: 'pull_requests', label: 'Pull requests' },
-  { value: 'usage', label: 'Usage' },
+/** Each filter, and what "mark all read" marks under it. */
+const CATEGORIES: { value: InboxCategory; label: string; markRead: string }[] = [
+  { value: 'all', label: 'All', markRead: 'Mark all read' },
+  { value: 'mentions', label: 'Mentions', markRead: 'Mark mentions read' },
+  { value: 'tasks', label: 'Tasks', markRead: 'Mark task updates read' },
+  { value: 'runs', label: 'Runs', markRead: 'Mark run updates read' },
+  { value: 'pull_requests', label: 'Pull requests', markRead: 'Mark pull request updates read' },
+  { value: 'usage', label: 'Usage', markRead: 'Mark usage alerts read' },
 ]
 
-const KIND_ICON: Record<string, IconName> = {
-  mention: 'at-sign',
-  comment_mention: 'at-sign',
-  conversation_message: 'message',
-  reminder: 'clock',
-  scheduled_send_failed: 'circle-alert',
-  assigned: 'work',
-  approval_requested: 'shield-check',
-  run_waiting: 'clock',
-  run_completed: 'circle-check',
-  run_failed: 'circle-alert',
-  checks_failed: 'triangle-alert',
-  review_requested: 'pull-request',
-  task_changed: 'work',
-  capacity_reset_soon: 'clock',
-  capacity_high_usage: 'activity',
-  capacity_limit_reached: 'circle-alert',
-  capacity_reset_credit: 'retry',
-}
+const PHONE = '(max-width: 860px)'
 
 function isView(value: string | null): value is InboxView {
   return VIEWS.some((view) => view.value === value)
@@ -87,6 +78,21 @@ function typingTarget(target: EventTarget | null) {
   return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
 }
 
+/** When a snoozed row comes back, short enough for the time column. */
+function backAt(iso: string, now = new Date()) {
+  const days = Math.round((new Date(iso).setHours(0, 0, 0, 0) - new Date(now).setHours(0, 0, 0, 0)) / 86_400_000)
+  if (days <= 0) return formatTime(iso)
+  if (days === 1) return 'tomorrow'
+  return formatShortDate(iso, now)
+}
+
+type ChangeOptions = {
+  /** What to say when it worked, usually with Undo. */
+  success?: (result: InboxUpdateResult) => ToastInput | null
+  /** The toast title when it fails. */
+  failed: string
+}
+
 /** Everything that needs you, from every project: read, archive, snooze and act in place. */
 export function InboxPage() {
   const session = useAuthenticatedSession()
@@ -97,25 +103,58 @@ export function InboxPage() {
   const category: InboxCategory = isCategory(params.get('category'))
     ? (params.get('category') as InboxCategory)
     : 'all'
+  const filter = CATEGORIES.find((option) => option.value === category) ?? CATEGORIES[0]
   const inbox = useInbox(view, category)
   const mutation = useUpdateInbox(view, category)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
-  const [status, setStatus] = useState<string | null>(null)
   const [helpOpen, setHelpOpen] = useState(false)
   const [busyApproval, setBusyApproval] = useState<string | null>(null)
+  const [marking, setMarking] = useState(false)
+  // In Unread, rows you read stay put until you leave the view, so you can still act on them.
+  const [kept, setKept] = useState<Map<string, InboxNotification>>(() => new Map())
   const listRef = useRef<HTMLDivElement>(null)
+  const pageRef = useRef<HTMLDivElement>(null)
+  const listScroll = useRef(0)
 
-  const notifications = useMemo(
-    () => inbox.data?.pages.flatMap((page) => page.notifications) ?? [],
-    [inbox.data],
-  )
+  const loaded = useMemo(() => inbox.data?.pages.flatMap((page) => page.notifications) ?? [], [inbox.data])
+  const notifications = useMemo(() => {
+    if (view !== 'unread' || kept.size === 0) return loaded
+    const present = new Set(loaded.map((item) => item.id))
+    const extra = [...kept.values()].filter((item) => !present.has(item.id))
+    if (extra.length === 0) return loaded
+    return [...loaded, ...extra].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0))
+  }, [kept, loaded, view])
   const unreadCount = inbox.data?.pages[0]?.unreadCount ?? 0
   const groups = useMemo(() => groupBySubject(notifications), [notifications])
   // Keyboard order follows the grouped order on screen.
   const ordered = useMemo(() => groups.flatMap((group) => group.items), [groups])
   const selectedIndex = ordered.findIndex((item) => item.id === selectedId)
   const selected = selectedIndex >= 0 ? ordered[selectedIndex] : null
+  const canMarkAll =
+    view !== 'archived' && view !== 'snoozed' && (category === 'all' ? unreadCount > 0 : notifications.some((item) => !item.read) || inbox.hasNextPage)
+
+  const keep = useCallback(
+    (item: InboxNotification, read: boolean | null) => {
+      if (view !== 'unread') return
+      setKept((current) => {
+        const next = new Map(current)
+        if (read === null) next.delete(item.id)
+        else next.set(item.id, { ...item, read })
+        return next
+      })
+    },
+    [view],
+  )
+
+  // On a phone the preview replaces the list: start it at the top, and come back to the same place in the list.
+  const showingDetail = detailOpen && Boolean(selected)
+  useLayoutEffect(() => {
+    const scroller = pageRef.current?.closest('main')
+    if (!scroller || !window.matchMedia(PHONE).matches) return
+    if (showingDetail) scroller.scrollTop = 0
+    else scroller.scrollTop = listScroll.current
+  }, [showingDetail])
 
   const setFilter = (key: 'view' | 'category', value: string) => {
     const next = new URLSearchParams(params)
@@ -124,35 +163,49 @@ export function InboxPage() {
     setParams(next, { replace: true })
     setSelectedId(null)
     setDetailOpen(false)
+    setKept(new Map())
   }
 
+  const undo = useCallback(
+    (update: InboxUpdate) => postUpdate(update).then(() => invalidateInbox(queryClient)),
+    [queryClient],
+  )
+
   const change = useCallback(
-    (update: InboxUpdate, done?: string) => {
-      setStatus(null)
+    (update: InboxUpdate, options: ChangeOptions) => {
       mutation.mutate(update, {
-        onSuccess: () => {
-          if (done) setStatus(done)
+        onSuccess: (result) => {
+          const toast = options.success?.(result)
+          if (toast) showToast(toast)
         },
-        onError: (reason) =>
-          setStatus(isApiError(reason) ? reason.message : 'That didn’t work. Try again.'),
+        onError: (reason) => toastError(options.failed, reason),
       })
     },
     [mutation],
   )
 
+  const setRead = useCallback(
+    (item: InboxNotification, read: boolean) => {
+      keep(item, read)
+      change({ action: read ? 'read' : 'unread', ids: [item.id] }, { failed: read ? 'It wasn’t marked read' : 'It wasn’t marked unread' })
+    },
+    [change, keep],
+  )
+
   const select = useCallback(
     (item: InboxNotification | undefined, open = false) => {
       if (!item) return
+      if (open && !detailOpen) listScroll.current = pageRef.current?.closest('main')?.scrollTop ?? 0
       setSelectedId(item.id)
       if (open) setDetailOpen(true)
-      if (!item.read && view !== 'archived') change({ action: 'read', ids: [item.id] })
+      if (!item.read && view !== 'archived') setRead(item, true)
       window.requestAnimationFrame(() => {
         listRef.current
           ?.querySelector<HTMLElement>(`[data-notification="${CSS.escape(item.id)}"]`)
           ?.scrollIntoView({ block: 'nearest' })
       })
     },
-    [change, view],
+    [detailOpen, setDetailOpen, setRead, view],
   )
 
   /** After removing the selected row, move to the one that takes its place. */
@@ -160,44 +213,101 @@ export function InboxPage() {
     const next = ordered[selectedIndex + 1] ?? ordered[selectedIndex - 1]
     setSelectedId(next ? next.id : null)
     if (!next) setDetailOpen(false)
-  }, [ordered, selectedIndex])
+  }, [ordered, selectedIndex, setDetailOpen])
 
   const archive = useCallback(
     (item: InboxNotification) => {
-      if (view === 'archived') change({ action: 'restore', ids: [item.id] }, 'Moved back to the inbox.')
-      else change({ action: 'archive', ids: [item.id] }, 'Archived.')
+      const ids = [item.id]
+      keep(item, null)
+      if (view === 'archived') {
+        change(
+          { action: 'restore', ids },
+          {
+            success: () => ({ tone: 'success', title: 'Moved back to the inbox', onUndo: () => undo({ action: 'archive', ids }) }),
+            failed: 'It wasn’t moved back to the inbox',
+          },
+        )
+      } else {
+        change(
+          { action: 'archive', ids },
+          {
+            success: () => ({ tone: 'success', title: 'Archived', onUndo: () => undo({ action: 'restore', ids }) }),
+            failed: 'It wasn’t archived',
+          },
+        )
+      }
       if (item.id === selectedId) advance()
     },
-    [advance, change, selectedId, view],
+    [advance, change, keep, selectedId, undo, view],
   )
 
   const snooze = useCallback(
-    (item: InboxNotification, until: Date, label: string) => {
-      change({ action: 'snooze', ids: [item.id], snoozeUntil: until.toISOString() }, `Snoozed until ${label.toLowerCase()}.`)
+    (item: InboxNotification, until: Date) => {
+      const ids = [item.id]
+      keep(item, null)
+      change(
+        { action: 'snooze', ids, snoozeUntil: until.toISOString() },
+        {
+          success: () => ({ tone: 'success', title: `Snoozed until ${atPhrase(until)}`, onUndo: () => undo({ action: 'unsnooze', ids }) }),
+          failed: 'It wasn’t snoozed',
+        },
+      )
       if (item.id === selectedId && view !== 'snoozed') advance()
     },
-    [advance, change, selectedId, view],
+    [advance, change, keep, selectedId, undo, view],
   )
+
+  const unsnooze = (item: InboxNotification) => {
+    change({ action: 'unsnooze', ids: [item.id] }, { success: () => ({ tone: 'success', title: 'Back in the inbox' }), failed: 'It’s still snoozed' })
+    if (item.id === selectedId) advance()
+  }
 
   const open = useCallback(
     (item: InboxNotification) => {
-      if (!item.read) change({ action: 'read', ids: [item.id] })
+      if (!item.read) setRead(item, true)
       if (isExternalHref(item.href)) window.open(item.href, '_blank', 'noopener,noreferrer')
       else navigate(item.href)
     },
-    [change, navigate],
+    [navigate, setRead],
   )
+
+  const markedRead = (result: InboxUpdateResult): ToastInput | null =>
+    result.updated.length
+      ? {
+          tone: 'success',
+          title: `Marked ${countLabel(result.updated.length, 'notification')} read`,
+          onUndo: () => undo({ action: 'unread', ids: result.updated }),
+        }
+      : null
+
+  /** Marks what the current filter shows read: everything, or one kind. */
+  const markAllRead = async () => {
+    setKept(new Map())
+    if (category === 'all') {
+      change({ action: 'read', all: true }, { success: markedRead, failed: 'Nothing was marked read' })
+      return
+    }
+    setMarking(true)
+    try {
+      const ids = await unreadIds(category)
+      if (ids.length) change({ action: 'read', ids }, { success: markedRead, failed: 'Nothing was marked read' })
+      else showToast({ title: 'Nothing here is unread' })
+    } catch (reason) {
+      toastError('Nothing was marked read', reason)
+    } finally {
+      setMarking(false)
+    }
+  }
 
   const answer = async (item: InboxNotification, decision: 'approve' | 'deny') => {
     if (!item.approval) return
-    setStatus(null)
     setBusyApproval(`${item.id}:${decision}`)
     try {
       await respondToApproval(item.approval.id, decision)
-      setStatus(decision === 'approve' ? 'Approved.' : 'Denied.')
+      showToast({ tone: 'success', title: decision === 'approve' ? 'Approved' : 'Denied' })
       invalidateInbox(queryClient)
     } catch (reason) {
-      setStatus(isApiError(reason) ? reason.message : 'Couldn’t send your answer. Open the thread and try there.')
+      toastError('Your answer wasn’t sent', reason)
     } finally {
       setBusyApproval(null)
     }
@@ -228,14 +338,14 @@ export function InboxPage() {
         archive(current)
       } else if (key === 'u' && current) {
         event.preventDefault()
-        change({ action: current.read ? 'unread' : 'read', ids: [current.id] })
-      } else if (key === 's' && current) {
+        setRead(current, !current.read)
+      } else if (key === 's' && current && view !== 'snoozed' && view !== 'archived') {
         event.preventDefault()
-        const tomorrow = snoozeChoices()[1]
-        snooze(current, tomorrow.until, tomorrow.label)
-      } else if (key === 'I' && event.shiftKey && view !== 'archived' && view !== 'snoozed') {
+        const tomorrow = snoozeChoices().find((choice) => choice.id === 'tomorrow')
+        if (tomorrow) snooze(current, tomorrow.until)
+      } else if (key === 'I' && event.shiftKey && canMarkAll && !marking) {
         event.preventDefault()
-        change({ action: 'read', all: true }, 'Marked everything read.')
+        void markAllRead()
       } else if (key === 'a' && current?.approval?.status === 'pending' && current.approval.kind === 'approval') {
         event.preventDefault()
         void answer(current, 'approve')
@@ -251,42 +361,39 @@ export function InboxPage() {
 
   return (
     <AppShell home mainClassName="aw-main--page" user={session.user}>
-      <div className="aw-page aw-page--wide aw-inbox" data-detail-open={detailOpen && selected ? 'true' : 'false'}>
+      <div className="aw-page aw-inbox" data-detail-open={showingDetail ? 'true' : 'false'} ref={pageRef}>
         <PageHeader
           actions={
             view === 'inbox' || view === 'unread' ? (
-              <Button
-                disabled={unreadCount === 0 || mutation.isPending}
-                icon="check"
-                onClick={() => change({ action: 'read', all: true }, 'Marked everything read.')}
-              >
-                Mark all read
+              <Button busy={marking} disabled={!canMarkAll || mutation.isPending} icon="check" onClick={() => void markAllRead()}>
+                {filter.markRead}
               </Button>
             ) : null
           }
           icon="inbox"
           title="Inbox"
         >
-          Mentions, assignments, approvals, runs and pull requests from every project. {unreadCount > 0 ? `${unreadCount} unread.` : null}
+          Mentions, assignments, approvals, runs and pull requests from every project.{unreadCount > 0 ? ` ${unreadCount} unread.` : null}
         </PageHeader>
         <div className="aw-inbox__filters">
           <SegmentedControl label="Show" onChange={(value) => setFilter('view', value)} options={VIEWS} value={view} />
           <div aria-label="Kind" className="aw-inbox__chips" role="group">
             {CATEGORIES.map((option) => (
-              <button
+              <Button
                 aria-pressed={option.value === category}
                 className="aw-inbox__chip"
                 key={option.value}
                 onClick={() => setFilter('category', option.value)}
-                type="button"
+                size="sm"
+                variant="ghost"
               >
                 {option.label}
-              </button>
+              </Button>
             ))}
           </div>
-          <button aria-expanded={helpOpen} className="aw-inbox__help-toggle" onClick={() => setHelpOpen((value) => !value)} type="button">
-            Inbox shortcuts
-          </button>
+          <Button aria-expanded={helpOpen} className="aw-inbox__help-toggle" onClick={() => setHelpOpen((value) => !value)} size="sm" variant="ghost">
+            Shortcuts
+          </Button>
         </div>
         {helpOpen ? (
           <ul aria-label="Keyboard shortcuts" className="aw-inbox__help">
@@ -296,21 +403,24 @@ export function InboxPage() {
             <li><Kbd>u</Kbd> read or unread</li>
             <li><Kbd>s</Kbd> snooze until tomorrow</li>
             <li><Kbd>a</Kbd> approve</li>
-            <li><Kbd>Shift</Kbd>+<Kbd>I</Kbd> mark all read</li>
+            <li><Kbd>Shift</Kbd>+<Kbd>I</Kbd> {filter.markRead.toLowerCase()}</li>
           </ul>
         ) : null}
-        <p aria-live="polite" className="aw-inbox__status" role="status">
-          {status}
-        </p>
 
-        {inbox.isPending ? <MessageSkeleton label="Loading your inbox" rows={4} /> : null}
-        {inbox.isError ? (
-          <ErrorState action={<Button icon="retry" onClick={() => void inbox.refetch()}>Try again</Button>} title="Your inbox didn’t load">
-            Check your connection and try again.
-          </ErrorState>
-        ) : null}
+        {inbox.isPending ? <ListSkeleton avatars label="Loading your inbox" rows={4} /> : null}
+        {inbox.isError ? <ErrorState error={inbox.error} onRetry={() => void inbox.refetch()} title="Your inbox didn’t load" /> : null}
         {caughtUp ? (
-          <EmptyState icon={view === 'archived' ? 'archive' : view === 'snoozed' ? 'clock' : 'circle-check'} title={emptyTitle(view)}>
+          <EmptyState
+            action={
+              category !== 'all' ? (
+                <Button onClick={() => setFilter('category', 'all')}>Show all kinds</Button>
+              ) : view !== 'inbox' ? (
+                <Button onClick={() => setFilter('view', 'inbox')}>Back to the inbox</Button>
+              ) : null
+            }
+            icon={view === 'archived' ? 'archive' : view === 'snoozed' ? 'clock' : 'circle-check'}
+            title={emptyTitle(view)}
+          >
             {emptyText(view, category)}
           </EmptyState>
         ) : null}
@@ -353,9 +463,9 @@ export function InboxPage() {
                   onArchive={() => archive(selected)}
                   onBack={() => setDetailOpen(false)}
                   onOpen={() => open(selected)}
-                  onSnooze={(until, label) => snooze(selected, until, label)}
-                  onToggleRead={() => change({ action: selected.read ? 'unread' : 'read', ids: [selected.id] })}
-                  onUnsnooze={() => change({ action: 'unsnooze', ids: [selected.id] }, 'Back in the inbox.')}
+                  onSnooze={(until) => snooze(selected, until)}
+                  onToggleRead={() => setRead(selected, !selected.read)}
+                  onUnsnooze={() => unsnooze(selected)}
                   view={view}
                 />
               ) : (
@@ -375,13 +485,15 @@ export function InboxPage() {
 function emptyTitle(view: InboxView) {
   if (view === 'archived') return 'Nothing archived'
   if (view === 'snoozed') return 'Nothing snoozed'
+  if (view === 'unread') return 'Nothing unread'
   return 'You’re all caught up'
 }
 
 function emptyText(view: InboxView, category: InboxCategory) {
-  if (category !== 'all') return 'Nothing of this kind here. Try All.'
+  if (category !== 'all') return 'Nothing of this kind here.'
   if (view === 'archived') return 'Archive notifications you’re done with and they’ll wait here.'
   if (view === 'snoozed') return 'Snooze a notification to bring it back later.'
+  if (view === 'unread') return 'You’ve read everything in your inbox.'
   return 'When someone mentions you, assigns you a task, needs your approval or a run of yours ends, it shows up here.'
 }
 
@@ -398,6 +510,8 @@ function NotificationRow({
   selected: boolean
   view: InboxView
 }) {
+  const preview = plainPreview(item.preview, 240)
+  const kindTone = FAILURE_KINDS.has(item.kind) ? ' is-failure' : ''
   return (
     <div
       aria-current={selected ? 'true' : undefined}
@@ -408,9 +522,9 @@ function NotificationRow({
       <button className="aw-inbox__row-main" onClick={onSelect} type="button">
         <span aria-hidden="true" className="aw-inbox__dot" />
         {item.actor ? (
-          <Avatar name={item.actor.name} seed={item.actor.id} size={28} />
+          <Avatar kind={item.actor.kind} name={item.actor.name} seed={item.actor.id} size={28} />
         ) : (
-          <span className="aw-inbox__kind-icon">
+          <span className={`aw-inbox__kind-icon${kindTone}`}>
             <Icon name={KIND_ICON[item.kind] ?? 'info'} size={16} />
           </span>
         )}
@@ -420,138 +534,26 @@ function NotificationRow({
             {item.title}
             {item.count > 1 ? <span className="aw-inbox__count"> ×{item.count}</span> : null}
           </span>
-          {item.preview ? <span className="aw-inbox__row-preview">{item.preview}</span> : null}
+          {preview ? <span className="aw-inbox__row-preview">{preview}</span> : null}
         </span>
-        <time className="aw-inbox__time" dateTime={item.at} title={formatFullDate(item.at)}>
-          {item.snoozedUntil ? `until ${relativeTime(item.snoozedUntil)}` : relativeTime(item.at)}
-        </time>
-      </button>
-      <button
-        aria-label={view === 'archived' ? `Restore: ${item.title}` : `Archive: ${item.title}`}
-        className="aw-inbox__row-action"
-        onClick={onArchive}
-        type="button"
-      >
-        <Icon name={view === 'archived' ? 'undo' : 'archive'} size={16} />
-      </button>
-    </div>
-  )
-}
-
-function NotificationDetail({
-  busyApproval,
-  item,
-  onAnswer,
-  onArchive,
-  onBack,
-  onOpen,
-  onSnooze,
-  onToggleRead,
-  onUnsnooze,
-  view,
-}: {
-  busyApproval: string | null
-  item: InboxNotification
-  onAnswer: (decision: 'approve' | 'deny') => void
-  onArchive: () => void
-  onBack: () => void
-  onOpen: () => void
-  onSnooze: (until: Date, label: string) => void
-  onToggleRead: () => void
-  onUnsnooze: () => void
-  view: InboxView
-}) {
-  const pendingApproval = item.approval?.status === 'pending' && item.approval.kind === 'approval'
-  const pendingQuestion = item.approval?.status === 'pending' && item.approval.kind === 'question'
-  const external = isExternalHref(item.href)
-  return (
-    <article aria-labelledby="inbox-detail-title" className="aw-inbox__card">
-      <button className="aw-inbox__back" onClick={onBack} type="button">
-        <Icon name="arrow-left" size={16} /> Inbox
-      </button>
-      <p className="aw-inbox__card-meta">
-        <StatusChip icon={KIND_ICON[item.kind] ?? 'info'}>{item.projectName}</StatusChip>
-        <span>{item.subject.title}</span>
-      </p>
-      <h2 className="aw-inbox__card-title" id="inbox-detail-title">
-        {item.title}
-      </h2>
-      <p className="aw-inbox__card-when">
-        {formatFullDate(item.at)}
-        {item.count > 1 ? ` · ${item.count} times` : ''}
-        {item.snoozedUntil ? ` · snoozed until ${formatFullDate(item.snoozedUntil)}` : ''}
-      </p>
-      {item.preview ? <blockquote className="aw-inbox__quote">{item.preview}</blockquote> : null}
-      {item.approval && item.approval.status !== 'pending' ? (
-        <Banner tone="info">This was already answered.</Banner>
-      ) : null}
-      <div className="aw-inbox__actions">
-        {pendingApproval ? (
-          <>
-            <Button
-              busy={busyApproval === `${item.id}:approve`}
-              disabled={busyApproval !== null}
-              icon="check"
-              onClick={() => onAnswer('approve')}
-              variant="primary"
-            >
-              Approve
-            </Button>
-            <Button
-              busy={busyApproval === `${item.id}:deny`}
-              disabled={busyApproval !== null}
-              icon="x"
-              onClick={() => onAnswer('deny')}
-              variant="danger"
-            >
-              Deny
-            </Button>
-          </>
-        ) : null}
-        {external ? (
-          <Button icon="external" onClick={onOpen} variant={pendingApproval ? 'secondary' : 'primary'}>
-            Open on GitHub
-          </Button>
+        {item.snoozedUntil ? (
+          <time className="aw-inbox__time" dateTime={item.snoozedUntil} title={`Back ${formatFullDate(item.snoozedUntil)}`}>
+            <Icon name="clock" size={12} /> {backAt(item.snoozedUntil)}
+          </time>
         ) : (
-          <Link className={`aw-btn aw-btn--${pendingApproval ? 'secondary' : 'primary'} aw-btn--md`} to={item.href}>
-            <Icon name="arrow-up" size={16} />
-            <span className="aw-btn__label">{pendingQuestion ? 'Answer in the thread' : 'Open'}</span>
-          </Link>
+          <time className="aw-inbox__time" dateTime={item.at} title={formatFullDate(item.at)}>
+            {formatRelativeShort(item.at)}
+          </time>
         )}
-        {item.batch ? (
-          <BatchLaunch batch={item.batch} reviewHref={item.launchHref} />
-        ) : item.launchHref ? (
-          <Link className="aw-btn aw-btn--secondary aw-btn--md" to={item.launchHref}>
-            <Icon name="play" size={16} />
-            <span className="aw-btn__label">Launch</span>
-          </Link>
-        ) : null}
-        <Button icon={view === 'archived' ? 'undo' : 'archive'} onClick={onArchive}>
-          {view === 'archived' ? 'Restore' : 'Archive'}
-        </Button>
-        {view === 'snoozed' ? (
-          <Button icon="undo" onClick={onUnsnooze}>
-            Unsnooze
-          </Button>
-        ) : view !== 'archived' ? (
-          <Menu
-            items={snoozeChoices().map((choice) => ({
-              label: `${choice.label} (${formatFullDate(choice.until.toISOString())})`,
-              icon: 'clock' as const,
-              onSelect: () => onSnooze(choice.until, choice.label),
-            }))}
-            label="Snooze until"
-            trigger={
-              <Button icon="clock" iconEnd="chevron-down">
-                Snooze
-              </Button>
-            }
-          />
-        ) : null}
-        <Button onClick={onToggleRead} variant="ghost">
-          {item.read ? 'Mark unread' : 'Mark read'}
-        </Button>
-      </div>
-    </article>
+      </button>
+      <IconButton
+        className="aw-inbox__row-action"
+        icon={view === 'archived' ? 'undo' : 'archive'}
+        label={view === 'archived' ? `Restore: ${item.title}` : `Archive: ${item.title}`}
+        onClick={onArchive}
+        size="sm"
+        tooltip={false}
+      />
+    </div>
   )
 }

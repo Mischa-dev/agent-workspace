@@ -1,5 +1,6 @@
 import { priorityLabel } from './constants'
 import type { ActivityChanges, DescriptionChange, EstimateUnit, FieldChange, WorkItemPriority } from './types'
+import { formatDateLabel } from '../ui/dateModel'
 
 /**
  * History entries carry `payload.changes`, field → { from, to }, with ids
@@ -61,11 +62,9 @@ function fieldLabel(field: string) {
   return words.charAt(0).toUpperCase() + words.slice(1)
 }
 
+/** "Oct 15", with the year when it isn't this year. */
 export function formatIsoDate(value: string) {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
-  if (!match) return value
-  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
-  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  return formatDateLabel(value) || value
 }
 
 export function formatEstimate(value: number, unit: EstimateUnit) {

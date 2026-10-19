@@ -1,0 +1,15 @@
+/* Project overview. Loads with the overview page. */
+
+.aw-overview__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+/* "And 3 more in the inbox." under a list. */
+.aw-overview__more {
+  margin: var(--space-2) 0 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}

@@ -290,9 +290,13 @@ export type Milestone = {
   description: string
   targetDate: string | null
   archived: boolean
+  /** Tasks in it, not counting canceled ones. */
   total: number
+  /** Completed tasks. */
   finished: number
   open: number
+  /** Canceled tasks, left out of total and progress. */
+  canceled: number
   progress: number
   overdue: boolean
   version: number

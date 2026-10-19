@@ -1114,9 +1114,13 @@ pub struct MilestoneView {
     pub description: String,
     pub target_date: Option<NaiveDate>,
     pub archived: bool,
+    /// Its tasks, not counting canceled ones: they left the scope.
     pub total: i64,
+    /// Completed tasks.
     pub finished: i64,
     pub open: i64,
+    /// Canceled tasks, counted apart so they don't read as progress.
+    pub canceled: i64,
     /// Finished over total, 0 when it has no tasks.
     pub progress: f64,
     /// Past its target date with tasks still open.
@@ -1127,12 +1131,13 @@ pub struct MilestoneView {
 pub const MILESTONE_SELECT: &str = r#"
     SELECT milestone.id, milestone.name, milestone.description, milestone.target_date,
            milestone.archived_at IS NOT NULL AS archived,
-           count(item.id) AS total,
-           count(item.id) FILTER (WHERE status.semantic_category IN ('completed', 'canceled')) AS finished,
+           count(item.id) FILTER (WHERE status.semantic_category <> 'canceled') AS total,
+           count(item.id) FILTER (WHERE status.semantic_category = 'completed') AS finished,
            count(item.id) FILTER (WHERE status.semantic_category NOT IN ('completed', 'canceled')) AS open,
+           count(item.id) FILTER (WHERE status.semantic_category = 'canceled') AS canceled,
            COALESCE(
-               (count(item.id) FILTER (WHERE status.semantic_category IN ('completed', 'canceled')))::float8
-                   / NULLIF(count(item.id), 0)::float8,
+               (count(item.id) FILTER (WHERE status.semantic_category = 'completed'))::float8
+                   / NULLIF(count(item.id) FILTER (WHERE status.semantic_category <> 'canceled'), 0)::float8,
                0)::float8 AS progress,
            COALESCE(milestone.target_date < current_date
                AND count(item.id) FILTER (WHERE status.semantic_category NOT IN ('completed', 'canceled')) > 0,

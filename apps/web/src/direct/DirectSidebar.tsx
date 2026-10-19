@@ -2,7 +2,7 @@ import { useNavigate } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
 import { SidebarFrame, SidebarLink, SidebarSection } from '../shell/SidebarParts'
-import { IconButton, actorKind } from '../ui'
+import { Banner, IconButton, ListSkeleton, actorKind } from '../ui'
 import { conversationTitle, useDirectOverview } from './api'
 
 export function DirectSidebar({ mobileOpen, onNavigate }: { mobileOpen: boolean; onNavigate: () => void }) {
@@ -51,7 +51,16 @@ export function DirectSidebar({ mobileOpen, onNavigate }: { mobileOpen: boolean;
           )
         })}
       </SidebarSection>
-      {overview.isPending ? <p className="aw-sidebar__note">Loading conversations…</p> : null}
+      {overview.isPending ? (
+        <div className="aw-sidebar__skeleton">
+          <ListSkeleton avatars label="Loading conversations" rows={4} />
+        </div>
+      ) : null}
+      {overview.isError ? (
+        <Banner className="aw-sidebar__note" onRetry={() => void overview.refetch()} tone="danger">
+          Your conversations didn’t load.
+        </Banner>
+      ) : null}
       {overview.data && conversations.length === 0 ? (
         <p className="aw-sidebar__note">No conversations yet. Start one with New message.</p>
       ) : null}

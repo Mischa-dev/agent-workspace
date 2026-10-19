@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useLocation, useSearchParams } from 'react-router-dom'
+import { useLocation, useSearchParams } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
 import { useProjects } from '../projects/hooks'
 import { AppShell } from '../shell/AppShell'
-import { Button, EmptyState, ErrorState, Icon, PageHeader, SegmentedControl, SettingsSkeleton } from '../ui'
+import { ButtonLink, EmptyState, ErrorState, Icon, PageHeader, SegmentedControl, SettingsSkeleton } from '../ui'
 import { formatBytes } from '../files/api'
 import { QuickMessageForm, QuickTaskForm } from './QuickAddForms'
 import { takeSharedFiles } from './sharedFiles'
@@ -43,25 +43,14 @@ export function QuickAddPage() {
   if (projects.isPending || files === null) {
     body = <SettingsSkeleton />
   } else if (projects.isError) {
-    body = (
-      <ErrorState
-        action={
-          <Button icon="retry" onClick={() => void projects.refetch()}>
-            Try again
-          </Button>
-        }
-        title="Projects didn’t load"
-      >
-        {projects.error.message}
-      </ErrorState>
-    )
+    body = <ErrorState error={projects.error} onRetry={() => void projects.refetch()} title="Projects didn’t load" />
   } else if (active.length === 0 && mode === 'task') {
     body = (
       <EmptyState
         action={
-          <Link className="aw-btn aw-btn--primary aw-btn--md" to="/projects/new">
-            <span className="aw-btn__label">Create a project</span>
-          </Link>
+          <ButtonLink icon="plus" to="/projects/new" variant="primary">
+            New project
+          </ButtonLink>
         }
         icon="work"
         title="No project to add it to"
@@ -78,7 +67,7 @@ export function QuickAddPage() {
   return (
     <AppShell mainClassName="aw-main--page" user={session.user}>
       <div className="aw-page aw-page--form aw-quick">
-        <PageHeader icon={sharing ? 'link' : 'plus'} title={sharing ? 'Share to Workspace' : 'New task'}>
+        <PageHeader icon={sharing ? 'link' : 'plus'} title={sharing ? 'Share' : 'New task'}>
           {sharing ? 'Make it a task, or post it in a conversation.' : 'Add a task to a project. It stays here until it’s created, even offline.'}
         </PageHeader>
         {shared ? <SharedPreview shared={shared} /> : null}

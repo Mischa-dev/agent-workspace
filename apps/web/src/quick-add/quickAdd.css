@@ -74,6 +74,8 @@
     padding: var(--space-3) var(--space-5) calc(var(--space-3) + env(safe-area-inset-bottom));
     background: inherit;
     border-top: 1px solid var(--content-border);
+    /* Round with the card, so the bar doesn't cover its bottom corners. */
+    border-radius: 0 0 calc(var(--radius-md) - 1px) calc(var(--radius-md) - 1px);
   }
 
   .aw-quick__actions .aw-btn {

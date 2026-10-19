@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 
-import { isApiError } from '../api/errors'
+import { describeError } from '../ui'
 import { enqueueProjectNavigationUpdate } from './navigationQueue'
 import type { ProjectLocation, ProjectNavigation } from './types'
 
@@ -46,9 +46,7 @@ export function useRememberProjectLocation(
         if (!active) return
         setFailure({
           key: syncKey,
-          message: isApiError(reason)
-            ? reason.message
-            : 'Your recent Project location could not be saved.',
+          message: describeError(reason).message,
         })
       })
     return () => {
