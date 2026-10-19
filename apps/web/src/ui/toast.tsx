@@ -81,7 +81,7 @@ export function ToastViewport() {
   const current = useToasts()
   if (typeof document === 'undefined') return null
   return createPortal(
-    <section aria-label="Notifications" className="aw-toasts">
+    <section aria-label="Notifications" aria-live="polite" aria-relevant="additions" className="aw-toasts">
       <ol className="aw-toasts__list">
         {current.map((toast) => (
           <ToastItem key={`${toast.id}:${toast.createdAt}`} toast={toast} />

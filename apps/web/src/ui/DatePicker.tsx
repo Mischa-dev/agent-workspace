@@ -41,13 +41,13 @@ export function Calendar({ label, onSelect, value }: { label: string; onSelect: 
     <div className="aw-calendar">
       <div className="aw-calendar__head">
         <button aria-label="Previous month" className="aw-iconbtn aw-iconbtn--sm" onClick={() => setFocused(addMonths(focused, -1))} type="button">
-          <Icon name="arrow-left" size={14} />
+          <Icon name="chevron-left" size={16} />
         </button>
         <h3 aria-live="polite" className="aw-calendar__month" id={headingId}>
-          {focused.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+          {focused.toLocaleDateString([], { month: 'long', year: 'numeric' })}
         </h3>
-        <button aria-label="Next month" className="aw-iconbtn aw-iconbtn--sm aw-calendar__next" onClick={() => setFocused(addMonths(focused, 1))} type="button">
-          <Icon name="arrow-left" size={14} />
+        <button aria-label="Next month" className="aw-iconbtn aw-iconbtn--sm" onClick={() => setFocused(addMonths(focused, 1))} type="button">
+          <Icon name="chevron-right" size={16} />
         </button>
       </div>
       <div aria-label={label} aria-labelledby={headingId} className="aw-calendar__grid" onKeyDown={onKeyDown} ref={grid} role="grid">
@@ -68,7 +68,7 @@ export function Calendar({ label, onSelect, value }: { label: string; onSelect: 
                 <span key={iso} role="gridcell" aria-selected={iso === value}>
                   <button
                     aria-current={iso === today ? 'date' : undefined}
-                    aria-label={day.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+                    aria-label={day.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
                     className={['aw-calendar__day', outside ? 'is-outside' : '', iso === value ? 'is-selected' : '', iso === today ? 'is-today' : '']
                       .filter(Boolean)
                       .join(' ')}
@@ -129,7 +129,7 @@ export function DatePicker({
         }}
         type="button"
       >
-        <Icon name="clock" size={14} />
+        <Icon name="calendar" size={14} />
         <span>{value ? formatDateLabel(value) : placeholder}</span>
       </button>
       <Popover anchor={anchor} className="aw-datepicker__panel" label={label} onClose={close} open={anchor !== null}>

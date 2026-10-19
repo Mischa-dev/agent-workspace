@@ -45,6 +45,10 @@
   margin-bottom: var(--space-6);
 }
 
+.aw-pagehead__text {
+  min-width: 0;
+}
+
 .aw-pagehead__title {
   display: flex;
   align-items: center;
@@ -52,9 +56,11 @@
   margin: 0;
   font: var(--t-display);
   letter-spacing: -0.015em;
+  overflow-wrap: anywhere;
 }
 
 .aw-pagehead__icon {
+  flex: none;
   display: grid;
   place-items: center;
   width: 40px;

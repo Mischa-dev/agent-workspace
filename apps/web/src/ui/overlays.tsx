@@ -315,6 +315,7 @@ const focusableSelector =
 export function Dialog({
   children,
   description,
+  dirty = false,
   footer,
   onClose,
   onSubmit,
@@ -325,6 +326,8 @@ export function Dialog({
 }: {
   children?: ReactNode
   description?: ReactNode
+  /** Something typed would be lost: a click outside doesn't close it (Escape, Cancel and ✕ still do). */
+  dirty?: boolean
   footer?: ReactNode
   onClose: () => void
   /** Makes the body and footer one form, so the footer's submit button sends it. */
@@ -339,12 +342,14 @@ export function Dialog({
   const restore = useRef<HTMLElement | null>(null)
   const returnRef = useRef(returnFocus)
   const closeRef = useRef(onClose)
+  const dirtyRef = useRef(dirty)
   const titleId = useId()
   const descriptionId = useId()
   useEffect(() => {
     closeRef.current = onClose
     returnRef.current = returnFocus
-  }, [onClose, returnFocus])
+    dirtyRef.current = dirty
+  }, [dirty, onClose, returnFocus])
 
   useEffect(() => {
     if (!open) return undefined
@@ -389,7 +394,12 @@ export function Dialog({
   if (!open) return null
   return createPortal(
     <div className="aw-dialog-layer">
-      <div className="aw-scrim" onMouseDown={() => closeRef.current()} />
+      <div
+        className="aw-scrim"
+        onMouseDown={() => {
+          if (!dirtyRef.current) closeRef.current()
+        }}
+      />
       <div
         aria-describedby={description ? descriptionId : undefined}
         aria-labelledby={titleId}

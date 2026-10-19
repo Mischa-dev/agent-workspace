@@ -12,9 +12,14 @@ export function fromIsoDate(value: string | null | undefined): Date | null {
   return Number.isNaN(date.getTime()) ? null : date
 }
 
-export function formatDateLabel(value: string | null | undefined, options: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric', year: 'numeric' }) {
+/** "Oct 15", with the year when it isn't this year. Pass `options` to choose the parts yourself. */
+export function formatDateLabel(value: string | null | undefined, options?: Intl.DateTimeFormatOptions, now = new Date()) {
   const date = fromIsoDate(value)
-  return date ? date.toLocaleDateString('en-US', options) : ''
+  if (!date) return ''
+  return date.toLocaleDateString(
+    [],
+    options ?? { month: 'short', day: 'numeric', ...(date.getFullYear() === now.getFullYear() ? {} : { year: 'numeric' }) },
+  )
 }
 
 export function addDays(date: Date, days: number) {

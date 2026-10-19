@@ -3,7 +3,7 @@
 .aw-kbd,
 .aw-menu__item kbd,
 .aw-tooltip kbd {
-  font: 600 11px/16px var(--font-sans);
+  font: 600 calc(11px * var(--text-scale)) / calc(16px * var(--text-scale)) var(--font-sans);
   padding: 0 5px;
   border-radius: var(--radius-xs);
   background: var(--surface-sunken);
@@ -34,14 +34,15 @@
   padding: 0 var(--space-3);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  font: 600 calc(14px * var(--text-scale)) / 20px var(--font-sans);
+  font: 600 calc(14px * var(--text-scale)) / calc(20px * var(--text-scale)) var(--font-sans);
   white-space: nowrap;
   text-decoration: none;
   cursor: pointer;
   transition:
     background-color var(--duration-fast) var(--ease-out),
     border-color var(--duration-fast) var(--ease-out),
-    color var(--duration-fast) var(--ease-out);
+    color var(--duration-fast) var(--ease-out),
+    opacity var(--duration-fast) var(--ease-out);
 }
 
 .aw-btn--sm {
@@ -95,16 +96,16 @@
   background: color-mix(in oklch, var(--danger) 88%, black);
 }
 
-.aw-btn:disabled {
-  background: var(--surface-sunken);
-  border-color: transparent;
-  color: var(--content-fg-muted);
+.aw-btn:disabled:not([aria-busy="true"]) {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .aw-btn--ghost:disabled {
   background: transparent;
 }
 
+/* A busy button keeps its color, so Save and Delete don't flash grey while they work. */
 .aw-btn[aria-busy="true"] {
   cursor: progress;
 }
@@ -141,8 +142,9 @@
 }
 
 .aw-iconbtn:disabled {
-  opacity: 0.45;
+  opacity: 0.5;
   background: transparent;
+  cursor: not-allowed;
 }
 
 /* Tooltip */
@@ -160,7 +162,8 @@
   border-radius: var(--radius-sm);
   background: var(--tooltip-bg);
   color: var(--tooltip-fg);
-  font: 600 12px/16px var(--font-sans);
+  font: var(--t-caption);
+  font-weight: 600;
   white-space: nowrap;
   pointer-events: none;
   box-shadow: var(--shadow-popover);
@@ -177,6 +180,29 @@
 @media (hover: none) {
   .aw-tooltip {
     display: none;
+  }
+}
+
+@media (pointer: coarse) {
+  .aw-menu__item {
+    min-height: 44px;
+  }
+}
+
+/* Touch screens keep :hover after a tap; don't leave the last tapped button grey. */
+@media (hover: none) {
+  .aw-iconbtn:hover:not([aria-pressed="true"], [aria-expanded="true"]) {
+    background: transparent;
+    color: var(--r-fg-muted);
+  }
+
+  .aw-btn--secondary:hover:not(:disabled) {
+    background: var(--surface-raised);
+  }
+
+  .aw-btn--ghost:hover:not(:disabled) {
+    background: transparent;
+    color: var(--r-fg);
   }
 }
 
@@ -294,7 +320,7 @@
   padding: 0 5px;
   border-radius: var(--radius-full);
   text-align: center;
-  font: 700 11px/18px var(--font-sans);
+  font: 700 calc(11px * var(--text-scale)) / 18px var(--font-sans);
   font-variant-numeric: tabular-nums;
   background: var(--badge-bg);
   color: var(--badge-fg);
@@ -354,11 +380,15 @@
   align-items: center;
   gap: var(--space-1);
   flex: none;
+  max-width: 100%;
+  min-width: 0;
   height: 20px;
   padding: 0 var(--space-2);
   border-radius: var(--radius-full);
   font: var(--t-tag);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .aw-chip .aw-dots {
@@ -399,11 +429,14 @@
 /* Menu */
 .aw-menu {
   position: fixed;
-  z-index: var(--layer-dropdown);
+  z-index: var(--layer-popover);
   display: flex;
   flex-direction: column;
   min-width: 220px;
-  max-width: 320px;
+  max-width: min(320px, calc(100vw - 16px));
+  max-height: min(70dvh, 480px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: var(--space-1);
   background: var(--surface-raised);
   color: var(--content-fg);
@@ -415,9 +448,10 @@
 
 .aw-menu__item {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 10px;
-  height: 32px;
+  min-height: 32px;
   padding: 0 var(--space-2);
   border: 0;
   border-radius: var(--radius-sm);
@@ -434,6 +468,10 @@
 
 .aw-menu__label {
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .aw-menu__item kbd {
@@ -443,20 +481,13 @@
 .aw-menu__item:hover,
 .aw-menu__item:focus-visible {
   outline: 0;
-  background: var(--accent);
-  color: var(--on-accent);
+  background: var(--accent-soft);
+  color: var(--content-fg);
 }
 
 .aw-menu__item:hover .aw-icon,
 .aw-menu__item:focus-visible .aw-icon {
-  color: var(--on-accent);
-}
-
-.aw-menu__item:hover kbd,
-.aw-menu__item:focus-visible kbd {
-  background: transparent;
-  border-color: color-mix(in oklch, var(--on-accent) 45%, transparent);
-  color: var(--on-accent);
+  color: var(--content-fg);
 }
 
 .aw-menu__item.is-danger,
@@ -466,13 +497,13 @@
 
 .aw-menu__item.is-danger:hover,
 .aw-menu__item.is-danger:focus-visible {
-  background: var(--danger);
-  color: var(--on-danger);
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 
 .aw-menu__item.is-danger:hover .aw-icon,
 .aw-menu__item.is-danger:focus-visible .aw-icon {
-  color: var(--on-danger);
+  color: var(--danger);
 }
 
 .aw-menu__item:disabled {
@@ -490,7 +521,8 @@
 
 .aw-menu__heading {
   padding: 6px var(--space-2) 2px;
-  font: 600 12px/16px var(--font-sans);
+  font: var(--t-caption);
+  font-weight: 600;
   color: var(--content-fg-muted);
 }
 
@@ -537,8 +569,10 @@
 }
 
 .aw-dialog__title {
+  min-width: 0;
   margin: 0;
   font: var(--t-title);
+  overflow-wrap: anywhere;
 }
 
 .aw-dialog__desc {
@@ -546,6 +580,7 @@
   padding: 0 var(--space-5);
   font: var(--t-body);
   color: var(--content-fg-muted);
+  overflow-wrap: anywhere;
 }
 
 .aw-dialog__body {
@@ -562,21 +597,6 @@
   padding: var(--space-2) var(--space-5) var(--space-5);
 }
 
-/* Toast */
-.aw-toast {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 40px;
-  padding: 6px 6px 6px var(--space-3);
-  border-radius: var(--radius-md);
-  background: var(--tooltip-bg);
-  color: var(--tooltip-fg);
-  box-shadow: var(--shadow-popover);
-  font: var(--t-ui);
-  animation: aw-rise var(--duration-slow) var(--ease-out);
-}
-
 /* Fields */
 .aw-field {
   display: grid;
@@ -586,7 +606,7 @@
 }
 
 .aw-field__label {
-  font: 600 calc(14px * var(--text-scale)) / 20px var(--font-sans);
+  font: 600 calc(14px * var(--text-scale)) / calc(20px * var(--text-scale)) var(--font-sans);
   color: var(--content-fg);
 }
 
@@ -709,6 +729,7 @@
   margin: 0;
   font: var(--t-small);
   color: var(--content-fg-muted);
+  overflow-wrap: anywhere;
 }
 
 .aw-field.is-invalid .aw-field__control {
@@ -730,8 +751,13 @@
   gap: var(--space-4);
 }
 
+.aw-switch-row > :first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .aw-switch-row__label {
-  font: 600 calc(14px * var(--text-scale)) / 20px var(--font-sans);
+  font: 600 calc(14px * var(--text-scale)) / calc(20px * var(--text-scale)) var(--font-sans);
   color: var(--content-fg);
 }
 
@@ -775,10 +801,17 @@
 
 .aw-switch:disabled {
   opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .aw-seg {
   display: inline-flex;
+  align-self: flex-start;
+  justify-self: start;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
   gap: 2px;
   padding: 2px;
   border-radius: var(--radius-md);
@@ -789,13 +822,15 @@
 .aw-seg__opt {
   display: inline-flex;
   align-items: center;
+  flex: none;
   gap: 6px;
-  height: 28px;
+  /* With the track's padding and border, as tall as a button beside it. */
+  height: calc(var(--size-control) - 6px);
   padding: 0 var(--space-3);
   border: 0;
   border-radius: var(--radius-sm);
   background: none;
-  font: 600 calc(13px * var(--text-scale)) / 18px var(--font-sans);
+  font: 600 calc(13px * var(--text-scale)) / calc(18px * var(--text-scale)) var(--font-sans);
   color: var(--content-fg-muted);
   white-space: nowrap;
 }
@@ -824,7 +859,9 @@
 
 .aw-banner__text {
   flex: 1;
+  min-width: 0;
   margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .aw-banner__text strong {

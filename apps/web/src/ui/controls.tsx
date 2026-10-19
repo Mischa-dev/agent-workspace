@@ -171,7 +171,7 @@ export const SelectField = forwardRef<HTMLSelectElement, Omit<SelectHTMLAttribut
         ) : null}
         <div className="aw-field__control aw-field__control--select">
           {prefix ? <span className="aw-field__prefix">{prefix}</span> : null}
-          <select aria-describedby={describedBy(id, hint, error)} id={id} ref={ref} {...input}>
+          <select aria-describedby={describedBy(id, hint, error)} aria-invalid={error ? true : undefined} id={id} ref={ref} {...input}>
             {children}
           </select>
           <Icon name="chevron-down" size={14} />

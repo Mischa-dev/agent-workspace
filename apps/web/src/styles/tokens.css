@@ -240,6 +240,8 @@
   --layer-dropdown: 40;
   --layer-backdrop: 60;
   --layer-modal: 70;
+  /* Menus and pickers open from drawers and dialogs, so they sit above both. */
+  --layer-popover: 75;
   --layer-toast: 80;
   --layer-tooltip: 90;
   --duration-fast: 120ms;
@@ -313,5 +315,14 @@
     --accent: Highlight;
     --on-accent: HighlightText;
     --focus-ring: Highlight;
+  }
+}
+
+/* Fingers need bigger targets than pointers: 44px for the main controls on touch screens. */
+@media (pointer: coarse) {
+  :root {
+    --size-control-sm: 36px;
+    --size-control: 40px;
+    --size-control-lg: 44px;
   }
 }
