@@ -157,6 +157,13 @@ run_browser_smoke() {
     echo "Skipping browser smoke tests: no server binary at ${binary}."
     return 0
   fi
+  # A cancelled run can leave its server or Vite listening on the smoke ports
+  # (apps/web/e2e/environment.ts). This run holds the machine's lock, so
+  # anything this user still has there is left over: stop it.
+  if [ -n "${CI_LOCK_DIR:-}" ]; then
+    local server_port="${E2E_SERVER_PORT:-3190}"
+    python3 tools/ci/free_ports.py "${server_port}" "$((server_port + 1))" "${E2E_WEB_PORT:-5190}"
+  fi
   E2E_SERVER_BINARY="${binary}" E2E_DATABASE_BASE="${CI_DATABASE_BASE}" CI=1 \
     E2E_DATABASE_NAME="aw_e2e_$(printf '%s' "${CI_RUN_ID:-$$}" | tr -c 'a-zA-Z0-9' '_' | tr 'A-Z' 'a-z')" \
     pnpm test:e2e

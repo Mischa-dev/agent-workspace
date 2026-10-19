@@ -121,11 +121,14 @@ sync_source() (
 
 # One CI job per machine: mkdir is atomic. The holder touches lock/alive every
 # minute (heartbeat below); a lock with no heartbeat for 5 minutes is from a
-# run that died without cleaning up, e.g. a cancelled job the runner killed.
+# run that died without cleaning up, e.g. a cancelled job the runner killed
+# before release() reached the machine. Its checks may still be running, so
+# stop them as release() would before taking the lock over.
 acquire() {
   remote "mkdir -p ${work} && cd ${work} && now=\$(date +%s) &&
     if mkdir lock 2>/dev/null; then echo '${run_id}' \$now > lock/owner; touch lock/alive; echo acquired;
     elif [ \$((now - \$(stat -c %Y lock/alive 2>/dev/null || cut -d' ' -f2 lock/owner 2>/dev/null || echo 0))) -gt 300 ]; then
+      pg=\$(cat lock/pgid 2>/dev/null); [ -n \"\$pg\" ] && kill -TERM -- -\$pg 2>/dev/null;
       rm -rf lock && mkdir lock && echo '${run_id}' \$now > lock/owner && touch lock/alive && echo acquired;
     else echo busy; fi" 2>/dev/null
 }
