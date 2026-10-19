@@ -133,7 +133,7 @@ for (const device of [
       await expect(composer.locator('.aw-upload.is-done')).toHaveCount(1)
       await comment.fill('Here is the log')
       // On a touch screen Enter makes a new line; the button sends.
-      if (device.name === 'phone') await composer.getByRole('button', { name: 'Send message' }).click()
+      if (device.name === 'phone') await composer.getByRole('button', { name: 'Comment', exact: true }).click()
       else await comment.press('Enter')
       const posted = page.locator('.aw-msg, li, article', { hasText: 'Here is the log' }).last()
       await expect(posted.getByRole('link', { name: 'Download log.txt' })).toBeVisible()
