@@ -25,6 +25,7 @@ import { editErrorMessage, useApplyPick } from './taskEdits'
 import type { BoardColumn, WorkItem, WorkItemBoardResponse, WorkItemCard, WorkItemPriority, WorkItemWorkflow } from './types'
 import { useBoardDrag, type DropTarget } from './useBoardDrag'
 import { PriorityIcon, StatusIcon } from './WorkItemIcons'
+import './board.css'
 
 const PICKER_KEYS: Record<string, PickerField> = { s: 'status', a: 'assignee', l: 'labels', p: 'priority', m: 'milestone' }
 const PAGE = 50
