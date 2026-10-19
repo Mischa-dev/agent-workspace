@@ -1211,6 +1211,17 @@
   outline-offset: -2px;
 }
 
+/* On a phone the words alone fit across, so no tab hides off the edge. */
+@media (max-width: 640px) {
+  .aw-tabs__tab {
+    padding: 0 var(--space-2);
+  }
+
+  .aw-tabs__tab > .aw-icon {
+    display: none;
+  }
+}
+
 .aw-page--settings .aw-pagesection {
   padding: var(--space-6) 0 var(--space-2);
   border-top: 0;

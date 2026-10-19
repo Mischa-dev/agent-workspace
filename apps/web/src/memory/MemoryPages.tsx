@@ -116,7 +116,6 @@ function PagesList({ projectId }: { projectId: string }) {
   const canEdit = Boolean(pages.data?.canEdit)
   return (
     <>
-      <MemoryTabs current="pages" projectId={projectId} />
       <PageHeader
         actions={
           canEdit ? (
@@ -131,6 +130,7 @@ function PagesList({ projectId }: { projectId: string }) {
         What’s true for this project now: how it works, conventions, plans. People and agents both read and edit these, and every
         version is kept.
       </PageHeader>
+      <MemoryTabs current="pages" projectId={projectId} />
       {pages.isPending ? <ListSkeleton label="Loading pages" rows={3} /> : null}
       {pages.isError ? <ErrorState error={pages.error} onRetry={() => void pages.refetch()} title="Pages didn’t load" /> : null}
       {pages.data && pages.data.pages.length === 0 ? (
@@ -616,7 +616,6 @@ function DecisionsList({ projectId }: { projectId: string }) {
   const canRecord = Boolean(decisions.data?.canRecord)
   return (
     <>
-      <MemoryTabs current="decisions" projectId={projectId} />
       <PageHeader
         actions={
           canRecord ? (
@@ -631,6 +630,7 @@ function DecisionsList({ projectId }: { projectId: string }) {
         What was settled and why. Save one from any message, or record it here. A decision from a private conversation is only
         visible to the people in it.
       </PageHeader>
+      <MemoryTabs current="decisions" projectId={projectId} />
       <div className="aw-memory__toolbar">
         <Checkbox checked={showSuperseded} label="Show replaced decisions" onChange={setShowSuperseded} />
       </div>
