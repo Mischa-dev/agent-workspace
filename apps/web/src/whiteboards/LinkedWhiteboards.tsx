@@ -35,11 +35,19 @@ const SERVER_KIND: Record<LinkTargetKind, string> = { task: 'work_item', project
 /** The whiteboards on a task, project or page, with ways to add one. */
 export function LinkedWhiteboards({
   canEdit,
+  dialog: requested = null,
+  hideWhenEmpty = false,
+  onDialog,
   projectId,
   targetId,
   targetKind,
 }: {
   canEdit: boolean
+  /** Which dialog is open, when the page offers "New whiteboard" and "Link a whiteboard" somewhere else too. */
+  dialog?: 'new' | 'link' | null
+  /** Leaves the section out while nothing is linked; the dialogs still open. */
+  hideWhenEmpty?: boolean
+  onDialog?: (dialog: 'new' | 'link' | null) => void
   projectId: string
   targetId: string
   targetKind: LinkTargetKind
@@ -49,7 +57,9 @@ export function LinkedWhiteboards({
     queryKey: whiteboardKeys.linked(targetKind, targetId),
     queryFn: () => linkedWhiteboards(targetKind, targetId),
   })
-  const [dialog, setDialog] = useState<'new' | 'link' | null>(null)
+  const [own, setOwn] = useState<'new' | 'link' | null>(null)
+  const dialog = onDialog ? requested : own
+  const setDialog = onDialog ?? setOwn
   const refresh = () => queryClient.invalidateQueries({ queryKey: whiteboardKeys.all })
   // Taking a link off is undone from the toast; the whiteboard itself stays.
   const unlink = (board: Whiteboard) => {
@@ -67,6 +77,24 @@ export function LinkedWhiteboards({
       .catch((reason: unknown) => toastError('The whiteboard wasn’t unlinked', reason))
   }
   const list = boards.data?.whiteboards ?? []
+  const dialogs = (
+    <>
+      <NewWhiteboardDialog
+        link={{ targetKind, targetId }}
+        onClose={() => setDialog(null)}
+        open={dialog === 'new'}
+        projectId={projectId}
+      />
+      <LinkBoardDialog
+        exclude={new Set(list.map((board) => board.id))}
+        onClose={() => setDialog(null)}
+        open={dialog === 'link'}
+        targetId={targetId}
+        targetKind={targetKind}
+      />
+    </>
+  )
+  if (hideWhenEmpty && !boards.isError && list.length === 0) return dialogs
   return (
     <Section
       actions={
@@ -115,19 +143,7 @@ export function LinkedWhiteboards({
           ))}
         </RowList>
       ) : null}
-      <NewWhiteboardDialog
-        link={{ targetKind, targetId }}
-        onClose={() => setDialog(null)}
-        open={dialog === 'new'}
-        projectId={projectId}
-      />
-      <LinkBoardDialog
-        exclude={new Set(list.map((board) => board.id))}
-        onClose={() => setDialog(null)}
-        open={dialog === 'link'}
-        targetId={targetId}
-        targetKind={targetKind}
-      />
+      {dialogs}
     </Section>
   )
 }

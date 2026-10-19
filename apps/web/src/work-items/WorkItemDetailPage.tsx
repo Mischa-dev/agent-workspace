@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
 import { NavigationSyncAlert } from '../projects/NavigationSyncAlert'
@@ -8,14 +8,13 @@ import { useProject } from '../projects/hooks'
 import { useRememberProjectLocation } from '../projects/useRememberProjectLocation'
 import { AppShell } from '../shell/AppShell'
 import { usePageTitle } from '../shell/documentTitleModel'
-import { Icon } from '../ui'
 import { CreateWorkItemDialog } from './CreateWorkItemDialog'
 import { useWorkItem, useWorkItemWorkflow } from './hooks'
-import { workItemHref, workItemsHref } from './links'
+import { workItemHref } from './links'
 import { TaskDetail } from './TaskDetail'
 import './work.css'
 
-/** A task on its own page: the same parts as the side panel, given the whole width. */
+/** A task on its own page: the same parts as the side panel, with its fields in a rail beside the text when there's room. */
 export function WorkItemDetailPage() {
   const session = useAuthenticatedSession()
   const navigate = useNavigate()
@@ -66,18 +65,8 @@ export function WorkItemDetailPage() {
   const canCreate = !project.data.archivedAt && ['owner', 'admin', 'member'].includes(project.data.role)
   return (
     <AppShell project={project.data} user={session.user}>
-      <div className="aw-page aw-page--wide">
+      <div className="aw-taskpage">
         <NavigationSyncAlert {...navigationSync} />
-        <nav aria-label="Breadcrumb" className="aw-crumbs">
-          <Link className="aw-crumbs__link" to={workItemsHref(projectId)}>
-            <Icon name="work" size={14} />
-            Tasks
-          </Link>
-          <Icon className="aw-crumbs__sep" name="chevron-right" size={14} />
-          <span aria-current="page" className="aw-crumbs__here">
-            {item.data?.key ?? 'Task'}
-          </span>
-        </nav>
         <TaskDetail
           key={workItemId}
           layout="page"

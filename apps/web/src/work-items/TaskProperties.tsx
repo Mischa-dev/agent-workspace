@@ -1,168 +1,232 @@
-import { Eye, EyeOff } from 'lucide-react'
-import { useState, type ReactNode } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
 
-import { Avatar, AvatarStack, Button, Icon, TextArea, actorKind, countLabel } from '../ui'
-import { DatePicker, Popover } from '../ui/pickers'
+import { Avatar, Icon, actorKind } from '../ui'
+import { DatePicker } from '../ui/pickers'
 import { priorityLabel } from './constants'
 import { FieldPicker, type PickerField } from './FieldPicker'
-import { useSetWatching } from './planningHooks'
 import { pickToPatch } from './taskEdits'
 import { EstimateField } from './TaskFields'
 import { TaskGlyph } from './TaskGlyph'
-import { TaskSearchPicker } from './TaskSearchPicker'
 import { isOverdue } from './taskDisplay'
 import type { WorkItem, WorkItemWorkflow } from './types'
 import type { TaskSave } from './useTaskSave'
 import { PriorityIcon, StatusIcon } from './WorkItemIcons'
 import { WorkItemLabels } from './WorkItemLabels'
 
-function Property({ children, label }: { children: ReactNode; label: string }) {
-  return (
-    <div className="aw-prop">
-      <span className="aw-prop__label">{label}</span>
-      <div className="aw-prop__value">{children}</div>
-    </div>
-  )
-}
-
-function PropertyButton({
-  children,
-  disabled,
-  label,
-  onOpen,
-}: {
-  children: ReactNode
-  disabled: boolean
-  label: string
-  onOpen: (anchor: HTMLElement) => void
-}) {
-  if (disabled) return <span className="aw-prop__static">{children}</span>
-  return (
-    <button aria-haspopup="dialog" aria-label={label} className="aw-combobox-trigger aw-prop__button" onClick={(event) => onOpen(event.currentTarget)} type="button">
-      {children}
-    </button>
-  )
-}
-
-/** The task's fields, each saved the moment it changes. */
+/**
+ * The task's fields, each saved the moment it changes: labelled rows in the
+ * full page's side rail, or a wrap of compact pills under the title in the
+ * side panel and on phones.
+ */
 export function TaskProperties({
   disabled,
   item,
   onManageLabels,
-  onOpenTask,
-  projectArchived,
   save,
+  variant,
   workflow,
 }: {
   disabled: boolean
   item: WorkItem
   onManageLabels: () => void
-  onOpenTask: (task: { id: string; projectId: string; href: string }) => void
-  projectArchived: boolean
   save: TaskSave
+  variant: 'rail' | 'pills'
   workflow: WorkItemWorkflow
 }) {
   const [picker, setPicker] = useState<{ field: PickerField; anchor: HTMLElement } | null>(null)
-  const [parentAnchor, setParentAnchor] = useState<HTMLElement | null>(null)
-  const open = (field: PickerField) => (anchor: HTMLElement) => setPicker({ field, anchor })
+  const [more, setMore] = useState(false)
   const status = workflow.statuses.find((entry) => entry.id === item.status.id) ?? item.status
   const overdue = isOverdue(item)
+  const rail = variant === 'rail'
+  const control = rail ? 'aw-prop__button' : 'aw-pill'
 
-  return (
-    <div className="aw-props aw-taskprops">
-      <Property label="Status">
-        <PropertyButton disabled={disabled} label={`Status: ${status.name}. Change`} onOpen={open('status')}>
+  // In pills, the fields people set less often wait behind More while they're empty.
+  const tucked = (empty: boolean) => !rail && !more && !disabled && empty
+  const hidden = [
+    tucked(!item.milestone) ? 'Milestone' : null,
+    tucked(!item.startDate) ? 'Start date' : null,
+    tucked(item.estimate === null) ? 'Estimate' : null,
+  ].filter((name) => name !== null)
+  const group = useRef<HTMLDivElement>(null)
+  const showMore = () => {
+    setMore(true)
+    // The button goes away, so focus moves to the first field it showed.
+    window.requestAnimationFrame(() => group.current?.querySelector<HTMLElement>(`[data-field="${hidden[0]}"] button`)?.focus())
+  }
+  // A workflow with one type doesn't need to say it on every task.
+  const showType = workflow.types.length > 1 || !workflow.types.some((type) => type.id === item.itemType.id)
+
+  // One field: a label beside it in the rail; in pills the value carries its own name.
+  const field = (label: string, value: ReactNode) =>
+    rail ? (
+      <div className="aw-prop" key={label}>
+        <span className="aw-prop__label">{label}</span>
+        <div className="aw-prop__value">{value}</div>
+      </div>
+    ) : (
+      <span className="aw-pills__item" data-field={label} key={label}>
+        {value}
+      </span>
+    )
+
+  const pickerButton = (name: PickerField, label: string, content: ReactNode, empty = false) =>
+    disabled ? (
+      <span className={`${control} is-static${empty ? ' is-empty' : ''}`}>{content}</span>
+    ) : (
+      <button
+        aria-haspopup="dialog"
+        aria-label={label}
+        className={`${control}${empty ? ' is-empty' : ''}`}
+        onClick={(event) => setPicker({ field: name, anchor: event.currentTarget })}
+        type="button"
+      >
+        {content}
+      </button>
+    )
+
+  const assignee = item.assignee
+  const fields = [
+    field(
+      'Status',
+      pickerButton(
+        'status',
+        `Status: ${status.name}. Change`,
+        <>
           <StatusIcon category={status.semanticCategory} />
           {status.name}
-        </PropertyButton>
-      </Property>
-      <Property label="Priority">
-        <PropertyButton disabled={disabled} label={`Priority: ${priorityLabel(item.priority)}. Change`} onOpen={open('priority')}>
+        </>,
+      ),
+    ),
+    field(
+      'Priority',
+      pickerButton(
+        'priority',
+        `Priority: ${priorityLabel(item.priority)}. Change`,
+        <>
           <PriorityIcon decorative priority={item.priority} />
-          {priorityLabel(item.priority)}
-        </PropertyButton>
-      </Property>
-      <Property label="Assignee">
-        <PropertyButton disabled={disabled} label={`Assignee: ${item.assignee?.displayName ?? 'Unassigned'}. Change`} onOpen={open('assignee')}>
-          {item.assignee ? (
+          {item.priority === 'no_priority' && !rail ? 'Priority' : priorityLabel(item.priority)}
+        </>,
+        item.priority === 'no_priority',
+      ),
+    ),
+    field(
+      'Assignee',
+      pickerButton(
+        'assignee',
+        `Assignee: ${assignee?.displayName ?? 'Unassigned'}. Change`,
+        assignee ? (
+          <>
+            <Avatar kind={actorKind(assignee.kind)} name={assignee.displayName} seed={assignee.actorId} size={18} />
+            <span className="aw-prop__text">
+              {assignee.displayName}
+              {assignee.active ? '' : ' (inactive)'}
+            </span>
+          </>
+        ) : (
+          <>
+            <Icon name="unassigned" size={16} />
+            {rail ? 'Unassigned' : 'Assignee'}
+          </>
+        ),
+        !assignee,
+      ),
+    ),
+    field(
+      'Labels',
+      pickerButton(
+        'labels',
+        `Labels: ${item.labels.map((label) => label.name).join(', ') || 'none'}. Change`,
+        item.labels.length ? (
+          <WorkItemLabels labels={item.labels} />
+        ) : (
+          <>
+            <TaskGlyph name="tag" />
+            {rail ? 'Add labels' : 'Labels'}
+          </>
+        ),
+        !item.labels.length,
+      ),
+    ),
+    hidden.includes('Milestone')
+      ? null
+      : field(
+          'Milestone',
+          pickerButton(
+            'milestone',
+            `Milestone: ${item.milestone?.name ?? 'none'}. Change`,
             <>
-              <Avatar kind={actorKind(item.assignee.kind)} name={item.assignee.displayName} seed={item.assignee.actorId} size={20} />
-              {item.assignee.displayName}
-              {item.assignee.active ? '' : ' (inactive)'}
-            </>
-          ) : (
-            <>
-              <Icon name="unassigned" size={16} />
-              Unassigned
-            </>
-          )}
-        </PropertyButton>
-      </Property>
-      <Property label="Type">
-        <PropertyButton disabled={disabled} label={`Type: ${item.itemType.name}. Change`} onOpen={open('type')}>
-          {item.itemType.name}
-        </PropertyButton>
-      </Property>
-      <Property label="Labels">
-        <PropertyButton disabled={disabled} label={`Labels: ${item.labels.map((label) => label.name).join(', ') || 'none'}. Change`} onOpen={open('labels')}>
-          {item.labels.length ? <WorkItemLabels labels={item.labels} /> : <span className="aw-prop__empty">Add labels</span>}
-        </PropertyButton>
-      </Property>
-      <Property label="Milestone">
-        <PropertyButton disabled={disabled} label={`Milestone: ${item.milestone?.name ?? 'none'}. Change`} onOpen={open('milestone')}>
-          <TaskGlyph name="milestone" />
-          {item.milestone ? item.milestone.name : <span className="aw-prop__empty">No milestone</span>}
-        </PropertyButton>
-      </Property>
-      <Property label="Parent">
-        <span className="aw-prop__pair">
-          <PropertyButton disabled={disabled} label={`Parent: ${item.parent ? item.parent.key : 'none'}. Change`} onOpen={setParentAnchor}>
-            {item.parent ? <span className="aw-prop__mono">{item.parent.key}</span> : <span className="aw-prop__empty">No parent</span>}
-          </PropertyButton>
-          {item.parent ? (
-            <a
-              className="aw-prop__link"
-              href={item.parent.href}
-              onClick={(event) => {
-                if (!item.parent || event.metaKey || event.ctrlKey) return
-                event.preventDefault()
-                onOpenTask(item.parent)
-              }}
-            >
-              {item.parent.title}
-            </a>
-          ) : null}
-        </span>
-      </Property>
-      <Property label="Start date">
-        <DatePicker disabled={disabled} label="Start date" onChange={(value) => save.save('Start date', { startDate: value })} value={item.startDate} />
-      </Property>
-      <Property label="Due date">
-        <span className={overdue ? 'aw-prop__pair is-overdue' : 'aw-prop__pair'}>
-          <DatePicker disabled={disabled} label="Due date" onChange={(value) => save.save('Due date', { dueDate: value })} value={item.dueDate} />
-          {overdue ? <span className="aw-due is-overdue">Overdue</span> : null}
-        </span>
-      </Property>
-      <Property label="Estimate">
-        <EstimateField disabled={disabled} onSave={(value) => save.save('Estimate', { estimate: value })} unit={item.estimateUnit} value={item.estimate} />
-      </Property>
-      <Property label="Blocked">
-        <BlockedField disabled={disabled} item={item} save={save} />
-      </Property>
-      <Property label="Watchers">
-        <WatchField item={item} readOnly={projectArchived} />
-      </Property>
+              <TaskGlyph name="milestone" />
+              <span className="aw-prop__text">{item.milestone ? item.milestone.name : rail ? 'No milestone' : 'Milestone'}</span>
+            </>,
+            !item.milestone,
+          ),
+        ),
+    hidden.includes('Start date')
+      ? null
+      : field(
+          'Start date',
+          <DatePicker
+            className={`${control} aw-prop__date`}
+            disabled={disabled}
+            label="Start date"
+            onChange={(value) => save.save('startDate', { startDate: value })}
+            placeholder={rail ? 'No date' : 'Start date'}
+            prefix={rail ? undefined : 'Starts'}
+            value={item.startDate}
+          />,
+        ),
+    field(
+      'Due date',
+      <>
+        <DatePicker
+          className={`${control} aw-prop__date${overdue ? ' is-overdue' : ''}`}
+          disabled={disabled}
+          label="Due date"
+          onChange={(value) => save.save('dueDate', { dueDate: value })}
+          placeholder={rail ? 'No date' : 'Due date'}
+          prefix={rail ? undefined : overdue ? 'Overdue' : 'Due'}
+          value={item.dueDate}
+        />
+        {rail && overdue ? <span className="aw-due is-overdue">Overdue</span> : null}
+      </>,
+    ),
+    hidden.includes('Estimate')
+      ? null
+      : field(
+          'Estimate',
+          <EstimateField
+            className={control}
+            disabled={disabled}
+            onSave={(value) => save.save('estimate', { estimate: value })}
+            placeholder={rail ? 'None' : 'Estimate'}
+            unit={item.estimateUnit}
+            value={item.estimate}
+          />,
+        ),
+    showType
+      ? field('Type', pickerButton('type', `Type: ${item.itemType.name}. Change`, <span className="aw-prop__text">{item.itemType.name}</span>))
+      : null,
+    hidden.length ? (
+      <span className="aw-pills__item" key="more">
+        <button aria-label={`More fields: ${hidden.join(', ').toLowerCase()}`} className="aw-pill is-empty" onClick={showMore} type="button">
+          <Icon name="plus" size={14} />
+          More
+        </button>
+      </span>
+    ) : null,
+  ]
 
+  return (
+    <div aria-label={rail ? undefined : 'Task details'} className={`aw-taskprops aw-taskprops--${variant}`} ref={group} role={rail ? undefined : 'group'}>
+      {fields}
       {picker ? (
         <FieldPicker
           anchor={picker.anchor}
           current={{
             statusId: item.status.id,
             priority: item.priority,
-            assigneeId: item.assignee?.actorId ?? null,
-            assignee: item.assignee
-              ? { id: item.assignee.actorId, displayName: item.assignee.displayName, handle: item.assignee.handle, kind: item.assignee.kind }
-              : null,
+            assigneeId: assignee?.actorId ?? null,
+            assignee: assignee ? { id: assignee.actorId, displayName: assignee.displayName, handle: assignee.handle, kind: assignee.kind } : null,
             labelIds: item.labels.map((label) => label.id),
             milestoneId: item.milestone?.id ?? null,
             typeId: item.itemType.id,
@@ -170,121 +234,11 @@ export function TaskProperties({
           field={picker.field}
           onClose={() => setPicker(null)}
           onManageLabels={onManageLabels}
-          onPick={(result) => {
-            const names: Record<PickerField, string> = { status: 'Status', priority: 'Priority', assignee: 'Assignee', labels: 'Labels', milestone: 'Milestone', type: 'Type' }
-            save.save(names[result.field], pickToPatch(result))
-          }}
+          onPick={(result) => save.save(result.field, pickToPatch(result))}
           projectId={item.projectId}
           workflow={workflow}
         />
       ) : null}
-      <TaskSearchPicker
-        allowTypedKey={false}
-        anchor={parentAnchor}
-        exclude={[item.id, ...item.subtasks.map((task) => task.id)]}
-        label="Set parent"
-        noneLabel="No parent"
-        onClose={() => setParentAnchor(null)}
-        onPick={(target) => {
-          setParentAnchor(null)
-          save.save('Parent', { parentWorkItemId: target.id })
-        }}
-        projectId={item.projectId}
-      />
     </div>
-  )
-}
-
-/** The manual "blocked" flag, with the reason people see. */
-function BlockedField({ disabled, item, save }: { disabled: boolean; item: WorkItem; save: TaskSave }) {
-  const [anchor, setAnchor] = useState<HTMLElement | null>(null)
-  const [reason, setReason] = useState('')
-  const openBlockers = item.blockedBy.filter((task) => !task.finished).length
-  return (
-    <span className="aw-blocked">
-      {item.blocked ? (
-        <>
-          <span className="aw-blocked__reason">
-            <TaskGlyph name="blocked" />
-            {item.blocked.reason || 'Blocked'}
-          </span>
-          {!disabled ? (
-            <Button onClick={() => save.save('Blocked', { blockedReason: null })} size="sm" variant="ghost">
-              Unblock
-            </Button>
-          ) : null}
-        </>
-      ) : (
-        <>
-          <span className="aw-prop__empty">{openBlockers ? `Waiting on ${countLabel(openBlockers, 'task')}` : item.ready ? 'Ready' : 'No'}</span>
-          {!disabled ? (
-            <Button
-              onClick={(event) => {
-                setReason('')
-                setAnchor(event.currentTarget)
-              }}
-              size="sm"
-              variant="ghost"
-            >
-              Mark blocked
-            </Button>
-          ) : null}
-        </>
-      )}
-      <Popover anchor={anchor} label="Mark as blocked" onClose={() => setAnchor(null)} open={anchor !== null} width={300}>
-        <form
-          className="aw-blocked__form"
-          onSubmit={(event) => {
-            event.preventDefault()
-            if (!reason.trim()) return
-            save.save('Blocked', { blockedReason: reason.trim() })
-            setAnchor(null)
-          }}
-        >
-          <TextArea
-            label="What’s in the way?"
-            maxLength={500}
-            onChange={(event) => setReason(event.target.value)}
-            placeholder="Waiting on the API keys from the vendor"
-            rows={3}
-            value={reason}
-          />
-          <Button disabled={!reason.trim()} size="sm" type="submit" variant="primary">
-            Mark blocked
-          </Button>
-        </form>
-      </Popover>
-    </span>
-  )
-}
-
-/** Anyone who can see a task can watch it, but not while its project is archived. */
-function WatchField({ item, readOnly }: { item: WorkItem; readOnly: boolean }) {
-  const watch = useSetWatching()
-  return (
-    <span className="aw-watch">
-      {item.watchers.length ? (
-        <span className="aw-watch__people" title={item.watchers.map((watcher) => watcher.displayName).join(', ')}>
-          <AvatarStack people={item.watchers.map((watcher) => ({ id: watcher.id, name: watcher.displayName, kind: actorKind(watcher.kind) }))} size={20} />
-          <span className="visually-hidden">Watched by {item.watchers.map((watcher) => watcher.displayName).join(', ')}</span>
-          {item.watchers.length > 3 ? <span className="aw-watch__more">+{item.watchers.length - 3}</span> : null}
-        </span>
-      ) : (
-        <span className="aw-prop__empty">Nobody yet</span>
-      )}
-      {readOnly ? null : (
-        <Button
-          aria-pressed={item.watching}
-          busy={watch.isPending}
-          icon={item.watching ? EyeOff : Eye}
-          onClick={() => watch.mutate({ projectId: item.projectId, workItemId: item.id, watching: !item.watching, idempotencyKey: crypto.randomUUID() })}
-          size="sm"
-          variant="ghost"
-        >
-          {item.watching ? 'Unwatch' : 'Watch'}
-        </Button>
-      )}
-      {watch.isError ? <span role="alert" className="aw-prop__error">{item.watching ? 'Unwatching' : 'Watching'} didn’t save. Try again.</span> : null}
-    </span>
   )
 }

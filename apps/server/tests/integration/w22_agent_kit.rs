@@ -235,6 +235,21 @@ async fn a_handoff_note_reaches_whoever_claims_the_task_next() {
     assert_eq!(next["outcome"], "ok", "{next}");
     assert_eq!(next["value"]["handoff"]["by"], "Mara", "{next}");
     assert_eq!(next["value"]["handoff"]["note"], note);
+    // People see it on the task page too, with who left it.
+    let task_id = created["workItemId"].as_str().expect("task id");
+    let (status, shown) = send(
+        app,
+        setup.browser.request(
+            "GET",
+            &format!("/api/v1/projects/{work}/work-items/{task_id}"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{shown}");
+    assert_eq!(shown["handoff"]["note"], note, "{shown}");
+    assert_eq!(shown["handoff"]["actor"]["displayName"], "Mara", "{shown}");
     let opened = tool(
         app,
         &codex,

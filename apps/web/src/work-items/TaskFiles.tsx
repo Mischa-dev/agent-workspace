@@ -1,21 +1,26 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { useRef, useState, type DragEvent } from 'react'
+import { useImperativeHandle, useRef, useState, type RefObject } from 'react'
 
 import { Attachments } from '../files/Attachments'
 import { removeFile, uploadFile, type FileAttachment } from '../files/api'
 import { UploadChips } from '../files/UploadChips'
 import { useUploads } from '../files/useUploads'
-import { Banner, Button, ConfirmDialog, Icon, describeError, describeLoadError, showToast } from '../ui'
+import { Banner, ConfirmDialog, IconButton, describeError, describeLoadError, showToast } from '../ui'
 import { taskFilesKey, useTaskFiles } from './hooks'
+import { TaskSection } from './TaskSection'
 import type { WorkItem } from './types'
-import { Paperclip } from '../files/icons'
 
-/** The task's own files: add by picker, phone camera or drop; anyone who can edit the task can remove one. */
-export function TaskFiles({ disabled, item }: { disabled: boolean; item: WorkItem }) {
+/** Lets the rest of the page add files: the Add row's picker, or files dropped anywhere on the task. */
+export type TaskFilesHandle = { choose: () => void; add: (files: FileList) => void }
+
+/**
+ * The task's own files: add by picker, phone camera or drop; anyone who can
+ * edit the task can remove one. Hidden while there are none.
+ */
+export function TaskFiles({ disabled, handle, item }: { disabled: boolean; handle: RefObject<TaskFilesHandle | null>; item: WorkItem }) {
   const queryClient = useQueryClient()
   const files = useTaskFiles(item.projectId, item.id)
   const input = useRef<HTMLInputElement>(null)
-  const [dragging, setDragging] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // Removing deletes the file for everyone, so it asks first.
   const [removing, setRemoving] = useState<FileAttachment | null>(null)
@@ -28,6 +33,10 @@ export function TaskFiles({ disabled, item }: { disabled: boolean; item: WorkIte
     await refresh()
     return uploaded
   })
+  useImperativeHandle(handle, () => ({
+    choose: () => input.current?.click(),
+    add: (list: FileList) => setError(uploads.add(list)),
+  }))
   // A finished upload shows in the list; only running and failed ones stay as chips.
   const waiting = uploads.items.filter((entry) => !entry.file)
   const own = (files.data ?? []).filter((file) => !file.commentId)
@@ -38,59 +47,49 @@ export function TaskFiles({ disabled, item }: { disabled: boolean; item: WorkIte
     setRemoveError(null)
     removeFile(file.id)
       .then(async () => {
-        await refresh()
         setRemoving(null)
+        await refresh()
         showToast({ title: `Removed ${file.name}`, tone: 'success' })
       })
       .catch((reason: unknown) => setRemoveError(`The file wasn’t removed. ${describeError(reason).message}`))
       .finally(() => setRemoveBusy(false))
   }
-  const onDrop = (event: DragEvent<HTMLElement>) => {
-    setDragging(false)
-    if (disabled || !event.dataTransfer.types.includes('Files')) return
-    event.preventDefault()
-    setError(uploads.add(event.dataTransfer.files))
-  }
-  if (!own.length && disabled && !files.isError) return null
-  return (
-    <section
-      aria-labelledby={`files-${item.id}`}
-      className={dragging ? 'aw-worksection is-dropping' : 'aw-worksection'}
-      onDragLeave={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false)
-      }}
-      onDragOver={(event) => {
-        if (disabled || !event.dataTransfer.types.includes('Files')) return
-        event.preventDefault()
-        setDragging(true)
-      }}
-      onDrop={onDrop}
+  const dialog = (
+    <ConfirmDialog
+      busy={removeBusy}
+      confirmLabel="Remove file"
+      error={removeError}
+      onClose={() => setRemoving(null)}
+      onConfirm={confirmRemove}
+      open={removing !== null}
+      title={`Remove ${removing?.name ?? 'this file'}?`}
     >
-      <header className="aw-worksection__head">
-        <h2 className="aw-worksection__title" id={`files-${item.id}`}>
-          <Icon name={Paperclip} size={16} />
-          Files
-        </h2>
-        {!disabled ? (
-          <>
-            <Button icon="plus" onClick={() => input.current?.click()} size="sm" variant="ghost">
-              Add files
-            </Button>
-            <input
-              aria-label="Choose files to attach"
-              className="visually-hidden"
-              multiple
-              onChange={(event) => {
-                if (event.target.files) setError(uploads.add(event.target.files))
-                event.target.value = ''
-              }}
-              ref={input}
-              tabIndex={-1}
-              type="file"
-            />
-          </>
-        ) : null}
-      </header>
+      It’s deleted from this task for everyone.
+    </ConfirmDialog>
+  )
+  const picker = disabled ? null : (
+    <input
+      aria-label="Choose files to attach"
+      className="visually-hidden"
+      multiple
+      onChange={(event) => {
+        if (event.target.files) setError(uploads.add(event.target.files))
+        event.target.value = ''
+      }}
+      ref={input}
+      tabIndex={-1}
+      type="file"
+    />
+  )
+  if (!own.length && !waiting.length && !error && !files.isError) return picker
+  return (
+    <TaskSection
+      actions={disabled ? null : <IconButton icon="plus" label="Add files" onClick={() => input.current?.click()} size="sm" />}
+      count={own.length || undefined}
+      id={`files-${item.id}`}
+      title="Files"
+    >
+      {picker}
       {files.isError ? (
         <Banner onRetry={() => void files.refetch()} title="Files didn’t load" tone="danger">
           {describeLoadError(files.error)}
@@ -110,20 +109,8 @@ export function TaskFiles({ disabled, item }: { disabled: boolean; item: WorkIte
                 }
           }
         />
-      ) : files.isSuccess && !waiting.length ? (
-        <p className="aw-quiet">{disabled ? 'No files.' : 'No files yet. Drop files here or add them.'}</p>
       ) : null}
-      <ConfirmDialog
-        busy={removeBusy}
-        confirmLabel="Remove file"
-        error={removeError}
-        onClose={() => setRemoving(null)}
-        onConfirm={confirmRemove}
-        open={removing !== null}
-        title={`Remove ${removing?.name ?? 'this file'}?`}
-      >
-        It’s deleted from this task for everyone.
-      </ConfirmDialog>
-    </section>
+      {dialog}
+    </TaskSection>
   )
 }

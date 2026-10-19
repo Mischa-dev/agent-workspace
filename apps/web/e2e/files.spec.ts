@@ -118,7 +118,7 @@ for (const device of [
       await dialog.getByRole('button', { name: 'Create task' }).click()
       await expect(dialog).toBeHidden()
 
-      const filesSection = page.locator('section.aw-worksection', { has: page.getByRole('heading', { name: 'Files' }) })
+      const filesSection = page.locator('section.aw-tsection', { has: page.getByRole('heading', { name: 'Files' }) })
       await expect(filesSection.getByRole('button', { name: 'Open spec.png' })).toBeVisible()
       await filesSection.locator('input[type="file"]').setInputFiles([
         { name: 'later.txt', mimeType: 'text/plain', buffer: Buffer.from('added later') },
