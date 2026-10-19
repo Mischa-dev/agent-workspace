@@ -1,14 +1,33 @@
-import { useState } from 'react'
+import { ListFilter } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { Avatar, Button, Icon, SegmentedControl, SelectField, TextField, actorKind } from '../ui'
-import { Calendar, ComboboxList, Popover } from '../ui/pickers'
+import { Avatar, Button, Icon, Menu, SegmentedControl, SelectField, TextField, actorKind, type MenuEntry } from '../ui'
+import { Calendar, ComboboxList, Popover, type ComboboxOption } from '../ui/pickers'
 import { workItemPriorities } from './constants'
-import { CATEGORY_LABELS, FILTER_FIELDS, TOGGLE_FIELDS, chipText, type FilterField } from './filterModel'
+import {
+  CATEGORY_LABELS,
+  FILTER_FIELDS,
+  LIST_FIELDS,
+  TOGGLE_FIELDS,
+  filterChips,
+  isListField,
+  operatorChoices,
+  operatorText,
+  operatorsOf,
+  valuesOf,
+  withOperator,
+  withValues,
+  type FilterChip,
+  type FilterField,
+  type FilterOperator,
+  type ListField,
+} from './filterModel'
 import { useAssignableActors, useWorkItem } from './hooks'
 import {
   COLUMN_FIELDS,
   GROUPINGS,
   LANE_FIELDS,
+  MAX_FILTER_VALUES,
   SORTS,
   clearFilters,
   type FilterValues,
@@ -24,7 +43,12 @@ import type { BoardColumnsBy, WorkItemGroupBy, WorkItemSort, WorkItemWorkflow } 
 import { useDebouncedSearch, type UpdateListState } from './useListState'
 import { PriorityIcon, StatusIcon } from './WorkItemIcons'
 
-type Open = { field: FilterField | null; anchor: HTMLElement }
+type Open =
+  /** The Filter menu's list of fields. */
+  | { field: null; anchor: HTMLElement }
+  /** A list filter's values, matched one way. */
+  | { field: ListField; operator: FilterOperator; anchor: HTMLElement }
+  | { field: Exclude<FilterField, ListField>; anchor: HTMLElement }
 
 // Done work has its own Show done toggle on the list and board. A saved view
 // that hides it outright still shows its chip, so it can be removed.
@@ -58,25 +82,37 @@ export function FilterBar({
 }) {
   const [search, setSearch] = useDebouncedSearch(state.filters.q ?? '', update)
   const [open, setOpen] = useState<Open | null>(null)
+  const body = useRef<HTMLDivElement>(null)
   const labels = useLabels(projectId)
   const milestones = useMilestones(projectId)
   const assignees = useAssignableActors(projectId, '')
   const parent = useWorkItem(projectId, state.filters.parentId && state.filters.parentId !== 'none' ? state.filters.parentId : '')
-  const assigneeName = state.filters.assigneeActorId
-    ? (assignees.data?.find((actor) => actor.id === state.filters.assigneeActorId)?.displayName ?? null)
-    : null
-  const lookups = { workflow, labels: labels.data, milestones: milestones.data, assigneeName, parentKey: parent.data?.key ?? null }
-  const chips = FILTER_FIELDS.flatMap((entry) => {
-    const text = chipText(entry.field, state.filters, lookups)
-    return text ? [{ field: entry.field, text }] : []
-  })
+  const actorNames = useMemo(() => new Map((assignees.data ?? []).map((actor) => [actor.id, actor.displayName])), [assignees.data])
+  const lookups = { workflow, labels: labels.data, milestones: milestones.data, actorNames, parentKey: parent.data?.key ?? null }
+  const chips = filterChips(state.filters, lookups)
   const apply = (field: FilterField, values: Partial<FilterValues>) => update((current) => setField(current, field, values))
+  const change = (next: (filters: FilterValues) => FilterValues) => update((current) => ({ ...current, filters: next(current.filters) }))
+  /** Opens a field's choices: a list field where its chip already matches, or "is". */
+  const choose = (field: FilterField, anchor: HTMLElement) => {
+    if (!isListField(field)) return setOpen({ field, anchor })
+    const existing = chips.find((chip) => chip.kind === 'list' && chip.field === field)
+    setOpen({ field, operator: existing?.kind === 'list' ? existing.operator : 'any', anchor })
+  }
+  // Picking a field swaps what the popover shows; focus goes to its search,
+  // or else its first control, as it does when the popover opens.
+  useEffect(() => {
+    const root = body.current
+    if (!root) return
+    const search = root.querySelector<HTMLElement>('input:not([disabled])')
+    if (search) search.focus({ preventScroll: true })
+    else if (!root.contains(document.activeElement)) root.querySelector<HTMLElement>('button:not([disabled])')?.focus({ preventScroll: true })
+  }, [open?.field])
 
   return (
     <div className="aw-filterbar">
-      <div aria-label="Filter work items" className="aw-filterbar__row" role="search">
+      <div aria-label="Filter tasks" className="aw-filterbar__row" role="search">
         <TextField
-          aria-label="Search work items"
+          aria-label="Search tasks"
           className="aw-filterbar__search"
           maxLength={120}
           onChange={(event) => setSearch(event.target.value)}
@@ -85,8 +121,7 @@ export function FilterBar({
           type="search"
           value={search}
         />
-        <Button aria-haspopup="dialog" onClick={(event) => setOpen({ field: null, anchor: event.currentTarget })} size="sm" variant="secondary">
-          <TaskGlyph name="filter" />
+        <Button aria-haspopup="dialog" icon={ListFilter} onClick={(event) => setOpen({ field: null, anchor: event.currentTarget })} size="sm" variant="secondary">
           Filter
         </Button>
         <span className="aw-filterbar__spacer" />
@@ -159,17 +194,14 @@ export function FilterBar({
       {chips.length ? (
         <ul aria-label="Active filters" className="aw-filterbar__chips">
           {chips.map((chip) => (
-            <li className="aw-chipfilter" key={chip.field}>
+            <li className="aw-chipfilter" key={chip.kind === 'list' ? chip.key : chip.field}>
+              <ChipFace chip={chip} filters={state.filters} onChange={change} onOpen={(anchor) => (chip.kind === 'list' ? setOpen({ field: chip.field, operator: chip.operator, anchor }) : setOpen({ field: chip.field as Exclude<FilterField, ListField>, anchor }))} />
               <button
-                aria-haspopup={TOGGLE_FIELDS[chip.field] ? undefined : 'dialog'}
-                className="aw-chipfilter__text"
-                disabled={Boolean(TOGGLE_FIELDS[chip.field])}
-                onClick={(event) => setOpen({ field: chip.field, anchor: event.currentTarget })}
+                aria-label={`Remove filter: ${chip.text}`}
+                className="aw-chipfilter__remove"
+                onClick={() => (chip.kind === 'list' ? change((filters) => withValues(filters, chip.key, [])) : apply(chip.field, {}))}
                 type="button"
               >
-                {chip.text}
-              </button>
-              <button aria-label={`Remove filter: ${chip.text}`} className="aw-chipfilter__remove" onClick={() => apply(chip.field, {})} type="button">
                 <Icon name="x" size={12} />
               </button>
             </li>
@@ -183,35 +215,48 @@ export function FilterBar({
       ) : null}
       {open && open.field !== 'parent' ? (
         <Popover anchor={open.anchor} label={open.field ? `Filter by ${FILTER_FIELDS.find((entry) => entry.field === open.field)?.label.toLocaleLowerCase()}` : 'Add a filter'} onClose={() => setOpen(null)} open width={300}>
-          {open.field === null ? (
-            <ComboboxList
-              label="Add a filter"
-              onSelect={(value) => {
-                const field = value as FilterField
-                const toggle = TOGGLE_FIELDS[field]
-                if (toggle) {
-                  apply(field, toggle)
-                  setOpen(null)
-                } else setOpen({ field, anchor: open.anchor })
-              }}
-              options={MENU_FIELDS.map((entry) => ({ value: entry.field, label: entry.label }))}
-              placeholder="Filter by…"
-              selected={chips.map((chip) => chip.field)}
-            />
-          ) : (
-            <FilterValueChooser
-              field={open.field}
-              filters={state.filters}
-              labels={labels.data ?? []}
-              milestones={milestones.data ?? []}
-              onApply={(values, close = true) => {
-                apply(open.field as FilterField, values)
-                if (close) setOpen(null)
-              }}
-              projectId={projectId}
-              workflow={workflow}
-            />
-          )}
+          <div className="aw-filterbar__popover" ref={body}>
+            {open.field === null ? (
+              <ComboboxList
+                label="Add a filter"
+                onSelect={(value) => {
+                  const field = value as FilterField
+                  const toggle = TOGGLE_FIELDS[field]
+                  if (toggle) {
+                    apply(field, toggle)
+                    setOpen(null)
+                  } else choose(field, open.anchor)
+                }}
+                options={MENU_FIELDS.map((entry) => ({ value: entry.field, label: entry.label }))}
+                placeholder="Filter by…"
+                selected={chips.map((chip) => chip.field)}
+              />
+            ) : 'operator' in open ? (
+              <ListFilterChooser
+                field={open.field}
+                filters={state.filters}
+                labels={labels.data ?? []}
+                milestones={milestones.data ?? []}
+                onChange={change}
+                onOperator={(operator) => {
+                  change((filters) => withOperator(filters, open.field, open.operator, operator))
+                  setOpen({ ...open, operator })
+                }}
+                operator={open.operator}
+                projectId={projectId}
+                workflow={workflow}
+              />
+            ) : (
+              <FilterValueChooser
+                field={open.field}
+                filters={state.filters}
+                onApply={(values, close = true) => {
+                  apply(open.field, values)
+                  if (close) setOpen(null)
+                }}
+              />
+            )}
+          </div>
         </Popover>
       ) : null}
       <TaskSearchPicker
@@ -231,57 +276,204 @@ export function FilterBar({
   )
 }
 
-function FilterValueChooser({
+/**
+ * A chip's face: the field, how it matches (a menu to switch between "is"
+ * and "is not") and its values, each opening what changes it. A filter that
+ * reads as one phrase, such as "Unassigned", is one button.
+ */
+function ChipFace({
+  chip,
+  filters,
+  onChange,
+  onOpen,
+}: {
+  chip: FilterChip
+  filters: FilterValues
+  onChange: (next: (filters: FilterValues) => FilterValues) => void
+  onOpen: (anchor: HTMLElement) => void
+}) {
+  const disabled = chip.kind === 'text' && Boolean(TOGGLE_FIELDS[chip.field])
+  if (chip.kind === 'text' || !chip.verb) {
+    return (
+      <button
+        aria-haspopup={disabled ? undefined : 'dialog'}
+        className="aw-chipfilter__text"
+        disabled={disabled}
+        onClick={(event) => onOpen(event.currentTarget)}
+        type="button"
+      >
+        {chip.kind === 'text' ? chip.text : chip.values}
+      </button>
+    )
+  }
+  const count = valuesOf(filters, chip.key).length
+  const operators: MenuEntry[] = operatorsOf(chip.field).map((operator) => ({
+    label: operatorText(chip.field, operator, chip.field === 'labels' ? 2 : count),
+    checked: operator === chip.operator,
+    onSelect: () => onChange((current) => withOperator(current, chip.field, chip.operator, operator)),
+  }))
+  return (
+    <>
+      <span aria-hidden="true" className="aw-chipfilter__field">
+        {chip.label}
+      </span>
+      <Menu
+        items={operators}
+        label={`How ${chip.label.toLocaleLowerCase()} matches`}
+        trigger={
+          <button className="aw-chipfilter__op" type="button">
+            <span className="visually-hidden">{chip.label} </span>
+            {chip.verb}
+          </button>
+        }
+      />
+      <button aria-haspopup="dialog" className="aw-chipfilter__text aw-chipfilter__values" onClick={(event) => onOpen(event.currentTarget)} title={chip.text} type="button">
+        <span className="visually-hidden">
+          {chip.label} {chip.verb}{' '}
+        </span>
+        {chip.values}
+      </button>
+    </>
+  )
+}
+
+/**
+ * The values of a list filter, any number of them, and whether a task
+ * matches with any of them, all of them (labels) or none of them. Each pick
+ * applies at once and the list stays open.
+ */
+function ListFilterChooser({
   field,
   filters,
   labels,
   milestones,
-  onApply,
+  onChange,
+  onOperator,
+  operator,
   projectId,
   workflow,
 }: {
-  field: FilterField
+  field: ListField
   filters: FilterValues
   labels: Array<{ id: string; name: string; color: string }>
   milestones: Array<{ id: string; name: string; targetDate: string | null }>
-  onApply: (values: Partial<FilterValues>, close?: boolean) => void
+  onChange: (next: (filters: FilterValues) => FilterValues) => void
+  onOperator: (operator: FilterOperator) => void
+  operator: FilterOperator
   projectId: string
   workflow: WorkItemWorkflow | undefined
 }) {
-  const one = (label: string, options: Parameters<typeof ComboboxList>[0]['options'], selected: string | undefined, toValues: (value: string) => Partial<FilterValues>) => (
+  const key = LIST_FIELDS[field].keys[operator] as keyof FilterValues
+  const selected = valuesOf(filters, key)
+  const full = selected.length >= MAX_FILTER_VALUES
+  const toggle = (value: string) =>
+    onChange((current) => {
+      const values = valuesOf(current, key)
+      if (values.includes(value)) return withValues(current, key, values.filter((entry) => entry !== value))
+      // Every one of several labels can't also be no labels.
+      if (operator === 'all') return withValues(current, key, value === 'none' ? ['none'] : [...values.filter((entry) => entry !== 'none'), value])
+      return withValues(current, key, [...values, value])
+    })
+  const limit = <T extends { value: string; disabled?: boolean }>(options: T[]) =>
+    full ? options.map((option) => (selected.includes(option.value) ? option : { ...option, disabled: true })) : options
+  const label = FILTER_FIELDS.find((entry) => entry.field === field)?.label ?? field
+  return (
+    <div className="aw-listfilter">
+      <SegmentedControl label={`How ${label.toLocaleLowerCase()} matches`} onChange={onOperator} options={operatorChoices(field)} value={operator} />
+      {field === 'assignee' ? (
+        <AssigneeOptions limit={limit} onSelect={toggle} projectId={projectId} selected={selected} />
+      ) : (
+        <ComboboxList
+          label={label}
+          multiple
+          onSelect={toggle}
+          options={limit(listOptions(field, workflow, labels, milestones))}
+          selected={selected}
+        />
+      )}
+      {full ? <p className="aw-listfilter__note">A filter takes up to {MAX_FILTER_VALUES} values.</p> : null}
+    </div>
+  )
+}
+
+function listOptions(
+  field: Exclude<ListField, 'assignee'>,
+  workflow: WorkItemWorkflow | undefined,
+  labels: Array<{ id: string; name: string; color: string }>,
+  milestones: Array<{ id: string; name: string; targetDate: string | null }>,
+): ComboboxOption[] {
+  switch (field) {
+    case 'status':
+      return (workflow?.statuses ?? []).map((status) => ({ value: status.id, label: status.name, leading: <StatusIcon category={status.semanticCategory} /> }))
+    case 'category':
+      return Object.entries(CATEGORY_LABELS).map(([value, label]) => ({ value, label, leading: <StatusIcon category={value} /> }))
+    case 'priority':
+      return workItemPriorities.map((priority) => ({ value: priority.value, label: priority.label, leading: <PriorityIcon decorative priority={priority.value} /> }))
+    case 'type':
+      return (workflow?.types ?? []).map((type) => ({ value: type.id, label: type.name }))
+    case 'milestone':
+      return [{ value: 'none', label: 'No milestone' }, ...milestones.map((milestone) => ({ value: milestone.id, label: milestone.name, description: milestone.targetDate ?? undefined }))]
+    case 'labels':
+      return [
+        { value: 'none', label: 'No labels' },
+        ...labels.map((label) => ({ value: label.id, label: label.name, leading: <span aria-hidden="true" className="aw-label__dot" style={{ backgroundColor: label.color }} /> })),
+      ]
+  }
+}
+
+/** People and agents to filter by, searched on the server; "Unassigned" first. */
+function AssigneeOptions({
+  limit,
+  onSelect,
+  projectId,
+  selected,
+}: {
+  limit: (options: ComboboxOption[]) => ComboboxOption[]
+  onSelect: (value: string) => void
+  projectId: string
+  selected: string[]
+}) {
+  const [query, setQuery] = useState('')
+  const debounced = useDebouncedValue(query, 200)
+  const actors = useAssignableActors(projectId, debounced)
+  // Who's picked already stays at the top while nothing is typed.
+  const listed = [...(actors.data ?? [])].sort((a, b) => (debounced.trim() ? 0 : Number(selected.includes(b.id)) - Number(selected.includes(a.id))))
+  return (
+    <ComboboxList
+      label="Assignee"
+      loading={actors.isFetching}
+      multiple
+      onQueryChange={setQuery}
+      onSelect={onSelect}
+      options={limit([
+        ...(debounced.trim() ? [] : [{ value: 'none', label: 'Unassigned', leading: <Icon name="unassigned" size={16} /> }]),
+        ...listed.map((actor) => ({
+          value: actor.id,
+          label: actor.displayName,
+          description: `@${actor.handle}`,
+          leading: <Avatar kind={actorKind(actor.kind)} name={actor.displayName} seed={actor.id} size={18} />,
+        })),
+      ])}
+      placeholder="Search people and agents"
+      selected={selected}
+    />
+  )
+}
+
+/** The choices of a filter that holds one value, such as Blocked or Due date. */
+function FilterValueChooser({
+  field,
+  filters,
+  onApply,
+}: {
+  field: Exclude<FilterField, ListField>
+  filters: FilterValues
+  onApply: (values: Partial<FilterValues>, close?: boolean) => void
+}) {
+  const one = (label: string, options: ComboboxOption[], selected: string | undefined, toValues: (value: string) => Partial<FilterValues>) => (
     <ComboboxList label={label} onSelect={(value) => onApply(toValues(value))} options={options} selected={selected ? [selected] : []} />
   )
   switch (field) {
-    case 'status':
-      return one(
-        'Status',
-        (workflow?.statuses ?? []).map((status) => ({ value: status.id, label: status.name, leading: <StatusIcon category={status.semanticCategory} /> })),
-        filters.statusId,
-        (value) => ({ statusId: value }),
-      )
-    case 'category':
-      return one(
-        'Status group',
-        Object.entries(CATEGORY_LABELS).map(([value, label]) => ({ value, label, leading: <StatusIcon category={value} /> })),
-        filters.semanticCategory,
-        (value) => ({ semanticCategory: value }),
-      )
-    case 'priority':
-      return one(
-        'Priority',
-        workItemPriorities.map((priority) => ({ value: priority.value, label: priority.label, leading: <PriorityIcon decorative priority={priority.value} /> })),
-        filters.priority,
-        (value) => ({ priority: value as FilterValues['priority'] }),
-      )
-    case 'type':
-      return one('Type', (workflow?.types ?? []).map((type) => ({ value: type.id, label: type.name })), filters.typeId, (value) => ({ typeId: value }))
-    case 'milestone':
-      return one(
-        'Milestone',
-        [{ value: 'none', label: 'No milestone' }, ...milestones.map((milestone) => ({ value: milestone.id, label: milestone.name, description: milestone.targetDate ?? undefined }))],
-        filters.milestoneId,
-        (value) => ({ milestoneId: value }),
-      )
     case 'blocked':
       return one(
         'Blocked',
@@ -302,61 +494,11 @@ function FilterValueChooser({
         filters.claimed,
         (value) => ({ claimed: value as 'true' | 'false' }),
       )
-    case 'labels':
-      return <LabelFilter labels={labels} onApply={onApply} value={filters.labelIds} />
-    case 'assignee':
-      return <AssigneeFilter filters={filters} onApply={onApply} projectId={projectId} />
     case 'due':
       return <DueFilter filters={filters} onApply={onApply} />
     default:
       return null
   }
-}
-
-function LabelFilter({ labels, onApply, value }: { labels: Array<{ id: string; name: string; color: string }>; onApply: (values: Partial<FilterValues>, close?: boolean) => void; value: string | undefined }) {
-  const selected = value && value !== 'none' ? value.split(',') : value === 'none' ? ['none'] : []
-  return (
-    <ComboboxList
-      label="Labels"
-      multiple
-      onSelect={(picked) => {
-        if (picked === 'none') return onApply({ labelIds: selected.includes('none') ? undefined : 'none' }, false)
-        const next = selected.filter((id) => id !== 'none')
-        const ids = next.includes(picked) ? next.filter((id) => id !== picked) : [...next, picked]
-        onApply({ labelIds: ids.length ? ids.join(',') : undefined }, false)
-      }}
-      options={[
-        { value: 'none', label: 'No labels' },
-        ...labels.map((label) => ({ value: label.id, label: label.name, leading: <span aria-hidden="true" className="aw-label__dot" style={{ backgroundColor: label.color }} /> })),
-      ]}
-      selected={selected}
-    />
-  )
-}
-
-function AssigneeFilter({ filters, onApply, projectId }: { filters: FilterValues; onApply: (values: Partial<FilterValues>) => void; projectId: string }) {
-  const [query, setQuery] = useState('')
-  const debounced = useDebouncedValue(query, 200)
-  const actors = useAssignableActors(projectId, debounced)
-  return (
-    <ComboboxList
-      label="Assignee"
-      loading={actors.isFetching}
-      onQueryChange={setQuery}
-      onSelect={(value) => onApply(value === 'none' ? { unassigned: true } : { assigneeActorId: value })}
-      options={[
-        ...(debounced.trim() ? [] : [{ value: 'none', label: 'Unassigned', leading: <Icon name="unassigned" size={16} /> }]),
-        ...(actors.data ?? []).map((actor) => ({
-          value: actor.id,
-          label: actor.displayName,
-          description: `@${actor.handle}`,
-          leading: <Avatar kind={actorKind(actor.kind)} name={actor.displayName} seed={actor.id} size={18} />,
-        })),
-      ]}
-      placeholder="Search people and agents"
-      selected={filters.unassigned ? ['none'] : filters.assigneeActorId ? [filters.assigneeActorId] : []}
-    />
-  )
 }
 
 function DueFilter({ filters, onApply }: { filters: FilterValues; onApply: (values: Partial<FilterValues>, close?: boolean) => void }) {
@@ -385,3 +527,4 @@ function DueFilter({ filters, onApply }: { filters: FilterValues; onApply: (valu
     </div>
   )
 }
+

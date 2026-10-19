@@ -218,18 +218,33 @@ export type WorkItemGroupBy = 'status' | 'assignee' | 'priority' | 'label' | 'mi
 
 export type BoardColumnsBy = 'status' | 'assignee' | 'priority' | 'milestone' | 'type' | 'label'
 
-/** Query parameters for GET /work-items, /work-items/groups and /work-items/board. */
+/**
+ * Query parameters for GET /work-items, /work-items/groups and /work-items/board.
+ * Most filters take several values, comma separated (any of them), with a
+ * `not…` twin (none of them); "none" stands for no value where a task can
+ * have none.
+ */
 export type WorkItemFilters = {
   q?: string
   typeId?: string
+  notTypeId?: string
   statusId?: string
+  notStatusId?: string
   semanticCategory?: string
-  priority?: WorkItemPriority
+  notSemanticCategory?: string
+  priority?: string
+  notPriority?: string
   assigneeActorId?: string
+  notAssigneeActorId?: string
+  /** Older links' "no one"; read as the assignee "none". */
   unassigned?: boolean
   archived?: boolean
+  /** All of these labels, or "none" alone for no labels. */
   labelIds?: string
+  anyLabelIds?: string
+  notLabelIds?: string
   milestoneId?: string
+  notMilestoneId?: string
   parentId?: string
   blocked?: 'true' | 'false'
   ready?: boolean

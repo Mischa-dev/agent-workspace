@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom'
 
+import { withFilter } from './listModel'
 import { SEARCH_DELAY, useDebouncedSearch, useListState } from './useListState'
 
 function Search() {
@@ -64,5 +65,35 @@ describe('search box', () => {
     expect(input).toHaveValue('')
     act(() => vi.advanceTimersByTime(SEARCH_DELAY))
     expect(screen.getByRole('status', { name: 'Location' })).toBeEmptyDOMElement()
+  })
+})
+
+describe('list state', () => {
+  it('keeps both of two updates made before the page catches up', () => {
+    function TwoPicks() {
+      const { update } = useListState()
+      const location = useLocation()
+      return (
+        <>
+          <button
+            onClick={() => {
+              update((current) => withFilter(current, 'priority', 'high'))
+              update((current) => withFilter(current, 'priority', [current.filters.priority, 'urgent'].join(',')))
+            }}
+            type="button"
+          >
+            Pick two
+          </button>
+          <output aria-label="Location">{location.search}</output>
+        </>
+      )
+    }
+    render(
+      <MemoryRouter initialEntries={['/list?blocked=true']}>
+        <TwoPicks />
+      </MemoryRouter>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Pick two' }))
+    expect(screen.getByRole('status', { name: 'Location' })).toHaveTextContent('?priority=high%2Curgent&blocked=true')
   })
 })

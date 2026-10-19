@@ -323,11 +323,16 @@ describe('Work Items list', () => {
   })
 
   it('reads filters from the URL, sends them to the server and clears them from a chip', async () => {
-    renderPage(`/projects/${projectId}/work-items?priority=urgent`)
+    const rendered = renderPage(`/projects/${projectId}/work-items?priority=urgent,high&notPriority=low`)
 
-    await waitFor(() => expect(listRequests().at(-1)).toContain('priority=urgent'))
-    fireEvent.click(screen.getByRole('button', { name: 'Remove filter: Priority is Urgent' }))
+    await waitFor(() => expect(listRequests().at(-1)).toContain('priority=high%2Curgent'))
+    expect(listRequests().at(-1)).toContain('notPriority=low')
+    expect((await axe.run(rendered.container)).violations).toEqual([])
+    fireEvent.click(screen.getByRole('button', { name: 'Remove filter: Priority is any of High, Urgent' }))
     await waitFor(() => expect(listRequests().at(-1)).not.toContain('priority='))
+    expect(listRequests().at(-1)).toContain('notPriority=low')
+    fireEvent.click(screen.getByRole('button', { name: 'Remove filter: Priority is not Low' }))
+    await waitFor(() => expect(listRequests().at(-1)).not.toContain('notPriority='))
   })
 
   it('submits creation with an idempotency key', () => {

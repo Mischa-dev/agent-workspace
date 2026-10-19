@@ -64,10 +64,20 @@ describe('list state in the URL', () => {
     expect(state.filters).toEqual({})
   })
 
-  it('keeps an assignee and "unassigned" from both applying', () => {
-    const state = readListState(new URLSearchParams('assigneeActorId=a1&unassigned=true'))
-    expect(state.filters).toEqual({ assigneeActorId: 'a1' })
-    expect(withFilter(state, 'unassigned', true).filters).toEqual({ unassigned: true })
+  it('reads older links as the server does: "unassigned" is one more assignee, "no labels" one more label choice', () => {
+    expect(readListState(new URLSearchParams('assigneeActorId=a1&unassigned=true')).filters).toEqual({ assigneeActorId: 'a1,none' })
+    expect(readListState(new URLSearchParams('unassigned=true')).filters).toEqual({ assigneeActorId: 'none' })
+    expect(readListState(new URLSearchParams('labelIds=none')).filters).toEqual({ anyLabelIds: 'none' })
+    expect(writeListState(readListState(new URLSearchParams('unassigned=true'))).toString()).toBe('assigneeActorId=none')
+  })
+
+  it('keeps each filter to one spelling and drops lists the server would refuse', () => {
+    const state = readListState(new URLSearchParams('statusId=s2,s1,s2&notAssigneeActorId=none,a1&priority=urgent,high&anyLabelIds=l1'))
+    expect(state.filters).toEqual({ statusId: 's1,s2', notAssigneeActorId: 'a1,none', priority: 'high,urgent', anyLabelIds: 'l1' })
+    expect(withFilter(state, 'statusId', undefined).filters).not.toHaveProperty('statusId')
+    for (const query of ['statusId=none', 'priority=high,whenever', 'labelIds=none,l1', `statusId=${Array.from({ length: 21 }, (_, n) => `s${n}`).join(',')}`]) {
+      expect(readListState(new URLSearchParams(query)).filters).toEqual({})
+    }
   })
 
   it('sends grouping and sort with the filters, and remembers everything but the open task', () => {

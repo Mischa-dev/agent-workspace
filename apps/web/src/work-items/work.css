@@ -38,6 +38,11 @@
   list-style: none;
 }
 
+/* Wraps whichever choices the filter popover shows, without a box of its own. */
+.aw-filterbar__popover {
+  display: contents;
+}
+
 .aw-chipfilter {
   display: inline-flex;
   align-items: center;
@@ -61,7 +66,7 @@
 
 .aw-chipfilter__text {
   min-width: 0;
-  padding: 0 4px 0 10px;
+  padding: 0 8px 0 10px;
   overflow: hidden;
   border-radius: var(--radius-full) 0 0 var(--radius-full);
   text-overflow: ellipsis;
@@ -69,7 +74,6 @@
 }
 
 .aw-chipfilter__text:disabled {
-  padding-right: 6px;
   cursor: default;
 }
 
@@ -84,6 +88,69 @@
 .aw-chipfilter__text:hover:not(:disabled),
 .aw-chipfilter__remove:hover {
   background: var(--content-hover);
+}
+
+/* A list filter's chip reads "Status | is any of | Ready, Review | x": the
+   verb and the values each open what changes them. */
+.aw-chipfilter__field {
+  flex: none;
+  padding: 0 8px 0 10px;
+  white-space: nowrap;
+}
+
+.aw-chipfilter__op {
+  flex: none;
+  height: 100%;
+  padding: 0 8px;
+  border: 0;
+  background: none;
+  color: var(--content-fg-muted);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.aw-chipfilter__op:hover,
+.aw-chipfilter__op[aria-expanded='true'] {
+  background: var(--content-hover);
+  color: var(--content-fg);
+}
+
+.aw-chipfilter__text.aw-chipfilter__values {
+  max-width: 240px;
+  padding: 0 8px;
+  border-radius: 0;
+}
+
+.aw-chipfilter__op,
+.aw-chipfilter__values,
+.aw-chipfilter__remove {
+  border-left: 1px solid var(--control-border);
+}
+
+.aw-chipfilter button:focus-visible {
+  outline-offset: -2px;
+}
+
+.aw-listfilter {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.aw-listfilter > .aw-seg {
+  display: flex;
+}
+
+.aw-listfilter .aw-seg__opt {
+  flex: 1;
+  justify-content: center;
+}
+
+.aw-listfilter__note {
+  margin: 0;
+  padding: var(--space-1) var(--space-2);
+  color: var(--content-fg-muted);
+  font: var(--t-small);
 }
 
 .aw-duefilter {

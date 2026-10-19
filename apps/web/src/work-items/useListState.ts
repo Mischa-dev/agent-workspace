@@ -9,9 +9,20 @@ export type UpdateListState = (next: (current: ListState) => ListState, options?
 export function useListState() {
   const [parameters, setParameters] = useSearchParams()
   const state = useMemo(() => readListState(parameters), [parameters])
+  // The router gives each update the URL as of the last render, so a second
+  // update before the next render (two quick picks in a filter) would drop
+  // the first. Until the URL catches up, updates build on the last write.
+  const pending = useRef<URLSearchParams | null>(null)
+  useEffect(() => {
+    pending.current = null
+  }, [parameters])
   const update = useCallback<UpdateListState>(
-    (next, options) => setParameters((previous) => writeListState(next(readListState(previous))), { replace: options?.replace }),
-    [setParameters],
+    (next, options) => {
+      const written = writeListState(next(readListState(pending.current ?? parameters)))
+      pending.current = written
+      setParameters(written, { replace: options?.replace })
+    },
+    [parameters, setParameters],
   )
   return { state, update, parameters, setParameters }
 }
