@@ -577,22 +577,46 @@ async fn task_list_takes_several_values_and_reads_views_as_the_list_does() {
 
     // Any of several values; a single string still works. Naming a finished
     // status lists its tasks without includeDone.
-    assert_eq!(list(json!({"status": ["Ready", "In Progress"]})).await, ["VIEWS-1", "VIEWS-2"]);
-    assert_eq!(list(json!({"status": ["review", "Done"]})).await, ["VIEWS-3", "VIEWS-4"]);
+    assert_eq!(
+        list(json!({"status": ["Ready", "In Progress"]})).await,
+        ["VIEWS-1", "VIEWS-2"]
+    );
+    assert_eq!(
+        list(json!({"status": ["review", "Done"]})).await,
+        ["VIEWS-3", "VIEWS-4"]
+    );
     assert_eq!(list(json!({"status": "Ready"})).await, ["VIEWS-1"]);
-    assert_eq!(list(json!({"priority": ["high", "urgent"]})).await, ["VIEWS-1", "VIEWS-2"]);
+    assert_eq!(
+        list(json!({"priority": ["high", "urgent"]})).await,
+        ["VIEWS-1", "VIEWS-2"]
+    );
     assert_eq!(list(json!({"assignee": ["none"]})).await, ["VIEWS-2"]);
-    assert_eq!(list(json!({"type": "task"})).await, ["VIEWS-1", "VIEWS-2", "VIEWS-3"]);
-    assert_eq!(list(json!({"parentId": "none"})).await, ["VIEWS-1", "VIEWS-2", "VIEWS-3"]);
+    assert_eq!(
+        list(json!({"type": "task"})).await,
+        ["VIEWS-1", "VIEWS-2", "VIEWS-3"]
+    );
+    assert_eq!(
+        list(json!({"parentId": "none"})).await,
+        ["VIEWS-1", "VIEWS-2", "VIEWS-3"]
+    );
 
     // Leaving tasks out: "is not" keeps tasks with no value.
-    assert_eq!(list(json!({"notStatus": ["Ready"]})).await, ["VIEWS-2", "VIEWS-3"]);
+    assert_eq!(
+        list(json!({"notStatus": ["Ready"]})).await,
+        ["VIEWS-2", "VIEWS-3"]
+    );
     assert_eq!(
         list(json!({"notAssignee": "me", "includeDone": true})).await,
         ["VIEWS-2", "VIEWS-4"]
     );
-    assert_eq!(list(json!({"notAssignee": ["me", "none"]})).await, Vec::<String>::new());
-    assert_eq!(list(json!({"notPriority": ["no_priority"]})).await, ["VIEWS-1", "VIEWS-2"]);
+    assert_eq!(
+        list(json!({"notAssignee": ["me", "none"]})).await,
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        list(json!({"notPriority": ["no_priority"]})).await,
+        ["VIEWS-1", "VIEWS-2"]
+    );
     assert_eq!(list(json!({"notType": ["Bug"]})).await.len(), 3);
 
     // Labels: all of them, any of them ("none": no labels too), none of them.
@@ -616,22 +640,55 @@ async fn task_list_takes_several_values_and_reads_views_as_the_list_does() {
             call("task_list", arguments).await
         }
     };
-    assert_refused(&refuse(json!({"notStatus": ["Doing"]})).await, "notStatus", "Statuses:");
-    assert_refused(&refuse(json!({"notAssignee": ["@nobody"]})).await, "notAssignee", "No one called @nobody");
-    assert_refused(&refuse(json!({"anyLabels": ["nope"]})).await, "anyLabels", "nope");
-    assert_refused(&refuse(json!({"notType": "Epic"})).await, "notType", "Types:");
-    assert_refused(&refuse(json!({"notPriority": "critical"})).await, "notPriority", "urgent");
-    assert_refused(&refuse(json!({"notMilestone": "Someday"})).await, "notMilestone", "Someday");
-    assert_refused(&refuse(json!({"dueAfter": "soon"})).await, "dueAfter", "YYYY-MM-DD");
+    assert_refused(
+        &refuse(json!({"notStatus": ["Doing"]})).await,
+        "notStatus",
+        "Statuses:",
+    );
+    assert_refused(
+        &refuse(json!({"notAssignee": ["@nobody"]})).await,
+        "notAssignee",
+        "No one called @nobody",
+    );
+    assert_refused(
+        &refuse(json!({"anyLabels": ["nope"]})).await,
+        "anyLabels",
+        "nope",
+    );
+    assert_refused(
+        &refuse(json!({"notType": "Epic"})).await,
+        "notType",
+        "Types:",
+    );
+    assert_refused(
+        &refuse(json!({"notPriority": "critical"})).await,
+        "notPriority",
+        "urgent",
+    );
+    assert_refused(
+        &refuse(json!({"notMilestone": "Someday"})).await,
+        "notMilestone",
+        "Someday",
+    );
+    assert_refused(
+        &refuse(json!({"dueAfter": "soon"})).await,
+        "dueAfter",
+        "YYYY-MM-DD",
+    );
     assert_refused(&refuse(json!({"parentId": "x"})).await, "parentId", "none");
     let many = (0..21).map(|n| format!("Status {n}")).collect::<Vec<_>>();
-    assert_refused(&refuse(json!({"status": many})).await, "status", "at most 20");
+    assert_refused(
+        &refuse(json!({"status": many})).await,
+        "status",
+        "at most 20",
+    );
 
     // Pages of a list filter add up, and a cursor fits only its own search.
     let mut paged = Vec::new();
     let mut cursor = Value::Null;
     loop {
-        let mut arguments = json!({"projectId": "VIEWS", "status": ["Ready", "In Progress", "Review"], "limit": 1});
+        let mut arguments =
+            json!({"projectId": "VIEWS", "status": ["Ready", "In Progress", "Review"], "limit": 1});
         if !cursor.is_null() {
             arguments["cursor"] = cursor.clone();
         }
@@ -722,9 +779,15 @@ async fn task_list_takes_several_values_and_reads_views_as_the_list_does() {
         on_the_page.sort();
         assert_eq!(list(json!({"view": name})).await, on_the_page, "{name}");
     }
-    assert_eq!(list(json!({"view": "In flight, not mine"})).await, ["VIEWS-2"]);
+    assert_eq!(
+        list(json!({"view": "In flight, not mine"})).await,
+        ["VIEWS-2"]
+    );
     assert_eq!(list(json!({"view": "No labels"})).await, ["VIEWS-4"]);
-    assert_eq!(list(json!({"view": "Urgent or unsorted"})).await, ["VIEWS-2", "VIEWS-3"]);
+    assert_eq!(
+        list(json!({"view": "Urgent or unsorted"})).await,
+        ["VIEWS-2", "VIEWS-3"]
+    );
     assert_eq!(
         list(json!({"view": "In flight, not mine", "assignee": "me"})).await,
         ["VIEWS-1"]

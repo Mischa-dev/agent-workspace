@@ -956,31 +956,73 @@ async fn filters_take_several_values_and_leave_tasks_out() {
     );
 
     // Any of several values, and none of them.
-    assert_eq!(list(format!("statusId={ready},{started}")).await, ["Mine", "Nobody's", "Theirs"]);
-    assert_eq!(list(format!("notStatusId={started}")).await, ["Both labels", "Mine"]);
-    assert_eq!(list("priority=high,urgent".to_owned()).await, ["Mine", "Theirs"]);
-    assert_eq!(list("notPriority=low,urgent".to_owned()).await, ["Both labels", "Mine"]);
+    assert_eq!(
+        list(format!("statusId={ready},{started}")).await,
+        ["Mine", "Nobody's", "Theirs"]
+    );
+    assert_eq!(
+        list(format!("notStatusId={started}")).await,
+        ["Both labels", "Mine"]
+    );
+    assert_eq!(
+        list("priority=high,urgent".to_owned()).await,
+        ["Mine", "Theirs"]
+    );
+    assert_eq!(
+        list("notPriority=low,urgent".to_owned()).await,
+        ["Both labels", "Mine"]
+    );
     assert_eq!(list(format!("milestoneId={beta},none")).await.len(), 4);
-    assert_eq!(list(format!("notMilestoneId={beta}")).await, ["Both labels", "Mine", "Nobody's"]);
+    assert_eq!(
+        list(format!("notMilestoneId={beta}")).await,
+        ["Both labels", "Mine", "Nobody's"]
+    );
 
     // "Is not" keeps tasks with no value, unless "none" is left out too.
-    assert_eq!(list(format!("assigneeActorId=none,{member}")).await, ["Nobody's", "Theirs"]);
-    assert_eq!(list(format!("notAssigneeActorId={me}")).await, ["Nobody's", "Theirs"]);
-    assert_eq!(list(format!("notAssigneeActorId={me},none")).await, ["Theirs"]);
+    assert_eq!(
+        list(format!("assigneeActorId=none,{member}")).await,
+        ["Nobody's", "Theirs"]
+    );
+    assert_eq!(
+        list(format!("notAssigneeActorId={me}")).await,
+        ["Nobody's", "Theirs"]
+    );
+    assert_eq!(
+        list(format!("notAssigneeActorId={me},none")).await,
+        ["Theirs"]
+    );
     // The old "unassigned" flag still means no one.
     assert_eq!(list("unassigned=true".to_owned()).await, ["Nobody's"]);
 
     // Labels: all of them, any of them, none of them.
-    assert_eq!(list(format!("labelIds={backend},{frontend}")).await, ["Both labels"]);
-    assert_eq!(list(format!("anyLabelIds={backend},{frontend}")).await, ["Both labels", "Mine", "Theirs"]);
-    assert_eq!(list(format!("anyLabelIds=none,{frontend}")).await, ["Both labels", "Nobody's", "Theirs"]);
-    assert_eq!(list(format!("notLabelIds={backend}")).await, ["Nobody's", "Theirs"]);
-    assert_eq!(list(format!("notLabelIds={backend},none")).await, ["Theirs"]);
+    assert_eq!(
+        list(format!("labelIds={backend},{frontend}")).await,
+        ["Both labels"]
+    );
+    assert_eq!(
+        list(format!("anyLabelIds={backend},{frontend}")).await,
+        ["Both labels", "Mine", "Theirs"]
+    );
+    assert_eq!(
+        list(format!("anyLabelIds=none,{frontend}")).await,
+        ["Both labels", "Nobody's", "Theirs"]
+    );
+    assert_eq!(
+        list(format!("notLabelIds={backend}")).await,
+        ["Nobody's", "Theirs"]
+    );
+    assert_eq!(
+        list(format!("notLabelIds={backend},none")).await,
+        ["Theirs"]
+    );
     assert_eq!(list("labelIds=none".to_owned()).await, ["Nobody's"]);
 
     // Every filter is one more condition.
     assert_eq!(
-        list(format!("statusId={ready},{started}&notAssigneeActorId={member}&anyLabelIds=none,{backend}")).await,
+        list(format!(
+            "statusId={ready},{started}&notAssigneeActorId={member}&anyLabelIds=none,{backend}"
+        ))
+        .await,
         ["Mine", "Nobody's"]
     );
 
@@ -992,7 +1034,10 @@ async fn filters_take_several_values_and_leave_tasks_out() {
         format!("notTypeId={}", Uuid::now_v7()),
         format!(
             "anyLabelIds={}",
-            (0..21).map(|_| Uuid::now_v7().to_string()).collect::<Vec<_>>().join(",")
+            (0..21)
+                .map(|_| Uuid::now_v7().to_string())
+                .collect::<Vec<_>>()
+                .join(",")
         ),
     ] {
         let (status, refused) = owner.get(&format!("{base}/work-items?{query}")).await;
@@ -1002,9 +1047,7 @@ async fn filters_take_several_values_and_leave_tasks_out() {
     // The board shows only the columns the filters let in, and each
     // column's own filters load more of exactly its tasks.
     let board = |query: String| async move {
-        let (status, board) = owner
-            .get(&format!("{base}/work-items/board?{query}"))
-            .await;
+        let (status, board) = owner.get(&format!("{base}/work-items/board?{query}")).await;
         assert_eq!(status, StatusCode::OK, "{query}: {board}");
         board["columns"].as_array().expect("columns").clone()
     };
@@ -1029,7 +1072,10 @@ async fn filters_take_several_values_and_leave_tasks_out() {
         .map(|column| column["key"].as_str().expect("key").to_owned())
         .collect::<Vec<_>>();
     assert!(!keys.contains(&me.to_string()), "{keys:?}");
-    assert!(keys.contains(&member.to_string()) && keys.contains(&"none".to_owned()), "{keys:?}");
+    assert!(
+        keys.contains(&member.to_string()) && keys.contains(&"none".to_owned()),
+        "{keys:?}"
+    );
     let columns = board(format!("columnsBy=label&notLabelIds={backend},none")).await;
     let keys = columns
         .iter()
@@ -1049,7 +1095,11 @@ async fn filters_take_several_values_and_leave_tasks_out() {
         )
         .await;
     assert_eq!(status, StatusCode::CREATED, "{view}");
-    assert_eq!(view["resolvedQuery"]["notAssigneeActorId"], format!("{me},none"), "{view}");
+    assert_eq!(
+        view["resolvedQuery"]["notAssigneeActorId"],
+        format!("{me},none"),
+        "{view}"
+    );
     let resolved = view["resolvedQuery"]
         .as_object()
         .expect("resolved query")

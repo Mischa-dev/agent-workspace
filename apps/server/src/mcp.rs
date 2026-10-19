@@ -4312,12 +4312,18 @@ mod tests {
             let property = &properties[field];
             assert!(property.get("anyOf").is_none(), "{field}: {property}");
             assert!(property.get("oneOf").is_none(), "{field}: {property}");
-            assert!(property.to_string().contains("array"), "{field}: {property}");
+            assert!(
+                property.to_string().contains("array"),
+                "{field}: {property}"
+            );
         }
         let read = |arguments: serde_json::Value| {
             serde_json::from_value::<super::tasks::TaskListArguments>(arguments).expect("arguments")
         };
-        assert_eq!(read(serde_json::json!({"status": "Done"})).status, Some(vec!["Done".to_owned()]));
+        assert_eq!(
+            read(serde_json::json!({"status": "Done"})).status,
+            Some(vec!["Done".to_owned()])
+        );
         assert_eq!(
             read(serde_json::json!({"notStatus": ["Done", "Canceled"]})).not_status,
             Some(vec!["Done".to_owned(), "Canceled".to_owned()])

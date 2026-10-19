@@ -153,7 +153,12 @@ pub(super) async fn apply_view(
         (arguments.query.is_some(), &["q"][..]),
         (
             arguments.status.is_some() || arguments.not_status.is_some(),
-            &["statusId", "notStatusId", "semanticCategory", "notSemanticCategory"],
+            &[
+                "statusId",
+                "notStatusId",
+                "semanticCategory",
+                "notSemanticCategory",
+            ],
         ),
         (
             arguments.assignee.is_some() || arguments.not_assignee.is_some(),

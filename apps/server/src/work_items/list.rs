@@ -731,7 +731,8 @@ impl Filters {
         self.statuses.put(&mut params, ("statusId", "notStatusId"));
         self.categories
             .put(&mut params, ("semanticCategory", "notSemanticCategory"));
-        self.priorities.put(&mut params, ("priority", "notPriority"));
+        self.priorities
+            .put(&mut params, ("priority", "notPriority"));
         self.assignees
             .put(&mut params, ("assigneeActorId", "notAssigneeActorId"));
         self.milestones
@@ -795,14 +796,18 @@ impl Filters {
     /// column (`with_group`) only ever narrows to a value the filters allow.
     fn allows_group(&self, grouping: Grouping, key: &str) -> bool {
         let id = Uuid::parse_str(key).ok();
-        let value = || if key == "none" { Ok(None) } else { id.ok_or(()).map(Some) };
+        let value = || {
+            if key == "none" {
+                Ok(None)
+            } else {
+                id.ok_or(()).map(Some)
+            }
+        };
         match grouping {
             Grouping::Status => id.is_some_and(|id| self.statuses.allows(Some(&id))),
             Grouping::Type => id.is_some_and(|id| self.types.allows(Some(&id))),
             Grouping::Priority => self.priorities.allows(Some(&key.to_owned())),
-            Grouping::Assignee => {
-                value().is_ok_and(|value| self.assignees.allows(value.as_ref()))
-            }
+            Grouping::Assignee => value().is_ok_and(|value| self.assignees.allows(value.as_ref())),
             Grouping::Milestone => {
                 value().is_ok_and(|value| self.milestones.allows(value.as_ref()))
             }
@@ -833,7 +838,11 @@ impl Filters {
         let mut filters = self.clone();
         let id = || Uuid::parse_str(key).map_err(|_| AppError::Internal("group key"));
         let value = || -> Result<Option<Uuid>, AppError> {
-            if key == "none" { Ok(None) } else { id().map(Some) }
+            if key == "none" {
+                Ok(None)
+            } else {
+                id().map(Some)
+            }
         };
         match grouping {
             Grouping::Status => filters.statuses = FieldFilter::only(Some(id()?)),
@@ -1740,10 +1749,30 @@ pub(super) async fn validate_filter_ids(
             checks.push((table, column, field, values.values.clone()));
         }
     };
-    check("work_item_types", "id", "typeId", filters.types.any.as_ref());
-    check("work_item_types", "id", "notTypeId", filters.types.not.as_ref());
-    check("work_item_statuses", "id", "statusId", filters.statuses.any.as_ref());
-    check("work_item_statuses", "id", "notStatusId", filters.statuses.not.as_ref());
+    check(
+        "work_item_types",
+        "id",
+        "typeId",
+        filters.types.any.as_ref(),
+    );
+    check(
+        "work_item_types",
+        "id",
+        "notTypeId",
+        filters.types.not.as_ref(),
+    );
+    check(
+        "work_item_statuses",
+        "id",
+        "statusId",
+        filters.statuses.any.as_ref(),
+    );
+    check(
+        "work_item_statuses",
+        "id",
+        "notStatusId",
+        filters.statuses.not.as_ref(),
+    );
     check(
         "project_memberships",
         "actor_id",
@@ -1756,9 +1785,24 @@ pub(super) async fn validate_filter_ids(
         "notAssigneeActorId",
         filters.assignees.not.as_ref(),
     );
-    check("project_labels", "id", "anyLabelIds", filters.any_labels.as_ref());
-    check("project_labels", "id", "notLabelIds", filters.not_labels.as_ref());
-    check("project_milestones", "id", "milestoneId", filters.milestones.any.as_ref());
+    check(
+        "project_labels",
+        "id",
+        "anyLabelIds",
+        filters.any_labels.as_ref(),
+    );
+    check(
+        "project_labels",
+        "id",
+        "notLabelIds",
+        filters.not_labels.as_ref(),
+    );
+    check(
+        "project_milestones",
+        "id",
+        "milestoneId",
+        filters.milestones.any.as_ref(),
+    );
     check(
         "project_milestones",
         "id",

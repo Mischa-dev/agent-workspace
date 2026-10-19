@@ -381,7 +381,9 @@ impl ListFilters {
         push_field(builder, "item.type_id", false, &self.types);
         push_field(builder, "item.priority", false, &self.priorities);
         if let Some(id) = self.created_by {
-            builder.push(" AND item.created_by_actor_id = ").push_bind(id);
+            builder
+                .push(" AND item.created_by_actor_id = ")
+                .push_bind(id);
         }
         if let Some(time) = self.updated_since {
             builder.push(" AND item.updated_at >= ").push_bind(time);
@@ -453,7 +455,9 @@ impl ListFilters {
             builder.push(" AND item.due_date >= ").push_bind(date);
         }
         if let Some(overdue) = self.overdue {
-            builder.push(format!(" AND ({OVERDUE}) = ")).push_bind(overdue);
+            builder
+                .push(format!(" AND ({OVERDUE}) = "))
+                .push_bind(overdue);
         }
         if let Some(view) = &self.view {
             view.push_where(builder);
@@ -767,7 +771,9 @@ async fn filter_label_choice(
     if values.is_empty() {
         return Ok(Ok(None));
     }
-    let none = values.iter().any(|value| value.eq_ignore_ascii_case("none"));
+    let none = values
+        .iter()
+        .any(|value| value.eq_ignore_ascii_case("none"));
     let named = values
         .iter()
         .filter(|value| !value.eq_ignore_ascii_case("none"))
@@ -811,11 +817,11 @@ async fn task_list_inner(
     principal: &McpPrincipal,
     arguments: TaskListArguments,
 ) -> Result<ToolResult<TaskListValue>, AppError> {
-    let (arguments, view) =
-        match super::views_data::apply_view(state, principal, arguments).await? {
-            Ok(applied) => applied,
-            Err((field, message)) => return Ok(ToolResult::invalid(field, message)),
-        };
+    let (arguments, view) = match super::views_data::apply_view(state, principal, arguments).await?
+    {
+        Ok(applied) => applied,
+        Err((field, message)) => return Ok(ToolResult::invalid(field, message)),
+    };
     match list_tasks(state, principal, arguments, view).await? {
         Ok(value) => Ok(ToolResult::ok(value)),
         Err(refusal) => Ok(refusal),
@@ -828,10 +834,14 @@ async fn list_tasks(
     arguments: TaskListArguments,
     view: Option<ViewFilters>,
 ) -> Result<Result<TaskListValue, ToolResult<TaskListValue>>, AppError> {
-    let invalid = |(field, message): (&'static str, String)| Err(ToolResult::invalid(field, message));
+    let invalid =
+        |(field, message): (&'static str, String)| Err(ToolResult::invalid(field, message));
     let limit = i64::from(arguments.limit.unwrap_or(50));
     if !(1..=200).contains(&limit) {
-        return Ok(Err(ToolResult::invalid("limit", "Use a limit from 1 to 200.")));
+        return Ok(Err(ToolResult::invalid(
+            "limit",
+            "Use a limit from 1 to 200.",
+        )));
     }
     let sort = arguments.sort.as_deref().unwrap_or("board");
     let Some(order) = list_order(sort) else {
@@ -863,7 +873,13 @@ async fn list_tasks(
     let milestone = arguments.milestone.as_ref().map(|values| {
         values
             .iter()
-            .map(|value| if value.trim().is_empty() { "none".to_owned() } else { value.clone() })
+            .map(|value| {
+                if value.trim().is_empty() {
+                    "none".to_owned()
+                } else {
+                    value.clone()
+                }
+            })
             .collect::<Vec<_>>()
     });
     let lists = (|| {
@@ -910,7 +926,12 @@ async fn list_tasks(
         None => None,
         Some(value) => match parse_since(value) {
             Some(time) => Some(time),
-            None => return Ok(Err(ToolResult::invalid("updatedSince", UPDATED_SINCE_MESSAGE))),
+            None => {
+                return Ok(Err(ToolResult::invalid(
+                    "updatedSince",
+                    UPDATED_SINCE_MESSAGE,
+                )));
+            }
         },
     };
     let date = |value: Option<&str>, field: &'static str| match value {
@@ -930,7 +951,10 @@ async fn list_tasks(
     let projects = match &arguments.project_ids {
         Some(listed) => {
             if listed.is_empty() || listed.len() > MAX_LIST_PROJECTS {
-                return Ok(Err(ToolResult::invalid("projectIds", "Pass 1 to 50 projects.")));
+                return Ok(Err(ToolResult::invalid(
+                    "projectIds",
+                    "Pass 1 to 50 projects.",
+                )));
             }
             let reachable = accessible_project_ids(state, principal).await?;
             let mut projects = Vec::with_capacity(listed.len());
@@ -1083,7 +1107,11 @@ async fn list_tasks(
                 (&status, &not_status, &assignees, &not_assignees),
                 (&any_labels, &not_labels, &task_type, &not_type),
                 (&priorities, &not_priorities, &milestones, &not_milestones),
-                (parent, due_after, view.as_ref().map(ViewFilters::fingerprint)),
+                (
+                    parent,
+                    due_after,
+                    view.as_ref().map(ViewFilters::fingerprint)
+                ),
             )
         )
     });

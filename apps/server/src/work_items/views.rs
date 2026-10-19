@@ -1216,7 +1216,10 @@ mod tests {
         ]);
         let resolved = resolved_params(&params, reader);
         assert_eq!(resolved["assigneeActorId"], reader.to_string());
-        assert_eq!(resolved["notAssigneeActorId"], format!("none,{reader},{other}"));
+        assert_eq!(
+            resolved["notAssigneeActorId"],
+            format!("none,{reader},{other}")
+        );
         assert_eq!(resolved["sort"], "due");
         assert!(list::saved_query_spec(&params, reader).is_ok());
     }
@@ -1248,7 +1251,10 @@ mod tests {
         // Several values, and "none of", read like the list reads them.
         let several = BTreeMap::from([
             ("priority".to_owned(), "high,urgent".to_owned()),
-            ("notSemanticCategory".to_owned(), "completed,canceled".to_owned()),
+            (
+                "notSemanticCategory".to_owned(),
+                "completed,canceled".to_owned(),
+            ),
             ("anyLabelIds".to_owned(), format!("none,{}", Uuid::nil())),
             ("notMilestoneId".to_owned(), "none".to_owned()),
         ]);
