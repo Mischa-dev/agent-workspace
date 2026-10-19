@@ -615,69 +615,545 @@
   }
 }
 
-/* Task panel and detail page */
-.aw-taskpanel {
+/* Task panel and page: a bar along the top, the text in one column, and on
+   a wide page the fields in a rail beside it that scrolls on its own. */
+.aw-taskpanel,
+.aw-taskpage {
   min-height: 100%;
-  padding: var(--space-3) var(--space-4) var(--space-8);
 }
 
-.aw-taskdetail--panel.aw-workitem {
-  grid-template-areas:
-    'head'
-    'side'
-    'rest';
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: none;
-  gap: var(--space-5);
+.aw-task {
+  --aw-task-bar: 48px;
+  position: relative;
+  min-height: 100%;
 }
 
-.aw-taskdetail--panel .aw-workitem__side {
-  position: static;
-}
-
-.aw-taskdetail--panel .aw-workitem__title,
-.aw-taskdetail--panel .aw-workitem__heading {
-  font: var(--t-title);
-}
-
-.aw-taskdetail__bar {
+.aw-task__bar {
+  position: sticky;
+  top: 0;
+  z-index: var(--layer-sticky);
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  min-height: 40px;
+  gap: var(--space-1);
+  height: var(--aw-task-bar);
+  padding: 0 var(--space-2) 0 var(--space-4);
+  border-bottom: 1px solid var(--content-border);
+  background: var(--content-bg);
 }
 
-.aw-taskdetail__spacer {
+.aw-task--page .aw-task__bar {
+  padding-left: var(--space-6);
+}
+
+.aw-task__bar .aw-crumbs {
+  min-width: 0;
+  margin: 0;
+}
+
+.aw-task__key {
+  font: var(--t-code);
+  color: var(--content-fg-muted);
+}
+
+.aw-task__spacer {
   flex: 1;
 }
 
-.aw-taskdetail__full {
+.aw-task__saving {
   font: var(--t-small);
-  color: var(--link);
+  color: var(--content-fg-muted);
 }
 
-@media (max-width: 860px) {
-  /* On phones the panel is the whole screen. */
-  .aw-panel:has(.aw-taskpanel) {
-    width: 100vw;
-  }
-
-  .aw-panel:has(.aw-taskpanel) .aw-panel__close {
-    display: none;
-  }
+.aw-task__saving:not(:empty) {
+  margin-right: var(--space-2);
 }
 
-.aw-taskprops {
+.aw-task__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  padding: var(--space-5) var(--space-4) var(--space-10);
+}
+
+.aw-task--page .aw-task__body {
+  padding: var(--space-6) var(--space-6) var(--space-12);
+}
+
+.aw-task--page.is-wide .aw-task__body {
+  grid-template-columns: minmax(0, 1fr) 300px;
+  align-items: start;
+  padding: 0;
+}
+
+.aw-task__column {
+  display: grid;
+  align-content: start;
+  gap: var(--space-6);
+  min-width: 0;
+}
+
+.aw-task--page .aw-task__column {
+  width: 100%;
+  max-width: var(--size-measure);
+  margin: 0 auto;
+}
+
+.aw-task--page.is-wide .aw-task__column {
+  max-width: calc(var(--size-measure) + 2 * var(--space-8));
+  padding: var(--space-8) var(--space-8) var(--space-12);
+}
+
+.aw-task__rail {
+  position: sticky;
+  top: var(--aw-task-bar);
+  display: grid;
+  align-content: start;
+  gap: var(--space-5);
+  min-height: calc(100dvh - var(--aw-task-bar));
+  max-height: calc(100dvh - var(--aw-task-bar));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-5) var(--space-4) var(--space-8);
+  border-left: 1px solid var(--content-border);
+}
+
+.aw-task__head {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.aw-task__text {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.aw-task__parent {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-task__parentlink {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--content-fg);
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-task__parentlink:hover {
+  text-decoration: underline;
+}
+
+.aw-task__parentkey {
+  font: var(--t-code);
+  font-size: calc(12px * var(--text-scale));
+  color: var(--content-fg-muted);
+}
+
+.aw-task__title,
+.aw-task__heading {
+  display: block;
+  width: calc(100% + 12px);
+  margin: 0 -6px;
+  padding: 2px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: 700 calc(26px * var(--text-scale)) / calc(34px * var(--text-scale)) var(--font-sans);
+  letter-spacing: -0.015em;
+  color: var(--content-fg);
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+}
+
+.aw-task--panel .aw-task__title,
+.aw-task--panel .aw-task__heading {
+  font-size: calc(20px * var(--text-scale));
+  line-height: calc(28px * var(--text-scale));
+  letter-spacing: -0.01em;
+}
+
+.aw-task__title {
+  overflow: hidden;
+  resize: none;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out);
+}
+
+.aw-task__title:hover {
+  background: var(--content-hover);
+}
+
+.aw-task__title:focus {
+  outline: none;
+  border-color: var(--focus-ring);
+  background: transparent;
+  box-shadow: 0 0 0 1px var(--focus-ring);
+}
+
+.aw-task__title::placeholder {
+  color: var(--content-fg-muted);
+}
+
+.aw-task__notices {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.aw-task__notices:empty {
+  display: none;
+}
+
+.aw-task__dates {
+  margin: 0;
+  padding: 0 var(--space-2);
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-task.is-dropping > .aw-task__body {
+  outline: 2px dashed var(--accent);
+  outline-offset: -6px;
+  border-radius: var(--radius-lg);
+}
+
+.aw-task__drop {
+  position: sticky;
+  bottom: var(--space-4);
+  z-index: var(--layer-sticky);
+  width: max-content;
+  max-width: calc(100% - 2 * var(--space-4));
+  margin: 0 auto;
+  padding: 6px var(--space-3);
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  box-shadow: var(--shadow-popover);
+  font: var(--t-ui);
+  color: var(--on-accent);
+  pointer-events: none;
+}
+
+/* Notes under the title: who's on it, what's in the way, a save to settle. */
+.aw-tasknote {
+  --aw-note-bg: var(--surface-sunken);
+  --aw-note-border: var(--content-border);
+  --aw-note-icon: var(--content-fg-muted);
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--aw-note-border);
+  border-radius: var(--radius-md);
+  background: var(--aw-note-bg);
+}
+
+.aw-tasknote--agent {
+  --aw-note-bg: var(--agent-soft);
+  --aw-note-border: color-mix(in oklab, var(--agent) 28%, transparent);
+  --aw-note-icon: var(--agent);
+}
+
+.aw-tasknote--warning {
+  --aw-note-bg: var(--warning-soft);
+  --aw-note-border: color-mix(in oklab, var(--warning) 32%, transparent);
+  --aw-note-icon: var(--warning);
+}
+
+.aw-tasknote--danger {
+  --aw-note-bg: var(--danger-soft);
+  --aw-note-border: color-mix(in oklab, var(--danger) 32%, transparent);
+  --aw-note-icon: var(--danger);
+}
+
+.aw-tasknote__icon {
+  flex: none;
+  margin-top: 2px;
+  color: var(--aw-note-icon);
+}
+
+.aw-tasknote__body {
+  display: grid;
+  flex: 1;
   gap: 2px;
-  padding: var(--space-2);
+  min-width: 0;
+}
+
+.aw-tasknote__title {
+  margin: 0;
+  font: var(--t-ui-strong);
+  color: var(--content-fg);
+  overflow-wrap: anywhere;
+}
+
+.aw-tasknote__meta {
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-tasknote__text {
+  font: var(--t-small);
+  color: var(--content-fg);
+  overflow-wrap: anywhere;
+}
+
+.aw-tasknote__text .aw-md {
+  font: var(--t-small);
+}
+
+.aw-tasknote__clamp {
+  max-height: calc(90px * var(--text-scale));
+  overflow: hidden;
+  mask-image: linear-gradient(to bottom, #000 55%, transparent);
+}
+
+.aw-tasknote__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.aw-blockform {
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.aw-blockform .aw-tasknote__actions {
+  margin-top: 0;
+}
+
+/* Description: Markdown to read, a text area to write. */
+.aw-taskdesc {
+  position: relative;
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.aw-taskdesc.is-editable {
+  margin: 0 -8px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  cursor: text;
+  transition: background-color var(--duration-fast) var(--ease-out);
+}
+
+.aw-taskdesc.is-editable:hover {
+  background: var(--content-hover);
+}
+
+.aw-taskdesc__body {
+  font: var(--t-body);
+  color: var(--content-fg);
+}
+
+.aw-taskdesc > .aw-tip {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-out);
+}
+
+.aw-taskdesc:hover > .aw-tip,
+.aw-taskdesc:focus-within > .aw-tip {
+  opacity: 1;
+}
+
+.aw-taskdesc__edit {
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-popover);
+}
+
+.aw-taskdesc__empty {
+  width: calc(100% + 16px);
+  margin: 0 -8px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: var(--t-body);
+  color: var(--content-fg-muted);
+  text-align: left;
+  cursor: text;
+}
+
+.aw-taskdesc__empty:hover {
+  background: var(--content-hover);
+}
+
+.aw-taskdesc--editing {
+  margin: 0 -8px;
+}
+
+.aw-taskdesc__box {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.aw-taskdesc__box:focus-within {
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 1px var(--focus-ring);
+}
+
+.aw-taskdesc__input {
+  display: block;
+  width: 100%;
+  min-height: 120px;
+  padding: 10px 12px;
+  border: 0;
+  outline: none;
+  resize: none;
+  background: transparent;
+  font: var(--t-body);
+  color: var(--content-fg);
+}
+
+.aw-taskdesc__note {
+  margin: 0;
+  padding: 0 12px 8px;
+  font: var(--t-small);
+  color: var(--warning);
+}
+
+.aw-taskdesc__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 4px 6px;
+  border-top: 1px solid var(--content-border);
+}
+
+.aw-taskdesc__tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+
+.aw-taskdesc__actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+.aw-taskdesc__theirs {
+  padding: 10px 12px;
+  border: 1px dashed var(--control-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  font: var(--t-small);
+}
+
+.aw-taskdesc__placeholder {
+  margin: 0;
+  color: var(--content-fg-muted);
+}
+
+/* The ways to add what a task doesn't have yet. */
+.aw-taskadd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  margin: 0 -6px;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-taskadd__label {
+  padding: 0 4px 0 6px;
+}
+
+.aw-taskadd__dot {
+  color: var(--control-border);
+}
+
+.aw-taskadd__item {
+  padding: 2px 6px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  font: inherit;
+  color: var(--content-fg-muted);
+  cursor: pointer;
+}
+
+.aw-taskadd__item:hover,
+.aw-taskadd__item[aria-expanded="true"] {
+  background: var(--content-hover);
+  color: var(--content-fg);
+}
+
+/* Sections: subtasks, dependencies, criteria, links, files, activity. */
+.aw-tsection {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.aw-tsection__head,
+.aw-task .aw-pagesection__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: 28px;
+}
+
+.aw-tsection__title,
+.aw-task .aw-pagesection__title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0;
+  font: var(--t-ui-strong);
+  color: var(--content-fg);
+}
+
+.aw-tsection__count {
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-tsection__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.aw-task .aw-pagesection {
+  gap: var(--space-2);
+  padding: 0;
+  border-top: 0;
+}
+
+.aw-activitysection {
+  padding-top: var(--space-6);
+  border-top: 1px solid var(--content-border);
+}
+
+/* Fields: labelled rows in the rail, compact pills under the title elsewhere. */
+.aw-taskprops--rail {
+  display: grid;
+  gap: 2px;
 }
 
 .aw-prop {
   display: grid;
-  grid-template-columns: 96px minmax(0, 1fr);
+  grid-template-columns: 84px minmax(0, 1fr);
   align-items: center;
   gap: var(--space-2);
-  min-height: 36px;
+  min-height: 34px;
 }
 
 .aw-prop__label {
@@ -688,47 +1164,54 @@
 
 .aw-prop__value {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
   min-width: 0;
 }
 
-.aw-prop__button {
-  width: 100%;
-  overflow: hidden;
-}
-
-.aw-prop__static {
+.aw-taskprops .aw-prop__button {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
+  width: 100%;
   min-width: 0;
+  min-height: 30px;
   padding: 0 var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
   font: var(--t-ui);
+  color: var(--content-fg);
+  text-align: left;
+  cursor: pointer;
+}
+
+.aw-taskprops .aw-prop__button:hover:not(:disabled, .is-static) {
+  background: var(--content-hover);
+}
+
+.aw-taskprops .aw-prop__button.is-empty {
+  color: var(--content-fg-muted);
+}
+
+.aw-taskprops .is-static {
+  cursor: default;
+}
+
+.aw-prop__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-prop__date.is-overdue {
+  color: var(--danger);
 }
 
 .aw-prop__empty {
   color: var(--content-fg-muted);
-}
-
-.aw-prop__pair {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-1);
-  min-width: 0;
-}
-
-.aw-prop__mono {
-  font: var(--t-code);
-}
-
-.aw-prop__link {
-  min-width: 0;
-  overflow: hidden;
-  padding: 0 var(--space-2);
-  font: var(--t-small);
-  color: var(--link);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .aw-prop__error {
@@ -737,16 +1220,104 @@
   color: var(--danger);
 }
 
-.aw-estimate {
+.aw-taskprops--pills {
   display: flex;
   flex-wrap: wrap;
+  gap: 6px;
+}
+
+.aw-pills__item {
+  display: contents;
+}
+
+/* A read-only task leaves out the fields nobody filled in. */
+.aw-pills__item:has(> .is-empty:is(.is-static, :disabled)) {
+  display: none;
+}
+
+.aw-taskprops .aw-pill {
+  display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
-  padding-left: var(--space-2);
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  height: 28px;
+  min-height: 0;
+  padding: 0 10px;
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-full);
+  background: var(--surface-raised);
+  font: var(--t-small);
+  font-weight: 500;
+  color: var(--content-fg);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.aw-taskprops .aw-pill:hover:not(:disabled, .is-static) {
+  background: var(--content-hover);
+}
+
+.aw-taskprops .aw-pill.is-empty {
+  border-style: dashed;
+  color: var(--content-fg-muted);
+}
+
+.aw-taskprops .aw-pill.is-overdue {
+  border-color: color-mix(in oklab, var(--danger) 45%, transparent);
+  color: var(--danger);
+}
+
+.aw-pill .aw-prop__text {
+  max-width: 180px;
+}
+
+.aw-pill .aw-labels {
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.aw-estimate__form {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-2);
+}
+
+.aw-estimate__scale {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 4px;
+}
+
+.aw-estimate__size {
+  height: 30px;
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  font: var(--t-ui);
+  color: var(--content-fg);
+  cursor: pointer;
+}
+
+.aw-estimate__size:hover {
+  background: var(--content-hover);
+}
+
+.aw-estimate__size[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.aw-estimate__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 
 .aw-estimate__input {
-  width: 72px;
+  flex: 1;
+  min-width: 0;
   height: 28px;
   padding: 0 var(--space-2);
   border: 1px solid var(--control-border);
@@ -762,39 +1333,97 @@
 }
 
 .aw-estimate__note {
-  flex-basis: 100%;
+  margin: 0;
   font: var(--t-small);
   color: var(--danger);
 }
 
-.aw-blocked,
-.aw-watch {
+.aw-estimate__clear {
+  justify-self: start;
+}
+
+/* Starting work: ready or what it waits on, beside Launch. */
+.aw-taskstart {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.aw-taskstart__state {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
-  min-width: 0;
-  padding-left: var(--space-2);
-}
-
-.aw-blocked__reason {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
+  margin: 0;
   font: var(--t-ui);
-  color: var(--danger);
-  overflow-wrap: anywhere;
+  color: var(--content-fg);
 }
 
-.aw-blocked__form {
+.aw-taskstart__state.is-ready .aw-icon {
+  color: var(--success);
+}
+
+.aw-taskstart__state.is-waiting .aw-icon {
+  color: var(--warning);
+}
+
+.aw-taskstart__state.is-blocked .aw-icon {
+  color: var(--danger);
+}
+
+.aw-taskstart__key {
+  font: var(--t-code);
+  color: var(--link);
+}
+
+.aw-taskstart__missing {
+  display: grid;
+  gap: 2px;
+}
+
+.aw-taskstart__hint {
+  margin: 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-taskstart__fixes {
+  display: grid;
+  justify-items: start;
+  margin: 0 0 0 -8px;
+  padding: 0;
+  list-style: none;
+}
+
+span.aw-taskstart__fix {
+  padding-left: var(--space-2);
+  font: var(--t-small);
+}
+
+.aw-launchcard.is-embedded {
   display: grid;
   gap: var(--space-2);
-  padding: var(--space-2);
 }
 
-.aw-blocked__form > .aw-btn {
-  justify-self: end;
+.aw-taskstart__launching {
+  min-height: 58px;
+}
+
+.aw-launchcard.is-embedded .aw-sidecard__text {
+  order: 1;
+}
+
+.aw-launchcard.is-embedded .aw-launchcard__latest {
+  order: 2;
+}
+
+.aw-watch {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
 }
 
 .aw-watch__people {
@@ -808,29 +1437,7 @@
   color: var(--content-fg-muted);
 }
 
-.aw-taskdesc {
-  display: grid;
-  gap: var(--space-1);
-}
-
-.aw-taskdesc__actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: var(--space-2);
-}
-
-.aw-taskdesc__hint {
-  font: var(--t-small);
-  color: var(--content-fg-muted);
-}
-
-.aw-worksection__count {
-  margin-left: var(--space-1);
-  font: var(--t-small);
-  color: var(--content-fg-muted);
-}
-
+/* Subtasks and dependencies */
 .aw-taskrefs {
   display: grid;
   gap: 2px;
@@ -844,6 +1451,7 @@
   align-items: center;
   gap: var(--space-2);
   min-height: 34px;
+  margin: 0 -8px;
   padding: 0 var(--space-2);
   border-radius: var(--radius-sm);
 }
@@ -865,8 +1473,13 @@
   overflow: hidden;
   color: var(--content-fg);
   font: var(--t-ui);
+  text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.aw-taskref__title:hover {
+  text-decoration: underline;
 }
 
 .aw-taskref.is-finished .aw-taskref__title {
@@ -888,27 +1501,257 @@
 
 .aw-deps {
   display: grid;
-  gap: var(--space-4);
+  gap: var(--space-3);
 }
 
 .aw-deps__group {
   display: grid;
-  gap: var(--space-1);
+  gap: 2px;
 }
 
-.aw-deps__head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.aw-deps__head .aw-links__title {
-  flex: 1;
+.aw-deps__title {
+  margin: 0;
+  font: var(--t-caption);
+  color: var(--content-fg-muted);
 }
 
 .aw-deps__close {
   padding: var(--space-2);
   border-bottom: 1px solid var(--content-border);
+}
+
+.aw-menuanchor {
+  display: inline-flex;
+}
+
+/* Acceptance criteria */
+.aw-criteria {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-criterion {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-height: 34px;
+  margin: 0 -8px;
+  padding: 6px var(--space-2);
+  border-radius: var(--radius-sm);
+  transition: background-color var(--duration-fast) var(--ease-out);
+}
+
+.aw-criterion:hover {
+  background: var(--content-hover);
+}
+
+.aw-criterion > .aw-check,
+.aw-criterion > .aw-inline-add {
+  flex: 1;
+  min-width: 0;
+}
+
+.aw-criterion:has(.aw-check__input:checked) .aw-check__label {
+  color: var(--content-fg-muted);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in oklab, currentColor 55%, transparent);
+}
+
+.aw-criterion__actions {
+  display: flex;
+  gap: 2px;
+  margin: -4px 0;
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-out);
+}
+
+.aw-criterion:hover .aw-criterion__actions,
+.aw-criterion:focus-within .aw-criterion__actions {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .aw-criterion__actions,
+  .aw-taskdesc > .aw-tip {
+    opacity: 1;
+  }
+}
+
+/* On touch screens the small pills and Add links take a fingertip without looking bigger. */
+@media (pointer: coarse) {
+  .aw-taskprops .aw-pill,
+  .aw-taskadd__item {
+    position: relative;
+  }
+
+  .aw-taskprops .aw-pill::after,
+  .aw-taskadd__item::after {
+    content: "";
+    position: absolute;
+    inset: -8px -3px;
+  }
+
+  .aw-taskadd {
+    row-gap: var(--space-3);
+  }
+
+  .aw-taskadd__item {
+    padding-block: 6px;
+  }
+}
+
+.aw-inline-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.aw-inline-add .aw-field {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.aw-inline-add .aw-field:has(select) {
+  flex: 0 1 auto;
+}
+
+.aw-inline-add .aw-field:first-child:has(select) {
+  flex: 1 1 auto;
+}
+
+/* Links */
+.aw-links {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.aw-links__add {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.aw-links__title {
+  margin: 0;
+  font: var(--t-caption);
+  color: var(--content-fg-muted);
+}
+
+.aw-links .aw-row {
+  min-height: 48px;
+  padding: 8px var(--space-3);
+}
+
+/* Activity */
+.aw-activity {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-activity__comment {
+  display: flex;
+  gap: var(--space-3);
+}
+
+.aw-activity__body {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.aw-activity__line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-activity__line strong {
+  color: var(--content-fg);
+  font-weight: 700;
+}
+
+.aw-activity__time,
+.aw-activity__via {
+  font: var(--t-caption);
+  color: var(--content-fg-muted);
+}
+
+.aw-activity__content {
+  margin-top: 4px;
+  font: var(--t-body);
+  color: var(--content-fg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.aw-activity__event {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding-left: 10px;
+}
+
+.aw-activity__dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--control-border);
+}
+
+.aw-activity__fold {
+  padding-left: 30px;
+}
+
+@media (max-width: 860px) {
+  /* On phones the panel is the whole screen. */
+  .aw-panel:has(.aw-taskpanel) {
+    width: 100vw;
+  }
+
+  .aw-panel:has(.aw-taskpanel) .aw-panel__close {
+    display: none;
+  }
+
+  /* The page's bar sits under the phone's menu bar. */
+  .aw-task--page .aw-task__bar {
+    top: var(--size-header);
+  }
+}
+
+@media (max-width: 640px) {
+  .aw-task--page .aw-task__bar {
+    padding-left: var(--space-4);
+  }
+
+  .aw-task__body,
+  .aw-task--page .aw-task__body {
+    padding: var(--space-4) var(--space-4) var(--space-10);
+  }
+
+  .aw-task__column {
+    gap: var(--space-5);
+  }
+
+  .aw-task__title,
+  .aw-task__heading {
+    font-size: calc(22px * var(--text-scale));
+    line-height: calc(30px * var(--text-scale));
+  }
 }
 
 /* History */

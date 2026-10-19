@@ -174,6 +174,8 @@ function stubApi(board: unknown = { columnsBy: 'status', columns: [] }) {
     vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       requests.push(url)
+      if (url.includes('/readiness')) return json({ ready: true, readyForAgents: true, checks: [] })
+      if (url.endsWith('/ai')) return json({ configured: false, pendingSuggestions: 0, runs: [] })
       if (url.includes('/work-items/board')) return json(board)
       if (url.includes('/work-items/groups')) return json({ groups: [] })
       if (url.includes('/labels')) return json({ labels: [] })
@@ -446,40 +448,35 @@ describe('Work Item detail', () => {
     expect(prompt.length).toBeLessThanOrEqual(2_000)
   })
 
-  it.each([
-    ['missing', [], 'Link one trusted repository'],
-    ['ambiguous', [
-      { id: 'repository-a', trusted: true, available: true, archivedAt: null, cloneUrl: 'https://github.com/a/a.git' },
-      { id: 'repository-b', trusted: true, available: true, archivedAt: null, cloneUrl: 'https://github.com/b/b.git' },
-    ], 'Keep exactly one linked repository'],
-    ['untrusted', [{ id: 'repository-a', trusted: false, available: false, archivedAt: null, cloneUrl: 'https://github.com/a/a.git' }], 'must be trusted'],
-    ['archived', [{ id: 'repository-a', trusted: true, available: false, archivedAt: '2026-07-31T00:00:00Z', cloneUrl: 'https://github.com/a/a.git' }], 'Restore the linked repository'],
-    ['unsupported', [{ id: 'repository-a', trusted: true, available: true, archivedAt: null, cloneUrl: 'ssh://git@github.com/a/a.git' }], 'supported canonical Git origin URL'],
-  ])('disables Open in Codex for a %s repository selection with an accessible reason', (_case, repositories, reason) => {
-    const linkedRepositories = repositories.map((repository) => ({
-      owner: 'owner',
-      name: repository.id,
-      role: 'primary' as const,
-      preparationState: 'ready',
-      href: '/settings',
-      ...repository,
-    }))
+  it('offers to open a task locally only when its one repository allows it', async () => {
+    renderDetail()
+    fireEvent.click(screen.getByRole('button', { name: 'Task actions' }))
+    expect(await screen.findByRole('menuitem', { name: 'Copy link' })).toBeVisible()
+    expect(screen.queryByRole('menuitem', { name: 'Open locally' })).not.toBeInTheDocument()
+    cleanup()
+
     vi.mocked(useWorkItem).mockReturnValue({
-      data: { ...workItem, linkedRepositories },
+      data: {
+        ...workItem,
+        linkedRepositories: [{
+          id: 'repository-a',
+          owner: 'Mischa-dev',
+          name: 'agent-workspace',
+          cloneUrl: 'https://github.com/Mischa-dev/agent-workspace.git',
+          role: 'primary',
+          preparationState: 'ready',
+          trusted: true,
+          available: true,
+          archivedAt: null,
+          href: `/projects/${projectId}/settings`,
+        }],
+      },
       isPending: false,
       isError: false,
     } as unknown as ReturnType<typeof useWorkItem>)
-    render(
-      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-        <MemoryRouter initialEntries={[`/projects/${projectId}/work-items/${workItemId}`]}>
-          <Routes><Route element={<WorkItemDetailPage />} path="/projects/:projectId/work-items/:workItemId" /></Routes>
-        </MemoryRouter>
-      </QueryClientProvider>,
-    )
-
-    const button = screen.getByRole('button', { name: 'Open in Codex' })
-    expect(button).toBeDisabled()
-    expect(screen.getByText(new RegExp(reason))).toHaveAttribute('id', button.getAttribute('aria-describedby'))
+    renderDetail()
+    fireEvent.click(screen.getByRole('button', { name: 'Task actions' }))
+    expect(await screen.findByRole('menuitem', { name: 'Open locally' })).toBeVisible()
   })
 
   it('launches an agent on the project defaults in one click, and with an edited prompt from the dialog', async () => {
@@ -504,7 +501,8 @@ describe('Work Item detail', () => {
       </QueryClientProvider>,
     )
 
-    expect(screen.getByText(/Codex Cloud in Web, on the project’s defaults/)).toBeVisible()
+    // Launching loads with the launch pages' code.
+    expect(await screen.findByText(/Codex Cloud in Web, on the project’s defaults/)).toBeVisible()
     fireEvent.click(screen.getByRole('button', { name: 'Launch' }))
     expect(mutate).toHaveBeenLastCalledWith(
       { input: { workItemIds: [workItemId], environmentId: 'environment-a' }, idempotencyKey: expect.any(String) },
@@ -525,26 +523,20 @@ describe('Work Item detail', () => {
     )
   })
 
-  it('saves one field at a time and says plainly when someone else changed the task first', () => {
+  it('keeps a typed title when someone else changed it first, until the person keeps theirs or takes the other', async () => {
     const current = { ...workItem, title: 'Title from another editor', version: 2 }
-    const mutate = vi.fn((_input, options) => {
-      options.onError(
+    const mutateAsync = vi
+      .fn()
+      .mockRejectedValueOnce(
         new ApiError({
           status: 409,
           code: 'version_conflict',
-          message: 'The Work Item changed.',
+          message: 'The task changed.',
           details: { currentVersion: 2, current },
         }),
       )
-      options.onSettled?.()
-    })
-    vi.mocked(useUpdateWorkItem).mockReturnValue({
-      mutate,
-      reset: vi.fn(),
-      isPending: false,
-      isError: false,
-      isSuccess: false,
-    } as unknown as ReturnType<typeof useUpdateWorkItem>)
+      .mockResolvedValue({ ...current, title: 'My new title', version: 3 })
+    vi.mocked(useUpdateWorkItem).mockReturnValue({ mutateAsync, isPending: false } as unknown as ReturnType<typeof useUpdateWorkItem>)
     renderDetail()
 
     const title = screen.getByLabelText('Title')
@@ -552,16 +544,54 @@ describe('Work Item detail', () => {
     fireEvent.change(title, { target: { value: 'My new title' } })
     fireEvent.blur(title)
 
-    expect(mutate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        projectId,
-        workItemId,
-        idempotencyKey: expect.any(String),
-        patch: { expectedVersion: 1, title: 'My new title' },
-      }),
-      expect.any(Object),
+    expect(await screen.findByText('Someone else changed the title while you were editing.')).toBeVisible()
+    expect(mutateAsync).toHaveBeenCalledTimes(1)
+    expect(mutateAsync).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId, workItemId, idempotencyKey: expect.any(String), patch: { expectedVersion: 1, title: 'My new title' } }),
     )
-    expect(screen.getByText('A newer version exists.')).toBeVisible()
-    expect(screen.getByText(/your change to title wasn’t saved/)).toBeVisible()
+    expect(screen.getByText(/Theirs is “Title from another editor”/)).toBeVisible()
+    expect(screen.getByLabelText('Title')).toHaveValue('My new title')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Keep yours' }))
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(2))
+    expect(mutateAsync).toHaveBeenLastCalledWith(expect.objectContaining({ patch: { expectedVersion: 2, title: 'My new title' } }))
+    await waitFor(() => expect(screen.queryByText('Someone else changed the title while you were editing.')).not.toBeInTheDocument())
+  })
+
+  it('opens the description editor on a click and saves it with Ctrl+Enter', async () => {
+    const mutateAsync = vi.fn().mockResolvedValue({ ...workItem, description: 'New description', version: 2 })
+    vi.mocked(useUpdateWorkItem).mockReturnValue({ mutateAsync, isPending: false } as unknown as ReturnType<typeof useUpdateWorkItem>)
+    renderDetail()
+
+    fireEvent.click(screen.getByText('Original description'))
+    const editor = screen.getByRole('textbox', { name: 'Description' })
+    expect(editor).toHaveValue('Original description')
+    fireEvent.change(editor, { target: { value: 'New description' } })
+    fireEvent.keyDown(editor, { key: 'Enter', ctrlKey: true })
+
+    await waitFor(() =>
+      expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ patch: { expectedVersion: 1, description: 'New description' } })),
+    )
+    expect(screen.queryByRole('textbox', { name: 'Description' })).not.toBeInTheDocument()
+  })
+
+  it('shows the last handoff note where the next person starts reading', () => {
+    vi.mocked(useWorkItem).mockReturnValue({
+      data: {
+        ...workItem,
+        handoff: {
+          note: 'Parser done; the CLI flags still need tests.',
+          actor: { id: 'actor-b', kind: 'external_agent', displayName: 'Builder' },
+          at: '2026-07-31T01:00:00Z',
+          via: null,
+        },
+      },
+      isPending: false,
+      isError: false,
+    } as unknown as ReturnType<typeof useWorkItem>)
+    renderDetail()
+
+    expect(screen.getByText('Handoff from Builder')).toBeVisible()
+    expect(screen.getByText('Parser done; the CLI flags still need tests.')).toBeVisible()
   })
 })

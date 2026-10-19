@@ -1,8 +1,11 @@
 import { useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
 
-import { Button, TextArea } from '../ui'
+import { Button } from '../ui'
+import { Popover } from '../ui/pickers'
 import { formatEstimate } from './historyFormat'
-import type { EstimateUnit } from './types'
+import { TaskGlyph } from './TaskGlyph'
+import type { EstimateUnit, WorkItem } from './types'
+import type { TaskSave } from './useTaskSave'
 
 /**
  * Text that edits in place and saves when you leave it. While you type, a
@@ -20,9 +23,14 @@ function useDraft(value: string) {
   return { draft, setDraft, editing, setEditing }
 }
 
-export function TitleField({ disabled, onSave, value }: { disabled: boolean; onSave: (title: string) => void; value: string }) {
+/** The title, edited in place. Enter saves, Escape puts it back. Typed text survives a clash with someone else's edit. */
+export function TitleField({ disabled, item, save }: { disabled: boolean; item: WorkItem; save: TaskSave }) {
+  const pending = save.pending('title')
+  const value = pending?.text ?? item.title
   const { draft, setDraft, setEditing } = useDraft(value)
   const ref = useRef<HTMLTextAreaElement>(null)
+  const base = useRef('')
+  const before = useRef('')
   useLayoutEffect(() => {
     const element = ref.current
     if (!element) return
@@ -33,8 +41,12 @@ export function TitleField({ disabled, onSave, value }: { disabled: boolean; onS
   const commit = () => {
     setEditing(false)
     const title = draft.trim()
-    if (!title) setDraft(value)
-    else if (title !== value) onSave(title)
+    if (!title) return setDraft(value)
+    if (title === before.current.trim()) return
+    // Editing again after a clash or a failed save means "this one".
+    if (pending?.state === 'conflict') save.keepMine('title', { title })
+    else if (pending?.state === 'failed') save.retry('title', { title })
+    else save.save('title', { title }, base.current)
   }
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.nativeEvent.isComposing) return
@@ -44,22 +56,26 @@ export function TitleField({ disabled, onSave, value }: { disabled: boolean; onS
     } else if (event.key === 'Escape') {
       event.preventDefault()
       event.stopPropagation()
-      setDraft(value)
+      setDraft(before.current)
       setEditing(false)
       window.requestAnimationFrame(() => ref.current?.blur())
     }
   }
-  if (disabled) return <h1 className="aw-workitem__heading">{value}</h1>
+  if (disabled) return <p className="aw-task__heading">{value}</p>
   return (
     <textarea
       aria-label="Title"
-      className="aw-workitem__title"
+      className="aw-task__title"
       maxLength={240}
       onBlur={commit}
       onChange={(event) => setDraft(event.target.value)}
-      onFocus={() => setEditing(true)}
+      onFocus={() => {
+        base.current = save.baseFor('title')
+        before.current = draft
+        setEditing(true)
+      }}
       onKeyDown={onKeyDown}
-      placeholder="Work item title"
+      placeholder="Task title"
       ref={ref}
       rows={1}
       value={draft}
@@ -67,119 +83,102 @@ export function TitleField({ disabled, onSave, value }: { disabled: boolean; onS
   )
 }
 
-/** The description as plain text with line breaks. Ctrl or Cmd + Enter saves, Escape puts it back. */
-export function DescriptionField({ disabled, onSave, value }: { disabled: boolean; onSave: (description: string) => void; value: string }) {
-  const { draft, setDraft, editing, setEditing } = useDraft(value)
-  const ref = useRef<HTMLTextAreaElement>(null)
-  if (disabled) {
-    return <p className={value ? 'aw-workitem__text' : 'aw-workitem__text is-empty'}>{value || 'No description.'}</p>
-  }
-  const commit = () => {
-    setEditing(false)
-    if (draft !== value) onSave(draft)
-  }
-  return (
-    <div className="aw-taskdesc">
-      <TextArea
-        aria-label="Description"
-        className="aw-workitem__desc"
-        maxLength={100000}
-        onBlur={(event) => {
-          // Leaving for the Cancel button shouldn't save first.
-          if ((event.relatedTarget as HTMLElement | null)?.dataset.cancel === 'description') return
-          commit()
-        }}
-        onChange={(event) => setDraft(event.target.value)}
-        onFocus={() => setEditing(true)}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-            event.preventDefault()
-            event.currentTarget.blur()
-          } else if (event.key === 'Escape') {
-            event.preventDefault()
-            event.stopPropagation()
-            setDraft(value)
-            setEditing(false)
-            window.requestAnimationFrame(() => ref.current?.blur())
-          }
-        }}
-        placeholder="Add a description: the outcome you want, any limits, and useful context."
-        ref={ref}
-        rows={5}
-        value={draft}
-      />
-      {editing ? (
-        <div className="aw-taskdesc__actions">
-          <span className="aw-taskdesc__hint">Saves when you click away · Ctrl+Enter</span>
-          <Button
-            data-cancel="description"
-            onClick={() => {
-              setDraft(value)
-              setEditing(false)
-            }}
-            size="sm"
-            variant="ghost"
-          >
-            Cancel
-          </Button>
-        </div>
-      ) : null}
-    </div>
-  )
-}
+const SCALES: Record<EstimateUnit, number[]> = { points: [1, 2, 3, 5, 8, 13], hours: [1, 2, 4, 8, 16, 24] }
 
+/** The estimate: a button that opens a small picker with the usual sizes and a field for any other number. */
 export function EstimateField({
+  className,
   disabled,
   onSave,
+  placeholder,
   unit,
   value,
 }: {
+  className: string
   disabled: boolean
   onSave: (estimate: number | null) => void
+  placeholder: string
   unit: EstimateUnit
   value: number | null
 }) {
-  const text = value === null ? '' : String(value)
-  const { draft, setDraft, setEditing } = useDraft(text)
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null)
+  const [typed, setTyped] = useState('')
   const [invalid, setInvalid] = useState(false)
-  if (disabled) return <span className="aw-prop__value">{value === null ? 'No estimate' : formatEstimate(value, unit)}</span>
-  const commit = () => {
-    setEditing(false)
-    const trimmed = draft.trim()
-    if (trimmed === text) return
-    if (!trimmed) return onSave(null)
-    const parsed = Number(trimmed)
-    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100000) {
-      setInvalid(true)
-      setDraft(text)
-      return
-    }
-    setInvalid(false)
-    onSave(Math.round(parsed * 10) / 10)
+  const shown = value === null ? placeholder : formatEstimate(value, unit)
+  const content = (
+    <>
+      <TaskGlyph name="estimate" />
+      <span className={value === null ? 'aw-prop__empty' : undefined}>{shown}</span>
+    </>
+  )
+  if (disabled) return <span className={`${className} is-static`}>{content}</span>
+  const pick = (next: number | null) => {
+    setAnchor(null)
+    if (next !== value) onSave(next)
   }
   return (
-    <span className="aw-estimate">
-      <input
-        aria-describedby={invalid ? 'estimate-note' : undefined}
-        aria-invalid={invalid || undefined}
-        aria-label={`Estimate in ${unit}`}
-        className="aw-estimate__input"
-        inputMode="decimal"
-        onBlur={commit}
-        onChange={(event) => setDraft(event.target.value)}
-        onFocus={() => setEditing(true)}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter') event.currentTarget.blur()
+    <>
+      <button
+        aria-expanded={anchor !== null}
+        aria-haspopup="dialog"
+        aria-label={`Estimate: ${value === null ? 'none' : formatEstimate(value, unit)}. Change`}
+        className={className}
+        onClick={(event) => {
+          setTyped(value === null ? '' : String(value))
+          setInvalid(false)
+          setAnchor(anchor ? null : event.currentTarget)
         }}
-        placeholder="None"
-        value={draft}
-      />
-      <span className="aw-estimate__unit">{unit}</span>
-      {invalid ? (
-        <span className="aw-estimate__note" id="estimate-note" role="alert">
-          Use a number from 0 to 100,000.
-        </span>
-      ) : null}
-    </span>
+        type="button"
+      >
+        {content}
+      </button>
+      <Popover anchor={anchor} className="aw-estimate" label="Estimate" onClose={() => setAnchor(null)} open={anchor !== null} width={260}>
+        <form
+          className="aw-estimate__form"
+          onSubmit={(event) => {
+            event.preventDefault()
+            const trimmed = typed.trim()
+            if (!trimmed) return pick(null)
+            const parsed = Number(trimmed)
+            if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100000) return setInvalid(true)
+            pick(Math.round(parsed * 10) / 10)
+          }}
+        >
+          <div className="aw-estimate__scale" role="group" aria-label={`Common sizes in ${unit}`}>
+            {SCALES[unit].map((size) => (
+              <button aria-pressed={value === size} className="aw-estimate__size" key={size} onClick={() => pick(size)} type="button">
+                {size}
+              </button>
+            ))}
+          </div>
+          <div className="aw-estimate__row">
+            <input
+              aria-describedby={invalid ? 'estimate-note' : undefined}
+              aria-invalid={invalid || undefined}
+              aria-label={`Estimate in ${unit}`}
+              className="aw-estimate__input"
+              inputMode="decimal"
+              onChange={(event) => setTyped(event.target.value)}
+              placeholder="Other"
+              value={typed}
+            />
+            <span className="aw-estimate__unit">{unit}</span>
+            <Button size="sm" type="submit">
+              Set
+            </Button>
+          </div>
+          {invalid ? (
+            <p className="aw-estimate__note" id="estimate-note" role="alert">
+              Use a number from 0 to 100,000.
+            </p>
+          ) : null}
+          {value !== null ? (
+            <Button className="aw-estimate__clear" onClick={() => pick(null)} size="sm" variant="ghost">
+              Clear estimate
+            </Button>
+          ) : null}
+        </form>
+      </Popover>
+    </>
   )
 }

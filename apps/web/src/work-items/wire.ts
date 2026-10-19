@@ -6,6 +6,7 @@ import type {
   MilestoneRef,
   ProjectLabel,
   TaskClaim,
+  TaskHandoff,
   TaskRef,
   TaskRelation,
   WorkItemPriority,
@@ -147,6 +148,15 @@ export function claim(value: unknown): TaskClaim | null {
     claimedAt: string(entry.claimedAt),
     expiresAt: string(entry.expiresAt),
   }
+}
+
+export function handoff(value: unknown): TaskHandoff | null {
+  if (!value || typeof value !== 'object') return null
+  const entry = record(value)
+  const actor = actorRef(entry.actor)
+  const note = string(entry.note)
+  if (!actor || !note) return null
+  return { actor, note, at: string(entry.at), via: nullableString(entry.via) }
 }
 
 export function projectLabel(value: unknown): ProjectLabel {
