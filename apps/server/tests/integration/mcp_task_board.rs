@@ -533,6 +533,209 @@ async fn task_list_filters_count_and_stay_inside_reachable_projects() {
 }
 
 #[tokio::test]
+async fn task_list_takes_several_values_and_reads_views_as_the_list_does() {
+    let Some(setup) = setup("mcp_board_several").await else {
+        return;
+    };
+    let app = &setup.app;
+    let project = create_project(&setup, "VIEWS", "Views").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+    for name in ["api", "web"] {
+        let label = call("label_write", json!({"projectId": "VIEWS", "name": name})).await;
+        assert_eq!(label["outcome"], "ok", "{label}");
+    }
+    for arguments in [
+        json!({"title": "One", "status": "Ready", "assignee": "me", "labels": ["api"], "priority": "high"}),
+        json!({"title": "Two", "status": "In Progress", "labels": ["web"], "priority": "urgent"}),
+        json!({"title": "Three", "status": "Review", "assignee": "me", "labels": ["api", "web"]}),
+        json!({"title": "Four", "status": "Done", "priority": "low"}),
+    ] {
+        let mut arguments = arguments;
+        arguments["projectId"] = json!("VIEWS");
+        let task = call("task_create", arguments).await;
+        assert_eq!(task["outcome"], "applied", "{task}");
+    }
+    let list = |arguments: Value| {
+        let call = &call;
+        async move {
+            let mut arguments = arguments;
+            arguments["projectId"] = json!("VIEWS");
+            let listed = call("task_list", arguments.clone()).await;
+            assert_eq!(listed["outcome"], "ok", "{arguments}: {listed}");
+            let mut found = keys(&listed["value"]["tasks"]);
+            assert_eq!(listed["value"]["total"], found.len(), "{listed}");
+            found.sort();
+            found
+        }
+    };
+
+    // Any of several values; a single string still works. Naming a finished
+    // status lists its tasks without includeDone.
+    assert_eq!(list(json!({"status": ["Ready", "In Progress"]})).await, ["VIEWS-1", "VIEWS-2"]);
+    assert_eq!(list(json!({"status": ["review", "Done"]})).await, ["VIEWS-3", "VIEWS-4"]);
+    assert_eq!(list(json!({"status": "Ready"})).await, ["VIEWS-1"]);
+    assert_eq!(list(json!({"priority": ["high", "urgent"]})).await, ["VIEWS-1", "VIEWS-2"]);
+    assert_eq!(list(json!({"assignee": ["none"]})).await, ["VIEWS-2"]);
+    assert_eq!(list(json!({"type": "task"})).await, ["VIEWS-1", "VIEWS-2", "VIEWS-3"]);
+    assert_eq!(list(json!({"parentId": "none"})).await, ["VIEWS-1", "VIEWS-2", "VIEWS-3"]);
+
+    // Leaving tasks out: "is not" keeps tasks with no value.
+    assert_eq!(list(json!({"notStatus": ["Ready"]})).await, ["VIEWS-2", "VIEWS-3"]);
+    assert_eq!(
+        list(json!({"notAssignee": "me", "includeDone": true})).await,
+        ["VIEWS-2", "VIEWS-4"]
+    );
+    assert_eq!(list(json!({"notAssignee": ["me", "none"]})).await, Vec::<String>::new());
+    assert_eq!(list(json!({"notPriority": ["no_priority"]})).await, ["VIEWS-1", "VIEWS-2"]);
+    assert_eq!(list(json!({"notType": ["Bug"]})).await.len(), 3);
+
+    // Labels: all of them, any of them ("none": no labels too), none of them.
+    assert_eq!(list(json!({"labels": ["api", "web"]})).await, ["VIEWS-3"]);
+    assert_eq!(
+        list(json!({"anyLabels": ["web", "none"], "includeDone": true})).await,
+        ["VIEWS-2", "VIEWS-3", "VIEWS-4"]
+    );
+    assert_eq!(list(json!({"notLabels": ["web"]})).await, ["VIEWS-1"]);
+    assert_eq!(
+        list(json!({"notLabels": ["none"], "includeDone": true})).await,
+        ["VIEWS-1", "VIEWS-2", "VIEWS-3"]
+    );
+
+    // Each list is refused by its own name.
+    let refuse = |arguments: Value| {
+        let call = &call;
+        async move {
+            let mut arguments = arguments;
+            arguments["projectId"] = json!("VIEWS");
+            call("task_list", arguments).await
+        }
+    };
+    assert_refused(&refuse(json!({"notStatus": ["Doing"]})).await, "notStatus", "Statuses:");
+    assert_refused(&refuse(json!({"notAssignee": ["@nobody"]})).await, "notAssignee", "No one called @nobody");
+    assert_refused(&refuse(json!({"anyLabels": ["nope"]})).await, "anyLabels", "nope");
+    assert_refused(&refuse(json!({"notType": "Epic"})).await, "notType", "Types:");
+    assert_refused(&refuse(json!({"notPriority": "critical"})).await, "notPriority", "urgent");
+    assert_refused(&refuse(json!({"notMilestone": "Someday"})).await, "notMilestone", "Someday");
+    assert_refused(&refuse(json!({"dueAfter": "soon"})).await, "dueAfter", "YYYY-MM-DD");
+    assert_refused(&refuse(json!({"parentId": "x"})).await, "parentId", "none");
+    let many = (0..21).map(|n| format!("Status {n}")).collect::<Vec<_>>();
+    assert_refused(&refuse(json!({"status": many})).await, "status", "at most 20");
+
+    // Pages of a list filter add up, and a cursor fits only its own search.
+    let mut paged = Vec::new();
+    let mut cursor = Value::Null;
+    loop {
+        let mut arguments = json!({"projectId": "VIEWS", "status": ["Ready", "In Progress", "Review"], "limit": 1});
+        if !cursor.is_null() {
+            arguments["cursor"] = cursor.clone();
+        }
+        let page = call("task_list", arguments).await;
+        assert_eq!(page["value"]["total"], 3, "{page}");
+        paged.extend(keys(&page["value"]["tasks"]));
+        match page["value"].get("nextCursor") {
+            Some(next) => cursor = next.clone(),
+            None => break,
+        }
+        assert!(paged.len() <= 3, "{paged:?}");
+    }
+    assert_eq!(paged, ["VIEWS-1", "VIEWS-2", "VIEWS-3"]);
+    let first = call(
+        "task_list",
+        json!({"projectId": "VIEWS", "status": ["Ready", "In Progress"], "limit": 1}),
+    )
+    .await;
+    assert_refused(
+        &refuse(json!({"status": ["Ready", "Review"], "limit": 1, "cursor": first["value"]["nextCursor"]})).await,
+        "cursor",
+        "different search",
+    );
+
+    // A saved view lists for an agent exactly what it lists on the page,
+    // "me" being the caller; a field passed as well replaces the view's.
+    let (_, workflow) = send(
+        app,
+        setup.browser.request(
+            "GET",
+            &format!("/api/v1/projects/{project}/work-item-workflow"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    let status_id = |name: &str| {
+        workflow["statuses"]
+            .as_array()
+            .expect("statuses")
+            .iter()
+            .find(|status| status["name"] == name)
+            .and_then(|status| status["id"].as_str())
+            .unwrap_or_else(|| panic!("status {name}: {workflow}"))
+            .to_owned()
+    };
+    for (index, (name, query)) in [
+        (
+            "In flight, not mine",
+            json!({"statusId": format!("{},{}", status_id("Ready"), status_id("In Progress")), "notAssigneeActorId": "me"}),
+        ),
+        ("No labels", json!({"labelIds": "none"})),
+        ("Urgent or unsorted", json!({"priority": "urgent,no_priority", "includeDone": "false"})),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (status, view) = send(
+            app,
+            setup.browser.request(
+                "POST",
+                &format!("/api/v1/projects/{project}/views"),
+                Some(&format!("view-{index}")),
+                json!({"name": name, "query": query}),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{view}");
+        let resolved = view["resolvedQuery"]
+            .as_object()
+            .expect("resolved query")
+            .iter()
+            .map(|(key, value)| format!("{key}={}", value.as_str().expect("value")))
+            .collect::<Vec<_>>()
+            .join("&");
+        let (status, page) = send(
+            app,
+            setup.browser.request(
+                "GET",
+                &format!("/api/v1/projects/{project}/work-items?{resolved}"),
+                None,
+                Value::Null,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        let mut on_the_page = keys(&page["items"]);
+        on_the_page.sort();
+        assert_eq!(list(json!({"view": name})).await, on_the_page, "{name}");
+    }
+    assert_eq!(list(json!({"view": "In flight, not mine"})).await, ["VIEWS-2"]);
+    assert_eq!(list(json!({"view": "No labels"})).await, ["VIEWS-4"]);
+    assert_eq!(list(json!({"view": "Urgent or unsorted"})).await, ["VIEWS-2", "VIEWS-3"]);
+    assert_eq!(
+        list(json!({"view": "In flight, not mine", "assignee": "me"})).await,
+        ["VIEWS-1"]
+    );
+    assert_eq!(
+        list(json!({"view": "No labels", "includeDone": false})).await,
+        Vec::<String>::new()
+    );
+}
+
+#[tokio::test]
 async fn task_reorder_places_tasks_beside_neighbours_and_rebalances() {
     let Some(setup) = setup("mcp_board_reorder").await else {
         return;

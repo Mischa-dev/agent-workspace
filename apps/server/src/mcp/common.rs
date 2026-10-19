@@ -324,6 +324,30 @@ where
     )
 }
 
+/// Reads a list argument agents may also send as one value (`status: "Done"`
+/// as well as `status: ["Done", "In Review"]`). Pair it with
+/// `#[schemars(with = "Option<Vec<String>>")]`, so the input schema stays a
+/// plain list.
+pub(super) fn one_or_many<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Raw {
+        One(String),
+        Many(Vec<String>),
+    }
+    Ok(
+        Option::<Raw>::deserialize(deserializer)?.map(|raw| match raw {
+            Raw::One(value) => vec![value],
+            Raw::Many(values) => values,
+        }),
+    )
+}
+
 /// A date (YYYY-MM-DD, as the start or the end of that day in UTC) or an
 /// RFC 3339 timestamp.
 pub(super) fn parse_time(value: &str, end_of_day: bool) -> Option<DateTime<Utc>> {

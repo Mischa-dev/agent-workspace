@@ -145,6 +145,8 @@ struct Fixture {
     member: Client,
     project_id: Uuid,
     organization_id: Uuid,
+    owner_actor_id: Uuid,
+    member_actor_id: Uuid,
     _temporary: tempfile::TempDir,
 }
 
@@ -245,6 +247,8 @@ async fn fixture(name: &str) -> Option<Fixture> {
         pool,
         project_id: seed.project_id,
         organization_id: seed.organization_id,
+        owner_actor_id: seed.human_actor_id,
+        member_actor_id: seed.collaborator_actor_id,
         _temporary: temporary,
     })
 }
@@ -888,6 +892,172 @@ async fn owners_edit_the_workflow_and_retired_statuses_move_their_tasks() {
         refused["error"]["details"]["field"], "estimateUnit",
         "{refused}"
     );
+}
+
+/// The titles a task list or board column shows, sorted.
+fn titles(items: &Value) -> Vec<String> {
+    let mut titles = items
+        .as_array()
+        .unwrap_or_else(|| panic!("not a list: {items}"))
+        .iter()
+        .map(|item| item["title"].as_str().expect("title").to_owned())
+        .collect::<Vec<_>>();
+    titles.sort();
+    titles
+}
+
+#[tokio::test]
+async fn filters_take_several_values_and_leave_tasks_out() {
+    let Some(fixture) = fixture("several").await else {
+        return;
+    };
+    let project = fixture.project_id;
+    let owner = &fixture.owner;
+    let base = format!("/api/v1/projects/{project}");
+    let (_, workflow) = owner.get(&format!("{base}/work-item-workflow")).await;
+    let ready = status_named(&workflow, "Ready");
+    let started = status_named(&workflow, "In Progress");
+    let review = status_named(&workflow, "Review");
+    let (_, backend) = owner
+        .post(&format!("{base}/labels"), json!({ "name": "Backend" }))
+        .await;
+    let (_, frontend) = owner
+        .post(&format!("{base}/labels"), json!({ "name": "Frontend" }))
+        .await;
+    let (status, beta) = owner
+        .post(&format!("{base}/milestones"), json!({ "name": "Beta" }))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{beta}");
+    let (backend, frontend, beta) = (&backend["id"], &frontend["id"], &beta["id"]);
+    let (me, member) = (fixture.owner_actor_id, fixture.member_actor_id);
+    for body in [
+        json!({ "title": "Mine", "statusId": ready, "assigneeActorId": me, "labelIds": [backend], "priority": "high" }),
+        json!({ "title": "Theirs", "statusId": started, "assigneeActorId": member, "labelIds": [frontend], "priority": "urgent", "milestoneId": beta }),
+        json!({ "title": "Nobody's", "statusId": started, "priority": "low" }),
+        json!({ "title": "Both labels", "statusId": review, "assigneeActorId": me, "labelIds": [backend, frontend] }),
+    ] {
+        create_task(owner, project, body).await;
+    }
+    let base = &base;
+    let list = |query: String| async move {
+        let (status, page) = owner.get(&format!("{base}/work-items?{query}")).await;
+        assert_eq!(status, StatusCode::OK, "{query}: {page}");
+        assert_eq!(
+            page["total"].as_u64().map(|total| total as usize),
+            page["items"].as_array().map(Vec::len),
+            "{query}: {page}"
+        );
+        titles(&page["items"])
+    };
+    let (backend, frontend, beta) = (
+        backend.as_str().expect("label"),
+        frontend.as_str().expect("label"),
+        beta.as_str().expect("milestone"),
+    );
+
+    // Any of several values, and none of them.
+    assert_eq!(list(format!("statusId={ready},{started}")).await, ["Mine", "Nobody's", "Theirs"]);
+    assert_eq!(list(format!("notStatusId={started}")).await, ["Both labels", "Mine"]);
+    assert_eq!(list("priority=high,urgent".to_owned()).await, ["Mine", "Theirs"]);
+    assert_eq!(list("notPriority=low,urgent".to_owned()).await, ["Both labels", "Mine"]);
+    assert_eq!(list(format!("milestoneId={beta},none")).await.len(), 4);
+    assert_eq!(list(format!("notMilestoneId={beta}")).await, ["Both labels", "Mine", "Nobody's"]);
+
+    // "Is not" keeps tasks with no value, unless "none" is left out too.
+    assert_eq!(list(format!("assigneeActorId=none,{member}")).await, ["Nobody's", "Theirs"]);
+    assert_eq!(list(format!("notAssigneeActorId={me}")).await, ["Nobody's", "Theirs"]);
+    assert_eq!(list(format!("notAssigneeActorId={me},none")).await, ["Theirs"]);
+    // The old "unassigned" flag still means no one.
+    assert_eq!(list("unassigned=true".to_owned()).await, ["Nobody's"]);
+
+    // Labels: all of them, any of them, none of them.
+    assert_eq!(list(format!("labelIds={backend},{frontend}")).await, ["Both labels"]);
+    assert_eq!(list(format!("anyLabelIds={backend},{frontend}")).await, ["Both labels", "Mine", "Theirs"]);
+    assert_eq!(list(format!("anyLabelIds=none,{frontend}")).await, ["Both labels", "Nobody's", "Theirs"]);
+    assert_eq!(list(format!("notLabelIds={backend}")).await, ["Nobody's", "Theirs"]);
+    assert_eq!(list(format!("notLabelIds={backend},none")).await, ["Theirs"]);
+    assert_eq!(list("labelIds=none".to_owned()).await, ["Nobody's"]);
+
+    // Every filter is one more condition.
+    assert_eq!(
+        list(format!("statusId={ready},{started}&notAssigneeActorId={member}&anyLabelIds=none,{backend}")).await,
+        ["Mine", "Nobody's"]
+    );
+
+    // What can't name anything is refused.
+    for query in [
+        "statusId=none".to_owned(),
+        "priority=high,whenever".to_owned(),
+        format!("labelIds=none,{backend}"),
+        format!("notTypeId={}", Uuid::now_v7()),
+        format!(
+            "anyLabelIds={}",
+            (0..21).map(|_| Uuid::now_v7().to_string()).collect::<Vec<_>>().join(",")
+        ),
+    ] {
+        let (status, refused) = owner.get(&format!("{base}/work-items?{query}")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{query}: {refused}");
+    }
+
+    // The board shows only the columns the filters let in, and each
+    // column's own filters load more of exactly its tasks.
+    let board = |query: String| async move {
+        let (status, board) = owner
+            .get(&format!("{base}/work-items/board?{query}"))
+            .await;
+        assert_eq!(status, StatusCode::OK, "{query}: {board}");
+        board["columns"].as_array().expect("columns").clone()
+    };
+    let columns = board(format!("statusId={ready},{started}")).await;
+    let labels = columns
+        .iter()
+        .map(|column| column["label"].as_str().expect("label"))
+        .collect::<Vec<_>>();
+    assert_eq!(labels, ["Ready", "In Progress"]);
+    for column in &columns {
+        let filter = column["filter"].as_object().expect("column filter");
+        let query = filter
+            .iter()
+            .map(|(key, value)| format!("{key}={}", value.as_str().expect("value")))
+            .collect::<Vec<_>>()
+            .join("&");
+        assert_eq!(list(query).await, titles(&column["items"]), "{column}");
+    }
+    let columns = board(format!("columnsBy=assignee&notAssigneeActorId={me}")).await;
+    let keys = columns
+        .iter()
+        .map(|column| column["key"].as_str().expect("key").to_owned())
+        .collect::<Vec<_>>();
+    assert!(!keys.contains(&me.to_string()), "{keys:?}");
+    assert!(keys.contains(&member.to_string()) && keys.contains(&"none".to_owned()), "{keys:?}");
+    let columns = board(format!("columnsBy=label&notLabelIds={backend},none")).await;
+    let keys = columns
+        .iter()
+        .map(|column| column["key"].as_str().expect("key"))
+        .collect::<Vec<_>>();
+    assert_eq!(keys, [frontend], "{columns:?}");
+    assert_eq!(titles(&columns[0]["items"]), ["Theirs"]);
+
+    // A saved view keeps several values, "me" among them for whoever opens it.
+    let (status, view) = owner
+        .post(
+            &format!("{base}/views"),
+            json!({
+                "name": "Not mine, in flight",
+                "query": { "statusId": format!("{ready},{started}"), "notAssigneeActorId": "me,none" },
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{view}");
+    assert_eq!(view["resolvedQuery"]["notAssigneeActorId"], format!("{me},none"), "{view}");
+    let resolved = view["resolvedQuery"]
+        .as_object()
+        .expect("resolved query")
+        .iter()
+        .map(|(key, value)| format!("{key}={}", value.as_str().expect("value")))
+        .collect::<Vec<_>>()
+        .join("&");
+    assert_eq!(list(resolved).await, ["Theirs"]);
 }
 
 #[tokio::test]

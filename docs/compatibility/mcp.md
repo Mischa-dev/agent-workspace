@@ -320,6 +320,23 @@ Behavior changes:
 
 New tools: `reply_stop`.
 
+## Task filters with several values (October 19, 2026)
+
+Behavior changes:
+
+- `task_list` takes several values for `status`, `assignee`, `type`,
+  `priority` and `milestone` (tasks with any of them); a single string still
+  works. `notStatus`, `notAssignee`, `notType`, `notPriority` and
+  `notMilestone` leave tasks out, keeping tasks with no value unless you list
+  "none". Beside `labels` (all of them) there are `anyLabels` and
+  `notLabels`, each taking "none" for tasks with no labels.
+- `task_list` also takes `dueAfter`, and `parentId: "none"` for top-level
+  tasks. Naming a finished status lists its tasks without `includeDone`.
+- `view` applies a saved view's filters exactly as the task list does, "me"
+  being the caller, and a filter you pass replaces the view's on that field.
+  Before, a view's "no labels", "due after" and "archived only" filters were
+  ignored for agents, and a view of top-level tasks was refused.
+
 ## Verification history
 
 The M0 development spike established the `2025-06-18` negotiation with Codex

@@ -22,6 +22,7 @@ use crate::{
     policy::Action,
     work_items::{
         imports::{self, CommitRefusal, CreateImportRequest, ImportOptions},
+        list::ViewFilters,
         templates::{self, ApplyOptions, ApplyOutcome},
         views,
     },
@@ -108,22 +109,24 @@ pub(super) async fn view_list(
             .collect::<Result<Vec<_>, _>>()?;
         Ok::<_, AppError>(ToolResult::ok(ViewListValue {
             views,
-            how_to_use: "Pass a view's name or id as `view` to task_list to list its tasks; filters you pass as well win over the view's.".to_owned(),
+            how_to_use: "Pass a view's name or id as `view` to task_list to list the tasks it shows on the task list; a filter you pass as well replaces the view's filter on that field.".to_owned(),
         }))
     }
     .await;
     result.unwrap_or_else(|error| ToolResult::from_error(error, "view_list"))
 }
 
-/// Fills task_list's arguments from a saved view. What the caller passed
-/// wins over the view; the view's "me" is the caller.
+/// Reads a saved view for task_list: its filters, applied exactly as the
+/// task list applies them, less the fields the caller passed (theirs
+/// replace the view's), and its sort unless the caller gave one. The view's
+/// "me" is the caller.
 pub(super) async fn apply_view(
     state: &AppState,
     principal: &McpPrincipal,
     mut arguments: TaskListArguments,
-) -> Result<Result<TaskListArguments, (&'static str, String)>, AppError> {
+) -> Result<Result<(TaskListArguments, Option<ViewFilters>), (&'static str, String)>, AppError> {
     let Some(wanted) = arguments.view.clone() else {
-        return Ok(Ok(arguments));
+        return Ok(Ok((arguments, None)));
     };
     if !principal.project_explicit && arguments.project_id.is_none() {
         return Ok(Err((
@@ -145,63 +148,51 @@ pub(super) async fn apply_view(
             format!("No view called “{wanted}” in this project. See view_list."),
         )));
     };
-    let query = views::query_params(&row.query);
-    let flag = |key: &str| query.get(key).and_then(|value| value.parse::<bool>().ok());
-    if arguments.query.is_none() {
-        arguments.query = query.get("q").cloned();
-    }
-    if arguments.assignee.is_none() {
-        arguments.assignee = match (query.get("assigneeActorId"), flag("unassigned")) {
-            (Some(id), _) => Some(id.clone()),
-            (None, Some(true)) => Some("none".to_owned()),
-            _ => None,
-        };
-    }
-    if arguments.labels.is_none()
-        && let Some(ids) = query.get("labelIds").filter(|ids| *ids != "none")
-    {
-        arguments.labels = Some(ids.split(',').map(str::to_owned).collect());
-    }
-    if arguments.priority.is_none() {
-        arguments.priority = query.get("priority").cloned();
-    }
-    if arguments.task_type.is_none() {
-        arguments.task_type = query.get("typeId").cloned();
-    }
-    if arguments.status.is_none() {
-        arguments.status = match (query.get("statusId"), query.get("semanticCategory")) {
-            (Some(id), _) => sqlx::query_scalar::<_, String>(
-                "SELECT name FROM work_item_statuses WHERE project_id = $1 AND id = $2::uuid",
-            )
-            .bind(principal.project_id)
-            .bind(id)
-            .fetch_optional(&state.pool)
-            .await
-            .ok()
-            .flatten(),
-            (None, Some(category)) => Some(category.clone()),
-            _ => None,
-        };
-    }
-    if arguments.milestone.is_none() {
-        arguments.milestone = query.get("milestoneId").cloned();
-    }
-    if arguments.parent_id.is_none() {
-        arguments.parent_id = query.get("parentId").cloned();
-    }
-    if arguments.due_before.is_none() {
-        arguments.due_before = query.get("dueBefore").cloned();
-    }
-    arguments.blocked = arguments.blocked.or(flag("blocked"));
-    arguments.ready = arguments.ready.or(flag("ready"));
-    arguments.overdue = arguments.overdue.or(flag("overdue"));
-    if arguments.claimed.is_none() {
-        arguments.claimed =
-            flag("claimed").map(|claimed| if claimed { "yes" } else { "no" }.to_owned());
-    }
-    // The list page shows finished tasks unless a view says not to.
-    if arguments.include_done.is_none() {
-        arguments.include_done = Some(flag("includeDone").unwrap_or(true));
+    let mut query = views::query_params(&row.query);
+    let passed = [
+        (arguments.query.is_some(), &["q"][..]),
+        (
+            arguments.status.is_some() || arguments.not_status.is_some(),
+            &["statusId", "notStatusId", "semanticCategory", "notSemanticCategory"],
+        ),
+        (
+            arguments.assignee.is_some() || arguments.not_assignee.is_some(),
+            &["assigneeActorId", "notAssigneeActorId", "unassigned"],
+        ),
+        (
+            arguments.labels.is_some()
+                || arguments.any_labels.is_some()
+                || arguments.not_labels.is_some(),
+            &["labelIds", "anyLabelIds", "notLabelIds"],
+        ),
+        (
+            arguments.task_type.is_some() || arguments.not_type.is_some(),
+            &["typeId", "notTypeId"],
+        ),
+        (
+            arguments.priority.is_some() || arguments.not_priority.is_some(),
+            &["priority", "notPriority"],
+        ),
+        (
+            arguments.milestone.is_some() || arguments.not_milestone.is_some(),
+            &["milestoneId", "notMilestoneId"],
+        ),
+        (arguments.parent_id.is_some(), &["parentId"]),
+        (arguments.due_before.is_some(), &["dueBefore"]),
+        (arguments.due_after.is_some(), &["dueAfter"]),
+        (arguments.blocked.is_some(), &["blocked"]),
+        (arguments.ready.is_some(), &["ready"]),
+        (arguments.overdue.is_some(), &["overdue"]),
+        (arguments.claimed.is_some(), &["claimed"]),
+        (arguments.include_done.is_some(), &["includeDone"]),
+        (arguments.include_archived.is_some(), &["archived"]),
+    ];
+    for (given, keys) in passed {
+        if given {
+            for key in keys {
+                query.remove(*key);
+            }
+        }
     }
     if arguments.sort.is_none() {
         arguments.sort = query
@@ -209,7 +200,22 @@ pub(super) async fn apply_view(
             .filter(|sort| matches!(sort.as_str(), "priority" | "updated" | "number"))
             .cloned();
     }
-    Ok(Ok(arguments))
+    let Ok(mut filters) = ViewFilters::parse(&query, principal.actor_id) else {
+        return Ok(Err((
+            "view",
+            format!(
+                "“{}” can't be read any more. Open it on the task list and save it again.",
+                row.name
+            ),
+        )));
+    };
+    // The task list shows finished tasks unless the view hides them.
+    arguments.include_done.get_or_insert(true);
+    match arguments.include_archived {
+        Some(_) => filters.leave_archived_to_caller(),
+        None => arguments.include_archived = Some(filters.archived_only()),
+    }
+    Ok(Ok((arguments, Some(filters))))
 }
 
 // ---------------------------------------------------------------------------

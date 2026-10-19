@@ -222,13 +222,7 @@ pub(crate) fn resolved_params(
 ) -> BTreeMap<String, String> {
     params
         .iter()
-        .map(|(key, value)| {
-            if key == "assigneeActorId" && value == "me" {
-                (key.clone(), reader.to_string())
-            } else {
-                (key.clone(), value.clone())
-            }
-        })
+        .map(|(key, value)| (key.clone(), list::resolve_me(key, value, reader)))
         .collect()
 }
 
@@ -1214,13 +1208,17 @@ mod tests {
     #[test]
     fn me_means_whoever_opens_the_view() {
         let reader = Uuid::now_v7();
+        let other = Uuid::now_v7();
         let params = BTreeMap::from([
             ("assigneeActorId".to_owned(), "me".to_owned()),
+            ("notAssigneeActorId".to_owned(), format!("none,me,{other}")),
             ("sort".to_owned(), "due".to_owned()),
         ]);
         let resolved = resolved_params(&params, reader);
         assert_eq!(resolved["assigneeActorId"], reader.to_string());
+        assert_eq!(resolved["notAssigneeActorId"], format!("none,{reader},{other}"));
         assert_eq!(resolved["sort"], "due");
+        assert!(list::saved_query_spec(&params, reader).is_ok());
     }
 
     #[test]
@@ -1247,6 +1245,26 @@ mod tests {
             ("labelIds".to_owned(), "none".to_owned()),
         ]);
         assert!(list::saved_query_spec(&board, reader).is_ok());
+        // Several values, and "none of", read like the list reads them.
+        let several = BTreeMap::from([
+            ("priority".to_owned(), "high,urgent".to_owned()),
+            ("notSemanticCategory".to_owned(), "completed,canceled".to_owned()),
+            ("anyLabelIds".to_owned(), format!("none,{}", Uuid::nil())),
+            ("notMilestoneId".to_owned(), "none".to_owned()),
+        ]);
+        assert!(list::saved_query_spec(&several, reader).is_ok());
+        for (key, value) in [
+            ("priority", "high,whenever"),
+            ("statusId", "none"),
+            ("labelIds", "none,00000000-0000-0000-0000-000000000000"),
+            ("notTypeId", "a,b"),
+        ] {
+            let params = BTreeMap::from([(key.to_owned(), value.to_owned())]);
+            assert!(
+                list::saved_query_spec(&params, reader).is_err(),
+                "{key}={value} is refused"
+            );
+        }
     }
 
     #[test]

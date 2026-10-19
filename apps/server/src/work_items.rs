@@ -86,7 +86,7 @@ const DEFAULT_TRANSITIONS: [(&str, &str); 17] = [
 
 pub(crate) mod import_parse;
 pub(crate) mod imports;
-mod list;
+pub(crate) mod list;
 mod planning;
 pub(crate) mod project_templates;
 pub(crate) mod templates;
@@ -905,52 +905,6 @@ pub async fn ensure_default_workflow(
         ));
     }
     Ok(false)
-}
-
-async fn validate_list_filter_ids(
-    pool: &PgPool,
-    project_id: Uuid,
-    type_id: Option<Uuid>,
-    status_id: Option<Uuid>,
-    assignee_actor_id: Option<Uuid>,
-) -> Result<(), AppError> {
-    if let Some(type_id) = type_id {
-        let belongs_to_project = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM work_item_types WHERE project_id = $1 AND id = $2)",
-        )
-        .bind(project_id)
-        .bind(type_id)
-        .fetch_one(pool)
-        .await?;
-        if !belongs_to_project {
-            return Err(AppError::Validation("typeId"));
-        }
-    }
-    if let Some(status_id) = status_id {
-        let belongs_to_project = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM work_item_statuses WHERE project_id = $1 AND id = $2)",
-        )
-        .bind(project_id)
-        .bind(status_id)
-        .fetch_one(pool)
-        .await?;
-        if !belongs_to_project {
-            return Err(AppError::Validation("statusId"));
-        }
-    }
-    if let Some(assignee_actor_id) = assignee_actor_id {
-        let belongs_to_project = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM project_memberships WHERE project_id = $1 AND actor_id = $2)",
-        )
-        .bind(project_id)
-        .bind(assignee_actor_id)
-        .fetch_one(pool)
-        .await?;
-        if !belongs_to_project {
-            return Err(AppError::Validation("assigneeActorId"));
-        }
-    }
-    Ok(())
 }
 
 async fn get_work_item(
@@ -4016,10 +3970,6 @@ fn default_priority() -> String {
 
 fn validate_priority(value: &str) -> Result<(), AppError> {
     crate::work_item_commands::validate_priority(value)
-}
-
-fn validate_priority_filter(value: Option<&str>) -> Result<(), AppError> {
-    value.map_or(Ok(()), validate_priority)
 }
 
 fn validate_semantic_category(value: Option<&str>) -> Result<(), AppError> {
