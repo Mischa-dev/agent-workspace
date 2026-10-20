@@ -7,7 +7,9 @@
 - Negotiated protocol: MCP `2025-06-18`
 - Transport: Streamable HTTP at `http://127.0.0.1:3100/api/v1/mcp`
 - Request ceiling: 1 MiB (a 100-task task_create_many plan fits)
-- Session mode: legacy session compatibility with JSON request/response enabled
+- Session mode: legacy session compatibility with JSON request/response enabled;
+  a session the server no longer holds (five idle minutes, or a restart) is
+  resumed instead of answered with 404
 - Network boundary: the ordinary loopback application listener, reached from
   the Mac only through SSH forwarding
 
@@ -39,8 +41,10 @@ ports, and requires an authenticated browser session plus CSRF-protected
 consent. Consent selects one active Project and shows the named client and
 requested scopes. Codes are five-minute, single-use, and bound to the exact
 client, redirect URI, and PKCE challenge. Access tokens expire after one hour;
-refresh tokens expire after 30 days, rotate atomically, and revoke the complete
-grant family if an old refresh token is reused. Codes and all tokens are stored
+refresh tokens expire after 30 days and rotate atomically. An exchanged refresh
+token still works for five minutes, because a client running many sessions on
+one grant refreshes from several at once and a client whose response was lost
+retries; used again after that, it revokes the complete grant family. Codes and all tokens are stored
 only as SHA-256 digests.
 
 Bearer writes use `authentication_class=mcp_bearer`; OAuth writes use

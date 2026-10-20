@@ -16,16 +16,19 @@ use rmcp::{
         wrapper::{Json, Parameters},
     },
     model::{
-        CacheScope, GetPromptRequestParams, GetPromptResponse, Implementation, ListPromptsResult,
-        ListToolsResult, PaginatedRequestParams, PromptMessage, Role, ServerCapabilities,
-        ServerInfo,
+        CacheScope, ClientCapabilities, GetPromptRequestParams, GetPromptResponse, Implementation,
+        InitializeRequestParams, ListPromptsResult, ListToolsResult, PaginatedRequestParams,
+        PromptMessage, ProtocolVersion, Role, ServerCapabilities, ServerInfo,
     },
     prompt, prompt_router, schemars,
     service::RequestContext,
     tool, tool_handler, tool_router,
     transport::{
         StreamableHttpServerConfig, StreamableHttpService,
-        streamable_http_server::session::local::LocalSessionManager,
+        streamable_http_server::session::{
+            local::LocalSessionManager,
+            store::{SessionState, SessionStore, SessionStoreError},
+        },
     },
 };
 use serde::{Deserialize, Serialize};
@@ -2630,6 +2633,53 @@ impl ServerHandler for McpServer {
     }
 }
 
+/// Picks up a session the server no longer holds instead of answering 404.
+///
+/// A session is dropped after five idle minutes and on every restart, and
+/// clients that don't start over on 404 (the claude.ai connector among them)
+/// then lose the server's tools until someone reconnects. A session carries
+/// nothing the tools rely on: every request is authenticated and scoped on its
+/// own by `authenticate_mcp`. So any well-formed session ID is resumed as a
+/// fresh session on the legacy protocol, where every version behaves alike.
+struct ResumeAnySession;
+
+const MAX_SESSION_ID_LEN: usize = 128;
+
+fn resumable_session_id(session_id: &str) -> bool {
+    (1..=MAX_SESSION_ID_LEN).contains(&session_id.len())
+        && session_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
+
+#[async_trait::async_trait]
+impl SessionStore for ResumeAnySession {
+    async fn load(&self, session_id: &str) -> Result<Option<SessionState>, SessionStoreError> {
+        if !resumable_session_id(session_id) {
+            return Ok(None);
+        }
+        Ok(Some(SessionState::new(
+            InitializeRequestParams::new(
+                ClientCapabilities::default(),
+                Implementation::new("resumed session", "0"),
+            )
+            .with_protocol_version(ProtocolVersion::V_2025_06_18),
+        )))
+    }
+
+    async fn store(
+        &self,
+        _session_id: &str,
+        _state: &SessionState,
+    ) -> Result<(), SessionStoreError> {
+        Ok(())
+    }
+
+    async fn delete(&self, _session_id: &str) -> Result<(), SessionStoreError> {
+        Ok(())
+    }
+}
+
 pub fn router(state: AppState) -> Router<AppState> {
     let handler = McpServer {
         state: state.clone(),
@@ -2658,17 +2708,16 @@ pub fn router(state: AppState) -> Router<AppState> {
     }
     allowed_hosts.sort();
     allowed_hosts.dedup();
-    let service: StreamableHttpService<McpServer, LocalSessionManager> = StreamableHttpService::new(
-        move || Ok(handler.clone()),
-        Default::default(),
-        StreamableHttpServerConfig::default()
-            .with_allowed_hosts(allowed_hosts)
-            .with_allowed_origins(state.config.allowed_origins.clone())
-            .with_legacy_session_mode(true)
-            .with_json_response(true)
-            .with_max_request_body_bytes(MAX_MCP_BODY_BYTES)
-            .with_cancellation_token(CancellationToken::new()),
-    );
+    let mut config = StreamableHttpServerConfig::default()
+        .with_allowed_hosts(allowed_hosts)
+        .with_allowed_origins(state.config.allowed_origins.clone())
+        .with_legacy_session_mode(true)
+        .with_json_response(true)
+        .with_max_request_body_bytes(MAX_MCP_BODY_BYTES)
+        .with_cancellation_token(CancellationToken::new());
+    config.session_store = Some(std::sync::Arc::new(ResumeAnySession));
+    let service: StreamableHttpService<McpServer, LocalSessionManager> =
+        StreamableHttpService::new(move || Ok(handler.clone()), Default::default(), config);
 
     Router::new()
         .nest_service(MCP_PATH, service)

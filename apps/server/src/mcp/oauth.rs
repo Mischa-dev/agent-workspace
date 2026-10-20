@@ -843,12 +843,35 @@ async fn refresh(state: &AppState, request: TokenRequest) -> Result<TokenRespons
             "refresh token client binding is invalid",
         ));
     }
-    if row.used_at.is_some() || row.revoked_at.is_some() {
-        revoke_grant_family(&mut transaction, row.grant_id, true).await?;
+    let reused = match (row.revoked_at, row.used_at) {
+        (None, None) => false,
+        (None, Some(used_at)) if chrono::Utc::now() - used_at <= refresh_reuse_grace() => true,
+        _ => {
+            revoke_grant_family(&mut transaction, row.grant_id, true).await?;
+            transaction.commit().await.map_err(AppError::from)?;
+            tracing::warn!(
+                grant_id = %row.grant_id,
+                client_id = %row.client_id,
+                "an old refresh token was used again, so its grant was revoked"
+            );
+            return Err(OAuthError::invalid_grant(
+                "refresh token reuse revoked the grant family",
+            ));
+        }
+    };
+    if reused {
+        // A client that runs many sessions on one grant refreshes from several
+        // of them at once, and a client whose refresh response was lost
+        // retries with the same token. Both are honest: give this one its own
+        // pair and leave the grant alone.
+        let response = issue_token_pair(&mut transaction, row.grant_id, &row.scopes).await?;
         transaction.commit().await.map_err(AppError::from)?;
-        return Err(OAuthError::invalid_grant(
-            "refresh token reuse revoked the grant family",
-        ));
+        tracing::info!(
+            grant_id = %row.grant_id,
+            client_id = %row.client_id,
+            "a refresh token was used again within the grace period"
+        );
+        return Ok(response);
     }
     sqlx::query("UPDATE mcp_oauth_refresh_tokens SET used_at = now() WHERE id = $1")
         .bind(row.id)
@@ -871,6 +894,15 @@ async fn refresh(state: &AppState, request: TokenRequest) -> Result<TokenRespons
         .map_err(AppError::from)?;
     transaction.commit().await.map_err(AppError::from)?;
     Ok(response)
+}
+
+/// How long a refresh token that was already exchanged still works. Long
+/// enough for parallel sessions and retries, short enough that a stolen token
+/// used later still revokes the grant.
+const REFRESH_REUSE_GRACE_SECONDS: i64 = 300;
+
+fn refresh_reuse_grace() -> chrono::Duration {
+    chrono::Duration::seconds(REFRESH_REUSE_GRACE_SECONDS)
 }
 
 async fn issue_token_pair(
