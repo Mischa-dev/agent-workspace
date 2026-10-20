@@ -272,6 +272,35 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     .await;
     assert_eq!(notification.status(), StatusCode::ACCEPTED);
 
+    // A session the server dropped (idle, or from before a restart) is picked
+    // up again instead of answered with 404, which some clients take as the
+    // server going away for good.
+    let resumed = protocol_json(
+        mcp_request(
+            &application,
+            Some(&token),
+            Some("from-before-a-restart"),
+            &json!({"jsonrpc":"2.0","id":99,"method":"tools/list","params":{}}),
+        )
+        .await,
+    )
+    .await;
+    assert!(
+        resumed
+            .pointer("/result/tools")
+            .and_then(Value::as_array)
+            .is_some_and(|tools| !tools.is_empty()),
+        "resumed session lists tools: {resumed}"
+    );
+    let not_an_id = mcp_request(
+        &application,
+        Some(&token),
+        Some("not a session id"),
+        &json!({"jsonrpc":"2.0","id":100,"method":"tools/list","params":{}}),
+    )
+    .await;
+    assert_eq!(not_an_id.status(), StatusCode::NOT_FOUND);
+
     let tools = protocol_json(
         mcp_request(
             &application,
@@ -1301,16 +1330,42 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     let refreshed_access = refreshed["access_token"]
         .as_str()
         .expect("refreshed access token");
-    let replayed_refresh = application
-        .clone()
-        .oneshot(
+    // Several sessions of one client refresh with the same token at once, and
+    // a client whose response got lost retries it. Right after the exchange
+    // that still works and leaves every token of the grant working.
+    let refresh_again = |body: String| {
+        application.clone().oneshot(
             Request::builder()
                 .method("POST")
                 .uri("/oauth/token")
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-                .body(Body::from(refresh_body))
+                .body(Body::from(body))
                 .expect("refresh replay request"),
         )
+    };
+    let parallel_refresh = json_response(
+        refresh_again(refresh_body.clone())
+            .await
+            .expect("refresh replay response"),
+    )
+    .await;
+    let parallel_access = parallel_refresh["access_token"]
+        .as_str()
+        .expect("parallel refresh access token");
+    assert_ne!(parallel_access, refreshed_access);
+    for access in [refreshed_access, parallel_access] {
+        let still_working = mcp_request(&application, Some(access), None, &initialize).await;
+        assert_eq!(still_working.status(), StatusCode::OK);
+    }
+    // Used again well after it was exchanged, it looks stolen: the grant goes.
+    sqlx::query(
+        "UPDATE mcp_oauth_refresh_tokens SET used_at = now() - interval '10 minutes' WHERE token_digest = $1",
+    )
+    .bind(Sha256::digest(refresh_token.as_bytes()).to_vec())
+    .execute(&pool)
+    .await
+    .expect("age the exchanged refresh token");
+    let replayed_refresh = refresh_again(refresh_body)
         .await
         .expect("refresh replay response");
     assert_eq!(replayed_refresh.status(), StatusCode::BAD_REQUEST);
