@@ -39,7 +39,7 @@
 .aw-convhead__title {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   min-width: 0;
   max-width: 100%;
   height: 34px;
@@ -92,21 +92,21 @@ button.aw-convhead__title[aria-expanded="true"] {
 .aw-convhead__actions {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-half);
   flex: none;
 }
 
 .aw-convhead__members {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   height: 30px;
   margin-right: var(--space-1);
-  padding: 0 var(--space-2) 0 5px;
+  padding: 0 var(--space-2) 0 var(--space-1-5);
   border: 1px solid var(--content-border);
   border-radius: var(--radius-sm);
   background: var(--content-bg);
-  font: 600 13px/18px var(--font-sans);
+  font: var(--t-label);
   color: var(--content-fg-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -141,7 +141,7 @@ button.aw-convhead__title[aria-expanded="true"] {
   translate: -50% 0;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   height: 30px;
   padding: 0 var(--space-3);
   border: 0;
@@ -162,14 +162,14 @@ button.aw-convhead__title[aria-expanded="true"] {
 .aw-older__button {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   height: 28px;
   padding: 0 var(--space-3);
   border: 1px solid var(--content-border);
   border-radius: var(--radius-full);
   background: var(--content-bg);
   color: var(--content-fg-muted);
-  font: 600 12px/16px var(--font-sans);
+  font: var(--t-caption-strong);
 }
 
 .aw-older__button:hover:not(:disabled) {
@@ -198,7 +198,7 @@ button.aw-convhead__title[aria-expanded="true"] {
   border-radius: var(--radius-full);
   background: var(--content-bg);
   color: var(--content-fg);
-  font: 600 12px/16px var(--font-sans);
+  font: var(--t-caption-strong);
 }
 
 .aw-newline {
@@ -216,7 +216,7 @@ button.aw-convhead__title[aria-expanded="true"] {
 }
 
 .aw-newline span {
-  padding: 1px 6px;
+  padding: 1px var(--space-1-5);
   border-radius: var(--radius-full);
   background: var(--badge-bg);
   color: var(--badge-fg);
@@ -230,13 +230,13 @@ button.aw-convhead__title[aria-expanded="true"] {
   grid-template-columns: var(--size-avatar) minmax(0, 1fr);
   column-gap: var(--space-3);
   margin-top: var(--space-1);
-  padding: calc(var(--msg-pad-y) + 2px) var(--space-4) var(--msg-pad-y);
+  padding: calc(var(--msg-pad-y) + var(--space-half)) var(--space-4) var(--msg-pad-y);
 }
 
 .aw-msg.is-continued {
   margin-top: 0;
-  padding-top: 2px;
-  padding-bottom: 2px;
+  padding-top: var(--space-half);
+  padding-bottom: var(--space-half);
 }
 
 /* With a mouse, a message lights up while it's pointed at or holds keyboard
@@ -263,13 +263,13 @@ button.aw-convhead__title[aria-expanded="true"] {
 }
 
 .aw-msg.is-linked {
-  transition: background-color 1.2s var(--ease-out);
+  transition: background-color var(--duration-fade) var(--ease-out);
 }
 
 .aw-msg__gutter {
   display: flex;
   justify-content: flex-end;
-  padding-top: 2px;
+  padding-top: var(--space-half);
 }
 
 .aw-msg.is-continued .aw-msg__gutter {
@@ -328,8 +328,8 @@ button.aw-convhead__title[aria-expanded="true"] {
 .aw-msg__note {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin: 2px 0 0;
+  gap: var(--space-1-5);
+  margin: var(--space-half) 0 0;
   font: var(--t-small);
   color: var(--content-fg-muted);
 }
@@ -348,8 +348,8 @@ button.aw-convhead__title[aria-expanded="true"] {
   right: var(--space-4);
   z-index: var(--layer-sticky);
   display: none;
-  gap: 2px;
-  padding: 2px;
+  gap: var(--space-half);
+  padding: var(--space-half);
   border-radius: var(--radius-md);
   background: var(--surface-raised);
   box-shadow: var(--shadow-popover);
@@ -395,11 +395,11 @@ button.aw-convhead__title[aria-expanded="true"] {
 }
 
 .aw-mention {
-  padding: 0 2px;
+  padding: 0 var(--space-half);
   border-radius: var(--radius-xs);
   background: var(--mention-bg);
   color: var(--mention-fg);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 .aw-mention.is-you {
@@ -415,13 +415,13 @@ button.aw-convhead__title[aria-expanded="true"] {
 .aw-workref {
   display: inline-flex;
   align-items: baseline;
-  gap: 5px;
+  gap: var(--space-1-5);
   max-width: 100%;
-  padding: 0 5px;
+  padding: 0 var(--space-1-5);
   border-radius: var(--radius-xs);
   background: var(--mention-bg);
   color: var(--mention-fg);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   text-decoration: none;
   vertical-align: baseline;
 }
@@ -449,7 +449,7 @@ a.aw-workref:hover {
 
 .aw-workref__key {
   flex: none;
-  font: 500 0.84em/1 var(--font-mono);
+  font: 500 0.84em/1 var(--font-mono); /* design-exception: sized to the text around it */
 }
 
 .aw-workref__title {
@@ -525,7 +525,7 @@ a.aw-workref:hover {
 
 .aw-event__line strong,
 .aw-event__kind {
-  font-weight: 700;
+  font-weight: var(--weight-bold);
   color: var(--content-fg);
 }
 
@@ -534,26 +534,26 @@ a.aw-workref:hover {
 }
 
 .aw-event__line code {
-  padding: 2px 5px;
+  padding: var(--space-half) var(--space-1-5);
   border-radius: var(--radius-xs);
   background: var(--surface-sunken);
   color: var(--content-fg);
-  font: 500 12px/1 var(--font-mono);
+  font: var(--t-code-sm); line-height: 1;
 }
 
 .aw-event__toggle {
   margin-left: var(--space-2);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 .aw-event .aw-code {
-  margin-top: 6px;
+  margin-top: var(--space-1-5);
 }
 
 /* Agents */
 .aw-replies {
   display: grid;
-  gap: 2px;
+  gap: var(--space-half);
   margin: var(--space-1) 0 0;
   padding: 0;
   list-style: none;
@@ -563,7 +563,7 @@ a.aw-workref:hover {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--space-1-5);
   font: var(--t-small);
   color: var(--content-fg-muted);
 }
@@ -587,7 +587,7 @@ a.aw-workref:hover {
 .aw-run__row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   min-width: 0;
   font: var(--t-small);
   color: var(--content-fg-muted);
@@ -595,11 +595,11 @@ a.aw-workref:hover {
 
 .aw-run__row code {
   overflow: hidden;
-  padding: 0 6px;
+  padding: 0 var(--space-1-5);
   border-radius: var(--radius-xs);
   background: var(--surface-sunken);
   color: var(--content-fg);
-  font: 500 12.5px/18px var(--font-mono);
+  font: var(--t-code-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -607,7 +607,7 @@ a.aw-workref:hover {
 .aw-run__row a {
   overflow: hidden;
   color: var(--link);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -629,7 +629,7 @@ a.aw-workref:hover {
   gap: var(--space-1);
   flex: none;
   margin-left: auto;
-  font: 600 12px/16px var(--font-sans);
+  font: var(--t-caption-strong);
 }
 
 .aw-run__checks.is-success {
@@ -652,9 +652,9 @@ a.aw-workref:hover {
 
 .aw-run__error {
   display: flex;
-  gap: 6px;
+  gap: var(--space-1-5);
   margin: 0;
-  padding: var(--space-2) 10px;
+  padding: var(--space-2) var(--space-2-5);
   border-radius: var(--radius-sm);
   background: var(--danger-soft);
   color: var(--danger);
@@ -662,7 +662,7 @@ a.aw-workref:hover {
 }
 
 .aw-run__error .aw-icon {
-  margin-top: 2px;
+  margin-top: var(--space-half);
 }
 
 .aw-approval.is-open {
@@ -725,7 +725,7 @@ h2.aw-card__title {
   min-height: 42px;
   max-height: 280px;
   margin: 0;
-  padding: 10px var(--space-3) 2px;
+  padding: var(--space-2-5) var(--space-3) var(--space-half);
   border: 0;
   outline: 0;
   resize: none;
@@ -743,14 +743,14 @@ h2.aw-card__title {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
-  padding: 2px 6px 6px;
+  padding: var(--space-half) var(--space-1-5) var(--space-1-5);
 }
 
 .aw-composer__tools,
 .aw-composer__end {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-half);
 }
 
 .aw-composer__end {
@@ -760,8 +760,8 @@ h2.aw-card__title {
 .aw-composer__meta {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding-left: 6px;
+  gap: var(--space-1-5);
+  padding-left: var(--space-1-5);
   font: var(--t-caption);
   color: var(--content-fg-muted);
 }
@@ -774,7 +774,7 @@ h2.aw-card__title {
 
 .aw-composer__count.is-over {
   color: var(--danger);
-  font-weight: 700;
+  font-weight: var(--weight-bold);
 }
 
 .aw-composer__send {
@@ -820,7 +820,7 @@ h2.aw-card__title {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 4px;
+  gap: var(--space-1);
   min-height: 24px;
   margin: 0;
   font: var(--t-caption);
@@ -909,13 +909,13 @@ h2.aw-card__title {
 }
 
 .aw-mentions__head {
-  padding: 6px var(--space-2) var(--space-1);
-  font: 600 12px/16px var(--font-sans);
+  padding: var(--space-1-5) var(--space-2) var(--space-1);
+  font: var(--t-caption-strong);
   color: var(--content-fg-muted);
 }
 
 .aw-mentions__empty {
-  padding: 6px var(--space-2) var(--space-2);
+  padding: var(--space-1-5) var(--space-2) var(--space-2);
   font: var(--t-small);
   color: var(--content-fg-muted);
 }
@@ -943,19 +943,19 @@ h2.aw-card__title {
 }
 
 .aw-mentions__name {
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .aw-mentions__title {
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 
 .aw-mentions__key {
   flex: none;
-  font: 500 12px/16px var(--font-mono);
+  font: var(--t-code-sm);
 }
 
 .aw-mentions__handle {
@@ -988,7 +988,7 @@ h2.aw-card__title {
 
 .aw-members__list {
   display: grid;
-  gap: 2px;
+  gap: var(--space-half);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -1017,7 +1017,7 @@ h2.aw-card__title {
 }
 
 .aw-members__you {
-  font-weight: 400;
+  font-weight: var(--weight-regular);
   color: var(--content-fg-muted);
 }
 
@@ -1055,7 +1055,7 @@ h2.aw-card__title {
 }
 
 .aw-details__list code {
-  font: 500 12px/18px var(--font-mono);
+  font: var(--t-code-sm);
 }
 
 .aw-details__section {
@@ -1141,8 +1141,8 @@ h2.aw-card__title {
 
 .aw-threadstatus:focus-visible {
   border-radius: var(--radius-full);
-  box-shadow: var(--focus-ring);
-  outline: none;
+  outline: var(--focus-width) solid var(--r-focus);
+  outline-offset: var(--focus-offset);
 }
 
 /* A conversation's thread board */
@@ -1178,8 +1178,8 @@ h2.aw-card__title {
 }
 
 .aw-threadboard__item:focus-visible {
-  box-shadow: var(--focus-ring);
-  outline: none;
+  outline: var(--focus-width) solid var(--r-focus);
+  outline-offset: var(--focus-offset);
 }
 
 .aw-threadboard__top,
@@ -1281,7 +1281,7 @@ h2.aw-card__title {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  padding: 2px var(--space-2);
+  padding: var(--space-half) var(--space-2);
   border: 0;
   border-radius: var(--radius-sm);
   background: none;
@@ -1414,7 +1414,7 @@ button.aw-msg__edited:focus-visible {
 
 .aw-history__current {
   margin-left: var(--space-2);
-  padding: 0 6px;
+  padding: 0 var(--space-1-5);
   border-radius: var(--radius-sm);
   background: var(--content-hover);
   color: var(--content-fg);
@@ -1439,7 +1439,7 @@ button.aw-msg__edited:focus-visible {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-1);
-  margin: var(--space-1) 0 2px;
+  margin: var(--space-1) 0 var(--space-half);
 }
 
 .aw-reaction {
@@ -1464,8 +1464,8 @@ button.aw-reaction:hover {
 }
 
 button.aw-reaction:focus-visible {
-  box-shadow: var(--focus-ring);
-  outline: none;
+  outline: var(--focus-width) solid var(--r-focus);
+  outline-offset: var(--focus-offset);
 }
 
 .aw-reaction.is-mine {
@@ -1482,7 +1482,7 @@ button.aw-reaction:focus-visible {
 @media (pointer: coarse) {
   .aw-reaction {
     min-height: 36px;
-    padding: 2px var(--space-3);
+    padding: var(--space-half) var(--space-3);
   }
 }
 
@@ -1502,7 +1502,7 @@ button.aw-reaction:focus-visible {
 
 .aw-forward {
   max-width: var(--size-measure);
-  margin: var(--space-1) 0 2px;
+  margin: var(--space-1) 0 var(--space-half);
   padding: var(--space-2) var(--space-3);
   border-left: 3px solid var(--content-border);
   border-radius: var(--radius-sm);
@@ -1532,7 +1532,7 @@ a.aw-forward__meta:hover .aw-forward__author {
 }
 
 .aw-forward__author {
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   color: var(--content-fg);
 }
 

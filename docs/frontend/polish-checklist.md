@@ -35,9 +35,13 @@ their own pages; nobody else will.
 
 ## Markup
 
-8. **Use the kit.** Controls, headers, sections, rows, chips and dialogs come
-   from `ui/index.ts`. No raw `<button>`, `<input>`, `<select>` or ad-hoc
-   colours in a page; new styles use the tokens in `theme-and-tokens.md`.
+8. **Use the kit and the tokens.** Controls, headers, sections, rows, chips and
+   dialogs come from `ui/index.ts`, used the way `apps/web/DESIGN.md` says (one
+   primary button, ghost actions in section headers, rows instead of a card in
+   a card). No raw `<button>`, `<input>` or `<select>` in a page. New styles
+   use the tokens; `src/styles/designSystem.test.ts` fails on hand-typed
+   colors, type, spacing, corners, focus rings and timings. Check new pieces
+   on `/design-system` in a light and a dark theme.
 9. **Keyboard**: every action is reachable with Tab, the focus ring shows,
    dialogs trap and restore focus, and Escape closes what it opened.
 10. **Accessible names**: icon buttons have a `label`, lists and regions have a

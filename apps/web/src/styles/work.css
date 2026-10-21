@@ -91,6 +91,7 @@
   border-radius: var(--radius-md);
   background: var(--surface-raised);
   list-style: none;
+  box-shadow: var(--shadow-card);
 }
 
 .aw-worklist li + li {
@@ -114,7 +115,7 @@
 }
 
 .aw-worklist__row:focus-visible {
-  outline-offset: -2px;
+  outline-offset: calc(-1 * var(--focus-width));
 }
 
 .aw-worklist__key {
@@ -129,7 +130,7 @@
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -145,7 +146,7 @@
   align-items: center;
   flex: none;
   height: 18px;
-  padding: 0 6px;
+  padding: 0 var(--space-1-5);
   border-radius: var(--radius-full);
   background: var(--surface-sunken);
   font: var(--t-tag);
@@ -189,7 +190,7 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   min-width: 0;
   margin: 0;
   padding: 0;
@@ -204,10 +205,10 @@
 .aw-label {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--space-1-5);
   max-width: 160px;
   height: 20px;
-  padding: 0 7px;
+  padding: 0 var(--space-1-5);
   border: 1px solid var(--content-border);
   border-radius: var(--radius-full);
   font: var(--t-small);
@@ -300,6 +301,7 @@
   transition:
     border-color var(--duration-fast) var(--ease-out),
     opacity var(--duration-fast) var(--ease-out);
+  box-shadow: var(--shadow-card);
 }
 
 .aw-board__card[draggable='true'] {
@@ -316,7 +318,7 @@
 
 .aw-board__link {
   display: grid;
-  gap: 2px;
+  gap: var(--space-half);
   color: var(--content-fg);
   text-decoration: none;
 }
@@ -333,7 +335,7 @@
 }
 
 .aw-board__card:has(.aw-board__link:focus-visible) {
-  outline: 2px solid var(--focus-ring);
+  outline: var(--focus-width) solid var(--r-focus);
   outline-offset: 1px;
 }
 
@@ -345,7 +347,7 @@
 
 .aw-board__name {
   font: var(--t-ui);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   overflow-wrap: anywhere;
 }
 
@@ -368,8 +370,8 @@
   z-index: 1;
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding: 2px;
+  gap: var(--space-half);
+  padding: var(--space-half);
   border-radius: var(--radius-sm);
   background: var(--surface-raised);
   box-shadow: var(--shadow-popover);
@@ -387,7 +389,7 @@
 .aw-board__status {
   max-width: 128px;
   height: 28px;
-  padding: 0 6px;
+  padding: 0 var(--space-1-5);
   border: 1px solid var(--control-border);
   border-radius: var(--radius-sm);
   background: var(--surface-raised);
@@ -428,7 +430,7 @@
 .aw-crumbs__link {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   border-radius: var(--radius-xs);
   color: var(--content-fg-muted);
   text-decoration: none;

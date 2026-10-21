@@ -78,8 +78,8 @@ samp {
 }
 
 :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
-  outline: 2px solid var(--r-focus);
-  outline-offset: 2px;
+  outline: var(--focus-width) solid var(--r-focus);
+  outline-offset: var(--focus-offset);
 }
 
 .visually-hidden,
@@ -136,7 +136,7 @@ samp {
   input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"]),
   select,
   textarea {
-    font-size: 16px !important;
+    font-size: 16px !important; /* design-exception: iOS zooms into smaller fields */
   }
 }
 
@@ -146,7 +146,7 @@ samp {
   *::after {
     animation-duration: 1ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 1ms !important;
+    transition-duration: 1ms !important; /* design-exception: reduced motion */
     scroll-behavior: auto !important;
   }
 }

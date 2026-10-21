@@ -8,12 +8,12 @@
   align-items: center;
   flex-wrap: wrap;
   column-gap: var(--space-2);
-  row-gap: 2px;
+  row-gap: var(--space-half);
   width: fit-content;
   max-width: 100%;
   min-height: 28px;
-  margin: 6px 0 2px -6px;
-  padding: 3px var(--space-2) 3px 6px;
+  margin: var(--space-1-5) 0 var(--space-half) calc(-1 * var(--space-1-5));
+  padding: 3px var(--space-2) 3px var(--space-1-5);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: none;
@@ -34,14 +34,14 @@
   max-width: 32ch;
   overflow: hidden;
   color: var(--link);
-  font-weight: 700;
+  font-weight: var(--weight-bold);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .aw-threadchip__count {
   color: var(--content-fg);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   white-space: nowrap;
 }
 
@@ -56,7 +56,7 @@
 /* "New": a small badge that never wraps inside itself. */
 .aw-threadchip__new {
   flex: none;
-  padding: 0 6px;
+  padding: 0 var(--space-1-5);
   border-radius: var(--radius-full);
   background: var(--badge-bg);
   color: var(--badge-fg);
@@ -83,8 +83,8 @@
 }
 
 .aw-threadchip:focus-visible {
-  box-shadow: var(--focus-ring);
-  outline: none;
+  outline: var(--focus-width) solid var(--r-focus);
+  outline-offset: var(--focus-offset);
 }
 
 @media (max-width: 600px) {
@@ -101,7 +101,7 @@
 .aw-emojigrid {
   display: grid;
   grid-template-columns: repeat(6, 36px);
-  gap: 2px;
+  gap: var(--space-half);
   padding: var(--space-1);
 }
 
@@ -114,7 +114,7 @@
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: none;
-  font-size: 20px;
+  font-size: 20px; /* design-exception: emoji */
   line-height: 1;
   cursor: pointer;
 }
@@ -124,8 +124,8 @@
 }
 
 .aw-emojigrid__item:focus-visible {
-  box-shadow: var(--focus-ring);
-  outline: none;
+  outline: var(--focus-width) solid var(--r-focus);
+  outline-offset: var(--focus-offset);
 }
 
 .aw-emojigrid__item.is-mine {
@@ -155,7 +155,7 @@
   align-items: center;
   gap: var(--space-1);
   max-width: calc(100% - var(--space-4) * 2);
-  padding: 2px 2px 2px var(--space-3);
+  padding: var(--space-half) var(--space-half) var(--space-half) var(--space-3);
   border: 1px solid var(--content-border);
   border-radius: var(--radius-full);
   background: var(--surface-raised);
@@ -205,7 +205,7 @@
 
 .aw-origin__where a {
   color: var(--link);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   text-decoration: none;
 }
 

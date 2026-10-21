@@ -96,7 +96,7 @@
 
 .aw-chipfilter__text {
   min-width: 0;
-  padding: 0 8px 0 10px;
+  padding: 0 var(--space-2) 0 var(--space-2-5);
   overflow: hidden;
   border-radius: var(--radius-full) 0 0 var(--radius-full);
   text-overflow: ellipsis;
@@ -124,14 +124,14 @@
    verb and the values each open what changes them. */
 .aw-chipfilter__field {
   flex: none;
-  padding: 0 8px 0 10px;
+  padding: 0 var(--space-2) 0 var(--space-2-5);
   white-space: nowrap;
 }
 
 .aw-chipfilter__op {
   flex: none;
   height: 100%;
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   border: 0;
   background: none;
   color: var(--content-fg-muted);
@@ -148,7 +148,7 @@
 
 .aw-chipfilter__text.aw-chipfilter__values {
   max-width: 240px;
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   border-radius: 0;
 }
 
@@ -159,7 +159,7 @@
 }
 
 .aw-chipfilter button:focus-visible {
-  outline-offset: -2px;
+  outline-offset: calc(-1 * var(--focus-width));
 }
 
 .aw-listfilter {
@@ -248,7 +248,7 @@
   place-items: center;
   min-width: 26px;
   height: 26px;
-  padding: 0 2px;
+  padding: 0 var(--space-half);
   border: 0;
   border-radius: var(--radius-sm);
   background: none;
@@ -265,7 +265,7 @@
   .aw-tasks__cellbtn {
     min-width: 44px;
     min-height: 44px;
-    margin: -9px;
+    margin: -9px; /* design-exception: grows the 26px mark to 44px without moving the row */
   }
 }
 
@@ -282,7 +282,7 @@
   overflow: hidden;
   color: var(--content-fg);
   font: var(--t-ui);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -296,7 +296,7 @@
   display: none;
   font: var(--t-code);
   font-size: calc(12px * var(--text-scale));
-  font-weight: 400;
+  font-weight: var(--weight-regular);
   color: var(--content-fg-muted);
 }
 
@@ -429,7 +429,7 @@
 
 .aw-due.is-overdue {
   color: var(--danger);
-  font-weight: 700;
+  font-weight: var(--weight-bold);
 }
 
 @media (max-width: 640px) {
@@ -484,7 +484,7 @@
 
 .aw-shortcuts__list {
   display: grid;
-  gap: 6px;
+  gap: var(--space-1-5);
   margin: 0;
 }
 
@@ -499,7 +499,7 @@
 .aw-shortcuts__row dt {
   display: flex;
   flex-wrap: wrap;
-  gap: 2px;
+  gap: var(--space-half);
 }
 
 .aw-shortcuts__row dd {
@@ -658,7 +658,7 @@
 .aw-task__parent {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   min-width: 0;
   margin: 0;
   font: var(--t-small);
@@ -688,12 +688,12 @@
 .aw-task__heading {
   display: block;
   width: calc(100% + 12px);
-  margin: 0 -6px;
-  padding: 2px 6px;
+  margin: 0 calc(-1 * var(--space-1-5));
+  padding: var(--space-half) var(--space-1-5);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
-  font: 700 calc(26px * var(--text-scale)) / calc(34px * var(--text-scale)) var(--font-sans);
+  font: var(--t-display);
   letter-spacing: -0.015em;
   color: var(--content-fg);
   overflow-wrap: anywhere;
@@ -702,9 +702,8 @@
 
 .aw-task--panel .aw-task__title,
 .aw-task--panel .aw-task__heading {
-  font-size: calc(20px * var(--text-scale));
-  line-height: calc(28px * var(--text-scale));
-  letter-spacing: -0.01em;
+  font: var(--t-headline);
+  letter-spacing: var(--tracking-tight);
 }
 
 .aw-task__title {
@@ -759,7 +758,7 @@
   width: max-content;
   max-width: calc(100% - 2 * var(--space-4));
   margin: 0 auto;
-  padding: 6px var(--space-3);
+  padding: var(--space-1-5) var(--space-3);
   border-radius: var(--radius-full);
   background: var(--accent);
   box-shadow: var(--shadow-popover);
@@ -801,14 +800,14 @@
 
 .aw-tasknote__icon {
   flex: none;
-  margin-top: 2px;
+  margin-top: var(--space-half);
   color: var(--aw-note-icon);
 }
 
 .aw-tasknote__body {
   display: grid;
   flex: 1;
-  gap: 2px;
+  gap: var(--space-half);
   min-width: 0;
 }
 
@@ -837,7 +836,7 @@
 .aw-tasknote__clamp {
   max-height: calc(90px * var(--text-scale));
   overflow: hidden;
-  mask-image: linear-gradient(to bottom, #000 55%, transparent);
+  mask-image: linear-gradient(to bottom, #000 55%, transparent); /* design-exception: an alpha mask, not a color */
 }
 
 .aw-tasknote__actions {
@@ -865,8 +864,8 @@
 }
 
 .aw-taskdesc.is-editable {
-  margin: 0 -8px;
-  padding: 4px 8px;
+  margin: 0 calc(-1 * var(--space-2));
+  padding: var(--space-1) var(--space-2);
   border-radius: var(--radius-sm);
   cursor: text;
   transition: background-color var(--duration-fast) var(--ease-out);
@@ -901,8 +900,8 @@
 
 .aw-taskdesc__empty {
   width: calc(100% + 16px);
-  margin: 0 -8px;
-  padding: 4px 8px;
+  margin: 0 calc(-1 * var(--space-2));
+  padding: var(--space-1) var(--space-2);
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -917,7 +916,7 @@
 }
 
 .aw-taskdesc--editing {
-  margin: 0 -8px;
+  margin: 0 calc(-1 * var(--space-2));
 }
 
 .aw-taskdesc__box {
@@ -937,7 +936,7 @@
   display: block;
   width: 100%;
   min-height: 120px;
-  padding: 10px 12px;
+  padding: var(--space-2-5) var(--space-3);
   border: 0;
   outline: none;
   resize: none;
@@ -948,7 +947,7 @@
 
 .aw-taskdesc__note {
   margin: 0;
-  padding: 0 12px 8px;
+  padding: 0 var(--space-3) var(--space-2);
   font: var(--t-small);
   color: var(--warning);
 }
@@ -959,14 +958,14 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
-  padding: 4px 6px;
+  padding: var(--space-1) var(--space-1-5);
   border-top: 1px solid var(--content-border);
 }
 
 .aw-taskdesc__tools {
   display: flex;
   flex-wrap: wrap;
-  gap: 2px;
+  gap: var(--space-half);
 }
 
 .aw-taskdesc__actions {
@@ -976,7 +975,7 @@
 }
 
 .aw-taskdesc__theirs {
-  padding: 10px 12px;
+  padding: var(--space-2-5) var(--space-3);
   border: 1px dashed var(--control-border);
   border-radius: var(--radius-md);
   background: var(--surface-sunken);
@@ -993,14 +992,14 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 2px;
-  margin: 0 -6px;
+  gap: var(--space-half);
+  margin: 0 calc(-1 * var(--space-1-5));
   font: var(--t-small);
   color: var(--content-fg-muted);
 }
 
 .aw-taskadd__label {
-  padding: 0 4px 0 6px;
+  padding: 0 var(--space-1) 0 var(--space-1-5);
 }
 
 .aw-taskadd__dot {
@@ -1008,7 +1007,7 @@
 }
 
 .aw-taskadd__item {
-  padding: 2px 6px;
+  padding: var(--space-half) var(--space-1-5);
   border: 0;
   border-radius: var(--radius-xs);
   background: transparent;
@@ -1057,7 +1056,7 @@
 .aw-tsection__actions {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-half);
 }
 
 .aw-task .aw-pagesection {
@@ -1074,7 +1073,7 @@
 /* Fields: labelled rows in the rail, compact pills under the title elsewhere. */
 .aw-taskprops--rail {
   display: grid;
-  gap: 2px;
+  gap: var(--space-half);
 }
 
 .aw-prop {
@@ -1095,7 +1094,7 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   min-width: 0;
 }
 
@@ -1152,7 +1151,7 @@
 .aw-taskprops--pills {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--space-1-5);
 }
 
 .aw-pills__item {
@@ -1167,17 +1166,17 @@
 .aw-taskprops .aw-pill {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   min-width: 0;
   max-width: 100%;
   height: 28px;
   min-height: 0;
-  padding: 0 10px;
+  padding: 0 var(--space-2-5);
   border: 1px solid var(--content-border);
   border-radius: var(--radius-full);
   background: var(--surface-raised);
   font: var(--t-small);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   color: var(--content-fg);
   white-space: nowrap;
   cursor: pointer;
@@ -1215,7 +1214,7 @@
 .aw-estimate__scale {
   display: grid;
   grid-template-columns: repeat(6, 1fr);
-  gap: 4px;
+  gap: var(--space-1);
 }
 
 .aw-estimate__size {
@@ -1279,6 +1278,7 @@
   border: 1px solid var(--content-border);
   border-radius: var(--radius-md);
   background: var(--surface-raised);
+  box-shadow: var(--shadow-card);
 }
 
 .aw-taskstart__state {
@@ -1309,7 +1309,7 @@
 
 .aw-taskstart__missing {
   display: grid;
-  gap: 2px;
+  gap: var(--space-half);
 }
 
 .aw-taskstart__hint {
@@ -1321,7 +1321,7 @@
 .aw-taskstart__fixes {
   display: grid;
   justify-items: start;
-  margin: 0 0 0 -8px;
+  margin: 0 0 0 calc(-1 * var(--space-2));
   padding: 0;
   list-style: none;
 }
@@ -1358,7 +1358,7 @@ span.aw-taskstart__fix {
 .aw-watch__people {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
 }
 
 .aw-watch__more {
@@ -1369,7 +1369,7 @@ span.aw-taskstart__fix {
 /* Subtasks and dependencies */
 .aw-taskrefs {
   display: grid;
-  gap: 2px;
+  gap: var(--space-half);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -1380,7 +1380,7 @@ span.aw-taskstart__fix {
   align-items: center;
   gap: var(--space-2);
   min-height: 34px;
-  margin: 0 -8px;
+  margin: 0 calc(-1 * var(--space-2));
   padding: 0 var(--space-2);
   border-radius: var(--radius-sm);
 }
@@ -1435,7 +1435,7 @@ span.aw-taskstart__fix {
 
 .aw-deps__group {
   display: grid;
-  gap: 2px;
+  gap: var(--space-half);
 }
 
 .aw-deps__title {
@@ -1456,7 +1456,7 @@ span.aw-taskstart__fix {
 /* Acceptance criteria */
 .aw-criteria {
   display: grid;
-  gap: 2px;
+  gap: var(--space-half);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -1467,8 +1467,8 @@ span.aw-taskstart__fix {
   align-items: flex-start;
   gap: var(--space-2);
   min-height: 34px;
-  margin: 0 -8px;
-  padding: 6px var(--space-2);
+  margin: 0 calc(-1 * var(--space-2));
+  padding: var(--space-1-5) var(--space-2);
   border-radius: var(--radius-sm);
   transition: background-color var(--duration-fast) var(--ease-out);
 }
@@ -1491,8 +1491,8 @@ span.aw-taskstart__fix {
 
 .aw-criterion__actions {
   display: flex;
-  gap: 2px;
-  margin: -4px 0;
+  gap: var(--space-half);
+  margin: calc(-1 * var(--space-1)) 0;
   opacity: 0;
   transition: opacity var(--duration-fast) var(--ease-out);
 }
@@ -1528,7 +1528,7 @@ span.aw-taskstart__fix {
   }
 
   .aw-taskadd__item {
-    padding-block: 6px;
+    padding-block: var(--space-1-5);
   }
 }
 
@@ -1571,7 +1571,7 @@ span.aw-taskstart__fix {
 
 .aw-links .aw-row {
   min-height: 48px;
-  padding: 8px var(--space-3);
+  padding: var(--space-2) var(--space-3);
 }
 
 /* Activity */
@@ -1609,7 +1609,7 @@ span.aw-taskstart__fix {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   margin: 0;
   font: var(--t-small);
   color: var(--content-fg-muted);
@@ -1617,7 +1617,7 @@ span.aw-taskstart__fix {
 
 .aw-activity__line strong {
   color: var(--content-fg);
-  font-weight: 700;
+  font-weight: var(--weight-bold);
 }
 
 .aw-activity__time,
@@ -1627,7 +1627,7 @@ span.aw-taskstart__fix {
 }
 
 .aw-activity__content {
-  margin-top: 4px;
+  margin-top: var(--space-1);
   font: var(--t-body);
   color: var(--content-fg);
   white-space: pre-wrap;
@@ -1638,15 +1638,15 @@ span.aw-taskstart__fix {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding-left: 10px;
+  padding-left: var(--space-2-5);
 }
 
 .aw-activity__dot {
   flex: none;
   width: 8px;
   height: 8px;
-  margin-right: 6px;
-  border-radius: 50%;
+  margin-right: var(--space-1-5);
+  border-radius: var(--radius-full);
   background: var(--control-border);
 }
 
@@ -1686,8 +1686,7 @@ span.aw-taskstart__fix {
 
   .aw-task__title,
   .aw-task__heading {
-    font-size: calc(22px * var(--text-scale));
-    line-height: calc(30px * var(--text-scale));
+    font: var(--t-headline);
   }
 }
 
@@ -1695,13 +1694,13 @@ span.aw-taskstart__fix {
 .aw-activity__eventbody {
   display: grid;
   flex: 1;
-  gap: 4px;
+  gap: var(--space-1);
   min-width: 0;
 }
 
 .aw-changes {
   display: grid;
-  gap: 2px;
+  gap: var(--space-half);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -1720,14 +1719,14 @@ span.aw-taskstart__fix {
 
 .aw-change__to {
   color: var(--content-fg);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   text-decoration: none;
 }
 
 .aw-diff__toggle {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   padding: 0;
   border: 0;
   background: none;
@@ -1742,7 +1741,7 @@ span.aw-taskstart__fix {
 
 .aw-diff__body {
   max-height: 320px;
-  margin: 4px 0 0;
+  margin: var(--space-1) 0 0;
   overflow: auto;
   padding: var(--space-2);
   border-radius: var(--radius-sm);
@@ -1775,7 +1774,7 @@ span.aw-taskstart__fix {
 
 .aw-diff__more {
   display: block;
-  margin-top: 4px;
+  margin-top: var(--space-1);
   color: var(--content-fg-muted);
   font-style: italic;
 }
@@ -1798,7 +1797,7 @@ span.aw-taskstart__fix {
 .aw-labelmgr__color {
   width: 32px;
   height: 32px;
-  padding: 2px;
+  padding: var(--space-half);
   border: 1px solid var(--control-border);
   border-radius: var(--radius-sm);
   background: var(--surface-raised);
@@ -1848,6 +1847,7 @@ span.aw-taskstart__fix {
   border: 1px solid var(--content-border);
   border-radius: var(--radius-md);
   background: var(--surface-raised);
+  box-shadow: var(--shadow-card);
 }
 
 .aw-milestone__main {
@@ -1993,7 +1993,7 @@ span.aw-taskstart__fix {
 }
 
 .aw-wf__radio {
-  border-radius: 50%;
+  border-radius: var(--radius-full);
 }
 
 .aw-check__input:checked + .aw-wf__radio {
@@ -2054,3 +2054,4 @@ span.aw-taskstart__fix {
   justify-content: flex-end;
   gap: var(--space-2);
 }
+

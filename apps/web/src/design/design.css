@@ -1,0 +1,178 @@
+/* The design system page: token and component specimens. */
+
+.aw-ds {
+  display: grid;
+  gap: var(--space-8);
+  padding-bottom: var(--space-12);
+}
+
+.aw-ds__themes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.aw-ds__specimen {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+}
+
+.aw-ds__specimen:has(> .aw-btn) {
+  align-items: center;
+}
+
+.aw-ds__specimen--stack {
+  display: grid;
+}
+
+.aw-ds__specimen + .aw-ds__specimen {
+  margin-top: calc(-1 * var(--space-1));
+}
+
+.aw-ds__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  align-items: start;
+}
+
+.aw-ds__label {
+  margin: 0;
+  font: var(--t-caption-strong);
+  color: var(--content-fg-muted);
+}
+
+.aw-ds__rowlabel {
+  align-self: center;
+  width: 80px;
+}
+
+.aw-ds code {
+  font: var(--t-code-sm);
+  color: var(--content-fg-muted);
+}
+
+.aw-ds__use {
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-ds__colors {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--space-6) var(--space-4);
+}
+
+.aw-ds__colorgroup {
+  display: grid;
+  gap: var(--space-2);
+  align-content: start;
+}
+
+.aw-ds__swatches,
+.aw-ds__type,
+.aw-ds__scale {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-ds__swatches li {
+  display: grid;
+  grid-template-columns: var(--size-avatar-sm) 1fr;
+  column-gap: var(--space-2-5);
+  align-items: center;
+}
+
+.aw-ds__swatches code {
+  grid-column: 2;
+}
+
+.aw-ds__swatch {
+  grid-row: span 2;
+  width: var(--size-avatar-sm);
+  height: var(--size-avatar-sm);
+  border-radius: var(--radius-sm);
+  box-shadow: inset 0 0 0 1px var(--content-border);
+}
+
+.aw-ds__name {
+  font: var(--t-ui);
+}
+
+.aw-ds__type li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 160px minmax(0, 220px);
+  gap: var(--space-4);
+  align-items: baseline;
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--content-border);
+}
+
+.aw-ds__sample {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-ds__scale li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.aw-ds__bar {
+  flex: none;
+  height: var(--space-3);
+  border-radius: var(--radius-xs);
+  background: var(--accent);
+}
+
+.aw-ds__scale li code {
+  min-width: 140px;
+}
+
+.aw-ds__tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: var(--space-4);
+}
+
+.aw-ds__tile {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.aw-ds__tile figcaption {
+  display: grid;
+  gap: var(--space-half);
+}
+
+.aw-ds__shape {
+  height: 64px;
+  border: 1px solid var(--content-border);
+  background: var(--accent-soft);
+}
+
+.aw-ds__shape--raised {
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+@media (max-width: 640px) {
+  .aw-ds__type li {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-1);
+  }
+
+  .aw-ds__rowlabel {
+    width: 100%;
+  }
+}

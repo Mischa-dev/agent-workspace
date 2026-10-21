@@ -61,6 +61,7 @@
   border: 1px solid var(--content-border);
   border-radius: var(--radius-md);
   background: var(--surface-raised);
+  box-shadow: var(--shadow-card);
 }
 
 .aw-api-op > summary {
@@ -117,7 +118,7 @@
 
 .aw-api-params th {
   color: var(--content-fg-muted);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 
 .aw-api-params__required {

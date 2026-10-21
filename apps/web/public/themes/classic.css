@@ -58,6 +58,7 @@ html[data-theme="nord"],
   --tooltip-bg: #242933;
   --tooltip-fg: #eceff4;
   --scrim: #00000099;
+  --shadow-card: none;
   --shadow-popover: 0 0 0 1px #ffffff14, 0 4px 12px #00000080;
   --shadow-dialog: 0 0 0 1px #ffffff0f, 0 16px 40px -8px #000000b3;
 }
@@ -112,6 +113,7 @@ html[data-theme="dracula"],
   --tooltip-bg: #191a21;
   --tooltip-fg: #f8f8f2;
   --scrim: #00000099;
+  --shadow-card: none;
   --shadow-popover: 0 0 0 1px #ffffff14, 0 4px 12px #00000080;
   --shadow-dialog: 0 0 0 1px #ffffff0f, 0 16px 40px -8px #000000b3;
 }
@@ -166,6 +168,7 @@ html[data-theme="gruvbox-dark"],
   --tooltip-bg: #1d2021;
   --tooltip-fg: #fbf1c7;
   --scrim: #00000099;
+  --shadow-card: none;
   --shadow-popover: 0 0 0 1px #ffffff14, 0 4px 12px #00000080;
   --shadow-dialog: 0 0 0 1px #ffffff0f, 0 16px 40px -8px #000000b3;
 }
@@ -220,6 +223,7 @@ html[data-theme="gruvbox-light"],
   --tooltip-bg: #3c3836;
   --tooltip-fg: #fbf1c7;
   --scrim: #00000066;
+  --shadow-card: 0 1px 2px #0000000f;
   --shadow-popover: 0 0 0 1px #0000001a, 0 4px 12px #0000001f;
   --shadow-dialog: 0 16px 40px -8px #00000047;
 }
@@ -274,6 +278,7 @@ html[data-theme="solarized-dark"],
   --tooltip-bg: #001e26;
   --tooltip-fg: #eee8d5;
   --scrim: #00000099;
+  --shadow-card: none;
   --shadow-popover: 0 0 0 1px #ffffff14, 0 4px 12px #00000080;
   --shadow-dialog: 0 0 0 1px #ffffff0f, 0 16px 40px -8px #000000b3;
 }
@@ -328,6 +333,7 @@ html[data-theme="solarized-light"],
   --tooltip-bg: #586e75;
   --tooltip-fg: #fdf6e3;
   --scrim: #00000066;
+  --shadow-card: 0 1px 2px #0000000f;
   --shadow-popover: 0 0 0 1px #0000001a, 0 4px 12px #0000001f;
   --shadow-dialog: 0 16px 40px -8px #00000047;
 }
@@ -382,6 +388,7 @@ html[data-theme="catppuccin-latte"],
   --tooltip-bg: #4c4f69;
   --tooltip-fg: #eff1f5;
   --scrim: #00000066;
+  --shadow-card: 0 1px 2px #0000000f;
   --shadow-popover: 0 0 0 1px #0000001a, 0 4px 12px #0000001f;
   --shadow-dialog: 0 16px 40px -8px #00000047;
 }
@@ -436,6 +443,7 @@ html[data-theme="catppuccin-frappe"],
   --tooltip-bg: #232634;
   --tooltip-fg: #c6d0f5;
   --scrim: #00000099;
+  --shadow-card: none;
   --shadow-popover: 0 0 0 1px #ffffff14, 0 4px 12px #00000080;
   --shadow-dialog: 0 0 0 1px #ffffff0f, 0 16px 40px -8px #000000b3;
 }
@@ -490,6 +498,7 @@ html[data-theme="catppuccin-macchiato"],
   --tooltip-bg: #181926;
   --tooltip-fg: #cad3f5;
   --scrim: #00000099;
+  --shadow-card: none;
   --shadow-popover: 0 0 0 1px #ffffff14, 0 4px 12px #00000080;
   --shadow-dialog: 0 0 0 1px #ffffff0f, 0 16px 40px -8px #000000b3;
 }
@@ -544,6 +553,7 @@ html[data-theme="catppuccin-mocha"],
   --tooltip-bg: #11111b;
   --tooltip-fg: #cdd6f4;
   --scrim: #00000099;
+  --shadow-card: none;
   --shadow-popover: 0 0 0 1px #ffffff14, 0 4px 12px #00000080;
   --shadow-dialog: 0 0 0 1px #ffffff0f, 0 16px 40px -8px #000000b3;
 }
@@ -598,6 +608,7 @@ html[data-theme="tokyo-night"],
   --tooltip-bg: #101014;
   --tooltip-fg: #c0caf5;
   --scrim: #00000099;
+  --shadow-card: none;
   --shadow-popover: 0 0 0 1px #ffffff14, 0 4px 12px #00000080;
   --shadow-dialog: 0 0 0 1px #ffffff0f, 0 16px 40px -8px #000000b3;
 }
@@ -652,6 +663,7 @@ html[data-theme="one-dark"],
   --tooltip-bg: #1b1d23;
   --tooltip-fg: #d7dae0;
   --scrim: #00000099;
+  --shadow-card: none;
   --shadow-popover: 0 0 0 1px #ffffff14, 0 4px 12px #00000080;
   --shadow-dialog: 0 0 0 1px #ffffff0f, 0 16px 40px -8px #000000b3;
 }
@@ -706,6 +718,7 @@ html[data-theme="rose-pine"],
   --tooltip-bg: #191724;
   --tooltip-fg: #e0def4;
   --scrim: #00000099;
+  --shadow-card: none;
   --shadow-popover: 0 0 0 1px #ffffff14, 0 4px 12px #00000080;
   --shadow-dialog: 0 0 0 1px #ffffff0f, 0 16px 40px -8px #000000b3;
 }
@@ -760,6 +773,7 @@ html[data-theme="rose-pine-dawn"],
   --tooltip-bg: #575279;
   --tooltip-fg: #faf4ed;
   --scrim: #00000066;
+  --shadow-card: 0 1px 2px #0000000f;
   --shadow-popover: 0 0 0 1px #0000001a, 0 4px 12px #0000001f;
   --shadow-dialog: 0 16px 40px -8px #00000047;
 }
@@ -814,6 +828,7 @@ html[data-theme="github-light"],
   --tooltip-bg: #1f2328;
   --tooltip-fg: #ffffff;
   --scrim: #00000066;
+  --shadow-card: 0 1px 2px #0000000f;
   --shadow-popover: 0 0 0 1px #0000001a, 0 4px 12px #0000001f;
   --shadow-dialog: 0 16px 40px -8px #00000047;
 }
@@ -868,6 +883,7 @@ html[data-theme="github-dark"],
   --tooltip-bg: #010409;
   --tooltip-fg: #f0f6fc;
   --scrim: #00000099;
+  --shadow-card: none;
   --shadow-popover: 0 0 0 1px #ffffff14, 0 4px 12px #00000080;
   --shadow-dialog: 0 0 0 1px #ffffff0f, 0 16px 40px -8px #000000b3;
 }
@@ -922,6 +938,7 @@ html[data-theme="monokai"],
   --tooltip-bg: #191a17;
   --tooltip-fg: #f8f8f2;
   --scrim: #00000099;
+  --shadow-card: none;
   --shadow-popover: 0 0 0 1px #ffffff14, 0 4px 12px #00000080;
   --shadow-dialog: 0 0 0 1px #ffffff0f, 0 16px 40px -8px #000000b3;
 }

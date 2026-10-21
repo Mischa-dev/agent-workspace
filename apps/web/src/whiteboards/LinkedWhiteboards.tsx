@@ -100,10 +100,10 @@ export function LinkedWhiteboards({
       actions={
         canEdit ? (
           <span className="aw-linked-boards__actions">
-            <Button icon="link" onClick={() => setDialog('link')} size="sm">
+            <Button icon="link" onClick={() => setDialog('link')} size="sm" variant="ghost">
               Link a whiteboard
             </Button>
-            <Button icon="plus" onClick={() => setDialog('new')} size="sm">
+            <Button icon="plus" onClick={() => setDialog('new')} size="sm" variant="ghost">
               New whiteboard
             </Button>
           </span>

@@ -41,5 +41,5 @@
 .aw-row.aw-memory__found {
   background: var(--accent-soft);
   box-shadow: inset 3px 0 0 var(--accent);
-  transition: background-color 600ms ease-out;
+  transition: background-color var(--duration-fade) var(--ease-out);
 }

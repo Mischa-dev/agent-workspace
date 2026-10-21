@@ -43,12 +43,12 @@
 
 .aw-ai-subnav__count {
   min-width: 18px;
-  padding: 0 5px;
-  border-radius: 999px;
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-full);
   background: var(--accent-soft);
   color: var(--content-fg);
   font: var(--t-small);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   text-align: center;
 }
 
@@ -193,12 +193,13 @@
   border: 1px solid var(--content-border);
   border-radius: var(--radius-md);
   background: var(--surface-raised);
+  box-shadow: var(--shadow-card);
 }
 
 .aw-ai-suggestion:focus-visible,
 .aw-ai-suggestion.is-selected {
   outline: none;
-  box-shadow: 0 0 0 2px var(--focus-ring);
+  box-shadow: var(--shadow-focus);
 }
 
 .aw-ai-suggestion__body {
@@ -288,6 +289,7 @@
   border: 1px solid var(--content-border);
   border-radius: var(--radius-md);
   background: var(--surface-raised);
+  box-shadow: var(--shadow-card);
 }
 
 .aw-ai-rank__place {
@@ -337,7 +339,7 @@
 .aw-ai-priority--urgent,
 .aw-ai-priority--high {
   color: var(--warning);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 /* Readiness */
@@ -357,12 +359,12 @@
 
 .aw-ai-readiness--compact svg {
   flex: none;
-  margin-top: 2px;
+  margin-top: var(--space-half);
 }
 
 .aw-ai-readiness--compact strong {
   color: var(--content-fg);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 .aw-ai-readiness__chips {
@@ -373,7 +375,7 @@
 
 .aw-ai-readiness__checks {
   display: grid;
-  gap: 2px;
+  gap: var(--space-half);
   margin: var(--space-2) 0 0;
   padding: 0;
   list-style: none;
@@ -477,13 +479,13 @@
 
 .aw-ai-node text {
   fill: var(--content-fg);
-  font-size: 13px;
+  font-size: 13px; /* design-exception: graph labels are SVG text */
 }
 
 .aw-ai-node__key,
 .aw-ai-node__status {
   fill: var(--content-fg-muted) !important;
-  font-size: 11px !important;
+  font-size: 11px !important; /* design-exception: graph labels are SVG text */
 }
 
 .aw-ai-legend {
@@ -507,7 +509,7 @@
   width: 14px;
   height: 10px;
   border: 1px solid var(--content-border);
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
 }
 
 .aw-ai-legend__swatch--ready {
@@ -658,7 +660,7 @@
 .aw-ai-days {
   display: flex;
   align-items: flex-end;
-  gap: 2px;
+  gap: var(--space-half);
   height: 48px;
   margin: var(--space-4) 0 0;
   padding: 0;

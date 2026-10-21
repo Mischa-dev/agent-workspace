@@ -6,6 +6,7 @@ import {
   Badge,
   Banner,
   Button,
+  ButtonLink,
   Dots,
   Icon,
   IconButton,
@@ -276,9 +277,14 @@ export default function AppearancePage({ session }: SettingsPageProps) {
       <div className="aw-appearance">
         <PageHeader
           actions={
-            <Button icon="undo" onClick={reset} variant="ghost">
-              Reset everything
-            </Button>
+            <>
+              <ButtonLink to="/design-system" variant="ghost">
+                See every component
+              </ButtonLink>
+              <Button icon="undo" onClick={reset} variant="ghost">
+                Reset everything
+              </Button>
+            </>
           }
           icon="palette"
           title="Appearance"

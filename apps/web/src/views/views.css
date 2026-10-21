@@ -115,6 +115,7 @@
   border: 1px solid var(--content-border);
   border-radius: var(--radius-md);
   background: var(--surface-raised);
+  box-shadow: var(--shadow-card);
 }
 
 .aw-timeline__pending > span {
@@ -309,7 +310,7 @@
 
 .aw-timeline__bar:focus-visible,
 .aw-timeline__diamond:focus-visible {
-  box-shadow: 0 0 0 2px var(--focus-ring);
+  box-shadow: var(--shadow-focus);
   outline: none;
 }
 
@@ -336,7 +337,7 @@
   top: 10px;
   width: 14px;
   height: 14px;
-  margin-left: -7px;
+  margin-left: -7px; /* design-exception: centers the 14px diamond on its date */
   padding: 0;
   border: 2px solid var(--accent);
   background: var(--content-bg);

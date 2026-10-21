@@ -23,6 +23,7 @@
   border: 1px solid var(--content-border);
   border-radius: var(--radius-md);
   background: var(--surface-raised);
+  box-shadow: var(--shadow-card);
 }
 
 .aw-usage__windowhead {
@@ -46,7 +47,7 @@
 .aw-usage__meter {
   height: 8px;
   overflow: hidden;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--surface-sunken);
 }
 
@@ -121,8 +122,8 @@
 }
 
 .aw-usage__blocktitle:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
+  outline: var(--focus-width) solid var(--r-focus);
+  outline-offset: var(--focus-offset);
 }
 
 .aw-usage__key {
@@ -226,7 +227,7 @@
 .aw-notify__saved {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-half);
   margin-left: var(--space-2);
   font: var(--t-caption);
   color: var(--success);
@@ -360,7 +361,7 @@
 
 .aw-history__table th {
   color: var(--content-fg-muted);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 
 /* The pause choices wrap on a phone instead of running off the side. */

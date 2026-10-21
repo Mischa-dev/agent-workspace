@@ -34,6 +34,11 @@ it in step with `preferences.ts` and `slots.ts`.
 2. Regions: `--r-*` variables set by `data-region` on the rail, sidebar and
    content columns.
 3. Components read slots and region variables only; no literal colors.
+4. Scales shared by every theme: type (`--t-*`, `--weight-*`), spacing
+   (`--space-*`), corners (`--radius-*`), focus (`--focus-*`,
+   `--shadow-focus`), motion (`--duration-*`, `--ease-*`) and layers
+   (`--layer-*`). `apps/web/DESIGN.md` says which to use where, and
+   `src/styles/designSystem.test.ts` keeps stylesheets on them.
 
 Every page now uses these tokens directly. The pre-redesign aliases
 (`--color-canvas`, `--text`, `--panel` and so on) were removed in pass two, so

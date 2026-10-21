@@ -3,8 +3,8 @@
 .aw-kbd,
 .aw-menu__item kbd,
 .aw-tooltip kbd {
-  font: 600 calc(11px * var(--text-scale)) / calc(16px * var(--text-scale)) var(--font-sans);
-  padding: 0 5px;
+  font: var(--t-tag);
+  padding: 0 var(--space-1-5);
   border-radius: var(--radius-xs);
   background: var(--surface-sunken);
   border: 1px solid var(--content-border);
@@ -15,7 +15,7 @@
   border: 0;
   background: none;
   padding: 0;
-  font-weight: 700;
+  font-weight: var(--weight-bold);
   color: var(--link);
   cursor: pointer;
 }
@@ -29,12 +29,12 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   height: var(--size-control);
   padding: 0 var(--space-3);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  font: 600 calc(14px * var(--text-scale)) / calc(20px * var(--text-scale)) var(--font-sans);
+  font: var(--t-ui-strong);
   white-space: nowrap;
   text-decoration: none;
   cursor: pointer;
@@ -47,7 +47,7 @@
 
 .aw-btn--sm {
   height: var(--size-control-sm);
-  padding: 0 10px;
+  padding: 0 var(--space-2-5);
   gap: var(--space-1);
   font-size: calc(13px * var(--text-scale));
 }
@@ -93,12 +93,25 @@
 }
 
 .aw-btn--danger:hover:not(:disabled) {
-  background: color-mix(in oklch, var(--danger) 88%, black);
+  background: var(--danger-hover);
 }
 
+/* Disabled buttons go quiet in every variant: a pale Save or Delete reads as a different color, not as "not yet". */
 .aw-btn:disabled:not([aria-busy="true"]) {
-  opacity: 0.5;
   cursor: not-allowed;
+}
+
+.aw-btn--primary:disabled:not([aria-busy="true"]),
+.aw-btn--danger:disabled:not([aria-busy="true"]),
+.aw-btn--secondary:disabled:not([aria-busy="true"]) {
+  background: var(--surface-sunken);
+  border-color: var(--content-border);
+  color: var(--content-fg-muted);
+}
+
+.aw-btn--ghost:disabled:not([aria-busy="true"]) {
+  color: var(--r-fg-muted);
+  opacity: 0.7;
 }
 
 .aw-btn--ghost:disabled {
@@ -157,13 +170,13 @@
   z-index: var(--layer-tooltip);
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 5px var(--space-2);
+  gap: var(--space-1-5);
+  padding: var(--space-1-5) var(--space-2);
   border-radius: var(--radius-sm);
   background: var(--tooltip-bg);
   color: var(--tooltip-fg);
   font: var(--t-caption);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   white-space: nowrap;
   pointer-events: none;
   box-shadow: var(--shadow-popover);
@@ -216,7 +229,7 @@
   height: var(--av-size);
   background: var(--av-bg);
   color: var(--on-swatch);
-  font: 700 calc(var(--av-size) * 0.42) / 1 var(--font-sans);
+  font: 700 calc(var(--av-size) * 0.42) / 1 var(--font-sans); /* design-exception: initials scale with the avatar */
   user-select: none;
 }
 
@@ -248,7 +261,7 @@
   position: absolute;
   inset: -4px;
   border: 2px solid var(--agent-working);
-  border-radius: calc(var(--radius-md) + 4px);
+  border-radius: calc(var(--radius-md) + 4px); /* design-exception: concentric with the radius inside it */
   animation: aw-breathe 1.6s ease-in-out infinite;
 }
 
@@ -292,7 +305,7 @@
 }
 
 .aw-stack .aw-avatar + .aw-avatar {
-  margin-left: -6px;
+  margin-left: calc(-1 * var(--space-1-5));
 }
 
 .aw-tag {
@@ -300,7 +313,7 @@
   align-items: center;
   flex: none;
   height: 16px;
-  padding: 0 5px;
+  padding: 0 var(--space-1-5);
   border-radius: var(--radius-xs);
   font: var(--t-tag);
   letter-spacing: 0.02em;
@@ -317,10 +330,11 @@
   display: inline-block;
   min-width: 18px;
   height: 18px;
-  padding: 0 5px;
+  padding: 0 var(--space-1-5);
   border-radius: var(--radius-full);
   text-align: center;
-  font: 700 calc(11px * var(--text-scale)) / 18px var(--font-sans);
+  font: var(--t-tag);
+  line-height: 18px;
   font-variant-numeric: tabular-nums;
   background: var(--badge-bg);
   color: var(--badge-fg);
@@ -393,7 +407,7 @@
 
 .aw-chip .aw-dots {
   height: 12px;
-  gap: 2px;
+  gap: var(--space-half);
 }
 
 .aw-chip .aw-dots i {
@@ -450,7 +464,7 @@
   display: flex;
   flex: none;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-2-5);
   min-height: 32px;
   padding: 0 var(--space-2);
   border: 0;
@@ -515,14 +529,14 @@
 
 .aw-menu__sep {
   height: 1px;
-  margin: var(--space-1) 6px;
+  margin: var(--space-1) var(--space-1-5);
   background: var(--content-border);
 }
 
 .aw-menu__heading {
-  padding: 6px var(--space-2) 2px;
+  padding: var(--space-1-5) var(--space-2) var(--space-half);
   font: var(--t-caption);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   color: var(--content-fg-muted);
 }
 
@@ -603,12 +617,12 @@
 .aw-field {
   display: grid;
   align-content: start;
-  gap: 6px;
+  gap: var(--space-1-5);
   min-width: 0;
 }
 
 .aw-field__label {
-  font: 600 calc(14px * var(--text-scale)) / calc(20px * var(--text-scale)) var(--font-sans);
+  font: var(--t-ui-strong);
   color: var(--content-fg);
 }
 
@@ -680,7 +694,7 @@
   display: inline-flex;
   align-items: center;
   flex: none;
-  margin-right: 6px;
+  margin-right: var(--space-1-5);
   font: var(--t-body);
   color: var(--content-fg-muted);
 }
@@ -700,7 +714,7 @@
 .aw-worktools .aw-field__control,
 .aw-inline-add .aw-field__control {
   min-height: var(--size-control);
-  padding: 0 10px;
+  padding: 0 var(--space-2-5);
 }
 
 .aw-field--inline .aw-field__control input,
@@ -732,7 +746,7 @@
 .aw-field__note {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   margin: 0;
   font: var(--t-small);
   color: var(--content-fg-muted);
@@ -764,12 +778,12 @@
 }
 
 .aw-switch-row__label {
-  font: 600 calc(14px * var(--text-scale)) / calc(20px * var(--text-scale)) var(--font-sans);
+  font: var(--t-ui-strong);
   color: var(--content-fg);
 }
 
 .aw-switch-row__desc {
-  margin: 2px 0 0;
+  margin: var(--space-half) 0 0;
   font: var(--t-small);
   color: var(--content-fg-muted);
 }
@@ -794,7 +808,7 @@
   height: 16px;
   border-radius: var(--radius-full);
   background: var(--on-accent);
-  box-shadow: 0 1px 2px #0000003d;
+  box-shadow: 0 1px 2px #0000003d; /* design-exception: a switch knob reads the same on every theme */
   transition: translate var(--duration-standard) var(--ease-out);
 }
 
@@ -819,8 +833,8 @@
   max-width: 100%;
   overflow-x: auto;
   scrollbar-width: none;
-  gap: 2px;
-  padding: 2px;
+  gap: var(--space-half);
+  padding: var(--space-half);
   border-radius: var(--radius-md);
   background: var(--surface-sunken);
   border: 1px solid var(--content-border);
@@ -830,14 +844,14 @@
   display: inline-flex;
   align-items: center;
   flex: none;
-  gap: 6px;
+  gap: var(--space-1-5);
   /* With the track's padding and border, as tall as a button beside it. */
   height: calc(var(--size-control) - 6px);
   padding: 0 var(--space-3);
   border: 0;
   border-radius: var(--radius-sm);
   background: none;
-  font: 600 calc(13px * var(--text-scale)) / calc(18px * var(--text-scale)) var(--font-sans);
+  font: var(--t-label);
   color: var(--content-fg-muted);
   white-space: nowrap;
 }
@@ -856,7 +870,7 @@
 .aw-banner {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-2-5);
   min-height: 40px;
   padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
   border-radius: var(--radius-md);
@@ -872,7 +886,7 @@
 }
 
 .aw-banner__text strong {
-  font-weight: 700;
+  font-weight: var(--weight-bold);
 }
 
 /* On a phone the action drops under the text instead of squeezing it. */
@@ -1062,7 +1076,7 @@
 
 .aw-code {
   margin: 0;
-  padding: var(--space-2) 10px;
+  padding: var(--space-2) var(--space-2-5);
   overflow-x: auto;
   font: var(--t-code);
   color: var(--content-fg);
@@ -1074,12 +1088,13 @@
 
 .aw-card {
   display: grid;
-  gap: 10px;
+  gap: var(--space-2-5);
   max-width: 560px;
   padding: var(--space-3);
   background: var(--surface-raised);
   border: 1px solid var(--content-border);
   border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
 }
 
 .aw-card__head {
@@ -1120,7 +1135,7 @@
   position: relative;
   display: flex;
   align-items: flex-start;
-  gap: 10px;
+  gap: var(--space-2-5);
   min-width: 0;
 }
 
@@ -1159,8 +1174,8 @@
 }
 
 .aw-check__input:focus-visible + .aw-check__box {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
+  outline: var(--focus-width) solid var(--r-focus);
+  outline-offset: var(--focus-offset);
 }
 
 .aw-check__input:disabled {
@@ -1254,7 +1269,7 @@
 }
 
 .aw-inline-code {
-  padding: 1px 6px;
+  padding: 1px var(--space-1-5);
   border-radius: var(--radius-xs);
   background: var(--surface-sunken);
   font: var(--t-code);

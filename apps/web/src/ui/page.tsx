@@ -60,7 +60,7 @@ export function Section({
           </h2>
           {description ? <p className="aw-pagesection__desc">{description}</p> : null}
         </div>
-        {actions}
+        {actions ? <div className="aw-pagesection__actions">{actions}</div> : null}
       </div>
       {children}
     </section>
