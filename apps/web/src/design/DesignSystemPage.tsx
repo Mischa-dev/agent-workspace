@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
 import { AppShell } from '../shell/AppShell'
@@ -6,20 +7,32 @@ import { THEME_PRESETS } from '../theme/slots'
 import { useTheme } from '../theme/themeContext'
 import {
   Avatar,
+  ActorTag,
   Badge,
   Banner,
   Button,
+  Checkbox,
+  DetailList,
   DocumentSkeleton,
   EmptyState,
   ErrorState,
+  Icon,
   IconButton,
   ListSkeleton,
   MessageSkeleton,
   PageHeader,
+  Kbd,
   PageSkeleton,
+  Row,
+  RowList,
   Section,
+  SegmentedControl,
+  SelectField,
   SettingsSkeleton,
   StatusChip,
+  Switch,
+  TextArea,
+  TextField,
   formatDateTime,
   formatRelative,
   relativeDay,
@@ -29,6 +42,8 @@ import {
 } from '../ui'
 import { CommandMenu } from '../ui/commandMenu'
 import { Markdown, MarkdownEditor } from '../ui/markdown'
+import { TokenSpecimens } from './TokenSpecimens'
+import './design.css'
 
 const SAMPLE_MARKDOWN = `## Ship the toast
 - [x] Toast with Undo
@@ -43,12 +58,14 @@ showToast({ title: 'Archived', onUndo: restore })
 const BANNER_TONES: BannerTone[] = ['info', 'success', 'warning', 'danger', 'agent', 'offline']
 const CHIP_TONES: ChipTone[] = ['muted', 'agent', 'warning', 'success', 'danger']
 
-/** Dev-only: every shared component, so a change can be checked in each theme at once. */
-export function DevUiPage() {
+/** The design system, live: every token and shared component in the current theme. apps/web/DESIGN.md says when to use each. */
+export function DesignSystemPage() {
   const session = useAuthenticatedSession()
   const theme = useTheme()
   const [menuOpen, setMenuOpen] = useState(false)
   const [draft, setDraft] = useState(SAMPLE_MARKDOWN)
+  const [checked, setChecked] = useState(true)
+  const [view, setView] = useState<'list' | 'board'>('list')
   const [times] = useState(() => {
     const now = Date.now()
     return [now - 20_000, now - 5 * 60_000, now - 3 * 3_600_000, now - 2 * 86_400_000, now - 40 * 86_400_000].map((at) => new Date(at).toISOString())
@@ -56,11 +73,12 @@ export function DevUiPage() {
 
   return (
     <AppShell mainClassName="aw-main--page" user={session.user}>
-      <div className="aw-page aw-page--wide aw-devui">
-        <PageHeader icon="palette" title="UI kit">
-          Shared components in the current theme. Switch themes to check each one.
+      <div className="aw-page aw-page--wide aw-ds">
+        <PageHeader icon="palette" title="Design system">
+          The tokens and shared components every page is built from, in the current theme. Pick a theme to check each one; your own choice
+          stays on <Link to="/settings/appearance">Appearance</Link>.
         </PageHeader>
-        <div aria-label="Theme" className="aw-devui__themes" role="group">
+        <div aria-label="Theme" className="aw-ds__themes" role="group">
           {THEME_PRESETS.map((preset) => (
             <Button
               aria-pressed={theme.preset === preset.id}
@@ -74,21 +92,105 @@ export function DevUiPage() {
           ))}
         </div>
 
-        <Section title="Buttons">
-          <div className="aw-devui__specimen">
-            <Button variant="primary">Primary</Button>
-            <Button>Secondary</Button>
-            <Button variant="ghost">Ghost</Button>
-            <Button variant="danger">Danger</Button>
-            <Button busy>Busy</Button>
-            <Button disabled>Disabled</Button>
+        <TokenSpecimens />
+
+        <Section
+          description="One primary action per view. Secondary for the rest, ghost inside rows, toolbars and section headers, danger only to confirm what can't be undone."
+          title="Buttons"
+        >
+          {(['primary', 'secondary', 'ghost', 'danger'] as const).map((variant) => (
+            <div className="aw-ds__specimen" key={variant}>
+              <span className="aw-ds__label aw-ds__rowlabel">{variant}</span>
+              <Button size="sm" variant={variant}>
+                Small
+              </Button>
+              <Button icon="plus" variant={variant}>
+                Medium
+              </Button>
+              <Button size="lg" variant={variant}>
+                Large
+              </Button>
+              <Button busy variant={variant}>
+                Busy
+              </Button>
+              <Button disabled variant={variant}>
+                Disabled
+              </Button>
+            </div>
+          ))}
+          <div className="aw-ds__specimen">
+            <span className="aw-ds__label aw-ds__rowlabel">icon</span>
             <IconButton icon="settings" label="Settings" />
             <IconButton icon="star" label="Pinned" pressed />
+            <IconButton icon="more" label="More" size="sm" />
+            <IconButton disabled icon="trash" label="Delete" />
+            <Kbd>⌘K</Kbd>
           </div>
         </Section>
 
+        <Section description="Fields are 40px in forms and 32px (compact) in toolbars. A hint sits under the field; an error replaces it." title="Fields and choices">
+          <div className="aw-ds__specimen aw-ds__grid">
+            <TextField hint="People see this in messages." label="Display name" placeholder="Muse" />
+            <TextField error="Use letters, numbers and dashes." label="Handle" prefix="@" defaultValue="muse bot" />
+            <TextField disabled label="Key" mono value="SMK" readOnly />
+            <SelectField label="Role" defaultValue="member">
+              <option value="member">Member</option>
+              <option value="admin">Admin</option>
+            </SelectField>
+            <TextField compact aria-label="Search" placeholder="Search by title or key" prefix={<Icon name="search" size={14} />} />
+            <TextArea label="Description" placeholder="What needs doing?" rows={2} />
+          </div>
+          <div className="aw-ds__specimen aw-ds__grid">
+            <Checkbox checked={checked} description="Ticked boxes save with the form." label="Include archived tasks" onChange={setChecked} />
+            <Switch checked={checked} description="Switches apply at once." label="Notify me" onChange={setChecked} />
+            <SegmentedControl
+              label="View"
+              onChange={setView}
+              options={[
+                { value: 'list', label: 'List', icon: 'list' },
+                { value: 'board', label: 'Board', icon: 'board' },
+              ]}
+              value={view}
+            />
+          </div>
+        </Section>
+
+        <Section
+          actions={
+            <Button icon="plus" size="sm" variant="ghost">
+              Section action
+            </Button>
+          }
+          description="Bordered lists and cards share one surface: raised, 1px border, md corners, the card shadow. Never put a card inside a card; use rows."
+          title="Rows, cards and details"
+        >
+          <RowList label="Sample rows">
+            <Row
+              actions={
+                <Button size="sm" variant="ghost">
+                  Open
+                </Button>
+              }
+              leading={<Avatar name={session.user.displayName} seed={session.user.actorId} size={32} />}
+              meta="@smoke · Joined today"
+              title={
+                <>
+                  {session.user.displayName} <StatusChip tone="success">Owner</StatusChip>
+                </>
+              }
+            />
+            <Row leading={<Avatar kind="agent" name="Muse" seed="muse" size={32} />} meta="Writes release notes" title={<>Muse <ActorTag kind="agent" /></>} />
+          </RowList>
+          <DetailList
+            items={[
+              { label: 'Key', value: <code>SMK</code> },
+              { label: 'Your role', value: 'Owner' },
+            ]}
+          />
+        </Section>
+
         <Section title="Toasts">
-          <div className="aw-devui__specimen">
+          <div className="aw-ds__specimen">
             <Button onClick={() => showToast({ tone: 'success', title: 'Saved' })}>Success</Button>
             <Button onClick={() => showToast({ title: 'Archived #design', onUndo: () => new Promise((resolve) => window.setTimeout(resolve, 600)) })}>
               With Undo
@@ -107,7 +209,7 @@ export function DevUiPage() {
         </Section>
 
         <Section title="Command menu">
-          <div className="aw-devui__specimen">
+          <div className="aw-ds__specimen">
             <Button onClick={() => setMenuOpen(true)}>Open a sample menu</Button>
           </div>
           {menuOpen ? (
@@ -124,14 +226,14 @@ export function DevUiPage() {
         </Section>
 
         <Section title="Banners and chips">
-          <div className="aw-devui__specimen aw-devui__specimen--stack">
+          <div className="aw-ds__specimen aw-ds__specimen--stack">
             {BANNER_TONES.map((tone) => (
               <Banner key={tone} title={`${tone[0].toUpperCase()}${tone.slice(1)}.`} tone={tone}>
                 A note about this pane.
               </Banner>
             ))}
           </div>
-          <div className="aw-devui__specimen">
+          <div className="aw-ds__specimen">
             {CHIP_TONES.map((tone) => (
               <StatusChip key={tone} tone={tone}>
                 {tone}
@@ -144,7 +246,7 @@ export function DevUiPage() {
         </Section>
 
         <Section title="Skeletons">
-          <div className="aw-devui__specimen aw-devui__specimen--stack">
+          <div className="aw-ds__specimen aw-ds__specimen--stack">
             <ListSkeleton decorative rows={3} />
             <SettingsSkeleton decorative sections={1} />
             <PageSkeleton decorative cards={2} />
@@ -154,7 +256,7 @@ export function DevUiPage() {
         </Section>
 
         <Section title="Empty and error states">
-          <div className="aw-devui__specimen">
+          <div className="aw-ds__specimen">
             <EmptyState action={<Button size="sm">Create task</Button>} icon="checklist" title="No tasks yet">
               Tasks you and your agents create show up here.
             </EmptyState>
@@ -165,14 +267,14 @@ export function DevUiPage() {
         </Section>
 
         <Section title="Markdown">
-          <div className="aw-devui__specimen aw-devui__specimen--stack">
+          <div className="aw-ds__specimen aw-ds__specimen--stack">
             <MarkdownEditor label="Description" onChange={setDraft} value={draft} />
             <Markdown source={draft} />
           </div>
         </Section>
 
         <Section title="Dates and times">
-          <dl className="aw-devui__specimen aw-devui__specimen--stack">
+          <dl className="aw-ds__specimen aw-ds__specimen--stack">
             {times.map((iso) => (
               <div key={iso}>
                 <dt>{formatRelative(iso)}</dt>

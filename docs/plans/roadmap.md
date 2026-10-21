@@ -818,7 +818,7 @@ test file is over 800 lines.
 Add the shared components the rest of the app needs: Toast with Undo, a
 CommandMenu base, skeletons shaped like their page (`MessageSkeleton` is used
 51 times for everything), and one relative-time formatter (four copies exist).
-A dev-only `/dev/ui` page shows each component in every theme. The pickers for
+A `/design-system` page (dev-only `/dev/ui` until the design system pass) shows each component in every theme. The pickers for
 the task views (Popover, Combobox, DatePicker, Table) are built with them in
 V1.
 

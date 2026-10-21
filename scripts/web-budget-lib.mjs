@@ -25,8 +25,10 @@ export const WEB_ASSET_LIMITS = Object.freeze({
   // index.html's stylesheets: the design system's five theme presets,
   // components and page layouts. Measured 101,925 raw bytes; the UI kit
   // (toasts, command menu, shortcut sheet, skeletons) and Markdown styles
-  // bring it to 112,083.
-  initialCssRawBytes: 112 * 1024,
+  // bring it to 112,083. The design system pass moved every hand-typed size,
+  // weight and gap onto tokens (var(--space-1-5) is longer than 6px) and added
+  // the scales themselves: 114,898 (October 2026).
+  initialCssRawBytes: 116 * 1024,
   // Any other script (each lazy route or shared lazy chunk, sw.js). The
   // largest, project settings, measured 35,379 raw / 9,320 gzip bytes.
   // Tasks at scale (W3) made the task list page (list, board, filters, bulk

@@ -74,10 +74,10 @@ export default function ProjectWhiteboards({ canEdit, projectId }: { canEdit: bo
       actions={
         canEdit ? (
           <div className="aw-overview__actions">
-            <Button icon="link" onClick={() => setDialog('link')} size="sm">
+            <Button icon="link" onClick={() => setDialog('link')} size="sm" variant="ghost">
               Link a whiteboard
             </Button>
-            <Button icon="plus" onClick={() => setDialog('new')} size="sm">
+            <Button icon="plus" onClick={() => setDialog('new')} size="sm" variant="ghost">
               New whiteboard
             </Button>
           </div>

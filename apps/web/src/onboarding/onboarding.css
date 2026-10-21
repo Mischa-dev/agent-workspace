@@ -36,13 +36,13 @@
 }
 
 .aw-onboarding__step:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
+  outline: var(--focus-width) solid var(--r-focus);
+  outline-offset: var(--focus-offset);
 }
 
 .aw-onboarding__step[aria-current='step'] {
   background: var(--content-hover);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 .aw-onboarding__step.is-skipped .aw-onboarding__steptitle {
@@ -57,7 +57,7 @@
   width: 24px;
   height: 24px;
   border: 1px solid var(--content-border);
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   font: var(--t-small);
   color: var(--content-fg-muted);
 }

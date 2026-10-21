@@ -29,6 +29,7 @@
   border: 1px solid var(--content-border);
   border-radius: var(--radius-lg);
   background: var(--surface-raised);
+  box-shadow: var(--shadow-card);
 }
 
 .aw-boardcard:focus-within,
@@ -71,7 +72,7 @@
   gap: var(--space-2);
   min-width: 0;
   font: var(--t-ui);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 .aw-boardcard__title a {

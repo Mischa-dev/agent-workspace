@@ -59,10 +59,7 @@ const InboxPage = lazy(() => import('../inbox/InboxPage').then((module) => ({ de
 const LaterPage = lazy(() => import('../later/LaterPage').then((module) => ({ default: module.LaterPage })))
 const QuickAddPage = lazy(() => import('../quick-add/QuickAddPage').then((module) => ({ default: module.QuickAddPage })))
 const TaskKeyRedirect = lazy(() => import('./TaskKeyRedirect').then((module) => ({ default: module.TaskKeyRedirect })))
-// Only development builds include the kit page; production drops the import.
-const DevUiPage = import.meta.env.DEV
-  ? lazy(() => import('./DevUiPage').then((module) => ({ default: module.DevUiPage })))
-  : null
+const DesignSystemPage = lazy(() => import('../design/DesignSystemPage').then((module) => ({ default: module.DesignSystemPage })))
 const SearchPage = lazy(() => import('../memory/SearchPage').then((module) => ({ default: module.SearchPage })))
 
 function createQueryClient() {
@@ -340,9 +337,7 @@ export function App() {
                     }
                     path="/search"
                   />
-                  {DevUiPage ? (
-                    <Route element={<AuthenticatedRouteBoundary><DevUiPage /></AuthenticatedRouteBoundary>} path="/dev/ui" />
-                  ) : null}
+                  <Route element={<AuthenticatedRouteBoundary><DesignSystemPage /></AuthenticatedRouteBoundary>} path="/design-system" />
                   <Route element={<AuthenticatedRouteBoundary><TaskKeyRedirect /></AuthenticatedRouteBoundary>} path="/:taskKey" />
                   <Route element={<NotFoundPage />} path="*" />
                 </Route>

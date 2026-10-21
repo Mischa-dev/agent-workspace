@@ -111,7 +111,7 @@
 }
 
 .aw-tboard__add {
-  margin: -4px;
+  margin: calc(-1 * var(--space-1));
   color: var(--content-fg-muted);
 }
 
@@ -130,18 +130,18 @@
   background: var(--surface-raised);
   color: var(--content-fg);
   font: var(--t-ui);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   resize: none;
 }
 
 .aw-tcomposer__input:focus {
   outline: none;
-  box-shadow: 0 0 0 2px var(--focus-ring);
+  box-shadow: var(--shadow-focus);
 }
 
 .aw-tcomposer__input::placeholder {
   color: var(--content-fg-muted);
-  font-weight: 400;
+  font-weight: var(--weight-regular);
 }
 
 .aw-tcomposer__actions {
@@ -215,7 +215,7 @@
 .aw-tcard {
   position: relative;
   display: grid;
-  gap: 6px;
+  gap: var(--space-1-5);
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--content-border);
   border-radius: var(--radius-md);
@@ -237,7 +237,7 @@
 }
 
 .aw-tcard:focus-visible {
-  box-shadow: 0 0 0 2px var(--focus-ring);
+  box-shadow: var(--shadow-focus);
 }
 
 .aw-tcard.is-open {
@@ -334,7 +334,7 @@
   outline: none;
   color: var(--content-fg);
   font: var(--t-ui);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   overflow-wrap: anywhere;
   text-decoration: none;
 }
@@ -361,7 +361,7 @@
   left: 0;
   z-index: var(--layer-tooltip);
   display: grid;
-  gap: 4px;
+  gap: var(--space-1);
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--accent);
   border-radius: var(--radius-md);

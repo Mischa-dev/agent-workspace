@@ -86,7 +86,7 @@
 }
 
 .aw-toast__description {
-  margin-top: 2px;
+  margin-top: var(--space-half);
   font: var(--t-small);
   color: var(--content-fg-muted);
 }
@@ -136,7 +136,7 @@
 }
 
 .aw-toast button:focus-visible {
-  outline: 2px solid var(--focus-ring);
+  outline: var(--focus-width) solid var(--r-focus);
   outline-offset: 1px;
 }
 
@@ -197,17 +197,18 @@
   border: 0;
   outline: 0;
   background: none;
-  font: 500 calc(17px * var(--text-scale)) / calc(24px * var(--text-scale)) var(--font-sans);
+  font: var(--t-title);
+  font-weight: var(--weight-medium);
   color: var(--content-fg);
 }
 
 .aw-cmdk__esc,
 .aw-cmdk__kbd,
 .aw-shortcuts kbd {
-  padding: 1px 6px;
+  padding: 1px var(--space-1-5);
   border: 1px solid var(--content-border);
   border-radius: var(--radius-xs);
-  font: 600 calc(11px * var(--text-scale)) / calc(16px * var(--text-scale)) var(--font-sans);
+  font: var(--t-tag);
   color: var(--content-fg-muted);
   background: var(--surface-sunken);
 }
@@ -226,7 +227,7 @@
 .aw-cmdk__heading {
   padding: var(--space-1) var(--space-2);
   font: var(--t-caption);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   color: var(--content-fg-muted);
 }
 
@@ -322,7 +323,7 @@
 
 .aw-shortcuts dd {
   display: flex;
-  gap: 4px;
+  gap: var(--space-1);
   margin: 0;
 }
 
@@ -434,32 +435,4 @@
   .aw-skel--shaped .aw-skel__avatar {
     animation: none;
   }
-}
-
-/* The dev-only component gallery */
-
-.aw-devui {
-  display: grid;
-  gap: var(--space-8);
-  padding-bottom: var(--space-12);
-}
-
-.aw-devui__themes {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
-.aw-devui__specimen {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  gap: var(--space-3);
-  padding: var(--space-4);
-  border: 1px solid var(--content-border);
-  border-radius: var(--radius-md);
-}
-
-.aw-devui__specimen--stack {
-  display: grid;
 }

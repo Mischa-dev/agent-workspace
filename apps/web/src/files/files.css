@@ -38,8 +38,8 @@
 }
 
 .aw-files__image:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
+  outline: var(--focus-width) solid var(--r-focus);
+  outline-offset: var(--focus-offset);
 }
 
 .aw-files__remove {
@@ -60,6 +60,7 @@
   border: 1px solid var(--content-border);
   border-radius: var(--radius-md);
   background: var(--surface-raised);
+  box-shadow: var(--shadow-card);
 }
 
 .aw-file__icon {
@@ -89,7 +90,7 @@
 .aw-file__name {
   overflow: hidden;
   font: var(--t-ui);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -112,7 +113,7 @@
   align-items: center;
   justify-content: center;
   padding: 56px var(--space-4) var(--space-4);
-  background: #0d0c1ae6;
+  background: #0d0c1ae6; /* design-exception: the viewer is always dark, like a photo app */
 }
 
 .aw-viewer__bar {
@@ -125,18 +126,18 @@
   gap: var(--space-2);
   min-height: 52px;
   padding: var(--space-2) var(--space-3) var(--space-2) var(--space-4);
-  color: #fff;
+  color: #fff; /* design-exception: the viewer is always dark, like a photo app */
 }
 
 .aw-viewer__bar .aw-iconbtn {
-  color: #fff;
+  color: #fff; /* design-exception: the viewer is always dark, like a photo app */
 }
 
 .aw-viewer__name {
   min-width: 0;
   overflow: hidden;
   font: var(--t-ui);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -153,7 +154,7 @@
   max-height: 100%;
   object-fit: contain;
   border-radius: var(--radius-sm);
-  background: #fff;
+  background: #fff; /* design-exception: the viewer is always dark, like a photo app */
 }
 
 .aw-viewer__step {
@@ -164,9 +165,9 @@
   width: 44px;
   height: 44px;
   border: 0;
-  border-radius: 50%;
-  background: #ffffff26;
-  color: #fff;
+  border-radius: var(--radius-full);
+  background: #ffffff26; /* design-exception: the viewer is always dark, like a photo app */
+  color: #fff; /* design-exception: the viewer is always dark, like a photo app */
   transform: translateY(-50%);
 }
 
@@ -202,7 +203,7 @@
 .aw-preview__link {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-half);
   padding-right: 28px;
   color: var(--content-fg);
   text-decoration: none;
@@ -215,7 +216,7 @@
 
 .aw-preview__title {
   font: var(--t-ui);
-  font-weight: 650;
+  font-weight: var(--weight-semibold);
   color: var(--link);
 }
 
@@ -281,7 +282,7 @@
   gap: var(--space-2);
   max-width: 240px;
   min-height: 44px;
-  padding: 4px 2px 4px 4px;
+  padding: var(--space-1) var(--space-half) var(--space-1) var(--space-1);
   overflow: hidden;
   border: 1px solid var(--content-border);
   border-radius: var(--radius-md);
@@ -319,7 +320,7 @@
 .aw-upload__name {
   overflow: hidden;
   font: var(--t-small);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--content-fg);
@@ -355,8 +356,8 @@
 .aw-composer__formats {
   display: flex;
   flex-wrap: wrap;
-  gap: 2px;
-  padding: 4px 6px 0;
+  gap: var(--space-half);
+  padding: var(--space-1) var(--space-1-5) 0;
   border-bottom: 1px solid var(--content-border);
 }
 
@@ -382,7 +383,7 @@
   background: var(--accent-soft);
   color: var(--accent);
   font: var(--t-ui);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   pointer-events: none;
 }
 

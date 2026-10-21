@@ -108,19 +108,19 @@
 
 .aw-runs__table th:first-child {
   text-align: left;
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   white-space: normal;
   overflow-wrap: anywhere;
 }
 
 .aw-runs__table thead th {
   color: var(--content-fg-muted);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 
 .aw-runs__table tfoot th,
 .aw-runs__table tfoot td {
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   border-bottom: none;
 }
 
