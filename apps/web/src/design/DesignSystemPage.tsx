@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
@@ -62,6 +62,7 @@ const CHIP_TONES: ChipTone[] = ['muted', 'agent', 'warning', 'success', 'danger'
 export function DesignSystemPage() {
   const session = useAuthenticatedSession()
   const theme = useTheme()
+  const { previewTheme } = theme
   const [menuOpen, setMenuOpen] = useState(false)
   const [draft, setDraft] = useState(SAMPLE_MARKDOWN)
   const [checked, setChecked] = useState(true)
@@ -71,21 +72,32 @@ export function DesignSystemPage() {
     return [now - 20_000, now - 5 * 60_000, now - 3 * 3_600_000, now - 2 * 86_400_000, now - 40 * 86_400_000].map((at) => new Date(at).toISOString())
   })
 
+  // Browsing presets only previews them; leaving the page puts the person's own theme back.
+  useEffect(() => () => previewTheme(null), [previewTheme])
+
   return (
     <AppShell mainClassName="aw-main--page" user={session.user}>
       <div className="aw-page aw-page--wide aw-ds">
         <PageHeader icon="palette" title="Design system">
-          The tokens and shared components every page is built from, in the current theme. Pick a theme to check each one; your own choice
-          stays on <Link to="/settings/appearance">Appearance</Link>.
+          The tokens and shared components every page is built from, in the current theme. Pick a theme to preview each one here; nothing
+          is saved, and your own choice stays on <Link to="/settings/appearance">Appearance</Link>.
         </PageHeader>
         <div aria-label="Theme" className="aw-ds__themes" role="group">
+          <Button
+            aria-pressed={theme.previewPreset === null}
+            onClick={() => previewTheme(null)}
+            size="sm"
+            variant={theme.previewPreset === null ? 'primary' : 'secondary'}
+          >
+            Your theme
+          </Button>
           {THEME_PRESETS.map((preset) => (
             <Button
-              aria-pressed={theme.preset === preset.id}
+              aria-pressed={theme.previewPreset === preset.id}
               key={preset.id}
-              onClick={() => theme.setTheme(preset.id)}
+              onClick={() => previewTheme(preset.id)}
               size="sm"
-              variant={theme.preset === preset.id ? 'primary' : 'secondary'}
+              variant={theme.previewPreset === preset.id ? 'primary' : 'secondary'}
             >
               {preset.name}
             </Button>
