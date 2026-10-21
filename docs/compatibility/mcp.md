@@ -9,7 +9,8 @@
 - Request ceiling: 1 MiB (a 100-task task_create_many plan fits)
 - Session mode: legacy session compatibility with JSON request/response enabled;
   a session the server no longer holds (five idle minutes, or a restart) is
-  resumed instead of answered with 404
+  resumed instead of answered with 404; one the client ended with `DELETE`
+  stays ended (remembered until the next restart)
 - Network boundary: the ordinary loopback application listener, reached from
   the Mac only through SSH forwarding
 
@@ -44,7 +45,9 @@ client, redirect URI, and PKCE challenge. Access tokens expire after one hour;
 refresh tokens expire after 30 days and rotate atomically. An exchanged refresh
 token still works for five minutes, because a client running many sessions on
 one grant refreshes from several at once and a client whose response was lost
-retries; used again after that, it revokes the complete grant family. Codes and all tokens are stored
+retries; used again after that, it revokes the complete grant family. Every
+rotation retires all live refresh tokens of the grant, so a token handed out
+in that window can't become a second branch that escapes reuse detection. Codes and all tokens are stored
 only as SHA-256 digests.
 
 Bearer writes use `authentication_class=mcp_bearer`; OAuth writes use
