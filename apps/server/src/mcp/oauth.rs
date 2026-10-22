@@ -863,7 +863,10 @@ async fn refresh(state: &AppState, request: TokenRequest) -> Result<TokenRespons
         // A client that runs many sessions on one grant refreshes from several
         // of them at once, and a client whose refresh response was lost
         // retries with the same token. Both are honest: give this one its own
-        // pair and leave the grant alone.
+        // pair and leave the grant alone. The new refresh token joins the
+        // grant's current generation, so the next rotation from any branch
+        // retires it like its siblings (see below) and a stolen copy can't
+        // outlive the grace period.
         let response = issue_token_pair(&mut transaction, row.grant_id, &row.scopes).await?;
         transaction.commit().await.map_err(AppError::from)?;
         tracing::info!(
@@ -873,11 +876,20 @@ async fn refresh(state: &AppState, request: TokenRequest) -> Result<TokenRespons
         );
         return Ok(response);
     }
-    sqlx::query("UPDATE mcp_oauth_refresh_tokens SET used_at = now() WHERE id = $1")
-        .bind(row.id)
-        .execute(&mut *transaction)
-        .await
-        .map_err(AppError::from)?;
+    // Rotating retires every live refresh token of the grant, not just this
+    // one. Without that, a replay inside the grace period would leave a second
+    // branch that rotates on its own for 30 days and never trips reuse
+    // detection. Now the branches stay one family: a sibling still works for
+    // the grace period (parallel sessions), and used later it revokes the
+    // grant. The grant row is locked above, so rotations of one grant run one
+    // at a time.
+    sqlx::query(
+        "UPDATE mcp_oauth_refresh_tokens SET used_at = now() WHERE grant_id = $1 AND used_at IS NULL AND revoked_at IS NULL",
+    )
+    .bind(row.grant_id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(AppError::from)?;
     let response = issue_token_pair(&mut transaction, row.grant_id, &row.scopes).await?;
     let new_id = sqlx::query_scalar::<_, Uuid>(
         "SELECT id FROM mcp_oauth_refresh_tokens WHERE token_digest = $1",

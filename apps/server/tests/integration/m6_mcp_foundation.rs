@@ -300,6 +300,49 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     )
     .await;
     assert_eq!(not_an_id.status(), StatusCode::NOT_FOUND);
+    // A session the client ended on purpose stays ended, whether the server
+    // started it or resumed it.
+    let ended = mcp_request(&application, Some(&token), None, &initialize).await;
+    let ended_session = ended
+        .headers()
+        .get("mcp-session-id")
+        .and_then(|value| value.to_str().ok())
+        .expect("MCP session to end")
+        .to_owned();
+    for session in [ended_session.as_str(), "from-before-a-restart"] {
+        let deleted = application
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(MCP_PATH)
+                    .header(header::HOST, "127.0.0.1")
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .header("mcp-session-id", session)
+                    .header("mcp-protocol-version", "2025-06-18")
+                    .body(Body::empty())
+                    .expect("MCP delete request"),
+            )
+            .await
+            .expect("MCP delete response");
+        assert!(
+            deleted.status().is_success(),
+            "DELETE ends {session}: {}",
+            deleted.status()
+        );
+        let after_delete = mcp_request(
+            &application,
+            Some(&token),
+            Some(session),
+            &json!({"jsonrpc":"2.0","id":101,"method":"tools/list","params":{}}),
+        )
+        .await;
+        assert_eq!(
+            after_delete.status(),
+            StatusCode::NOT_FOUND,
+            "a deleted session {session} is not brought back"
+        );
+    }
 
     let tools = protocol_json(
         mcp_request(
@@ -1357,20 +1400,81 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         let still_working = mcp_request(&application, Some(access), None, &initialize).await;
         assert_eq!(still_working.status(), StatusCode::OK);
     }
-    // Used again well after it was exchanged, it looks stolen: the grant goes.
+    // A replay inside the grace period mustn't become a second branch that
+    // lives on its own. Say the parallel refresh was a thief's: the thief
+    // rotates their branch, which retires the honest branch, and when the
+    // honest client refreshes later, the grant goes with every branch in it.
+    let refresh_form = |token: &str| {
+        serde_urlencoded::to_string([
+            ("grant_type", "refresh_token"),
+            ("client_id", &client_id),
+            ("refresh_token", token),
+        ])
+        .expect("refresh form")
+    };
+    let honest_refresh = refreshed["refresh_token"]
+        .as_str()
+        .expect("honest refresh token");
+    let thief_refresh = parallel_refresh["refresh_token"]
+        .as_str()
+        .expect("replayed refresh token");
+    let thief_rotated = json_response(
+        refresh_again(refresh_form(thief_refresh))
+            .await
+            .expect("thief rotation response"),
+    )
+    .await;
+    let thief_access = thief_rotated["access_token"]
+        .as_str()
+        .expect("thief access token");
+    let thief_next_refresh = thief_rotated["refresh_token"]
+        .as_str()
+        .expect("thief next refresh token");
+    let live_refresh_tokens = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM mcp_oauth_refresh_tokens WHERE grant_id = (SELECT grant_id FROM mcp_oauth_refresh_tokens WHERE token_digest = $1) AND used_at IS NULL AND revoked_at IS NULL",
+    )
+    .bind(Sha256::digest(thief_next_refresh.as_bytes()).to_vec())
+    .fetch_one(&pool)
+    .await
+    .expect("live refresh tokens");
+    assert_eq!(
+        live_refresh_tokens, 1,
+        "a rotation leaves one live refresh token in the grant"
+    );
+    // A retired sibling still works right away, for sessions that hold
+    // different branches and refresh together.
+    let sibling_refresh = refresh_again(refresh_form(honest_refresh))
+        .await
+        .expect("sibling refresh response");
+    assert_eq!(sibling_refresh.status(), StatusCode::OK);
+    // Used again well after it was retired, it looks stolen: the grant goes.
     sqlx::query(
         "UPDATE mcp_oauth_refresh_tokens SET used_at = now() - interval '10 minutes' WHERE token_digest = $1",
     )
-    .bind(Sha256::digest(refresh_token.as_bytes()).to_vec())
+    .bind(Sha256::digest(honest_refresh.as_bytes()).to_vec())
     .execute(&pool)
     .await
-    .expect("age the exchanged refresh token");
-    let replayed_refresh = refresh_again(refresh_body)
+    .expect("age the retired refresh token");
+    let late_refresh = refresh_again(refresh_form(honest_refresh))
         .await
-        .expect("refresh replay response");
-    assert_eq!(replayed_refresh.status(), StatusCode::BAD_REQUEST);
-    let family_revoked = mcp_request(&application, Some(refreshed_access), None, &initialize).await;
-    assert_eq!(family_revoked.status(), StatusCode::UNAUTHORIZED);
+        .expect("late refresh response");
+    assert_eq!(late_refresh.status(), StatusCode::BAD_REQUEST);
+    for access in [refreshed_access, parallel_access, thief_access] {
+        let family_revoked = mcp_request(&application, Some(access), None, &initialize).await;
+        assert_eq!(family_revoked.status(), StatusCode::UNAUTHORIZED);
+    }
+    let thief_continues = refresh_again(refresh_form(thief_next_refresh))
+        .await
+        .expect("thief refresh after revocation");
+    assert_eq!(
+        thief_continues.status(),
+        StatusCode::BAD_REQUEST,
+        "no branch of a revoked grant can refresh"
+    );
+    let original_replayed = refresh_again(refresh_body)
+        .await
+        .expect("original refresh replay response");
+    assert_eq!(original_replayed.status(), StatusCode::BAD_REQUEST);
 
     let user_status_credential = mcp::issue_credential(
         &pool,
