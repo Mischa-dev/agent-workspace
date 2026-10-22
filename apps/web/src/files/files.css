@@ -17,11 +17,18 @@
 
 .aw-files__image-wrap {
   position: relative;
+  /* A flex item won't shrink below its picture's width unless told to, so a
+     wide picture in a narrow column (the thread panel) would spill out. */
+  min-width: 0;
+  max-width: 100%;
 }
 
 .aw-files__image {
   display: block;
   max-width: 100%;
+  /* Width and aspect ratio come from the picture; the height follows when the
+     column is narrower than the thumbnail. */
+  height: auto;
   padding: 0;
   overflow: hidden;
   border: 1px solid var(--content-border);

@@ -50,7 +50,7 @@ export function Attachments({ files, onRemove }: { files: FileAttachment[]; onRe
                   aria-label={`Open ${file.name}`}
                   className="aw-files__image"
                   onClick={() => setOpen(file)}
-                  style={{ width: size.width, height: size.height }}
+                  style={{ width: size.width, aspectRatio: `${size.width} / ${size.height}` }}
                   type="button"
                 >
                   <img alt={file.name} decoding="async" height={size.height} loading="lazy" src={fileThumbnailUrl(file.id)} width={size.width} />
