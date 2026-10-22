@@ -1,0 +1,815 @@
+/* The trailer's own layout. Colors, corners, shadows and type all come from
+   the design system's tokens; only stage geometry is set here. */
+
+html,
+body {
+  margin: 0;
+  width: 1920px;
+  height: 1080px;
+  overflow: hidden;
+  background: var(--brand-deep);
+}
+
+#root {
+  width: 1920px;
+  height: 1080px;
+}
+
+.tr-stage {
+  position: relative;
+  width: 1920px;
+  height: 1080px;
+  overflow: hidden;
+  background: var(--brand-deep);
+  isolation: isolate;
+}
+
+.tr-scene {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+/* The backdrops sit under every scene and cross-fade when the tone changes.
+   Dark: the brand's deep indigo, a touch darker toward the corners. Light: the
+   app's sunken surface, so white app windows stand off it. */
+.tr-backdrop {
+  position: absolute;
+  inset: 0;
+}
+
+.tr-backdrop--dark {
+  background:
+    radial-gradient(ellipse 80% 70% at 50% 42%, transparent 40%, color-mix(in oklch, var(--rail-bg) 70%, transparent) 100%),
+    var(--brand-deep);
+}
+
+.tr-backdrop--light {
+  background: var(--surface-sunken);
+}
+
+.tr-scene--dark {
+  color: var(--sidebar-fg-strong);
+}
+
+.tr-scene--light {
+  color: var(--content-fg);
+}
+
+.tr-layer {
+  position: absolute;
+  inset: 0;
+}
+
+.tr-abs {
+  position: absolute;
+}
+
+.tr-center {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+
+/* An app window: the shell at its real size, scaled as a whole. */
+.tr-window {
+  position: absolute;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: var(--content-bg);
+  box-shadow: var(--shadow-dialog), 0 0 0 1px var(--content-border);
+  transform-origin: 0 0;
+}
+
+.tr-window .aw-shell,
+.tr-shell {
+  height: 100%;
+  width: 100%;
+}
+
+.tr-main {
+  overflow: hidden;
+}
+
+.tr-panel {
+  position: absolute;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  color: var(--content-fg);
+  box-shadow: var(--shadow-dialog), 0 0 0 1px var(--content-border);
+  transform-origin: 0 0;
+}
+
+/* Captions */
+.tr-caption {
+  position: absolute;
+  display: grid;
+  gap: var(--space-4);
+}
+
+.tr-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--accent);
+}
+
+.tr-scene--dark .tr-kicker {
+  color: var(--agent-working);
+}
+
+.tr-title {
+  margin: 0;
+  color: inherit;
+  text-wrap: balance;
+}
+
+.tr-sub {
+  margin: 0;
+  color: var(--content-fg-muted);
+  text-wrap: pretty;
+}
+
+.tr-scene--dark .tr-sub {
+  color: var(--sidebar-fg-muted);
+}
+
+.tr-line {
+  display: block;
+  overflow: hidden;
+  padding-bottom: 0.08em;
+  margin-bottom: -0.08em;
+}
+
+.tr-word {
+  display: inline-block;
+  white-space: pre;
+}
+
+.tr-accent {
+  color: var(--accent);
+}
+
+.tr-scene--dark .tr-accent {
+  color: var(--agent-working);
+}
+
+/* Agents' own marks (identity.tsx): the maker's logo fills the avatar's
+   square; light tiles get a hairline so they stand off a white page. */
+.tr-logo--light::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--content-fg) 14%, transparent);
+  pointer-events: none;
+}
+
+/* The pointer */
+.tr-cursor {
+  position: absolute;
+  z-index: 50;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.tr-cursor svg {
+  position: absolute;
+  left: -3px;
+  top: -2px;
+  filter: drop-shadow(0 2px 3px color-mix(in oklch, black 35%, transparent));
+}
+
+.tr-cursor__ring {
+  position: absolute;
+  left: -22px;
+  top: -22px;
+  width: 44px;
+  height: 44px;
+  border: 3px solid var(--focus-ring);
+  border-radius: var(--radius-full);
+}
+
+/* Code and terminal cards: always dark, like the app's run log. */
+.tr-code {
+  position: absolute;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: var(--rail-bg);
+  color: var(--rail-fg);
+  box-shadow: var(--shadow-dialog), 0 0 0 1px var(--sidebar-border);
+}
+
+.tr-code__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 44px;
+  padding: 0 var(--space-4);
+  border-bottom: 1px solid var(--sidebar-border);
+  color: var(--sidebar-fg-muted);
+}
+
+.tr-code__dot {
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius-full);
+  background: var(--sidebar-border);
+}
+
+.tr-code__body {
+  margin: 0;
+  padding: var(--space-5) var(--space-6);
+  white-space: pre;
+}
+
+.tr-tok-key {
+  color: var(--mention-bg);
+}
+
+.tr-tok-fn {
+  color: var(--agent-working);
+}
+
+.tr-tok-str {
+  color: var(--highlight-bg);
+}
+
+.tr-tok-dim {
+  color: var(--sidebar-fg-muted);
+}
+
+.tr-tok-ok {
+  color: var(--presence-online);
+}
+
+/* Phone */
+.tr-phone {
+  position: absolute;
+  overflow: hidden;
+  border-radius: 56px; /* the device's own corner */
+  background: var(--content-bg);
+  box-shadow:
+    0 0 0 10px var(--rail-bg),
+    0 0 0 12px var(--sidebar-border),
+    var(--shadow-dialog);
+}
+
+/* A control the pointer is pressing: the kit's hover color, pushed in a touch. */
+.aw-btn.tr-pressed {
+  transform: scale(0.97);
+}
+
+.aw-btn--primary.tr-pressed {
+  background: var(--accent-hover);
+}
+
+.aw-btn--secondary.tr-pressed,
+.aw-seg__opt.tr-pressed {
+  background: var(--content-hover);
+}
+
+/* Something the pointer rests on: the kit's own hover look. */
+.aw-menu__item.tr-hover {
+  background: var(--accent-soft);
+  color: var(--content-fg);
+}
+
+.aw-taskadd__item.tr-hover {
+  background: var(--content-hover);
+  color: var(--content-fg);
+}
+
+/* Menus drawn in place, under the control that opened them. */
+.aw-menu.tr-menu {
+  position: absolute;
+  z-index: 30;
+}
+
+.tr-canvas {
+  background: var(--content-bg);
+}
+
+.tr-link {
+  color: var(--accent);
+}
+
+/* Conversations, pinned to their newest message: older ones leave at the top. */
+.tr-timeline {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  overflow: hidden;
+}
+
+.tr-timeline > * {
+  flex: none;
+}
+
+.tr-timeline--top {
+  justify-content: flex-start;
+}
+
+/* A page in the main column, with room for a layer over it: the list leaving
+   over the board's top, or a task opening out of its card. */
+.tr-pagestack {
+  position: relative;
+  display: flex;
+  flex: 1 0 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.tr-leaving {
+  position: relative;
+  z-index: 2;
+  height: 0;
+}
+
+.tr-leaving > * {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+}
+
+.tr-opening {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--content-bg);
+}
+
+.tr-opening__frame {
+  position: absolute;
+  z-index: 4;
+  border: 1px solid var(--content-border);
+  pointer-events: none;
+}
+
+/* A glint running down the graph's longest chain. */
+.tr-glint {
+  fill: none;
+  stroke: var(--surface-raised);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  opacity: 0.85;
+}
+
+/* Two lines in one place, cross-fading as a status changes. */
+.tr-swap {
+  display: grid;
+}
+
+.tr-swap > * {
+  grid-area: 1 / 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The thread column opens by widening; its content keeps the panel's width meanwhile. */
+.tr-shell > .aw-panel {
+  overflow: hidden;
+}
+
+.tr-panelfill {
+  display: flex;
+  flex-direction: column;
+  width: var(--size-thread);
+  height: 100%;
+  flex: none;
+}
+
+/* The composer's text, drawn in place of its textarea so typing follows the trailer's clock. */
+.aw-composer.tr-focus {
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 1px var(--focus-ring);
+}
+
+.tr-composer-text {
+  min-height: 42px;
+  padding: var(--space-2-5) var(--space-3) var(--space-half);
+  color: var(--content-fg);
+  font: var(--t-body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tr-composer-text.is-empty,
+.tr-placeholder {
+  color: var(--content-fg-muted);
+}
+
+.tr-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1.15em;
+  margin-right: -2px;
+  vertical-align: text-bottom;
+  background: var(--content-fg);
+  animation: tr-blink 1s steps(1, end) infinite;
+}
+
+.tr-caret.is-typing {
+  animation: none;
+}
+
+@keyframes tr-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+.aw-composer__send.tr-pressed {
+  background: var(--accent-hover);
+  transform: scale(0.94);
+}
+
+/* The picture Muse attaches: a crop of the Tasks page with the new button marked. */
+.tr-mock {
+  box-sizing: border-box;
+  width: 420px;
+  height: 346px;
+  padding: var(--space-4) 0 0 var(--space-4);
+  background: var(--surface-sunken);
+}
+
+.tr-mock__page {
+  height: 100%;
+  overflow: hidden;
+  border-radius: var(--radius-lg) 0 0 0;
+  background: var(--content-bg);
+  box-shadow: var(--shadow-popover);
+}
+
+.tr-mock__body {
+  padding: var(--space-4) var(--space-5);
+}
+
+.tr-mock .aw-worktools__search {
+  flex: 0 0 132px;
+  min-width: 0;
+}
+
+.tr-mock .aw-worktools__search .aw-field__control,
+.tr-mock .aw-worktools__search input {
+  min-width: 0;
+  width: 100%;
+}
+
+.tr-mock__new {
+  position: relative;
+  display: inline-flex;
+  border-radius: var(--radius-sm);
+  outline: 2px dashed var(--swatch-orchid);
+  outline-offset: 4px;
+}
+
+.tr-mock__tag {
+  position: absolute;
+  top: -30px;
+  right: -10px;
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-full);
+  background: var(--swatch-orchid);
+  color: var(--on-swatch);
+  font: var(--t-tag);
+  line-height: 18px;
+}
+
+/* Feature tiles: one corner of the app each, drawn at its real size. */
+.tr-tile {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: var(--content-bg);
+  color: var(--content-fg);
+  box-shadow: var(--shadow-dialog), 0 0 0 1px var(--content-border);
+}
+
+.tr-tile__head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--size-header);
+  padding: 0 var(--space-4);
+  border-bottom: 1px solid var(--content-border);
+  font: var(--t-heading);
+}
+
+.tr-tile__head > .aw-icon,
+.tr-tile__head > svg {
+  color: var(--content-fg-muted);
+}
+
+.tr-tile__title {
+  white-space: nowrap;
+}
+
+.tr-tile__topic {
+  min-width: 0;
+  margin-left: var(--space-1);
+  padding-left: var(--space-3);
+  border-left: 1px solid var(--content-border);
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+  white-space: nowrap;
+}
+
+.tr-tile__body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.tr-tile__pad {
+  padding: var(--space-3) var(--space-4);
+}
+
+/* The inbox fills its tile edge to edge. */
+.tr-inbox .aw-inbox__group {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.tr-tile .aw-search__results {
+  margin-top: var(--space-3);
+}
+
+.aw-pins__toggle.tr-hover {
+  background: var(--content-hover);
+  color: var(--content-fg);
+}
+
+/* Rows that arrive one by one sit in wrappers, so the lists' own separators
+   (drawn between neighbouring rows) are drawn between the wrappers instead. */
+.tr-rise + .tr-rise > .aw-row,
+.tr-rise + .tr-rise > .aw-later__row {
+  border-top: 1px solid var(--content-border);
+}
+
+/* A slice of a thread that comes forward on its own: its header and timeline. */
+.tr-report {
+  display: flex;
+  flex-direction: column;
+  background: var(--content-bg);
+}
+
+.tr-code__file {
+  margin-left: var(--space-2);
+  color: var(--sidebar-fg-muted);
+}
+
+.tr-code__terminal {
+  margin: 0;
+  padding: var(--space-3) var(--space-6) var(--space-4);
+  border-top: 1px solid var(--sidebar-border);
+  color: var(--rail-fg);
+  white-space: pre;
+}
+
+.tr-caret--code {
+  background: var(--rail-fg);
+}
+
+/* The project's agents, as cards on the backdrop. */
+.tr-roster {
+  position: absolute;
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tr-profilecard {
+  box-shadow: var(--shadow-popover);
+}
+
+/* Coming next: the tiles' chip, their one-line description, and the mocks inside. */
+.tr-tile__chip {
+  margin-left: auto;
+}
+
+.tr-tile__desc {
+  flex: none;
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--content-border);
+  background: var(--surface-sunken);
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+}
+
+.tr-doc__title {
+  margin: 0 0 var(--space-1);
+  font: var(--t-title);
+}
+
+.tr-doc__text {
+  margin: 0 0 var(--space-3);
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+}
+
+.tr-doc__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.tr-sheet {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-sm);
+  font: var(--t-small);
+}
+
+.tr-sheet__row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1fr);
+}
+
+.tr-sheet__row + .tr-sheet__row {
+  border-top: 1px solid var(--content-border);
+}
+
+.tr-sheet__row.is-head {
+  background: var(--surface-sunken);
+  color: var(--content-fg-muted);
+  font: var(--t-caption-strong);
+}
+
+.tr-sheet__num {
+  display: grid;
+  place-items: center;
+  border-right: 1px solid var(--content-border);
+  background: var(--surface-sunken);
+  color: var(--content-fg-muted);
+  font: var(--t-caption);
+}
+
+.tr-sheet__cell {
+  min-height: 30px;
+  overflow: hidden;
+  padding: var(--space-1-5) var(--space-2);
+  border-right: 1px solid var(--content-border);
+  white-space: nowrap;
+}
+
+.tr-sheet__cell:last-child {
+  border-right: 0;
+}
+
+.tr-pair__code {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  color: var(--content-fg);
+  letter-spacing: 0.12em;
+  text-align: center;
+}
+
+.tr-pair__term {
+  min-height: 64px;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--rail-bg);
+  color: var(--rail-fg);
+  font: var(--t-code);
+  white-space: pre-wrap;
+}
+
+.tr-pair__status {
+  margin-top: var(--space-3);
+}
+
+/* Chips that change together, kept in one group so they cross-fade as one. */
+.tr-chips {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  gap: var(--space-1);
+}
+
+/* A sheet's owner cell, with the owner's avatar */
+.tr-sheet__owner {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+
+/* Someone else editing a cell: their selection and their name over it. */
+.tr-sheet__cell.is-editing {
+  position: relative;
+  overflow: visible;
+  box-shadow: inset 0 0 0 2px color-mix(in oklch, var(--rail-bg) calc(var(--edit) * 100%), transparent);
+}
+
+.tr-sheet__flag {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% - 2px);
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-1-5) 2px 2px;
+  border-radius: var(--radius-xs) var(--radius-xs) 0 var(--radius-xs);
+  background: var(--rail-bg);
+  color: var(--rail-fg);
+  font: var(--t-caption-strong);
+  white-space: nowrap;
+  opacity: var(--edit);
+}
+
+/* A paired runner, and the work it picked up */
+.tr-runner {
+  gap: 0;
+  max-width: none;
+  margin-top: var(--space-3);
+}
+
+.tr-runner .aw-run__row {
+  padding-top: var(--space-2-5);
+}
+
+.tr-runner__icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  background: var(--content-hover);
+  color: var(--content-fg-muted);
+}
+
+.tr-runner__task {
+  color: var(--content-fg);
+  font-weight: var(--weight-semibold);
+}
+
+.tr-runner__chip {
+  margin-left: auto;
+}
+
+/* In a dark scene, a dark logo tile keeps a light edge so it doesn't sink into the backdrop. */
+.tr-scene--dark .tr-logo::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, white 16%, transparent);
+  pointer-events: none;
+}
+
+/* A property's value on its own, so two can cross-fade in the property's button. */
+.tr-propvalue {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* An agent's presence line on its own, so two can cross-fade. */
+.tr-presence {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* The carried card's held look, faded by --held as it settles into its slot. */
+.tr-carried__shadow {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popover);
+}
+
+.tr-carried .aw-tcard.is-held {
+  transform: rotate(calc(-1deg * var(--held)));
+  box-shadow: 0 0 0 calc(2px * var(--held)) color-mix(in oklch, var(--accent) calc(var(--held) * 100%), transparent);
+}
+
+/* The run's files: the list and the diff button, in one box. */
+.tr-runfiles__diff {
+  display: flex;
+}
