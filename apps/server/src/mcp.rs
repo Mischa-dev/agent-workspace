@@ -2641,9 +2641,49 @@ impl ServerHandler for McpServer {
 /// nothing the tools rely on: every request is authenticated and scoped on its
 /// own by `authenticate_mcp`. So any well-formed session ID is resumed as a
 /// fresh session on the legacy protocol, where every version behaves alike.
-struct ResumeAnySession;
+///
+/// A session the client ended with `DELETE` stays ended: rmcp calls `delete`
+/// only then (never on idle expiry), and the ID is remembered so later
+/// requests get the unknown-session 404 the spec asks for. The memory is
+/// bounded and lasts until the next restart.
+#[derive(Default)]
+struct ResumeAnySession {
+    deleted: std::sync::Mutex<DeletedSessions>,
+}
 
 const MAX_SESSION_ID_LEN: usize = 128;
+/// How many deleted session IDs are remembered; the oldest go first.
+const MAX_DELETED_SESSIONS: usize = 4096;
+
+#[derive(Default)]
+struct DeletedSessions {
+    ids: std::collections::HashSet<String>,
+    order: std::collections::VecDeque<String>,
+}
+
+impl DeletedSessions {
+    fn insert(&mut self, session_id: &str) {
+        if !self.ids.insert(session_id.to_owned()) {
+            return;
+        }
+        self.order.push_back(session_id.to_owned());
+        while self.order.len() > MAX_DELETED_SESSIONS {
+            if let Some(oldest) = self.order.pop_front() {
+                self.ids.remove(&oldest);
+            }
+        }
+    }
+}
+
+impl ResumeAnySession {
+    fn was_deleted(&self, session_id: &str) -> bool {
+        self.deleted
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .ids
+            .contains(session_id)
+    }
+}
 
 fn resumable_session_id(session_id: &str) -> bool {
     (1..=MAX_SESSION_ID_LEN).contains(&session_id.len())
@@ -2655,7 +2695,7 @@ fn resumable_session_id(session_id: &str) -> bool {
 #[async_trait::async_trait]
 impl SessionStore for ResumeAnySession {
     async fn load(&self, session_id: &str) -> Result<Option<SessionState>, SessionStoreError> {
-        if !resumable_session_id(session_id) {
+        if !resumable_session_id(session_id) || self.was_deleted(session_id) {
             return Ok(None);
         }
         Ok(Some(SessionState::new(
@@ -2675,7 +2715,13 @@ impl SessionStore for ResumeAnySession {
         Ok(())
     }
 
-    async fn delete(&self, _session_id: &str) -> Result<(), SessionStoreError> {
+    async fn delete(&self, session_id: &str) -> Result<(), SessionStoreError> {
+        if resumable_session_id(session_id) {
+            self.deleted
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(session_id);
+        }
         Ok(())
     }
 }
@@ -2715,7 +2761,7 @@ pub fn router(state: AppState) -> Router<AppState> {
         .with_json_response(true)
         .with_max_request_body_bytes(MAX_MCP_BODY_BYTES)
         .with_cancellation_token(CancellationToken::new());
-    config.session_store = Some(std::sync::Arc::new(ResumeAnySession));
+    config.session_store = Some(std::sync::Arc::new(ResumeAnySession::default()));
     let service: StreamableHttpService<McpServer, LocalSessionManager> =
         StreamableHttpService::new(move || Ok(handler.clone()), Default::default(), config);
 
@@ -4031,7 +4077,35 @@ async fn identifier_project(
 mod tests {
     use axum::http::{HeaderMap, HeaderValue, header::AUTHORIZATION};
 
-    use super::{SERVER_INSTRUCTIONS, common, exact_bearer_token, generate_token};
+    use rmcp::transport::streamable_http_server::session::store::SessionStore;
+
+    use super::{
+        MAX_DELETED_SESSIONS, ResumeAnySession, SERVER_INSTRUCTIONS, common, exact_bearer_token,
+        generate_token,
+    };
+
+    #[tokio::test]
+    async fn deleted_sessions_stay_deleted_within_a_bounded_memory() {
+        let store = ResumeAnySession::default();
+        assert!(store.load("live-session").await.expect("load").is_some());
+        store.delete("ended-session").await.expect("delete");
+        assert!(store.load("ended-session").await.expect("load").is_none());
+        assert!(store.load("live-session").await.expect("load").is_some());
+
+        for index in 0..MAX_DELETED_SESSIONS {
+            store
+                .delete(&format!("later-{index}"))
+                .await
+                .expect("delete");
+        }
+        let deleted = store.deleted.lock().expect("deleted sessions");
+        assert_eq!(deleted.ids.len(), MAX_DELETED_SESSIONS);
+        assert_eq!(deleted.order.len(), MAX_DELETED_SESSIONS);
+        assert!(
+            !deleted.ids.contains("ended-session"),
+            "the oldest goes first"
+        );
+    }
 
     #[test]
     fn generated_token_has_256_bits_and_only_safe_prefix_metadata() {
