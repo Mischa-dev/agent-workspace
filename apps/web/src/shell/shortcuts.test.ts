@@ -116,5 +116,6 @@ describe('document title', () => {
     expect(pageTitleFor('/messages', '', projects, null)).toBe('Messages')
     expect(pageTitleFor('/settings/account/appearance', '', projects, null)).toBe('Appearance')
     expect(pageTitleFor('/settings/workspace/members', '', projects, null)).toBe('Settings')
+    expect(pageTitleFor('/design-system', '', projects, null)).toBe('Design system')
   })
 })

@@ -54,7 +54,7 @@ describe('service worker', () => {
   })
 
   it('opens every app page offline, including task links, but not server files', () => {
-    for (const path of ['/later', '/welcome', '/forgot-password', '/reset-password?token=a', '/verify-email', '/AWD-12', '/aw-3/']) {
+    for (const path of ['/later', '/welcome', '/forgot-password', '/reset-password?token=a', '/verify-email', '/design-system', '/AWD-12', '/aw-3/']) {
       expect(handles(`${origin}${path}`, { mode: 'navigate' })).toBe(true)
     }
     for (const path of ['/llms.txt', '/mcp-tools.md', '/.well-known/oauth-authorization-server', '/health', '/AW-0', '/AW-12/x']) {
