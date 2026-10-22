@@ -60,7 +60,7 @@ const STATIC_TITLES: [RegExp, string][] = [
   [/^\/settings(\/.*)?$/, 'Settings'],
   [/^\/projects\/new\/?$/, 'New project'],
   [/^\/projects\/?$/, 'Projects'],
-  [/^\/dev\/ui\/?$/, 'UI kit'],
+  [/^\/design-system\/?$/, 'Design system'],
 ]
 
 const PROJECT_TITLES: [RegExp, string][] = [

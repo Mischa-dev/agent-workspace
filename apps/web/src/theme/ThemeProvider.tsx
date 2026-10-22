@@ -7,9 +7,11 @@ import {
   writeAppearancePreferences,
   type AppearancePreferences,
 } from './preferences'
-import { ALL_SLOTS, DERIVED_SLOTS, isClassicPreset, loadClassicThemes, themeProperties } from './slots'
+import { ALL_SLOTS, DERIVED_SLOTS, isClassicPreset, loadClassicThemes, themeProperties, type ThemePreset } from './slots'
 import { ThemeContext, type ThemeContextValue } from './themeContext'
 import { syncThemeColor } from './themeColor'
+
+const NO_OVERRIDES: Record<string, string> = {}
 
 function prefersDark() {
   return window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false
@@ -19,7 +21,11 @@ function prefersDark() {
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [preferences, setPreferences] = useState(readAppearancePreferences)
   const [dark, setDark] = useState(prefersDark)
+  const [previewPreset, setPreviewPreset] = useState<ThemePreset | null>(null)
   const preset = resolvePreset(preferences.theme, dark)
+  // A preview shows the preset as it ships; the saved choice and its custom colors stay as they are.
+  const shownPreset = previewPreset ?? preset
+  const shownOverrides = previewPreset ? NO_OVERRIDES : preferences.overrides
 
   useEffect(() => {
     const query = window.matchMedia?.('(prefers-color-scheme: dark)')
@@ -31,15 +37,15 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const root = document.documentElement
-    if (isClassicPreset(preset)) loadClassicThemes(syncThemeColor)
-    root.dataset.theme = preset
+    if (isClassicPreset(shownPreset)) loadClassicThemes(syncThemeColor)
+    root.dataset.theme = shownPreset
     root.dataset.themePreference = preferences.theme
     root.dataset.density = preferences.density
     root.dataset.textSize = preferences.textSize
     for (const slot of new Set([...ALL_SLOTS, ...Object.keys(DERIVED_SLOTS)])) root.style.removeProperty(`--${slot}`)
-    for (const [name, value] of Object.entries(themeProperties(preferences.overrides))) root.style.setProperty(name, value)
+    for (const [name, value] of Object.entries(themeProperties(shownOverrides))) root.style.setProperty(name, value)
     syncThemeColor()
-  }, [preferences, preset])
+  }, [preferences, shownPreset, shownOverrides])
 
   // The setters never change, so effects that depend on them (AppearanceSync
   // applying the account's copy) don't re-run, and undo a choice, on every change.
@@ -58,6 +64,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       })
     }
     return {
+      previewTheme: setPreviewPreset,
       setTheme: (theme: AppearancePreferences['theme']) =>
         update((current) => ({ ...current, theme, overrides: theme === current.theme ? current.overrides : {} })),
       setOverrides: (overrides: AppearancePreferences['overrides']) => update((current) => ({ ...current, overrides })),
@@ -67,7 +74,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       replaceAppearance: (next: AppearancePreferences) => update(() => next),
     }
   }, [])
-  const value = useMemo<ThemeContextValue>(() => ({ ...preferences, preset, ...actions }), [preferences, preset, actions])
+  const value = useMemo<ThemeContextValue>(() => ({ ...preferences, preset, previewPreset, ...actions }), [preferences, preset, previewPreset, actions])
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>
 }

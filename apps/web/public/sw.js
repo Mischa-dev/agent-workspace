@@ -21,7 +21,7 @@ const MAX_ASSETS = 120
 // Client-side routes that the server answers with index.html, and a task's
 // short link (/AW-12). Keep in step with the routes in App.tsx.
 const APP_ROUTE =
-  /^\/(?:|home|welcome|inbox|later|my-work|runs|whiteboards|messages|projects|settings|search|share|new-task|sign-in|forgot-password|reset-password|verify-email|join|dev)(?:\/|$)|^\/[A-Za-z][A-Za-z0-9]{1,9}-[1-9][0-9]{0,8}\/?$/
+  /^\/(?:|home|welcome|inbox|later|my-work|runs|whiteboards|messages|projects|settings|search|share|new-task|sign-in|forgot-password|reset-password|verify-email|join|design-system)(?:\/|$)|^\/[A-Za-z][A-Za-z0-9]{1,9}-[1-9][0-9]{0,8}\/?$/
 
 self.addEventListener('install', (event) => {
   event.waitUntil(cacheShell().catch(() => undefined).then(() => self.skipWaiting()))
