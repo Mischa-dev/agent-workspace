@@ -190,6 +190,7 @@ export function SignInPage() {
     )
   }
 
+  const workosError = new URLSearchParams(location.search).get('workosError')
   const google = Boolean(workos.data?.googleEnabled)
   const sso = Boolean(workos.data?.enabled)
   return (
@@ -208,11 +209,14 @@ export function SignInPage() {
       title="Sign in"
       titleId="sign-in-heading"
     >
-      {new URLSearchParams(location.search).has('workosError') && (
+      {workosError === 'unlinked' ? (
         <Banner tone="danger">
-          Single sign-on didn’t finish. If you already have an account, sign in below and link single sign-on in Account settings.
+          That single sign-on account isn’t linked to an account here yet. Sign in below with your username and
+          password, then link single sign-on in Account settings.
         </Banner>
-      )}
+      ) : workosError ? (
+        <Banner tone="danger">Single sign-on didn’t finish. Try again.</Banner>
+      ) : null}
       {error && (
         <div className="aw-auth__error" ref={errorRef} role="alert" tabIndex={-1}>
           <Banner tone="danger">{error}</Banner>

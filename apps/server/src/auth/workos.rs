@@ -178,7 +178,7 @@ async fn start(
     let nonce = random_token();
     let browser = random_token();
     let pkce = Zeroizing::new(verifier(config, &nonce)?);
-    let mut url = url::Url::parse("https://api.workos.com/user_management/authorize")
+    let mut url = url::Url::parse(&format!("{}/user_management/authorize", config.api_base))
         .map_err(|_| AppError::Internal("WorkOS URL"))?;
     url.query_pairs_mut().extend_pairs([
         ("client_id", config.client_id.as_str()),
@@ -264,11 +264,21 @@ async fn callback(
     headers: HeaderMap,
     ApiQuery(query): ApiQuery<Callback>,
 ) -> Response {
-    match finish_callback(&state, &headers, query).await {
+    let mut step = "start";
+    match finish_callback(&state, &headers, query, &mut step).await {
         Ok(response) => response,
-        Err(_) => {
-            // Never log provider errors, authorization codes, or response bodies.
-            let mut response = Redirect::to("/sign-in?workosError=1").into_response();
+        Err(error) => {
+            // Log only which step failed, so a failed sign-in can be traced;
+            // never provider errors, authorization codes, or response bodies.
+            tracing::warn!(step, "WorkOS sign-in did not finish");
+            // Someone whose sign-in worked at WorkOS but who has no account
+            // here is told how to link one; everything else is a retry.
+            let reason = match (step, error) {
+                ("account", AppError::Forbidden) => "unlinked",
+                _ => "1",
+            };
+            let mut response =
+                Redirect::to(&format!("/sign-in?workosError={reason}")).into_response();
             let _ = append_cookie(response.headers_mut(), browser_cookie(&state, "", true));
             response
         }
@@ -278,8 +288,10 @@ async fn finish_callback(
     state: &AppState,
     headers: &HeaderMap,
     query: Callback,
+    step: &mut &'static str,
 ) -> Result<Response, AppError> {
     let config = config(state)?;
+    *step = "callback";
     let nonce = Zeroizing::new(
         query
             .state
@@ -292,16 +304,20 @@ async fn finish_callback(
             .filter(|v| v.len() <= 2048)
             .ok_or(AppError::InvalidCredentials)?,
     );
+    *step = "browser cookie";
     let browser = cookie_value(headers, cookie_name(state))
         .filter(|v| v.len() <= 256)
         .ok_or(AppError::InvalidCredentials)?;
+    *step = "login attempt";
     let attempt=sqlx::query_as::<_,LoginAttempt>("DELETE FROM workos_login_attempts WHERE state_hash=$1 AND browser_hash=$2 AND expires_at>now() RETURNING link_session_id,signup_username")
         .bind(hash_secret(&nonce).to_vec()).bind(hash_secret(&browser).to_vec()).fetch_optional(&state.pool).await?.ok_or(AppError::InvalidCredentials)?;
+    *step = "code exchange";
     let pkce = Zeroizing::new(verifier(config, &nonce)?);
-    let response=client()?.post("https://api.workos.com/user_management/authenticate")
+    let response=client()?.post(format!("{}/user_management/authenticate", config.api_base))
         .json(&serde_json::json!({"client_id":config.client_id,"client_secret":config.api_key.expose(),"grant_type":"authorization_code","code":code.as_str(),"code_verifier":pkce.as_str()}))
         .send().await.map_err(|_|AppError::Internal("identity service unavailable"))?;
     if !response.status().is_success() {
+        *step = "code exchange rejected";
         return Err(AppError::InvalidCredentials);
     }
     let raw = Zeroizing::new(
@@ -310,6 +326,7 @@ async fn finish_callback(
             .await
             .map_err(|_| AppError::InvalidCredentials)?,
     );
+    *step = "provider user";
     let auth: Authentication =
         serde_json::from_str(&raw).map_err(|_| AppError::InvalidCredentials)?;
     if !auth.user.email_verified
@@ -319,6 +336,7 @@ async fn finish_callback(
     {
         return Err(AppError::InvalidCredentials);
     }
+    *step = "provider session";
     // This token came directly from the authenticated HTTPS code exchange. Only
     // extract its session reference; never accept caller-supplied JWT claims.
     let token = Zeroizing::new(auth.access_token);
@@ -336,10 +354,13 @@ async fn finish_callback(
     if !claims.sid.starts_with("session_") || claims.sid.len() > 100 {
         return Err(AppError::InvalidCredentials);
     }
+    *step = "account";
     let mut tx = state.pool.begin().await?;
     let user_id = resolve_identity(&mut tx, config, &auth.user, &attempt).await?;
+    *step = "local user";
     let row=sqlx::query_as::<_,(Uuid,String,String,i64)>("SELECT u.actor_id,u.login_name,u.display_name,u.authentication_epoch FROM users u JOIN actors a ON a.id=u.actor_id WHERE u.id=$1 AND u.status='active' AND a.status='active' AND a.kind='human' FOR SHARE OF u,a")
         .bind(user_id).fetch_optional(&mut *tx).await?.ok_or(AppError::Forbidden)?;
+    *step = "session";
     let established = establish_session_in_transaction(
         &state.config,
         headers,
@@ -636,7 +657,8 @@ async fn provider_session_active(
     for _ in 0..10 {
         let mut request = client()?
             .get(format!(
-                "https://api.workos.com/user_management/users/{subject}/sessions"
+                "{}/user_management/users/{subject}/sessions",
+                config.api_base
             ))
             .bearer_auth(config.api_key.expose())
             .query(&[("limit", "100")]);
@@ -686,7 +708,10 @@ pub(crate) async fn revoke_provider_session(state: &AppState, session_id: Uuid) 
     };
     // Log only the outcome; never the session reference, key, or response body.
     match client
-        .post("https://api.workos.com/user_management/sessions/revoke")
+        .post(format!(
+            "{}/user_management/sessions/revoke",
+            config.api_base
+        ))
         .bearer_auth(config.api_key.expose())
         .json(&serde_json::json!({"session_id":sid}))
         .send()
@@ -746,6 +771,7 @@ mod tests {
             authkit_domain: None,
             google_enabled: false,
             agent_registration_enabled: false,
+            api_base: crate::config::WORKOS_API_BASE.into(),
         };
         let provider = ProviderUser {
             id: "user_test_one".into(),

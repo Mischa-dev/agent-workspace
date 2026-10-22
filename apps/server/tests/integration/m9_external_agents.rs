@@ -2264,6 +2264,7 @@ async fn workos_link_start_requires_csrf_and_callback_is_bound_to_the_browser() 
         authkit_domain: None,
         google_enabled: true,
         agent_registration_enabled: false,
+        api_base: agent_workspace_server::config::WORKOS_API_BASE.into(),
     });
     let application = test_app(pool.clone(), config);
     let cookie = login(&application).await;

@@ -53,7 +53,7 @@ async fn api(
     body: Option<Value>,
 ) -> Result<Value, AppError> {
     let mut request = client()?
-        .request(method, format!("https://api.workos.com{path}"))
+        .request(method, format!("{}{path}", config.api_base))
         .bearer_auth(config.api_key.expose());
     if let Some(body) = body {
         request = request.json(&body);
@@ -151,10 +151,7 @@ async fn verified_token(config: &WorkOsConfig, token: &str) -> Result<Option<Cla
         return Ok(None);
     }
     let response = client()?
-        .get(format!(
-            "https://api.workos.com/sso/jwks/{}",
-            config.client_id
-        ))
+        .get(format!("{}/sso/jwks/{}", config.api_base, config.client_id))
         .send()
         .await
         .map_err(|_| AppError::Internal("WorkOS signing keys unavailable"))?;
@@ -498,7 +495,7 @@ async fn ensure_org(
         id
     } else {
         let response = client()?
-            .post("https://api.workos.com/organizations")
+            .post(format!("{}/organizations", config.api_base))
             .bearer_auth(config.api_key.expose())
             .header("Idempotency-Key", format!("workspace-org-{org}"))
             .json(&json!({"name":name,"external_id":org.to_string()}))
@@ -727,6 +724,7 @@ mod tests {
             authkit_domain: Some("https://test.authkit.app".into()),
             google_enabled: false,
             agent_registration_enabled: true,
+            api_base: crate::config::WORKOS_API_BASE.into(),
         }
     }
     fn claims() -> Value {
