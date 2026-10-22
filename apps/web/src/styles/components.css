@@ -825,8 +825,11 @@
   cursor: not-allowed;
 }
 
+/* In a row it keeps its full width and lets the text beside it wrap; it only
+   scrolls when it's wider than the whole row. */
 .aw-seg {
   display: inline-flex;
+  flex-shrink: 0;
   align-self: flex-start;
   justify-self: start;
   width: max-content;
