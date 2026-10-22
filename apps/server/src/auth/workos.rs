@@ -324,12 +324,6 @@ async fn finish_callback(
             .filter(|v| v.len() <= 256)
             .ok_or(AppError::InvalidCredentials)?,
     );
-    let code = Zeroizing::new(
-        query
-            .code
-            .filter(|v| v.len() <= 2048)
-            .ok_or(AppError::InvalidCredentials)?,
-    );
     *step = "browser cookie";
     let browser = cookie_value(headers, cookie_name(state))
         .filter(|v| v.len() <= 256)
@@ -338,6 +332,15 @@ async fn finish_callback(
     let attempt=sqlx::query_as::<_,LoginAttempt>("DELETE FROM workos_login_attempts WHERE state_hash=$1 AND browser_hash=$2 AND expires_at>now() RETURNING link_session_id,signup_username")
         .bind(hash_secret(&nonce).to_vec()).bind(hash_secret(&browser).to_vec()).fetch_optional(&state.pool).await?.ok_or(AppError::InvalidCredentials)?;
     *linking = attempt.link_session_id.is_some();
+    // Only now: a callback that brings an error instead of a code (someone
+    // cancelled at WorkOS) still has to find its way back to a link.
+    *step = "authorization code";
+    let code = Zeroizing::new(
+        query
+            .code
+            .filter(|v| v.len() <= 2048)
+            .ok_or(AppError::InvalidCredentials)?,
+    );
     *step = "code exchange";
     let pkce = Zeroizing::new(verifier(config, &nonce)?);
     let response=client()?.post(format!("{}/user_management/authenticate", config.api_base))
