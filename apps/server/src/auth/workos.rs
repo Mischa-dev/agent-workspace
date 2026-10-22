@@ -265,7 +265,8 @@ async fn callback(
     ApiQuery(query): ApiQuery<Callback>,
 ) -> Response {
     let mut step = "start";
-    match finish_callback(&state, &headers, query, &mut step).await {
+    let mut linking = false;
+    match finish_callback(&state, &headers, query, &mut step, &mut linking).await {
         Ok(response) => response,
         Err(error) => {
             // Log only which step failed, so a failed sign-in can be traced;
@@ -273,9 +274,8 @@ async fn callback(
             if worth_logging(step, &error) {
                 tracing::warn!(step, "WorkOS sign-in did not finish");
             }
-            let reason = failure_reason(step, &error);
             let mut response =
-                Redirect::to(&format!("/sign-in?workosError={reason}")).into_response();
+                Redirect::to(&failure_location(step, &error, linking)).into_response();
             let _ = append_cookie(response.headers_mut(), browser_cookie(&state, "", true));
             response
         }
@@ -298,11 +298,23 @@ fn failure_reason(step: &str, error: &AppError) -> &'static str {
         _ => "1",
     }
 }
+/// A failed link goes back to Account settings, where it was started: the
+/// browser is still signed in there, and the sign-in page would send it on
+/// to the home page before the reason could be read.
+fn failure_location(step: &str, error: &AppError, linking: bool) -> String {
+    let page = if linking {
+        "/settings/account/profile"
+    } else {
+        "/sign-in"
+    };
+    format!("{page}?workosError={}", failure_reason(step, error))
+}
 async fn finish_callback(
     state: &AppState,
     headers: &HeaderMap,
     query: Callback,
     step: &mut &'static str,
+    linking: &mut bool,
 ) -> Result<Response, AppError> {
     let config = config(state)?;
     *step = "callback";
@@ -325,6 +337,7 @@ async fn finish_callback(
     *step = "login attempt";
     let attempt=sqlx::query_as::<_,LoginAttempt>("DELETE FROM workos_login_attempts WHERE state_hash=$1 AND browser_hash=$2 AND expires_at>now() RETURNING link_session_id,signup_username")
         .bind(hash_secret(&nonce).to_vec()).bind(hash_secret(&browser).to_vec()).fetch_optional(&state.pool).await?.ok_or(AppError::InvalidCredentials)?;
+    *linking = attempt.link_session_id.is_some();
     *step = "code exchange";
     let pkce = Zeroizing::new(verifier(config, &nonce)?);
     let response=client()?.post(format!("{}/user_management/authenticate", config.api_base))
@@ -749,6 +762,30 @@ mod tests {
     use crate::config::SecretString;
     use sqlx::{Executor, postgres::PgPoolOptions};
 
+    #[test]
+    fn failed_links_return_to_account_settings() {
+        let conflict = AppError::Conflict("single sign-on identity", "linked to another account");
+        assert_eq!(
+            failure_location("account", &conflict, true),
+            "/settings/account/profile?workosError=linked_elsewhere"
+        );
+        assert_eq!(
+            failure_location(
+                "code exchange rejected",
+                &AppError::InvalidCredentials,
+                true
+            ),
+            "/settings/account/profile?workosError=1"
+        );
+        assert_eq!(
+            failure_location("account", &AppError::Forbidden, false),
+            "/sign-in?workosError=unlinked"
+        );
+        assert_eq!(
+            failure_location("login attempt", &AppError::InvalidCredentials, false),
+            "/sign-in?workosError=1"
+        );
+    }
     #[test]
     fn callbacks_that_match_no_login_attempt_are_not_logged() {
         // Anyone can send these to the public callback, as often as they like.

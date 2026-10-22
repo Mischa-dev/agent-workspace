@@ -214,11 +214,6 @@ export function SignInPage() {
           That single sign-on account isn’t linked to an account here yet. Sign in below with your username and
           password, then link single sign-on in Account settings.
         </Banner>
-      ) : workosError === 'linked_elsewhere' ? (
-        <Banner tone="danger">
-          That single sign-on account is already linked to a different account here, so it can’t be linked to this
-          one.
-        </Banner>
       ) : workosError ? (
         <Banner tone="danger">Single sign-on didn’t finish. Try again.</Banner>
       ) : null}

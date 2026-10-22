@@ -1,5 +1,6 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useSearchParams } from 'react-router-dom'
 
 import { requestJson } from '../../api/client'
 import { queryKeys } from '../../api/queryKeys'
@@ -9,9 +10,26 @@ import { Avatar, Banner, Button, PageHeader, Section, SettingsSkeleton, TextFiel
 import type { SettingsPageProps } from '../types'
 import { EmailSection } from './EmailSection'
 
+/** Why a single sign-on link that came back here (`?workosError=`) didn't go through. */
+function linkFailure(reason: string | null) {
+  if (reason === 'linked_elsewhere') {
+    return 'That single sign-on account is already linked to a different account here, so it can’t be linked to this one.'
+  }
+  return reason ? 'Single sign-on didn’t link. Try again.' : null
+}
+
 /** Account › Profile: your name, your email address, your GitHub username and how you sign in. */
 export default function ProfilePage({ session, workspace }: SettingsPageProps) {
   const client = useQueryClient()
+  const [parameters, setParameters] = useSearchParams()
+  // Read once, then taken out of the address so a reload doesn't show it again.
+  const [linkError] = useState(() => linkFailure(parameters.get('workosError')))
+  useEffect(() => {
+    if (!parameters.has('workosError')) return
+    const next = new URLSearchParams(parameters)
+    next.delete('workosError')
+    setParameters(next, { replace: true })
+  }, [parameters, setParameters])
   const [name, setName] = useState(session.user.displayName)
   const [error, setError] = useState<string | null>(null)
   const status = useQuery({ queryKey: ['workos-status'], queryFn: workOsStatus })
@@ -103,6 +121,7 @@ export default function ProfilePage({ session, workspace }: SettingsPageProps) {
         id="sign-in-heading"
         title="Sign-in"
       >
+        {linkError && <Banner tone="danger">{linkError}</Banner>}
         {status.isPending && <SettingsSkeleton label="Loading sign-in settings" sections={1} />}
         {status.isError && (
           <Banner onRetry={() => void status.refetch()} title="Sign-in settings didn’t load." tone="danger">

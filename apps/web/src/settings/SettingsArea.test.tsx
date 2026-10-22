@@ -69,6 +69,15 @@ describe('settings addresses', () => {
     await waitFor(() => expect(window.location.search).toBe(''))
   })
 
+  it('says why single sign-on didn’t link when the link comes back', async () => {
+    installStandardApi()
+    window.history.replaceState({}, '', '/settings/account/profile?workosError=linked_elsewhere')
+    render(<App />)
+    expect(await screen.findByText(/already linked to a different account here/)).toBeVisible()
+    await waitFor(() => expect(window.location.search).toBe(''))
+    expect(window.location.pathname).toBe('/settings/account/profile')
+  })
+
   it('finds a single setting by name and links to the page that holds it', async () => {
     const fetchMock = installStandardApi()
     const standard = fetchMock.getMockImplementation()
