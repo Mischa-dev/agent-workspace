@@ -96,6 +96,8 @@ export default defineConfig({
         ws: true,
       },
       '/health': apiTarget,
+      // Single sign-on comes back here from WorkOS, and the server finishes it.
+      '/auth/workos': apiTarget,
     },
   },
   test: {

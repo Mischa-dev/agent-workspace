@@ -1,6 +1,6 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { randomBytes, randomUUID } from 'node:crypto'
-import { createWriteStream, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { createWriteStream, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -15,6 +15,7 @@ import {
   storageStatePath,
   webOrigin,
 } from './environment'
+import { startWorkOsStandIn, workOsStandIn } from './workos-stand-in'
 
 /**
  * Prepares a fresh database, creates the first User through the real
@@ -48,6 +49,10 @@ export default async function globalSetup() {
 
   mkdirSync(outputRoot, { recursive: true })
   const runtimeRoot = mkdtempSync(path.join(os.tmpdir(), 'aw-e2e-'))
+  // Single sign-on goes through a local stand-in for WorkOS (see workos-stand-in.ts).
+  const workOs = await startWorkOsStandIn(ports.workos)
+  const workOsKeyPath = path.join(runtimeRoot, 'workos-api-key')
+  writeFileSync(workOsKeyPath, workOsStandIn.apiKey, { mode: 0o600 })
   const maintenance = `${databaseBase}/postgres`
   const dropDatabase = () =>
     run('dropdb', ['--force', '--if-exists', `--maintenance-db=${maintenance}`, databaseName])
@@ -71,6 +76,9 @@ export default async function globalSetup() {
     AGENT_WORKSPACE_CODEX_HOME_ROOT: path.join(runtimeRoot, 'codex'),
     AGENT_WORKSPACE_MINIMUM_FREE_BYTES: String(1024 * 1024 * 1024),
     AGENT_WORKSPACE_LOG_FILTER: 'agent_workspace=info,tower_http=warn',
+    AGENT_WORKSPACE_WORKOS_CLIENT_ID: workOsStandIn.clientId,
+    AGENT_WORKSPACE_WORKOS_API_KEY_PATH: workOsKeyPath,
+    AGENT_WORKSPACE_WORKOS_API_BASE: workOs.origin,
   }
 
   // A fresh throwaway password per run, handed over on stdin only.
@@ -93,6 +101,7 @@ export default async function globalSetup() {
     { cwd: runtimeRoot, env: serverEnvironment, input: `${password}\n`, encoding: 'utf8', timeout: 180_000 },
   )
   if (bootstrap.status !== 0) {
+    await workOs.close()
     dropDatabase()
     throw new Error(`bootstrap-admin failed (${bootstrap.status}):\n${bootstrap.stdout}\n${bootstrap.stderr}`)
   }
@@ -104,6 +113,7 @@ export default async function globalSetup() {
 
   const teardown = async () => {
     await stop(server)
+    await workOs.close()
     log.end()
     dropDatabase()
     rmSync(runtimeRoot, { recursive: true, force: true })

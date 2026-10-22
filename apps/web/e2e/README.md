@@ -14,6 +14,11 @@ be a test matrix. Unit and component tests stay in `src/` with Vitest.
     then moving it on the board: Backlog → Ready with the keyboard (Space,
     an arrow, Space), Ready → In Progress by dragging, and checking it's still
     there after a reload
+- `single-sign-on.spec.ts`: the whole WorkOS round trip against a local
+  stand-in (`workos-stand-in.ts`, on `localhost` so the browser treats it as
+  another site): linking single sign-on from a password session, signing in
+  with it, staying signed in past the server's periodic check with WorkOS,
+  signing out, and the message for a WorkOS account that isn't linked
 - `whiteboards.spec.ts`: creating a whiteboard, drawing a rectangle on it,
   seeing a second tab on the same board pull the change from the live stream,
   and finding it still there after a reload
@@ -42,7 +47,8 @@ or point at one you have: `PLAYWRIGHT_CHROMIUM_EXECUTABLE=/path/to/chrome`.
 
 Other knobs: `E2E_SERVER_BINARY` (default `target/debug/agent-workspace-server`),
 `E2E_DATABASE_NAME` (default `aw_e2e`; must start with `aw_e2e`),
-`E2E_SERVER_PORT` (default 3190; the webhook listener takes the next port) and
+`E2E_SERVER_PORT` (default 3190; the webhook listener takes the next port and
+the WorkOS stand-in the one after) and
 `E2E_WEB_PORT` (default 5190). The defaults stay clear of the usual dev ports,
 so a running `pnpm dev` is left alone.
 

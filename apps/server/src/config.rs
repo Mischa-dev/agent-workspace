@@ -136,6 +136,9 @@ pub struct WorkOsConfig {
     pub authkit_domain: Option<String>,
     pub google_enabled: bool,
     pub agent_registration_enabled: bool,
+    /// Where the WorkOS API lives: always `https://api.workos.com` outside
+    /// development, where the browser tests point it at a stand-in.
+    pub api_base: String,
 }
 
 #[derive(Clone)]
@@ -349,7 +352,7 @@ impl AppConfig {
             });
         }
 
-        let workos = workos_config(values, &data_root, &web_root)?;
+        let workos = workos_config(values, environment, &data_root, &web_root)?;
         let secrets_key_path =
             optional_secret_path(values, "SECRETS_KEY_PATH", &data_root, &web_root, 64 * 1024)?;
         // The master key opens every stored credential; a checkout (or an
@@ -877,8 +880,11 @@ pub enum ConfigError {
     Invalid { key: String, reason: String },
 }
 
+pub const WORKOS_API_BASE: &str = "https://api.workos.com";
+
 fn workos_config(
     values: &BTreeMap<String, String>,
+    environment: Environment,
     data_root: &Path,
     web_root: &Path,
 ) -> Result<Option<WorkOsConfig>, ConfigError> {
@@ -939,7 +945,28 @@ fn workos_config(
     if agent_registration_enabled && authkit_domain.is_none() {
         return Err(error());
     }
+    let api_base = match values.get("AGENT_WORKSPACE_WORKOS_API_BASE") {
+        None => WORKOS_API_BASE.to_owned(),
+        Some(value) => {
+            let url = url::Url::parse(value).map_err(|_| ConfigError::Invalid {
+                key: "AGENT_WORKSPACE_WORKOS_API_BASE".into(),
+                reason: "must be a URL".into(),
+            })?;
+            let loopback = url.scheme() == "http"
+                && matches!(url.host_str(), Some("127.0.0.1" | "localhost"))
+                && url.path() == "/"
+                && url.query().is_none();
+            if !environment.is_development() || !loopback {
+                return Err(ConfigError::Invalid {
+                    key: "AGENT_WORKSPACE_WORKOS_API_BASE".into(),
+                    reason: "only a loopback stand-in in development".into(),
+                });
+            }
+            url.as_str().trim_end_matches('/').to_owned()
+        }
+    };
     Ok(Some(WorkOsConfig {
+        api_base,
         authkit_domain,
         google_enabled,
         agent_registration_enabled,
@@ -1339,5 +1366,64 @@ mod tests {
                 "accepted {invalid}"
             );
         }
+    }
+
+    #[test]
+    fn workos_api_stand_in_is_development_loopback_only() {
+        let base = std::env::temp_dir().join(format!("aw-workos-config-{}", std::process::id()));
+        let (data_root, web_root) = (base.join("data"), base.join("web"));
+        std::fs::create_dir_all(&base).expect("make directory");
+        let key = base.join("workos-api-key");
+        std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .mode(0o600)
+            .open(&key)
+            .and_then(|mut file| file.write_all(b"sk_test"))
+            .expect("write key");
+        let values = |api_base: Option<&str>| {
+            let mut values = BTreeMap::from([
+                (
+                    "AGENT_WORKSPACE_WORKOS_CLIENT_ID".to_owned(),
+                    "client_test".to_owned(),
+                ),
+                (
+                    "AGENT_WORKSPACE_WORKOS_API_KEY_PATH".to_owned(),
+                    key.to_string_lossy().into_owned(),
+                ),
+            ]);
+            if let Some(api_base) = api_base {
+                values.insert(
+                    "AGENT_WORKSPACE_WORKOS_API_BASE".to_owned(),
+                    api_base.to_owned(),
+                );
+            }
+            values
+        };
+        let api_base = |environment, api_base| {
+            workos_config(&values(api_base), environment, &data_root, &web_root)
+                .map(|config| config.expect("configured").api_base)
+        };
+        assert_eq!(
+            api_base(Environment::Production, None).expect("default"),
+            WORKOS_API_BASE
+        );
+        assert_eq!(
+            api_base(Environment::Development, Some("http://localhost:3192")).expect("stand-in"),
+            "http://localhost:3192"
+        );
+        for (environment, value) in [
+            (Environment::Production, "http://localhost:3192"),
+            (Environment::Development, "https://elsewhere.example"),
+            (Environment::Development, "http://10.0.0.5:3192"),
+            (Environment::Development, "http://localhost:3192/path"),
+        ] {
+            assert!(
+                api_base(environment, Some(value)).is_err(),
+                "accepted {value}"
+            );
+        }
+        std::fs::remove_dir_all(&base).expect("clean up");
     }
 }
