@@ -26,6 +26,11 @@ const MCP_AUTH_ATTEMPTS_PER_WINDOW: u32 = 600;
 const GLOBAL_MCP_AUTH_ATTEMPTS_PER_WINDOW: u32 = 900;
 const OAUTH_CEREMONIES_PER_WINDOW: u32 = 30;
 const GLOBAL_OAUTH_CEREMONIES_PER_WINDOW: u32 = 240;
+/// Token refreshes have their own budget: one app running many sessions on a
+/// grant refreshes from all of them at once, and a refused refresh drops the
+/// app's tools, so it mustn't share the sign-in ceremonies' smaller one.
+const OAUTH_REFRESHES_PER_WINDOW: u32 = 300;
+const GLOBAL_OAUTH_REFRESHES_PER_WINDOW: u32 = 1_200;
 // WorkOS sign-in starts have their own budget so they can neither starve nor
 // be starved by password logins and MCP OAuth ceremonies.
 const WORKOS_STARTS_PER_WINDOW: u32 = 20;
@@ -58,6 +63,8 @@ pub struct RateLimiters {
     global_mcp_auth_attempts: FixedWindowLimiter<()>,
     oauth_ceremonies: FixedWindowLimiter<[u8; 32]>,
     global_oauth_ceremonies: FixedWindowLimiter<()>,
+    oauth_refreshes: FixedWindowLimiter<[u8; 32]>,
+    global_oauth_refreshes: FixedWindowLimiter<()>,
     workos_starts: FixedWindowLimiter<[u8; 32]>,
     global_workos_starts: FixedWindowLimiter<()>,
     webhook_attempts: FixedWindowLimiter<()>,
@@ -128,6 +135,16 @@ impl RateLimiters {
             .map_err(AppError::rate_limited)?;
         let key: [u8; 32] = Sha256::digest(untrusted_key.as_bytes()).into();
         self.oauth_ceremonies
+            .check(key)
+            .map_err(AppError::rate_limited)
+    }
+
+    pub fn check_oauth_refresh(&self, untrusted_client_id: &str) -> Result<(), AppError> {
+        self.global_oauth_refreshes
+            .check(())
+            .map_err(AppError::rate_limited)?;
+        let key: [u8; 32] = Sha256::digest(untrusted_client_id.as_bytes()).into();
+        self.oauth_refreshes
             .check(key)
             .map_err(AppError::rate_limited)
     }
@@ -223,6 +240,16 @@ impl Default for RateLimiters {
             ),
             global_oauth_ceremonies: FixedWindowLimiter::new(
                 GLOBAL_OAUTH_CEREMONIES_PER_WINDOW,
+                WINDOW,
+                1,
+            ),
+            oauth_refreshes: FixedWindowLimiter::new(
+                OAUTH_REFRESHES_PER_WINDOW,
+                WINDOW,
+                MAX_SESSION_KEYS,
+            ),
+            global_oauth_refreshes: FixedWindowLimiter::new(
+                GLOBAL_OAUTH_REFRESHES_PER_WINDOW,
                 WINDOW,
                 1,
             ),
@@ -353,7 +380,7 @@ mod tests {
     use super::{
         CONCURRENT_PASSWORD_KDFS, EXPENSIVE_READS_PER_WINDOW, FixedWindowLimiter,
         MCP_AUTH_ATTEMPTS_PER_WINDOW, MCP_REQUESTS_PER_WINDOW, OAUTH_CEREMONIES_PER_WINDOW,
-        RateLimiters, WEBHOOK_ATTEMPTS_PER_WINDOW,
+        OAUTH_REFRESHES_PER_WINDOW, RateLimiters, WEBHOOK_ATTEMPTS_PER_WINDOW,
     };
     use crate::error::AppError;
 
@@ -491,6 +518,15 @@ mod tests {
             Err(AppError::RateLimited { .. })
         ));
         assert!(limiters.check_oauth_ceremony("client-b").is_ok());
+        // Refreshes don't spend the exhausted ceremony budget.
+        for _ in 0..OAUTH_REFRESHES_PER_WINDOW {
+            assert!(limiters.check_oauth_refresh("client-a").is_ok());
+        }
+        assert!(matches!(
+            limiters.check_oauth_refresh("client-a"),
+            Err(AppError::RateLimited { .. })
+        ));
+        assert!(limiters.check_oauth_refresh("client-b").is_ok());
 
         for _ in 0..WEBHOOK_ATTEMPTS_PER_WINDOW {
             assert!(limiters.check_webhook_attempt().is_ok());

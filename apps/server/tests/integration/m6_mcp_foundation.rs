@@ -1296,6 +1296,20 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     let access_token = tokens["access_token"].as_str().expect("access token");
     let refresh_token = tokens["refresh_token"].as_str().expect("refresh token");
     assert_eq!(tokens["scope"], "read write");
+    // Access tokens last twelve hours, so an app with many sessions on one
+    // grant refreshes rarely; the stored expiry matches what the app is told.
+    assert_eq!(tokens["expires_in"], 12 * 60 * 60);
+    let access_lifetime = sqlx::query_scalar::<_, f64>(
+        "SELECT EXTRACT(EPOCH FROM expires_at - created_at)::float8 FROM mcp_oauth_access_tokens WHERE token_digest = $1",
+    )
+    .bind(Sha256::digest(access_token.as_bytes()).to_vec())
+    .fetch_one(&pool)
+    .await
+    .expect("access token lifetime");
+    assert!(
+        (access_lifetime - 43_200.0).abs() < 60.0,
+        "stored lifetime {access_lifetime}"
+    );
     let stored_oauth = serde_json::to_string(&sqlx::query_as::<_, (Vec<u8>, Vec<u8>)>(
         "SELECT access.token_digest, refresh.token_digest FROM mcp_oauth_access_tokens access JOIN mcp_oauth_refresh_tokens refresh ON refresh.grant_id = access.grant_id LIMIT 1",
     ).fetch_one(&pool).await.expect("stored OAuth digests")).expect("digest JSON");
@@ -1462,6 +1476,17 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     for access in [refreshed_access, parallel_access, thief_access] {
         let family_revoked = mcp_request(&application, Some(access), None, &initialize).await;
         assert_eq!(family_revoked.status(), StatusCode::UNAUTHORIZED);
+        // A token that stopped working says so, so the client refreshes or
+        // signs in again instead of quietly dropping the server.
+        assert!(
+            family_revoked
+                .headers()
+                .get(header::WWW_AUTHENTICATE)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.ends_with(", error=\"invalid_token\"")),
+            "{:?}",
+            family_revoked.headers().get(header::WWW_AUTHENTICATE)
+        );
     }
     let thief_continues = refresh_again(refresh_form(thief_next_refresh))
         .await

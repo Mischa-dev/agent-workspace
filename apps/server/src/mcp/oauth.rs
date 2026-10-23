@@ -597,14 +597,40 @@ async fn token(
     State(state): State<AppState>,
     Form(request): Form<TokenRequest>,
 ) -> Result<Response, OAuthError> {
-    state
-        .rate_limits
-        .check_oauth_ceremony(&request.client_id)
-        .map_err(OAuthError::from)?;
-    let response = match request.grant_type.as_str() {
-        "authorization_code" => exchange_code(&state, request).await?,
-        "refresh_token" => refresh(&state, request).await?,
-        _ => return Err(OAuthError::unsupported_grant("unsupported grant type")),
+    let refreshing = request.grant_type == "refresh_token";
+    let budget = if refreshing {
+        state.rate_limits.check_oauth_refresh(&request.client_id)
+    } else {
+        state.rate_limits.check_oauth_ceremony(&request.client_id)
+    };
+    if let Err(error) = budget {
+        tracing::warn!(
+            grant_type = %log_grant_type(&request.grant_type),
+            "an OAuth token request was over its rate limit"
+        );
+        return Err(OAuthError::from(error));
+    }
+    let outcome = match request.grant_type.as_str() {
+        "authorization_code" => exchange_code(&state, &request).await,
+        "refresh_token" => refresh(&state, &request).await,
+        _ => Err(OAuthError::unsupported_grant("unsupported grant type")),
+    };
+    let response = match outcome {
+        Ok(response) => response,
+        Err(error) => {
+            // A refused refresh is what drops a connected app's tools, so say
+            // why. Only the static reason is logged, never the request.
+            if error.status != StatusCode::SERVICE_UNAVAILABLE {
+                tracing::warn!(
+                    grant_type = %log_grant_type(&request.grant_type),
+                    client_id = %log_client_id(&request.client_id),
+                    error = error.error,
+                    reason = error.description,
+                    "an OAuth token request was refused"
+                );
+            }
+            return Err(error);
+        }
     };
     let mut result = Json(response).into_response();
     result
@@ -614,6 +640,22 @@ async fn token(
         .headers_mut()
         .insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
     Ok(result)
+}
+
+/// The grant type as sent, for a log line: one of the known ones, or
+/// "other" so a client can't write arbitrary text into the logs.
+fn log_grant_type(grant_type: &str) -> &'static str {
+    match grant_type {
+        "authorization_code" => "authorization_code",
+        "refresh_token" => "refresh_token",
+        _ => "other",
+    }
+}
+
+/// A client ID is a UUID the server issued and isn't secret; anything else a
+/// client sends there is logged as "invalid".
+fn log_client_id(client_id: &str) -> String {
+    Uuid::parse_str(client_id).map_or_else(|_| "invalid".to_owned(), |id| id.to_string())
 }
 
 #[derive(FromRow)]
@@ -632,7 +674,7 @@ struct CodeRow {
 
 async fn exchange_code(
     state: &AppState,
-    request: TokenRequest,
+    request: &TokenRequest,
 ) -> Result<TokenResponse, OAuthError> {
     let client_id = parse_client_id(&request.client_id)?;
     let code = request
@@ -734,6 +776,11 @@ async fn exchange_code(
     .map_err(AppError::from)?;
     let response = issue_token_pair(&mut transaction, grant_id, &row.scopes).await?;
     transaction.commit().await.map_err(AppError::from)?;
+    tracing::info!(
+        grant_id = %grant_id,
+        client_id = %client_id,
+        "a connected app signed in and got its first tokens"
+    );
     Ok(response)
 }
 
@@ -793,7 +840,7 @@ struct RefreshRow {
     revoked_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-async fn refresh(state: &AppState, request: TokenRequest) -> Result<TokenResponse, OAuthError> {
+async fn refresh(state: &AppState, request: &TokenRequest) -> Result<TokenResponse, OAuthError> {
     let client_id = parse_client_id(&request.client_id)?;
     let refresh_token = request
         .refresh_token
@@ -843,6 +890,9 @@ async fn refresh(state: &AppState, request: TokenRequest) -> Result<TokenRespons
             "refresh token client binding is invalid",
         ));
     }
+    let retired_seconds = row
+        .used_at
+        .map(|used_at| (chrono::Utc::now() - used_at).num_seconds());
     let reused = match (row.revoked_at, row.used_at) {
         (None, None) => false,
         (None, Some(used_at)) if chrono::Utc::now() - used_at <= refresh_reuse_grace() => true,
@@ -852,6 +902,7 @@ async fn refresh(state: &AppState, request: TokenRequest) -> Result<TokenRespons
             tracing::warn!(
                 grant_id = %row.grant_id,
                 client_id = %row.client_id,
+                retired_seconds,
                 "an old refresh token was used again, so its grant was revoked"
             );
             return Err(OAuthError::invalid_grant(
@@ -872,6 +923,7 @@ async fn refresh(state: &AppState, request: TokenRequest) -> Result<TokenRespons
         tracing::info!(
             grant_id = %row.grant_id,
             client_id = %row.client_id,
+            retired_seconds,
             "a refresh token was used again within the grace period"
         );
         return Ok(response);
@@ -905,6 +957,11 @@ async fn refresh(state: &AppState, request: TokenRequest) -> Result<TokenRespons
         .await
         .map_err(AppError::from)?;
     transaction.commit().await.map_err(AppError::from)?;
+    tracing::info!(
+        grant_id = %row.grant_id,
+        client_id = %row.client_id,
+        "a connected app refreshed its tokens"
+    );
     Ok(response)
 }
 
@@ -917,6 +974,13 @@ fn refresh_reuse_grace() -> chrono::Duration {
     chrono::Duration::seconds(REFRESH_REUSE_GRACE_SECONDS)
 }
 
+/// How long an access token works. Every request still looks the token up,
+/// so revoking a grant or removing a person cuts it off at once; the
+/// lifetime only sets how often an app refreshes. An app running many
+/// sessions on one grant refreshes from several at once, so fewer refreshes
+/// mean fewer chances for that to go wrong.
+const ACCESS_TOKEN_TTL_SECONDS: i64 = 12 * 60 * 60;
+
 async fn issue_token_pair(
     transaction: &mut Transaction<'_, Postgres>,
     grant_id: Uuid,
@@ -924,8 +988,9 @@ async fn issue_token_pair(
 ) -> Result<TokenResponse, OAuthError> {
     let (access_token, access_prefix, access_digest) = generate_secret("aw_oauth_");
     let (refresh_token, refresh_prefix, refresh_digest) = generate_secret("aw_refresh_");
-    sqlx::query("INSERT INTO mcp_oauth_access_tokens (id, grant_id, token_prefix, token_digest) VALUES ($1,$2,$3,$4)")
+    sqlx::query("INSERT INTO mcp_oauth_access_tokens (id, grant_id, token_prefix, token_digest, expires_at) VALUES ($1,$2,$3,$4, now() + make_interval(secs => $5))")
         .bind(Uuid::now_v7()).bind(grant_id).bind(access_prefix).bind(access_digest.to_vec())
+        .bind(ACCESS_TOKEN_TTL_SECONDS as f64)
         .execute(&mut **transaction).await.map_err(AppError::from)?;
     sqlx::query("INSERT INTO mcp_oauth_refresh_tokens (id, grant_id, token_prefix, token_digest) VALUES ($1,$2,$3,$4)")
         .bind(Uuid::now_v7()).bind(grant_id).bind(refresh_prefix).bind(refresh_digest.to_vec())
@@ -933,7 +998,7 @@ async fn issue_token_pair(
     Ok(TokenResponse {
         access_token,
         token_type: "Bearer",
-        expires_in: 3600,
+        expires_in: ACCESS_TOKEN_TTL_SECONDS,
         refresh_token,
         scope: scopes.join(" "),
     })
@@ -1007,6 +1072,57 @@ struct AccessRow {
     backing_credential_id: Option<Uuid>,
     connection_scopes: Option<Vec<String>>,
     account_wide: bool,
+}
+
+/// Why an access token that `resolve_access_token` turned away doesn't work,
+/// for the log line on a refused MCP request. It looks at the token's own
+/// row only, so it says nothing a caller couldn't already know about a
+/// token they hold, and it's never sent to the client.
+pub(crate) async fn rejected_access_token_reason(
+    state: &AppState,
+    token: &str,
+) -> Result<&'static str, AppError> {
+    let Ok((prefix, digest)) = secret_lookup(token, "aw_oauth_") else {
+        return Ok("malformed");
+    };
+    let rows = sqlx::query_as::<_, RejectedAccessRow>(
+        r#"
+        SELECT access.token_digest, access.expires_at <= now() AS expired,
+               access.revoked_at IS NOT NULL AS token_revoked,
+               grant_row.revoked_at IS NOT NULL AS grant_revoked,
+               grant_row.compromise_detected_at IS NOT NULL AS reuse_detected
+        FROM mcp_oauth_access_tokens access
+        JOIN mcp_oauth_grants grant_row ON grant_row.id = access.grant_id
+        WHERE access.token_prefix = $1
+        "#,
+    )
+    .bind(prefix)
+    .fetch_all(&state.pool)
+    .await?;
+    let Some(row) = rows
+        .into_iter()
+        .find(|row| digest_matches(&row.token_digest, &digest))
+    else {
+        return Ok("unknown");
+    };
+    Ok(if row.reuse_detected {
+        "grant revoked after an old refresh token was used again"
+    } else if row.grant_revoked || row.token_revoked {
+        "revoked"
+    } else if row.expired {
+        "expired"
+    } else {
+        "the person, project or app is no longer allowed"
+    })
+}
+
+#[derive(FromRow)]
+struct RejectedAccessRow {
+    token_digest: Vec<u8>,
+    expired: bool,
+    token_revoked: bool,
+    grant_revoked: bool,
+    reuse_detected: bool,
 }
 
 pub async fn resolve_access_token(
