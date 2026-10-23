@@ -8,10 +8,13 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use rand_core::{OsRng, RngCore};
+use std::sync::OnceLock;
+
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
     handler::server::{
         prompt::PromptContext,
+        router::tool::ToolRouter,
         tool::Extension,
         wrapper::{Json, Parameters},
     },
@@ -2580,7 +2583,18 @@ impl McpServer {
 /// the cache hints on them, which the rmcp macros leave out.
 const LIST_TTL_MS: u64 = 300_000;
 
-#[tool_handler]
+impl McpServer {
+    /// The tool router, built once. Building it generates the JSON schema of
+    /// every tool, and the generated handler would otherwise do that on every
+    /// tools/list and tools/call, which a client connecting many sessions at
+    /// once has to wait for.
+    fn tools() -> &'static ToolRouter<McpServer> {
+        static TOOLS: OnceLock<ToolRouter<McpServer>> = OnceLock::new();
+        TOOLS.get_or_init(Self::tool_router)
+    }
+}
+
+#[tool_handler(router = Self::tools())]
 impl ServerHandler for McpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(
@@ -2598,11 +2612,9 @@ impl ServerHandler for McpServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        Ok(
-            ListToolsResult::with_all_items(Self::tool_router().list_all())
-                .with_ttl_ms(LIST_TTL_MS)
-                .with_cache_scope(CacheScope::Public),
-        )
+        Ok(ListToolsResult::with_all_items(Self::tools().list_all())
+            .with_ttl_ms(LIST_TTL_MS)
+            .with_cache_scope(CacheScope::Public))
     }
 
     async fn list_prompts(
@@ -2777,7 +2789,7 @@ pub fn oauth_router() -> Router<AppState> {
 /// Every tool's name, description, schemas and hints, for the public API's
 /// OpenAPI document (X3). Generated from the same Rust types the tools take.
 pub(crate) fn tool_catalog() -> Vec<rmcp::model::Tool> {
-    McpServer::tool_router().list_all()
+    McpServer::tools().list_all()
 }
 
 /// Why a direct tool call didn't produce a result.
@@ -2802,7 +2814,7 @@ pub(crate) async fn call_tool_direct(
     tool: &str,
     mut arguments: serde_json::Value,
 ) -> Result<serde_json::Value, DirectCallError> {
-    let router = McpServer::tool_router();
+    let router = McpServer::tools();
     if !router.has_route(tool) {
         return Err(DirectCallError::UnknownTool);
     }
@@ -2888,6 +2900,7 @@ async fn authenticate_mcp(
     }
     match resolve_bearer_principal(&state, request.headers()).await {
         Ok(Some(mut principal)) => {
+            let mut handshake = None;
             if let Err(error) = state.rate_limits.check_mcp_request(principal.credential_id) {
                 return error.into_response();
             }
@@ -2898,7 +2911,11 @@ async fn authenticate_mcp(
                     Err(_) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
                 };
                 let mut bytes = bytes;
-                if let Ok(mut body) = serde_json::from_slice::<serde_json::Value>(&bytes)
+                let mut body = serde_json::from_slice::<serde_json::Value>(&bytes).ok();
+                handshake = body.as_ref().and_then(|body| {
+                    HandshakeStep::of(body, &principal, request_session(&parts.headers))
+                });
+                if let Some(body) = body.as_mut()
                     && body.get("method").and_then(serde_json::Value::as_str) == Some("tools/call")
                 {
                     // People name projects and tasks by key ("AWD", "AWD-12");
@@ -2932,9 +2949,17 @@ async fn authenticate_mcp(
                 request = Request::from_parts(parts, Body::from(bytes));
             }
             request.extensions_mut().insert(principal);
-            next.run(request).await
+            let started = std::time::Instant::now();
+            let response = next.run(request).await;
+            if let Some(step) = handshake {
+                step.log(response.status(), started.elapsed());
+            }
+            response
         }
-        Ok(None) => unauthorized_response(&state),
+        Ok(None) => {
+            log_refused_bearer(&state, request.headers()).await;
+            unauthorized_response(&state, exact_bearer_token(request.headers()).is_some())
+        }
         Err(error) => {
             tracing::error!(error = %error, "MCP credential lookup failed");
             StatusCode::SERVICE_UNAVAILABLE.into_response()
@@ -2942,10 +2967,134 @@ async fn authenticate_mcp(
     }
 }
 
-fn unauthorized_response(state: &AppState) -> Response {
+/// The steps a client takes to load the tools, logged with how long they
+/// took, so a client that gives up on a slow handshake (claude.ai allows about
+/// five seconds) or never gets this far shows in the journal.
+struct HandshakeStep {
+    method: &'static str,
+    client_name: String,
+    credential_id: Uuid,
+    oauth_grant_id: Option<Uuid>,
+    resumed_session: bool,
+    app: Option<(String, String)>,
+    protocol_version: Option<String>,
+}
+
+impl HandshakeStep {
+    fn of(
+        body: &serde_json::Value,
+        principal: &McpPrincipal,
+        session: Option<&str>,
+    ) -> Option<Self> {
+        let method = match body.get("method").and_then(serde_json::Value::as_str)? {
+            "initialize" => "initialize",
+            "tools/list" => "tools/list",
+            _ => return None,
+        };
+        let params = &body["params"];
+        let text = |value: &serde_json::Value| {
+            value
+                .as_str()
+                .map(|text| text.chars().take(64).collect::<String>())
+        };
+        Some(Self {
+            method,
+            client_name: principal.client_name.clone(),
+            credential_id: principal.credential_id,
+            oauth_grant_id: principal.oauth_grant_id,
+            resumed_session: session.is_some(),
+            app: text(&params["clientInfo"]["name"]).map(|name| {
+                (
+                    name,
+                    text(&params["clientInfo"]["version"]).unwrap_or_default(),
+                )
+            }),
+            protocol_version: text(&params["protocolVersion"]),
+        })
+    }
+
+    fn log(&self, status: StatusCode, elapsed: std::time::Duration) {
+        let elapsed_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
+        let (app, app_version) = self.app.as_ref().map_or(("", ""), |(name, version)| {
+            (name.as_str(), version.as_str())
+        });
+        let protocol_version = self.protocol_version.as_deref().unwrap_or("");
+        if elapsed_ms >= SLOW_HANDSHAKE_MS || !status.is_success() {
+            tracing::warn!(
+                method = self.method,
+                status = status.as_u16(),
+                elapsed_ms,
+                client_name = %self.client_name,
+                credential_id = %self.credential_id,
+                oauth_grant_id = ?self.oauth_grant_id,
+                session = self.resumed_session,
+                app,
+                app_version,
+                protocol_version,
+                "an MCP client's handshake step was slow or failed"
+            );
+        } else {
+            tracing::info!(
+                method = self.method,
+                status = status.as_u16(),
+                elapsed_ms,
+                client_name = %self.client_name,
+                credential_id = %self.credential_id,
+                oauth_grant_id = ?self.oauth_grant_id,
+                session = self.resumed_session,
+                app,
+                app_version,
+                protocol_version,
+                "an MCP client loaded the server"
+            );
+        }
+    }
+}
+
+/// Above this a handshake step is logged as slow: well under the time
+/// clients wait before they drop the server.
+const SLOW_HANDSHAKE_MS: u64 = 1_000;
+
+fn request_session(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get("mcp-session-id")
+        .and_then(|value| value.to_str().ok())
+}
+
+/// Says in the journal why a bearer token was turned away, so a connected app
+/// that loses its tools leaves a trace. The token itself is never logged.
+async fn log_refused_bearer(state: &AppState, headers: &HeaderMap) {
+    let Some(token) = exact_bearer_token(headers) else {
+        return;
+    };
+    let reason = if token.starts_with("aw_oauth_") {
+        oauth::rejected_access_token_reason(state, token)
+            .await
+            .unwrap_or("could not be checked")
+    } else {
+        "not a current credential"
+    };
+    let kind = if token.starts_with("aw_oauth_") {
+        "oauth"
+    } else if token.starts_with("eyJ") {
+        "workos"
+    } else {
+        "credential"
+    };
+    tracing::warn!(kind, reason, "an MCP request's bearer token was refused");
+}
+
+fn unauthorized_response(state: &AppState, had_token: bool) -> Response {
     let mut response = StatusCode::UNAUTHORIZED.into_response();
+    // With a token that no longer works, say so (RFC 6750), so the client
+    // refreshes instead of treating the server as broken.
+    let error = if had_token {
+        ", error=\"invalid_token\""
+    } else {
+        ""
+    };
     let challenge = format!(
-        "Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource/api/v1/mcp\"",
+        "Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource/api/v1/mcp\"{error}",
         oauth::public_origin(state)
     );
     if let Ok(value) = HeaderValue::from_str(&challenge) {

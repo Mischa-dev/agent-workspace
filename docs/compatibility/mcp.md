@@ -17,7 +17,10 @@
 The server rejects missing, duplicated, malformed, expired, revoked, or
 wrong-Project credentials with HTTP 401 and a standards-compatible Bearer
 challenge. The challenge points to protected-resource metadata, which in turn
-identifies the loopback authorization server. Browser cookies are never an MCP
+identifies the loopback authorization server; when the request carried a token,
+it also says `error="invalid_token"` so the client refreshes or signs in again.
+The journal says why each token was refused (expired, revoked, the grant
+revoked after refresh-token reuse, unknown), never the token itself. Browser cookies are never an MCP
 resource credential.
 
 Initialization instructions put immutable Project/Work Item identification,
@@ -41,14 +44,23 @@ registers only public clients with exact HTTP loopback redirects and explicit
 ports, and requires an authenticated browser session plus CSRF-protected
 consent. Consent selects one active Project and shows the named client and
 requested scopes. Codes are five-minute, single-use, and bound to the exact
-client, redirect URI, and PKCE challenge. Access tokens expire after one hour;
-refresh tokens expire after 30 days and rotate atomically. An exchanged refresh
+client, redirect URI, and PKCE challenge. Access tokens expire after twelve
+hours (every request still looks them up, so revocation is immediate; the
+lifetime only sets how often a client refreshes); refresh tokens expire after 30 days and rotate atomically. An exchanged refresh
 token still works for five minutes, because a client running many sessions on
 one grant refreshes from several at once and a client whose response was lost
 retries; used again after that, it revokes the complete grant family. Every
 rotation retires all live refresh tokens of the grant, so a token handed out
-in that window can't become a second branch that escapes reuse detection. Codes and all tokens are stored
-only as SHA-256 digests.
+in that window can't become a second branch that escapes reuse detection.
+Refreshes have their own rate budget (300 a minute per client), apart from
+registration and consent. Every sign-in, refresh, reuse (with how long ago the
+token was retired) and refused token request is logged with its grant and
+client IDs. Codes and all tokens are stored only as SHA-256 digests.
+
+The tool list is built once per process. `initialize` and `tools/list` are
+logged with the client, protocol version and duration, as a warning when they
+take a second or more or fail, since claude.ai drops a server whose handshake
+takes about five seconds.
 
 Bearer writes use `authentication_class=mcp_bearer`; OAuth writes use
 `authentication_class=mcp_oauth`. Both preserve the authenticated human Actor
