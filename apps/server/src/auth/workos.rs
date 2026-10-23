@@ -916,8 +916,7 @@ mod tests {
         );
         tx.rollback().await.expect("WorkOS test operation");
         pool.close().await;
-        admin
-            .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+        crate::test_support::drop_schema(&admin, &schema)
             .await
             .expect("WorkOS test operation");
     }

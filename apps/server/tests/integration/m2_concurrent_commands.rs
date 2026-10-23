@@ -233,8 +233,7 @@ async fn concurrent_thread_create_is_linearizable_and_exactly_once() {
 
     drop(app);
     pool.close().await;
-    administrative_pool
-        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("drop isolated concurrent-command schema");
 }

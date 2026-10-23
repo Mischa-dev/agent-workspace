@@ -374,8 +374,7 @@ async fn repository_registration_preparation_archive_and_policy_are_safe_and_ide
 
     supervisors.shutdown_all().await;
     pool.close().await;
-    administrative_pool
-        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("drop isolated M3 repository schema");
 

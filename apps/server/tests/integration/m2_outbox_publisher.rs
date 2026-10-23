@@ -325,8 +325,7 @@ async fn publisher_recovers_committed_rows_and_isolates_poison_events() {
     );
 
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
-        .execute(&administrative_pool)
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("drop isolated outbox schema");
 }

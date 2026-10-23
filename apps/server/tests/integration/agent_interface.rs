@@ -656,8 +656,7 @@ async fn connected_apps_and_agents_see_exactly_what_they_should() {
 
     drop(app);
     pool.close().await;
-    admin
-        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+    agent_workspace_server::test_support::drop_schema(&admin, &schema)
         .await
         .expect("drop schema");
 }

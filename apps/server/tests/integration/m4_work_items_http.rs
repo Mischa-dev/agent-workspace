@@ -1136,8 +1136,7 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
 
     supervisors.shutdown_all().await;
     pool.close().await;
-    administrative_pool
-        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("drop isolated M4 Work Item schema");
 }

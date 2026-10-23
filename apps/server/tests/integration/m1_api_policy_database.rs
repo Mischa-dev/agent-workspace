@@ -204,8 +204,7 @@ async fn durable_m0_routes_require_a_session_and_exact_project_membership() {
     );
 
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
-        .execute(&administrative_pool)
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("drop isolated API-policy schema");
 }

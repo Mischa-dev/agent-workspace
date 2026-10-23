@@ -752,8 +752,7 @@ async fn api_webhooks_and_automations_act_for_their_maker_only() {
     );
     assert_eq!(received.lock().expect("received").len(), before);
 
-    administrative_pool
-        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("drop schema");
 }
