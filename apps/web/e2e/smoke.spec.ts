@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Response } from '@playwright/test'
 
 import { seeded, seededValue } from './environment'
 
@@ -72,6 +72,14 @@ test('creates a task and moves it across the board', async ({ page }) => {
   // New items start in Backlog.
   await expect(card('Backlog')).toBeVisible()
 
+  // Each move saves with its own request; the board shows it before then.
+  const moves: Response[] = []
+  page.on('response', (response) => {
+    if (response.request().method() === 'POST' && /\/work-items\/[^/]+\/move$/.test(new URL(response.url()).pathname)) {
+      moves.push(response)
+    }
+  })
+
   // Move with the keyboard: Space picks the card up, an arrow carries it to
   // the next column, Space drops it. Backlog → Ready.
   // Each step waits for the board's screen-reader announcement, as a person
@@ -90,6 +98,10 @@ test('creates a task and moves it across the board', async ({ page }) => {
   await card('Ready').dragTo(column('In Progress'), { steps: 10 })
   await expect(card('In Progress')).toBeVisible()
   await expect(card('Ready')).toHaveCount(0)
+
+  // Both moves saved, the second right behind the first, before anything
+  // reloads: a reload mid-request would cancel the save it's checking.
+  await expect.poll(() => moves.map((response) => response.status())).toEqual([200, 200])
 
   // The move is stored on the server, not just shown: it survives a reload.
   await page.reload()

@@ -8,7 +8,7 @@ import { BoardCard } from './BoardCard'
 import { BoardSkeleton } from './BoardSkeleton'
 import { ColumnComposer } from './ColumnComposer'
 import { statusBoardColumns, tucksDone, withoutDone } from './doneModel'
-import { applyMove, dropAnchor, fieldMove, laneOf, lanesFor, orderedIndex, PRIORITY_ORDER, runOptimisticMove } from './boardModel'
+import { applyMove, createSaveQueue, dropAnchor, fieldMove, laneOf, lanesFor, orderedIndex, PRIORITY_ORDER, runOptimisticMove } from './boardModel'
 import { FieldPicker, type PickerField, type PickResult } from './FieldPicker'
 import { allowedStatuses } from './pickerModel'
 import { boardQuery, type ListState } from './listModel'
@@ -87,6 +87,8 @@ export function WorkItemBoard({
   const [focusedId, setFocusedId] = useState<string | null>(null)
   const [held, setHeld] = useState<{ dragId: string; target: DropTarget } | null>(null)
   const [announcement, setAnnouncement] = useState('')
+  // A card's moves save in order, each with the version the last one left.
+  const [queueSave] = useState(() => createSaveQueue())
   const [picker, setPicker] = useState<{ field: PickerField; anchor: HTMLElement; targets: WorkItemCard[] } | null>(null)
   const [loadingColumn, setLoadingColumn] = useState<string | null>(null)
   const [selectionState, setSelection] = useState<Selection>(emptySelection)
@@ -212,31 +214,33 @@ export function WorkItemBoard({
       // A status move and a lane change are two saves. When the move saves but
       // the lane change doesn't, the move stands and the error comes back as
       // `laneError`, so the person is told what did and didn't happen.
-      const send = async (): Promise<{ laneError?: unknown }> => {
-        let version = card.version
-        if (columnsBy === 'status') {
-          const moved = await moveWorkItem({
-            projectId,
-            workItemId: card.id,
-            expectedVersion: version,
-            targetStatusId: to.key,
-            ...(anchor.beforeId ? { beforeId: anchor.beforeId } : anchor.afterId ? { afterId: anchor.afterId } : { targetPosition: 1 }),
-            idempotencyKey: crypto.randomUUID(),
-          })
-          version = moved.version
-          if (!laneChange) return {}
-          try {
-            await updateWorkItem({ projectId, workItemId: card.id, idempotencyKey: crypto.randomUUID(), patch: { expectedVersion: version, ...laneChange.patch } })
-          } catch (laneError) {
-            return { laneError }
+      const send = () =>
+        queueSave(card.id, async (savedVersion): Promise<{ result: { laneError?: unknown }; version: number }> => {
+          let version = Math.max(card.version, savedVersion ?? 0)
+          if (columnsBy === 'status') {
+            const moved = await moveWorkItem({
+              projectId,
+              workItemId: card.id,
+              expectedVersion: version,
+              targetStatusId: to.key,
+              ...(anchor.beforeId ? { beforeId: anchor.beforeId } : anchor.afterId ? { afterId: anchor.afterId } : { targetPosition: 1 }),
+              idempotencyKey: crypto.randomUUID(),
+            })
+            version = moved.version
+            if (!laneChange) return { result: {}, version }
+            try {
+              const updated = await updateWorkItem({ projectId, workItemId: card.id, idempotencyKey: crypto.randomUUID(), patch: { expectedVersion: version, ...laneChange.patch } })
+              version = updated.version
+            } catch (laneError) {
+              return { result: { laneError }, version }
+            }
+            return { result: {}, version }
           }
-          return {}
-        }
-        const patch = { ...(columnChange ? columnChange.patch : {}), ...(laneChange?.patch ?? {}) }
-        if (Object.keys(patch).length === 0) return {}
-        await updateWorkItem({ projectId, workItemId: card.id, idempotencyKey: crypto.randomUUID(), patch: { expectedVersion: version, ...patch } })
-        return {}
-      }
+          const patch = { ...(columnChange ? columnChange.patch : {}), ...(laneChange?.patch ?? {}) }
+          if (Object.keys(patch).length === 0) return { result: {}, version }
+          const updated = await updateWorkItem({ projectId, workItemId: card.id, idempotencyKey: crypto.randomUUID(), patch: { expectedVersion: version, ...patch } })
+          return { result: {}, version: updated.version }
+        })
 
       setAnnouncement(`Moved ${card.key} to ${to.label}${laneChange ? `, ${laneLabel}` : ''}.`)
       runOptimisticMove(
@@ -272,7 +276,7 @@ export function WorkItemBoard({
         })
         .finally(() => void invalidate(projectId))
     },
-    [boardKey, columnsBy, invalidate, laneDroppable, lanes, notify, projectId, queryClient, state.lanes, workflow],
+    [boardKey, columnsBy, invalidate, laneDroppable, lanes, notify, projectId, queryClient, queueSave, state.lanes, workflow],
   )
 
   const drag = useBoardDrag({ enabled: canMove, ghostRef, onDrop: performMove, scrollerRef })
