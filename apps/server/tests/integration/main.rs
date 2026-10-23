@@ -3,6 +3,7 @@
 
 mod agent_interface;
 mod backbone;
+mod bug_report_links;
 mod bug_sweep;
 mod direct_conversations;
 mod harness_support;

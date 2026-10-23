@@ -11,6 +11,7 @@ pub mod audit_log;
 pub mod auth;
 pub mod automations;
 pub mod bootstrap;
+pub mod bug_reports;
 pub mod config;
 pub mod connected_apps;
 pub mod conversations;
@@ -184,6 +185,7 @@ pub fn router(state: AppState) -> Router {
         .merge(public_api::router())
         .merge(webhooks::router())
         .merge(automations::router())
+        .merge(bug_reports::router())
         .route("/api/v1", any(api_not_found))
         .route("/api/v1/{*path}", any(api_not_found))
         .fallback_service(

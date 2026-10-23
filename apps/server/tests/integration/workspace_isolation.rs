@@ -177,6 +177,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{project_id}/timeline",
     "/api/v1/projects/{project_id}/views",
     "/api/v1/projects/{project_id}/automations",
+    "/api/v1/projects/{project_id}/bug-report-links",
     "/api/v1/projects/{project_id}/automations/{rule_id}/runs",
     "/api/v1/projects/{project_id}/work-item-assignees",
     "/api/v1/projects/{project_id}/work-item-references",
@@ -1579,6 +1580,20 @@ async fn build_workspace(
         "{label} automation: {status} {created}"
     );
     let rule = Uuid::parse_str(&string_at(&created, "/id")).expect("rule id");
+    let (status, created) = send(
+        app,
+        browser.request(
+            "POST",
+            &format!("/api/v1/projects/{project}/bug-report-links"),
+            None,
+            json!({"name": format!("Game{m}")}),
+        ),
+    )
+    .await;
+    assert!(
+        status.is_success(),
+        "{label} bug report link: {status} {created}"
+    );
 
     // Whiteboards: one for the whole workspace, drawn on and with an image,
     // and one in the project, linked to the task, the project and the page.
@@ -2518,6 +2533,10 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
         ),
         project_route("/api/v1/projects/{project_id}/views", "/views"),
         project_route("/api/v1/projects/{project_id}/automations", "/automations"),
+        project_route(
+            "/api/v1/projects/{project_id}/bug-report-links",
+            "/bug-report-links",
+        ),
         {
             let (own, foreign) =
                 pair(&|outer, inner| format!("{}/automations/{}/runs", p(outer), inner.rule));

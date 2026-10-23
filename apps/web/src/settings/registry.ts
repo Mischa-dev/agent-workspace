@@ -6,7 +6,7 @@
 // same name in two groups (General, Members, Runs and models) shares one. A renamed
 // page's old id redirects in ./route.ts.
 import { lazy, type ComponentType, type LazyExoticComponent } from 'react'
-import { ArrowDownUp, Bell, BookOpen, Cpu, LayoutTemplate, Mail, Plug, ScrollText, Server, User, Webhook, Zap } from 'lucide-react'
+import { ArrowDownUp, Bell, BookOpen, Bug, Cpu, LayoutTemplate, Mail, Plug, ScrollText, Server, User, Webhook, Zap } from 'lucide-react'
 
 import type { IconGlyph } from '../ui'
 import type { SettingsGroup, SettingsPageProps, SettingsVisibility } from './types'
@@ -79,6 +79,7 @@ export const SETTINGS_PAGES: SettingsPage[] = [
   page('project', 'runs', 'Runs and models', Cpu, ['harness', 'model', 'models', 'reasoning', 'speed', 'attempts', 'environment', 'environments', 'repository', 'defaults', 'run defaults', 'provider', 'suggestions', 'summaries', 'dependencies', 'automatic', 'launch prompt', 'template', 'ai'], () => import('./project/RunsPage'), { settings: ['run.', 'ai.', 'launch.'] }),
   page('project', 'agents', 'Agents', 'bot', ['external agents', 'connections', 'credentials', 'profiles', 'reviewer', 'planner', 'fixer', 'instructions'], () => import('./project/AgentsPage'), { visible: manageProject }),
   page('project', 'automations', 'Automation', Zap, ['rules', 'triggers', 'when', 'schedule', 'launch', 'checks failed', 'workflow automation', 'pull requests', 'review', 'github'], () => import('./project/AutomationRulesPage'), { visible: projectMember }),
+  page('project', 'bug-reports', 'Bug reports', Bug, ['bug reports', 'crash reports', 'errors', 'intake', 'inbound', 'report link', 'feedback', 'other apps', 'webhook'], () => import('./project/BugReportsPage'), { visible: projectMember }),
   page('project', 'workflow', 'Workflow', 'board', ['statuses', 'types', 'estimates', 'transitions', 'board', 'columns'], () => import('./project/WorkflowPage'), { visible: projectMember }),
   page('project', 'templates', 'Templates', 'bookmark', ['task templates', 'recurring', 'repeat', 'schedule', 'project template'], () => import('./project/TemplatesPage'), { visible: projectMember }),
   page('project', 'import-export', 'Import and export', ArrowDownUp, ['import', 'export', 'csv', 'markdown', 'github issues', 'linear', 'jira', 'json', 'download'], () => import('./project/ImportExportPage')),
