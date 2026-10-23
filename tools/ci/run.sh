@@ -161,7 +161,9 @@ waited=""
 while [ -z "${held_host}" ]; do
   for host in "${hosts[@]}"; do
     load_host "${host}"
-    lock="$(acquire)"
+    # An unreachable host makes ssh fail; that means "try the next one", so
+    # it must not end the run under set -e.
+    lock="$(acquire)" || lock=""
     if [ -z "${lock}" ]; then
       [ -z "${waited}" ] && echo "ci: ${host} is off or unreachable"
       continue
