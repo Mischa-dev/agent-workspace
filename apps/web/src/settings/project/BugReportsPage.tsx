@@ -315,7 +315,7 @@ function SetupCard({ name, onDone, projectName, url }: { name: string; onDone: (
         yourself.
       </p>
       <SegmentedControl label="Setup for" onChange={setKind} options={SNIPPET_KINDS} value={kind} />
-      <pre className="aw-code" tabIndex={0}>
+      <pre className="aw-code aw-code--wrap" tabIndex={0}>
         {text}
       </pre>
       <div className="aw-card__actions aw-onetime__actions">
