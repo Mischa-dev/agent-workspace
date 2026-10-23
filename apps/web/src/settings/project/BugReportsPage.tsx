@@ -27,6 +27,7 @@ import {
   showToast,
   type ChipTone,
 } from '../../ui'
+import type { Project } from '../../projects/types'
 import type { SettingsPageProps } from '../types'
 import {
   SNIPPET_KINDS,
@@ -49,12 +50,17 @@ const STATE: Record<BugReportLink['state'], { label: string; tone: ChipTone }> =
 
 /** Project › Bug reports: links other apps send bug reports to, each becoming a task here. */
 export default function BugReportsPage({ project }: SettingsPageProps) {
-  const projectId = project?.id ?? ''
+  // Keyed by project, so switching projects drops a shown link and any open
+  // dialog instead of showing one project's secret under another's name.
+  return project ? <BugReports key={project.id} project={project} /> : null
+}
+
+function BugReports({ project }: { project: Project }) {
+  const projectId = project.id
   const queryClient = useQueryClient()
   const list = useQuery({
     queryKey: bugReportKeys.links(projectId),
     queryFn: () => listBugReportLinks(projectId),
-    enabled: Boolean(project),
   })
   const [creating, setCreating] = useState(false)
   const [setup, setSetup] = useState<{ name: string; url: string } | null>(null)
@@ -85,7 +91,6 @@ export default function BugReportsPage({ project }: SettingsPageProps) {
     onSettled: refresh,
   })
 
-  if (!project) return null
   const canCreate = list.data?.canCreate === true
 
   return (
