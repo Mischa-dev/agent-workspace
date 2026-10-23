@@ -579,3 +579,9 @@
 .aw-fieldset:disabled .aw-seg {
   opacity: 0.6;
 }
+
+/* Copy-paste text people read before copying, such as a bug report link's setup. */
+.aw-code--wrap {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

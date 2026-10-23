@@ -31,6 +31,10 @@ const GLOBAL_OAUTH_CEREMONIES_PER_WINDOW: u32 = 240;
 const WORKOS_STARTS_PER_WINDOW: u32 = 20;
 const GLOBAL_WORKOS_STARTS_PER_WINDOW: u32 = 600;
 const WEBHOOK_ATTEMPTS_PER_WINDOW: u32 = 300;
+/// Reports sent to one bug report link, and to all of them: enough for a
+/// burst of real reports, not for a loop to flood a project.
+const BUG_REPORTS_PER_WINDOW: u32 = 30;
+const GLOBAL_BUG_REPORTS_PER_WINDOW: u32 = 300;
 /// Emailed password resets: a few per account an hour, and a ceiling for
 /// the whole server, so the form can't be used to flood anyone's inbox.
 const PASSWORD_RESETS_PER_HOUR: u32 = 5;
@@ -57,6 +61,8 @@ pub struct RateLimiters {
     workos_starts: FixedWindowLimiter<[u8; 32]>,
     global_workos_starts: FixedWindowLimiter<()>,
     webhook_attempts: FixedWindowLimiter<()>,
+    bug_reports: FixedWindowLimiter<[u8; 32]>,
+    global_bug_reports: FixedWindowLimiter<()>,
     password_resets: FixedWindowLimiter<[u8; 32]>,
     global_password_resets: FixedWindowLimiter<()>,
     password_kdfs: Arc<Semaphore>,
@@ -158,6 +164,15 @@ impl RateLimiters {
             .check(())
             .map_err(AppError::rate_limited)
     }
+
+    /// A report sent to the bug report link whose token has this digest.
+    pub fn check_bug_report(&self, token_digest: &[u8]) -> Result<(), AppError> {
+        self.global_bug_reports
+            .check(())
+            .map_err(AppError::rate_limited)?;
+        let key: [u8; 32] = Sha256::digest(token_digest).into();
+        self.bug_reports.check(key).map_err(AppError::rate_limited)
+    }
 }
 
 impl Default for RateLimiters {
@@ -222,6 +237,8 @@ impl Default for RateLimiters {
                 1,
             ),
             webhook_attempts: FixedWindowLimiter::new(WEBHOOK_ATTEMPTS_PER_WINDOW, WINDOW, 1),
+            bug_reports: FixedWindowLimiter::new(BUG_REPORTS_PER_WINDOW, WINDOW, MAX_SESSION_KEYS),
+            global_bug_reports: FixedWindowLimiter::new(GLOBAL_BUG_REPORTS_PER_WINDOW, WINDOW, 1),
             password_resets: FixedWindowLimiter::new(
                 PASSWORD_RESETS_PER_HOUR,
                 HOUR,

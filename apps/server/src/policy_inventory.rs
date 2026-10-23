@@ -31,6 +31,10 @@ pub enum MutationAction {
     /// token from that push. The command it runs is authorized as that
     /// person, exactly as in the app.
     NotificationActionToken,
+    /// A report sent to a project's bug report link. The task is created as
+    /// the link's maker, through the task tools, after checking that they
+    /// can still add tasks in the project.
+    BugReportLinkToken,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -405,6 +409,36 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         Post,
         "/api/v1/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver",
         CredentialManage
+    ),
+    policy_route!(
+        "bug_reports",
+        Post,
+        "/api/v1/projects/{project_id}/bug-report-links",
+        WorkItemCreate
+    ),
+    policy_route!(
+        "bug_reports",
+        Patch,
+        "/api/v1/bug-report-links/{link_id}",
+        WorkItemCreate
+    ),
+    policy_route!(
+        "bug_reports",
+        Delete,
+        "/api/v1/bug-report-links/{link_id}",
+        WorkItemCreate
+    ),
+    policy_route!(
+        "bug_reports",
+        Post,
+        "/api/v1/bug-report-links/{link_id}/replace",
+        WorkItemCreate
+    ),
+    boundary_route!(
+        "bug_reports",
+        Post,
+        "/api/v1/bug-reports/{token}",
+        BugReportLinkToken
     ),
     boundary_route!(
         "account_security",
@@ -1504,6 +1538,7 @@ mod tests {
         ("whiteboards/http", include_str!("whiteboards/http.rs")),
         ("connected_apps", include_str!("connected_apps.rs")),
         ("webhooks", include_str!("webhooks.rs")),
+        ("bug_reports", include_str!("bug_reports.rs")),
         ("settings", include_str!("settings.rs")),
         ("environments", include_str!("environments.rs")),
         ("harnesses", include_str!("harnesses.rs")),
