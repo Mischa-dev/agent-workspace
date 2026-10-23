@@ -4,7 +4,11 @@
 //! change someone's link, and a link whose maker lost the project turns
 //! itself off instead of acting for them.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    io::Write,
+    sync::{Arc, Mutex},
+};
 
 use agent_workspace_server::{
     AppState,
@@ -31,6 +35,27 @@ use crate::{
 };
 
 const OWNER_LOGIN: &str = "bug-report-owner";
+
+/// Every log line written on this thread while it's held.
+#[derive(Clone, Default)]
+struct CapturedLogs(Arc<Mutex<Vec<u8>>>);
+
+impl Write for CapturedLogs {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().expect("log lock").extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl CapturedLogs {
+    fn text(&self) -> String {
+        String::from_utf8_lossy(&self.0.lock().expect("log lock")).into_owned()
+    }
+}
 const PASSWORD: &str = "correct horse battery staple";
 
 /// A POST from another app: no cookie, no CSRF token, any origin.
@@ -173,6 +198,29 @@ async fn bug_report_links_make_tasks_as_their_maker_only() {
     let path = path_of(&url);
     assert!(!created.1.contains("tokenDigest"));
 
+    // The link's secret never reaches the logs: request lines carry the
+    // route's pattern instead of the path.
+    let token = path.rsplit('/').next().expect("token").to_owned();
+    let logs = CapturedLogs::default();
+    let writer = logs.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::TRACE)
+        .with_ansi(false)
+        .with_writer(move || writer.clone())
+        .finish();
+    let guard = tracing::subscriber::set_default(subscriber);
+    let (status, _, _) = report(&application, &path, "text/plain", "Logged report").await;
+    let (status_bad, _, _) = report(&application, &path, "application/json", "{not json").await;
+    drop(guard);
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(status_bad, StatusCode::BAD_REQUEST);
+    let logged = logs.text();
+    assert!(
+        logged.contains("/api/v1/bug-reports/{token}"),
+        "request lines name the route: {logged}"
+    );
+    assert!(!logged.contains(&token), "the secret was logged: {logged}");
+
     // A JSON report from a game: a task, as the owner, typed Bug, with the
     // extra fields listed.
     let body = json!({
@@ -261,7 +309,7 @@ async fn bug_report_links_make_tasks_as_their_maker_only() {
     // The member sees the link and its count but can't change it.
     let listed = send_get(&application, member, &links).await;
     assert_eq!(listed.0, StatusCode::OK, "{}", listed.1);
-    assert_eq!(listed.2["links"][0]["reportCount"], json!(2));
+    assert_eq!(listed.2["links"][0]["reportCount"], json!(3));
     assert_eq!(listed.2["links"][0]["canManage"], json!(false));
     assert!(!listed.1.contains("awbr_"));
     let link_path = format!("/api/v1/bug-report-links/{link_id}");

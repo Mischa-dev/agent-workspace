@@ -207,7 +207,7 @@ pub fn router(state: AppState) -> Router {
                 tracing::info_span!(
                     "http.request",
                     method = %request.method(),
-                    path = %request.uri().path(),
+                    path = %logged_path(request),
                     request_id = request_id,
                 )
             }),
@@ -255,6 +255,17 @@ pub fn router(state: AppState) -> Router {
             HeaderName::from_static("cross-origin-resource-policy"),
             HeaderValue::from_static("same-origin"),
         ))
+}
+
+/// The path a request's log lines carry: the route's pattern, such as
+/// `/api/v1/bug-reports/{token}`, so a secret in a path (a bug report link's
+/// token) never reaches the logs. Static files have no route and no secrets,
+/// so they log their own path.
+fn logged_path<B>(request: &Request<B>) -> &str {
+    request
+        .extensions()
+        .get::<axum::extract::MatchedPath>()
+        .map_or_else(|| request.uri().path(), axum::extract::MatchedPath::as_str)
 }
 
 async fn api_not_found() -> crate::error::AppError {
