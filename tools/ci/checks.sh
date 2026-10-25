@@ -117,6 +117,13 @@ if has rust; then
   step "agentos-nyx tests" python3 -m unittest discover -s integrations/agentos-nyx -p 'test_*.py'
 fi
 if has web; then
+  step "Node version" node -e '
+    const expected = require("node:fs").readFileSync(".node-version", "utf8").trim();
+    if (process.version !== `v${expected}`) {
+      throw new Error(`CI needs Node ${expected}; selected host has ${process.version}. Update its Node PATH before retrying.`);
+    }
+    console.log(`Node ${process.version}`);
+  '
   step "pnpm install" pnpm install --frozen-lockfile --reporter=silent
   step "web lint" pnpm lint
   step "web typecheck" pnpm typecheck
@@ -213,3 +220,4 @@ fi
 report_web
 if [ -n "${web_later:-}" ]; then run_web_checks; fi
 echo "All checks passed (${areas})."
+

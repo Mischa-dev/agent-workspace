@@ -1,7 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly node_version="24.18.1"
+# Existing hosts can stage Node without changing the shared Codex installation.
+node_only=false
+case "${1:-}" in
+  --node-only) node_only=true; shift ;;
+  "") ;;
+  *) echo "usage: install-toolchains.sh [--node-only]" >&2; exit 2 ;;
+esac
+if [[ "$#" -ne 0 ]]; then
+  echo "usage: install-toolchains.sh [--node-only]" >&2
+  exit 2
+fi
+
+readonly node_version="24.22.1"
 readonly codex_version="0.146.0"
 readonly architecture="linux-arm64"
 readonly install_root="/opt/agent-workspace"
@@ -31,6 +43,13 @@ curl --fail --location --proto '=https' --tlsv1.2 \
 
 install -d -m 0755 "${install_root}/toolchains"
 tar -xJf "${temporary_dir}/${archive}" -C "${install_root}/toolchains"
+
+# npm and Codex use /usr/bin/env node; use this toolchain for both.
+export PATH="${node_dir}/bin:${PATH}"
+"${node_dir}/bin/node" --version
+if ${node_only}; then
+  exit 0
+fi
 
 install -d -m 0755 "${install_root}/codex/${codex_version}"
 "${node_dir}/bin/npm" install \

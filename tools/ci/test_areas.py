@@ -29,7 +29,7 @@ class AreaValidationTests(unittest.TestCase):
         # Fail immediately if validation reaches scheduling or repository work.
         for name in ("nice", "git", "ssh", "rsync"):
             self.stub(self.bin / name, status=97)
-        for name in ("cargo", "rustup", "pnpm", "python3", "psql", "createdb", "dropdb"):
+        for name in ("cargo", "rustup", "node", "pnpm", "python3", "psql", "createdb", "dropdb"):
             self.stub(self.bin / name)
         self.stub(self.root / "tools" / "verify-self-hosted-guide.sh")
         # Keep combined checks sequential for deterministic call logs.
@@ -90,6 +90,13 @@ class AreaValidationTests(unittest.TestCase):
                 self.assertEqual("pnpm lint" in calls, web)
                 self.assertEqual("pnpm build" in calls, web)
 
+    def test_node_check_failure_stops_before_dependency_install(self):
+        self.stub(self.bin / "node", status=97)
+        result, calls = self.run_script("checks.sh", ["web"], scoped=True)
+        self.assertEqual(result.returncode, 97, result.stdout + result.stderr)
+        self.assertIn("Node version failed", result.stdout)
+        self.assertFalse(any(call.startswith("pnpm ") for call in calls))
+
     def test_runner_accepts_documented_areas_and_default(self):
         for args in ([], ["--areas", "rust,web"], ["--areas", "rust"], ["--areas", "web"]):
             with self.subTest(args=args):
@@ -100,3 +107,4 @@ class AreaValidationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

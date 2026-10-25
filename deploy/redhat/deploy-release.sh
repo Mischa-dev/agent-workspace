@@ -5,7 +5,7 @@ readonly checkout_root="${1:-/home/bot/deployments/agent-workspace}"
 readonly commit_sha="$(git -C "${checkout_root}" rev-parse HEAD)"
 readonly install_root="/opt/agent-workspace"
 readonly release_root="${install_root}/releases/${commit_sha}"
-readonly node_bin="${install_root}/toolchains/node-v24.18.1-linux-arm64/bin"
+readonly node_bin="${install_root}/toolchains/node-v24.22.1-linux-arm64/bin"
 readonly cargo_bin="${HOME}/.local/share/agent-workspace/cargo/bin"
 readonly rustup_home="${HOME}/.local/share/agent-workspace/rustup"
 readonly cargo_target_root="${checkout_root}/target"
@@ -15,7 +15,14 @@ if [[ -n "$(git -C "${checkout_root}" status --porcelain)" ]]; then
   exit 1
 fi
 
-export PATH="${cargo_bin}:${node_bin}:${PATH}"
+# Never fall back to a system Node when the staged toolchain is missing.
+if [[ ! -x "${node_bin}/node" || ! -x "${node_bin}/corepack" ]] ||
+  [[ "$("${node_bin}/node" --version)" != "v24.22.1" ]]; then
+  echo "Stage Node 24.22.1 first: sudo ./deploy/redhat/install-toolchains.sh --node-only" >&2
+  exit 1
+fi
+
+export PATH="${node_bin}:${cargo_bin}:${PATH}"
 export COREPACK_HOME="${checkout_root}/.corepack"
 export CARGO_HOME="${HOME}/.local/share/agent-workspace/cargo"
 export RUSTUP_HOME="${rustup_home}"
