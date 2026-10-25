@@ -29,20 +29,35 @@ fi
 temporary_dir="$(mktemp -d)"
 trap 'rm -rf "${temporary_dir}"' EXIT
 
-curl --fail --location --proto '=https' --tlsv1.2 \
-  "${download_root}/${archive}" \
-  --output "${temporary_dir}/${archive}"
-curl --fail --location --proto '=https' --tlsv1.2 \
-  "${download_root}/SHASUMS256.txt" \
-  --output "${temporary_dir}/SHASUMS256.txt"
+if [[ -e "${node_dir}" ]]; then
+  # A retry must not overwrite a toolchain a running process may already use.
+  if [[ ! -x "${node_dir}/bin/node" || ! -x "${node_dir}/bin/corepack" ]] ||
+    [[ "$("${node_dir}/bin/node" --version)" != "v${node_version}" ]]; then
+    echo "Existing toolchain is incomplete or has the wrong version: ${node_dir}" >&2
+    exit 1
+  fi
+else
+  curl --fail --location --proto '=https' --tlsv1.2 \
+    "${download_root}/${archive}" \
+    --output "${temporary_dir}/${archive}"
+  curl --fail --location --proto '=https' --tlsv1.2 \
+    "${download_root}/SHASUMS256.txt" \
+    --output "${temporary_dir}/SHASUMS256.txt"
 
-(
-  cd "${temporary_dir}"
-  grep " ${archive}\$" SHASUMS256.txt | sha256sum --check -
-)
+  (
+    cd "${temporary_dir}"
+    grep " ${archive}\$" SHASUMS256.txt | sha256sum --check -
+  )
 
-install -d -m 0755 "${install_root}/toolchains"
-tar -xJf "${temporary_dir}/${archive}" -C "${install_root}/toolchains"
+  install -d -m 0755 "${install_root}/toolchains"
+  tar -xJf "${temporary_dir}/${archive}" -C "${temporary_dir}"
+  if [[ ! -x "${temporary_dir}/node-v${node_version}-${architecture}/bin/corepack" ]] ||
+    [[ "$("${temporary_dir}/node-v${node_version}-${architecture}/bin/node" --version)" != "v${node_version}" ]]; then
+    echo "Downloaded toolchain failed validation." >&2
+    exit 1
+  fi
+  mv -T "${temporary_dir}/node-v${node_version}-${architecture}" "${node_dir}"
+fi
 
 # npm and Codex use /usr/bin/env node; use this toolchain for both.
 export PATH="${node_dir}/bin:${PATH}"
