@@ -397,6 +397,113 @@ async fn boards_live_in_a_workspace_or_project_and_links_never_copy_or_delete_th
 }
 
 #[tokio::test]
+async fn trashed_boards_go_for_good_only_when_someone_who_can_edit_asks() {
+    let Some(setup) = setup("w16_purge").await else {
+        return;
+    };
+    let work = create_project(&setup, "PURGE", "Purge").await;
+    let (viewer_id, viewer) = add_person(&setup, &[&work], "vic").await;
+    set_role(&setup.pool, &work, viewer_id, "viewer").await;
+    let owner = &setup.browser;
+    let board = create_board(
+        &setup,
+        owner,
+        json!({"title": "Old plan", "projectId": work}),
+    )
+    .await;
+    let kept = create_board(&setup, owner, json!({"title": "Keep", "projectId": work})).await;
+    write(&setup, owner, &board, vec![rectangle("box", 1, 1, 0.0)]).await;
+    let path = format!("/api/v1/whiteboards/{board}");
+
+    // Only from the trash.
+    let (status, _) = request(&setup, owner, "DELETE", &path, Value::Null).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, copy) = request(
+        &setup,
+        owner,
+        "POST",
+        &format!("{path}/duplicate"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{copy}");
+    let copy = copy["whiteboard"]["id"].as_str().expect("copy").to_owned();
+    let (status, _) = request(&setup, owner, "PATCH", &path, json!({"deleted": true})).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // A viewer sees the project's trash but can't delete from it.
+    let (status, _) = request(&setup, &viewer, "DELETE", &path, Value::Null).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, emptied) = request(
+        &setup,
+        &viewer,
+        "POST",
+        "/api/v1/whiteboard-trash/empty",
+        json!({"projectId": work}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{emptied}");
+    assert_eq!(emptied["deleted"], 0);
+
+    // The owner deletes it for good, drawing and all; the copy stays.
+    let (status, _) = request(&setup, owner, "DELETE", &path, Value::Null).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let left = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM whiteboard_elements WHERE whiteboard_id::text = $1",
+    )
+    .bind(&board)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("elements");
+    assert_eq!(left, 0);
+    let (status, _) = request(&setup, owner, "GET", &path, Value::Null).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = request(
+        &setup,
+        owner,
+        "GET",
+        &format!("/api/v1/whiteboards/{copy}"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a copy outlives the board it came from"
+    );
+
+    // Emptying the trash takes what's left there, and nothing outside it.
+    let (status, _) = request(
+        &setup,
+        owner,
+        "PATCH",
+        &format!("/api/v1/whiteboards/{kept}"),
+        json!({"deleted": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, emptied) = request(
+        &setup,
+        owner,
+        "POST",
+        "/api/v1/whiteboard-trash/empty",
+        json!({"projectId": work}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{emptied}");
+    assert_eq!(emptied["deleted"], 1);
+    let (status, _) = request(
+        &setup,
+        owner,
+        "GET",
+        &format!("/api/v1/whiteboards/{copy}"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
 async fn concurrent_edits_merge_by_element_and_never_drop_a_newer_change() {
     let Some(setup) = setup("w16_merge").await else {
         return;

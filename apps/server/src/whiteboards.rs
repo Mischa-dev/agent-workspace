@@ -559,6 +559,84 @@ pub async fn change(
     Ok(())
 }
 
+/// Deletes a board in the trash for good, with its drawing, images, saved
+/// versions and links. Nothing is purged on a timer; this is the only way.
+pub async fn purge(
+    transaction: &mut Transaction<'_, Postgres>,
+    caller: &Caller,
+    whiteboard_id: Uuid,
+) -> Result<(), AppError> {
+    let board = access(transaction, caller, whiteboard_id, true).await?;
+    let deleted = sqlx::query_scalar::<_, bool>(
+        "SELECT deleted_at IS NOT NULL FROM whiteboards WHERE id = $1 FOR UPDATE",
+    )
+    .bind(whiteboard_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if !deleted {
+        return Err(AppError::Conflict(
+            "whiteboard",
+            "move the board to the trash first",
+        ));
+    }
+    audit(
+        transaction,
+        caller,
+        board.organization_id,
+        board.project_id,
+        "whiteboard.purged",
+        whiteboard_id,
+    )
+    .await?;
+    sqlx::query("DELETE FROM whiteboards WHERE id = $1")
+        .bind(whiteboard_id)
+        .execute(&mut **transaction)
+        .await?;
+    Ok(())
+}
+
+/// Empties the trash the caller sees (one workspace or project, or all of
+/// them): every board there they can change goes for good. Returns how many.
+pub async fn empty_trash(
+    transaction: &mut Transaction<'_, Postgres>,
+    caller: &Caller,
+    organization_id: Option<Uuid>,
+    project_id: Option<Uuid>,
+) -> Result<usize, AppError> {
+    let trashed = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT board.id FROM whiteboards board
+        WHERE board.deleted_at IS NOT NULL
+          AND whiteboard_visible_to(board.id, $1)
+          AND (board.project_id IS NULL OR actor_can_access_project($1, $2, board.project_id))
+          AND ($3::uuid IS NULL OR board.project_id = $3)
+          AND ($4::uuid IS NULL OR board.organization_id = $4)
+          AND ($5::uuid IS NULL OR board.project_id = $5)
+        ORDER BY board.deleted_at, board.id
+        LIMIT 200
+        "#,
+    )
+    .bind(caller.actor_id)
+    .bind(caller.connection_id)
+    .bind(caller.confined_project)
+    .bind(organization_id)
+    .bind(project_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    let mut purged = 0;
+    for whiteboard_id in trashed {
+        // A project viewer sees the project's trash but can't empty it.
+        if access(transaction, caller, whiteboard_id, false)
+            .await?
+            .can_edit
+        {
+            purge(transaction, caller, whiteboard_id).await?;
+            purged += 1;
+        }
+    }
+    Ok(purged)
+}
+
 // ---------------------------------------------------------------------------
 // Links
 
