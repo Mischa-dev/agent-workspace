@@ -655,7 +655,11 @@ pub(super) async fn two_workspaces_with(name: &str, github: bool) -> Option<TwoW
             values.insert(format!("AGENT_WORKSPACE_{key}"), value.to_owned());
         }
     }
-    let config = AppConfig::from_values(&values).expect("test configuration");
+    let mut config = AppConfig::from_values(&values).expect("test configuration");
+    // Uploads here don't depend on how much disk the host has left, which
+    // changes as CI runs.
+    config.data_quota_bytes = u64::MAX;
+    config.minimum_free_bytes = 0;
     let supervisors = SupervisorRegistry::new(&config).expect("supervisors");
     let realtime = RealtimeHub::new(8192);
     let app = router(AppState {
