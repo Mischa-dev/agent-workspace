@@ -46,7 +46,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/api/v1/projects/{project_id}/agent-profiles/{profile_id}",
-            patch(update_http),
+            patch(update_http).delete(delete_http),
         )
         .route("/api/v1/projects/{project_id}/agents", get(presence_http))
 }
@@ -210,7 +210,7 @@ pub async fn list_profiles(
         .await
         .is_ok();
     let profiles = sqlx::query_as::<_, ProfileView>(&format!(
-        "{PROFILE_SELECT} WHERE profile.project_id = $1 ORDER BY profile.enabled DESC, membership.display_name, profile.id"
+        "{PROFILE_SELECT} WHERE profile.project_id = $1 AND profile.hidden_at IS NULL ORDER BY profile.enabled DESC, membership.display_name, profile.id"
     ))
     .bind(project_id)
     .fetch_all(&state.pool)
@@ -579,7 +579,7 @@ async fn load(
     profile_id: Uuid,
 ) -> Result<ProfileView, AppError> {
     sqlx::query_as::<_, ProfileView>(&format!(
-        "{PROFILE_SELECT} WHERE profile.project_id = $1 AND profile.id = $2"
+        "{PROFILE_SELECT} WHERE profile.project_id = $1 AND profile.id = $2 AND profile.hidden_at IS NULL"
     ))
     .bind(project_id)
     .bind(profile_id)
@@ -600,11 +600,12 @@ async fn create_http(
     let clean = clean(&state, organization_id, project_id, request.clone(), None).await?;
     let mut transaction = state.pool.begin().await?;
     crate::execution_setup::lock_project_setup(&mut transaction, project_id).await?;
-    let count =
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM agent_profiles WHERE project_id = $1")
-            .bind(project_id)
-            .fetch_one(&mut *transaction)
-            .await?;
+    let count = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM agent_profiles WHERE project_id = $1 AND hidden_at IS NULL",
+    )
+    .bind(project_id)
+    .fetch_one(&mut *transaction)
+    .await?;
     if count >= MAX_PROFILES_PER_PROJECT {
         return Err(AppError::Conflict(
             "agent_profile",
@@ -840,6 +841,156 @@ async fn update_http(
     let view = load(&mut *transaction, &state, project_id, profile_id).await?;
     transaction.commit().await?;
     Ok(Json(view))
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemovedProfile {
+    /// `deleted`, or `hidden` when runs, launches or messages still point at
+    /// it: then it's off the list, out of mentions and can't run, and what it
+    /// did keeps its name.
+    pub outcome: &'static str,
+}
+
+/// Deletes an agent that never did anything; one that did is hidden instead,
+/// so its past runs and messages keep their author.
+async fn delete_http(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath((project_id, profile_id)): ApiPath<(Uuid, Uuid)>,
+) -> Result<Json<RemovedProfile>, AppError> {
+    manage(&state, &headers, &principal, project_id).await?;
+    let mut transaction = state.pool.begin().await?;
+    crate::execution_setup::lock_project_setup(&mut transaction, project_id).await?;
+    let (actor_id, worker_id, handle) = sqlx::query_as::<_, (Uuid, Uuid, String)>(
+        r#"
+        SELECT profile.actor_id, profile.execution_worker_id, membership.handle
+        FROM agent_profiles profile
+        JOIN project_memberships membership
+          ON membership.project_id = profile.project_id AND membership.actor_id = profile.actor_id
+        WHERE profile.project_id = $1 AND profile.id = $2 AND profile.hidden_at IS NULL
+        FOR UPDATE OF profile
+        "#,
+    )
+    .bind(project_id)
+    .bind(profile_id)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(AppError::NotFound("agent_profile"))?;
+    let (running, used) = sqlx::query_as::<_, (bool, bool)>(&format!(
+        r#"
+        SELECT
+            EXISTS (
+                SELECT 1 FROM agent_runs
+                WHERE execution_worker_id = $1 AND state IN {ACTIVE_RUN_STATES}
+            ),
+            EXISTS (SELECT 1 FROM agent_runs WHERE execution_worker_id = $1)
+                OR EXISTS (SELECT 1 FROM launches WHERE agent_profile_id = $2)
+        "#
+    ))
+    .bind(worker_id)
+    .bind(profile_id)
+    .fetch_one(&mut *transaction)
+    .await?;
+    if running {
+        return Err(AppError::Conflict(
+            "agent_profile",
+            "this agent is working on something; stop its runs first",
+        ));
+    }
+    // Anything else that names it (a message it wrote, a mention, a
+    // reaction) refuses the delete, and it's hidden instead.
+    let deleted = !used && {
+        let mut attempt = sqlx::Acquire::begin(&mut transaction).await?;
+        match delete_profile_rows(&mut attempt, project_id, profile_id, worker_id, actor_id).await {
+            Ok(()) => {
+                attempt.commit().await?;
+                true
+            }
+            Err(sqlx::Error::Database(error)) if error.is_foreign_key_violation() => {
+                attempt.rollback().await?;
+                false
+            }
+            Err(error) => return Err(error.into()),
+        }
+    };
+    if !deleted {
+        sqlx::query(
+            r#"
+            UPDATE agent_profiles
+            SET hidden_at = now(), enabled = false, version = version + 1, updated_at = now()
+            WHERE id = $1
+            "#,
+        )
+        .bind(profile_id)
+        .execute(&mut *transaction)
+        .await?;
+        sqlx::query(
+            r#"
+            UPDATE project_memberships
+            SET enabled = false, disabled_by_actor_id = $3,
+                disabled_at = COALESCE(disabled_at, now()),
+                version = version + 1, updated_at = now()
+            WHERE project_id = $1 AND actor_id = $2
+            "#,
+        )
+        .bind(project_id)
+        .bind(actor_id)
+        .bind(principal.actor_id)
+        .execute(&mut *transaction)
+        .await?;
+        sqlx::query(
+            r#"
+            UPDATE execution_workers SET enabled = false, version = version + 1, updated_at = now()
+            WHERE id = $1
+            "#,
+        )
+        .bind(worker_id)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    let outcome = if deleted { "deleted" } else { "hidden" };
+    settings::audit(
+        &mut transaction,
+        &headers,
+        &principal,
+        Some(project_id),
+        &format!("agent_profile.{outcome}"),
+        "agent_profile",
+        Some(profile_id),
+        json!({ "handle": handle }),
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(Json(RemovedProfile { outcome }))
+}
+
+async fn delete_profile_rows(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    profile_id: Uuid,
+    worker_id: Uuid,
+    actor_id: Uuid,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM agent_profiles WHERE id = $1")
+        .bind(profile_id)
+        .execute(&mut **transaction)
+        .await?;
+    sqlx::query("DELETE FROM execution_workers WHERE id = $1")
+        .bind(worker_id)
+        .execute(&mut **transaction)
+        .await?;
+    sqlx::query("DELETE FROM project_memberships WHERE project_id = $1 AND actor_id = $2")
+        .bind(project_id)
+        .bind(actor_id)
+        .execute(&mut **transaction)
+        .await?;
+    sqlx::query("DELETE FROM actors WHERE id = $1 AND kind = 'execution_worker'")
+        .bind(actor_id)
+        .execute(&mut **transaction)
+        .await?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

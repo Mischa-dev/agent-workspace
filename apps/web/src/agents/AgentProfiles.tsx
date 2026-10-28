@@ -4,11 +4,23 @@ import { Link } from 'react-router-dom'
 import { toastError } from '../app/mutations'
 import { threadHref } from '../launch/launchModel'
 import { accountSettingsHref } from '../settings/paths'
-import { Banner, Button, EmptyState, ErrorState, ListSkeleton, Section, Switch, showToast } from '../ui'
+import {
+  Banner,
+  Button,
+  ConfirmDialog,
+  EmptyState,
+  ErrorState,
+  IconButton,
+  ListSkeleton,
+  Section,
+  Switch,
+  describeError,
+  showToast,
+} from '../ui'
 import type { AgentPresence, AgentProfile, ProfileTemplate } from './api'
 import { AgentMark } from './AgentMark'
 import { AgentProfileDialog } from './AgentProfileDialog'
-import { usePresence, useProfiles, useUpdateProfile } from './hooks'
+import { useDeleteProfile, usePresence, useProfiles, useUpdateProfile } from './hooks'
 import { presenceLabel } from './presenceModel'
 import './agents.css'
 
@@ -95,6 +107,8 @@ function ProfileCard({
   projectId: string
 }) {
   const update = useUpdateProfile(projectId)
+  const remove = useDeleteProfile(projectId)
+  const [confirming, setConfirming] = useState(false)
   const model = [profile.runDefaults.model, profile.runDefaults.reasoning, profile.runDefaults.speed].filter(Boolean).join(' · ')
   const toggle = (enabled: boolean) =>
     update.mutate(
@@ -117,9 +131,12 @@ function ProfileCard({
           <span className="aw-profilecard__meta">@{profile.handle}</span>
         </div>
         {canManage ? (
-          <Button icon="pencil" onClick={onEdit} size="sm" variant="ghost">
-            Edit
-          </Button>
+          <>
+            <Button icon="pencil" onClick={onEdit} size="sm" variant="ghost">
+              Edit
+            </Button>
+            <IconButton icon="trash" label={`Delete ${profile.name}`} onClick={() => setConfirming(true)} size="sm" />
+          </>
         ) : null}
       </div>
       {profile.description ? <p className="aw-profilecard__text">{profile.description}</p> : null}
@@ -132,6 +149,27 @@ function ProfileCard({
       {canManage ? (
         <Switch checked={profile.enabled} disabled={update.isPending} label="Enabled" onChange={toggle} />
       ) : null}
+      <ConfirmDialog
+        busy={remove.isPending}
+        confirmLabel="Delete agent"
+        error={remove.error ? describeError(remove.error).message : null}
+        onClose={() => {
+          setConfirming(false)
+          remove.reset()
+        }}
+        onConfirm={() =>
+          remove.mutate(profile.id, {
+            onSuccess: () => {
+              setConfirming(false)
+              showToast({ tone: 'success', title: `${profile.name} deleted` })
+            },
+          })
+        }
+        open={confirming}
+        title={`Delete ${profile.name}?`}
+      >
+        Nobody can mention or start it again, and @{profile.handle} is free for someone else. Runs and messages it already made keep its name.
+      </ConfirmDialog>
     </li>
   )
 }

@@ -147,7 +147,7 @@ pub(crate) async fn owned_account<'e, E: PgExecutor<'e>>(
           ON membership.organization_id = account.organization_id
          AND membership.actor_id = account.owner_actor_id AND membership.enabled
         JOIN actors actor ON actor.id = account.owner_actor_id AND actor.status = 'active'
-        WHERE account.id = $1 AND account.owner_actor_id = $2
+        WHERE account.id = $1 AND account.owner_actor_id = $2 AND account.hidden_at IS NULL
         "#
     ))
     .bind(account_id)
@@ -795,7 +795,7 @@ pub async fn list_for(
         JOIN organization_memberships membership
           ON membership.organization_id = account.organization_id
          AND membership.actor_id = account.owner_actor_id AND membership.enabled
-        WHERE account.owner_actor_id = $1
+        WHERE account.owner_actor_id = $1 AND account.hidden_at IS NULL
           AND ($2::uuid IS NULL OR account.organization_id = $2)
         ORDER BY account.created_at, account.id
         LIMIT 100

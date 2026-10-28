@@ -230,7 +230,7 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
         )
         VALUES ($1, $2, 'thread', $3, $4, 'M0 walking skeleton')
         ON CONFLICT (parent_channel_id, lower(name))
-            WHERE kind = 'thread' AND archived_at IS NULL
+            WHERE kind = 'thread' AND archived_at IS NULL AND NOT auto_named
         DO UPDATE SET repository_id = EXCLUDED.repository_id, updated_at = now()
         RETURNING id
         "#,

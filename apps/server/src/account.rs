@@ -48,7 +48,9 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/api/v1/projects/{project_id}/provider-accounts/{account_id}",
-            get(read_account).patch(update_account),
+            get(read_account)
+                .patch(update_account)
+                .delete(delete_account),
         )
         .route(
             "/api/v1/projects/{project_id}/provider-accounts/{account_id}/use",
@@ -282,7 +284,7 @@ async fn list_accounts(
 ) -> Result<Json<ProviderAccountsResponse>, AppError> {
     let project = require_project_manager(&state, &principal, project_id).await?;
     let rows = sqlx::query_as::<_, AccountRow>(&account_select(
-        "account.organization_id = $2 AND account.owner_actor_id = $3",
+        "account.organization_id = $2 AND account.owner_actor_id = $3 AND account.hidden_at IS NULL",
     ))
     .bind(project_id)
     .bind(project.organization_id)
@@ -458,7 +460,10 @@ pub(crate) async fn insert_account(
         .execute(&mut **transaction)
         .await?;
     let count = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM provider_accounts WHERE organization_id = $1 AND owner_actor_id = $2",
+        r#"
+        SELECT count(*) FROM provider_accounts
+        WHERE organization_id = $1 AND owner_actor_id = $2 AND hidden_at IS NULL
+        "#,
     )
     .bind(organization_id)
     .bind(owner_actor_id)
@@ -628,6 +633,139 @@ async fn update_account(
     Ok(Json(
         fetch_account_view(&state, project_id, account_id).await?,
     ))
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RemovedAccount {
+    /// `deleted`, or `hidden` when past runs or launches still point at it.
+    outcome: &'static str,
+}
+
+/// Deletes one of the caller's accounts: it's turned off and signed out,
+/// then removed with its private home. When past runs or launches still
+/// point at it the row stays, hidden, so they keep its name; it stays off,
+/// off every list, and no run can pick it.
+async fn delete_account(
+    State(state): State<AppState>,
+    principal: AuthenticatedActor,
+    headers: HeaderMap,
+    ApiPath((project_id, account_id)): ApiPath<(Uuid, Uuid)>,
+) -> Result<Json<RemovedAccount>, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    let access = require_account_owner(&state, &principal, project_id, account_id).await?;
+    let mut transaction = state.pool.begin().await?;
+    sqlx::query("SELECT 1 FROM provider_accounts WHERE id = $1 FOR UPDATE")
+        .bind(account_id)
+        .execute(&mut *transaction)
+        .await?;
+    let running = sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM agent_runs run
+            JOIN execution_profiles profile ON profile.id = run.execution_profile_id
+            WHERE profile.provider_account_id = $1
+              AND run.state IN ('created', 'queued', 'starting', 'working', 'blocked', 'recovering')
+        )
+        "#,
+    )
+    .bind(account_id)
+    .fetch_one(&mut *transaction)
+    .await?;
+    if running {
+        return Err(AppError::Conflict(
+            "provider_account",
+            "runs are using this account; stop them first",
+        ));
+    }
+    // Off before signing out, so no run picks it up meanwhile; its usage
+    // readings and alerts go with it.
+    sqlx::query(
+        r#"
+        UPDATE provider_accounts
+        SET status = 'disabled', hidden_at = COALESCE(hidden_at, now()),
+            version = version + 1, updated_at = now()
+        WHERE id = $1
+        "#,
+    )
+    .bind(account_id)
+    .execute(&mut *transaction)
+    .await?;
+    for table in [
+        "usage_schedules",
+        "capacity_alert_rules",
+        "capacity_alert_fires",
+        "usage_windows",
+        "usage_window_samples",
+        "usage_window_cycles",
+        "usage_accounts",
+    ] {
+        sqlx::query(&format!("DELETE FROM {table} WHERE account_id = $1"))
+            .bind(account_id)
+            .execute(&mut *transaction)
+            .await?;
+    }
+    transaction.commit().await?;
+    let home = PathBuf::from(&access.home_path);
+    if let Err(error) = logout(&state, access).await {
+        // A harness that's gone has nothing left to revoke; removing the
+        // home below still drops the sign-in kept here.
+        tracing::warn!(%account_id, error = %error, "signing out a deleted account failed");
+    }
+    let mut transaction = state.pool.begin().await?;
+    let deleted = {
+        let mut attempt = sqlx::Acquire::begin(&mut transaction).await?;
+        match delete_account_rows(&mut attempt, account_id).await {
+            Ok(()) => {
+                attempt.commit().await?;
+                true
+            }
+            Err(sqlx::Error::Database(error)) if error.is_foreign_key_violation() => {
+                attempt.rollback().await?;
+                false
+            }
+            Err(error) => return Err(error.into()),
+        }
+    };
+    let outcome = if deleted { "deleted" } else { "hidden" };
+    crate::settings::audit(
+        &mut transaction,
+        &headers,
+        &principal,
+        Some(project_id),
+        &format!("provider_account.{outcome}"),
+        "provider_account",
+        Some(account_id),
+        serde_json::json!({}),
+    )
+    .await?;
+    transaction.commit().await?;
+    let data_root = state.config.data_root.clone();
+    let home_root = state.config.codex_home_root.clone();
+    let removed = tokio::task::spawn_blocking(move || {
+        crate::profile_runtime::remove_private_profile_directory(&data_root, &home_root, &home)
+    })
+    .await
+    .map_err(|_| AppError::Internal("remove provider account home task"))?;
+    if let Err(error) = removed {
+        tracing::warn!(%account_id, error = %error, "removing a deleted account's home failed");
+    }
+    Ok(Json(RemovedAccount { outcome }))
+}
+
+async fn delete_account_rows(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    account_id: Uuid,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM execution_profiles WHERE provider_account_id = $1")
+        .bind(account_id)
+        .execute(&mut **transaction)
+        .await?;
+    sqlx::query("DELETE FROM provider_accounts WHERE id = $1")
+        .bind(account_id)
+        .execute(&mut **transaction)
+        .await?;
+    Ok(())
 }
 
 /// Uses one of the caller's accounts in this project, making it the one
@@ -1367,6 +1505,7 @@ pub(crate) async fn require_account_owner(
         WHERE account.id = $1
           AND account.organization_id = $2
           AND account.owner_actor_id = $3
+          AND account.hidden_at IS NULL
         "#,
     )
     .bind(account_id)
@@ -1400,6 +1539,7 @@ async fn require_profile_owner(
         FROM execution_profiles profile
         JOIN provider_accounts account
           ON account.id = profile.provider_account_id
+         AND account.hidden_at IS NULL
         JOIN projects project ON project.id = profile.project_id
         JOIN project_memberships membership
           ON membership.project_id = profile.project_id
