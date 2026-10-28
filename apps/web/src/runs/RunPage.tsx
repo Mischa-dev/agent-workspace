@@ -6,6 +6,7 @@ import { isApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
 import { toastError } from '../app/mutations'
 import { useAuthenticatedSession } from '../auth/session'
+import { useProjectExperience } from '../experience/layout'
 import { threadHref } from '../launch/launchModel'
 import { AppShell } from '../shell/AppShell'
 import { usePageTitle } from '../shell/documentTitleModel'
@@ -102,6 +103,7 @@ function RunBody({ run }: { run: RunDetail }) {
   // current one, the same rule the thread's own run card follows.
   const threadId = run.conversationId ?? ''
   const thread = useThread(run.projectId, threadId, false)
+  const usage = useProjectExperience(run.projectId).shows('tech.run_usage')
   const timeline = thread.routeMatches ? thread.timeline.data : undefined
   const actions = useThreadRunActions({ entries: timeline?.entries ?? [], includeArchived: false, projectId: run.projectId, threadId, timeline })
   const activeRun = timeline?.activeRun ?? null
@@ -141,7 +143,7 @@ function RunBody({ run }: { run: RunDetail }) {
 
   const duration = runDuration(run, now)
   const files = run.files?.length ?? 0
-  const cost = formatCost(run.cost, run.currency)
+  const cost = usage ? formatCost(run.cost, run.currency) : null
   const summary = [
     run.agentName,
     duration ? (live ? `${duration} so far` : duration) : null,
@@ -280,9 +282,11 @@ function RunBody({ run }: { run: RunDetail }) {
           <pre className="aw-runs__pre aw-runs__prompt">{run.prompt}</pre>
         </Section>
       ) : null}
-      <Section id="run-usage" title="Tokens and cost">
-        <ModelUsageTable live={live} run={run} />
-      </Section>
+      {usage ? (
+        <Section id="run-usage" title="Tokens and cost">
+          <ModelUsageTable live={live} run={run} />
+        </Section>
+      ) : null}
     </>
   )
 }

@@ -1,0 +1,440 @@
+/* Layout settings (AWD-66): preset cards, switches by group, words and a live preview of the sidebar. */
+
+.aw-layout {
+  display: grid;
+  gap: var(--space-6);
+}
+
+.aw-layout__note {
+  margin-top: var(--space-4);
+}
+
+/* Editor and preview side by side where there's room; the preview follows the cards on narrow screens. */
+.aw-layout__editor {
+  display: grid;
+  grid-template-areas: 'main' 'preview';
+  gap: var(--space-6);
+}
+
+.aw-layout__main {
+  grid-area: main;
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.aw-layout__aside {
+  grid-area: preview;
+  min-width: 0;
+}
+
+@media (min-width: 1180px) {
+  .aw-layout__editor {
+    grid-template-areas: 'main preview';
+    grid-template-columns: minmax(0, 1fr) 248px;
+    align-items: start;
+  }
+
+  .aw-layout__aside {
+    position: sticky;
+    top: var(--space-6);
+  }
+}
+
+/* Preset cards */
+.aw-presets {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(176px, 1fr));
+  gap: var(--space-3);
+}
+
+.aw-preset {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-2);
+  color: var(--content-fg);
+  text-align: left;
+  background: var(--surface-raised);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  cursor: pointer;
+  transition: border-color var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out);
+}
+
+.aw-preset:hover {
+  border-color: var(--control-border);
+}
+
+.aw-preset:has(input:focus-visible) {
+  box-shadow: var(--shadow-focus);
+}
+
+.aw-preset.is-selected {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.aw-preset.is-disabled {
+  cursor: default;
+}
+
+.aw-preset.is-disabled:not(.is-selected) {
+  opacity: 0.72;
+}
+
+.aw-preset__text {
+  display: grid;
+  align-content: start;
+  gap: var(--space-half);
+  padding: 0 var(--space-1) var(--space-1);
+}
+
+.aw-preset__name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  font: var(--t-ui-strong);
+}
+
+.aw-preset__desc {
+  margin: 0;
+  color: var(--content-fg-muted);
+  font: var(--t-caption);
+}
+
+.aw-preset__check {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  color: var(--on-accent);
+  background: var(--accent);
+  border-radius: var(--radius-full);
+}
+
+.aw-preset__tag {
+  color: var(--content-fg-muted);
+  font: var(--t-tag);
+  text-transform: uppercase;
+}
+
+/* A preset card's small picture of the sidebar it gives. */
+.aw-minipreview {
+  display: grid;
+  align-content: start;
+  gap: var(--space-half);
+  height: 104px;
+  padding: var(--space-2);
+  overflow: hidden;
+  color: var(--r-fg);
+  background: var(--r-bg);
+  border-radius: var(--radius-md);
+}
+
+.aw-minipreview__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-width: 0;
+  font: var(--t-caption);
+  white-space: nowrap;
+}
+
+.aw-minipreview__row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.aw-minipreview__head {
+  margin-top: var(--space-1);
+  color: var(--r-fg-muted);
+  font: var(--t-tag);
+  text-transform: uppercase;
+}
+
+/* The live preview: the project's sidebar as this layout gives it. */
+.aw-layoutpreview {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.aw-layoutpreview__title {
+  margin: 0;
+  font: var(--t-heading);
+}
+
+.aw-layoutpreview__frame {
+  display: grid;
+  align-content: start;
+  gap: var(--space-half);
+  padding: var(--space-3) var(--space-2);
+  color: var(--r-fg);
+  background: var(--r-bg);
+  border-radius: var(--radius-lg);
+}
+
+.aw-layoutpreview__project {
+  padding: 0 var(--space-2) var(--space-2);
+  color: var(--r-fg-strong);
+  font: var(--t-ui-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-layoutpreview__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 28px;
+  padding: 0 var(--space-2);
+  font: var(--t-ui);
+  border-radius: var(--radius-sm);
+}
+
+.aw-layoutpreview__row.is-first {
+  color: var(--sidebar-active-fg);
+  background: var(--sidebar-active-bg);
+}
+
+.aw-layoutpreview__row.is-nested {
+  padding-left: var(--space-8);
+  color: var(--r-fg-muted);
+  font: var(--t-small);
+}
+
+.aw-layoutpreview__head {
+  margin-top: var(--space-3);
+  padding: 0 var(--space-2);
+  color: var(--r-fg-muted);
+  font: var(--t-caption-strong);
+}
+
+.aw-layoutpreview__facts {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.aw-layoutpreview__fact {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.aw-layoutpreview__fact dt {
+  color: var(--content-fg-muted);
+  font: var(--t-caption-strong);
+}
+
+.aw-layoutpreview__fact dd {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: 0;
+}
+
+.aw-layoutpreview__chip {
+  padding: var(--space-half) var(--space-2);
+  font: var(--t-caption);
+  background: var(--surface-sunken);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-full);
+}
+
+.aw-layoutpreview__none {
+  color: var(--content-fg-muted);
+  font: var(--t-caption);
+}
+
+/* Switches, in one box per group */
+.aw-partgroups {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.aw-partgroup {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-lg);
+}
+
+.aw-partgroup__title {
+  padding: 0;
+  font: var(--t-ui-strong);
+}
+
+.aw-partgroup__desc {
+  margin: 0 0 var(--space-1);
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+}
+
+.aw-partgroup .aw-switch-row + .aw-switch-row {
+  border-top: 1px solid var(--content-border);
+}
+
+/* Words */
+.aw-words {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.aw-words__row {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr) minmax(0, 1fr);
+  align-items: end;
+  gap: var(--space-3);
+}
+
+.aw-words__noun {
+  padding-bottom: var(--space-2);
+  font: var(--t-ui-strong);
+}
+
+@media (max-width: 640px) {
+  .aw-words__row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .aw-words__noun {
+    grid-column: 1 / -1;
+    padding-bottom: 0;
+  }
+}
+
+/* Save bar under the editor */
+.aw-layout__actions {
+  position: sticky;
+  bottom: 0;
+  z-index: var(--layer-sticky);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) 0;
+  background: var(--content-bg);
+  border-top: 1px solid var(--content-border);
+}
+
+.aw-layout__status {
+  margin-right: auto;
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+}
+
+/* Who gets which preset */
+.aw-layoutrules {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.aw-layoutrule {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 240px) auto;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--size-row);
+}
+
+.aw-layoutrule__who {
+  display: grid;
+  min-width: 0;
+}
+
+.aw-layoutrule__name {
+  font: var(--t-ui);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-layoutrule__meta {
+  color: var(--content-fg-muted);
+  font: var(--t-caption);
+}
+
+@media (max-width: 640px) {
+  .aw-layoutrule {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .aw-layoutrule .aw-field {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}
+
+/* What applies to you, for people who can't change it */
+.aw-layoutsummary {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-4);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-lg);
+}
+
+.aw-layoutsummary__title {
+  margin: 0;
+  font: var(--t-heading);
+}
+
+.aw-layoutsummary__text {
+  margin: 0;
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+}
+
+/* "What's this project for?" when creating one */
+.aw-presetpicker {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.aw-presetpicker__legend {
+  padding: 0;
+  font: var(--t-label);
+}
+
+.aw-presetpicker__hint {
+  margin: 0;
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+}
+
+.aw-presetpicker .aw-presets {
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+}
+
+.aw-presetpicker .aw-minipreview {
+  height: 84px;
+}
+
+/* Your view's switches wait behind a summary line. */
+.aw-layout__mine {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.aw-layout__mine > summary {
+  width: fit-content;
+  color: var(--link);
+  font: var(--t-ui);
+  cursor: pointer;
+}
+
+.aw-layout__mine[open] > summary {
+  margin-bottom: var(--space-3);
+}

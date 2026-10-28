@@ -6,6 +6,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { createIdempotencyKey } from '../conversations/composerModel'
 import type { ConversationKind, MessageContentV1 } from '../conversations/types'
 import { toastError } from '../app/mutations'
+import { useProjectExperience } from '../experience/layout'
 import { Banner, countLabel, showToast, type MenuEntry } from '../ui'
 import { createWorkItem } from '../work-items/api'
 import {
@@ -49,6 +50,19 @@ export function useConversationTools({
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const inProject = kind === 'channel' || kind === 'thread'
+  // A project's layout can leave out slash commands, scheduling and agents in @ suggestions.
+  const experience = useProjectExperience(inProject ? projectId : null)
+  const scheduling = experience.shows('talk.scheduling')
+  const commands = experience.shows('talk.slash_commands')
+    ? commandsFor({ inProject }).filter(
+        (command) =>
+          (command.name !== 'schedule' || scheduling) &&
+          (command.name !== 'tag' || experience.shows('talk.agent_mentions')) &&
+          (command.name !== 'task' || experience.shows('area.tasks')) &&
+          (command.name !== 'launch' || experience.shows('area.runs')) &&
+          ((command.name !== 'later' && command.name !== 'remind') || experience.shows('workspace.later')),
+      )
+    : null
   const level = useConversationLevel(conversationId)
   const scheduled = useScheduled(conversationId, canPost)
   // One key per /task: a retry of the same one after a failure reuses it, anything else gets a new one.
@@ -189,8 +203,17 @@ export function useConversationTools({
       <BellOff aria-label="Muted" className="aw-icon aw-convhead__muted" role="img" size={14} />
     ) : null
 
+  const composer: { commands?: SlashCommand[]; onCommand?: typeof onCommand; onSchedule?: typeof schedule; peopleOnly?: boolean } = canPost
+    ? {
+        commands: commands ?? undefined,
+        onCommand: commands ? onCommand : undefined,
+        onSchedule: scheduling ? schedule : undefined,
+        peopleOnly: !experience.shows('talk.agent_mentions'),
+      }
+    : {}
+
   return {
-    composer: canPost ? { commands: commandsFor({ inProject }), onCommand, onSchedule: schedule } : {},
+    composer,
     banner,
     levelMenu,
     levelMark: muted,

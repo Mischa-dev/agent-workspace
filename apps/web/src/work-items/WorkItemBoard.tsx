@@ -5,6 +5,7 @@ import { queryKeys } from '../api/queryKeys'
 import { Button, ErrorState, Icon, IconButton, actorKind, Avatar, countLabel } from '../ui'
 import { ASSIGNEE_PAGE, listWorkItems, moveWorkItem, updateWorkItem } from './api'
 import { BoardCard } from './BoardCard'
+import { useCardFields } from './cardFields'
 import { BoardSkeleton } from './BoardSkeleton'
 import { ColumnComposer } from './ColumnComposer'
 import { statusBoardColumns, tucksDone, withoutDone } from './doneModel'
@@ -79,6 +80,7 @@ export function WorkItemBoard({
   )
   const boardKey = queryKeys.workItemBoard(projectId, query)
   const board = useBoard(projectId, query, true)
+  const fields = useCardFields(projectId)
   const queryClient = useQueryClient()
   const invalidate = useInvalidateWorkItems()
   const applyPick = useApplyPick()
@@ -656,6 +658,7 @@ export function WorkItemBoard({
                             card={entry.card}
                             dragId={entry.dragId}
                             draggable={canMove && entry.card.capabilities.edit && !entry.card.archivedAt}
+                            fields={fields}
                             focused={entry.dragId === tabStop}
                             held={held?.dragId === entry.dragId}
                             key={entry.dragId}
