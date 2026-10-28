@@ -24,6 +24,11 @@
   background: var(--content-hover);
 }
 
+/* The task open in the side panel. */
+.aw-mywork__row.is-open {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
 /* The whole row opens the task. */
 .aw-mywork__title::after {
   position: absolute;

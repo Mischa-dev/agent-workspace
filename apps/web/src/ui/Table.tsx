@@ -38,10 +38,10 @@ const columnsStyle = (columns: TableColumn[]) =>
   }) as CSSProperties
 
 /**
- * A data grid with a sticky header and keyboard row movement: Up and Down (or
- * J and K when `letterKeys` is on), Home, End, Page Up and Page Down move
- * between rows and Enter activates one. Rows can be windowed: pass only the
- * rows in view, with `rowCount`, `index` and the space above and below.
+ * A data grid with a sticky header and keyboard row movement: Up and Down,
+ * Home, End, Page Up and Page Down move between rows and Enter activates one.
+ * Rows can be windowed: pass only the rows in view, with `rowCount`, `index`
+ * and the space above and below.
  */
 export function Table({
   activeKey,
@@ -53,6 +53,7 @@ export function Table({
   label,
   onActivate,
   onActiveKeyChange,
+  onMove,
   onRowClick,
   onRowKeyDown,
   rowCount,
@@ -71,6 +72,8 @@ export function Table({
   onActivate?: (key: string) => void
   /** Focus moved to another row. Windowed tables scroll it into view. */
   onActiveKeyChange?: (key: string) => void
+  /** A movement key (not a click or Tab) landed on this row, to open it beside the table. */
+  onMove?: (key: string) => void
   /** A click on the row itself, not on a control inside it. */
   onRowClick?: (event: MouseEvent<HTMLDivElement>, key: string) => void
   /** Keys the table doesn't handle itself, for shortcuts on the focused row. */
@@ -97,6 +100,7 @@ export function Table({
     const target = focusable[Math.max(0, Math.min(next, focusable.length - 1))]
     if (!target) return true
     onActiveKeyChange?.(target.key)
+    onMove?.(target.key)
     window.requestAnimationFrame(() => body.current?.querySelector<HTMLElement>(`[data-row-key="${CSS.escape(target.key)}"]`)?.focus())
     return true
   }

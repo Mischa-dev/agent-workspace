@@ -16,7 +16,7 @@ import { useWorkItemGroups, useWorkItemPages } from './planningHooks'
 import { SelectionBar } from './SelectionBar'
 import { useDoneCount, useDoneItems } from './useDoneWork'
 import { emptySelection, keepLoaded, MAX_BULK, pick, pickerCurrent, pickerTargets, selectAll, toggleOne, type Selection } from './selectionModel'
-import { useTaskShortcuts } from './shortcutKeys'
+import { pageHasFocus, useOpenAsYouGo, useTaskShortcuts } from './shortcutKeys'
 import { editErrorMessage, useApplyPick, type EditTarget } from './taskEdits'
 import type { WorkItemCard, WorkItemWorkflow } from './types'
 import { useWindowedRows } from './useWindowedRows'
@@ -262,6 +262,19 @@ export function WorkItemList({
     )
   }
 
+  // The side panel follows the keyboard selection; a click or Enter opens at once.
+  const following = useOpenAsYouGo((id) => {
+    if (id !== openTaskId) onOpenTask(id)
+  })
+  const openNow = (id: string) => {
+    following.cancel()
+    onOpenTask(id)
+  }
+  const follow = (key: string) => {
+    const row = rowByKey(key)
+    if (row?.kind === 'task') following.follow(row.item.id)
+  }
+
   const onRowSelect = (card: WorkItemCard, event: { shiftKey: boolean; metaKey: boolean; ctrlKey: boolean }) => {
     if (disabled) return
     setSelection(pick(selection, card.id, order, { shift: event.shiftKey, toggle: event.metaKey || event.ctrlKey }))
@@ -276,19 +289,22 @@ export function WorkItemList({
     }
     if (event.metaKey || event.ctrlKey) return false
     if (key === 'escape') {
+      following.cancel()
       if (openTaskId) onClosePanel()
       else if (selection.ids.size) setSelection(emptySelection)
       else return false
       return true
     }
-    if (key === 'j' || key === 'k') {
+    // J and K work from anywhere but a field; the arrows, Home and End once
+    // focus is on a row (the table moves it) or nowhere in particular.
+    const step = key === 'j' || (key === 'arrowdown' && pageHasFocus()) ? 1 : key === 'k' || (key === 'arrowup' && pageHasFocus()) ? -1 : 0
+    const end = (key === 'home' || key === 'end') && pageHasFocus() ? key : null
+    if (step || end) {
       if (!focusable.length) return false
       const index = focusable.findIndex((row) => row.key === currentKey)
-      const next = index < 0 ? 0 : Math.max(0, Math.min(focusable.length - 1, index + (key === 'j' ? 1 : -1)))
+      const next = end === 'home' ? 0 : end === 'end' ? focusable.length - 1 : index < 0 ? 0 : Math.max(0, Math.min(focusable.length - 1, index + step))
       activate(focusable[next].key, true)
-      // With a task open beside the list, the panel follows, the way a peek does.
-      const target = focusable[next]
-      if (openTaskId && target.kind === 'task' && target.item.id !== openTaskId) onOpenTask(target.item.id)
+      follow(focusable[next].key)
       return true
     }
     const row = currentKey ? rowByKey(currentKey) : undefined
@@ -297,7 +313,7 @@ export function WorkItemList({
       return true
     }
     if (key === 'enter' && row) {
-      if (row.kind === 'task') onOpenTask(row.item.id)
+      if (row.kind === 'task') openNow(row.item.id)
       else if (row.kind === 'group') toggleGroup(row.groupKey)
       return true
     }
@@ -394,7 +410,7 @@ export function WorkItemList({
           if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return
           event.preventDefault()
           setActiveKey(row.key)
-          onOpenTask(target.id)
+          openNow(target.id)
         },
         onPick: (target, field, anchor) => {
           setActiveKey(row.key)
@@ -423,17 +439,18 @@ export function WorkItemList({
         label="Tasks"
         onActivate={(key) => {
           const row = rowByKey(key)
-          if (row?.kind === 'task') onOpenTask(row.item.id)
+          if (row?.kind === 'task') openNow(row.item.id)
           else if (row?.kind === 'group') toggleGroup(row.groupKey)
         }}
         onActiveKeyChange={(key) => activate(key, false)}
+        onMove={follow}
         onRowClick={(event, key) => {
           const row = rowByKey(key)
           setActiveKey(key)
           if (row?.kind === 'group') toggleGroup(row.groupKey)
           else if (row?.kind === 'task') {
             if (event.shiftKey || event.metaKey || event.ctrlKey) onRowSelect(row.item, event)
-            else onOpenTask(row.item.id)
+            else openNow(row.item.id)
           }
         }}
         rowCount={rows.length}

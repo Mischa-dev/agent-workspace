@@ -1,7 +1,11 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
+
+import { isMobileWidth } from '../shell/mobileNavigation'
 
 export const LIST_SHORTCUTS: Array<{ keys: string[]; label: string }> = [
-  { keys: ['J', 'K'], label: 'Move down and up' },
+  { keys: ['↓', '↑'], label: 'Next and previous task, opening each in the side panel' },
+  { keys: ['J', 'K'], label: 'The same, wherever you are on the page' },
+  { keys: ['Home', 'End'], label: 'First and last task' },
   { keys: ['X'], label: 'Select or unselect' },
   { keys: ['Shift', 'click'], label: 'Select a range' },
   { keys: ['S'], label: 'Change status' },
@@ -15,8 +19,10 @@ export const LIST_SHORTCUTS: Array<{ keys: string[]; label: string }> = [
 ]
 
 export const BOARD_SHORTCUTS: Array<{ keys: string[]; label: string }> = [
-  { keys: ['Arrows'], label: 'Move between cards' },
+  { keys: ['←', '→'], label: 'Next and previous column, opening each card in the side panel' },
+  { keys: ['↓', '↑'], label: 'Next and previous card in a column' },
   { keys: ['J', 'K'], label: 'Next and previous card, down each column' },
+  { keys: ['Home', 'End'], label: 'First and last card in a column' },
   { keys: ['X'], label: 'Select or unselect' },
   { keys: ['Shift', 'click'], label: 'Select a range' },
   { keys: ['Space'], label: 'Pick up a card, then arrows to move it and Space to drop' },
@@ -31,6 +37,47 @@ export function isTypingTarget(target: EventTarget | null) {
   if (target.isContentEditable) return true
   if (target.closest('input, textarea, select, [role="dialog"], [role="menu"], .aw-popover, #context-region')) return true
   return false
+}
+
+/**
+ * True when nothing in particular has focus (the page itself, or its main
+ * region after a click on empty space), so the arrow keys can start moving
+ * through the list instead of scrolling.
+ */
+export function pageHasFocus() {
+  const active = document.activeElement
+  return !active || active === document.body || active.id === 'main-workspace'
+}
+
+/** How long the keyboard selection rests on a task before the side panel follows it. */
+const FOLLOW_DELAY_MS = 120
+
+/**
+ * Opens what the keyboard selection lands on in the side panel, once it stops
+ * for a moment, so holding an arrow key doesn't load every task on the way.
+ * On a phone the panel would cover the list, so Enter opens it there.
+ */
+export function useOpenAsYouGo<T = string>(open: (target: T) => void) {
+  const openRef = useRef(open)
+  const timer = useRef<number | undefined>(undefined)
+  useEffect(() => {
+    openRef.current = open
+  }, [open])
+  useEffect(() => () => window.clearTimeout(timer.current), [])
+  return useMemo(
+    () => ({
+      follow(target: T) {
+        window.clearTimeout(timer.current)
+        if (isMobileWidth()) return
+        timer.current = window.setTimeout(() => openRef.current(target), FOLLOW_DELAY_MS)
+      },
+      /** Forget a pending open: Escape, a click or Enter came first. */
+      cancel() {
+        window.clearTimeout(timer.current)
+      },
+    }),
+    [],
+  )
 }
 
 /**

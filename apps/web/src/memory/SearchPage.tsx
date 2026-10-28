@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from 'react'
+import { useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 
@@ -20,6 +20,7 @@ import {
   formatFullDate,
   formatRelative,
   plainPreview,
+  useListKeys,
 } from '../ui'
 
 type SearchHit = {
@@ -105,6 +106,9 @@ export function SearchPage() {
     next.set('q', draft.trim())
     setParams(next)
   }
+  // Down and Up (or J and K) step through the results once you leave the box.
+  const resultsRef = useRef<HTMLDivElement>(null)
+  useListKeys(resultsRef, '.aw-row__link')
   const searchEverything = () => {
     const next = new URLSearchParams(params)
     next.delete('projectId')
@@ -140,7 +144,7 @@ export function SearchPage() {
             </Button>
           </p>
         ) : null}
-        <div className="aw-search__results">
+        <div className="aw-search__results" ref={resultsRef}>
           {results.isLoading ? <ListSkeleton label="Searching" rows={3} /> : null}
           {results.isError ? (
             <Banner onRetry={() => void results.refetch()} tone="danger" title="Search didn’t work.">
