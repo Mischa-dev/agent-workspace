@@ -178,6 +178,13 @@ async fn save_http(
         .map(|username| username.trim().to_owned())
         .filter(|username| !username.is_empty());
     request.smtp.validate().map_err(AppError::Validation)?;
+    request
+        .smtp
+        .check_destination(state.config.allow_private_addresses)
+        .map_err(|field| AppError::Refused {
+            field,
+            message: smtp::NOT_PUBLIC,
+        })?;
     let from_address =
         normalize_address(&request.from_address).ok_or(AppError::Validation("fromAddress"))?;
     let from_name = request

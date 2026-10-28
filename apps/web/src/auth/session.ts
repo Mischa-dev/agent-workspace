@@ -35,6 +35,8 @@ export type SessionUser = {
   defaultOrganizationId?: string | null
   capabilities: {
     createProject: boolean
+    /** Runs this server, so sees Settings › Workspace › Server. */
+    serverStatus?: boolean
   }
 }
 
@@ -137,6 +139,7 @@ function normalizeUser(value: unknown): SessionUser | null {
     defaultOrganizationId: normalizedUuid(record.defaultOrganizationId),
     capabilities: {
       createProject: asRecord(record.capabilities).createProject === true,
+      serverStatus: asRecord(record.capabilities).serverStatus === true,
     },
   }
 }

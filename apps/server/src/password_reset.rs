@@ -519,7 +519,9 @@ async fn request_reset_http(
     // The same answer for every well-formed request; who exists is looked
     // up later, in the job.
     if let Some(login) = normalize_reset_key(&request.login) {
-        state.rate_limits.check_password_reset(&login)?;
+        state
+            .rate_limits
+            .check_password_reset(crate::rate_limit::client_address(&headers), &login)?;
         jobs::enqueue(
             &state.pool,
             NewJob::new(RESET_KIND)
@@ -592,6 +594,13 @@ async fn send_reset(state: &AppState, login: &str) -> Result<(), JobError> {
         || last.is_some_and(|at| Utc::now() - at < chrono::Duration::seconds(60))
     {
         return Ok(());
+    }
+    // The whole server's reset emails have a ceiling too; only real sends
+    // spend it, so requests for made-up accounts can't hold anyone's back.
+    if let Err(seconds) = state.rate_limits.check_reset_email() {
+        return Err(JobError::retry(format!(
+            "too many reset emails right now; trying again in {seconds} s"
+        )));
     }
     // One live link at a time: the newest.
     end_live_resets(&mut transaction, target.user_id).await?;
@@ -735,6 +744,11 @@ struct CompleteRequest {
     new_password: String,
     /// The authenticator or recovery code, for an account with two-factor.
     code: Option<String>,
+    /// Also disconnect the apps connected as this person (for when someone
+    /// else may have got in). Off by default: reconnecting every app is a
+    /// chore, and the reset already signs out every browser.
+    #[serde(default)]
+    disconnect_apps: bool,
 }
 
 impl Drop for CompleteRequest {
@@ -845,6 +859,9 @@ async fn complete_reset_http(
         .bind(reset.user_id)
         .execute(&mut *transaction)
         .await?;
+    if request.disconnect_apps {
+        disconnect_apps(&mut transaction, reset.actor_id).await?;
+    }
     audit(
         &mut transaction,
         None,
@@ -859,6 +876,51 @@ async fn complete_reset_http(
         crate::auth::workos::revoke_provider_session(&state, session_id).await;
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Revokes every app connected as `actor_id`, with every token issued to
+/// it, as if each had been disconnected in Settings › Connected apps.
+async fn disconnect_apps(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+) -> Result<(), AppError> {
+    let grants = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        UPDATE mcp_oauth_grants SET revoked_at = now()
+        WHERE actor_id = $1 AND revoked_at IS NULL
+        RETURNING id
+        "#,
+    )
+    .bind(actor_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    if grants.is_empty() {
+        return Ok(());
+    }
+    for table in ["mcp_oauth_access_tokens", "mcp_oauth_refresh_tokens"] {
+        sqlx::query(&format!(
+            "UPDATE {table} SET revoked_at = COALESCE(revoked_at, now()) WHERE grant_id = ANY($1)"
+        ))
+        .bind(&grants)
+        .execute(&mut **transaction)
+        .await?;
+    }
+    sqlx::query(
+        r#"
+        INSERT INTO audit_events (
+            id, actor_id, authentication_class, action, target_kind, target_id,
+            outcome, channel, metadata, mcp_oauth_grant_id
+        )
+        SELECT gen_random_uuid(), $1, 'password_session', 'connected_app.revoked',
+               'mcp_oauth_grant', grant_id, 'succeeded', 'browser', '{}'::jsonb, grant_id
+        FROM unnest($2::uuid[]) AS grant_id
+        "#,
+    )
+    .bind(actor_id)
+    .bind(&grants)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
 }
 
 async fn audit(

@@ -7,7 +7,7 @@ import { Link, useLocation } from 'react-router-dom'
 
 import { requestJson } from '../api/client'
 import { isApiError } from '../api/errors'
-import { Banner, Button, ButtonLink, TextField, describeError, describeLoadError } from '../ui'
+import { Banner, Button, ButtonLink, Checkbox, TextField, describeError, describeLoadError } from '../ui'
 import { AuthLayout } from './AuthLayout'
 
 type ResetInspection = { loginName: string; twoFactorRequired: boolean }
@@ -18,10 +18,10 @@ const requestReset = (login: string) => requestJson<{ accepted: boolean }>('/api
 
 const inspectReset = (token: string) => requestJson<ResetInspection>('/api/v1/auth/password-reset/inspect', { method: 'POST', json: { token } })
 
-const completeReset = (token: string, newPassword: string, code: string | null) =>
+const completeReset = (token: string, newPassword: string, code: string | null, disconnectApps: boolean) =>
   requestJson<void>('/api/v1/auth/password-reset/complete', {
     method: 'POST',
-    json: code ? { token, newPassword, code } : { token, newPassword },
+    json: { token, newPassword, ...(code ? { code } : {}), ...(disconnectApps ? { disconnectApps } : {}) },
   })
 
 const verifyEmail = (token: string) => requestJson<{ address: string }>('/api/v1/auth/verify-email', { method: 'POST', json: { token } })
@@ -123,6 +123,7 @@ export function ResetPasswordPage() {
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [code, setCode] = useState('')
+  const [disconnectApps, setDisconnectApps] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [done, setDone] = useState(false)
   const [expired, setExpired] = useState(false)
@@ -179,7 +180,7 @@ export function ResetPasswordPage() {
     setSubmitting(true)
     setError(null)
     try {
-      await completeReset(token, password, twoFactor ? code.trim() : null)
+      await completeReset(token, password, twoFactor ? code.trim() : null, disconnectApps)
       setPassword('')
       setConfirm('')
       setDone(true)
@@ -203,6 +204,13 @@ export function ResetPasswordPage() {
         {twoFactor && (
           <TextField autoComplete="one-time-code" disabled={submitting} hint="From your authenticator app, or a recovery code." id="reset-code" label="Two-factor code" maxLength={32} mono onChange={(event) => setCode(event.target.value)} required spellCheck={false} value={code} />
         )}
+        <Checkbox
+          checked={disconnectApps}
+          description="If someone else may have got in. You’ll need to connect each app again."
+          disabled={submitting}
+          label="Also disconnect my connected apps"
+          onChange={setDisconnectApps}
+        />
         <Button busy={submitting} className="aw-auth__submit" disabled={!ready} size="lg" type="submit" variant="primary">
           {submitting ? 'Saving…' : 'Change password'}
         </Button>

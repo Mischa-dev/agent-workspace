@@ -53,6 +53,7 @@ mod phase3_takedown;
 mod phase4_groundwork;
 mod polish_leftovers;
 mod reply_requests;
+mod server_operators;
 mod settings_accounts;
 mod w10_ai_planning;
 mod w11_views_and_data;
@@ -70,3 +71,19 @@ mod w3_tasks_http;
 mod w7_launch;
 mod w9_capacity_and_push;
 mod workspace_isolation;
+
+/// The PostgreSQL tests skip themselves when `AGENT_WORKSPACE_DATABASE_URL`
+/// is unset, so without this a run with no database would pass with most of
+/// the suite never run. Skipping them is a choice you make out loud.
+#[test]
+fn postgres_tests_are_never_skipped_silently() {
+    let configured = std::env::var("AGENT_WORKSPACE_DATABASE_URL").is_ok_and(|url| !url.is_empty());
+    let skipping =
+        std::env::var_os("AGENT_WORKSPACE_SKIP_DATABASE_TESTS").is_some_and(|value| value == "1");
+    assert!(
+        configured || skipping,
+        "AGENT_WORKSPACE_DATABASE_URL is unset, so every PostgreSQL test skipped itself. \
+         Point it at a database (tools/cloud/setup.sh does in a cloud session), or set \
+         AGENT_WORKSPACE_SKIP_DATABASE_TESTS=1 to skip them on purpose."
+    );
+}
