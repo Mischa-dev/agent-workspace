@@ -2777,7 +2777,7 @@ fn normalize_text(value: String, max_characters: usize, allow_empty: bool) -> Op
 }
 
 /// Comments may span lines and carry Markdown, as they can in the web app.
-fn normalize_comment(value: String) -> Option<String> {
+pub(super) fn normalize_comment(value: String) -> Option<String> {
     let value = value.trim();
     if value.is_empty()
         || value.chars().count() > MAX_UPDATE_CHARACTERS

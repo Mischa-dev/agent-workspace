@@ -241,14 +241,40 @@ pub async fn deliver(
     if decision.nothing() {
         return Ok(false);
     }
+    // A message the recipient has already seen (they had the conversation
+    // open when it arrived) comes in read.
+    let already_seen = match notification.message_id {
+        Some(message_id) => {
+            sqlx::query_scalar::<_, bool>(
+                r#"
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM conversation_entries entry
+                    JOIN conversation_read_states state
+                      ON state.conversation_id = entry.conversation_id
+                     AND state.actor_id = $2
+                    WHERE entry.message_id = $1
+                      AND entry.sequence <= state.highest_seen_sequence
+                )
+                "#,
+            )
+            .bind(message_id)
+            .bind(notification.recipient_actor_id)
+            .fetch_one(&mut **transaction)
+            .await?
+        }
+        None => false,
+    };
     let notification_id = sqlx::query_scalar::<_, Uuid>(
         r#"
         INSERT INTO notifications (
             id, project_id, recipient_actor_id, kind, subject_kind, subject_id,
             actor_id, conversation_id, message_id, work_item_id, comment_id,
-            agent_run_id, approval_id, pull_request_id, detail, group_key, archived_at
+            agent_run_id, approval_id, pull_request_id, detail, group_key, archived_at,
+            read_at
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
-                  CASE WHEN $17 THEN NULL ELSE now() END)
+                  CASE WHEN $17 THEN NULL ELSE now() END,
+                  CASE WHEN $18 THEN now() END)
         ON CONFLICT (recipient_actor_id, group_key) WHERE archived_at IS NULL
         DO UPDATE SET
             kind = EXCLUDED.kind,
@@ -259,7 +285,7 @@ pub async fn deliver(
             pull_request_id = COALESCE(EXCLUDED.pull_request_id, notifications.pull_request_id),
             detail = EXCLUDED.detail,
             repeat_count = notifications.repeat_count + 1,
-            read_at = NULL,
+            read_at = CASE WHEN $18 THEN COALESCE(notifications.read_at, now()) END,
             surfaced_at = GREATEST(now(), COALESCE(notifications.snoozed_until, now())),
             updated_at = now()
         RETURNING id
@@ -282,6 +308,7 @@ pub async fn deliver(
     .bind(&notification.detail)
     .bind(&notification.group_key)
     .bind(decision.in_app)
+    .bind(already_seen)
     .fetch_one(&mut **transaction)
     .await?;
     if decision.push || decision.email {
@@ -405,6 +432,43 @@ pub(crate) async fn announce(
         OutboxEventPayload::NotificationsUpdated(NotificationsUpdatedPayload { actor_id }),
     )
     .await?;
+    Ok(())
+}
+
+/// Viewing a conversation up to `sequence` reads what the viewer was told
+/// about it there. Snoozed notifications wait for their time.
+pub(crate) async fn read_for_conversation(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    viewer: Uuid,
+    conversation_id: Uuid,
+    sequence: i64,
+) -> Result<(), AppError> {
+    let read = sqlx::query(
+        r#"
+        UPDATE notifications n
+        SET read_at = now(), updated_at = now()
+        WHERE n.recipient_actor_id = $1
+          AND n.conversation_id = $2
+          AND n.read_at IS NULL
+          AND n.archived_at IS NULL
+          AND (n.snoozed_until IS NULL OR n.snoozed_until <= now())
+          AND (n.message_id IS NULL OR EXISTS (
+              SELECT 1 FROM conversation_entries entry
+              WHERE entry.conversation_id = $2
+                AND entry.message_id = n.message_id
+                AND entry.sequence <= $3
+          ))
+        "#,
+    )
+    .bind(viewer)
+    .bind(conversation_id)
+    .bind(sequence)
+    .execute(&mut **transaction)
+    .await?;
+    if read.rows_affected() > 0 {
+        announce(transaction, project_id, viewer).await?;
+    }
     Ok(())
 }
 
@@ -568,6 +632,68 @@ async fn followed_messages(
 
 /// A removed message stops counting: its occurrences go, and a notification
 /// left with none goes too. The text itself was never copied here.
+/// A deleted task comment's notifications go with it, as a removed
+/// message's do. A notification that also stood for other occurrences stays,
+/// counted again.
+pub(crate) async fn forget_comment(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    comment_id: Uuid,
+) -> Result<(), AppError> {
+    let affected = sqlx::query_as::<_, (Uuid, Uuid)>(
+        r#"
+        DELETE FROM notification_occurrences
+        WHERE dedupe_key = ANY($1)
+        RETURNING notification_id, recipient_actor_id
+        "#,
+    )
+    .bind(vec![
+        format!("comment-mention:{comment_id}"),
+        format!("watch:{comment_id}"),
+    ])
+    .fetch_all(&mut **transaction)
+    .await?;
+    if affected.is_empty() {
+        return Ok(());
+    }
+    let ids = affected.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+    sqlx::query(
+        r#"
+        DELETE FROM notifications n
+        WHERE n.id = ANY($1)
+          AND NOT EXISTS (
+              SELECT 1 FROM notification_occurrences o WHERE o.notification_id = n.id
+          )
+        "#,
+    )
+    .bind(&ids)
+    .execute(&mut **transaction)
+    .await?;
+    sqlx::query(
+        r#"
+        UPDATE notifications n
+        SET comment_id = NULLIF(n.comment_id, $2),
+            repeat_count = GREATEST(1, (
+                SELECT count(*) FROM notification_occurrences o WHERE o.notification_id = n.id
+            )::integer),
+            updated_at = now()
+        WHERE n.id = ANY($1)
+        "#,
+    )
+    .bind(&ids)
+    .bind(comment_id)
+    .execute(&mut **transaction)
+    .await?;
+    let recipients = affected
+        .into_iter()
+        .map(|(_, recipient)| recipient)
+        .collect::<BTreeSet<_>>();
+    for recipient in recipients {
+        announce(transaction, project_id, recipient).await?;
+    }
+    Ok(())
+}
+
 async fn forget_message(
     transaction: &mut Transaction<'_, Postgres>,
     message_id: Uuid,
@@ -663,7 +789,10 @@ async fn work_item_changes(
         JOIN work_item_comments comment
           ON comment.project_id = event.project_id
          AND comment.work_item_id = $3
-         AND comment.created_at = event.created_at
+         -- A new comment, or an edit (it can add mentions; people already
+         -- told about this comment aren't told again).
+         AND (comment.created_at = event.created_at OR comment.edited_at = event.created_at)
+         AND comment.removed_at IS NULL
         JOIN work_item_comment_mentions mention ON mention.comment_id = comment.id
         WHERE event.event_id = $1 AND event.project_id = $2
           AND mention.actor_id <> comment.author_actor_id
@@ -756,6 +885,7 @@ async fn work_item_changes(
               ON comment.project_id = event.project_id
              AND comment.work_item_id = $3
              AND comment.created_at = event.created_at
+             AND comment.removed_at IS NULL
             WHERE event.event_id = $1 AND event.project_id = $2
         )
         SELECT change.change_id, change.actor_id, change.comment_id, change.change,

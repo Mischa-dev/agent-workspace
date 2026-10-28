@@ -715,6 +715,26 @@ pub(crate) async fn forget_message_files(
     Ok(())
 }
 
+/// A deleted task comment's files stop showing at once; their bytes are
+/// deleted by the next cleanup.
+pub(crate) async fn forget_comment_files(
+    transaction: &mut Transaction<'_, Postgres>,
+    comment_id: Uuid,
+    removed_by: Uuid,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        UPDATE files SET removed_at = now(), removed_by_actor_id = $2
+        WHERE comment_id = $1 AND removed_at IS NULL
+        "#,
+    )
+    .bind(comment_id)
+    .bind(removed_by)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
 /// Removes a file: an unsent upload by its uploader, or a task's own file by
 /// anyone who may edit the task (checked by the caller, `may_edit_task`, so
 /// an archived task or a viewer can't). Message and comment files go with
