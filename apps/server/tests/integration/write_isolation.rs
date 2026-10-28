@@ -2560,12 +2560,28 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             "transitions": "all",
         })
     };
-    let b_statuses = sp
-        .statuses
-        .iter()
-        .map(|status| with(status, "id", json!(bx.status)))
-        .collect::<Vec<_>>();
-    let a_workflow = workflow(&sp.statuses, &sp.types);
+    // A's statuses and types, each with one more: new in A's own request,
+    // and B's in the others, which are then valid but for B's ID.
+    let added_status =
+        json!({"name": "Net added status", "semanticCategory": "review", "isDefault": false});
+    let added_type = json!({"name": "Net added type", "isDefault": false});
+    let plus = |entries: &[Value], entry: Value| {
+        let mut entries = entries.to_vec();
+        entries.push(entry);
+        entries
+    };
+    let a_workflow = workflow(
+        &plus(&sp.statuses, added_status.clone()),
+        &plus(&sp.types, added_type.clone()),
+    );
+    let b_status_workflow = workflow(
+        &plus(&sp.statuses, with(&added_status, "id", json!(bx.status))),
+        &plus(&sp.types, added_type.clone()),
+    );
+    let b_type_workflow = workflow(
+        &plus(&sp.statuses, added_status),
+        &plus(&sp.types, with(&added_type, "id", json!(bx.task_type))),
+    );
     let workflow_version = |project: &str| {
         current(
             "project_task_settings",
@@ -3814,11 +3830,18 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
                 Payload::Json(with(&a_workflow, "expectedVersion", workflow_version(&values[0])))
             },
         )
-        .rejecting(vec![with(
-            &workflow(&b_statuses, &sp.types),
-            "expectedVersion",
-            workflow_version(&a.project),
-        )]),
+        .rejecting(vec![
+            with(
+                &b_status_workflow,
+                "expectedVersion",
+                workflow_version(&a.project),
+            ),
+            with(
+                &b_type_workflow,
+                "expectedVersion",
+                workflow_version(&a.project),
+            ),
+        ]),
         // Tasks
         path_case(
             "POST /api/v1/projects/{project_id}/work-items",
@@ -4448,11 +4471,19 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             })
             .collect::<Vec<_>>()
     };
+    // As over HTTP: A's statuses and types with one more each, new in A's
+    // own call and B's in the others. The HTTP request added its own, which
+    // A's call retires.
+    let added_status = json!({"name": "Net tool status", "category": "review", "isDefault": false});
+    let added_type = json!({"name": "Net tool type", "isDefault": false});
+    let plus = |entries: &[Value], entry: Value| {
+        let mut entries = entries.to_vec();
+        entries.push(entry);
+        entries
+    };
     let a_statuses = drafts(&sp.statuses);
-    let b_statuses = a_statuses
-        .iter()
-        .map(|status| with(status, "id", json!(bx.status)))
-        .collect::<Vec<_>>();
+    let own_statuses = plus(&a_statuses, added_status.clone());
+    let own_types = plus(&sp.types, added_type.clone());
     let rule = json!({
         "trigger": {"kind": "task_created"},
         "actions": [{"kind": "notify", "recipients": "owner", "message": "Net"}],
@@ -5060,7 +5091,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"projectId": b.project, "title": "Net mcp plan", "plan": "- Net step"})],
         )
         .rejecting(vec![
-            json!({"projectId": a.project, "pageId": b.page}),
+            json!({"projectId": a.project, "title": "Net page plan", "pageId": b.page}),
             json!({"projectId": a.project, "importId": b.plan, "commit": true, "expectedVersion": version("ai_plan_imports", b.plan)}),
         ]),
         mcp_case(
@@ -5079,25 +5110,34 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({
                 "projectId": a.project,
                 "expectedVersion": workflow_version(&a.project),
-                "statuses": a_statuses,
-                "types": sp.types,
+                "statuses": own_statuses,
+                "types": own_types,
                 "allTransitions": true,
             }),
             vec![json!({
                 "projectId": b.project,
                 "expectedVersion": workflow_version(&b.project),
-                "statuses": a_statuses,
-                "types": sp.types,
+                "statuses": own_statuses,
+                "types": own_types,
                 "allTransitions": true,
             })],
         )
-        .rejecting(vec![json!({
-            "projectId": a.project,
-            "expectedVersion": workflow_version(&a.project),
-            "statuses": b_statuses,
-            "types": sp.types,
-            "allTransitions": true,
-        })]),
+        .rejecting(vec![
+            json!({
+                "projectId": a.project,
+                "expectedVersion": workflow_version(&a.project),
+                "statuses": plus(&a_statuses, with(&added_status, "id", json!(bx.status))),
+                "types": own_types,
+                "allTransitions": true,
+            }),
+            json!({
+                "projectId": a.project,
+                "expectedVersion": workflow_version(&a.project),
+                "statuses": own_statuses,
+                "types": plus(&sp.types, with(&added_type, "id", json!(bx.task_type))),
+                "allTransitions": true,
+            }),
+        ]),
         // Runs
         mcp_case(
             "run_start",
