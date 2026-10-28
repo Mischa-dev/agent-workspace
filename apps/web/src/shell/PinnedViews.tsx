@@ -1,8 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
 import { NavLink, useLocation } from 'react-router-dom'
 
+import { useProjectExperience } from '../experience/layout'
 import { Icon } from '../ui'
 import { listViews, viewKeys } from '../views/api'
+import { viewName, viewShown } from '../views/layoutViews'
 import { SidebarSection } from './SidebarParts'
 
 /**
@@ -11,8 +13,11 @@ import { SidebarSection } from './SidebarParts'
  */
 export default function PinnedViews({ onNavigate, projectId }: { onNavigate: () => void; projectId: string }) {
   const location = useLocation()
+  const experience = useProjectExperience(projectId)
   const views = useQuery({ queryKey: viewKeys.views(projectId), queryFn: () => listViews(projectId), staleTime: 60_000 })
-  const pinned = (views.data?.views ?? []).filter((view) => view.pinned).sort((left, right) => left.position - right.position)
+  const pinned = (views.data?.views ?? [])
+    .filter((view) => view.pinned && viewShown(view, experience))
+    .sort((left, right) => left.position - right.position)
   if (!pinned.length) return null
   const current = new URLSearchParams(location.search).get('savedView')
   return (
@@ -27,7 +32,7 @@ export default function PinnedViews({ onNavigate, projectId }: { onNavigate: () 
             <span className="aw-item__lead">
               <Icon name={view.builtin === 'ready_for_agents' ? 'bot' : view.layout === 'board' ? 'board' : 'list'} />
             </span>
-            <span className="aw-item__label">{view.name}</span>
+            <span className="aw-item__label">{viewName(view, experience)}</span>
           </NavLink>
         </li>
       ))}

@@ -30,31 +30,33 @@ const capital = (text: string) => (text ? text.charAt(0).toLocaleUpperCase() + t
 export function MiniPreview({ shape }: { shape: Shape }) {
   return (
     <div aria-hidden="true" className="aw-minipreview" data-region="sidebar">
-      <span className="aw-minipreview__row">
-        <Icon name="home" size={12} />
-        <span>Overview</span>
-      </span>
-      {topRows(shape).map((row) => (
-        <span className="aw-minipreview__row" key={row.part}>
-          <Icon name={row.icon} size={12} />
-          <span>{row.label}</span>
-        </span>
-      ))}
-      {shape.visible.has('area.agents') ? (
+      <span className="aw-minipreview__rows">
         <span className="aw-minipreview__row">
-          <Icon name="bot" size={12} />
-          <span>Agents</span>
+          <Icon name="home" size={12} />
+          <span>Overview</span>
         </span>
-      ) : null}
-      {shape.visible.has('area.chat') ? (
-        <>
-          <span className="aw-minipreview__head">{shapeWord(shape, 'channel', 'many')}</span>
-          <span className="aw-minipreview__row">
-            <Icon name="hash" size={12} />
-            <span>general</span>
+        {topRows(shape).map((row) => (
+          <span className="aw-minipreview__row" key={row.part}>
+            <Icon name={row.icon} size={12} />
+            <span>{row.label}</span>
           </span>
-        </>
-      ) : null}
+        ))}
+        {shape.visible.has('area.agents') ? (
+          <span className="aw-minipreview__row">
+            <Icon name="bot" size={12} />
+            <span>Agents</span>
+          </span>
+        ) : null}
+        {shape.visible.has('area.chat') ? (
+          <>
+            <span className="aw-minipreview__head">{shapeWord(shape, 'channel', 'many')}</span>
+            <span className="aw-minipreview__row">
+              <Icon name="hash" size={12} />
+              <span>general</span>
+            </span>
+          </>
+        ) : null}
+      </span>
     </div>
   )
 }

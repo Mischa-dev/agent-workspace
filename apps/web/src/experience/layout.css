@@ -128,14 +128,21 @@
 /* A preset card's small picture of the sidebar it gives. */
 .aw-minipreview {
   display: grid;
-  align-content: start;
-  gap: var(--space-half);
   height: 104px;
   padding: var(--space-2);
-  overflow: hidden;
   color: var(--r-fg);
   background: var(--r-bg);
   border-radius: var(--radius-md);
+}
+
+.aw-minipreview__rows {
+  display: grid;
+  align-content: start;
+  gap: var(--space-half);
+  min-height: 0;
+  overflow: hidden;
+  /* Rows past the bottom fade out rather than stop mid-line. */
+  mask-image: linear-gradient(to bottom, var(--r-bg) calc(100% - var(--space-4)), transparent);
 }
 
 .aw-minipreview__row {
@@ -330,6 +337,13 @@
   margin-right: auto;
   color: var(--content-fg-muted);
   font: var(--t-small);
+}
+
+/* On a phone the buttons keep one row under the status. */
+@media (max-width: 640px) {
+  .aw-layout__status {
+    flex-basis: 100%;
+  }
 }
 
 /* Who gets which preset */
