@@ -634,7 +634,9 @@ async fn token(
                 && error.status.is_client_error()
                 && error.status != StatusCode::TOO_MANY_REQUESTS
             {
-                state.rate_limits.note_oauth_refresh_failure(address);
+                state
+                    .rate_limits
+                    .note_oauth_refresh_failure(address, &request.client_id);
             }
             // A refused refresh is what drops a connected app's tools, so say
             // why. Only the static reason is logged, never the request.

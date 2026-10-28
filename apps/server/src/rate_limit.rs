@@ -41,6 +41,11 @@ const GLOBAL_OAUTH_REFRESHES_PER_WINDOW: u32 = 1_200;
 /// without end.
 const OAUTH_REFRESH_FAILURES_PER_WINDOW: u32 = 30;
 const GLOBAL_OAUTH_REFRESH_FAILURES_PER_WINDOW: u32 = 600;
+/// Bad refreshes naming one app, which still reach the database while the
+/// global budget is spent if that app got tokens lately. The client ID isn't
+/// proof the request came from the app, so this keeps that way in bounded:
+/// a real app's own refresh failures are rare, so it stays well clear.
+const OAUTH_REFRESH_FAILURES_PER_CLIENT_PER_WINDOW: u32 = 60;
 /// While bad refreshes flood in from everywhere, an app that got tokens this
 /// recently still gets through. Access tokens last twelve hours, so a day
 /// covers every app that's in use.
@@ -85,6 +90,7 @@ pub struct RateLimiters {
     oauth_refreshes: FixedWindowLimiter<[u8; 32]>,
     global_oauth_refreshes: FixedWindowLimiter<()>,
     oauth_refresh_failures: FixedWindowLimiter<[u8; 32]>,
+    oauth_refresh_client_failures: FixedWindowLimiter<[u8; 32]>,
     global_oauth_refresh_failures: FixedWindowLimiter<()>,
     recent_oauth_clients: RecentKeys,
     workos_starts: FixedWindowLimiter<[u8; 32]>,
@@ -177,7 +183,8 @@ impl RateLimiters {
 
     /// Before a refresh is looked at: refuses a sender whose refreshes keep
     /// failing and, while bad refreshes flood in from everywhere, any app
-    /// that hasn't got tokens lately. Spends nothing: a good refresh is
+    /// that hasn't got tokens lately or whose own bad refreshes are spent
+    /// (anyone can name an app's client ID). Spends nothing: a good refresh is
     /// charged to its app by `check_oauth_refresh` once its token checks out,
     /// and a bad one to its sender by `note_oauth_refresh_failure`.
     pub fn check_oauth_refresh_sender(
@@ -191,12 +198,14 @@ impl RateLimiters {
         {
             return Err(AppError::rate_limited(retry_after));
         }
-        if let Some(retry_after) = self.global_oauth_refresh_failures.spent_at(&(), now)
-            && !self
-                .recent_oauth_clients
-                .contains_at(&digest(untrusted_client_id), now)
-        {
-            return Err(AppError::rate_limited(retry_after));
+        if let Some(retry_after) = self.global_oauth_refresh_failures.spent_at(&(), now) {
+            let client = digest(untrusted_client_id);
+            if !self.recent_oauth_clients.contains_at(&client, now) {
+                return Err(AppError::rate_limited(retry_after));
+            }
+            if let Some(retry_after) = self.oauth_refresh_client_failures.spent_at(&client, now) {
+                return Err(AppError::rate_limited(retry_after));
+            }
         }
         Ok(())
     }
@@ -211,10 +220,14 @@ impl RateLimiters {
             .map_err(AppError::rate_limited)
     }
 
-    /// A refresh whose token didn't check out, charged to its sender.
-    pub fn note_oauth_refresh_failure(&self, address: Option<&str>) {
+    /// A refresh whose token didn't check out, charged to its sender and to
+    /// the app it named.
+    pub fn note_oauth_refresh_failure(&self, address: Option<&str>, untrusted_client_id: &str) {
         // A spent budget refuses the next attempt; nothing more to charge.
         let _ = self.global_oauth_refresh_failures.check(());
+        let _ = self
+            .oauth_refresh_client_failures
+            .check(digest(untrusted_client_id));
         if let Some(address) = address {
             let _ = self.oauth_refresh_failures.check(digest(address));
         }
@@ -355,6 +368,11 @@ impl Default for RateLimiters {
                 OAUTH_REFRESH_FAILURES_PER_WINDOW,
                 WINDOW,
                 MAX_LOGIN_KEYS,
+            ),
+            oauth_refresh_client_failures: FixedWindowLimiter::new(
+                OAUTH_REFRESH_FAILURES_PER_CLIENT_PER_WINDOW,
+                WINDOW,
+                MAX_SESSION_KEYS,
             ),
             global_oauth_refresh_failures: FixedWindowLimiter::new(
                 GLOBAL_OAUTH_REFRESH_FAILURES_PER_WINDOW,
@@ -562,7 +580,8 @@ mod tests {
     use super::{
         CONCURRENT_PASSWORD_KDFS, EXPENSIVE_READS_PER_WINDOW, FixedWindowLimiter,
         GLOBAL_OAUTH_REFRESH_FAILURES_PER_WINDOW, MCP_AUTH_ATTEMPTS_PER_WINDOW,
-        MCP_REQUESTS_PER_WINDOW, OAUTH_CEREMONIES_PER_WINDOW, OAUTH_REFRESH_FAILURES_PER_WINDOW,
+        MCP_REQUESTS_PER_WINDOW, OAUTH_CEREMONIES_PER_WINDOW,
+        OAUTH_REFRESH_FAILURES_PER_CLIENT_PER_WINDOW, OAUTH_REFRESH_FAILURES_PER_WINDOW,
         OAUTH_REFRESHES_PER_WINDOW, RateLimiters, WEBHOOK_ATTEMPTS_PER_WINDOW,
     };
     use crate::error::AppError;
@@ -744,7 +763,7 @@ mod tests {
                     .check_oauth_refresh_sender(Some("203.0.113.9"), "junk")
                     .is_ok()
             );
-            limiters.note_oauth_refresh_failure(Some("203.0.113.9"));
+            limiters.note_oauth_refresh_failure(Some("203.0.113.9"), "junk");
         }
         assert!(matches!(
             limiters.check_oauth_refresh_sender(Some("203.0.113.9"), "junk"),
@@ -763,7 +782,7 @@ mod tests {
         // apps that got tokens lately get through.
         limiters.note_oauth_client_success("app");
         for _ in OAUTH_REFRESH_FAILURES_PER_WINDOW..GLOBAL_OAUTH_REFRESH_FAILURES_PER_WINDOW {
-            limiters.note_oauth_refresh_failure(None);
+            limiters.note_oauth_refresh_failure(None, "junk");
         }
         assert!(matches!(
             limiters.check_oauth_refresh_sender(None, "junk"),
@@ -773,6 +792,23 @@ mod tests {
         assert!(
             limiters
                 .check_oauth_refresh_sender(Some("198.51.100.7"), "app")
+                .is_ok()
+        );
+
+        // Naming that app doesn't open an unbounded way past the flood: bad
+        // refreshes under its client ID are capped too.
+        for _ in 0..OAUTH_REFRESH_FAILURES_PER_CLIENT_PER_WINDOW {
+            assert!(limiters.check_oauth_refresh_sender(None, "app").is_ok());
+            limiters.note_oauth_refresh_failure(None, "app");
+        }
+        assert!(matches!(
+            limiters.check_oauth_refresh_sender(None, "app"),
+            Err(AppError::RateLimited { .. })
+        ));
+        limiters.note_oauth_client_success("other-app");
+        assert!(
+            limiters
+                .check_oauth_refresh_sender(None, "other-app")
                 .is_ok()
         );
     }

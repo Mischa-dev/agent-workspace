@@ -4,8 +4,9 @@
 //! inside the server's network, so unless the server's operator allows
 //! private addresses (`AGENT_WORKSPACE_ALLOW_PRIVATE_ADDRESSES=true`, for a
 //! local model or mail relay) they must go to public ones. The name is
-//! resolved when the request is made, and the connection goes to the address
-//! that was checked, so a second DNS answer can't point it somewhere else.
+//! resolved when the request is made, and the connection goes only to the
+//! addresses that were checked, so a second DNS answer can't point it
+//! somewhere else.
 
 use std::{
     net::{IpAddr, SocketAddr},
@@ -54,14 +55,20 @@ pub fn plainly_private(host: &str) -> bool {
         || !name.contains('.')
 }
 
-/// The address to connect to for `host` and `port`. Unless `allow_private`,
-/// every address the name resolves to must be public (a name that also
-/// resolves to a private address is refused, whichever comes first).
-pub async fn resolve(host: &str, port: u16, allow_private: bool) -> Result<SocketAddr, Refusal> {
+/// The addresses to connect to for `host` and `port`, in the order DNS gave
+/// them, never empty: try each in turn, as a connection by name would.
+/// Unless `allow_private`, every address the name resolves to must be public
+/// (a name that also resolves to a private address is refused, whichever
+/// comes first).
+pub async fn resolve(
+    host: &str,
+    port: u16,
+    allow_private: bool,
+) -> Result<Vec<SocketAddr>, Refusal> {
     let host = host.trim_start_matches('[').trim_end_matches(']');
     if let Ok(ip) = host.parse::<IpAddr>() {
         return if allow_private || is_public(ip) {
-            Ok(SocketAddr::new(ip, port))
+            Ok(vec![SocketAddr::new(ip, port)])
         } else {
             Err(Refusal::Private)
         };
@@ -74,11 +81,13 @@ pub async fn resolve(host: &str, port: u16, allow_private: bool) -> Result<Socke
         .map_err(|_| Refusal::Unresolved)?
         .map_err(|_| Refusal::Unresolved)?
         .collect::<Vec<_>>();
-    let first = *addresses.first().ok_or(Refusal::Unresolved)?;
+    if addresses.is_empty() {
+        return Err(Refusal::Unresolved);
+    }
     if !allow_private && addresses.iter().any(|address| !is_public(address.ip())) {
         return Err(Refusal::Private);
     }
-    Ok(first)
+    Ok(addresses)
 }
 
 #[cfg(test)]
@@ -123,15 +132,20 @@ mod tests {
         assert_eq!(resolve("[::1]", 25, false).await, Err(Refusal::Private));
         assert_eq!(
             resolve("127.0.0.1", 11434, true).await,
-            Ok("127.0.0.1:11434".parse().expect("address"))
+            Ok(vec!["127.0.0.1:11434".parse().expect("address")])
         );
-        // Resolved, not just read: localhost is only reachable with the switch.
+        // Resolved, not just read: localhost is only reachable with the
+        // switch, and every address it has is kept to try in turn.
         let local = resolve("localhost", 2525, true).await.expect("localhost");
-        assert!(local.ip().is_loopback());
-        assert_eq!(local.port(), 2525);
+        assert!(!local.is_empty());
+        assert!(
+            local
+                .iter()
+                .all(|address| address.ip().is_loopback() && address.port() == 2525)
+        );
         assert_eq!(
             resolve("93.184.216.34", 443, false).await,
-            Ok("93.184.216.34:443".parse().expect("address"))
+            Ok(vec!["93.184.216.34:443".parse().expect("address")])
         );
     }
 }

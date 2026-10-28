@@ -336,8 +336,9 @@ pub async fn send(
         .check_destination(allow_private)
         .map_err(|_| MailError::Permanent(NOT_PUBLIC.into()))?;
     let host = settings.host.trim();
-    // Resolved and checked once; the connection goes to the address checked.
-    let address = crate::outbound::resolve(host, settings.port, allow_private)
+    // Resolved and checked once; the connection goes only to the addresses
+    // checked, each tried in turn.
+    let addresses = crate::outbound::resolve(host, settings.port, allow_private)
         .await
         .map_err(|refusal| match refusal {
             crate::outbound::Refusal::Private => MailError::Permanent(NOT_PUBLIC.into()),
@@ -345,7 +346,7 @@ pub async fn send(
                 MailError::Retry("couldn't find the mail server (check the host)".into())
             }
         })?;
-    let tcp = timeout(CONNECT_TIMEOUT, TcpStream::connect(address))
+    let tcp = timeout(CONNECT_TIMEOUT, TcpStream::connect(addresses.as_slice()))
         .await
         .map_err(|_| MailError::Retry("couldn't reach the mail server in time".into()))?
         .map_err(|_| {

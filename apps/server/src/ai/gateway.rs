@@ -372,7 +372,7 @@ fn client() -> &'static reqwest::Client {
 /// so the shared client calls it. An address the workspace chose
 /// (`ai.base_url`) must be public unless the server's operator allows
 /// private ones: it's resolved now, and the client connects only to the
-/// address checked, with no proxy picking another.
+/// addresses checked, with no proxy picking another.
 async fn provider_client(
     state: &AppState,
     resolved: &ResolvedModel,
@@ -410,7 +410,7 @@ async fn provider_client(
         .connect_timeout(Duration::from_secs(15))
         .no_proxy();
     if matches!(url.host(), Some(url::Host::Domain(_))) {
-        builder = builder.resolve(host, pinned);
+        builder = builder.resolve_to_addrs(host, &pinned);
     }
     builder
         .build()
