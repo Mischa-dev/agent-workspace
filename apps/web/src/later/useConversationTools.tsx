@@ -152,7 +152,7 @@ export function useConversationTools({
         taskKey.current = null
         showToast({
           tone: 'success',
-          title: `Created ${item.key}`,
+          title: experience.shows('tech.task_keys') ? `Created ${item.key}` : `${experience.label('task')} created`,
           description: item.title,
           action: { label: 'Open', onSelect: () => navigate(`/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(item.id)}`) },
         })

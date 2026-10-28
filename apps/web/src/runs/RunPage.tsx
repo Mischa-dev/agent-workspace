@@ -103,7 +103,8 @@ function RunBody({ run }: { run: RunDetail }) {
   // current one, the same rule the thread's own run card follows.
   const threadId = run.conversationId ?? ''
   const thread = useThread(run.projectId, threadId, false)
-  const usage = useProjectExperience(run.projectId).shows('tech.run_usage')
+  const experience = useProjectExperience(run.projectId)
+  const usage = experience.shows('tech.run_usage')
   const timeline = thread.routeMatches ? thread.timeline.data : undefined
   const actions = useThreadRunActions({ entries: timeline?.entries ?? [], includeArchived: false, projectId: run.projectId, threadId, timeline })
   const activeRun = timeline?.activeRun ?? null
@@ -162,7 +163,7 @@ function RunBody({ run }: { run: RunDetail }) {
   if (run.conversationId) {
     details.push({ label: 'Thread', value: <Link to={threadHref(run.projectId, run.conversationId)}>{run.threadName ?? 'Open the thread'}</Link> })
   }
-  if (run.branch) details.push({ label: 'Branch', value: <code>{run.branch}</code> })
+  if (run.branch && experience.shows('tech.ids')) details.push({ label: 'Branch', value: <code>{run.branch}</code> })
   if (run.pullRequestUrl) {
     details.push({
       label: 'Pull request',
