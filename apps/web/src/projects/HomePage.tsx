@@ -2,6 +2,7 @@ import { type MouseEvent } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
+import { useHomeExperience } from '../experience/layout'
 import { AppShell } from '../shell/AppShell'
 import { useInboxUnread } from '../shell/homeSpace'
 import { defaultWorkspace } from '../settings/workspaceChoice'
@@ -37,6 +38,7 @@ function waitingLede(unread: number | null) {
 export function HomePage() {
   const session = useAuthenticatedSession()
   const workspace = defaultWorkspace(session)
+  const experience = useHomeExperience()
   const projects = useProjects()
   const switchProject = useSwitchProject()
   const unread = useInboxUnread()
@@ -89,11 +91,11 @@ export function HomePage() {
         <div className="aw-home__grid">
           <div className="aw-home__column">
             <NeedsYou />
-            <WorkingNow />
+            {experience.shows('home.working_now') ? <WorkingNow /> : null}
           </div>
           <div className="aw-home__column">
-            <Capacity />
-            <YourTasks />
+            {experience.shows('home.capacity') ? <Capacity /> : null}
+            {experience.shows('workspace.my_work') ? <YourTasks /> : null}
             <Section
               actions={activeProjects.length > 0 ? <MoreLink to="/projects">All projects</MoreLink> : null}
               id="recent-projects-heading"
@@ -125,7 +127,7 @@ export function HomePage() {
                       className="aw-row--link"
                       key={project.id}
                       leading={<ProjectInitials project={project} size={36} />}
-                      meta={`${project.key} · ${openedLabel(project.navigation.lastOpenedAt)}`}
+                      meta={experience.shows('tech.task_keys') ? `${project.key} · ${openedLabel(project.navigation.lastOpenedAt)}` : openedLabel(project.navigation.lastOpenedAt)}
                       title={
                         <a className="aw-row__link" href={project.navigation.href} onClick={(event) => openProject(project, event)}>
                           {project.name}

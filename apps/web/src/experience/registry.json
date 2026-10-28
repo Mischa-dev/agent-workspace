@@ -1,0 +1,639 @@
+{
+  "groups": [
+    {
+      "id": "areas",
+      "label": "Project areas",
+      "description": "The places in a project: its sidebar rows, tabs and settings pages."
+    },
+    {
+      "id": "task",
+      "label": "Task details",
+      "description": "Fields and sections on each task, in lists, cards and the task itself."
+    },
+    {
+      "id": "talk",
+      "label": "Conversation extras",
+      "description": "What the message box and messages offer beyond writing and reading."
+    },
+    {
+      "id": "technical",
+      "label": "Technical details",
+      "description": "Keys, IDs and run costs, for people who track work closely."
+    },
+    {
+      "id": "workspace",
+      "label": "Workspace pages",
+      "description": "Home and the pages beside it, which follow the workspace's layout."
+    }
+  ],
+  "parts": [
+    {
+      "id": "area.chat",
+      "group": "areas",
+      "label": "Chat and channels",
+      "description": "Channels and their threads, for talking with people and agents.",
+      "default": true
+    },
+    {
+      "id": "area.tasks",
+      "group": "areas",
+      "label": "Tasks",
+      "description": "The task list, and adding tasks.",
+      "default": true
+    },
+    {
+      "id": "area.board",
+      "group": "areas",
+      "label": "Board",
+      "description": "Tasks as cards in columns, one for each status.",
+      "default": true
+    },
+    {
+      "id": "area.timeline",
+      "group": "areas",
+      "label": "Timeline",
+      "description": "Tasks with dates, laid out over weeks.",
+      "default": true
+    },
+    {
+      "id": "area.milestones",
+      "group": "areas",
+      "label": "Milestones",
+      "description": "Groups of tasks working toward a date.",
+      "default": true
+    },
+    {
+      "id": "area.planning",
+      "group": "areas",
+      "label": "Planning",
+      "description": "What to do next, suggested dependencies, the task graph and turning a plan into tasks.",
+      "default": true
+    },
+    {
+      "id": "area.pages",
+      "group": "areas",
+      "label": "Pages",
+      "description": "Notes and documents kept with the project, including its guide.",
+      "default": true
+    },
+    {
+      "id": "area.decisions",
+      "group": "areas",
+      "label": "Decisions",
+      "description": "What the project decided, recorded from its conversations.",
+      "default": true
+    },
+    {
+      "id": "area.whiteboards",
+      "group": "areas",
+      "label": "Whiteboards",
+      "description": "Sketches and diagrams, on the project and its tasks.",
+      "default": true
+    },
+    {
+      "id": "area.runs",
+      "group": "areas",
+      "label": "Runs",
+      "description": "Handing tasks to agents to work on, and following their runs.",
+      "default": true
+    },
+    {
+      "id": "area.agents",
+      "group": "areas",
+      "label": "Agents",
+      "description": "The agents in this project, listed in the sidebar and set up in settings.",
+      "default": true
+    },
+    {
+      "id": "area.automations",
+      "group": "areas",
+      "label": "Automations",
+      "description": "Rules that act on their own when something happens.",
+      "default": true
+    },
+    {
+      "id": "area.code",
+      "group": "areas",
+      "label": "Repositories and pull requests",
+      "description": "Connected code repositories, branches and pull requests.",
+      "default": true
+    },
+    {
+      "id": "area.bug_reports",
+      "group": "areas",
+      "label": "Bug reports",
+      "description": "Links other apps use to send bug reports in as tasks.",
+      "default": true
+    },
+    {
+      "id": "area.files",
+      "group": "areas",
+      "label": "Files",
+      "description": "Attaching files and pictures to tasks.",
+      "default": true
+    },
+    {
+      "id": "task.type",
+      "group": "task",
+      "label": "Type",
+      "description": "Whether a task is a bug, a feature or another type.",
+      "default": true
+    },
+    {
+      "id": "task.priority",
+      "group": "task",
+      "label": "Priority",
+      "description": "How urgent a task is, from low to urgent.",
+      "default": true
+    },
+    {
+      "id": "task.estimate",
+      "group": "task",
+      "label": "Estimate",
+      "description": "How big a task is, in points or hours.",
+      "default": true
+    },
+    {
+      "id": "task.labels",
+      "group": "task",
+      "label": "Labels",
+      "description": "Colored tags for sorting tasks into groups.",
+      "default": true
+    },
+    {
+      "id": "task.milestone",
+      "group": "task",
+      "label": "Milestone",
+      "description": "Which milestone a task belongs to.",
+      "default": true
+    },
+    {
+      "id": "task.dates",
+      "group": "task",
+      "label": "Start and due dates",
+      "description": "When a task starts and when it's due.",
+      "default": true
+    },
+    {
+      "id": "task.dependencies",
+      "group": "task",
+      "label": "Dependencies",
+      "description": "Tasks this one waits on or blocks.",
+      "default": true
+    },
+    {
+      "id": "task.criteria",
+      "group": "task",
+      "label": "Acceptance criteria",
+      "description": "A checklist of what done means for a task.",
+      "default": true
+    },
+    {
+      "id": "task.pull_requests",
+      "group": "task",
+      "label": "Pull requests",
+      "description": "Pull requests, branches and repositories linked to a task.",
+      "default": true
+    },
+    {
+      "id": "task.runs",
+      "group": "task",
+      "label": "Runs",
+      "description": "Starting an agent on a task, and the runs it has had.",
+      "default": true
+    },
+    {
+      "id": "task.suggestions",
+      "group": "task",
+      "label": "Suggestions",
+      "description": "Suggested dependencies, fields and summaries on a task.",
+      "default": true
+    },
+    {
+      "id": "talk.slash_commands",
+      "group": "talk",
+      "label": "Slash commands",
+      "description": "Typing / in the message box for commands like /remind and /task.",
+      "default": true
+    },
+    {
+      "id": "talk.scheduling",
+      "group": "talk",
+      "label": "Scheduling",
+      "description": "Sending a message at a later time.",
+      "default": true
+    },
+    {
+      "id": "talk.agent_mentions",
+      "group": "talk",
+      "label": "Agent mentions",
+      "description": "Agents among the suggestions when you type @.",
+      "default": true
+    },
+    {
+      "id": "talk.threads",
+      "group": "talk",
+      "label": "Threads",
+      "description": "Starting a thread off a message, and threads listed under channels.",
+      "default": true
+    },
+    {
+      "id": "tech.task_keys",
+      "group": "technical",
+      "label": "Task keys",
+      "description": "Short keys like AWD-12 beside each task and the project.",
+      "default": true
+    },
+    {
+      "id": "tech.run_usage",
+      "group": "technical",
+      "label": "Run usage and cost",
+      "description": "Tokens, time and cost for each run.",
+      "default": true
+    },
+    {
+      "id": "tech.ids",
+      "group": "technical",
+      "label": "IDs and developer detail",
+      "description": "IDs, commit hashes and other detail for developers.",
+      "default": true
+    },
+    {
+      "id": "home.working_now",
+      "group": "workspace",
+      "label": "Working now, on Home",
+      "description": "Agent runs in progress, on the Home page.",
+      "default": true
+    },
+    {
+      "id": "home.capacity",
+      "group": "workspace",
+      "label": "Capacity, on Home",
+      "description": "How much of each provider account's usage is left, on the Home page.",
+      "default": true
+    },
+    {
+      "id": "workspace.my_work",
+      "group": "workspace",
+      "label": "My work",
+      "description": "The tasks assigned to you across projects.",
+      "default": true
+    },
+    {
+      "id": "workspace.later",
+      "group": "workspace",
+      "label": "Later",
+      "description": "Saved messages, reminders and messages scheduled to send.",
+      "default": true
+    },
+    {
+      "id": "workspace.runs",
+      "group": "workspace",
+      "label": "Runs page",
+      "description": "Every run across your projects, in one list.",
+      "default": true
+    }
+  ],
+  "nouns": [
+    { "id": "task", "label": "Task", "one": "task", "many": "tasks" },
+    { "id": "milestone", "label": "Milestone", "one": "milestone", "many": "milestones" },
+    { "id": "page", "label": "Page", "one": "page", "many": "pages" },
+    { "id": "channel", "label": "Channel", "one": "channel", "many": "channels" }
+  ],
+  "presets": [
+    {
+      "id": "software_team",
+      "name": "Software team",
+      "description": "Everything on: tasks, code, runs, agents and planning.",
+      "tone": "A software team. Technical terms are fine.",
+      "hide": []
+    },
+    {
+      "id": "startup",
+      "name": "Startup",
+      "description": "A small team shipping fast: tasks, chat, code and agents, without the heavier planning.",
+      "tone": "A small team moving fast. Keep it short and practical.",
+      "hide": ["area.timeline", "task.estimate", "task.type", "tech.ids"]
+    },
+    {
+      "id": "personal_life",
+      "name": "Personal life",
+      "description": "Your own life: to-dos, notes, goals and dates, with nothing that feels like work software.",
+      "tone": "Someone's personal life. Use plain, warm, everyday words, and avoid software and project-management terms.",
+      "only": [
+        "area.chat",
+        "area.tasks",
+        "area.board",
+        "area.milestones",
+        "area.pages",
+        "area.whiteboards",
+        "area.files",
+        "task.labels",
+        "task.milestone",
+        "task.dates",
+        "talk.scheduling",
+        "talk.agent_mentions",
+        "talk.threads",
+        "workspace.my_work",
+        "workspace.later"
+      ],
+      "words": {
+        "task": { "one": "to-do", "many": "to-dos" },
+        "milestone": { "one": "goal", "many": "goals" },
+        "page": { "one": "note", "many": "notes" }
+      }
+    },
+    {
+      "id": "household",
+      "name": "Household",
+      "description": "A shared home: chores, shopping, bills and plans, for everyone who lives there.",
+      "tone": "A household sharing chores and plans. Use plain, friendly words.",
+      "only": [
+        "area.chat",
+        "area.tasks",
+        "area.board",
+        "area.pages",
+        "area.files",
+        "task.labels",
+        "task.dates",
+        "talk.scheduling",
+        "talk.agent_mentions",
+        "talk.threads",
+        "workspace.my_work",
+        "workspace.later"
+      ],
+      "words": {
+        "task": { "one": "to-do", "many": "to-dos" },
+        "page": { "one": "note", "many": "notes" }
+      }
+    },
+    {
+      "id": "bug_reporting",
+      "name": "Bug reporting",
+      "description": "Just the list of bugs and a way to add one, for people who report problems.",
+      "tone": "Someone reporting bugs. Ask what they did, what they expected and what happened instead, and skip internal jargon.",
+      "only": ["area.tasks", "area.files"],
+      "words": {
+        "task": { "one": "bug", "many": "bugs" }
+      }
+    },
+    {
+      "id": "simple_todo",
+      "name": "Simple to-do list",
+      "description": "One list of things to do, with due dates.",
+      "tone": "A simple to-do list. Keep replies short.",
+      "only": ["area.tasks", "task.dates", "workspace.my_work"],
+      "words": {
+        "task": { "one": "to-do", "many": "to-dos" }
+      }
+    },
+    {
+      "id": "kanban",
+      "name": "Kanban",
+      "description": "A board of cards moving across columns, with labels and priorities.",
+      "tone": "A kanban board, where work is cards moving across columns.",
+      "only": [
+        "area.chat",
+        "area.tasks",
+        "area.board",
+        "area.files",
+        "task.priority",
+        "task.labels",
+        "task.dates",
+        "talk.agent_mentions",
+        "talk.threads",
+        "workspace.my_work"
+      ],
+      "words": {
+        "task": { "one": "card", "many": "cards" }
+      }
+    },
+    {
+      "id": "writing",
+      "name": "Writing",
+      "description": "Drafts and notes first, with a short list of what's left to do.",
+      "tone": "A writing project. Talk about drafts, edits and ideas in plain language.",
+      "only": [
+        "area.chat",
+        "area.tasks",
+        "area.pages",
+        "area.decisions",
+        "area.whiteboards",
+        "area.files",
+        "task.labels",
+        "task.dates",
+        "talk.scheduling",
+        "talk.agent_mentions",
+        "talk.threads",
+        "workspace.my_work",
+        "workspace.later"
+      ],
+      "words": {
+        "task": { "one": "to-do", "many": "to-dos" },
+        "page": { "one": "draft", "many": "drafts" }
+      }
+    },
+    {
+      "id": "research",
+      "name": "Research",
+      "description": "Notes, findings and sources, with agents to help dig.",
+      "tone": "A research project. Be precise, cite sources, and keep findings apart from guesses.",
+      "only": [
+        "area.chat",
+        "area.tasks",
+        "area.pages",
+        "area.decisions",
+        "area.whiteboards",
+        "area.runs",
+        "area.agents",
+        "area.files",
+        "task.labels",
+        "task.dates",
+        "task.runs",
+        "talk.slash_commands",
+        "talk.scheduling",
+        "talk.agent_mentions",
+        "talk.threads",
+        "home.working_now",
+        "workspace.my_work",
+        "workspace.later",
+        "workspace.runs"
+      ],
+      "words": {
+        "page": { "one": "note", "many": "notes" }
+      }
+    },
+    {
+      "id": "school",
+      "name": "School",
+      "description": "Classes, assignments and exam dates, with notes and study groups.",
+      "tone": "A student's coursework. Be clear and encouraging.",
+      "only": [
+        "area.chat",
+        "area.tasks",
+        "area.board",
+        "area.milestones",
+        "area.pages",
+        "area.whiteboards",
+        "area.files",
+        "task.labels",
+        "task.milestone",
+        "task.dates",
+        "talk.scheduling",
+        "talk.threads",
+        "workspace.my_work",
+        "workspace.later"
+      ],
+      "words": {
+        "task": { "one": "assignment", "many": "assignments" },
+        "page": { "one": "note", "many": "notes" }
+      }
+    },
+    {
+      "id": "event_planning",
+      "name": "Event planning",
+      "description": "Plan an event: to-dos with deadlines, a timeline and who's doing what.",
+      "tone": "Planning an event. Keep track of dates, people and logistics, in plain words.",
+      "only": [
+        "area.chat",
+        "area.tasks",
+        "area.board",
+        "area.timeline",
+        "area.milestones",
+        "area.pages",
+        "area.whiteboards",
+        "area.files",
+        "task.priority",
+        "task.labels",
+        "task.milestone",
+        "task.dates",
+        "task.dependencies",
+        "talk.scheduling",
+        "talk.agent_mentions",
+        "talk.threads",
+        "workspace.my_work",
+        "workspace.later"
+      ],
+      "words": {
+        "task": { "one": "to-do", "many": "to-dos" }
+      }
+    },
+    {
+      "id": "content_calendar",
+      "name": "Content calendar",
+      "description": "Posts moving from idea to published, with drafts and publish dates.",
+      "tone": "A content calendar. Talk about ideas, drafts and publish dates.",
+      "only": [
+        "area.chat",
+        "area.tasks",
+        "area.board",
+        "area.timeline",
+        "area.pages",
+        "area.whiteboards",
+        "area.files",
+        "task.labels",
+        "task.dates",
+        "talk.scheduling",
+        "talk.agent_mentions",
+        "talk.threads",
+        "workspace.my_work",
+        "workspace.later"
+      ],
+      "words": {
+        "task": { "one": "post", "many": "posts" },
+        "page": { "one": "draft", "many": "drafts" }
+      }
+    },
+    {
+      "id": "support_desk",
+      "name": "Support desk",
+      "description": "Tickets coming in from people and other apps, sorted and answered.",
+      "tone": "A support desk handling tickets. Be courteous and concrete.",
+      "only": [
+        "area.chat",
+        "area.tasks",
+        "area.board",
+        "area.pages",
+        "area.agents",
+        "area.automations",
+        "area.bug_reports",
+        "area.files",
+        "task.type",
+        "task.priority",
+        "task.labels",
+        "task.dates",
+        "talk.slash_commands",
+        "talk.scheduling",
+        "talk.agent_mentions",
+        "talk.threads",
+        "tech.task_keys",
+        "workspace.my_work",
+        "workspace.later"
+      ],
+      "words": {
+        "task": { "one": "ticket", "many": "tickets" }
+      }
+    },
+    {
+      "id": "agent_lab",
+      "name": "Agent lab",
+      "description": "Agents and runs first: hand tasks to agents, follow their runs and compare results.",
+      "tone": "An agent lab for trying out agents and runs. Technical detail is welcome.",
+      "hide": ["area.timeline", "task.estimate"],
+      "lead": ["area.runs"]
+    },
+    {
+      "id": "planning_only",
+      "name": "Planning only",
+      "description": "Plan the work: tasks, milestones, a timeline and dependencies, without the doing.",
+      "tone": "Planning work: scope, order and dates. Plan the tasks, don't start doing them.",
+      "only": [
+        "area.tasks",
+        "area.board",
+        "area.timeline",
+        "area.milestones",
+        "area.planning",
+        "area.pages",
+        "area.decisions",
+        "task.type",
+        "task.priority",
+        "task.estimate",
+        "task.labels",
+        "task.milestone",
+        "task.dates",
+        "task.dependencies",
+        "task.criteria",
+        "task.suggestions",
+        "talk.threads",
+        "tech.task_keys",
+        "workspace.my_work"
+      ]
+    },
+    {
+      "id": "stakeholder",
+      "name": "Stakeholder",
+      "description": "Mostly reading: progress, milestones, decisions and pages, without the working parts.",
+      "tone": "A stakeholder following progress. Summarize plainly: what's done, what's next and what's at risk.",
+      "only": [
+        "area.chat",
+        "area.tasks",
+        "area.timeline",
+        "area.milestones",
+        "area.pages",
+        "area.decisions",
+        "task.priority",
+        "task.milestone",
+        "task.dates",
+        "talk.threads",
+        "workspace.my_work"
+      ]
+    },
+    {
+      "id": "minimal",
+      "name": "Minimal",
+      "description": "Just tasks and chat, nothing else.",
+      "tone": "Keep it simple and short.",
+      "only": ["area.chat", "area.tasks"]
+    }
+  ]
+}

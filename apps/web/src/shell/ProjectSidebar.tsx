@@ -1,8 +1,10 @@
-import { lazy, Suspense, useState } from 'react'
+import { lazy, Suspense, useState, type ReactNode } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
 import { useProjectConversationSidebar } from '../conversations/hooks'
 import type { SidebarThread } from '../conversations/types'
+import { useProjectExperience } from '../experience/layout'
+import type { PartId } from '../experience/parts'
 import { useUpdateProjectNavigation } from '../projects/hooks'
 import type { Project } from '../projects/types'
 import { IconButton, showToast, type MenuEntry } from '../ui'
@@ -37,13 +39,16 @@ export function ProjectSidebar({
   const location = useLocation()
   const navigate = useNavigate()
   const [creating, setCreating] = useState(false)
+  const experience = useProjectExperience(project.id)
+  const chat = experience.shows('area.chat')
+  const threads = experience.shows('talk.threads')
   const updateNavigation = useUpdateProjectNavigation()
   const expandSelected = new URLSearchParams(location.search).get('threads') === 'all'
   const sidebar = useProjectConversationSidebar(project.id, selectedChannelId, {
     expandedChannelId: expandSelected && selectedChannelId ? selectedChannelId : undefined,
   })
   const base = `/projects/${encodeURIComponent(project.id)}`
-  const canCreate = Boolean(sidebar.data?.capabilities.createChannel)
+  const canCreate = chat && Boolean(sidebar.data?.capabilities.createChannel)
   const go = (to: string) => {
     onNavigate()
     navigate(to)
@@ -65,11 +70,53 @@ export function ProjectSidebar({
     ...(project.capabilities.navigationWrite
       ? [{ label: pinned ? 'Unpin from the rail' : 'Pin to the rail', icon: 'star' as const, onSelect: togglePin }]
       : []),
-    { label: 'Archived conversations', icon: 'archive', onSelect: () => go(`${base}/conversations/archived`) },
+    ...(chat ? [{ label: 'Archived conversations', icon: 'archive' as const, onSelect: () => go(`${base}/conversations/archived`) }] : []),
     { label: 'Project settings', icon: 'settings', onSelect: () => go(projectSettingsHref(project.id)) },
   ]
   const section = projectSection(location.pathname, base)
   const listedThread = sidebar.data?.channels.some((channel) => channel.threads.some((candidate) => candidate.id === thread?.id))
+  // Each row is a part of the layout, and the layout's lead parts go first. Pages also holds Decisions.
+  const pages = experience.shows('area.pages')
+  const topLinks: { part: PartId; shown: boolean; link: ReactNode }[] = [
+    {
+      part: 'area.tasks',
+      shown: experience.shows('area.tasks'),
+      link: (
+        <SidebarLink
+          active={section === 'work'}
+          icon="work"
+          key="tasks"
+          label={experience.label('task', 'many')}
+          onNavigate={onNavigate}
+          to={`${base}/work-items`}
+        />
+      ),
+    },
+    {
+      part: 'area.pages',
+      shown: pages || experience.shows('area.decisions'),
+      link: (
+        <SidebarLink
+          active={section === 'pages'}
+          icon="list"
+          key="pages"
+          label={pages ? experience.label('page', 'many') : 'Decisions'}
+          onNavigate={onNavigate}
+          to={`${base}/${pages ? 'pages' : 'decisions'}`}
+        />
+      ),
+    },
+    {
+      part: 'area.runs',
+      shown: experience.shows('area.runs'),
+      link: <SidebarLink icon="activity" key="runs" label="Runs" onNavigate={onNavigate} to={`${base}/launches`} />,
+    },
+  ]
+  const leading = (part: PartId) => (experience.lead.includes(part) ? 0 : 1)
+  const topRows = topLinks
+    .filter((row) => row.shown)
+    .sort((left, right) => leading(left.part) - leading(right.part))
+    .map((row) => row.link)
 
   return (
     <SidebarFrame
@@ -90,75 +137,77 @@ export function ProjectSidebar({
     >
       <ul className="aw-section__list aw-sidebar__top">
         <SidebarLink end icon="home" label="Overview" onNavigate={onNavigate} to={base} />
-        <SidebarLink
-          active={section === 'work'}
-          icon="work"
-          label="Tasks"
-          onNavigate={onNavigate}
-          to={`${base}/work-items`}
-        />
-        <SidebarLink active={section === 'pages'} icon="list" label="Pages" onNavigate={onNavigate} to={`${base}/pages`} />
-        <SidebarLink icon="activity" label="Runs" onNavigate={onNavigate} to={`${base}/launches`} />
+        {topRows}
       </ul>
-      <Suspense fallback={null}>
-        <PinnedViews onNavigate={onNavigate} projectId={project.id} />
-      </Suspense>
-      <Suspense fallback={null}>
-        <SidebarAgents onNavigate={onNavigate} projectId={project.id} />
-      </Suspense>
-      <SidebarSection addLabel="New channel" label="Channels" onAdd={canCreate ? () => setCreating(true) : undefined}>
-        {(sidebar.data?.channels ?? []).flatMap((channel) => {
-          const selected = channel.id === selectedChannelId
-          const rows = [
-            <SidebarLink
-              icon="hash"
-              keep={selected || channel.unread}
-              key={channel.id}
-              label={channel.name}
-              onNavigate={onNavigate}
-              to={`${base}/channels/${encodeURIComponent(channel.id)}`}
-              unread={channel.unread}
-            />,
-            ...channel.threads.map((channelThread) => (
+      {experience.shows('area.tasks') ? (
+        <Suspense fallback={null}>
+          <PinnedViews onNavigate={onNavigate} projectId={project.id} />
+        </Suspense>
+      ) : null}
+      {experience.shows('area.agents') ? (
+        <Suspense fallback={null}>
+          <SidebarAgents onNavigate={onNavigate} projectId={project.id} />
+        </Suspense>
+      ) : null}
+      {chat ? (
+        <SidebarSection
+          addLabel={`New ${experience.word('channel')}`}
+          label={experience.label('channel', 'many')}
+          onAdd={canCreate ? () => setCreating(true) : undefined}
+        >
+          {(sidebar.data?.channels ?? []).flatMap((channel) => {
+            const selected = channel.id === selectedChannelId
+            const rows = [
               <SidebarLink
-                attention={attentionMarks[channelThread.attention]}
-                attentionLabel={channelThread.attentionLabel}
-                dataAttention={channelThread.attention}
-                keep={channelThread.attention === 'response_required' || channelThread.id === thread?.id}
-                key={channelThread.id}
-                label={channelThread.name}
-                nested
+                icon="hash"
+                keep={selected || channel.unread}
+                key={channel.id}
+                label={channel.name}
                 onNavigate={onNavigate}
-                to={`${base}/threads/${encodeURIComponent(channelThread.id)}`}
-                unread={channelThread.attention === 'unread'}
-              />
-            )),
-          ]
-          if (channel.hasMoreThreads) {
-            rows.push(
-              <SidebarLink
-                key={`${channel.id}-more`}
-                label="All threads"
-                nested
-                onNavigate={onNavigate}
-                to={`${base}/channels/${encodeURIComponent(channel.id)}?threads=all`}
+                to={`${base}/channels/${encodeURIComponent(channel.id)}`}
+                unread={channel.unread}
               />,
-            )
-          }
-          return rows
-        })}
-        {thread && sidebar.data && !listedThread ? (
-          <SidebarLink
-            keep
-            key={thread.id}
-            label={thread.name}
-            nested
-            onNavigate={onNavigate}
-            to={`${base}/threads/${encodeURIComponent(thread.id)}`}
-          />
-        ) : null}
-      </SidebarSection>
-      {sidebar.isError ? <p className="aw-sidebar__note">Channels couldn’t load. They’ll retry on their own.</p> : null}
+              ...(threads ? channel.threads : []).map((channelThread) => (
+                <SidebarLink
+                  attention={attentionMarks[channelThread.attention]}
+                  attentionLabel={channelThread.attentionLabel}
+                  dataAttention={channelThread.attention}
+                  keep={channelThread.attention === 'response_required' || channelThread.id === thread?.id}
+                  key={channelThread.id}
+                  label={channelThread.name}
+                  nested
+                  onNavigate={onNavigate}
+                  to={`${base}/threads/${encodeURIComponent(channelThread.id)}`}
+                  unread={channelThread.attention === 'unread'}
+                />
+              )),
+            ]
+            if (threads && channel.hasMoreThreads) {
+              rows.push(
+                <SidebarLink
+                  key={`${channel.id}-more`}
+                  label="All threads"
+                  nested
+                  onNavigate={onNavigate}
+                  to={`${base}/channels/${encodeURIComponent(channel.id)}?threads=all`}
+                />,
+              )
+            }
+            return rows
+          })}
+          {thread && sidebar.data && !listedThread ? (
+            <SidebarLink
+              keep
+              key={thread.id}
+              label={thread.name}
+              nested
+              onNavigate={onNavigate}
+              to={`${base}/threads/${encodeURIComponent(thread.id)}`}
+            />
+          ) : null}
+        </SidebarSection>
+      ) : null}
+      {chat && sidebar.isError ? <p className="aw-sidebar__note">Channels couldn’t load. They’ll retry on their own.</p> : null}
       {creating ? (
         <Suspense fallback={null}>
           <ChannelCreator onClose={() => setCreating(false)} onCreated={(to) => go(to)} open projectId={project.id} />

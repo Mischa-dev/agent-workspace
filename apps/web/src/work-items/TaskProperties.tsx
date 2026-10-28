@@ -1,5 +1,6 @@
 import { useRef, useState, type ReactNode } from 'react'
 
+import { useProjectExperience } from '../experience/layout'
 import { Avatar, Icon, actorKind } from '../ui'
 import { DatePicker } from '../ui/pickers'
 import { priorityLabel } from './constants'
@@ -35,6 +36,7 @@ export function TaskProperties({
 }) {
   const [picker, setPicker] = useState<{ field: PickerField; anchor: HTMLElement } | null>(null)
   const [more, setMore] = useState(false)
+  const experience = useProjectExperience(item.projectId)
   const status = workflow.statuses.find((entry) => entry.id === item.status.id) ?? item.status
   const overdue = isOverdue(item)
   const rail = variant === 'rail'
@@ -42,10 +44,13 @@ export function TaskProperties({
 
   // In pills, the fields people set less often wait behind More while they're empty.
   const tucked = (empty: boolean) => !rail && !more && !disabled && empty
+  const showMilestone = experience.shows('task.milestone')
+  const showDates = experience.shows('task.dates')
+  const showEstimate = experience.shows('task.estimate')
   const hidden = [
-    tucked(!item.milestone) ? 'Milestone' : null,
-    tucked(!item.startDate) ? 'Start date' : null,
-    tucked(item.estimate === null) ? 'Estimate' : null,
+    showMilestone && tucked(!item.milestone) ? 'Milestone' : null,
+    showDates && tucked(!item.startDate) ? 'Start date' : null,
+    showEstimate && tucked(item.estimate === null) ? 'Estimate' : null,
   ].filter((name) => name !== null)
   const group = useRef<HTMLDivElement>(null)
   const showMore = () => {
@@ -54,7 +59,8 @@ export function TaskProperties({
     window.requestAnimationFrame(() => group.current?.querySelector<HTMLElement>(`[data-field="${hidden[0]}"] button`)?.focus())
   }
   // A workflow with one type doesn't need to say it on every task.
-  const showType = workflow.types.length > 1 || !workflow.types.some((type) => type.id === item.itemType.id)
+  const showType =
+    experience.shows('task.type') && (workflow.types.length > 1 || !workflow.types.some((type) => type.id === item.itemType.id))
 
   // One field: a label beside it in the rail; in pills the value carries its own name.
   const field = (label: string, value: ReactNode) =>
@@ -97,18 +103,20 @@ export function TaskProperties({
         </>,
       ),
     ),
-    field(
-      'Priority',
-      pickerButton(
-        'priority',
-        `Priority: ${priorityLabel(item.priority)}. Change`,
-        <>
-          <PriorityIcon decorative priority={item.priority} />
-          {item.priority === 'no_priority' && !rail ? 'Priority' : priorityLabel(item.priority)}
-        </>,
-        item.priority === 'no_priority',
-      ),
-    ),
+    experience.shows('task.priority')
+      ? field(
+          'Priority',
+          pickerButton(
+            'priority',
+            `Priority: ${priorityLabel(item.priority)}. Change`,
+            <>
+              <PriorityIcon decorative priority={item.priority} />
+              {item.priority === 'no_priority' && !rail ? 'Priority' : priorityLabel(item.priority)}
+            </>,
+            item.priority === 'no_priority',
+          ),
+        )
+      : null,
     field(
       'Assignee',
       pickerButton(
@@ -131,23 +139,25 @@ export function TaskProperties({
         !assignee,
       ),
     ),
-    field(
-      'Labels',
-      pickerButton(
-        'labels',
-        `Labels: ${item.labels.map((label) => label.name).join(', ') || 'none'}. Change`,
-        item.labels.length ? (
-          <WorkItemLabels labels={item.labels} />
-        ) : (
-          <>
-            <TaskGlyph name="tag" />
-            {rail ? 'Add labels' : 'Labels'}
-          </>
-        ),
-        !item.labels.length,
-      ),
-    ),
-    hidden.includes('Milestone')
+    experience.shows('task.labels')
+      ? field(
+          'Labels',
+          pickerButton(
+            'labels',
+            `Labels: ${item.labels.map((label) => label.name).join(', ') || 'none'}. Change`,
+            item.labels.length ? (
+              <WorkItemLabels labels={item.labels} />
+            ) : (
+              <>
+                <TaskGlyph name="tag" />
+                {rail ? 'Add labels' : 'Labels'}
+              </>
+            ),
+            !item.labels.length,
+          ),
+        )
+      : null,
+    !showMilestone || hidden.includes('Milestone')
       ? null
       : field(
           'Milestone',
@@ -161,7 +171,7 @@ export function TaskProperties({
             !item.milestone,
           ),
         ),
-    hidden.includes('Start date')
+    !showDates || hidden.includes('Start date')
       ? null
       : field(
           'Start date',
@@ -175,22 +185,24 @@ export function TaskProperties({
             value={item.startDate}
           />,
         ),
-    field(
-      'Due date',
-      <>
-        <DatePicker
-          className={`${control} aw-prop__date${overdue ? ' is-overdue' : ''}`}
-          disabled={disabled}
-          label="Due date"
-          onChange={(value) => save.save('dueDate', { dueDate: value })}
-          placeholder={rail ? 'No date' : 'Due date'}
-          prefix={rail ? undefined : overdue ? 'Overdue' : 'Due'}
-          value={item.dueDate}
-        />
-        {rail && overdue ? <span className="aw-due is-overdue">Overdue</span> : null}
-      </>,
-    ),
-    hidden.includes('Estimate')
+    showDates
+      ? field(
+          'Due date',
+          <>
+            <DatePicker
+              className={`${control} aw-prop__date${overdue ? ' is-overdue' : ''}`}
+              disabled={disabled}
+              label="Due date"
+              onChange={(value) => save.save('dueDate', { dueDate: value })}
+              placeholder={rail ? 'No date' : 'Due date'}
+              prefix={rail ? undefined : overdue ? 'Overdue' : 'Due'}
+              value={item.dueDate}
+            />
+            {rail && overdue ? <span className="aw-due is-overdue">Overdue</span> : null}
+          </>,
+        )
+      : null,
+    !showEstimate || hidden.includes('Estimate')
       ? null
       : field(
           'Estimate',

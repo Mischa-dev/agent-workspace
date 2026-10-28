@@ -1,14 +1,17 @@
-import { useMemo, useRef, useState, type FormEvent } from 'react'
+import { lazy, Suspense, useMemo, useRef, useState, type FormEvent } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
 import { useAuthenticatedSession } from '../auth/session'
 import { AppShell } from '../shell/AppShell'
-import { Banner, Button, ButtonLink, ErrorState, PageHeader, SelectField, TextField, describeError } from '../ui'
+import { Banner, Button, ButtonLink, ErrorState, PageHeader, SelectField, TextField, describeError, showToast } from '../ui'
 import { listProjectTemplates, viewKeys } from '../views/api'
 import { useCreateProject, useSwitchProject } from './hooks'
 import { projectKeyPattern, suggestKey } from './projectKey'
+
+// The preset cards bring the layout registry, so they load in their own chunk.
+const PresetPicker = lazy(() => import('../experience/PresetPicker'))
 
 function newIdempotencyKey() {
   return crypto.randomUUID()
@@ -30,6 +33,8 @@ export function CreateProjectPage() {
   const [idempotencyKey] = useState(newIdempotencyKey)
   const [error, setError] = useState<string | null>(null)
   const [templateId, setTemplateId] = useState('')
+  // A preset for the new project's layout; none follows the workspace's default.
+  const [preset, setPreset] = useState<string | null>(null)
   const templates = useQuery({
     queryKey: viewKeys.projectTemplates(organizationId),
     queryFn: () => listProjectTemplates(organizationId),
@@ -87,6 +92,14 @@ export function CreateProjectPage() {
         ...(template ? { templateId: template.id } : {}),
         idempotencyKey,
       })
+      if (preset) {
+        try {
+          const { saveProjectLayout } = await import('../experience/api')
+          await saveProjectLayout(project.id, { preset }, 0)
+        } catch {
+          showToast({ tone: 'danger', title: 'The project’s layout wasn’t set', description: 'Pick it in the project’s settings, under Layout.' })
+        }
+      }
       try {
         const switched = await switchProject.mutateAsync({
           projectId: project.id,
@@ -186,6 +199,11 @@ export function CreateProjectPage() {
                 </option>
               ))}
             </SelectField>
+          ) : null}
+          {organizationId ? (
+            <Suspense fallback={null}>
+              <PresetPicker onChange={setPreset} organizationId={organizationId} value={preset} />
+            </Suspense>
           ) : null}
           <div className="aw-form__actions">
             <Button onClick={() => navigate('/home')} variant="secondary">

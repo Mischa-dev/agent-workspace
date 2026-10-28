@@ -31,24 +31,29 @@ function pullRequestSummary(pullRequest: WorkItem['linkedPullRequests'][number])
 /**
  * The threads, repositories and pull requests linked to a task. Only kinds
  * with something linked show; adding reveals the fields to link a thread or
- * a repository. Pull requests are linked by the runs that open them.
+ * a repository. Pull requests are linked by the runs that open them. A
+ * layout can hide the threads (no chat) or the code (no pull requests).
  */
 export function TaskLinks({
   adding,
+  code = true,
   disabled,
   item,
   onAdding,
+  threads = true,
 }: {
   adding: boolean
+  code?: boolean
   disabled: boolean
   item: WorkItem
   onAdding: (adding: boolean) => void
+  threads?: boolean
 }) {
   const conversations = useProjectConversationSidebar(item.projectId)
   const repositories = useQuery({
     queryKey: ['projects', item.projectId, 'repositories', 'work-item-picker'],
     queryFn: () => listRepositories(item.projectId),
-    enabled: Boolean(item.projectId) && adding && !disabled,
+    enabled: Boolean(item.projectId) && adding && !disabled && code,
   })
   const threadMutation = useSetWorkItemThreadLink()
   const repositoryMutation = useSetWorkItemRepositoryLink()
@@ -68,7 +73,10 @@ export function TaskLinks({
   const failure = threadMutation.error ?? repositoryMutation.error ?? primaryMutation.error
   const ids = { projectId: item.projectId, workItemId: item.id }
   const open = adding && !disabled
-  if (!item.linkedThreads.length && !item.linkedRepositories.length && !item.linkedPullRequests.length && !open) return null
+  const linkedThreads = threads ? item.linkedThreads : []
+  const linkedRepositories = code ? item.linkedRepositories : []
+  const linkedPullRequests = code ? item.linkedPullRequests : []
+  if (!linkedThreads.length && !linkedRepositories.length && !linkedPullRequests.length && !open) return null
 
   return (
     <TaskSection
@@ -78,16 +86,21 @@ export function TaskLinks({
             Done
           </Button>
         ) : (
-          <IconButton icon="plus" label="Link a thread or repository" onClick={() => onAdding(true)} size="sm" />
+          <IconButton
+            icon="plus"
+            label={threads && code ? 'Link a thread or repository' : threads ? 'Link a thread' : 'Link a repository'}
+            onClick={() => onAdding(true)}
+            size="sm"
+          />
         )
       }
       id={`links-${item.id}`}
       title="Links"
     >
       <div className="aw-links">
-        {item.linkedThreads.length ? (
+        {linkedThreads.length ? (
           <RowList label="Linked threads">
-            {item.linkedThreads.map((thread) => (
+            {linkedThreads.map((thread) => (
               <Row
                 actions={
                   !disabled ? (
@@ -115,9 +128,9 @@ export function TaskLinks({
           </RowList>
         ) : null}
 
-        {item.linkedRepositories.length ? (
+        {linkedRepositories.length ? (
           <RowList label="Linked repositories">
-            {item.linkedRepositories.map((repository) => (
+            {linkedRepositories.map((repository) => (
               <Row
                 actions={
                   !disabled ? (
@@ -165,9 +178,9 @@ export function TaskLinks({
           </RowList>
         ) : null}
 
-        {item.linkedPullRequests.length ? (
+        {linkedPullRequests.length ? (
           <RowList label="Linked pull requests">
-            {item.linkedPullRequests.map((pullRequest) => (
+            {linkedPullRequests.map((pullRequest) => (
               <Row
                 key={pullRequest.id}
                 leading={
@@ -188,58 +201,63 @@ export function TaskLinks({
 
         {open ? (
           <div className="aw-links__add">
-            <form
-              className="aw-inline-add"
-              onSubmit={(event) => {
-                event.preventDefault()
-                if (!threadId) return
-                threadMutation.mutate({ ...ids, threadId, linked: true, idempotencyKey: crypto.randomUUID() }, { onSuccess: () => setThreadId('') })
-              }}
-            >
-              <SelectField aria-label="Thread to link" autoFocus id={`thread-link-${item.id}`} onChange={(event) => setThreadId(event.target.value)} value={threadId}>
-                <option value="">Link a thread…</option>
-                {availableThreads.map((thread) => (
-                  <option key={thread.id} value={thread.id}>
-                    #{thread.channelName} / {thread.name}
-                  </option>
-                ))}
-              </SelectField>
-              <Button disabled={!threadId || busy} size="sm" type="submit">
-                Link
-              </Button>
-            </form>
-            <form
-              className="aw-inline-add"
-              onSubmit={(event) => {
-                event.preventDefault()
-                if (!repositoryId) return
-                repositoryMutation.mutate(
-                  { ...ids, repositoryId, expectedVersion: item.version, role: repositoryRole, idempotencyKey: crypto.randomUUID() },
-                  { onSuccess: () => setRepositoryId('') },
-                )
-              }}
-            >
-              <SelectField
-                aria-label="Repository to link"
-                id={`repository-link-${item.id}`}
-                onChange={(event) => setRepositoryId(event.target.value)}
-                value={repositoryId}
+            {threads ? (
+              <form
+                className="aw-inline-add"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  if (!threadId) return
+                  threadMutation.mutate({ ...ids, threadId, linked: true, idempotencyKey: crypto.randomUUID() }, { onSuccess: () => setThreadId('') })
+                }}
               >
-                <option value="">{repositories.isPending ? 'Loading repositories…' : 'Link a repository…'}</option>
-                {availableRepositories.map((repository) => (
-                  <option key={repository.id} value={repository.id}>
-                    {repository.owner}/{repository.name}
-                  </option>
-                ))}
-              </SelectField>
-              <SelectField aria-label="Repository role" onChange={(event) => setRepositoryRole(event.target.value as 'primary' | 'related')} value={repositoryRole}>
-                <option value="related">Related</option>
-                <option value="primary">Primary</option>
-              </SelectField>
-              <Button disabled={!repositoryId || busy} size="sm" type="submit">
-                Link
-              </Button>
-            </form>
+                <SelectField aria-label="Thread to link" autoFocus id={`thread-link-${item.id}`} onChange={(event) => setThreadId(event.target.value)} value={threadId}>
+                  <option value="">Link a thread…</option>
+                  {availableThreads.map((thread) => (
+                    <option key={thread.id} value={thread.id}>
+                      #{thread.channelName} / {thread.name}
+                    </option>
+                  ))}
+                </SelectField>
+                <Button disabled={!threadId || busy} size="sm" type="submit">
+                  Link
+                </Button>
+              </form>
+            ) : null}
+            {code ? (
+              <form
+                className="aw-inline-add"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  if (!repositoryId) return
+                  repositoryMutation.mutate(
+                    { ...ids, repositoryId, expectedVersion: item.version, role: repositoryRole, idempotencyKey: crypto.randomUUID() },
+                    { onSuccess: () => setRepositoryId('') },
+                  )
+                }}
+              >
+                <SelectField
+                  aria-label="Repository to link"
+                  autoFocus={!threads}
+                  id={`repository-link-${item.id}`}
+                  onChange={(event) => setRepositoryId(event.target.value)}
+                  value={repositoryId}
+                >
+                  <option value="">{repositories.isPending ? 'Loading repositories…' : 'Link a repository…'}</option>
+                  {availableRepositories.map((repository) => (
+                    <option key={repository.id} value={repository.id}>
+                      {repository.owner}/{repository.name}
+                    </option>
+                  ))}
+                </SelectField>
+                <SelectField aria-label="Repository role" onChange={(event) => setRepositoryRole(event.target.value as 'primary' | 'related')} value={repositoryRole}>
+                  <option value="related">Related</option>
+                  <option value="primary">Primary</option>
+                </SelectField>
+                <Button disabled={!repositoryId || busy} size="sm" type="submit">
+                  Link
+                </Button>
+              </form>
+            ) : null}
           </div>
         ) : null}
       </div>
