@@ -115,6 +115,8 @@ pub enum AppError {
     ProjectKeyConflict,
     #[error("the project has an active run")]
     ProjectHasActiveRuns,
+    #[error("the repository has an active run")]
+    RepositoryHasActiveRuns,
     #[error("the project is archived")]
     ProjectArchived,
     #[error("a repository selection is required")]
@@ -157,6 +159,7 @@ impl AppError {
             Self::Validation(_) | Self::Refused { .. } => "validation",
             Self::ProjectKeyConflict => "project_key_conflict",
             Self::ProjectHasActiveRuns => "project_has_active_runs",
+            Self::RepositoryHasActiveRuns => "repository_has_active_runs",
             Self::ProjectArchived => "project_archived",
             Self::RepositoryChoiceRequired { .. } => "repository_choice_required",
             Self::RepositoryBindingConflict => "repository_binding_conflict",
@@ -311,6 +314,12 @@ impl IntoResponse for AppError {
                 StatusCode::CONFLICT,
                 "project_has_active_runs",
                 "Interrupt or finish active runs before archiving this Project.",
+                None,
+            ),
+            Self::RepositoryHasActiveRuns => (
+                StatusCode::CONFLICT,
+                "repository_has_active_runs",
+                "Stop or finish this repository's runs before archiving it.",
                 None,
             ),
             Self::ProjectArchived => (

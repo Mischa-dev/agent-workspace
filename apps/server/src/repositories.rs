@@ -515,6 +515,29 @@ async fn archive_repository(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
+    // The database refuses to archive a repository with an unfinished run;
+    // checked first so the person hears why. Only this project's repository
+    // counts, so another project's runs never show through.
+    let has_active_run = sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM agent_runs run
+            JOIN repositories repository ON repository.id = run.repository_id
+            WHERE repository.id = $1 AND repository.project_id = $2
+              AND run.state IN (
+                  'created', 'queued', 'starting', 'working', 'blocked', 'recovering'
+              )
+        )
+        "#,
+    )
+    .bind(repository_id)
+    .bind(project_id)
+    .fetch_one(&mut *transaction)
+    .await?;
+    if has_active_run {
+        return Err(AppError::RepositoryHasActiveRuns);
+    }
     let updated = sqlx::query(
         r#"
         UPDATE repositories
