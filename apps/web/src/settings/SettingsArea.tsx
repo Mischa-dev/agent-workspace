@@ -147,7 +147,8 @@ export default function SettingsArea() {
       const first = pagesIn(group, context)[0]
       return <Navigate replace to={first ? (hrefFor(first, null) ?? accountSettingsHref('profile')) : accountSettingsHref('profile')} />
     } else {
-      content = <PageBody entry={entry} props={{ ...context, project: null }} />
+      // A new page for each workspace, so nothing typed for one is saved to the next.
+      content = <PageBody entry={entry} key={context.workspace?.id} props={{ ...context, project: null }} />
     }
   }
 
@@ -246,7 +247,7 @@ function ProjectScope({
     return <Navigate replace to={projectSettingsHref(project.id)} />
   }
   return (
-    <PageBody entry={entry} props={{ session, workspace, project, projects }} />
+    <PageBody entry={entry} key={project.id} props={{ session, workspace, project, projects }} />
   )
 }
 

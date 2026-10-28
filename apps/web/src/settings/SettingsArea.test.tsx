@@ -2,7 +2,16 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { describe, expect, it } from 'vitest'
 
 import { App } from '../app/App'
-import { installAppShellLifecycle, installStandardApi, jsonResponse, projectAId, projectBId } from '../test/appHarness'
+import {
+  authenticatedSession,
+  installAppShellLifecycle,
+  installStandardApi,
+  jsonResponse,
+  organization,
+  ownerOrganizationId,
+  projectAId,
+  projectBId,
+} from '../test/appHarness'
 import { parseSettingsPath } from './route'
 
 describe('settings addresses', () => {
@@ -113,5 +122,44 @@ describe('settings addresses', () => {
       `/settings/projects/${projectAId}/runs#setting-run.reasoning`,
     ])
     expect(within(results).getAllByText('Reasoning')).toHaveLength(2)
+  })
+
+  it('starts a workspace page afresh on another workspace, so nothing typed for one is saved to it', async () => {
+    const side = { id: ownerOrganizationId, name: 'Side project', slug: 'side', role: 'owner' as const }
+    const fetchMock = installStandardApi({ ...authenticatedSession, organizations: [organization, side] })
+    const standard = fetchMock.getMockImplementation()
+    fetchMock.mockImplementation((input, init) => {
+      if (String(input).endsWith('/mail')) {
+        return jsonResponse({
+          configured: false,
+          enabled: false,
+          provider: null,
+          smtp: null,
+          fromAddress: null,
+          fromName: null,
+          passwordSet: false,
+          lastTest: null,
+          updatedAt: null,
+          yourAddress: null,
+        })
+      }
+      return standard ? standard(input, init) : jsonResponse({})
+    })
+    window.sessionStorage.clear()
+    window.history.replaceState({}, '', '/settings/workspace/email')
+    render(<App />)
+
+    // Both workspaces' email settings are loaded once, so later switches show them at once.
+    const picker = await screen.findByRole('combobox', { name: 'Workspace' })
+    fireEvent.change(picker, { target: { value: side.id } })
+    await screen.findByText(/How Side project sends email/)
+    fireEvent.change(picker, { target: { value: organization.id } })
+    await screen.findByText(/How Mischa sends email/)
+    fireEvent.change(await screen.findByLabelText('Server'), { target: { value: 'smtp.mischa.example' } })
+
+    fireEvent.change(picker, { target: { value: side.id } })
+    await screen.findByText(/How Side project sends email/)
+    expect(screen.getByLabelText('Server')).toHaveValue('')
+    expect(window.location.pathname).toBe('/settings/workspace/email')
   })
 })
