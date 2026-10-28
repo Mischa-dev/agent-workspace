@@ -1,9 +1,12 @@
 import { useInfiniteQuery } from '@tanstack/react-query'
-import { Link, useSearchParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
+import { LaunchQueue } from '../launch/LaunchQueue'
 import { launchesHref } from '../launch/launchModel'
-import { useProjects } from '../projects/hooks'
+import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
+import { useProject, useProjects } from '../projects/hooks'
+import type { Project } from '../projects/types'
 import { AppShell } from '../shell/AppShell'
 import {
   Button,
@@ -58,13 +61,39 @@ function statusParam(value: string | null): RunStatusFilter {
   return TABS.some((tab) => tab.value === value) ? (value as RunStatusFilter) : 'all'
 }
 
-/** Every agent run you can see, across your projects, newest first. */
-export function RunsPage() {
+/** A project's Runs: the one Runs page, kept to that project and inside it. */
+export function ProjectRunsPage() {
+  const session = useAuthenticatedSession()
+  const { projectId = '' } = useParams()
+  const project = useProject(projectId)
+  if (project.isPending) {
+    return (
+      <AppShell user={session.user}>
+        <ProjectPageLoading label="Loading runs" />
+      </AppShell>
+    )
+  }
+  if (project.isError) {
+    return (
+      <AppShell user={session.user}>
+        <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
+      </AppShell>
+    )
+  }
+  return <RunsPage project={project.data} />
+}
+
+/**
+ * Every agent run you can see, newest first: across your projects from Home,
+ * or one project's from inside it. With a project, what waits to start comes
+ * first.
+ */
+export function RunsPage({ project }: { project?: Project } = {}) {
   const session = useAuthenticatedSession()
   const [params, setParams] = useSearchParams()
   const status = statusParam(params.get('status'))
   const mine = params.get('mine') === '1'
-  const projectId = params.get('project') ?? undefined
+  const projectId = project?.id ?? params.get('project') ?? undefined
   const filter: RunListFilter = { status, mine, projectId }
 
   const runs = useInfiniteQuery({
@@ -88,14 +117,17 @@ export function RunsPage() {
   }
 
   return (
-    <AppShell home mainClassName="aw-main--page" user={session.user}>
+    <AppShell home={!project} mainClassName="aw-main--page" project={project} user={session.user}>
       <div className="aw-page aw-runs">
         <PageHeader icon="activity" title="Runs">
-          What agents did on your tasks, what they used and what it cost.
+          {project
+            ? `Agents working on tasks in ${project.name}: what waits to start, what ran, what it used and what it cost.`
+            : 'What agents did on your tasks, what they used and what it cost.'}
         </PageHeader>
+        {projectId ? <LaunchQueue projectId={projectId} /> : null}
         <div className="aw-runs__filters">
           <SegmentedControl label="Show runs" onChange={(value) => update('status', value === 'all' ? null : value)} options={TABS} value={status} />
-          {choices.length > 1 ? (
+          {!project && choices.length > 1 ? (
             <SelectField aria-label="Project" compact onChange={(event) => update('project', event.target.value || null)} value={projectId ?? ''}>
               <option value="">All projects</option>
               {choices.map((project) => (

@@ -46,7 +46,7 @@ const NextPage = lazy(() => import('../ai/PlanningPages').then((module) => ({ de
 const SuggestionsPage = lazy(() => import('../ai/PlanningPages').then((module) => ({ default: module.SuggestionsPage })))
 const GraphPage = lazy(() => import('../ai/GraphPage').then((module) => ({ default: module.GraphPage })))
 const PlanImportPage = lazy(() => import('../ai/PlanImportPage').then((module) => ({ default: module.PlanImportPage })))
-const LaunchesPage = lazy(() => import('../launch/LaunchesPage').then((module) => ({ default: module.LaunchesPage })))
+const ProjectRunsPage = lazy(() => import('../runs/RunsPage').then((module) => ({ default: module.ProjectRunsPage })))
 const PagesPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.PagesPage })))
 const PageDetailPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.PageDetailPage })))
 const DecisionsPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.DecisionsPage })))
@@ -276,7 +276,7 @@ export function App() {
                   <Route
                     element={
                       <AuthenticatedRouteBoundary>
-                        <LaunchesPage />
+                        <ProjectRunsPage />
                       </AuthenticatedRouteBoundary>
                     }
                     path="/projects/:projectId/launches"
