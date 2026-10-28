@@ -141,6 +141,12 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         SettingsManage
     ),
     policy_route!(
+        "agent_profiles",
+        Delete,
+        "/api/v1/projects/{project_id}/agent-profiles/{profile_id}",
+        SettingsManage
+    ),
+    policy_route!(
         "secrets",
         Put,
         "/api/v1/organizations/{organization_id}/secrets/{name}",
@@ -516,6 +522,12 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     ),
     policy_route!(
         "account",
+        Delete,
+        "/api/v1/projects/{project_id}/provider-accounts/{account_id}",
+        ExecutionProfileManage
+    ),
+    policy_route!(
+        "account",
         Post,
         "/api/v1/projects/{project_id}/provider-accounts/{account_id}/use",
         ExecutionProfileManage
@@ -671,6 +683,18 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "whiteboards/http",
         Patch,
         "/api/v1/whiteboards/{id}",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "whiteboards/http",
+        Delete,
+        "/api/v1/whiteboards/{id}",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "whiteboards/http",
+        Post,
+        "/api/v1/whiteboard-trash/empty",
         WorkItemEdit
     ),
     policy_route!(
@@ -1236,6 +1260,18 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         MessageSend
     ),
     policy_route!(
+        "work_items/comments",
+        Patch,
+        "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "work_items/comments",
+        Delete,
+        "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}",
+        WorkItemEdit
+    ),
+    policy_route!(
         "work_items",
         Post,
         "/api/v1/projects/{project_id}/work-items/{work_item_id}/threads/{conversation_id}",
@@ -1531,6 +1567,10 @@ mod tests {
         ("projects", include_str!("projects.rs")),
         ("repositories", include_str!("repositories.rs")),
         ("work_items", include_str!("work_items.rs")),
+        (
+            "work_items/comments",
+            include_str!("work_items/comments.rs"),
+        ),
         ("ai/http", include_str!("ai/http.rs")),
         ("execution", include_str!("execution.rs")),
         ("external_agents", include_str!("external_agents.rs")),
