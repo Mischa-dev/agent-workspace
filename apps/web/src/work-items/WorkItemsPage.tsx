@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
@@ -54,9 +54,11 @@ export function WorkItemsPage() {
   const createButtonRef = useRef<HTMLButtonElement>(null)
   const project = useProject(projectId)
   const experience = useProjectExperience(projectId)
-  // A layout without the board shows the list, whatever the link says.
+  // A layout without the board shows the list, whatever the link says, and
+  // the filters, Views menu and list all go by what's shown.
   const board = experience.shows('area.board')
-  const view = board ? state.view : 'list'
+  const shown = useMemo(() => (board || state.view === 'list' ? state : { ...state, view: 'list' as const }), [board, state])
+  const view = shown.view
   const workflow = useWorkItemWorkflow(projectId)
   const savedFilters = project.data?.navigation.filters
   // The remembered view comes back only when the page is entered with an
@@ -135,7 +137,7 @@ export function WorkItemsPage() {
         />
       ) : null}
       <Suspense fallback={null}>
-        <ViewsMenu actorId={session.user.actorId} projectId={projectId} readOnly={archived} state={state} update={update} />
+        <ViewsMenu actorId={session.user.actorId} projectId={projectId} readOnly={archived} state={shown} update={update} />
       </Suspense>
       {newButton}
     </>
@@ -170,7 +172,7 @@ export function WorkItemsPage() {
           Everything that needs doing in {project.data.name}.
         </PageHeader>
         <WorkTabs current="items" projectId={projectId} />
-        <FilterBar projectId={projectId} state={state} update={update} workflow={workflow.data} />
+        <FilterBar projectId={projectId} state={shown} update={update} workflow={workflow.data} />
         {archived ? (
           <Banner className="aw-page__banner" icon="archive">
             This project is archived, so its tasks can’t change.
@@ -191,7 +193,7 @@ export function WorkItemsPage() {
             onToggleDone={toggleDone}
             openTaskId={state.task}
             projectId={projectId}
-            state={state}
+            state={shown}
             workflow={workflow.data}
           />
         ) : null}
