@@ -124,6 +124,25 @@ Restart the service after editing.
   now set per project only, so a workspace-wide or personal value for it, if
   one was saved, stops applying: set it on the project's page instead.
 
+- **Reliability and security (2026-10-28).** The migration
+  `20261028060000_server_operators.sql` runs with the rest. Two optional
+  settings:
+  - `AGENT_WORKSPACE_OPERATOR_LOGINS=<login>,<login>`: Settings › Workspace ›
+    Server (checks, backups, the job queue) is now only for the server's
+    operators, who are whoever ran `bootstrap-admin` plus the logins listed
+    here. Before deploying, check that the owner's login has that row:
+    `SELECT u.login_name FROM audit_events a JOIN users u ON u.actor_id = a.actor_id WHERE a.action = 'identity.bootstrap_admin' AND a.outcome = 'succeeded';`
+    If it's missing, list the owner's login here.
+  - `AGENT_WORKSPACE_ALLOW_PRIVATE_ADDRESSES=true`: the model provider address
+    (`ai.base_url`) and the SMTP server must now be public addresses, and SMTP
+    must use a mail port (25, 465, 587 or 2525). Set this only for a model or
+    mail relay on this machine or a private network.
+
+  Password resets keep connected apps unless the person ticks "Also
+  disconnect my connected apps". Picture uploads whose location data can't be
+  removed are refused instead of stored as they came. Reconnect the
+  "workspace" connector once after the deploy if it drops.
+
 ## After: in the app
 
 1. Sign in, open Settings › General and check "Server version".

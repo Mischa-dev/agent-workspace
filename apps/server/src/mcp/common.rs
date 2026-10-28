@@ -98,6 +98,7 @@ impl<T> ToolResult<T> {
             AppError::Validation(field) | AppError::Invalid(field) => {
                 Self::invalid(field, format!("{field} isn't valid."))
             }
+            AppError::Refused { field, message } => Self::invalid(field, message),
             AppError::Conflict(_, message) => Self::conflict(message),
             AppError::VersionConflict {
                 current_version, ..

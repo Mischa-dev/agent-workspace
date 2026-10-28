@@ -25,6 +25,7 @@ class AreaValidationTests(unittest.TestCase):
             "CI_TEST_CALLS": str(self.calls),
             "CI_DATABASE_BASE": "postgres://ci-test",
             "CI_RUN_ID": "area-test",
+            "PLAYWRIGHT_CHROMIUM_EXECUTABLE": str(self.root / "chromium"),
         }
         # Fail immediately if validation reaches scheduling or repository work.
         for name in ("nice", "git", "ssh", "rsync"):
@@ -32,6 +33,7 @@ class AreaValidationTests(unittest.TestCase):
         for name in ("cargo", "rustup", "pnpm", "python3", "psql", "createdb", "dropdb"):
             self.stub(self.bin / name)
         self.stub(self.root / "tools" / "verify-self-hosted-guide.sh")
+        self.stub(self.root / "target" / "debug" / "agent-workspace-server")
         # Keep combined checks sequential for deterministic call logs.
         self.stub(self.bin / "nproc", output="4")
 
@@ -89,6 +91,25 @@ class AreaValidationTests(unittest.TestCase):
                 self.assertEqual("cargo nextest run --workspace --profile ci" in calls, rust)
                 self.assertEqual("pnpm lint" in calls, web)
                 self.assertEqual("pnpm build" in calls, web)
+                # The browser smoke tests drive the server too, so they run
+                # for a change on either side.
+                self.assertIn("pnpm install --frozen-lockfile --reporter=silent", calls)
+                self.assertIn("pnpm test:e2e", calls)
+
+    def test_browser_smoke_fails_in_ci_instead_of_skipping(self):
+        del self.env["PLAYWRIGHT_CHROMIUM_EXECUTABLE"]
+        result, calls = self.run_script("checks.sh", ["web"], scoped=True)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Browser smoke tests can't run: no Chromium", result.stdout + result.stderr)
+        self.assertNotIn("All checks passed", result.stdout)
+        self.assertNotIn("pnpm test:e2e", calls)
+
+        # Outside a CI run, a missing browser is a skip with a note.
+        del self.env["CI_RUN_ID"]
+        result, calls = self.run_script("checks.sh", ["web"], scoped=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Skipping browser smoke tests: no Chromium", result.stdout)
+        self.assertIn("All checks passed", result.stdout)
 
     def test_runner_accepts_documented_areas_and_default(self):
         for args in ([], ["--areas", "rust,web"], ["--areas", "rust"], ["--areas", "web"]):

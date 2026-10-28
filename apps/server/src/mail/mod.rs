@@ -369,6 +369,7 @@ pub async fn send(
                     data: &data,
                     hello: &hello_name(state),
                 },
+                state.config.allow_private_addresses,
             )
             .await
         }
