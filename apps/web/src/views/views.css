@@ -29,6 +29,12 @@
   box-shadow: inset 3px 0 0 var(--accent);
 }
 
+/* Holds the priority's place when the project's layout hides it. */
+.aw-mywork__icon {
+  flex: none;
+  inline-size: 14px;
+}
+
 /* The whole row opens the task. */
 .aw-mywork__title::after {
   position: absolute;

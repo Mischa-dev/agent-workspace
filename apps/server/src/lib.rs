@@ -38,6 +38,7 @@ pub mod invitations;
 pub mod jobs;
 pub mod later;
 pub mod launch;
+pub mod layouts;
 pub mod link_previews;
 pub mod mail;
 pub mod mcp;
@@ -181,6 +182,7 @@ pub fn router(state: AppState) -> Router {
         .merge(connected_apps::router())
         .merge(agent_docs::router())
         .merge(settings::router())
+        .merge(layouts::router())
         .merge(secrets::router())
         .merge(metrics::router())
         .merge(mcp::oauth_router())

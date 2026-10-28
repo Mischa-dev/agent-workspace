@@ -7,6 +7,7 @@ import { useAuthenticatedSession } from '../auth/session'
 import { searchMentionableActors } from '../conversations/api'
 import { MessageContent } from '../conversations/MessageContent'
 import { StructuredComposer } from '../conversations/StructuredComposer'
+import { useProjectExperience } from '../experience/layout'
 import { Attachments } from '../files/Attachments'
 import { uploadFile, type FileAttachment } from '../files/api'
 import { useProject } from '../projects/hooks'
@@ -110,6 +111,7 @@ function groupTimeline(entries: WorkItemTimelineEntry[]): Group[] {
 /** Comments and changes, oldest first, with the comment box at the end; long runs of changes fold away. */
 export function TaskActivity({ disabled, item, projectArchived }: { disabled: boolean; item: WorkItem; projectArchived: boolean }) {
   const timeline = useWorkItemTimeline(item.projectId, item.id)
+  const experience = useProjectExperience(item.projectId)
   // Pages come newest first; the list reads oldest to newest, so older pages go on top.
   const entries = (timeline.data?.pages ?? []).flatMap((page) => page.entries).reverse()
   const createComment = useCreateWorkItemComment()
@@ -286,11 +288,12 @@ export function TaskActivity({ disabled, item, projectArchived }: { disabled: bo
             await createComment.mutateAsync({ projectId: item.projectId, workItemId: item.id, content: words, idempotencyKey, attachments })
             if (attachments?.length) void queryClient.invalidateQueries({ queryKey: taskFilesKey(item.projectId, item.id) })
           }}
-          placeholder="Leave a comment. @mention someone or reference a task."
+          peopleOnly={!experience.shows('talk.agent_mentions')}
+          placeholder={`Leave a comment. @mention someone or reference a ${experience.word('task')}.`}
           searchActors={async (query) => (await searchMentionableActors(item.projectId, query)).actors}
           searchWorkItems={(query) => searchWorkItemReferences(item.projectId, query)}
           submitLabel="Comment"
-          upload={uploadFile({ kind: 'task', projectId: item.projectId, workItemId: item.id, forComment: true })}
+          upload={experience.shows('area.files') ? uploadFile({ kind: 'task', projectId: item.projectId, workItemId: item.id, forComment: true }) : undefined}
         />
       ) : null}
     </section>

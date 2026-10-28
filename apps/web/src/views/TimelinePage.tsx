@@ -5,6 +5,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { queryKeys } from '../api/queryKeys'
 import { isApiError } from '../api/errors'
 import { useAuthenticatedSession } from '../auth/session'
+import { useProjectExperience } from '../experience/layout'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
 import { useProject } from '../projects/hooks'
 import { RememberPlace } from '../projects/RememberPlace'
@@ -66,6 +67,8 @@ function rowsOf(timeline: Timeline): Row[] {
 export function TimelinePage() {
   const session = useAuthenticatedSession()
   const { projectId = '' } = useParams()
+  const showKeys = useProjectExperience(projectId).shows('tech.task_keys')
+  const named = (task: TimelineTask) => (showKeys ? `${task.key} ${task.title}` : task.title)
   const [parameters, setParameters] = useSearchParams()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -389,20 +392,20 @@ export function TimelinePage() {
                   const done = task.statusCategory === 'completed' || task.statusCategory === 'canceled'
                   return (
                     <li className="aw-timeline__row" key={task.id} style={{ height: ROW_HEIGHT }}>
-                      <span className="aw-timeline__label" style={{ width: labelWidth }} title={`${task.key} ${task.title}`}>
-                        <span className="aw-timeline__key">{task.key}</span>
+                      <span className="aw-timeline__label" style={{ width: labelWidth }} title={named(task)}>
+                        {showKeys ? <span className="aw-timeline__key">{task.key}</span> : null}
                         <span className="aw-timeline__name">{task.title}</span>
                       </span>
                       {span ? (
                         <button
-                          aria-label={`${task.key} ${task.title}, ${dayLabel(dayFromNumber(span.start))} to ${dayLabel(dayFromNumber(span.end))}${reason ? `, slips: ${reason}` : ''}${canEdit ? '. Arrow keys move it, Shift with arrows changes the due date, Enter saves.' : ''}`}
+                          aria-label={`${named(task)}, ${dayLabel(dayFromNumber(span.start))} to ${dayLabel(dayFromNumber(span.end))}${reason ? `, slips: ${reason}` : ''}${canEdit ? '. Arrow keys move it, Shift with arrows changes the due date, Enter saves.' : ''}`}
                           className={`aw-timeline__bar${done ? ' is-done' : ''}${task.blocked ? ' is-blocked' : ''}${reason ? ' is-slipping' : ''}`}
                           onKeyDown={(event) => keys(event, (shift, wide) => ({ kind: 'task', id: task.id, days: shift, edge: wide ? 'end' : 'move' }))}
                           onPointerDown={(event) => begin(event, { kind: 'task', id: task.id, days: 0, edge: (event.target as HTMLElement).dataset.edge === 'end' ? 'end' : 'move' })}
                           onPointerMove={move}
                           onPointerUp={() => end(() => navigate(workItemHref(projectId, task.id)))}
                           style={{ left: x(span.start), width: Math.max(scale.width, (span.end - span.start + 1) * scale.width) }}
-                          title={reason ?? `${task.key} ${task.title}`}
+                          title={reason ?? named(task)}
                           type="button"
                         >
                           {task.assigneeName ? (

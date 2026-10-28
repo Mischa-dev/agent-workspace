@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react'
 
 import { useReadiness } from '../ai/hooks'
+import { useProjectExperience } from '../experience/layout'
 import { Button, Icon } from '../ui'
 import type { OpenTask } from './TaskConnections'
 import { TaskGlyph } from './TaskGlyph'
@@ -25,17 +26,21 @@ const FIXES: Record<string, { fix: StartFix; label: string }> = {
  * picking it up, it says what's missing, with a way to add it.
  */
 export function TaskStart({
+  canFix = () => true,
   disabled,
   item,
   onFix,
   onOpenTask,
 }: {
+  /** Fixes for a section the layout hides are named but not offered. */
+  canFix?: (fix: StartFix) => boolean
   disabled: boolean
   item: WorkItem
   onFix: (fix: StartFix) => void
   onOpenTask: OpenTask
 }) {
   const readiness = useReadiness(item.projectId, item.id, item.version)
+  const keys = useProjectExperience(item.projectId).shows('tech.task_keys')
   const category = item.status.semanticCategory
   const finished = category === 'completed' || category === 'canceled'
   const notStarted = category === 'backlog' || category === 'unstarted'
@@ -73,7 +78,7 @@ export function TaskStart({
                   }}
                   title={task.title}
                 >
-                  {task.key}
+                  {keys ? task.key : task.title}
                 </a>
               </span>
             ))}
@@ -102,7 +107,7 @@ export function TaskStart({
           <ul className="aw-taskstart__fixes">
             {missing.map((check) => (
               <li key={check.id}>
-                {disabled ? (
+                {disabled || !canFix(FIXES[check.id].fix) ? (
                   <span className="aw-taskstart__fix">{FIXES[check.id].label}</span>
                 ) : (
                   <Button className="aw-taskstart__fix" icon="plus" onClick={() => onFix(FIXES[check.id].fix)} size="sm" variant="ghost">

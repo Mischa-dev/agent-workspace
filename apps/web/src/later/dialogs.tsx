@@ -6,6 +6,7 @@ import { createIdempotencyKey } from '../conversations/composerModel'
 import { useProjectConversationSidebar } from '../conversations/hooks'
 import type { ConversationMessage } from '../conversations/types'
 import { conversationTitle, useDirectOverview } from '../direct/api'
+import { useProjectExperience } from '../experience/layout'
 import { useProjects } from '../projects/hooks'
 import { Banner, Button, Dialog, SelectField, TextArea, TextField, describeError, plainPreview, showToast } from '../ui'
 import { createWorkItem } from '../work-items/api'
@@ -165,6 +166,8 @@ export function MessageTaskDialog({
   projectId: string
 }) {
   const navigate = useNavigate()
+  const experience = useProjectExperience(projectId)
+  const task = experience.word('task')
   const [initial] = useState(() => ({
     title: firstLine(message.plainText),
     description: `From ${message.author.displayName}:\n\n> ${message.plainText.slice(0, 2_000).replace(/\n/g, '\n> ')}`,
@@ -192,7 +195,7 @@ export function MessageTaskDialog({
       onClose()
       showToast({
         tone: 'success',
-        title: `Created ${item.key}`,
+        title: experience.shows('tech.task_keys') ? `Created ${item.key}` : `${experience.label('task')} created`,
         action: { label: 'Open', onSelect: () => navigate(`/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(item.id)}`) },
       })
     } catch (reason) {
@@ -204,7 +207,7 @@ export function MessageTaskDialog({
 
   return (
     <Dialog
-      description="The task links back to this message."
+      description={`The ${task} links back to this message.`}
       dirty={title !== initial.title || description !== initial.description}
       footer={
         <>
@@ -212,14 +215,14 @@ export function MessageTaskDialog({
             Cancel
           </Button>
           <Button busy={busy} disabled={!title.trim()} type="submit" variant="primary">
-            Create task
+            Create {task}
           </Button>
         </>
       }
       onClose={onClose}
       onSubmit={(event) => void submit(event)}
       open
-      title="New task from this message"
+      title={`New ${task} from this message`}
       width={520}
     >
       <TextField data-autofocus label="Title" maxLength={240} onChange={(event) => setTitle(event.target.value)} required value={title} />

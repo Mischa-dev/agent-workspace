@@ -3,8 +3,10 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { NavLink, useLocation } from 'react-router-dom'
 
 import { toastError } from '../app/toastError'
+import { useProjectExperience } from '../experience/layout'
 import { Icon } from '../ui'
 import { listViews, pinView, viewKeys, type SavedView } from '../views/api'
+import { viewName, viewShown } from '../views/layoutViews'
 import { orderAfterDrop } from './dragOrder'
 import { isMobileWidth } from './mobileNavigation'
 import { SidebarSection } from './SidebarParts'
@@ -20,9 +22,12 @@ const VIEW_DRAG_TYPE = 'application/x-agent-workspace-view'
 export default function PinnedViews({ onNavigate, projectId }: { onNavigate: () => void; projectId: string }) {
   const location = useLocation()
   const queryClient = useQueryClient()
+  const experience = useProjectExperience(projectId)
   const views = useQuery({ queryKey: viewKeys.views(projectId), queryFn: () => listViews(projectId), staleTime: 60_000 })
   const [drag, setDrag] = useState<{ id: string; over: { id: string; after: boolean } | null } | null>(null)
-  const pinned = (views.data?.views ?? []).filter((view) => view.pinned).sort((left, right) => left.position - right.position)
+  const pinned = (views.data?.views ?? [])
+    .filter((view) => view.pinned && viewShown(view, experience))
+    .sort((left, right) => left.position - right.position)
   if (!pinned.length) return null
   const current = new URLSearchParams(location.search).get('savedView')
 
@@ -85,7 +90,7 @@ export default function PinnedViews({ onNavigate, projectId }: { onNavigate: () 
             <span className="aw-item__lead">
               <Icon name={view.builtin === 'ready_for_agents' ? 'bot' : view.layout === 'board' ? 'board' : 'list'} />
             </span>
-            <span className="aw-item__label">{view.name}</span>
+            <span className="aw-item__label">{viewName(view, experience)}</span>
           </NavLink>
         </li>
       ))}

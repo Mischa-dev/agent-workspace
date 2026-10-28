@@ -2,8 +2,10 @@ import { useRef, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 
+import { useProjectExperience } from '../experience/layout'
 import { Button, ConfirmDialog, Dialog, Menu, describeError, showToast, Switch, TextField, type MenuEntry } from '../ui'
 import { createView, deleteView, listViews, pinView, updateView, viewKeys, type SavedView, type ViewDraft } from '../views/api'
+import { COLUMN_PARTS, viewName, viewShown } from '../views/layoutViews'
 import { VIEW_FIELDS, readListState, writeListState, type ListState } from './listModel'
 import type { UpdateListState } from './useListState'
 
@@ -57,6 +59,7 @@ export default function ViewsMenu({
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const views = useQuery({ queryKey: viewKeys.views(projectId), queryFn: () => listViews(projectId) })
+  const experience = useProjectExperience(projectId)
   const [saving, setSaving] = useState<'new' | 'rename' | null>(null)
   const [deleting, setDeleting] = useState<SavedView | null>(null)
   const current = views.data?.views.find((view) => view.id === state.savedView) ?? null
@@ -94,8 +97,9 @@ export default function ViewsMenu({
   const items: MenuEntry[] = []
   if (views.isError) items.push({ label: 'Views didn’t load. Try again', icon: 'retry', keepOpen: true, onSelect: () => void views.refetch() })
   for (const view of views.data?.views ?? []) {
+    if (!viewShown(view, experience) && view.id !== state.savedView) continue
     items.push({
-      label: view.shared || view.builtin ? view.name : `${view.name} (only you)`,
+      label: view.shared || view.builtin ? viewName(view, experience) : `${view.name} (only you)`,
       checked: view.id === state.savedView,
       onSelect: () => navigate(view.href),
     })
@@ -114,6 +118,8 @@ export default function ViewsMenu({
     items.push({ heading: 'Columns' })
     const shown = state.fields ?? VIEW_FIELDS
     for (const field of VIEW_FIELDS) {
+      const part = COLUMN_PARTS[field]
+      if (part && !experience.shows(part)) continue
       items.push({
         label: FIELD_LABELS[field] ?? field,
         checked: shown.includes(field),

@@ -16,6 +16,7 @@ import {
   showToast,
   type MenuEntry,
 } from '../ui'
+import { useProjectExperience } from '../experience/layout'
 import { buildOpenInCodexLink } from './codexDeepLink'
 import { useTaskFiles, useWorkItem, useWorkItemWorkflow } from './hooks'
 import { workItemHref, workItemsHref } from './links'
@@ -44,12 +45,12 @@ const TaskAiPanel = lazy(() => import('../ai/TaskAiPanel'))
 const LinkedWhiteboards = lazy(() =>
   import('../whiteboards/LinkedWhiteboards').then((module) => ({ default: module.LinkedWhiteboards })),
 )
+// Managing labels loads when someone opens it.
+const LabelManager = lazy(() => import('./LabelManager').then((module) => ({ default: module.LabelManager })))
 // Links load the first time a task has one.
 const TaskLinks = lazy(() => import('./TaskLinks').then((module) => ({ default: module.TaskLinks })))
 // What to do about a save that stopped loads only when one does.
 const TaskSaveNotices = lazy(() => import('./TaskSaveNotices').then((module) => ({ default: module.TaskSaveNotices })))
-// Managing labels loads when someone opens it.
-const LabelManager = lazy(() => import('./LabelManager').then((module) => ({ default: module.LabelManager })))
 
 /**
  * A task, loaded by id: the side panel on the list and board, and the full
@@ -72,10 +73,11 @@ export function TaskDetail({
 }) {
   const item = useWorkItem(projectId, taskId)
   const workflow = useWorkItemWorkflow(projectId)
+  const experience = useProjectExperience(projectId)
   if (item.isPending || workflow.isPending) {
     return (
       <TaskFrame layout={layout} onClose={onClose} projectId={projectId}>
-        <DocumentSkeleton label="Loading task" paragraphs={2} />
+        <DocumentSkeleton label={`Loading ${experience.word('task')}`} paragraphs={2} />
       </TaskFrame>
     )
   }
@@ -85,7 +87,7 @@ export function TaskDetail({
         <ErrorState
           error={item.error ?? workflow.error}
           onRetry={() => void Promise.all([item.refetch(), workflow.refetch()])}
-          title="This task didn’t load"
+          title={`This ${experience.word('task')} didn’t load`}
         />
       </TaskFrame>
     )
@@ -128,20 +130,27 @@ function TaskBar({
   onClose?: () => void
   projectId: string
 }) {
+  const experience = useProjectExperience(projectId)
+  // Without keys the crumb is just the way back to the list; the title says which task this is.
+  const keys = experience.shows('tech.task_keys')
   return (
     <div className="aw-task__bar">
       {layout === 'page' ? (
         <nav aria-label="Breadcrumb" className="aw-crumbs">
           <Link className="aw-crumbs__link" to={workItemsHref(projectId)}>
             <Icon name="work" size={14} />
-            Tasks
+            {experience.label('task', 'many')}
           </Link>
-          <Icon className="aw-crumbs__sep" name="chevron-right" size={14} />
-          <span aria-current="page" className="aw-crumbs__here">
-            {item?.key ?? 'Task'}
-          </span>
+          {keys ? (
+            <>
+              <Icon className="aw-crumbs__sep" name="chevron-right" size={14} />
+              <span aria-current="page" className="aw-crumbs__here">
+                {item?.key ?? experience.label('task')}
+              </span>
+            </>
+          ) : null}
         </nav>
-      ) : item ? (
+      ) : item && keys ? (
         <span className="aw-task__key">{item.key}</span>
       ) : null}
       {item?.archivedAt ? <StatusChip icon="archive">Archived</StatusChip> : null}
@@ -193,7 +202,23 @@ function TaskDetailBody({
   const [dropping, setDropping] = useState(false)
   useEditShortcut(!disabled, editDescription, layout)
 
-  const hasLinks = item.linkedThreads.length > 0 || item.linkedRepositories.length > 0 || item.linkedPullRequests.length > 0
+  // The layout decides which sections a task shows; hidden ones stay as they are, just out of sight.
+  const experience = useProjectExperience(item.projectId)
+  const keys = experience.shows('tech.task_keys')
+  const shown = {
+    dependencies: experience.shows('task.dependencies'),
+    criteria: experience.shows('task.criteria'),
+    threadLinks: experience.shows('area.chat'),
+    codeLinks: experience.shows('task.pull_requests'),
+    files: experience.shows('area.files'),
+    whiteboards: experience.shows('area.whiteboards'),
+    runs: experience.shows('task.runs'),
+    suggestions: experience.shows('task.suggestions'),
+  }
+  const canLink = shown.threadLinks || shown.codeLinks
+  const hasLinks =
+    (shown.threadLinks && item.linkedThreads.length > 0) ||
+    (shown.codeLinks && (item.linkedRepositories.length > 0 || item.linkedPullRequests.length > 0))
   const ownFiles = (taskFiles.data ?? []).filter((file) => !file.commentId)
   const finished = isFinished(item)
   const titleSave = save.pending('title')
@@ -212,11 +237,11 @@ function TaskDetailBody({
   }
 
   // Opens the coding app on this computer with the task ready; offered only when the task's one repository allows it.
-  const local = projectArchived ? null : buildOpenInCodexLink(item, window.location.origin).href
+  const local = projectArchived || !experience.shows('area.code') ? null : buildOpenInCodexLink(item, window.location.origin).href
 
   const menu: MenuEntry[] = [
     { label: 'Copy link', icon: 'link', onSelect: () => copy(`${window.location.origin}${workItemHref(item.projectId, item.id)}`, 'Link copied') },
-    { label: `Copy ${item.key}`, icon: 'copy', onSelect: () => copy(item.key, `${item.key} copied`) },
+    ...(keys ? [{ label: `Copy ${item.key}`, icon: 'copy' as const, onSelect: () => copy(item.key, `${item.key} copied`) }] : []),
   ]
   if (!disabled) {
     menu.push(
@@ -309,7 +334,7 @@ function TaskDetailBody({
           subtask
         </button>
       ) : null}
-      {!item.blockedBy.length && !item.blocks.length && !item.relations.length ? (
+      {shown.dependencies && !item.blockedBy.length && !item.blocks.length && !item.relations.length ? (
         <DependencyMenu
           onChoose={setDependency}
           trigger={
@@ -319,22 +344,22 @@ function TaskDetailBody({
           }
         />
       ) : null}
-      {!item.acceptanceCriteria.length && adding !== 'criterion' ? (
+      {shown.criteria && !item.acceptanceCriteria.length && adding !== 'criterion' ? (
         <button aria-label="Add an acceptance criterion" className="aw-taskadd__item" onClick={() => setAdding('criterion')} type="button">
           criterion
         </button>
       ) : null}
-      {!hasLinks && adding !== 'link' ? (
+      {canLink && !hasLinks && adding !== 'link' ? (
         <button aria-label="Add a link" className="aw-taskadd__item" onClick={() => setAdding('link')} type="button">
           link
         </button>
       ) : null}
-      {taskFiles.isSuccess && !ownFiles.length ? (
+      {shown.files && taskFiles.isSuccess && !ownFiles.length ? (
         <button aria-label="Attach a file" className="aw-taskadd__item" onClick={() => files.current?.choose()} type="button">
           file
         </button>
       ) : null}
-      {boards === 0 ? (
+      {shown.whiteboards && boards === 0 ? (
         <Menu
           items={[
             { label: 'New whiteboard…', icon: 'plus', onSelect: () => afterMenu(() => setBoardDialog('new')) },
@@ -361,17 +386,25 @@ function TaskDetailBody({
       workflow={workflow}
     />
   )
-  const start = <TaskStart disabled={disabled} item={item} onFix={fix} onOpenTask={onOpenTask} />
+  const start = shown.runs ? (
+    <TaskStart
+      canFix={(what) => (what === 'criterion' ? shown.criteria : what === 'link' ? shown.codeLinks : true)}
+      disabled={disabled}
+      item={item}
+      onFix={fix}
+      onOpenTask={onOpenTask}
+    />
+  ) : null
 
   const onDragOver = (event: DragEvent<HTMLDivElement>) => {
-    if (disabled || event.defaultPrevented || !event.dataTransfer.types.includes('Files')) return
+    if (disabled || !shown.files || event.defaultPrevented || !event.dataTransfer.types.includes('Files')) return
     event.preventDefault()
     if (!dropping) setDropping(true)
   }
   const onDrop = (event: DragEvent<HTMLDivElement>) => {
     setDropping(false)
     // The comment box takes files dropped on it for the comment.
-    if (disabled || event.defaultPrevented || !event.dataTransfer.files.length) return
+    if (disabled || !shown.files || event.defaultPrevented || !event.dataTransfer.files.length) return
     event.preventDefault()
     files.current?.add(event.dataTransfer.files)
   }
@@ -391,9 +424,9 @@ function TaskDetailBody({
         <div className="aw-task__column">
           <div className="aw-task__head">
             <h1 className="visually-hidden" id={layout === 'page' ? 'workspace-heading' : undefined}>
-              {item.key}: {item.title}
+              {keys ? `${item.key}: ${item.title}` : item.title}
             </h1>
-            {item.parent ? <ParentLine onOpenTask={onOpenTask} parent={item.parent} /> : null}
+            {item.parent ? <ParentLine keys={keys} onOpenTask={onOpenTask} parent={item.parent} /> : null}
             <TitleField disabled={disabled} item={item} save={save} />
             {wide ? null : properties}
           </div>
@@ -409,29 +442,44 @@ function TaskDetailBody({
             onAdding={(on) => setAdding(on ? 'subtask' : null)}
             onOpen={onOpenTask}
           />
-          <TaskDependencies disabled={disabled} item={item} onOpen={onOpenTask} onRequest={setDependency} request={dependency} save={save} />
-          <AcceptanceCriteria adding={adding === 'criterion'} disabled={disabled} item={item} onAdding={(on) => setAdding(on ? 'criterion' : null)} />
-          {hasLinks || adding === 'link' ? (
+          {shown.dependencies ? (
+            <TaskDependencies disabled={disabled} item={item} onOpen={onOpenTask} onRequest={setDependency} request={dependency} save={save} />
+          ) : null}
+          {shown.criteria ? (
+            <AcceptanceCriteria adding={adding === 'criterion'} disabled={disabled} item={item} onAdding={(on) => setAdding(on ? 'criterion' : null)} />
+          ) : null}
+          {hasLinks || (canLink && adding === 'link') ? (
             <Suspense fallback={null}>
-              <TaskLinks adding={adding === 'link'} disabled={disabled} item={item} onAdding={(on) => setAdding(on ? 'link' : null)} />
+              <TaskLinks
+                adding={adding === 'link'}
+                code={shown.codeLinks}
+                disabled={disabled}
+                item={item}
+                onAdding={(on) => setAdding(on ? 'link' : null)}
+                threads={shown.threadLinks}
+              />
             </Suspense>
           ) : null}
-          <TaskFiles disabled={disabled} handle={files} item={item} />
-          <Suspense fallback={null}>
-            <LinkedWhiteboards
-              canEdit={!disabled}
-              dialog={boardDialog}
-              hideWhenEmpty
-              onDialog={setBoardDialog}
-              projectId={item.projectId}
-              targetId={item.id}
-              targetKind="task"
-            />
-          </Suspense>
+          {shown.files ? <TaskFiles disabled={disabled} handle={files} item={item} /> : null}
+          {shown.whiteboards ? (
+            <Suspense fallback={null}>
+              <LinkedWhiteboards
+                canEdit={!disabled}
+                dialog={boardDialog}
+                hideWhenEmpty
+                onDialog={setBoardDialog}
+                projectId={item.projectId}
+                targetId={item.id}
+                targetKind="task"
+              />
+            </Suspense>
+          ) : null}
           {wide ? null : start}
-          <Suspense fallback={null}>
-            <TaskAiPanel disabled={disabled} projectId={item.projectId} taskId={item.id} />
-          </Suspense>
+          {shown.suggestions ? (
+            <Suspense fallback={null}>
+              <TaskAiPanel disabled={disabled} projectId={item.projectId} taskId={item.id} />
+            </Suspense>
+          ) : null}
           <TaskActivity disabled={disabled} item={item} projectArchived={projectArchived} />
         </div>
         {wide ? (
@@ -453,7 +501,7 @@ function TaskDetailBody({
       </div>
       {dropping ? (
         <p aria-hidden="true" className="aw-task__drop">
-          Drop to attach to {item.key}
+          Drop to attach to {keys ? item.key : `this ${experience.word('task')}`}
         </p>
       ) : null}
       <TaskSearchPicker
@@ -479,7 +527,7 @@ function TaskDetailBody({
 }
 
 /** "Subtask of AW-3 Ship the export", above the title. */
-function ParentLine({ onOpenTask, parent }: { onOpenTask: OpenTask; parent: NonNullable<WorkItem['parent']> }) {
+function ParentLine({ keys, onOpenTask, parent }: { keys: boolean; onOpenTask: OpenTask; parent: NonNullable<WorkItem['parent']> }) {
   return (
     <p className="aw-task__parent">
       <TaskGlyph name="subtasks" />
@@ -493,7 +541,7 @@ function ParentLine({ onOpenTask, parent }: { onOpenTask: OpenTask; parent: NonN
           onOpenTask(parent)
         }}
       >
-        <span className="aw-task__parentkey">{parent.key}</span> {parent.title}
+        {keys ? <span className="aw-task__parentkey">{parent.key}</span> : null} {parent.title}
       </a>
     </p>
   )

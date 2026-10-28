@@ -1,6 +1,8 @@
 import { ListFilter } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
+import { useProjectExperience, type Experience } from '../experience/layout'
+import type { PartId } from '../experience/parts'
 import { Avatar, Button, Icon, Menu, SegmentedControl, SelectField, TextField, actorKind, type MenuEntry } from '../ui'
 import { Calendar, ComboboxList, Popover, formatDateLabel, type ComboboxOption } from '../ui/pickers'
 import { workItemPriorities } from './constants'
@@ -55,6 +57,18 @@ type Open =
 // that hides it outright still shows its chip, so it can be removed.
 const MENU_FIELDS = FILTER_FIELDS.filter((entry) => entry.field !== 'done')
 
+// Filters and groupings on a field the layout hides aren't offered; one already in the URL still works.
+const FIELD_PARTS: Record<string, PartId> = {
+  priority: 'task.priority',
+  labels: 'task.labels',
+  label: 'task.labels',
+  milestone: 'task.milestone',
+  type: 'task.type',
+  due: 'task.dates',
+}
+const offered = (experience: Experience, field: string, current?: string | null) =>
+  field === current || !FIELD_PARTS[field] || experience.shows(FIELD_PARTS[field])
+
 /** Clears every key of a filter field, then sets `values`. */
 function setField(state: ListState, field: FilterField, values: Partial<FilterValues>): ListState {
   const filters: Record<string, unknown> = { ...state.filters }
@@ -84,6 +98,7 @@ export function FilterBar({
   const [search, setSearch] = useDebouncedSearch(state.filters.q ?? '', update)
   const [open, setOpen] = useState<Open | null>(null)
   const body = useRef<HTMLDivElement>(null)
+  const experience = useProjectExperience(projectId)
   const labels = useLabels(projectId)
   const milestones = useMilestones(projectId)
   const assignees = useAssignableActors(projectId, '')
@@ -119,14 +134,14 @@ export function FilterBar({
 
   return (
     <div className="aw-filterbar">
-      <div aria-label="Filter tasks" className="aw-filterbar__row" role="search">
+      <div aria-label={`Filter ${experience.word('task', 'many')}`} className="aw-filterbar__row" role="search">
         <TextField
-          aria-label="Search tasks"
+          aria-label={`Search ${experience.word('task', 'many')}`}
           className="aw-filterbar__search"
           compact
           maxLength={120}
           onChange={(event) => setSearch(event.target.value)}
-          placeholder="Search by title or key"
+          placeholder={experience.shows('tech.task_keys') ? 'Search by title or key' : 'Search by title'}
           prefix={<Icon name="search" size={14} />}
           type="search"
           value={search}
@@ -160,7 +175,7 @@ export function FilterBar({
               value={state.groupBy ?? ''}
             >
               <option value="">No grouping</option>
-              {GROUPINGS.map((grouping) => (
+              {GROUPINGS.filter((grouping) => offered(experience, grouping.value, state.groupBy)).map((grouping) => (
                 <option key={grouping.value} value={grouping.value}>
                   By {grouping.label.toLocaleLowerCase()}
                 </option>
@@ -181,7 +196,7 @@ export function FilterBar({
               prefix={<TaskGlyph name="group" />}
               value={state.columnsBy}
             >
-              {COLUMN_FIELDS.map((field) => (
+              {COLUMN_FIELDS.filter((field) => offered(experience, field.value, state.columnsBy)).map((field) => (
                 <option key={field.value} value={field.value}>
                   Columns by {field.label.toLocaleLowerCase()}
                 </option>
@@ -195,7 +210,7 @@ export function FilterBar({
               prefix={<TaskGlyph name="lanes" />}
               value={state.lanes}
             >
-              {LANE_FIELDS.filter((field) => field.value !== state.columnsBy).map((field) => (
+              {LANE_FIELDS.filter((field) => field.value !== state.columnsBy && offered(experience, field.value, state.lanes)).map((field) => (
                 <option key={field.value} value={field.value}>
                   {field.value === 'none' ? field.label : `Lanes by ${field.label.toLocaleLowerCase()}`}
                 </option>
@@ -241,7 +256,10 @@ export function FilterBar({
                     setOpen(null)
                   } else choose(field, open.anchor)
                 }}
-                options={MENU_FIELDS.map((entry) => ({ value: entry.field, label: entry.label }))}
+                options={MENU_FIELDS.filter((entry) => offered(experience, entry.field, chips.find((chip) => chip.field === entry.field)?.field)).map((entry) => ({
+                  value: entry.field,
+                  label: entry.label,
+                }))}
                 placeholder="Filter by…"
                 selected={chips.map((chip) => chip.field)}
               />

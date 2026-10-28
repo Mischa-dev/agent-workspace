@@ -7,6 +7,7 @@ mod bug_report_links;
 mod bug_sweep;
 mod direct_conversations;
 mod harness_support;
+mod layouts;
 mod m0_database;
 mod m1_api_policy_database;
 mod m1_bootstrap_database;

@@ -1,6 +1,7 @@
 import { useRef, useState, type ComponentProps, type FormEvent, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 
+import { useProjectExperience } from '../experience/layout'
 import { Avatar, Button, Checkbox, IconButton, Menu, TextField, actorKind } from '../ui'
 import { createWorkItem } from './api'
 import { useInvalidateWorkItems, useSetDependencies, useSetRelation } from './planningHooks'
@@ -13,10 +14,11 @@ import { StatusIcon } from './WorkItemIcons'
 export type OpenTask = (task: { id: string; projectId: string; href: string }) => void
 
 function TaskRefRow({ actions, assignee, onOpen, task }: { actions?: ReactNode; assignee?: ActorRef | null; onOpen: OpenTask; task: TaskRef }) {
+  const keys = useProjectExperience(task.projectId).shows('tech.task_keys')
   return (
     <li className={task.finished ? 'aw-taskref is-finished' : 'aw-taskref'}>
       <StatusIcon category={task.statusCategory} label={task.statusName || undefined} />
-      <span className="aw-taskref__key">{task.key}</span>
+      {keys ? <span className="aw-taskref__key">{task.key}</span> : null}
       {task.href ? (
         <a
           className="aw-taskref__title"

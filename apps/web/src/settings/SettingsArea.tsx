@@ -2,6 +2,7 @@ import { Suspense, useEffect, useId, useMemo, useRef, useState, type KeyboardEve
 import { Link, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom'
 
 import { useAuthenticatedSession, type AuthenticatedSession } from '../auth/session'
+import { useProjectExperience } from '../experience/layout'
 import { ProjectPageError } from '../projects/ProjectPageStates'
 import { useProject, useProjects } from '../projects/hooks'
 import { projectLocationHref } from '../projects/locations'
@@ -79,10 +80,11 @@ export default function SettingsArea() {
     projects.find((project) => project.id === preferredProjectId) ??
     null
 
+  const projectExperience = useProjectExperience(pickerProject?.id)
   const contexts: Record<SettingsGroup, SettingsVisibility> = {
     account: { session, workspace, project: null, projects },
     workspace: { session, workspace: viewedWorkspace, project: null, projects },
-    project: { session, workspace: organizationFor(session, pickerProject), project: pickerProject, projects },
+    project: { session, workspace: organizationFor(session, pickerProject), project: pickerProject, projects, experience: projectExperience },
   }
 
   // Close the phone menu whenever the page changes.

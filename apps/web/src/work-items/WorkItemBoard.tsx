@@ -5,6 +5,7 @@ import { queryKeys } from '../api/queryKeys'
 import { Button, ErrorState, Icon, IconButton, actorKind, Avatar, countLabel } from '../ui'
 import { ASSIGNEE_PAGE, listWorkItems, moveWorkItem, updateWorkItem } from './api'
 import { BoardCard } from './BoardCard'
+import { pickerShown, useCardFields } from './cardFields'
 import { BoardSkeleton } from './BoardSkeleton'
 import { ColumnComposer } from './ColumnComposer'
 import { statusBoardColumns, tucksDone, withoutDone } from './doneModel'
@@ -79,6 +80,7 @@ export function WorkItemBoard({
   )
   const boardKey = queryKeys.workItemBoard(projectId, query)
   const board = useBoard(projectId, query, true)
+  const fields = useCardFields(projectId)
   const queryClient = useQueryClient()
   const invalidate = useInvalidateWorkItems()
   const applyPick = useApplyPick()
@@ -452,7 +454,7 @@ export function WorkItemBoard({
       return
     }
     const field = PICKER_KEYS[event.key.toLowerCase()]
-    if (field && !event.shiftKey && openPicker(field, event.currentTarget, card)) event.preventDefault()
+    if (field && !event.shiftKey && pickerShown(field, fields) && openPicker(field, event.currentTarget, card)) event.preventDefault()
   }
 
   // While a card is held its element moves between columns, so keys are read from the window.
@@ -531,7 +533,7 @@ export function WorkItemBoard({
       return true
     }
     const field = PICKER_KEYS[key]
-    if (field && !event.shiftKey) {
+    if (field && !event.shiftKey && pickerShown(field, fields)) {
       const element = current ? scrollerRef.current?.querySelector<HTMLElement>(`[data-drag-id="${CSS.escape(current.dragId)}"]`) : null
       const anchor = element ?? document.querySelector<HTMLElement>('.aw-bulkbar') ?? scrollerRef.current
       return anchor ? openPicker(field, anchor, current?.card) : false
@@ -679,6 +681,7 @@ export function WorkItemBoard({
                             card={entry.card}
                             dragId={entry.dragId}
                             draggable={canMove && entry.card.capabilities.edit && !entry.card.archivedAt}
+                            fields={fields}
                             focused={entry.dragId === tabStop}
                             held={held?.dragId === entry.dragId}
                             key={entry.dragId}

@@ -3,12 +3,13 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 
 import { toastError } from '../app/mutations'
+import { useProjectExperience } from '../experience/layout'
 import { changeSaved, invalidateLater, removeSaved, saveForLater } from '../later/api'
-import { ForwardDialog, MessageTaskDialog } from '../later/dialogs'
 import { TimeDialog } from '../later/TimeDialog'
 import { atPhrase, describeWhen, whenChoices } from '../later/when'
 import { IconButton, showToast, type MenuEntry } from '../ui'
 import { invalidateConversation } from './liveMessages'
+import { MessageDialog } from './MessageDialogs'
 import type { ConversationMessage, SavedMark } from './types'
 
 type Open =
@@ -35,6 +36,8 @@ export function useMessageLater({
   const navigate = useNavigate()
   const [marks, setMarks] = useState(new Map<string, SavedMark | null>())
   const [open, setOpen] = useState<Open | null>(null)
+  const experience = useProjectExperience(taskProject ? projectId : null)
+  const tasks = taskProject && experience.shows('area.tasks')
 
   const markOf = (message: ConversationMessage) => (marks.has(message.id) ? (marks.get(message.id) ?? null) : (message.saved ?? null))
   const mark = (messageId: string, value: SavedMark | null) => setMarks((current) => new Map(current).set(messageId, value))
@@ -96,7 +99,7 @@ export function useMessageLater({
   /** Forward and Create task, for the top of the More menu. */
   const shareItems = (message: ConversationMessage): MenuEntry[] => [
     { label: 'Forward…', icon: 'send', onSelect: () => setOpen({ kind: 'forward', message }) },
-    ...(taskProject ? [{ label: 'Create task…', icon: 'work' as const, onSelect: () => setOpen({ kind: 'task', message }) }] : []),
+    ...(tasks ? [{ label: `Create ${experience.word('task')}…`, icon: 'work' as const, onSelect: () => setOpen({ kind: 'task', message }) }] : []),
   ]
 
   /** Remind me, under its own heading. */
@@ -121,10 +124,8 @@ export function useMessageLater({
   const dialogs = open ? (
     open.kind === 'remind' ? (
       <TimeDialog action="Remind me" onClose={() => setOpen(null)} onPick={(at) => save(open.message, at)} title="Remind me about this" />
-    ) : open.kind === 'forward' ? (
-      <ForwardDialog currentConversationId={conversationId} currentProjectId={projectId} message={open.message} onClose={() => setOpen(null)} />
     ) : (
-      <MessageTaskDialog message={open.message} onClose={() => setOpen(null)} projectId={projectId} />
+      <MessageDialog conversationId={conversationId} kind={open.kind} message={open.message} onClose={() => setOpen(null)} projectId={projectId} />
     )
   ) : null
 

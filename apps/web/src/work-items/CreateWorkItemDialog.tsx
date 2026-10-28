@@ -2,6 +2,7 @@ import { useRef, useState, type ClipboardEvent, type FormEvent, type RefObject }
 
 import { isConnectionError } from '../app/localDrafts'
 import { useRetryWhenOnline } from '../app/useRetryWhenOnline'
+import { useProjectExperience } from '../experience/layout'
 import { formatBytes, uploadFile } from '../files/api'
 import { FileGlyph, Paperclip } from '../files/icons'
 import { MAX_ATTACHMENTS } from '../files/useUploads'
@@ -28,6 +29,9 @@ export function CreateWorkItemDialog({
   workflow: WorkItemWorkflow
 }) {
   const mutation = useCreateWorkItem()
+  const experience = useProjectExperience(projectId)
+  const showType = experience.shows('task.type')
+  const showPriority = experience.shows('task.priority')
   // The title and description are kept in this browser until the task is made.
   const { draft, update, clear } = useTaskDraft(projectId)
   const { title, description } = draft
@@ -106,7 +110,7 @@ export function CreateWorkItemDialog({
             Cancel
           </Button>
           <Button busy={mutation.isPending || attaching} disabled={!title.trim()} type="submit" variant="primary">
-            Create task
+            Create {experience.word('task')}
           </Button>
         </>
       }
@@ -116,7 +120,7 @@ export function CreateWorkItemDialog({
       onSubmit={submit}
       open
       returnFocus={returnFocusRef}
-      title="New task"
+      title={`New ${experience.word('task')}`}
       width={560}
     >
       <TextField
@@ -134,91 +138,99 @@ export function CreateWorkItemDialog({
         label="Description"
         maxLength={100000}
         onChange={(event) => update({ description: event.target.value })}
-        onPaste={onPaste}
+        onPaste={experience.shows('area.files') ? onPaste : undefined}
         placeholder="Add the outcome you want, any limits, and useful links."
         rows={5}
         value={description}
       />
-      <div
-        className="aw-newtask-files"
-        onDragOver={(event) => {
-          if (![...event.dataTransfer.types].includes('Files')) return
-          event.preventDefault()
-          event.dataTransfer.dropEffect = 'copy'
-        }}
-        onDrop={(event) => {
-          if (event.dataTransfer.files.length === 0) return
-          event.preventDefault()
-          addFiles(event.dataTransfer.files)
-        }}
-      >
-        {files.length ? (
-          <ul aria-label="Files to attach" className="aw-uploads">
-            {files.map((file, index) => (
-              <li className="aw-upload is-done" key={`${file.name}-${index}`}>
-                <span aria-hidden="true" className="aw-upload__icon">
-                  <Icon name={FileGlyph} size={18} />
-                </span>
-                <span className="aw-upload__text">
-                  <span className="aw-upload__name">{file.name}</span>
-                  <span className="aw-upload__meta">{formatBytes(file.size)}</span>
-                </span>
-                <IconButton
-                  className="aw-upload__remove"
-                  icon="x"
-                  label={`Remove ${file.name}`}
-                  onClick={() => setFiles((current) => current.filter((_, at) => at !== index))}
-                  size="sm"
-                  tooltip={false}
-                />
-              </li>
-            ))}
-          </ul>
-        ) : null}
-        <Button
-          disabled={files.length >= MAX_ATTACHMENTS}
-          icon={Paperclip}
-          onClick={() => fileInput.current?.click()}
-          size="sm"
-          variant="ghost"
-        >
-          Attach files
-        </Button>
-        <input
-          aria-label="Choose files to attach"
-          className="visually-hidden"
-          multiple
-          onChange={(event) => {
-            if (event.target.files) addFiles(event.target.files)
-            event.target.value = ''
+      {experience.shows('area.files') ? (
+        <div
+          className="aw-newtask-files"
+          onDragOver={(event) => {
+            if (![...event.dataTransfer.types].includes('Files')) return
+            event.preventDefault()
+            event.dataTransfer.dropEffect = 'copy'
           }}
-          ref={fileInput}
-          tabIndex={-1}
-          type="file"
-        />
-      </div>
-      <div className="aw-form__grid">
-        <SelectField id="new-work-item-type" label="Type" onChange={(event) => setTypeId(event.target.value)} value={typeId}>
-          {workflow.types.map((type) => (
-            <option key={type.id} value={type.id}>
-              {type.name}
-            </option>
-          ))}
-        </SelectField>
-        <SelectField
-          id="new-work-item-priority"
-          label="Priority"
-          onChange={(event) => setPriority(event.target.value as WorkItemPriority)}
-          prefix={<PriorityIcon decorative priority={priority} />}
-          value={priority}
+          onDrop={(event) => {
+            if (event.dataTransfer.files.length === 0) return
+            event.preventDefault()
+            addFiles(event.dataTransfer.files)
+          }}
         >
-          {workItemPriorities.map((item) => (
-            <option key={item.value} value={item.value}>
-              {item.label}
-            </option>
-          ))}
-        </SelectField>
-      </div>
+          {files.length ? (
+            <ul aria-label="Files to attach" className="aw-uploads">
+              {files.map((file, index) => (
+                <li className="aw-upload is-done" key={`${file.name}-${index}`}>
+                  <span aria-hidden="true" className="aw-upload__icon">
+                    <Icon name={FileGlyph} size={18} />
+                  </span>
+                  <span className="aw-upload__text">
+                    <span className="aw-upload__name">{file.name}</span>
+                    <span className="aw-upload__meta">{formatBytes(file.size)}</span>
+                  </span>
+                  <IconButton
+                    className="aw-upload__remove"
+                    icon="x"
+                    label={`Remove ${file.name}`}
+                    onClick={() => setFiles((current) => current.filter((_, at) => at !== index))}
+                    size="sm"
+                    tooltip={false}
+                  />
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          <Button
+            disabled={files.length >= MAX_ATTACHMENTS}
+            icon={Paperclip}
+            onClick={() => fileInput.current?.click()}
+            size="sm"
+            variant="ghost"
+          >
+            Attach files
+          </Button>
+          <input
+            aria-label="Choose files to attach"
+            className="visually-hidden"
+            multiple
+            onChange={(event) => {
+              if (event.target.files) addFiles(event.target.files)
+              event.target.value = ''
+            }}
+            ref={fileInput}
+            tabIndex={-1}
+            type="file"
+          />
+        </div>
+      ) : null}
+      {showType || showPriority ? (
+        <div className="aw-form__grid">
+          {showType ? (
+            <SelectField id="new-work-item-type" label="Type" onChange={(event) => setTypeId(event.target.value)} value={typeId}>
+              {workflow.types.map((type) => (
+                <option key={type.id} value={type.id}>
+                  {type.name}
+                </option>
+              ))}
+            </SelectField>
+          ) : null}
+          {showPriority ? (
+            <SelectField
+              id="new-work-item-priority"
+              label="Priority"
+              onChange={(event) => setPriority(event.target.value as WorkItemPriority)}
+              prefix={<PriorityIcon decorative priority={priority} />}
+              value={priority}
+            >
+              {workItemPriorities.map((item) => (
+                <option key={item.value} value={item.value}>
+                  {item.label}
+                </option>
+              ))}
+            </SelectField>
+          ) : null}
+        </div>
+      ) : null}
       {offline ? (
         <Banner tone="offline">No connection. This task is saved here and will be created when you’re back online.</Banner>
       ) : mutation.isError ? (

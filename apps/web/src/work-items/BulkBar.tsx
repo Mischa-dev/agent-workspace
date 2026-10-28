@@ -1,5 +1,6 @@
 import { Button } from '../ui'
 import { DatePicker } from '../ui/pickers'
+import { ALL_FIELDS, pickerShown, type CardFields } from './cardFields'
 import type { PickerField } from './FieldPicker'
 import { MAX_BULK } from './selectionModel'
 
@@ -16,6 +17,7 @@ export function BulkBar({
   archived,
   busy,
   count,
+  fields = ALL_FIELDS,
   onArchive,
   onClear,
   onDueDate,
@@ -27,6 +29,8 @@ export function BulkBar({
   archived: boolean
   busy: boolean
   count: number
+  /** What the project's layout shows: hidden fields get no button. */
+  fields?: CardFields
   onArchive: () => void
   onClear: () => void
   onDueDate: (value: string | null) => void
@@ -51,7 +55,7 @@ export function BulkBar({
           </Button>
         ) : (
           <>
-            {ACTIONS.map((action) => (
+            {ACTIONS.filter((action) => pickerShown(action.field, fields)).map((action) => (
               <Button
                 aria-keyshortcuts={action.shortcut}
                 disabled={busy}
@@ -68,7 +72,9 @@ export function BulkBar({
                 Launch
               </Button>
             ) : null}
-            <DatePicker className="aw-bulkbar__date" disabled={busy} label="Due date for selected" onChange={onDueDate} placeholder="Due date" value={null} />
+            {fields.dates ? (
+              <DatePicker className="aw-bulkbar__date" disabled={busy} label="Due date for selected" onChange={onDueDate} placeholder="Due date" value={null} />
+            ) : null}
             <Button busy={busy} icon="archive" onClick={onArchive} size="sm" variant="ghost">
               Archive
             </Button>

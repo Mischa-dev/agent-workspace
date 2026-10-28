@@ -1,6 +1,7 @@
 import { memo, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react'
 
 import { Icon } from '../ui'
+import type { CardFields } from './cardFields'
 import { AssigneeMark, DueDate, TaskBadges } from './ListCells'
 import type { PickerField } from './FieldPicker'
 import { workItemHref } from './links'
@@ -15,6 +16,7 @@ export const BoardCard = memo(function BoardCard({
   card,
   dragId,
   draggable,
+  fields,
   focused,
   held,
   onFocus,
@@ -30,6 +32,7 @@ export const BoardCard = memo(function BoardCard({
   card: WorkItemCard
   dragId: string
   draggable: boolean
+  fields: CardFields
   focused: boolean
   /** Picked up with the keyboard and being moved. */
   held: boolean
@@ -89,10 +92,12 @@ export const BoardCard = memo(function BoardCard({
       ) : null}
       <div className="aw-tcard__top">
         {showStatus ? <StatusIcon category={card.status.semanticCategory} label={card.status.name} /> : null}
-        <span className="aw-tcard__key">{card.key}</span>
-        <span className="aw-tcard__due">
-          <DueDate card={card} />
-        </span>
+        {fields.keys ? <span className="aw-tcard__key">{card.key}</span> : null}
+        {fields.dates ? (
+          <span className="aw-tcard__due">
+            <DueDate card={card} />
+          </span>
+        ) : null}
       </div>
       {/* Not natively draggable: the browser's own link drag would cancel the pointer drag. */}
       <a
@@ -105,7 +110,7 @@ export const BoardCard = memo(function BoardCard({
         {card.title}
       </a>
       <div className="aw-tcard__meta">
-        {editable ? (
+        {!fields.priority ? null : editable ? (
           <button
             aria-label={`Priority of ${card.key}, change`}
             className="aw-tasks__cellbtn"
@@ -118,7 +123,7 @@ export const BoardCard = memo(function BoardCard({
         ) : (
           <PriorityIcon priority={card.priority} />
         )}
-        <TaskBadges card={card} compact />
+        <TaskBadges card={card} compact fields={fields} />
         <span className="aw-tcard__assignee">
           {editable ? (
             <button

@@ -2,6 +2,7 @@ import { useInfiniteQuery } from '@tanstack/react-query'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
+import { useHomeExperience, useProjectExperience } from '../experience/layout'
 import { LaunchQueue } from '../launch/LaunchQueue'
 import { launchesHref } from '../launch/launchModel'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
@@ -96,6 +97,10 @@ export function RunsPage({ project }: { project?: Project } = {}) {
   const mine = params.get('mine') === '1'
   const projectId = project?.id ?? params.get('project') ?? undefined
   const filter: RunListFilter = { status, mine, projectId }
+  // Tokens and cost follow the project's layout when one is picked, else the workspace's.
+  const projectExperience = useProjectExperience(projectId)
+  const homeExperience = useHomeExperience()
+  const usage = (projectId ? projectExperience : homeExperience).shows('tech.run_usage')
 
   const runs = useInfiniteQuery({
     queryKey: runKeys.list(filter),
@@ -163,7 +168,7 @@ export function RunsPage({ project }: { project?: Project } = {}) {
         {list.length > 0 ? (
           <RowList label="Runs">
             {list.map((run) => (
-              <RunRow key={run.id} run={run} />
+              <RunRow key={run.id} run={run} usage={usage} />
             ))}
           </RowList>
         ) : null}
@@ -174,16 +179,16 @@ export function RunsPage({ project }: { project?: Project } = {}) {
             </Button>
           </div>
         ) : null}
-        <RunUsage projectId={projectId} />
+        {usage ? <RunUsage projectId={projectId} /> : null}
       </div>
     </AppShell>
   )
 }
 
-function RunRow({ run }: { run: RunSummary }) {
+function RunRow({ run, usage }: { run: RunSummary; usage: boolean }) {
   const status = runStatus(run.state)
-  const cost = formatCost(run.cost, run.currency)
-  const tokens = totalTokens(run)
+  const cost = usage ? formatCost(run.cost, run.currency) : null
+  const tokens = usage ? totalTokens(run) : 0
   return (
     <Row
       actions={<StatusChip icon={status.icon} spin={status.spin} tone={status.tone}>{status.label}</StatusChip>}
@@ -193,7 +198,7 @@ function RunRow({ run }: { run: RunSummary }) {
           <span>{run.projectName}</span>
           {run.harnessName ? <span>{run.harnessName}</span> : null}
           {run.agentName ? <span>{run.agentName}</span> : null}
-          {tokens > 0 ? <span>{formatTokens(tokens)} tokens</span> : isLiveRun(run.state) ? <span>No tokens yet</span> : null}
+          {tokens > 0 ? <span>{formatTokens(tokens)} tokens</span> : usage && isLiveRun(run.state) ? <span>No tokens yet</span> : null}
           {cost ? <span>{cost}</span> : null}
           <time dateTime={run.createdAt} title={formatFullDate(run.createdAt)}>
             {formatRelative(run.createdAt)}
