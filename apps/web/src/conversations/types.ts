@@ -270,4 +270,8 @@ export type ThreadSummary = {
   archived: boolean
   lastActivityAt: string
   statusChangedAt: string | null
+  /** Up to three who replied, the latest first. */
+  participants: ThreadParticipant[]
 }
+
+export type ThreadParticipant = { id: string; kind: string; displayName: string }

@@ -1,4 +1,4 @@
-import type { SidebarThread, ThreadSummary } from './types'
+import type { SidebarThread, ThreadParticipant, ThreadSummary } from './types'
 
 /** What the chip under a message knows about its thread, from the board, the sidebar, or both. */
 export type ThreadChipFacts = {
@@ -10,6 +10,7 @@ export type ThreadChipFacts = {
   outcome?: string | null
   unread?: boolean
   attention?: SidebarThread['attention']
+  participants?: ThreadParticipant[]
 }
 
 /** A thread board row and a sidebar entry, as one set of chip facts. */
@@ -25,5 +26,6 @@ export function threadChipFacts(summary: ThreadSummary | undefined, sidebar?: Si
     outcome: summary?.outcome,
     unread: sidebar ? sidebar.attention === 'unread' || sidebar.highestSequence > sidebar.highestSeenSequence : summary?.unread,
     attention: sidebar?.attention,
+    participants: summary?.participants,
   }
 }

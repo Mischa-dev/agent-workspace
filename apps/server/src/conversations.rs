@@ -1162,6 +1162,8 @@ pub(crate) struct ThreadSummaryView {
     pub(crate) archived: bool,
     pub(crate) last_activity_at: String,
     pub(crate) status_changed_at: Option<String>,
+    /// Up to three people or agents who replied, the latest first.
+    pub(crate) participants: serde_json::Value,
 }
 
 /// The threads under a channel, DM, or group, newest activity first.
@@ -1219,10 +1221,40 @@ pub(crate) async fn thread_summaries(
                    AS unread,
                thread.archived_at IS NOT NULL AS archived,
                COALESCE(last_entry.created_at, thread.created_at)::text AS last_activity_at,
-               thread.thread_status_changed_at::text AS status_changed_at
+               thread.thread_status_changed_at::text AS status_changed_at,
+               COALESCE(repliers.actors, '[]'::jsonb) AS participants
         FROM conversations thread
         LEFT JOIN conversation_read_states read_state
           ON read_state.conversation_id = thread.id AND read_state.actor_id = $2
+        LEFT JOIN LATERAL (
+            SELECT jsonb_agg(
+                jsonb_build_object(
+                    'id', recent.actor_id,
+                    'kind', recent.kind,
+                    'displayName', recent.display_name,
+                    'handle', recent.handle,
+                    'avatarUrl', NULL
+                )
+                ORDER BY recent.last_sequence DESC
+            ) AS actors
+            FROM (
+                SELECT message.author_actor_id AS actor_id, author.kind,
+                       membership.display_name, membership.handle,
+                       max(entry.sequence) AS last_sequence
+                FROM conversation_entries entry
+                JOIN messages message ON message.id = entry.message_id
+                JOIN actors author ON author.id = message.author_actor_id
+                JOIN project_memberships membership
+                  ON membership.project_id = thread.project_id
+                 AND membership.actor_id = message.author_actor_id
+                WHERE entry.conversation_id = thread.id
+                  AND message.removed_at IS NULL
+                GROUP BY message.author_actor_id, author.kind,
+                         membership.display_name, membership.handle
+                ORDER BY max(entry.sequence) DESC
+                LIMIT 3
+            ) recent
+        ) repliers ON true
         LEFT JOIN LATERAL (
             SELECT entry.created_at FROM conversation_entries entry
             WHERE entry.conversation_id = thread.id

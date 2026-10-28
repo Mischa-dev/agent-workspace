@@ -369,6 +369,16 @@ async fn connected_apps_and_agents_see_exactly_what_they_should() {
     .await
     .1;
     assert_eq!(threads["threads"][0]["outcome"], "Going with plan B");
+    // The chip shows who replied: here only the owner has.
+    assert_eq!(
+        threads["threads"][0]["participants"]
+            .as_array()
+            .expect("participants")
+            .iter()
+            .map(|actor| actor["id"].as_str().expect("participant").to_owned())
+            .collect::<Vec<_>>(),
+        vec![owner.actor_id.to_string()]
+    );
 
     // Retrying thread_start with an opening message doesn't post it twice.
     for _ in 0..2 {
