@@ -38,7 +38,8 @@ several guesses.
   with no checks running usually needs a merge.
 - Where both sides add to a shared registry (the tool list in `mcp.rs`,
   routes in `api.rs` and `App.tsx`, `policy_inventory.rs`, `ui/index.ts`,
-  `MCP_CASE_TOOLS` in the isolation test), keep both sides' lines.
+  `MCP_CASE_TOOLS` in the isolation test, `WRITE_ROUTES` and
+  `MCP_WRITE_TOOLS` in the write isolation test), keep both sides' lines.
 - Two migrations with the same timestamp, or a numbered one: rename yours to
   a new timestamp in your range.
 - Regenerate `pnpm-lock.yaml` with `corepack pnpm install`, never by hand.

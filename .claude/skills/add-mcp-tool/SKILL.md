@@ -76,6 +76,13 @@ is new; `/mcp-tools.md` and the OpenAPI document pick it up from there.
   `apps/server/tests/integration/workspace_isolation.rs`. The guard test
   `every_get_route_and_read_tool_has_an_isolation_case` fails until it's
   there, and needs no database.
+- Every tool that writes needs one too, in
+  `apps/server/tests/integration/write_isolation.rs`: `MCP_WRITE_TOOLS` and
+  `mcp_cases`, with A's own arguments (which must succeed) and B's IDs
+  (which must be refused). Its guard,
+  `every_write_route_and_write_tool_has_an_isolation_case`, also needs no
+  database. The same goes for a new POST, PUT, PATCH or DELETE route
+  (`WRITE_ROUTES` and `http_cases`); the file's top comment says how.
 - Write an integration test where a bug would be silent: someone outside the
   project reading or writing, a claim or version conflict, a private
   conversation. See `w22_agent_kit.rs` for a compact one.
@@ -84,7 +91,7 @@ is new; `/mcp-tools.md` and the OpenAPI document pick it up from there.
 ## 5. Check
 
 `cargo check -p agent-workspace-server`, then
-`cargo test -p agent-workspace-server --test integration -- <your test> workspace_isolation`
+`cargo test -p agent-workspace-server --test integration -- <your test> workspace_isolation write_isolation`
 (needs `AGENT_WORKSPACE_DATABASE_URL`; in a cloud session run
 `tools/cloud/setup.sh` if it's missing). Before pushing, run the full checks
 (see the `steward` skill).
