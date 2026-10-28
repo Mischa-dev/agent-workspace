@@ -1626,6 +1626,31 @@ span.aw-taskstart__fix {
   color: var(--content-fg-muted);
 }
 
+.aw-activity__edited {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: var(--t-caption);
+  color: var(--content-fg-muted);
+  text-decoration: underline dotted;
+  cursor: pointer;
+}
+
+.aw-activity__edited:hover {
+  color: var(--content-fg);
+}
+
+.aw-activity__actions {
+  margin-left: auto;
+}
+
+.aw-activity__removed {
+  margin: var(--space-1) 0 0;
+  font: var(--t-small);
+  font-style: italic;
+  color: var(--content-fg-muted);
+}
+
 .aw-activity__content {
   margin-top: var(--space-1);
   font: var(--t-body);

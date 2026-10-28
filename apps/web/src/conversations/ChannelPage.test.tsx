@@ -350,7 +350,9 @@ describe('M2 Channel workspace', () => {
     const linkedThreadForm = await screen.findByRole('dialog', {
       name: 'Start a thread',
     })
-    expect(within(linkedThreadForm).getByLabelText('Thread name')).not.toHaveValue('')
+    // Unnamed, it goes by the message it starts from until someone names it.
+    expect(within(linkedThreadForm).getByLabelText('Thread name')).toHaveValue('')
+    expect(within(linkedThreadForm).getByLabelText('Thread name')).toHaveAttribute('placeholder', 'Latest @mischa')
     fireEvent.change(within(linkedThreadForm).getByLabelText('Thread name'), {
       target: { value: 'Latest follow-up' },
     })

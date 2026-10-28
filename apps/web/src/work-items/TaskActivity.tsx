@@ -2,13 +2,32 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Eye } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 
+import { useAuthenticatedSession } from '../auth/session'
+
 import { searchMentionableActors } from '../conversations/api'
 import { MessageContent } from '../conversations/MessageContent'
 import { StructuredComposer } from '../conversations/StructuredComposer'
 import { Attachments } from '../files/Attachments'
 import { uploadFile, type FileAttachment } from '../files/api'
-import { ActorTag, Avatar, AvatarStack, Banner, Button, Icon, MessageSkeleton, actorKind, describeLoadError, formatFullDate, formatRelative } from '../ui'
+import { useProject } from '../projects/hooks'
+import {
+  ActorTag,
+  Avatar,
+  AvatarStack,
+  Banner,
+  Button,
+  Icon,
+  IconButton,
+  Menu,
+  MessageSkeleton,
+  actorKind,
+  describeLoadError,
+  formatFullDate,
+  formatRelative,
+  type MenuEntry,
+} from '../ui'
 import { searchWorkItemReferences } from './api'
+import { CommentEditor, CommentHistoryDialog, DeleteCommentDialog, type PostedComment } from './CommentEditing'
 import { formatChanges, type FormattedChange } from './historyFormat'
 import { taskFilesKey, useCreateWorkItemComment, useTaskFiles, useWorkItemTimeline } from './hooks'
 import { useSetWatching } from './planningHooks'
@@ -90,6 +109,13 @@ export function TaskActivity({ disabled, item, projectArchived }: { disabled: bo
   const queryClient = useQueryClient()
   const files = useTaskFiles(item.projectId, item.id)
   const [unfolded, setUnfolded] = useState<ReadonlySet<number>>(() => new Set())
+  const viewerId = useAuthenticatedSession().user.actorId ?? null
+  const role = useProject(item.projectId).data?.role
+  // Owners and admins may delete anyone's comment; everyone else only their own.
+  const moderator = role === 'owner' || role === 'admin'
+  const [editing, setEditing] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState<PostedComment | null>(null)
+  const [history, setHistory] = useState<PostedComment | null>(null)
   const commentFiles = new Map<string, FileAttachment[]>()
   for (const file of files.data ?? []) {
     if (file.commentId) commentFiles.set(file.commentId, [...(commentFiles.get(file.commentId) ?? []), file])
@@ -126,6 +152,16 @@ export function TaskActivity({ disabled, item, projectArchived }: { disabled: bo
     const posted = entry.comment
     if (!posted) return null
     const kind = actorKind(posted.author.kind ?? 'human')
+    const own = viewerId !== null && posted.author.id === viewerId
+    const removedBy = posted.removed?.removedBy
+    const actions: MenuEntry[] = []
+    if (!posted.removed) {
+      if (own && !disabled) actions.push({ label: 'Edit', icon: 'pencil', onSelect: () => setEditing(posted.id) })
+      if (posted.editedAt) actions.push({ label: 'Edit history', icon: 'clock', onSelect: () => setHistory(posted) })
+      if ((own || moderator) && !projectArchived && item.capabilities.edit) {
+        actions.push({ label: 'Delete', icon: 'trash', danger: true, onSelect: () => setDeleting(posted) })
+      }
+    }
     return (
       <li className="aw-activity__comment" key={entry.sequence}>
         <Avatar kind={kind} name={posted.author.displayName} seed={posted.author.id} size={28} />
@@ -137,7 +173,24 @@ export function TaskActivity({ disabled, item, projectArchived }: { disabled: bo
             <time className="aw-activity__time" dateTime={entry.createdAt} title={formatFullDate(entry.createdAt)}>
               {formatRelative(entry.createdAt)}
             </time>
+            {posted.editedAt && !posted.removed ? (
+              <button className="aw-activity__edited" onClick={() => setHistory(posted)} title={`Edited ${formatFullDate(posted.editedAt)}`} type="button">
+                edited
+              </button>
+            ) : null}
+            {actions.length ? (
+              <span className="aw-activity__actions">
+                <Menu items={actions} label="Comment actions" placement="bottom-end" trigger={<IconButton icon="more" label="Comment actions" size="sm" />} />
+              </span>
+            ) : null}
           </p>
+          {posted.removed ? (
+            <p className="aw-activity__removed">
+              Comment deleted{removedBy && removedBy.id !== posted.author.id ? ` by ${removedBy.displayName}` : ''}
+            </p>
+          ) : editing === posted.id ? (
+            <CommentEditor comment={posted} onDone={() => setEditing(null)} projectId={item.projectId} workItemId={item.id} />
+          ) : (
           <div className="aw-activity__content">
             <MessageContent
               actors={posted.mentionedActors.map((mentioned) => ({
@@ -151,6 +204,7 @@ export function TaskActivity({ disabled, item, projectArchived }: { disabled: bo
             />
             <Attachments files={commentFiles.get(posted.id) ?? []} />
           </div>
+          )}
         </div>
       </li>
     )
@@ -203,6 +257,10 @@ export function TaskActivity({ disabled, item, projectArchived }: { disabled: bo
         </div>
       ) : null}
       {rows.length ? <ol className="aw-activity">{rows}</ol> : null}
+      {deleting ? (
+        <DeleteCommentDialog comment={deleting} onClose={() => setDeleting(null)} projectId={item.projectId} viewerId={viewerId} workItemId={item.id} />
+      ) : null}
+      {history ? <CommentHistoryDialog comment={history} onClose={() => setHistory(null)} projectId={item.projectId} workItemId={item.id} /> : null}
       {!disabled ? (
         <StructuredComposer
           disabled={createComment.isPending}

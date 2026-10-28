@@ -5,6 +5,8 @@ import {
   createWorkItem,
   createAcceptanceCriterion,
   createWorkItemComment,
+  deleteWorkItemComment,
+  editWorkItemComment,
   getWorkItem,
   getWorkItemWorkflow,
   listWorkItems,
@@ -179,6 +181,14 @@ export function useRemoveAcceptanceCriterion() {
 
 export function useCreateWorkItemComment() {
   return useWorkItemChildMutation(createWorkItemComment)
+}
+
+export function useEditWorkItemComment() {
+  return useWorkItemChildMutation(editWorkItemComment)
+}
+
+export function useDeleteWorkItemComment() {
+  return useWorkItemChildMutation(deleteWorkItemComment)
 }
 
 export function useSetWorkItemThreadLink() {
