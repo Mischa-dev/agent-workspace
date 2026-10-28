@@ -338,6 +338,68 @@ async fn repository_registration_preparation_archive_and_policy_are_safe_and_ide
     let created_version = created["version"]
         .as_i64()
         .expect("created repository version");
+
+    // A repository with a run that hasn't finished stays, and the answer
+    // says why.
+    let created_uuid = Uuid::parse_str(created_id).expect("created repository UUID");
+    let run_thread = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO conversations (id, project_id, kind, parent_channel_id, repository_id, name)
+        VALUES ($1, $2, 'thread', $3, $4, 'Archive guard')
+        "#,
+    )
+    .bind(run_thread)
+    .bind(seed.project_id)
+    .bind(seed.channel_id)
+    .bind(created_uuid)
+    .execute(&pool)
+    .await
+    .expect("insert run thread");
+    let run = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO agent_runs (
+            id, conversation_id, execution_worker_id, requesting_actor_id,
+            execution_profile_id, repository_id, state, prompt,
+            authorization_snapshot, started_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, 'failed', 'Archive guard', '{}'::jsonb, now())
+        "#,
+    )
+    .bind(run)
+    .bind(run_thread)
+    .bind(seed.execution_worker_id)
+    .bind(seed.human_actor_id)
+    .bind(seed.execution_profile_id)
+    .bind(created_uuid)
+    .execute(&pool)
+    .await
+    .expect("insert run");
+    // Admission checks a live account on insert; a run already waiting on
+    // an approval only needs the row.
+    sqlx::query("UPDATE agent_runs SET state = 'blocked' WHERE id = $1")
+        .bind(run)
+        .execute(&pool)
+        .await
+        .expect("block run");
+    let refused = post_json(
+        &application,
+        &cookie,
+        Some(&csrf),
+        Some("archive-active-key"),
+        &format!("{base}/{created_id}/archive"),
+        json!({"expectedVersion": created_version}),
+    )
+    .await;
+    assert_eq!(refused.0, StatusCode::CONFLICT, "{}", refused.1);
+    assert_eq!(refused.2["error"]["code"], "repository_has_active_runs");
+    sqlx::query("UPDATE agent_runs SET state = 'failed', finished_at = now() WHERE id = $1")
+        .bind(run)
+        .execute(&pool)
+        .await
+        .expect("finish run");
+
     let archived = post_json(
         &application,
         &cookie,

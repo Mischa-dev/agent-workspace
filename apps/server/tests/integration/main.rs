@@ -72,6 +72,7 @@ mod w3_tasks_http;
 mod w7_launch;
 mod w9_capacity_and_push;
 mod workspace_isolation;
+mod write_isolation;
 
 /// The PostgreSQL tests skip themselves when `AGENT_WORKSPACE_DATABASE_URL`
 /// is unset, so without this a run with no database would pass with most of

@@ -479,6 +479,16 @@ pub(super) async fn release_claim(
         )
         .await
     );
+    let exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM work_items WHERE project_id = $1 AND id = $2)",
+    )
+    .bind(project_id)
+    .bind(task_id)
+    .fetch_one(&mut *write.transaction)
+    .await?;
+    if !exists {
+        return Err(AppError::NotFound("work_item"));
+    }
     let claimer = sqlx::query_scalar::<_, Uuid>(
         "SELECT actor_id FROM work_item_claims WHERE project_id = $1 AND work_item_id = $2 FOR UPDATE",
     )
