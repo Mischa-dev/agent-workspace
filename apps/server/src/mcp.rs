@@ -411,7 +411,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Set what a project is for: pick its layout preset (such as Personal life, Bug reporting or Software team), which decides the parts of the app people see there and words like \"to-dos\" for tasks. Visual only: it never changes what anyone may do. Leave preset out to follow the workspace's default again. Owners and admins only, as themselves.",
+        description = "Set what a project is for: pick its layout preset (such as Personal life, Bug reporting or Software team), which decides the parts of the app people see there and words like \"to-dos\" for tasks. Visual only: it never changes what anyone may do. Leave preset out to follow the workspace's default again. The project's owners and admins only, as themselves.",
         annotations(
             title = "Set project layout",
             read_only_hint = false,

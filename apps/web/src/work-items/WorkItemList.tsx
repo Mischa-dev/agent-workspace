@@ -4,7 +4,7 @@ import { useProjectExperience } from '../experience/layout'
 import { Button, EmptyState, ErrorState, Icon, ListSkeleton, countLabel } from '../ui'
 import { Table, type TableRow } from '../ui/pickers'
 import { FieldPicker, type PickerField, type PickResult } from './FieldPicker'
-import { useCardFields, type CardFields } from './cardFields'
+import { pickerShown, useCardFields, type CardFields } from './cardFields'
 import { AssigneeMark, DoneToggle, DueDate, GroupHeader, PickerCell, TaskBadges } from './ListCells'
 import { LIST_COLUMNS } from './taskDisplay'
 import { workItemHref } from './links'
@@ -308,7 +308,7 @@ export function WorkItemList({
       return true
     }
     const field = PICKER_KEYS[key]
-    if (field && !event.shiftKey) {
+    if (field && !event.shiftKey && pickerShown(field, fields)) {
       const element = currentKey ? bodyRef.current?.querySelector<HTMLElement>(`[data-row-key="${CSS.escape(currentKey)}"]`) : null
       const card = row?.kind === 'task' ? row.item : undefined
       if (!card && !selection.ids.size) return false

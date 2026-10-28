@@ -349,4 +349,37 @@ async fn owners_choose_layouts_for_roles_and_people_and_members_only_hide_more()
     )
     .await;
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+
+    // A person's app goes by their role in the project, as the settings page
+    // does: a member can't, a project admin who is only a member of the
+    // workspace can.
+    let rook_token = connect_app(app, &rook_browser, "Rook's desk", "full").await;
+    let rook_session = initialize(app, &rook_token).await.expect("Rook's session");
+    let as_member = tool(
+        app,
+        &rook_token,
+        &rook_session,
+        "project_layout_set",
+        json!({"projectId": work, "preset": "Minimal"}),
+    )
+    .await;
+    assert_eq!(as_member["outcome"], "permission_denied", "{as_member}");
+    sqlx::query(
+        "UPDATE project_memberships SET role = 'admin' WHERE actor_id = $1 AND project_id = $2",
+    )
+    .bind(rook)
+    .bind(Uuid::parse_str(&work).expect("project id"))
+    .execute(&setup.pool)
+    .await
+    .expect("make Rook a project admin");
+    let as_admin = tool(
+        app,
+        &rook_token,
+        &rook_session,
+        "project_layout_set",
+        json!({"projectId": work, "preset": "Minimal"}),
+    )
+    .await;
+    assert_eq!(as_admin["outcome"], "ok", "{as_admin}");
+    assert_eq!(as_admin["value"]["layout"]["preset"], "Minimal");
 }

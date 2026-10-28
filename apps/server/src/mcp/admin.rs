@@ -1082,7 +1082,9 @@ pub(super) async fn project_layout_set(
         let Some(row) = admin_row(&mut transaction, principal, project_id).await? else {
             return Ok(ToolResult::not_found("That project"));
         };
-        if !may_administer(principal, project_id, &row) {
+        // The same people who change it in the project's settings: the
+        // project's owners and admins, whatever their role in the workspace.
+        if !role_allows(principal, project_id, &row.role, Action::SettingsManage) {
             return Ok(ToolResult::denied(ADMIN_ONLY));
         }
         if row.kind == "direct" {
