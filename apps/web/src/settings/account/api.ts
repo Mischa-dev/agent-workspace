@@ -33,7 +33,8 @@ export type AccountSecurity = {
   recentEvents: SecurityEvent[]
 }
 
-export type TwoFactorSetup = { secret: string; otpauthUri: string; issuer: string; accountName: string }
+/** `qrSvg` is the setup link drawn by the server as a standalone SVG, for the browser to show as an image. */
+export type TwoFactorSetup = { secret: string; otpauthUri: string; issuer: string; accountName: string; qrSvg?: string }
 
 export type TokenScope = 'read' | 'write'
 

@@ -187,7 +187,10 @@ struct CreateChannelRequest {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CreateThreadRequest {
-    name: String,
+    /// Left out (or blank), the thread goes by the message it starts from, or
+    /// its first message, until someone names it.
+    #[serde(default)]
+    name: Option<String>,
     origin_message_id: Option<Uuid>,
 }
 
@@ -984,7 +987,12 @@ async fn create_thread(
     require_authenticated_write(&state, &headers, &principal)?;
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
     let command = CreateThreadRequest {
-        name: normalize_conversation_name(&request.name)?,
+        name: request
+            .name
+            .as_deref()
+            .filter(|name| !name.trim().is_empty())
+            .map(normalize_conversation_name)
+            .transpose()?,
         origin_message_id: request.origin_message_id,
     };
     let request_hash = RequestHash::for_value(&command)?;
@@ -1020,10 +1028,11 @@ async fn create_thread(
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
 
+    let mut origin_text = None;
     if let Some(origin_message_id) = command.origin_message_id {
-        let origin_removed = sqlx::query_scalar::<_, bool>(
+        let origin = sqlx::query_as::<_, (bool, String)>(
             r#"
-            SELECT removed_at IS NOT NULL
+            SELECT removed_at IS NOT NULL, plain_text
             FROM messages
             WHERE id = $1
               AND project_id = $2
@@ -1035,27 +1044,36 @@ async fn create_thread(
         .bind(channel.id)
         .fetch_optional(&mut *transaction)
         .await?;
-        match origin_removed {
+        match origin {
             None => return Err(AppError::Validation("Thread origin Message")),
-            Some(true) => return Err(AppError::Conflict("message", "removed")),
-            Some(false) => {}
+            Some((true, _)) => return Err(AppError::Conflict("message", "removed")),
+            Some((false, text)) => origin_text = Some(text),
         }
     }
+    let auto_named = command.name.is_none();
+    let name = match &command.name {
+        Some(name) => name.clone(),
+        None => origin_text
+            .as_deref()
+            .and_then(thread_name_from_text)
+            .unwrap_or_else(|| UNNAMED_THREAD.to_owned()),
+    };
 
     let thread_id = Uuid::now_v7();
     let inserted = sqlx::query(
         r#"
         INSERT INTO conversations (
-            id, project_id, kind, parent_channel_id, origin_message_id, name
+            id, project_id, kind, parent_channel_id, origin_message_id, name, auto_named
         )
-        VALUES ($1, $2, 'thread', $3, $4, $5)
+        VALUES ($1, $2, 'thread', $3, $4, $5, $6)
         "#,
     )
     .bind(thread_id)
     .bind(channel.project_id)
     .bind(channel.id)
     .bind(command.origin_message_id)
-    .bind(&command.name)
+    .bind(&name)
+    .bind(auto_named)
     .execute(&mut *transaction)
     .await;
     map_conversation_insert(inserted)?;
@@ -1099,7 +1117,7 @@ async fn create_thread(
             kind: "thread".to_owned(),
             parent_channel_id: Some(channel.id),
             origin_message_id: command.origin_message_id,
-            name: command.name,
+            name,
             archived_at: None,
             version: 1,
             thread_status: Some("Open".to_owned()),
@@ -1144,6 +1162,8 @@ pub(crate) struct ThreadSummaryView {
     pub(crate) archived: bool,
     pub(crate) last_activity_at: String,
     pub(crate) status_changed_at: Option<String>,
+    /// Up to three people or agents who replied, the latest first.
+    pub(crate) participants: serde_json::Value,
 }
 
 /// The threads under a channel, DM, or group, newest activity first.
@@ -1201,10 +1221,40 @@ pub(crate) async fn thread_summaries(
                    AS unread,
                thread.archived_at IS NOT NULL AS archived,
                COALESCE(last_entry.created_at, thread.created_at)::text AS last_activity_at,
-               thread.thread_status_changed_at::text AS status_changed_at
+               thread.thread_status_changed_at::text AS status_changed_at,
+               COALESCE(repliers.actors, '[]'::jsonb) AS participants
         FROM conversations thread
         LEFT JOIN conversation_read_states read_state
           ON read_state.conversation_id = thread.id AND read_state.actor_id = $2
+        LEFT JOIN LATERAL (
+            SELECT jsonb_agg(
+                jsonb_build_object(
+                    'id', recent.actor_id,
+                    'kind', recent.kind,
+                    'displayName', recent.display_name,
+                    'handle', recent.handle,
+                    'avatarUrl', NULL
+                )
+                ORDER BY recent.last_sequence DESC
+            ) AS actors
+            FROM (
+                SELECT message.author_actor_id AS actor_id, author.kind,
+                       membership.display_name, membership.handle,
+                       max(entry.sequence) AS last_sequence
+                FROM conversation_entries entry
+                JOIN messages message ON message.id = entry.message_id
+                JOIN actors author ON author.id = message.author_actor_id
+                JOIN project_memberships membership
+                  ON membership.project_id = thread.project_id
+                 AND membership.actor_id = message.author_actor_id
+                WHERE entry.conversation_id = thread.id
+                  AND message.removed_at IS NULL
+                GROUP BY message.author_actor_id, author.kind,
+                         membership.display_name, membership.handle
+                ORDER BY max(entry.sequence) DESC
+                LIMIT 3
+            ) recent
+        ) repliers ON true
         LEFT JOIN LATERAL (
             SELECT entry.created_at FROM conversation_entries entry
             WHERE entry.conversation_id = thread.id
@@ -1325,6 +1375,7 @@ pub(crate) async fn update_thread(
         r#"
         UPDATE conversations
         SET name = COALESCE($2, name),
+            auto_named = auto_named AND $2 IS NULL,
             thread_status = COALESCE($3, thread_status),
             thread_outcome = CASE WHEN $4 THEN $5 ELSE thread_outcome END,
             thread_status_changed_at = CASE WHEN $6 THEN now() ELSE thread_status_changed_at END,
@@ -1749,6 +1800,16 @@ pub(crate) async fn append_message_command_with(
     .bind(message_id)
     .execute(&mut *transaction)
     .await?;
+    if conversation.kind == "thread" {
+        refresh_auto_thread_names(
+            &mut transaction,
+            conversation.project_id,
+            conversation.id,
+            None,
+            true,
+        )
+        .await?;
+    }
     enqueue_event(
         &mut transaction,
         conversation.project_id,
@@ -2610,6 +2671,14 @@ async fn mark_conversation_seen(
             highest_seen_sequence: row.highest_seen_sequence,
             version: row.version,
         }),
+    )
+    .await?;
+    crate::notifications::read_for_conversation(
+        &mut transaction,
+        conversation.project_id,
+        principal.actor_id,
+        conversation.id,
+        row.highest_seen_sequence,
     )
     .await?;
     transaction.commit().await?;
@@ -4515,6 +4584,122 @@ pub(crate) fn web_suggested_thread_name(text: &str) -> String {
         short
     };
     name.trim().to_owned()
+}
+
+/// What a thread started without a name is called until it has a message.
+pub(crate) const UNNAMED_THREAD: &str = "New thread";
+/// How much of its first message an unnamed thread shows as its name.
+const AUTO_THREAD_NAME_CHARACTERS: usize = 80;
+
+/// A thread's name from a message: its first line of text, cut at a word
+/// near 80 characters. None when the message has no text (only files).
+pub(crate) fn thread_name_from_text(text: &str) -> Option<String> {
+    let line = text
+        .lines()
+        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+        .find(|line| !line.is_empty())?;
+    let line: String = line.chars().filter(|c| !c.is_control()).collect();
+    if line.chars().count() <= AUTO_THREAD_NAME_CHARACTERS {
+        return (!line.is_empty()).then_some(line);
+    }
+    let cut: String = line.chars().take(AUTO_THREAD_NAME_CHARACTERS).collect();
+    let cut = match cut.rfind(' ') {
+        Some(space) if space > AUTO_THREAD_NAME_CHARACTERS / 2 => cut[..space].to_owned(),
+        _ => cut,
+    };
+    Some(format!("{}…", cut.trim_end()))
+}
+
+/// Threads nobody has named yet go by text: the message they started from,
+/// else their first message, else "New thread". Called when a message is
+/// sent, edited or removed, for its own conversation and, with
+/// `started_from`, threads started from it. A send passes `only_unnamed`: a
+/// new message can only name a thread that has no text to go by yet.
+pub(crate) async fn refresh_auto_thread_names(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    conversation_id: Uuid,
+    started_from: Option<Uuid>,
+    only_unnamed: bool,
+) -> Result<(), AppError> {
+    let threads = sqlx::query_as::<_, (Uuid, String, Option<Uuid>)>(
+        r#"
+        SELECT id, name, origin_message_id FROM conversations
+        WHERE auto_named AND kind = 'thread' AND project_id = $1
+          AND (id = $2 OR ($3::uuid IS NOT NULL AND parent_channel_id = $2
+                           AND origin_message_id = $3))
+          AND (NOT $4 OR name = $5)
+        ORDER BY id
+        "#,
+    )
+    .bind(project_id)
+    .bind(conversation_id)
+    .bind(started_from)
+    .bind(only_unnamed)
+    .bind(UNNAMED_THREAD)
+    .fetch_all(&mut **transaction)
+    .await?;
+    for (thread_id, name, origin_message_id) in threads {
+        let origin_text = match origin_message_id {
+            Some(origin) => {
+                sqlx::query_scalar::<_, String>(
+                    "SELECT plain_text FROM messages WHERE id = $1 AND removed_at IS NULL",
+                )
+                .bind(origin)
+                .fetch_optional(&mut **transaction)
+                .await?
+            }
+            None => None,
+        };
+        let mut next = origin_text.as_deref().and_then(thread_name_from_text);
+        if next.is_none() {
+            let first = sqlx::query_scalar::<_, String>(
+                r#"
+                SELECT message.plain_text
+                FROM conversation_entries entry
+                JOIN messages message ON message.id = entry.message_id
+                WHERE entry.conversation_id = $1
+                  AND message.removed_at IS NULL AND message.plain_text <> ''
+                ORDER BY entry.sequence
+                LIMIT 1
+                "#,
+            )
+            .bind(thread_id)
+            .fetch_optional(&mut **transaction)
+            .await?;
+            next = first.as_deref().and_then(thread_name_from_text);
+        }
+        let next = next.unwrap_or_else(|| UNNAMED_THREAD.to_owned());
+        if next == name {
+            continue;
+        }
+        let version = sqlx::query_scalar::<_, i64>(
+            r#"
+            UPDATE conversations
+            SET name = $2, version = version + 1, updated_at = now()
+            WHERE id = $1 AND auto_named
+            RETURNING version
+            "#,
+        )
+        .bind(thread_id)
+        .bind(&next)
+        .fetch_optional(&mut **transaction)
+        .await?;
+        if let Some(version) = version {
+            enqueue_event(
+                transaction,
+                project_id,
+                OutboxEventPayload::ConversationUpdated(
+                    crate::outbox::ConversationUpdatedPayload {
+                        conversation_id: thread_id,
+                        version,
+                    },
+                ),
+            )
+            .await?;
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn normalize_conversation_name(value: &str) -> Result<String, AppError> {

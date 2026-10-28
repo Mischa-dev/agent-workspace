@@ -15,7 +15,15 @@ vi.mock('../projects/hooks', () => ({
   useProject: () => ({
     isPending: false,
     isError: false,
-    data: { id: 'p1', organizationId: 'o1', key: 'ACME', name: 'Acme', archivedAt: null, role: 'member' },
+    data: {
+      id: 'p1',
+      organizationId: 'o1',
+      key: 'ACME',
+      name: 'Acme',
+      archivedAt: null,
+      role: 'member',
+      capabilities: { view: true, manage: false, archive: false, navigationWrite: false },
+    },
   }),
 }))
 

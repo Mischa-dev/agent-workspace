@@ -16,7 +16,7 @@ import { FilterBar } from './FilterBar'
 import { useWorkItemWorkflow } from './hooks'
 import { activeFilterKeys, parametersFromRemembered, rememberedState } from './listModel'
 import { notify } from './notice'
-import { TaskDetail } from './TaskDetail'
+import { TaskPanel } from './TaskPanel'
 import { useListState } from './useListState'
 import { WorkItemList } from './WorkItemList'
 import './work.css'
@@ -70,10 +70,9 @@ export function WorkItemsPage() {
   if (project.isSuccess && entry?.projectId !== projectId) {
     setEntry({
       projectId,
-      restore:
-        viewParameters === 0 &&
-        project.data.navigation.location.kind === 'work_items' &&
-        Boolean(savedFilters && Object.keys(savedFilters).length > 0),
+      // The view is remembered however the person left Tasks: for another
+      // tab, a page or a channel.
+      restore: viewParameters === 0 && Boolean(savedFilters && Object.keys(savedFilters).length > 0),
     })
   } else if (entry?.restore && viewParameters > 0) {
     setEntry({ ...entry, restore: false })
@@ -143,25 +142,7 @@ export function WorkItemsPage() {
     </>
   )
   const panel = state.task ? (
-    <div
-      className="aw-taskpanel"
-      onKeyDown={(event) => {
-        if (event.key !== 'Escape' || event.defaultPrevented) return
-        if ((event.target as HTMLElement).closest('input, textarea, select, .aw-popover, [role="dialog"][aria-modal="true"]:not(.aw-panel)')) return
-        event.preventDefault()
-        closeTask()
-      }}
-    >
-      <TaskDetail
-        key={state.task}
-        layout="panel"
-        onClose={closeTask}
-        onOpenTask={(task) => openTask(task.id)}
-        projectArchived={archived}
-        projectId={projectId}
-        taskId={state.task}
-      />
-    </div>
+    <TaskPanel onClose={closeTask} onOpenTask={(task) => openTask(task.id)} projectArchived={archived} projectId={projectId} taskId={state.task} />
   ) : undefined
 
   return (

@@ -461,6 +461,7 @@ pub(super) async fn task_move(
                   ON author.project_id = comment.project_id
                  AND author.actor_id = comment.author_actor_id
                 WHERE comment.project_id = $1 AND comment.work_item_id = $2
+                  AND comment.removed_at IS NULL
                 ORDER BY comment.created_at, comment.id
                 LIMIT $3
                 "#,
@@ -471,7 +472,7 @@ pub(super) async fn task_move(
             .fetch_all(&mut *transaction)
             .await?;
             let comment_count = sqlx::query_scalar::<_, i64>(
-                "SELECT count(*) FROM work_item_comments WHERE project_id = $1 AND work_item_id = $2",
+                "SELECT count(*) FROM work_item_comments WHERE project_id = $1 AND work_item_id = $2 AND removed_at IS NULL",
             )
             .bind(source_project_id)
             .bind(task.id)

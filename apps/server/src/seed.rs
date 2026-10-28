@@ -223,18 +223,36 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
     .fetch_one(&mut *transaction)
     .await?;
 
-    let thread_id = sqlx::query_scalar::<_, Uuid>(
+    // Upgrade tests also seed schemas from before threads could go unnamed,
+    // whose unique thread names have no unnamed threads to leave out.
+    let has_unnamed_threads = sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM pg_attribute
+            WHERE attrelid = to_regclass('conversations')
+              AND attname = 'auto_named'
+              AND NOT attisdropped
+        )
+        "#,
+    )
+    .fetch_one(&mut *transaction)
+    .await?;
+    let named_threads = if has_unnamed_threads {
+        "kind = 'thread' AND archived_at IS NULL AND NOT auto_named"
+    } else {
+        "kind = 'thread' AND archived_at IS NULL"
+    };
+    let thread_id = sqlx::query_scalar::<_, Uuid>(&format!(
         r#"
         INSERT INTO conversations (
             id, project_id, kind, parent_channel_id, repository_id, name
         )
         VALUES ($1, $2, 'thread', $3, $4, 'M0 walking skeleton')
-        ON CONFLICT (parent_channel_id, lower(name))
-            WHERE kind = 'thread' AND archived_at IS NULL
+        ON CONFLICT (parent_channel_id, lower(name)) WHERE {named_threads}
         DO UPDATE SET repository_id = EXCLUDED.repository_id, updated_at = now()
         RETURNING id
         "#,
-    )
+    ))
     .bind(Uuid::now_v7())
     .bind(project_id)
     .bind(channel_id)

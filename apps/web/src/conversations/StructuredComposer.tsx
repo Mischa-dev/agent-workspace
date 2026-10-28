@@ -11,7 +11,7 @@ import {
   type ReactNode,
 } from 'react'
 
-import { isConnectionError, onReconnect, readLocal, writeLocal } from '../app/localDrafts'
+import { holdUnsent, isConnectionError, onReconnect, readLocal, writeLocal } from '../app/localDrafts'
 import type { Uploader } from '../files/api'
 import { UploadChips } from '../files/UploadChips'
 import { useUploads } from '../files/useUploads'
@@ -45,6 +45,8 @@ import {
   typedHandles,
   type ComposerDraft,
   type ComposerSubmission,
+  type OutboxTarget,
+  type QueuedSend,
   type Trigger,
 } from './composerModel'
 import type { ConversationActor, ConversationWorkItemReference, MessageContentV1 } from './types'
@@ -85,6 +87,8 @@ type StructuredComposerProps = {
    * for want of a connection to send again when it's back.
    */
   draftKey?: string
+  /** Where a send kept for want of a connection goes, so it goes out from any page once the connection is back. */
+  outbox?: OutboxTarget
   /** Slash commands offered as you type "/"; text naming none is sent as typed. */
   commands?: SlashCommand[]
   /** Run a command; `build` turns text into content with the people and tasks picked here. */
@@ -107,11 +111,6 @@ type StructuredComposerProps = {
   focusOnOpen?: boolean
 }
 
-/**
- * A send that couldn't reach the server, kept to send again with the same key,
- * with the people and tasks it named so a refusal puts all of it back.
- */
-type QueuedSend = ComposerSubmission & { text: string } & Partial<Pick<ComposerDraft, 'mentions' | 'workItems'>>
 
 /** The formatting row, and Slack's shortcuts for it (Ctrl, or ⌘ on a Mac). */
 const FORMATS: { action: FormatAction; icon: IconGlyph; label: string; shortcut: string }[] = [
@@ -194,6 +193,7 @@ function ComposerBox({
   className,
   submitIcon = 'send',
   draftKey,
+  outbox,
   upload,
   commands,
   onCommand,
@@ -254,6 +254,9 @@ function ComposerBox({
     if (!draftKey) return
     writeLocal<ComposerDraft>(`draft:${draftKey}`, text.trim() ? { text, mentions, workItems } : null)
   }, [draftKey, text, mentions, workItems])
+
+  // While it's on screen, this box sends its own queue; the app sends it after.
+  useEffect(() => (draftKey && !keepDraftWhileSaving ? holdUnsent(draftKey) : undefined), [draftKey, keepDraftWhileSaving])
 
   const queuedRef = useRef(queued)
   const queue = (update: (current: QueuedSend[]) => QueuedSend[]) => {
@@ -555,7 +558,7 @@ function ComposerBox({
           // Kept and sent again when the connection is back; never dropped.
           queue((current) => [
             ...current,
-            { content: message, idempotencyKey: key, text: sentText, attachments, mentions: draft.mentions, workItems: draft.workItems },
+            { content: message, idempotencyKey: key, text: sentText, attachments, mentions: draft.mentions, workItems: draft.workItems, target: outbox },
           ])
           return
         }

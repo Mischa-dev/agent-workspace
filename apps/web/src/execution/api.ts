@@ -155,6 +155,12 @@ export function updateProviderAccount(
   })
 }
 
+/** Signs the account out and deletes it with its files; when past runs point
+ * at it, it's hidden instead and keeps its name on them. */
+export function deleteProviderAccount(projectId: string, accountId: string) {
+  return requestJson<{ outcome: 'deleted' | 'hidden' }>(accountPath(projectId, accountId), { method: 'DELETE' })
+}
+
 /** Uses the account in this project and makes it the one your runs here pick first. */
 export function useProviderAccount(projectId: string, accountId: string, idempotencyKey: string) {
   return requestJson<ProviderAccount>(`${accountPath(projectId, accountId)}/use`, {

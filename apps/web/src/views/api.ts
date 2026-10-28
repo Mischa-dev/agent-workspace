@@ -76,11 +76,12 @@ export function deleteView(projectId: string, view: Pick<SavedView, 'id' | 'vers
   })
 }
 
-export function pinView(projectId: string, viewId: string, pinned: boolean, idempotencyKey: string) {
+/** Pins a view to your sidebar or takes it off; `position` places it among your pins. */
+export function pinView(projectId: string, viewId: string, pinned: boolean, idempotencyKey: string, position?: number) {
   return requestJson<SavedView>(projectPath(projectId, `views/${encodeURIComponent(viewId)}/pin`), {
     method: 'POST',
     idempotencyKey,
-    json: { pinned },
+    json: position === undefined ? { pinned } : { pinned, position },
   })
 }
 

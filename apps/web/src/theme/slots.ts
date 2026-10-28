@@ -23,11 +23,15 @@ export const THEME_PRESETS = [
   { id: 'rose-pine', name: 'Rosé Pine', group: 'dark' },
   { id: 'github-dark', name: 'GitHub Dark', group: 'dark' },
   { id: 'monokai', name: 'Monokai', group: 'dark' },
+  { id: 'everforest-dark', name: 'Everforest Dark', group: 'dark' },
+  { id: 'kanagawa', name: 'Kanagawa', group: 'dark' },
   { id: 'gruvbox-light', name: 'Gruvbox Light', group: 'light' },
   { id: 'solarized-light', name: 'Solarized Light', group: 'light' },
   { id: 'catppuccin-latte', name: 'Catppuccin Latte', group: 'light' },
   { id: 'rose-pine-dawn', name: 'Rosé Pine Dawn', group: 'light' },
   { id: 'github-light', name: 'GitHub Light', group: 'light' },
+  { id: 'everforest-light', name: 'Everforest Light', group: 'light' },
+  { id: 'one-light', name: 'One Light', group: 'light' },
 ] as const satisfies readonly { id: string; name: string; group: 'workspace' | 'dark' | 'light' }[]
 
 export type ThemePreset = (typeof THEME_PRESETS)[number]['id']

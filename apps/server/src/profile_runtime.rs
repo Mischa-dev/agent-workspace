@@ -99,6 +99,36 @@ pub fn prepare_private_profile_directory(
     Ok(profile_path)
 }
 
+/// Removes an account's private home, as `prepare_private_profile_directory`
+/// made it, with everything in it. Only a directory directly beneath the
+/// configured root is touched; a home that is already gone is fine.
+pub fn remove_private_profile_directory(
+    configured_data_root: &Path,
+    configured_root: &Path,
+    home: &Path,
+) -> Result<(), AppError> {
+    let root = resolve_path_within_data_root(configured_data_root, configured_root)?;
+    let Ok(root) = root.canonicalize() else {
+        return Ok(());
+    };
+    let key = home
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or(AppError::Invalid("unsafe account home path"))?;
+    validate_profile_key(key)?;
+    if home.parent() != Some(root.as_path()) {
+        return Err(AppError::Invalid("unsafe account home path"));
+    }
+    match std::fs::symlink_metadata(home) {
+        Ok(metadata) if metadata.is_dir() => {
+            std::fs::remove_dir_all(home).map_err(|_| AppError::Internal("remove account home"))
+        }
+        Ok(_) => Err(AppError::Invalid("unsafe account home path")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(AppError::Internal("inspect account home")),
+    }
+}
+
 #[cfg(not(unix))]
 pub fn prepare_private_profile_directory(
     _configured_data_root: &Path,
@@ -191,7 +221,32 @@ mod tests {
 
     use tempfile::TempDir;
 
-    use super::{prepare_private_profile_directory, resolve_path_within_data_root};
+    use super::{
+        prepare_private_profile_directory, remove_private_profile_directory,
+        resolve_path_within_data_root,
+    };
+
+    #[test]
+    fn removes_only_a_home_directly_beneath_the_root() {
+        let temporary = TempDir::new().expect("temporary root");
+        let data_root = temporary.path().join("data");
+        let configured = data_root.join("profiles");
+        let home = prepare_private_profile_directory(&data_root, &configured, "acct-1")
+            .expect("create private profile");
+        fs::write(home.join("auth.json"), "{}").expect("write a file");
+        let outside = temporary.path().join("outside");
+        fs::create_dir(&outside).expect("outside directory");
+
+        assert!(remove_private_profile_directory(&data_root, &configured, &outside).is_err());
+        assert!(
+            remove_private_profile_directory(&data_root, &configured, &home.join("..")).is_err()
+        );
+        remove_private_profile_directory(&data_root, &configured, &home).expect("remove home");
+        assert!(!home.exists());
+        assert!(outside.exists());
+        remove_private_profile_directory(&data_root, &configured, &home)
+            .expect("a home already gone is fine");
+    }
 
     #[test]
     fn creates_an_absolute_owner_only_profile_and_is_idempotent() {

@@ -24,6 +24,11 @@
   background: var(--content-hover);
 }
 
+/* The task open in the side panel. */
+.aw-mywork__row.is-open {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
 /* Holds the priority's place when the project's layout hides it. */
 .aw-mywork__icon {
   flex: none;

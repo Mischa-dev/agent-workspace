@@ -270,6 +270,7 @@ export function ThreadPanel({
           draftKey={threadId}
           focusOnOpen
           label="Reply in thread"
+          outbox={{ kind: 'message', conversationId: threadId, conversationKind: 'thread', href: threadHref }}
           onEditLast={() => messageActions.editLast(entries)}
           onSubmit={sender.send}
           placeholder="Reply in thread"

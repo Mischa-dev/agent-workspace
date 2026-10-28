@@ -622,6 +622,84 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
     .await
     .expect("archived rename response");
     assert_eq!(archived_rename.status(), StatusCode::CONFLICT);
+
+    // Archived projects are listed only when asked for, and a manager can
+    // bring one back against the version they read, audited once.
+    let listed_ids = |uri: &'static str| {
+        let app = app.clone();
+        let cookie = cookie_header.clone();
+        async move {
+            let response = app
+                .oneshot(request(
+                    "GET",
+                    uri,
+                    &[("cookie", cookie.as_str())],
+                    Value::Null,
+                ))
+                .await
+                .expect("list response");
+            assert_eq!(response.status(), StatusCode::OK);
+            response_json(response).await["projects"]
+                .as_array()
+                .expect("Projects")
+                .iter()
+                .map(|project| project["id"].as_str().expect("Project id").to_owned())
+                .collect::<Vec<_>>()
+        }
+    };
+    let restore = |project_id: &str, expected_version: i64| {
+        app.clone().oneshot(request(
+            "POST",
+            &format!("/api/v1/projects/{project_id}/restore"),
+            &write_headers,
+            json!({"expectedVersion": expected_version}),
+        ))
+    };
+    assert!(
+        !listed_ids("/api/v1/projects")
+            .await
+            .contains(&first_project_id.to_owned())
+    );
+    assert_eq!(
+        listed_ids("/api/v1/projects?archived=true").await,
+        vec![first_project_id.to_owned()]
+    );
+    let stale_restore = restore(first_project_id, 1)
+        .await
+        .expect("stale restore response");
+    assert_eq!(stale_restore.status(), StatusCode::CONFLICT);
+    let restored = restore(first_project_id, 2)
+        .await
+        .expect("restore response");
+    assert_eq!(restored.status(), StatusCode::OK);
+    let restored = response_json(restored).await;
+    assert!(restored["archivedAt"].is_null(), "{restored}");
+    assert_eq!(restored["version"], 3);
+    let repeated_restore = restore(first_project_id, 2)
+        .await
+        .expect("repeated restore response");
+    assert_eq!(repeated_restore.status(), StatusCode::OK);
+    assert_eq!(response_json(repeated_restore).await["version"], 3);
+    assert!(
+        listed_ids("/api/v1/projects")
+            .await
+            .contains(&first_project_id.to_owned())
+    );
+    assert!(
+        listed_ids("/api/v1/projects?archived=true")
+            .await
+            .is_empty()
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM audit_events WHERE action = 'project.restored' AND target_id = $1",
+        )
+        .bind(first_project_id.parse::<Uuid>().expect("Project UUID"))
+        .fetch_one(&pool)
+        .await
+        .expect("count restore audit events"),
+        1
+    );
     let renamed = rename(
         &second_project_id,
         json!({"name": "  Alpha renamed  ", "expectedVersion": 1}),
@@ -674,6 +752,10 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
     .await
     .expect("Viewer rename response");
     assert_eq!(viewer_rename.status(), StatusCode::FORBIDDEN);
+    let viewer_restore = restore(&second_project_id, 2)
+        .await
+        .expect("Viewer restore response");
+    assert_eq!(viewer_restore.status(), StatusCode::FORBIDDEN);
     assert_eq!(
         sqlx::query_scalar::<_, String>("SELECT name FROM projects WHERE id = $1")
             .bind(second_project_id.parse::<Uuid>().expect("Project UUID"))

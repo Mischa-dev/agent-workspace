@@ -195,6 +195,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/readiness",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/launch",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/timeline",
+    "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}/revisions",
     "/api/v1/push/config",
     "/api/v1/push/subscriptions",
     "/api/v1/runs",
@@ -442,6 +443,8 @@ pub(super) struct World {
     pub(super) group: String,
     pub(super) task: Uuid,
     pub(super) subtask: Uuid,
+    /// A comment on `task`, edited once.
+    pub(super) comment: Uuid,
     pub(super) page: String,
     pub(super) repository: Uuid,
     pub(super) pull_request: Uuid,
@@ -1072,9 +1075,16 @@ async fn build_workspace(
     };
     let task = task_number(1).await;
     let subtask = task_number(2).await;
-    call(
+    let comment = call(
         "task_comment",
         json!({"workItemId": "WORK-1", "update": format!("Launch comment{m}"), "clientRequestId": "comment-1"}),
+    )
+    .await;
+    let comment = Uuid::parse_str(&string_at(&comment, "/activityId")).expect("comment id");
+    // An edit, so the comment has versions to read.
+    call(
+        "task_comment_edit",
+        json!({"taskId": "WORK-1", "commentId": comment, "text": format!("Launch comment, corrected{m}")}),
     )
     .await;
     call(
@@ -1907,6 +1917,7 @@ async fn build_workspace(
         group,
         task,
         subtask,
+        comment,
         page,
         repository,
         pull_request,
@@ -2812,6 +2823,19 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
         }
         cases.push(case(route, own, foreign, vec![]));
     }
+
+    let (own, foreign) = pair(&|outer, inner| {
+        format!(
+            "/api/v1/projects/{}/work-items/{}/comments/{}/revisions",
+            outer.project, outer.task, inner.comment
+        )
+    });
+    cases.push(case(
+        "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}/revisions",
+        own,
+        foreign,
+        vec![],
+    ));
 
     let (own, foreign) =
         pair(&|outer, inner| format!("/api/v1/projects/{}/ai/plans/{}", outer.project, inner.plan));

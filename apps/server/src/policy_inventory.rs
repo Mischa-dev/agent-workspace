@@ -190,6 +190,12 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         SettingsManage
     ),
     policy_route!(
+        "agent_profiles",
+        Delete,
+        "/api/v1/projects/{project_id}/agent-profiles/{profile_id}",
+        SettingsManage
+    ),
+    policy_route!(
         "secrets",
         Put,
         "/api/v1/organizations/{organization_id}/secrets/{name}",
@@ -565,6 +571,12 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     ),
     policy_route!(
         "account",
+        Delete,
+        "/api/v1/projects/{project_id}/provider-accounts/{account_id}",
+        ExecutionProfileManage
+    ),
+    policy_route!(
+        "account",
         Post,
         "/api/v1/projects/{project_id}/provider-accounts/{account_id}/use",
         ExecutionProfileManage
@@ -720,6 +732,18 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "whiteboards/http",
         Patch,
         "/api/v1/whiteboards/{id}",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "whiteboards/http",
+        Delete,
+        "/api/v1/whiteboards/{id}",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "whiteboards/http",
+        Post,
+        "/api/v1/whiteboard-trash/empty",
         WorkItemEdit
     ),
     policy_route!(
@@ -1196,6 +1220,18 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     ),
     policy_route!(
         "projects",
+        Post,
+        "/api/v1/projects/{id}/restore",
+        ProjectManage
+    ),
+    policy_route!(
+        "projects",
+        Put,
+        "/api/v1/projects/rail-order",
+        NavigationWrite
+    ),
+    policy_route!(
+        "projects",
         Put,
         "/api/v1/projects/{id}/navigation",
         NavigationWrite
@@ -1301,6 +1337,18 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         Post,
         "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments",
         MessageSend
+    ),
+    policy_route!(
+        "work_items/comments",
+        Patch,
+        "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "work_items/comments",
+        Delete,
+        "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}",
+        WorkItemEdit
     ),
     policy_route!(
         "work_items",

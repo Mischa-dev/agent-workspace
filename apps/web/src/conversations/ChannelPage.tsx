@@ -398,6 +398,12 @@ export function ChannelPage() {
           draftKey={channelId}
           focusOnOpen={!openThreadId}
           label={`Message #${name}`}
+          outbox={{
+            kind: 'message',
+            conversationId: channelId,
+            conversationKind: 'channel',
+            href: `/projects/${encodeURIComponent(projectId)}/channels/${encodeURIComponent(channelId)}`,
+          }}
           onEditLast={() => messageActions.editLast(entries)}
           onSubmit={sender.send}
           placeholder={`Message #${name}`}

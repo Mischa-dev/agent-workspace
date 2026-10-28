@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
+import { RememberPlace } from '../projects/RememberPlace'
 import { useProject } from '../projects/hooks'
 import type { Project } from '../projects/types'
 import { AppShell } from '../shell/AppShell'
@@ -63,6 +64,7 @@ export function PlanningFrame({
           What can start next in {project.data.name}, what depends on what, and plans to turn into tasks.
         </PageHeader>
         <WorkTabs current="planning" projectId={projectId} />
+        <RememberPlace location={{ kind: 'planning' }} project={project.data} />
         <nav aria-label="Planning" className="aw-seg aw-ai-subnav">
           {SUBPAGES.map((page) => (
             <Link aria-current={page.id === tab ? 'page' : undefined} className="aw-seg__opt" key={page.id} to={planningHref(projectId, page.id)}>

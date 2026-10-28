@@ -1,4 +1,4 @@
-import { Children, Fragment, lazy, Suspense, useRef, useState, type DragEvent, type ReactNode } from 'react'
+import { Children, Fragment, lazy, Suspense, useEffect, useRef, useState, type DragEvent, type ReactNode } from 'react'
 import { Maximize2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
@@ -9,6 +9,7 @@ import {
   Icon,
   IconButton,
   Menu,
+  MessageSkeleton,
   StatusChip,
   Tooltip,
   formatFullDate,
@@ -20,7 +21,6 @@ import { useProjectExperience } from '../experience/layout'
 import { buildOpenInCodexLink } from './codexDeepLink'
 import { useTaskFiles, useWorkItem, useWorkItemWorkflow } from './hooks'
 import { workItemHref, workItemsHref } from './links'
-import { TaskActivity } from './TaskActivity'
 import { DependencyMenu, TaskDependencies, TaskSubtasks, type DependencyRequest, type OpenTask } from './TaskConnections'
 import { AcceptanceCriteria } from './TaskCriteria'
 import { TaskDescription } from './TaskDescription'
@@ -51,6 +51,9 @@ const LabelManager = lazy(() => import('./LabelManager').then((module) => ({ def
 const TaskLinks = lazy(() => import('./TaskLinks').then((module) => ({ default: module.TaskLinks })))
 // What to do about a save that stopped loads only when one does.
 const TaskSaveNotices = lazy(() => import('./TaskSaveNotices').then((module) => ({ default: module.TaskSaveNotices })))
+// Comments and changes are their own chunk, fetched while the task loads.
+const loadTaskActivity = () => import('./TaskActivity')
+const TaskActivity = lazy(() => loadTaskActivity().then((module) => ({ default: module.TaskActivity })))
 
 /**
  * A task, loaded by id: the side panel on the list and board, and the full
@@ -74,6 +77,9 @@ export function TaskDetail({
   const item = useWorkItem(projectId, taskId)
   const workflow = useWorkItemWorkflow(projectId)
   const experience = useProjectExperience(projectId)
+  useEffect(() => {
+    void loadTaskActivity()
+  }, [])
   if (item.isPending || workflow.isPending) {
     return (
       <TaskFrame layout={layout} onClose={onClose} projectId={projectId}>
@@ -480,7 +486,9 @@ function TaskDetailBody({
               <TaskAiPanel disabled={disabled} projectId={item.projectId} taskId={item.id} />
             </Suspense>
           ) : null}
-          <TaskActivity disabled={disabled} item={item} projectArchived={projectArchived} />
+          <Suspense fallback={<MessageSkeleton label="Loading activity" rows={2} />}>
+            <TaskActivity disabled={disabled} item={item} projectArchived={projectArchived} />
+          </Suspense>
         </div>
         {wide ? (
           <aside aria-label="Task details" className="aw-task__rail">

@@ -142,6 +142,7 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/project-invitations/{invitation_id}/replace",
     "POST /api/v1/project-invitations/{invitation_id}/revoke",
     "POST /api/v1/projects",
+    "PUT /api/v1/projects/rail-order",
     "PATCH /api/v1/projects/{id}",
     "POST /api/v1/projects/{id}/archive",
     "POST /api/v1/projects/{id}/channels",
@@ -152,8 +153,10 @@ const WRITE_ROUTES: &[&str] = &[
     "PUT /api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
     "PUT /api/v1/projects/{id}/navigation",
     "POST /api/v1/projects/{id}/pages",
+    "POST /api/v1/projects/{id}/restore",
     "POST /api/v1/projects/{id}/switch",
     "POST /api/v1/projects/{project_id}/agent-profiles",
+    "DELETE /api/v1/projects/{project_id}/agent-profiles/{profile_id}",
     "PATCH /api/v1/projects/{project_id}/agent-profiles/{profile_id}",
     "POST /api/v1/projects/{project_id}/agent-runs/{run_id}/publish",
     "POST /api/v1/projects/{project_id}/agent-runs/{run_id}/pull-request",
@@ -206,6 +209,7 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{project_id}/milestones",
     "PATCH /api/v1/projects/{project_id}/milestones/{milestone_id}",
     "POST /api/v1/projects/{project_id}/provider-accounts",
+    "DELETE /api/v1/projects/{project_id}/provider-accounts/{account_id}",
     "PATCH /api/v1/projects/{project_id}/provider-accounts/{account_id}",
     "POST /api/v1/projects/{project_id}/provider-accounts/{account_id}/login/api-key",
     "POST /api/v1/projects/{project_id}/provider-accounts/{account_id}/login/browser",
@@ -242,6 +246,8 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/ai/triage",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/archive",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/comments",
+    "DELETE /api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}",
+    "PATCH /api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/dependencies",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/files",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/move",
@@ -282,7 +288,9 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver",
     "POST /api/v1/webhooks/{webhook_id}/rotate-secret",
     "POST /api/v1/webhooks/{webhook_id}/test",
+    "POST /api/v1/whiteboard-trash/empty",
     "POST /api/v1/whiteboards",
+    "DELETE /api/v1/whiteboards/{id}",
     "PATCH /api/v1/whiteboards/{id}",
     "POST /api/v1/whiteboards/{id}/duplicate",
     "POST /api/v1/whiteboards/{id}/files",
@@ -418,6 +426,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "session_bind",
     "task_claim",
     "task_comment",
+    "task_comment_delete",
+    "task_comment_edit",
     "task_create",
     "task_create_many",
     "task_criteria",
@@ -1102,6 +1112,9 @@ struct Targets {
     /// retry.
     failed_run: Uuid,
     failed_event: Uuid,
+    /// A board in the trash. B's is one A's "Delete forever" and "Empty
+    /// trash" must leave alone; A's goes when A empties its trash.
+    trashed_whiteboard: Uuid,
 }
 
 async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targets {
@@ -1222,6 +1235,24 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         "POST",
         &format!("/api/v1/projects/{project}/work-items"),
         json!({"title": "Net backlog task"}),
+    )
+    .await;
+    let trashed = ok(
+        app,
+        browser,
+        "POST",
+        "/api/v1/whiteboards",
+        json!({"title": format!("Net trashed {tag}"), "organizationId": organization}),
+    )
+    .await;
+    let trashed_whiteboard =
+        Uuid::parse_str(&string_at(&trashed, "/whiteboard/id")).expect("trashed board");
+    ok(
+        app,
+        browser,
+        "PATCH",
+        &format!("/api/v1/whiteboards/{trashed_whiteboard}"),
+        json!({"deleted": true}),
     )
     .await;
 
@@ -1513,6 +1544,7 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         run_threads: [run_threads[0], run_threads[1]],
         failed_run,
         failed_event,
+        trashed_whiteboard,
     }
 }
 
@@ -1525,7 +1557,7 @@ struct Spares {
     task: Uuid,
     /// In the same column as `task`, to reorder after it.
     second_task: Uuid,
-    /// Archived over HTTP and through MCP.
+    /// Archived over HTTP (the first, then restored) and through MCP.
     projects: [String; 2],
     /// Deleted over HTTP and through MCP.
     messages: [String; 2],
@@ -1568,6 +1600,13 @@ struct Spares {
     requester_token: String,
     /// A repository with no runs, archived.
     repository: Uuid,
+    /// The owner's comments on the task, deleted over HTTP and through MCP.
+    comments: [Uuid; 2],
+    /// A board in the trash, deleted for good.
+    trashed_whiteboard: Uuid,
+    /// An agent and an account for runs, deleted.
+    agent_profile: Uuid,
+    provider_account: Uuid,
 }
 
 /// The redirect a hosted OAuth client registers.
@@ -1812,6 +1851,55 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
     )
     .await;
     let repository = Uuid::parse_str(&string_at(&repository, "/id")).expect("repository");
+
+    let mut comments = Vec::new();
+    for text_value in ["Net spare comment one", "Net spare comment two"] {
+        let created = ok(
+            app,
+            browser,
+            "POST",
+            &format!("/api/v1/projects/{project}/work-items/{}/comments", a.task),
+            json!({"content": text(text_value)}),
+        )
+        .await;
+        comments.push(Uuid::parse_str(&string_at(&created, "/comment/id")).expect("comment"));
+    }
+    let trashed = ok(
+        app,
+        browser,
+        "POST",
+        "/api/v1/whiteboards",
+        json!({"title": "Net spare trashed", "organizationId": a.organization}),
+    )
+    .await;
+    let trashed_whiteboard =
+        Uuid::parse_str(&string_at(&trashed, "/whiteboard/id")).expect("trashed board");
+    ok(
+        app,
+        browser,
+        "PATCH",
+        &format!("/api/v1/whiteboards/{trashed_whiteboard}"),
+        json!({"deleted": true}),
+    )
+    .await;
+    let profile = ok(
+        app,
+        browser,
+        "POST",
+        &format!("/api/v1/projects/{project}/agent-profiles"),
+        json!({"template": "reviewer", "name": "Net spare reviewer"}),
+    )
+    .await;
+    let agent_profile = Uuid::parse_str(&string_at(&profile, "/id")).expect("agent profile");
+    let account = ok(
+        app,
+        browser,
+        "POST",
+        &format!("/api/v1/projects/{project}/provider-accounts"),
+        json!({"adapterKind": "codex_app_server", "name": "Net spare account"}),
+    )
+    .await;
+    let provider_account = Uuid::parse_str(&string_at(&account, "/id")).expect("account");
 
     // Two runs waiting on an approval, each in a thread of its own, made the
     // way `more_targets` makes its failed run: the owner's, and one on
@@ -2060,6 +2148,10 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         session,
         requester_token,
         repository,
+        comments: [comments[0], comments[1]],
+        trashed_whiteboard,
+        agent_profile,
+        provider_account,
     }
 }
 
@@ -3406,6 +3498,18 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             "name": "Net",
             "templateId": bx.project_template,
         })]),
+        // The rail's order is the caller's own; projects they can't open in
+        // it are skipped.
+        body_case(
+            "PUT /api/v1/projects/rail-order",
+            &[],
+            json!({"projectIds": [a.project]}),
+            Vec::new(),
+        )
+        .no_effect(vec![
+            json!({"projectIds": [b.project]}),
+            json!({"projectIds": [b.project, a.project]}),
+        ]),
         path_case(
             "PATCH /api/v1/projects/{id}",
             &[project()],
@@ -3413,6 +3517,13 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         ),
         path_case(
             "POST /api/v1/projects/{id}/archive",
+            &[id(&sp.projects[0], &b.project)],
+            versioned("projects", 0, json!({})),
+        )
+        .last(),
+        // After the archive above, which runs first.
+        path_case(
+            "POST /api/v1/projects/{id}/restore",
             &[id(&sp.projects[0], &b.project)],
             versioned("projects", 0, json!({})),
         )
@@ -3500,6 +3611,11 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             "version": version("agent_profiles", ax.agent_profile),
             "environmentId": bx.environment,
         })]),
+        path_case(
+            "DELETE /api/v1/projects/{project_id}/agent-profiles/{profile_id}",
+            &[project(), id(sp.agent_profile, bx.agent_profile)],
+            empty(),
+        ),
         path_case(
             "POST /api/v1/projects/{project_id}/agent-runs/{run_id}/publish",
             &[project(), id(a.run, b.run)],
@@ -3933,6 +4049,11 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             versioned("provider_accounts", 1, json!({"name": "Net account renamed"})),
         ),
         path_case(
+            "DELETE /api/v1/projects/{project_id}/provider-accounts/{account_id}",
+            &[project(), id(sp.provider_account, b.provider_account)],
+            empty(),
+        ),
+        path_case(
             "POST /api/v1/projects/{project_id}/provider-accounts/{account_id}/use",
             &[project(), id(a.provider_account, b.provider_account)],
             empty(),
@@ -4221,6 +4342,16 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         .rejecting(vec![
             json!({"content": text("Net comment"), "attachments": [bx.comment_upload]}),
         ]),
+        path_case(
+            "PATCH /api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}",
+            &[project(), task(), id(a.comment, b.comment)],
+            json_body(json!({"content": text("Launch comment, edited over HTTP")})),
+        ),
+        path_case(
+            "DELETE /api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}",
+            &[project(), task(), id(sp.comments[0], b.comment)],
+            empty(),
+        ),
         path_case(
             "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/dependencies",
             &[project(), task()],
@@ -4559,6 +4690,24 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             &[id(a.whiteboard, b.whiteboard), same(1)],
             empty(),
         ),
+        // Before Empty trash, which would take this board too.
+        path_case(
+            "DELETE /api/v1/whiteboards/{id}",
+            &[id(sp.trashed_whiteboard, bx.trashed_whiteboard)],
+            empty(),
+        ),
+        // Only ever the caller's own trash: B's workspace or project narrows
+        // it to nothing.
+        body_case(
+            "POST /api/v1/whiteboard-trash/empty",
+            &[],
+            json!({"organizationId": a.organization}),
+            Vec::new(),
+        )
+        .no_effect(vec![
+            json!({"organizationId": b.organization}),
+            json!({"projectId": b.project}),
+        ]),
         // OAuth consent: connecting an app as B's agent.
         consent_case(
             "POST /connect/confirm",
@@ -5093,6 +5242,24 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "attachmentIds": [bx.comment_upload],
             "clientRequestId": "net-comment-mixed",
         })]),
+        mcp_case(
+            "task_comment_edit",
+            json!({"taskId": a.task, "commentId": a.comment, "text": "Launch comment, edited by a tool"}),
+            vec![json!({"taskId": b.task, "commentId": b.comment, "text": "Net edit"})],
+        )
+        .rejecting(vec![
+            json!({"taskId": a.task, "commentId": b.comment, "text": "Net edit"}),
+            json!({"taskId": b.task, "commentId": a.comment, "text": "Net edit"}),
+        ]),
+        mcp_case(
+            "task_comment_delete",
+            json!({"taskId": a.task, "commentId": sp.comments[1]}),
+            vec![json!({"taskId": b.task, "commentId": b.comment})],
+        )
+        .rejecting(vec![
+            json!({"taskId": a.task, "commentId": b.comment}),
+            json!({"taskId": b.task, "commentId": sp.comments[1]}),
+        ]),
         mcp_case(
             "task_mark_blocked",
             json!({

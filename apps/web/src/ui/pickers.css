@@ -326,18 +326,17 @@
   text-align: center;
 }
 
-@media (max-width: 640px) {
-  .aw-table__row {
-    grid-template-columns: var(--aw-table-columns-phone);
-  }
+/* A narrow table (on a phone, or beside a wide side panel) keeps the essentials. */
+.aw-table.is-narrow .aw-table__row {
+  grid-template-columns: var(--aw-table-columns-phone);
+}
 
-  .aw-table__row--full {
-    grid-template-columns: minmax(0, 1fr);
-  }
+.aw-table.is-narrow .aw-table__row--full {
+  grid-template-columns: minmax(0, 1fr);
+}
 
-  .aw-table__cell.is-wide-only {
-    display: none;
-  }
+.aw-table.is-narrow .aw-table__cell.is-wide-only {
+  display: none;
 }
 
 @media (pointer: coarse) {

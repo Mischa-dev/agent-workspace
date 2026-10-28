@@ -2,6 +2,9 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react'
 
 import {
   DEFAULT_APPEARANCE,
+  PANEL_WIDTHS,
+  SIDEBAR_WIDTHS,
+  clampWidth,
   readAppearancePreferences,
   resolvePreset,
   writeAppearancePreferences,
@@ -44,6 +47,13 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     root.dataset.textSize = preferences.textSize
     for (const slot of new Set([...ALL_SLOTS, ...Object.keys(DERIVED_SLOTS)])) root.style.removeProperty(`--${slot}`)
     for (const [name, value] of Object.entries(themeProperties(shownOverrides))) root.style.setProperty(name, value)
+    for (const [name, width] of [
+      ['--sidebar-width', preferences.sidebarWidth],
+      ['--panel-width', preferences.panelWidth],
+    ] as const) {
+      if (width === null) root.style.removeProperty(name)
+      else root.style.setProperty(name, `${width}px`)
+    }
     syncThemeColor()
   }, [preferences, shownPreset, shownOverrides])
 
@@ -70,6 +80,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       setOverrides: (overrides: AppearancePreferences['overrides']) => update((current) => ({ ...current, overrides })),
       setDensity: (density: AppearancePreferences['density']) => update((current) => ({ ...current, density })),
       setTextSize: (textSize: AppearancePreferences['textSize']) => update((current) => ({ ...current, textSize })),
+      setSidebarWidth: (width: number | null) => update((current) => ({ ...current, sidebarWidth: clampWidth(width, SIDEBAR_WIDTHS) })),
+      setPanelWidth: (width: number | null) => update((current) => ({ ...current, panelWidth: clampWidth(width, PANEL_WIDTHS) })),
       resetAppearance: () => update(() => DEFAULT_APPEARANCE),
       replaceAppearance: (next: AppearancePreferences) => update(() => next),
     }

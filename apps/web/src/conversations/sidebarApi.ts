@@ -166,6 +166,14 @@ function normalizeThreadSummary(value: unknown): ThreadSummary | null {
     archived: item.archived === true,
     lastActivityAt: string(item.lastActivityAt),
     statusChangedAt: nullableString(item.statusChangedAt),
+    participants: Array.isArray(item.participants)
+      ? item.participants.flatMap((value) => {
+          const actor = asRecord(value)
+          return typeof actor.id === 'string' && typeof actor.displayName === 'string'
+            ? [{ id: actor.id, kind: string(actor.kind, 'human'), displayName: actor.displayName }]
+            : []
+        })
+      : [],
   }
 }
 

@@ -493,6 +493,12 @@ export function ThreadPage() {
           draftKey={threadId}
           focusOnOpen
           label={`Message ${threadName}`}
+          outbox={{
+            kind: 'message',
+            conversationId: threadId,
+            conversationKind: 'thread',
+            href: `/projects/${encodeURIComponent(projectId)}/threads/${encodeURIComponent(threadId)}`,
+          }}
           onEditLast={() => messageActions.editLast(entries)}
           onSubmit={sender.send}
           placeholder={`Reply in ${threadName}`}

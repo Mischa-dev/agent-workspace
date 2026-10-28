@@ -1,21 +1,15 @@
 import { useMutation, useQueryClient, type QueryClient, type QueryKey } from '@tanstack/react-query'
 
 import { describeError, showToast, type ToastInput } from '../ui'
+import { toastError } from './toastError'
 
-export { describeError }
+export { describeError, toastError }
 
 /**
  * One way to change things from the web: update the screen at once, say what
  * happened in a toast (with Undo where it can be undone), and on failure put
  * the screen back and explain what went wrong. Nothing tells you to reload.
  */
-
-/** Show a failure as a toast. Returns whether the data on screen is out of date. */
-export function toastError(title: string, error: unknown) {
-  const { message, stale } = describeError(error)
-  showToast({ tone: 'danger', title, description: message })
-  return stale
-}
 
 type Snapshot = { queryKey: QueryKey; data: unknown }[]
 

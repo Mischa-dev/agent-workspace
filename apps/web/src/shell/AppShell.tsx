@@ -28,6 +28,7 @@ const drawerFocusableSelector = [
 const PullToRefresh = lazy(() => loadShellLazy().then((module) => ({ default: module.PullToRefresh })))
 const HomeSidebar = lazy(() => loadShellLazy().then((module) => ({ default: module.HomeSidebar })))
 const DirectSidebar = lazy(() => loadShellLazy().then((module) => ({ default: module.DirectSidebar })))
+const ResizeEdge = lazy(() => loadShellLazy().then((module) => ({ default: module.ResizeEdge })))
 
 /**
  * The listed project a /projects/… address belongs to, so a project page
@@ -309,6 +310,11 @@ export function AppShell({
             </Suspense>
           </div>
         ) : null}
+        {hasSidebar ? (
+          <Suspense fallback={null}>
+            <ResizeEdge edge="sidebar" />
+          </Suspense>
+        ) : null}
         <main
           className={`aw-main ${mainClassName ?? 'aw-main--page'}`}
           data-region="content"
@@ -335,6 +341,11 @@ export function AppShell({
           )}
           {children}
         </main>
+        {hasSidebar && context ? (
+          <Suspense fallback={null}>
+            <ResizeEdge edge="panel" />
+          </Suspense>
+        ) : null}
         {hasSidebar && context && (
           <div
             aria-label={contextOpen ? 'Details' : undefined}

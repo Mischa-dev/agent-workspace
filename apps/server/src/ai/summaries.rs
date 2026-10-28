@@ -207,6 +207,7 @@ pub async fn task(
               ON membership.project_id = comment.project_id
              AND membership.actor_id = comment.author_actor_id
             WHERE comment.project_id = $1 AND comment.work_item_id = $2
+              AND comment.removed_at IS NULL
         ) history
         ORDER BY at DESC
         LIMIT $3

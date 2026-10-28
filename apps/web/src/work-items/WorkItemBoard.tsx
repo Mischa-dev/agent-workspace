@@ -19,7 +19,7 @@ import { useAssignableActors } from './hooks'
 import { useBoard, useInvalidateWorkItems, useMilestones } from './planningHooks'
 import { SelectionBar } from './SelectionBar'
 import { emptySelection, keepLoaded, MAX_BULK, pick, pickerCurrent, pickerTargets, selectAll, toggleOne, type Selection } from './selectionModel'
-import { useTaskShortcuts } from './shortcutKeys'
+import { pageHasFocus, useOpenAsYouGo, useTaskShortcuts } from './shortcutKeys'
 import { useDoneCount } from './useDoneWork'
 import { TaskGlyph } from './TaskGlyph'
 import { editErrorMessage, useApplyPick } from './taskEdits'
@@ -373,6 +373,15 @@ export function WorkItemBoard({
     window.requestAnimationFrame(() => scrollerRef.current?.querySelector<HTMLElement>(`[data-drag-id="${CSS.escape(dragId)}"]`)?.focus())
   }
 
+  // The side panel follows the keyboard from card to card; a click or Enter opens at once.
+  const following = useOpenAsYouGo((id) => {
+    if (id !== openTaskId) onOpenTask(id)
+  })
+  const browseTo = (dragId: string) => {
+    focusCard(dragId)
+    following.follow(splitDragId(dragId).cardId)
+  }
+
   const moveHeld = (key: string) => {
     if (!held) return
     const { target } = held
@@ -412,7 +421,17 @@ export function WorkItemBoard({
       const column = columns.find((entry) => entry.key === target.columnKey)
       const cell = column ? cellCards(column, target.laneKey) : []
       const next = cell[Math.max(0, Math.min(target.index, cell.length - 1))]
-      if (column && next) focusCard(dragIdFor(column.key, next.id))
+      if (column && next) browseTo(dragIdFor(column.key, next.id))
+      return
+    }
+    if (event.key === 'Home' || event.key === 'End') {
+      // The ends of the card's own column (and lane).
+      event.preventDefault()
+      const { columnKey } = splitDragId(dragId)
+      const column = columns.find((entry) => entry.key === columnKey)
+      const cell = column ? cellCards(column, state.lanes === 'none' ? 'all' : laneOf(card, state.lanes).key) : []
+      const next = event.key === 'Home' ? cell[0] : cell[cell.length - 1]
+      if (column && next) browseTo(dragIdFor(column.key, next.id))
       return
     }
     if (event.key === ' ' && canMove && card.capabilities.edit && !card.archivedAt) {
@@ -430,6 +449,7 @@ export function WorkItemBoard({
     }
     if (event.key === 'Enter') {
       event.preventDefault()
+      following.cancel()
       onOpenTask(card.id)
       return
     }
@@ -491,18 +511,21 @@ export function WorkItemBoard({
     }
     if (event.metaKey || event.ctrlKey) return false
     if (key === 'escape') {
+      following.cancel()
       if (openTaskId) onClosePanel()
       else if (selection.ids.size) setSelection(emptySelection)
       else return false
       return true
     }
-    if (key === 'j' || key === 'k') {
+    // J and K walk down each column from anywhere but a field. With nothing
+    // focused (or the board itself, after a click between cards), an arrow
+    // starts on the card you were on, or the first one.
+    if (key === 'j' || key === 'k' || (key.startsWith('arrow') && (pageHasFocus() || document.activeElement === scrollerRef.current))) {
       if (!readingOrder.length) return false
       const index = current ? readingOrder.indexOf(current) : -1
-      const next = readingOrder[index < 0 ? 0 : Math.max(0, Math.min(readingOrder.length - 1, index + (key === 'j' ? 1 : -1)))]
-      focusCard(next.dragId)
-      // With a task open beside the board, the panel follows, the way it does on the list.
-      if (openTaskId && next.card.id !== openTaskId) onOpenTask(next.card.id)
+      const step = key === 'j' ? 1 : key === 'k' ? -1 : 0
+      const next = readingOrder[index < 0 ? 0 : Math.max(0, Math.min(readingOrder.length - 1, index + step))]
+      browseTo(next.dragId)
       return true
     }
     if (key === 'x' && current && canMove) {
@@ -666,6 +689,7 @@ export function WorkItemBoard({
                             onKeyDown={onCardKeyDown}
                             onOpen={(card) => {
                               if (drag.justDragged()) return
+                              following.cancel()
                               onOpenTask(card.id)
                             }}
                             onPick={(card, field, anchor) => openPicker(field, anchor, card)}

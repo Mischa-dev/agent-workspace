@@ -19,9 +19,13 @@ export const WEB_ASSET_LIMITS = Object.freeze({
   // The polish pass added plain error sentences, shortcut labels for each
   // keyboard, confirm dialogs and steadier sidebars, and moved 9 KB of
   // conversation calls the shell doesn't need out of it: from 418,331 /
-  // 136,131 to 419,086 / 137,030 (October 2026).
+  // 136,131 to 419,086 / 137,030 (October 2026). Layouts bring it to
+  // 422,207 / 136,850. The rail's own order and dragging, sidebar and panel
+  // widths set before the first paint, offline sends from any page and more
+  // remembered places bring it to 428,622 / 138,911; the resize edges and
+  // the dialogs for comments, labels and decisions load when first used.
   initialJavascriptRawBytes: 424 * 1024,
-  initialJavascriptGzipBytes: 135 * 1024,
+  initialJavascriptGzipBytes: 136 * 1024,
   // index.html's stylesheets: the design system's five theme presets,
   // components and page layouts. Measured 101,925 raw bytes; the UI kit
   // (toasts, command menu, shortcut sheet, skeletons) and Markdown styles

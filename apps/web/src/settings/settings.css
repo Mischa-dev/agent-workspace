@@ -407,6 +407,15 @@
   list-style: none;
 }
 
+/* The server draws the code black on white, as scanners expect, in either theme. */
+.aw-twofactor-qr {
+  display: block;
+  width: 200px;
+  height: 200px;
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-sm);
+}
+
 .aw-secret-key {
   font: var(--t-code);
   font-weight: var(--weight-medium);

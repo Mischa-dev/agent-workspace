@@ -1,6 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { PRESENCE_REFRESH_MS, agentKeys, createProfile, listPresence, listProfiles, updateProfile, type ProfileInput } from './api'
+import {
+  PRESENCE_REFRESH_MS,
+  agentKeys,
+  createProfile,
+  deleteProfile,
+  listPresence,
+  listProfiles,
+  updateProfile,
+  type ProfileInput,
+} from './api'
 
 export function useProfiles(projectId: string, enabled = true) {
   return useQuery({ queryKey: agentKeys.profiles(projectId), queryFn: () => listProfiles(projectId), enabled: enabled && Boolean(projectId) })
@@ -34,4 +43,9 @@ export function useUpdateProfile(projectId: string) {
     mutationFn: ({ input, profileId }: { profileId: string; input: ProfileInput & { version: number } }) => updateProfile(projectId, profileId, input),
     onSuccess: refresh,
   })
+}
+
+export function useDeleteProfile(projectId: string) {
+  const refresh = useRefresh(projectId)
+  return useMutation({ mutationFn: (profileId: string) => deleteProfile(projectId, profileId), onSuccess: refresh })
 }

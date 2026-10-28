@@ -68,6 +68,35 @@ export function MessageReactions({
   )
 }
 
+/** The reactions one click away in a message's toolbar, before the full picker. */
+const QUICK_REACTIONS = ['check', 'eyes', 'thumbsup']
+  .map((name) => REACTION_CHOICES.find((choice) => choice.name === name))
+  .filter((choice): choice is ReactionChoice => Boolean(choice))
+
+/** One-click reactions for a message's toolbar: each adds yours, or takes it away again. */
+export function QuickReactions({
+  onPick,
+  reactions,
+}: {
+  onPick: (choice: ReactionChoice, reacted: boolean) => void
+  reactions: readonly MessageReaction[]
+}) {
+  const mine = new Set(reactions.filter((reaction) => reaction.byViewer).map((reaction) => reaction.name))
+  return QUICK_REACTIONS.map((choice) => (
+    <Tooltip key={choice.name} label={mine.has(choice.name) ? `Remove your ${choice.emoji}` : `React with ${choice.emoji}`}>
+      <button
+        aria-label={`React with ${choice.label}`}
+        aria-pressed={mine.has(choice.name)}
+        className="aw-iconbtn aw-iconbtn--sm aw-quickreact"
+        onClick={() => onPick(choice, !mine.has(choice.name))}
+        type="button"
+      >
+        <span aria-hidden="true">{choice.emoji}</span>
+      </button>
+    </Tooltip>
+  ))
+}
+
 /**
  * "Add reaction": a small grid of emoji, yours marked. One click reacts (or
  * takes yours away) and closes it; arrow keys move around the grid.

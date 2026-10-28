@@ -3,12 +3,14 @@ import { useLocation, useNavigate } from 'react-router-dom'
 
 import { useProjectConversationSidebar } from '../conversations/hooks'
 import type { SidebarThread } from '../conversations/types'
+import { toastError } from '../app/toastError'
 import { useProjectExperience } from '../experience/layout'
 import type { PartId } from '../experience/parts'
-import { useUpdateProjectNavigation } from '../projects/hooks'
+import { useProjects, useSetRailOrder, useUpdateProjectNavigation } from '../projects/hooks'
 import type { Project } from '../projects/types'
 import { IconButton, showToast, type MenuEntry } from '../ui'
 import { projectSection } from './projectSections'
+import { railOrderAfterStep, railProjects } from './railProjects'
 import { SidebarFrame, SidebarLink, SidebarSection, type SidebarAttention } from './SidebarParts'
 import { projectSettingsHref } from '../settings/paths'
 
@@ -54,6 +56,16 @@ export function ProjectSidebar({
     navigate(to)
   }
   const pinned = project.navigation.pinned
+  // Keyboard users move a pin up and down the rail from here; others drag it.
+  const projects = useProjects()
+  const setRailOrder = useSetRailOrder()
+  const rail = railProjects((projects.data?.projects ?? []).filter((candidate) => !candidate.archivedAt), project.id)
+  const railSteps = pinned
+    ? ([
+        ['Move up in the rail', 'arrow-up', railOrderAfterStep(rail, project.id, -1)],
+        ['Move down in the rail', 'arrow-down', railOrderAfterStep(rail, project.id, 1)],
+      ] as const)
+    : []
   const togglePin = () => {
     updateNavigation
       .mutateAsync({ projectId: project.id, expectedVersion: project.navigation.version, navigation: project.navigation, pinned: !pinned })
@@ -69,6 +81,11 @@ export function ProjectSidebar({
       : []),
     ...(project.capabilities.navigationWrite
       ? [{ label: pinned ? 'Unpin from the rail' : 'Pin to the rail', icon: 'star' as const, onSelect: togglePin }]
+      : []),
+    ...(project.capabilities.navigationWrite
+      ? railSteps.flatMap(([label, icon, order]) =>
+          order ? [{ label, icon, onSelect: () => setRailOrder.mutate(order, { onError: (reason) => toastError('The rail’s order wasn’t saved', reason) }) }] : [],
+        )
       : []),
     ...(chat ? [{ label: 'Archived conversations', icon: 'archive' as const, onSelect: () => go(`${base}/conversations/archived`) }] : []),
     { label: 'Project settings', icon: 'settings', onSelect: () => go(projectSettingsHref(project.id)) },

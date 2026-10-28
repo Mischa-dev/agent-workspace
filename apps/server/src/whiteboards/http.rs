@@ -33,7 +33,11 @@ const OPERATIONS_BODY_BYTES: usize = 1024 * 1024;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/whiteboards", get(list_http).post(create_http))
-        .route("/api/v1/whiteboards/{id}", get(get_http).patch(change_http))
+        .route(
+            "/api/v1/whiteboards/{id}",
+            get(get_http).patch(change_http).delete(purge_http),
+        )
+        .route("/api/v1/whiteboard-trash/empty", post(empty_trash_http))
         .route("/api/v1/whiteboards/{id}/duplicate", post(duplicate_http))
         .route(
             "/api/v1/whiteboards/{id}/scene",
@@ -226,6 +230,54 @@ async fn change_http(
     super::change(&mut transaction, &caller, id, &change).await?;
     transaction.commit().await?;
     Ok(Json(detail(&state, &caller, id).await?))
+}
+
+/// Deletes a board in the trash for good.
+async fn purge_http(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath(id): ApiPath<Uuid>,
+) -> Result<axum::http::StatusCode, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    let caller = Caller::browser(&principal)?;
+    let mut transaction = state.pool.begin().await?;
+    super::purge(&mut transaction, &caller, id).await?;
+    transaction.commit().await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct EmptyTrashRequest {
+    organization_id: Option<Uuid>,
+    project_id: Option<Uuid>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EmptyTrashResponse {
+    deleted: usize,
+}
+
+async fn empty_trash_http(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiJson(request): ApiJson<EmptyTrashRequest>,
+) -> Result<Json<EmptyTrashResponse>, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    let caller = Caller::browser(&principal)?;
+    let mut transaction = state.pool.begin().await?;
+    let deleted = super::empty_trash(
+        &mut transaction,
+        &caller,
+        request.organization_id,
+        request.project_id,
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(Json(EmptyTrashResponse { deleted }))
 }
 
 #[derive(Debug, Default, Deserialize)]

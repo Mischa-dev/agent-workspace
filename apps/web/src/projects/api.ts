@@ -55,6 +55,7 @@ export function normalizeNavigation(
       location,
     ),
     pinned: asBoolean(record.pinned, Boolean(pinnedAt)),
+    railPosition: typeof record.railPosition === 'number' && Number.isFinite(record.railPosition) ? record.railPosition : null,
     lastOpenedAt: asNullableString(record.lastOpenedAt),
     version: Math.max(0, asNumber(record.version)),
     contextDrawerOpen:
@@ -94,10 +95,11 @@ export function normalizeProject(value: unknown): Project {
   }
 }
 
-export async function listProjects(query?: string): Promise<ProjectListResponse> {
+export async function listProjects(query?: string, options: { archived?: boolean } = {}): Promise<ProjectListResponse> {
   const parameters = new URLSearchParams()
   if (query?.trim()) parameters.set('q', query.trim())
   parameters.set('limit', '100')
+  if (options.archived) parameters.set('archived', 'true')
   const suffix = parameters.toString()
   const payload = await requestJson<{ projects?: unknown[] } | unknown[]>(
     `/api/v1/projects?${suffix}`,
@@ -154,6 +156,22 @@ export async function archiveProject(
   return normalizeProject(record.project ?? payload)
 }
 
+/** Brings an archived project back, against the version the caller read. */
+export async function restoreProject(
+  projectId: string,
+  expectedVersion: number,
+): Promise<Project> {
+  const payload = await requestJson<unknown>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/restore`,
+    {
+      method: 'POST',
+      json: { expectedVersion },
+    },
+  )
+  const record = asRecord(payload)
+  return normalizeProject(record.project ?? payload)
+}
+
 export async function getProjectNavigation(
   projectId: string,
 ): Promise<ProjectNavigation> {
@@ -183,6 +201,12 @@ export async function updateProjectNavigation(
   )
   const record = asRecord(payload)
   return normalizeNavigation(projectId, record.navigation ?? payload)
+}
+
+/** Your pinned projects in your own order, top to bottom; returns the ones placed. */
+export async function setRailOrder(projectIds: string[]): Promise<string[]> {
+  const payload = asRecord(await requestJson<unknown>('/api/v1/projects/rail-order', { method: 'PUT', json: { projectIds } }))
+  return Array.isArray(payload.projectIds) ? payload.projectIds.filter((id): id is string => typeof id === 'string') : []
 }
 
 export async function switchProject(

@@ -252,6 +252,8 @@ export default function AppearancePage({ session }: SettingsPageProps) {
     overrides: theme.overrides,
     density: theme.density,
     textSize: theme.textSize,
+    sidebarWidth: theme.sidebarWidth,
+    panelWidth: theme.panelWidth,
   })
   // Another preset starts from its own colors, so say what went and offer it back.
   const choose = (next: ThemeChoice) => {

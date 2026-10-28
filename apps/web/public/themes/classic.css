@@ -668,6 +668,61 @@ html[data-theme="one-dark"],
   --shadow-dialog: 0 0 0 1px #ffffff0f, 0 16px 40px -8px #000000b3;
 }
 
+/* One Light: github.com/atom/atom one-light-syntax */
+html[data-theme="one-light"],
+[data-theme="one-light"] {
+  color-scheme: light;
+  --rail-bg: #dbdbdc;
+  --rail-fg: #383a42;
+  --rail-tile: #cdcdcf;
+  --rail-tile-active: #3b6fe0;
+  --rail-indicator: #383a42;
+  --sidebar-bg: #f0f0f1;
+  --sidebar-fg: #383a42;
+  --sidebar-fg-strong: #202227;
+  --sidebar-fg-muted: #696c77;
+  --sidebar-hover: #e5e5e6;
+  --sidebar-border: #dbdbdc;
+  --sidebar-active-bg: #dbdbdc;
+  --sidebar-active-fg: #202227;
+  --content-bg: #fafafa;
+  --content-fg: #383a42;
+  --content-fg-muted: #696c77;
+  --content-hover: #f0f0f1;
+  --content-border: #e5e5e6;
+  --control-border: #909196;
+  --surface-raised: #ffffff;
+  --surface-sunken: #f0f0f1;
+  --highlight-bg: #f6ecd2;
+  --accent: #3b6fe0;
+  --accent-hover: #3462c8;
+  --on-accent: #ffffff;
+  --accent-soft: #e3ebfc;
+  --link: #3a6ddc;
+  --focus-ring: #3b6fe0;
+  --mention-fg: #3665cc;
+  --mention-bg: #e3ebfc;
+  --badge-bg: #c94a3d;
+  --badge-fg: #ffffff;
+  --presence-online: #4d9b4c;
+  --success: #40813f;
+  --warning: #9a6a01;
+  --danger: #c44a3f;
+  --agent: #a626a4;
+  --agent-soft: #f5e6f5;
+  --agent-working: #a626a4;
+  --success-soft: #e6f2e5;
+  --warning-soft: #f8eed6;
+  --danger-soft: #fbe6e3;
+  --on-danger: #ffffff;
+  --tooltip-bg: #383a42;
+  --tooltip-fg: #fafafa;
+  --scrim: #00000066;
+  --shadow-card: 0 1px 2px #0000000f;
+  --shadow-popover: 0 0 0 1px #0000001a, 0 4px 12px #0000001f;
+  --shadow-dialog: 0 16px 40px -8px #00000047;
+}
+
 /* Rosé Pine: rosepinetheme.com/palette */
 html[data-theme="rose-pine"],
 [data-theme="rose-pine"] {
@@ -937,6 +992,171 @@ html[data-theme="monokai"],
   --on-danger: #272822;
   --tooltip-bg: #191a17;
   --tooltip-fg: #f8f8f2;
+  --scrim: #00000099;
+  --shadow-card: none;
+  --shadow-popover: 0 0 0 1px #ffffff14, 0 4px 12px #00000080;
+  --shadow-dialog: 0 0 0 1px #ffffff0f, 0 16px 40px -8px #000000b3;
+}
+
+/* Everforest Dark: github.com/sainnhe/everforest, medium contrast */
+html[data-theme="everforest-dark"],
+[data-theme="everforest-dark"] {
+  color-scheme: dark;
+  --rail-bg: #232a2e;
+  --rail-fg: #d3c6aa;
+  --rail-tile: #3d484d;
+  --rail-tile-active: #a7c080;
+  --rail-indicator: #ece5cf;
+  --sidebar-bg: #2d353b;
+  --sidebar-fg: #d3c6aa;
+  --sidebar-fg-strong: #ece5cf;
+  --sidebar-fg-muted: #9da9a0;
+  --sidebar-hover: #343f44;
+  --sidebar-border: #3d484d;
+  --sidebar-active-bg: #475258;
+  --sidebar-active-fg: #ece5cf;
+  --content-bg: #2d353b;
+  --content-fg: #d3c6aa;
+  --content-fg-muted: #9da9a0;
+  --content-hover: #343f44;
+  --content-border: #3d484d;
+  --control-border: #859289;
+  --surface-raised: #343f44;
+  --surface-sunken: #272e33;
+  --highlight-bg: #4d4c43;
+  --accent: #a7c080;
+  --accent-hover: #95ad70;
+  --on-accent: #2d353b;
+  --accent-soft: #425047;
+  --link: #7fbbb3;
+  --focus-ring: #a7c080;
+  --mention-fg: #aec58a;
+  --mention-bg: #425047;
+  --badge-bg: #e67e80;
+  --badge-fg: #232a2e;
+  --presence-online: #a7c080;
+  --success: #a7c080;
+  --warning: #dbbc7f;
+  --danger: #e67e80;
+  --agent: #d89db9;
+  --agent-soft: #543a48;
+  --agent-working: #d699b6;
+  --success-soft: #425047;
+  --warning-soft: #4d4c43;
+  --danger-soft: #514045;
+  --on-danger: #2d353b;
+  --tooltip-bg: #232a2e;
+  --tooltip-fg: #d3c6aa;
+  --scrim: #00000099;
+  --shadow-card: none;
+  --shadow-popover: 0 0 0 1px #ffffff14, 0 4px 12px #00000080;
+  --shadow-dialog: 0 0 0 1px #ffffff0f, 0 16px 40px -8px #000000b3;
+}
+
+/* Everforest Light: github.com/sainnhe/everforest, medium contrast */
+html[data-theme="everforest-light"],
+[data-theme="everforest-light"] {
+  color-scheme: light;
+  --rail-bg: #e6e2cc;
+  --rail-fg: #5c6a72;
+  --rail-tile: #d8d3bc;
+  --rail-tile-active: #2e7d61;
+  --rail-indicator: #3a454a;
+  --sidebar-bg: #f4f0d9;
+  --sidebar-fg: #5c6a72;
+  --sidebar-fg-strong: #3a454a;
+  --sidebar-fg-muted: #647063;
+  --sidebar-hover: #ece8d1;
+  --sidebar-border: #e6e2cc;
+  --sidebar-active-bg: #e6e2cc;
+  --sidebar-active-fg: #3a454a;
+  --content-bg: #fdf6e3;
+  --content-fg: #5c6a72;
+  --content-fg-muted: #646f63;
+  --content-hover: #f4f0d9;
+  --content-border: #e6e2cc;
+  --control-border: #879285;
+  --surface-raised: #fffbef;
+  --surface-sunken: #f4f0d9;
+  --highlight-bg: #faedcd;
+  --accent: #2e7d61;
+  --accent-hover: #276b53;
+  --on-accent: #fdf6e3;
+  --accent-soft: #e9f0e9;
+  --link: #2f78a0;
+  --focus-ring: #2e7d61;
+  --mention-fg: #2d795e;
+  --mention-bg: #e9f0e9;
+  --badge-bg: #d03e3c;
+  --badge-fg: #ffffff;
+  --presence-online: #809301;
+  --success: #687701;
+  --warning: #936a00;
+  --danger: #c64442;
+  --agent: #a14c86;
+  --agent-soft: #f8e6ef;
+  --agent-working: #cf62ad;
+  --success-soft: #f0f1d2;
+  --warning-soft: #faedcd;
+  --danger-soft: #fde3da;
+  --on-danger: #ffffff;
+  --tooltip-bg: #5c6a72;
+  --tooltip-fg: #fdf6e3;
+  --scrim: #00000066;
+  --shadow-card: 0 1px 2px #0000000f;
+  --shadow-popover: 0 0 0 1px #0000001a, 0 4px 12px #0000001f;
+  --shadow-dialog: 0 16px 40px -8px #00000047;
+}
+
+/* Kanagawa: github.com/rebelot/kanagawa.nvim, Wave */
+html[data-theme="kanagawa"],
+[data-theme="kanagawa"] {
+  color-scheme: dark;
+  --rail-bg: #16161d;
+  --rail-fg: #dcd7ba;
+  --rail-tile: #2a2a37;
+  --rail-tile-active: #7e9cd8;
+  --rail-indicator: #dcd7ba;
+  --sidebar-bg: #1a1a22;
+  --sidebar-fg: #dcd7ba;
+  --sidebar-fg-strong: #ebe6cb;
+  --sidebar-fg-muted: #9a998f;
+  --sidebar-hover: #2a2a37;
+  --sidebar-border: #2a2a37;
+  --sidebar-active-bg: #2d4f67;
+  --sidebar-active-fg: #ebe6cb;
+  --content-bg: #1f1f28;
+  --content-fg: #dcd7ba;
+  --content-fg-muted: #9a998f;
+  --content-hover: #2a2a37;
+  --content-border: #363646;
+  --control-border: #727169;
+  --surface-raised: #2a2a37;
+  --surface-sunken: #1a1a22;
+  --highlight-bg: #49443c;
+  --accent: #7e9cd8;
+  --accent-hover: #6d8bc7;
+  --on-accent: #16161d;
+  --accent-soft: #223249;
+  --link: #7fb4ca;
+  --focus-ring: #7e9cd8;
+  --mention-fg: #a3d4d5;
+  --mention-bg: #223249;
+  --badge-bg: #e46876;
+  --badge-fg: #16161d;
+  --presence-online: #98bb6c;
+  --success: #98bb6c;
+  --warning: #e6c384;
+  --danger: #e46876;
+  --agent: #9883ba;
+  --agent-soft: #252535;
+  --agent-working: #957fb8;
+  --success-soft: #2b3328;
+  --warning-soft: #49443c;
+  --danger-soft: #43242b;
+  --on-danger: #16161d;
+  --tooltip-bg: #16161d;
+  --tooltip-fg: #dcd7ba;
   --scrim: #00000099;
   --shadow-card: none;
   --shadow-popover: 0 0 0 1px #ffffff14, 0 4px 12px #00000080;

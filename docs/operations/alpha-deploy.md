@@ -142,6 +142,11 @@ Restart the service after editing.
   disconnect my connected apps". Picture uploads whose location data can't be
   removed are refused instead of stored as they came. Reconnect the
   "workspace" connector once after the deploy if it drops.
+- **Keyboard, dragging and the polish leftovers (2026-10-28).** Nothing goes
+  in this file. The migration `20261028070000_keyboard_drag_polish.sql` runs
+  with the rest. The home-screen shortcuts (New task, Inbox, Messages) have
+  their own icons now; an installed app shows them once the browser refreshes
+  it, or when it's added to the home screen again.
 
 ## After: in the app
 

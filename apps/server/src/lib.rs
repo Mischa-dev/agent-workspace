@@ -174,6 +174,7 @@ pub fn router(state: AppState) -> Router {
         .merge(onboarding::router())
         .merge(audit_log::router())
         .merge(work_items::router())
+        .merge(work_items::comments::router())
         .merge(ai::http::router())
         .merge(memory::router())
         .merge(whiteboards::router())
