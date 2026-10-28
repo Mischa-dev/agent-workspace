@@ -6,7 +6,9 @@
   var classic = [
     'nord', 'dracula', 'gruvbox-dark', 'solarized-dark', 'catppuccin-frappe', 'catppuccin-macchiato',
     'catppuccin-mocha', 'tokyo-night', 'one-dark', 'rose-pine', 'github-dark', 'monokai',
+    'everforest-dark', 'kanagawa',
     'gruvbox-light', 'solarized-light', 'catppuccin-latte', 'rose-pine-dawn', 'github-light',
+    'everforest-light', 'one-light',
   ]
   var derived = {
     'rail-tile': 'color-mix(in oklch, var(--rail-fg) 12%, var(--rail-bg))',
