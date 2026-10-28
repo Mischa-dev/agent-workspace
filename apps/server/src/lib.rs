@@ -80,6 +80,7 @@ pub mod server_status;
 pub mod settings;
 pub mod storage_admission;
 pub mod telemetry;
+pub mod test_support;
 pub mod usage;
 pub mod webhooks;
 pub mod whiteboards;

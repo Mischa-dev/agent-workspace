@@ -550,8 +550,7 @@ async fn m2_to_m3_execution_foundation_adopts_rows_and_enforces_scope() {
     );
 
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
-        .execute(&administrative_pool)
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("drop isolated M3 schema");
 }
@@ -610,8 +609,7 @@ async fn m3_upgrade_rejects_ambiguous_legacy_profile_ownership() {
     );
 
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
-        .execute(&administrative_pool)
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("drop isolated invalid M3 schema");
 }
@@ -710,8 +708,7 @@ async fn m3_hardening_rejects_duplicate_host_runtime_paths() {
         );
 
         pool.close().await;
-        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
-            .execute(&administrative_pool)
+        agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
             .await
             .expect("drop duplicate-path M3 schema");
     }
@@ -825,8 +822,7 @@ async fn pre_m3_upgrade_repair_handles_only_the_known_relative_seed_paths() {
         .expect("frozen 0009 accepts conservatively repaired legacy rows");
 
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
-        .execute(&administrative_pool)
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("drop M3 preflight schema");
 }
@@ -935,8 +931,7 @@ async fn deferred_repository_run_guard_closes_the_concurrent_archive_race() {
     );
 
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
-        .execute(&administrative_pool)
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("drop archive-race M3 schema");
 }

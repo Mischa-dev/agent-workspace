@@ -276,8 +276,7 @@ async fn account_flow_is_session_bound_csrf_safe_idempotent_and_redacted() {
     );
     supervisors.shutdown_all().await;
     pool.close().await;
-    administrative_pool
-        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("drop isolated M3 account schema");
 }

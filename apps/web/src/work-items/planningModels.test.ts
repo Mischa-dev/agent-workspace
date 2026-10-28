@@ -1,7 +1,7 @@
 import { QueryClient } from '@tanstack/react-query'
 import { describe, expect, it } from 'vitest'
 
-import { applyMove, dropAnchor, fieldMove, lanesFor, newTaskValues, orderedIndex, runOptimisticMove } from './boardModel'
+import { applyMove, createSaveQueue, dropAnchor, fieldMove, lanesFor, newTaskValues, orderedIndex, runOptimisticMove } from './boardModel'
 import { formatDateLabel } from '../ui/dateModel'
 import { changeSentence, formatChanges } from './historyFormat'
 import type { WorkItemBoardResponse, WorkItemCard, WorkItemWorkflow } from './types'
@@ -164,6 +164,33 @@ describe('board moves', () => {
 
     await runOptimisticMove(queryClient, key, (current) => applyMove(current, '1', 'doing', 0), async () => 'ok')
     expect(ids(queryClient.getQueryData<WorkItemBoardResponse>(key)!)).toEqual(['2,3', '1,4'])
+  })
+
+  it('saves a card\'s second move after its first, with the version the first left', async () => {
+    const queueSave = createSaveQueue()
+    const seen: Array<number | undefined> = []
+    let finishFirst!: () => void
+    const first = queueSave('1', async (savedVersion) => {
+      seen.push(savedVersion)
+      await new Promise<void>((resolve) => (finishFirst = resolve))
+      return { result: 'first', version: 4 }
+    })
+    const second = queueSave('1', async (savedVersion) => {
+      seen.push(savedVersion)
+      return { result: 'second', version: 5 }
+    })
+    // Another card doesn't wait for this one.
+    await expect(queueSave('2', async (savedVersion) => ({ result: savedVersion, version: 1 }))).resolves.toBeUndefined()
+    expect(seen).toEqual([undefined])
+
+    finishFirst()
+    await expect(first).resolves.toBe('first')
+    await expect(second).resolves.toBe('second')
+    expect(seen).toEqual([undefined, 4])
+
+    // A failed save leaves no version, so the next one sends the card's own.
+    await expect(queueSave('1', async () => Promise.reject(new Error('conflict')))).rejects.toThrow('conflict')
+    await expect(queueSave('1', async (savedVersion) => ({ result: savedVersion, version: 6 }))).resolves.toBeUndefined()
   })
 
   it('starts a task added in a column with the column value and the filters it pins', () => {

@@ -257,8 +257,7 @@ async fn bootstrap_adopts_m0_owner_and_has_exactly_one_concurrent_winner() {
     );
 
     pool.close().await;
-    administrative_pool
-        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("drop isolated bootstrap schema");
 }
@@ -351,8 +350,7 @@ async fn bootstrap_rolls_back_every_insert_when_a_late_database_write_fails() {
     );
 
     pool.close().await;
-    administrative_pool
-        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("drop isolated bootstrap rollback schema");
 }

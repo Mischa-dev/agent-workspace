@@ -207,6 +207,29 @@ export async function runOptimisticMove<T>(
 }
 
 /**
+ * Runs the saves of one card one after another. A move dropped while the
+ * card's last move is still saving would send the version the card had before
+ * it, so the server would refuse it as a conflict and the card would go back.
+ * Each save waits for the one before it and gets the version that one left,
+ * or undefined when it failed (the card's own version still holds then).
+ */
+export function createSaveQueue() {
+  const last = new Map<string, Promise<number | undefined>>()
+  return <T>(id: string, save: (savedVersion: number | undefined) => Promise<{ result: T; version: number }>): Promise<T> => {
+    const run = (last.get(id) ?? Promise.resolve(undefined)).then(save)
+    const version = run.then(
+      (saved) => saved.version,
+      () => undefined,
+    )
+    last.set(id, version)
+    void version.then(() => {
+      if (last.get(id) === version) last.delete(id)
+    })
+    return run.then((saved) => saved.result)
+  }
+}
+
+/**
  * Where a card lands among `items` on a board not grouped by status. Those
  * boards keep manual order (status, then rank), and a field change doesn't
  * touch it, so the card goes where that order puts it, not where it was dropped.

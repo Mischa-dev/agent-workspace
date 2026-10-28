@@ -547,8 +547,7 @@ async fn m0_to_m2_upgrade_preserves_history_and_enforces_conversation_invariants
     exercise_outbox(&pool, fixture).await;
 
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
-        .execute(&administrative_pool)
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("drop isolated M2 schema");
 }
@@ -664,8 +663,7 @@ async fn concurrent_m2_timeline_writers_allocate_gap_free_unique_sequences() {
     );
 
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
-        .execute(&administrative_pool)
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("drop isolated sequence schema");
 }
@@ -845,8 +843,7 @@ async fn archive_updates_serialize_with_thread_and_navigation_validation() {
     );
 
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
-        .execute(&administrative_pool)
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("drop isolated archive-race schema");
 }

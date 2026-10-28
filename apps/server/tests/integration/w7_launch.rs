@@ -403,8 +403,7 @@ async fn launches_use_the_defaults_queue_in_order_and_recheck_access() {
             .any(|launch| launch["state"] == "cancelled")
     );
 
-    administrative_pool
-        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("drop launch schema");
 }

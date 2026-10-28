@@ -2894,6 +2894,9 @@ async fn authenticate_mcp(
     mut request: Request<Body>,
     next: Next,
 ) -> Response {
+    // A handshake step is timed from here, so a slow credential lookup or
+    // body read counts toward it, as it does for the client waiting.
+    let started = std::time::Instant::now();
     let authentication_key = exact_bearer_token(request.headers()).unwrap_or("invalid");
     if let Err(error) = state.rate_limits.check_mcp_auth(authentication_key) {
         return error.into_response();
@@ -2949,12 +2952,11 @@ async fn authenticate_mcp(
                 request = Request::from_parts(parts, Body::from(bytes));
             }
             request.extensions_mut().insert(principal);
-            let started = std::time::Instant::now();
             let response = next.run(request).await;
-            if let Some(step) = handshake {
-                step.log(response.status(), started.elapsed());
+            match handshake {
+                Some(step) => step.watch(response, started),
+                None => response,
             }
-            response
         }
         Ok(None) => {
             log_refused_bearer(&state, request.headers()).await;
@@ -3013,16 +3015,55 @@ impl HandshakeStep {
         })
     }
 
-    fn log(&self, status: StatusCode, elapsed: std::time::Duration) {
+    /// Log the step once its answer has gone out. An HTTP error is logged at
+    /// once; otherwise the body is read as it streams to the client, because
+    /// a session's reply is an event stream whose headers leave before the
+    /// answer exists, and a JSON-RPC error travels in an HTTP 200.
+    fn watch(self, response: Response, started: std::time::Instant) -> Response {
+        let status = response.status();
+        if !status.is_success() {
+            self.log(status, started.elapsed(), &HandshakeOutcome::HttpError);
+            return response;
+        }
+        let event_stream = response
+            .headers()
+            .get(http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("text/event-stream"));
+        let mut watch = HandshakeWatch {
+            step: self,
+            status,
+            started,
+            answer: HandshakeAnswer::new(event_stream),
+            logged: false,
+        };
+        let (parts, body) = response.into_parts();
+        let body = futures_util::StreamExt::map(body.into_data_stream(), move |chunk| {
+            if let Ok(bytes) = &chunk {
+                watch.read(bytes);
+            }
+            chunk
+        });
+        Response::from_parts(parts, Body::from_stream(body))
+    }
+
+    fn log(&self, status: StatusCode, elapsed: std::time::Duration, outcome: &HandshakeOutcome) {
         let elapsed_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
         let (app, app_version) = self.app.as_ref().map_or(("", ""), |(name, version)| {
             (name.as_str(), version.as_str())
         });
         let protocol_version = self.protocol_version.as_deref().unwrap_or("");
-        if elapsed_ms >= SLOW_HANDSHAKE_MS || !status.is_success() {
+        let (error_code, error) = match outcome {
+            HandshakeOutcome::ProtocolError { code, message } => (Some(*code), message.as_str()),
+            _ => (None, ""),
+        };
+        if elapsed_ms >= SLOW_HANDSHAKE_MS || !matches!(outcome, HandshakeOutcome::Answered) {
             tracing::warn!(
                 method = self.method,
                 status = status.as_u16(),
+                outcome = outcome.label(),
+                error_code,
+                error,
                 elapsed_ms,
                 client_name = %self.client_name,
                 credential_id = %self.credential_id,
@@ -3037,6 +3078,7 @@ impl HandshakeStep {
             tracing::info!(
                 method = self.method,
                 status = status.as_u16(),
+                outcome = outcome.label(),
                 elapsed_ms,
                 client_name = %self.client_name,
                 credential_id = %self.credential_id,
@@ -3054,6 +3096,178 @@ impl HandshakeStep {
 /// Above this a handshake step is logged as slow: well under the time
 /// clients wait before they drop the server.
 const SLOW_HANDSHAKE_MS: u64 = 1_000;
+/// The most of a handshake reply kept while looking for its answer. The tool
+/// list is a few hundred kilobytes.
+const MAX_WATCHED_HANDSHAKE_BYTES: usize = 8 * 1024 * 1024;
+/// The most of a JSON-RPC error's message that is logged.
+const MAX_LOGGED_ERROR_CHARACTERS: usize = 200;
+
+/// How a handshake step ended, as the client saw it.
+#[derive(Debug, PartialEq)]
+enum HandshakeOutcome {
+    /// A JSON-RPC result.
+    Answered,
+    /// A JSON-RPC error, which can arrive in an HTTP 200.
+    ProtocolError { code: i64, message: String },
+    /// An HTTP status other than success.
+    HttpError,
+    /// The reply ended, or the client hung up, before an answer was sent.
+    NoAnswer,
+    /// The reply was too large to keep while looking for its answer.
+    Unread,
+}
+
+impl HandshakeOutcome {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Answered => "answered",
+            Self::ProtocolError { .. } => "protocol_error",
+            Self::HttpError => "http_error",
+            Self::NoAnswer => "no_answer",
+            Self::Unread => "unread",
+        }
+    }
+
+    /// The outcome a JSON-RPC message gives, or `None` for one that isn't
+    /// the answer (a notification, or an empty priming event).
+    fn of_message(text: &str) -> Option<Self> {
+        let message = serde_json::from_str::<serde_json::Value>(text).ok()?;
+        if let Some(error) = message.get("error") {
+            let code = error
+                .get("code")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or_default();
+            let message = error
+                .get("message")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .chars()
+                .take(MAX_LOGGED_ERROR_CHARACTERS)
+                .collect();
+            return Some(Self::ProtocolError { code, message });
+        }
+        message.get("result").map(|_| Self::Answered)
+    }
+}
+
+/// Reads a handshake reply as it passes, until its answer shows.
+#[derive(Debug)]
+struct HandshakeAnswer {
+    event_stream: bool,
+    buffer: Vec<u8>,
+    outcome: Option<HandshakeOutcome>,
+}
+
+impl HandshakeAnswer {
+    fn new(event_stream: bool) -> Self {
+        Self {
+            event_stream,
+            buffer: Vec::new(),
+            outcome: None,
+        }
+    }
+
+    /// Take the next piece of the body; the outcome, once it's known.
+    fn read(&mut self, bytes: &[u8]) -> Option<&HandshakeOutcome> {
+        if self.outcome.is_none() {
+            if self.buffer.len() + bytes.len() > MAX_WATCHED_HANDSHAKE_BYTES {
+                self.buffer = Vec::new();
+                self.outcome = Some(HandshakeOutcome::Unread);
+            } else {
+                self.buffer.extend_from_slice(bytes);
+                if self.event_stream {
+                    self.read_events();
+                }
+            }
+        }
+        self.outcome.as_ref()
+    }
+
+    /// The outcome once the body has ended or been dropped.
+    fn finish(&mut self) -> HandshakeOutcome {
+        if let Some(outcome) = self.outcome.take() {
+            return outcome;
+        }
+        let rest = std::mem::take(&mut self.buffer);
+        let rest = String::from_utf8_lossy(&rest);
+        let outcome = if self.event_stream {
+            event_data(&rest).and_then(|data| HandshakeOutcome::of_message(&data))
+        } else {
+            HandshakeOutcome::of_message(&rest)
+        };
+        outcome.unwrap_or(HandshakeOutcome::NoAnswer)
+    }
+
+    /// Check each complete server-sent event for the answer.
+    fn read_events(&mut self) {
+        while self.outcome.is_none() {
+            let Some((end, separator)) = event_end(&self.buffer) else {
+                return;
+            };
+            let event = String::from_utf8_lossy(&self.buffer[..end]).into_owned();
+            self.buffer.drain(..end + separator);
+            if let Some(data) = event_data(&event) {
+                self.outcome = HandshakeOutcome::of_message(&data);
+            }
+        }
+        self.buffer = Vec::new();
+    }
+}
+
+/// Where the first server-sent event in `buffer` ends, and the length of the
+/// blank line that ends it.
+fn event_end(buffer: &[u8]) -> Option<(usize, usize)> {
+    [b"\r\n\r\n".as_slice(), b"\n\n", b"\r\r"]
+        .iter()
+        .filter_map(|separator| {
+            buffer
+                .windows(separator.len())
+                .position(|window| window == *separator)
+                .map(|end| (end, separator.len()))
+        })
+        .min_by_key(|(end, _)| *end)
+}
+
+/// An event's data lines, joined; `None` when it has none.
+fn event_data(event: &str) -> Option<String> {
+    let lines = event
+        .lines()
+        .filter_map(|line| line.strip_prefix("data:"))
+        .map(|data| data.strip_prefix(' ').unwrap_or(data))
+        .collect::<Vec<_>>();
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+/// A handshake reply on its way out; logs the step once its answer passes,
+/// or when the reply ends or the client hangs up before one does.
+struct HandshakeWatch {
+    step: HandshakeStep,
+    status: StatusCode,
+    started: std::time::Instant,
+    answer: HandshakeAnswer,
+    logged: bool,
+}
+
+impl HandshakeWatch {
+    fn read(&mut self, bytes: &[u8]) {
+        if self.logged {
+            return;
+        }
+        if let Some(outcome) = self.answer.read(bytes) {
+            self.step.log(self.status, self.started.elapsed(), outcome);
+            self.logged = true;
+        }
+    }
+}
+
+impl Drop for HandshakeWatch {
+    fn drop(&mut self) {
+        if !self.logged {
+            let outcome = self.answer.finish();
+            self.step.log(self.status, self.started.elapsed(), &outcome);
+        }
+    }
+}
 
 fn request_session(headers: &HeaderMap) -> Option<&str> {
     headers
@@ -4229,8 +4443,9 @@ mod tests {
     use rmcp::transport::streamable_http_server::session::store::SessionStore;
 
     use super::{
-        MAX_DELETED_SESSIONS, ResumeAnySession, SERVER_INSTRUCTIONS, common, exact_bearer_token,
-        generate_token,
+        HandshakeAnswer, HandshakeOutcome, HandshakeStep, MAX_DELETED_SESSIONS,
+        MAX_LOGGED_ERROR_CHARACTERS, ResumeAnySession, SERVER_INSTRUCTIONS, SLOW_HANDSHAKE_MS,
+        StatusCode, common, exact_bearer_token, generate_token,
     };
 
     #[tokio::test]
@@ -4658,5 +4873,191 @@ mod tests {
         ] {
             assert!(SERVER_INSTRUCTIONS.contains(required), "missing {required}");
         }
+    }
+
+    fn answer_of(event_stream: bool, chunks: &[&str]) -> HandshakeOutcome {
+        let mut answer = HandshakeAnswer::new(event_stream);
+        for chunk in chunks {
+            if let Some(outcome) = answer.read(chunk.as_bytes()) {
+                return match outcome {
+                    HandshakeOutcome::ProtocolError { code, message } => {
+                        HandshakeOutcome::ProtocolError {
+                            code: *code,
+                            message: message.clone(),
+                        }
+                    }
+                    HandshakeOutcome::Answered => HandshakeOutcome::Answered,
+                    HandshakeOutcome::HttpError => HandshakeOutcome::HttpError,
+                    HandshakeOutcome::NoAnswer => HandshakeOutcome::NoAnswer,
+                    HandshakeOutcome::Unread => HandshakeOutcome::Unread,
+                };
+            }
+        }
+        answer.finish()
+    }
+
+    #[test]
+    fn handshake_answers_are_read_from_json_and_event_streams() {
+        let error = HandshakeOutcome::ProtocolError {
+            code: -32603,
+            message: "tools unavailable".to_owned(),
+        };
+        // A JSON body, whole or in pieces.
+        assert_eq!(
+            answer_of(
+                false,
+                &[r#"{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}"#]
+            ),
+            HandshakeOutcome::Answered
+        );
+        assert_eq!(
+            answer_of(
+                false,
+                &[
+                    r#"{"jsonrpc":"2.0","id":1,"#,
+                    r#""error":{"code":-32603,"message":"tools unavailable"}}"#
+                ]
+            ),
+            error
+        );
+        // An event stream: a priming event and a notification come first,
+        // and the answer is split across chunks.
+        assert_eq!(
+            answer_of(
+                true,
+                &[
+                    "id: 0\nretry: 3000\ndata:\n\n",
+                    "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/message\",\"params\":{}}\n\n",
+                    "data: {\"jsonrpc\":\"2.0\",\"id\":2,\"error\":",
+                    "{\"code\":-32603,\"message\":\"tools unavailable\"}}\n\n",
+                ]
+            ),
+            error
+        );
+        assert_eq!(
+            answer_of(
+                true,
+                &["data: {\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{}}\r\n\r\n"]
+            ),
+            HandshakeOutcome::Answered
+        );
+        // The stream ended, or the client hung up, with no answer.
+        assert_eq!(
+            answer_of(true, &["id: 0\ndata:\n\n", "data: {\"jsonrpc\""]),
+            HandshakeOutcome::NoAnswer
+        );
+        assert_eq!(answer_of(false, &[]), HandshakeOutcome::NoAnswer);
+        // Long error messages are cut before they're logged.
+        let long = format!(
+            r#"{{"jsonrpc":"2.0","id":1,"error":{{"code":-1,"message":"{}"}}}}"#,
+            "x".repeat(5_000)
+        );
+        let HandshakeOutcome::ProtocolError { message, .. } = answer_of(false, &[&long]) else {
+            panic!("expected a protocol error");
+        };
+        assert_eq!(message.chars().count(), MAX_LOGGED_ERROR_CHARACTERS);
+    }
+
+    #[derive(Clone, Default)]
+    struct CapturedLogs(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for CapturedLogs {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("log lock").extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn handshake_step(method: &'static str) -> HandshakeStep {
+        HandshakeStep {
+            method,
+            client_name: "claude.ai".to_owned(),
+            credential_id: uuid::Uuid::nil(),
+            oauth_grant_id: None,
+            resumed_session: true,
+            app: None,
+            protocol_version: None,
+        }
+    }
+
+    /// Send `response` through a handshake step's watch as a client would
+    /// read it, and return what was logged.
+    async fn logged_handshake(
+        response: axum::response::Response,
+        started: std::time::Instant,
+    ) -> String {
+        let logs = CapturedLogs::default();
+        let writer = logs.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let watched = handshake_step("tools/list").watch(response, started);
+        let body = axum::body::to_bytes(watched.into_body(), usize::MAX)
+            .await
+            .expect("read the reply");
+        assert!(!body.is_empty(), "the reply reaches the client unchanged");
+        String::from_utf8_lossy(&logs.0.lock().expect("log lock")).into_owned()
+    }
+
+    #[tokio::test]
+    async fn handshake_logs_show_protocol_errors_and_the_whole_wait() {
+        let reply = |content_type: &str, body: &'static str| {
+            axum::response::Response::builder()
+                .status(StatusCode::OK)
+                .header(axum::http::header::CONTENT_TYPE, content_type)
+                .body(axum::body::Body::from(body))
+                .expect("reply")
+        };
+
+        // A JSON-RPC error in an HTTP 200 is a failed step, not a load.
+        let logged = logged_handshake(
+            reply(
+                "text/event-stream",
+                "data: {\"jsonrpc\":\"2.0\",\"id\":2,\"error\":{\"code\":-32603,\"message\":\"tools unavailable\"}}\n\n",
+            ),
+            std::time::Instant::now(),
+        )
+        .await;
+        assert!(logged.contains("WARN"), "{logged}");
+        assert!(logged.contains("outcome=\"protocol_error\""), "{logged}");
+        assert!(logged.contains("error_code=-32603"), "{logged}");
+        assert!(logged.contains("tools unavailable"), "{logged}");
+        assert!(!logged.contains("loaded the server"), "{logged}");
+
+        // Time spent before the tools answered (the credential lookup, the
+        // body read) counts toward the step.
+        let earlier = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_millis(SLOW_HANDSHAKE_MS + 500))
+            .expect("an earlier instant");
+        let logged = logged_handshake(
+            reply(
+                "application/json",
+                r#"{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}"#,
+            ),
+            earlier,
+        )
+        .await;
+        assert!(logged.contains("WARN"), "{logged}");
+        assert!(logged.contains("outcome=\"answered\""), "{logged}");
+        assert!(logged.contains("slow or failed"), "{logged}");
+
+        // A quick answer is an ordinary load.
+        let logged = logged_handshake(
+            reply(
+                "application/json",
+                r#"{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}"#,
+            ),
+            std::time::Instant::now(),
+        )
+        .await;
+        assert!(logged.contains("INFO"), "{logged}");
+        assert!(logged.contains("loaded the server"), "{logged}");
     }
 }

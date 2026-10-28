@@ -1411,8 +1411,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
 
     drop(application);
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
-        .execute(&administrative_pool)
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("drop isolated M9 schema");
 }
@@ -2218,8 +2217,7 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
     terminate_mcp(&application, &approver_token, &approver_session).await;
     drop(application);
     pool.close().await;
-    administrative_pool
-        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("account fixture operation");
 }
@@ -2361,10 +2359,59 @@ async fn workos_link_start_requires_csrf_and_callback_is_bound_to_the_browser() 
             .expect("account fixture operation"),
         0
     );
+    // Cancelling at WorkOS brings an error and no code; a link still returns
+    // to Account settings, where the browser is signed in.
+    let cancelled = application
+        .clone()
+        .oneshot(write_request(
+            "POST",
+            "/api/v1/auth/workos/start",
+            &cookie,
+            &csrf,
+            json!({"link":true}),
+        ))
+        .await
+        .expect("account fixture operation");
+    assert_eq!(cancelled.status(), StatusCode::OK);
+    let cancelled_cookie = cancelled
+        .headers()
+        .get(header::SET_COOKIE)
+        .expect("account fixture operation")
+        .to_str()
+        .expect("account fixture operation")
+        .split(';')
+        .next()
+        .expect("account fixture operation")
+        .to_owned();
+    let cancelled = response_json(cancelled).await;
+    let cancelled_url = url::Url::parse(
+        cancelled["url"]
+            .as_str()
+            .expect("account fixture operation"),
+    )
+    .expect("account fixture operation");
+    let cancelled_state = cancelled_url
+        .query_pairs()
+        .find(|(k, _)| k == "state")
+        .expect("account fixture operation")
+        .1
+        .into_owned();
+    let denied = application
+        .clone()
+        .oneshot(read_request(
+            &format!("/auth/workos/callback?error=access_denied&state={cancelled_state}"),
+            &cancelled_cookie,
+        ))
+        .await
+        .expect("account fixture operation");
+    assert_eq!(denied.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        denied.headers()[header::LOCATION],
+        "/settings/account/profile?workosError=1"
+    );
     drop(application);
     pool.close().await;
-    administrative_pool
-        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("account fixture operation");
 }
