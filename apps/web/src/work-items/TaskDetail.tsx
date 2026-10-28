@@ -19,7 +19,6 @@ import {
 import { buildOpenInCodexLink } from './codexDeepLink'
 import { useTaskFiles, useWorkItem, useWorkItemWorkflow } from './hooks'
 import { workItemHref, workItemsHref } from './links'
-import { LabelManager } from './LabelManager'
 import { TaskActivity } from './TaskActivity'
 import { DependencyMenu, TaskDependencies, TaskSubtasks, type DependencyRequest, type OpenTask } from './TaskConnections'
 import { AcceptanceCriteria } from './TaskCriteria'
@@ -49,6 +48,8 @@ const LinkedWhiteboards = lazy(() =>
 const TaskLinks = lazy(() => import('./TaskLinks').then((module) => ({ default: module.TaskLinks })))
 // What to do about a save that stopped loads only when one does.
 const TaskSaveNotices = lazy(() => import('./TaskSaveNotices').then((module) => ({ default: module.TaskSaveNotices })))
+// Managing labels loads when someone opens it.
+const LabelManager = lazy(() => import('./LabelManager').then((module) => ({ default: module.LabelManager })))
 
 /**
  * A task, loaded by id: the side panel on the list and board, and the full
@@ -468,7 +469,11 @@ function TaskDetailBody({
         }}
         projectId={item.projectId}
       />
-      {managingLabels ? <LabelManager onClose={() => setManagingLabels(false)} projectId={item.projectId} /> : null}
+      {managingLabels ? (
+        <Suspense fallback={null}>
+          <LabelManager onClose={() => setManagingLabels(false)} projectId={item.projectId} />
+        </Suspense>
+      ) : null}
     </div>
   )
 }

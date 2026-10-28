@@ -8,7 +8,7 @@ import { memoryKeys, pin, unpin } from '../memory/api'
 import { usePins } from '../memory/hooks'
 import { useProjects } from '../projects/hooks'
 import { showToast, type MenuEntry } from '../ui'
-import { DecisionDialog } from './DecisionDialog'
+import { LazyDecisionDialog } from './LazyDecisionDialog'
 import type { ConversationMessage } from './types'
 
 /**
@@ -69,7 +69,7 @@ export function useMessageMemory({
   }
 
   const dialogs = deciding ? (
-    <DecisionDialog
+    <LazyDecisionDialog
       conversationId={conversationId}
       message={deciding}
       onClose={() => setDeciding(null)}

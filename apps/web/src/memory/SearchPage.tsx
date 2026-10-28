@@ -20,8 +20,8 @@ import {
   formatFullDate,
   formatRelative,
   plainPreview,
-  useListKeys,
 } from '../ui'
+import { useListKeys } from '../ui/listKeys'
 
 type SearchHit = {
   kind: 'message' | 'thread' | 'task' | 'page' | 'decision' | 'file'

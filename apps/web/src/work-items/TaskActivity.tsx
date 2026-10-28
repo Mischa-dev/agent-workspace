@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { Eye } from 'lucide-react'
-import { useState, type ReactNode } from 'react'
+import { Suspense, lazy, useState, type ReactNode } from 'react'
 
 import { useAuthenticatedSession } from '../auth/session'
 
@@ -27,12 +27,18 @@ import {
   type MenuEntry,
 } from '../ui'
 import { commentContent, searchWorkItemReferences } from './api'
-import { CommentEditor, CommentHistoryDialog, DeleteCommentDialog, type PostedComment } from './CommentEditing'
+import type { PostedComment } from './CommentEditing'
 import { formatChanges, type FormattedChange } from './historyFormat'
 import { taskFilesKey, useCreateWorkItemComment, useTaskFiles, useWorkItemTimeline } from './hooks'
 import { useSetWatching } from './planningHooks'
 import { workItemHref } from './links'
 import type { WorkItem, WorkItemTimelineEntry } from './types'
+
+// Editing, deleting and the edit history load the first time someone uses them.
+const loadCommentEditing = () => import('./CommentEditing')
+const CommentEditor = lazy(() => loadCommentEditing().then((module) => ({ default: module.CommentEditor })))
+const CommentHistoryDialog = lazy(() => loadCommentEditing().then((module) => ({ default: module.CommentHistoryDialog })))
+const DeleteCommentDialog = lazy(() => loadCommentEditing().then((module) => ({ default: module.DeleteCommentDialog })))
 
 /** "Priority High → Urgent", with the old value struck through for sighted readers. */
 function ChangeLine({ change }: { change: Extract<FormattedChange, { kind: 'field' }> }) {
@@ -163,6 +169,21 @@ export function TaskActivity({ disabled, item, projectArchived }: { disabled: bo
         actions.push({ label: 'Delete', icon: 'trash', danger: true, onSelect: () => setDeleting(posted) })
       }
     }
+    const content = (
+      <div className="aw-activity__content">
+        <MessageContent
+          actors={posted.mentionedActors.map((mentioned) => ({
+            ...mentioned,
+            kind: mentioned.kind as 'human' | 'external_agent' | 'execution_worker' | 'integration' | 'system',
+            avatarUrl: null,
+          }))}
+          content={posted.content}
+          fallbackPlainText={posted.plainText}
+          workItems={posted.referencedWorkItems}
+        />
+        <Attachments files={commentFiles.get(posted.id) ?? []} />
+      </div>
+    )
     return (
       <li className="aw-activity__comment" key={entry.sequence}>
         <Avatar kind={kind} name={posted.author.displayName} seed={posted.author.id} size={28} />
@@ -190,21 +211,11 @@ export function TaskActivity({ disabled, item, projectArchived }: { disabled: bo
               Comment deleted{removedBy && removedBy.id !== posted.author.id ? ` by ${removedBy.displayName}` : ''}
             </p>
           ) : editing === posted.id ? (
-            <CommentEditor comment={posted} onDone={() => setEditing(null)} projectId={item.projectId} workItemId={item.id} />
+            <Suspense fallback={content}>
+              <CommentEditor comment={posted} onDone={() => setEditing(null)} projectId={item.projectId} workItemId={item.id} />
+            </Suspense>
           ) : (
-          <div className="aw-activity__content">
-            <MessageContent
-              actors={posted.mentionedActors.map((mentioned) => ({
-                ...mentioned,
-                kind: mentioned.kind as 'human' | 'external_agent' | 'execution_worker' | 'integration' | 'system',
-                avatarUrl: null,
-              }))}
-              content={posted.content}
-              fallbackPlainText={posted.plainText}
-              workItems={posted.referencedWorkItems}
-            />
-            <Attachments files={commentFiles.get(posted.id) ?? []} />
-          </div>
+            content
           )}
         </div>
       </li>
@@ -258,10 +269,12 @@ export function TaskActivity({ disabled, item, projectArchived }: { disabled: bo
         </div>
       ) : null}
       {rows.length ? <ol className="aw-activity">{rows}</ol> : null}
-      {deleting ? (
-        <DeleteCommentDialog comment={deleting} onClose={() => setDeleting(null)} projectId={item.projectId} viewerId={viewerId} workItemId={item.id} />
-      ) : null}
-      {history ? <CommentHistoryDialog comment={history} onClose={() => setHistory(null)} projectId={item.projectId} workItemId={item.id} /> : null}
+      <Suspense fallback={null}>
+        {deleting ? (
+          <DeleteCommentDialog comment={deleting} onClose={() => setDeleting(null)} projectId={item.projectId} viewerId={viewerId} workItemId={item.id} />
+        ) : null}
+        {history ? <CommentHistoryDialog comment={history} onClose={() => setHistory(null)} projectId={item.projectId} workItemId={item.id} /> : null}
+      </Suspense>
       {!disabled ? (
         <StructuredComposer
           disabled={createComment.isPending}

@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
-import { toastError } from '../app/mutations'
+import { toastError } from '../app/toastError'
 import { clearAuthenticatedQueryCache, logout, type SessionUser } from '../auth/session'
 import { useDirectOverview } from '../direct/api'
 import { projectLocationHref } from '../projects/locations'

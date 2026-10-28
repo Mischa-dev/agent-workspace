@@ -13,7 +13,6 @@ import { BoardSkeleton } from './BoardSkeleton'
 import { CreateWorkItemDialog } from './CreateWorkItemDialog'
 import { FilterBar } from './FilterBar'
 import { useWorkItemWorkflow } from './hooks'
-import { LabelManager } from './LabelManager'
 import { activeFilterKeys, parametersFromRemembered, rememberedState } from './listModel'
 import { notify } from './notice'
 import { TaskPanel } from './TaskPanel'
@@ -24,6 +23,8 @@ import './work.css'
 const ViewsMenu = lazy(() => import('./ViewsMenu'))
 // The board is its own chunk: most visits open the list.
 const WorkItemBoard = lazy(() => import('./WorkItemBoard').then((module) => ({ default: module.WorkItemBoard })))
+// Managing labels loads when someone opens it.
+const LabelManager = lazy(() => import('./LabelManager').then((module) => ({ default: module.LabelManager })))
 
 /**
  * Every task in a project as a list or a board, with filters, sorting,
@@ -197,7 +198,11 @@ export function WorkItemsPage() {
           workflow={workflow.data}
         />
       ) : null}
-      {managingLabels ? <LabelManager onClose={() => setManagingLabels(false)} projectId={projectId} /> : null}
+      {managingLabels ? (
+        <Suspense fallback={null}>
+          <LabelManager onClose={() => setManagingLabels(false)} projectId={projectId} />
+        </Suspense>
+      ) : null}
     </AppShell>
   )
 }

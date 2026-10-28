@@ -2,7 +2,7 @@ import { useState, type DragEvent } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { NavLink, useLocation } from 'react-router-dom'
 
-import { toastError } from '../app/mutations'
+import { toastError } from '../app/toastError'
 import { Icon } from '../ui'
 import { listViews, pinView, viewKeys, type SavedView } from '../views/api'
 import { orderAfterDrop } from './dragOrder'

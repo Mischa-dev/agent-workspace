@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 
 import { useProjectConversationSidebar } from '../conversations/hooks'
 import type { SidebarThread } from '../conversations/types'
-import { toastError } from '../app/mutations'
+import { toastError } from '../app/toastError'
 import { useProjects, useSetRailOrder, useUpdateProjectNavigation } from '../projects/hooks'
 import type { Project } from '../projects/types'
 import { IconButton, showToast, type MenuEntry } from '../ui'
