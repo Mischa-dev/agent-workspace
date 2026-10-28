@@ -1070,6 +1070,12 @@ struct Targets {
     claimed_reply: Uuid,
     /// The group the claimed request is in.
     claimed_conversation: String,
+    /// Uploads nobody has sent yet, in the channel and for a comment on the
+    /// task. A's own message and comment attach A's. A sent file can't be
+    /// attached again anyway, so only B's unsent ones show that attaching
+    /// checks whose files they are.
+    channel_upload: Uuid,
+    comment_upload: Uuid,
 }
 
 async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targets {
@@ -1221,6 +1227,29 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
     .await
     .expect("webhook delivery");
 
+    let channel_upload = upload(
+        app,
+        browser,
+        &format!(
+            "/api/v1/conversations/{}/files?name=net-unsent-{tag}.txt",
+            world.channel
+        ),
+        "text/plain",
+        format!("Net unsent {tag}").into_bytes(),
+    )
+    .await;
+    let comment_upload = upload(
+        app,
+        browser,
+        &format!(
+            "/api/v1/projects/{project}/work-items/{}/files?name=net-unsent-{tag}.txt&for=comment",
+            world.task
+        ),
+        "text/plain",
+        format!("Net unsent comment {tag}").into_bytes(),
+    )
+    .await;
+
     let in_project = |sql: &'static str| scalar(pool, sql, project);
     let in_organization = |sql: &'static str| scalar(pool, sql, organization);
     Targets {
@@ -1327,6 +1356,8 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         reply,
         claimed_reply,
         claimed_conversation,
+        channel_upload,
+        comment_upload,
     }
 }
 
@@ -1344,6 +1375,14 @@ struct Spares {
     /// Deleted over HTTP and through MCP.
     messages: [String; 2],
     file: Uuid,
+    /// Unsent uploads A's own messages attach: in the thread and the DM
+    /// over HTTP; in the channel and for a task comment through MCP; and
+    /// the agent's, in the group its reply goes to.
+    thread_upload: Uuid,
+    dm_upload: Uuid,
+    tool_upload: Uuid,
+    tool_comment_upload: Uuid,
+    reply_upload: Uuid,
     later: Uuid,
     /// Sent now over HTTP, and changed through MCP.
     scheduled: [Uuid; 2],
@@ -1486,6 +1525,24 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         b"Net spare".to_vec(),
     )
     .await;
+    let mut uploads = Vec::new();
+    for uri in [
+        format!(
+            "/api/v1/conversations/{}/files?name=net-thread.txt",
+            a.thread
+        ),
+        format!("/api/v1/conversations/{}/files?name=net-dm.txt", a.dm),
+        format!(
+            "/api/v1/conversations/{}/files?name=net-tool.txt",
+            a.channel
+        ),
+        format!(
+            "/api/v1/projects/{project}/work-items/{}/files?name=net-tool.txt&for=comment",
+            a.task
+        ),
+    ] {
+        uploads.push(upload(app, browser, &uri, "text/plain", b"Net unsent".to_vec()).await);
+    }
     ok(
         app,
         browser,
@@ -1829,6 +1886,26 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
     for status in ["pending", "pending", "pending", "claimed", "pending"] {
         replies.push(reply_request(app, pool, browser, ax.agent, status).await.0);
     }
+    // The agent's own upload, in the group of the request it answers.
+    let agent_session = initialize(app, &a.agent_token).await.expect("A agent MCP");
+    let group = scalar(
+        pool,
+        "SELECT conversation_id FROM reply_requests WHERE id = $1",
+        replies[1],
+    )
+    .await;
+    let (_, uploaded) = call_tool(
+        app,
+        &a.agent_token,
+        &agent_session,
+        "file_upload",
+        json!({"conversationId": group, "name": "net-reply.txt", "text": "Net reply file"}),
+    )
+    .await;
+    let reply_upload = structured(&uploaded)["value"]["fileId"]
+        .as_str()
+        .and_then(|id| Uuid::parse_str(id).ok())
+        .unwrap_or_else(|| panic!("agent upload: {uploaded}"));
 
     let statuses = sqlx::query_as::<_, (Uuid, String, String, bool)>(
         "SELECT id, name, semantic_category, is_default FROM work_item_statuses WHERE project_id = $1 AND enabled ORDER BY position",
@@ -1865,6 +1942,11 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         projects: [projects[0].clone(), projects[1].clone()],
         messages: [messages[0].clone(), messages[1].clone()],
         file,
+        thread_upload: uploads[0],
+        dm_upload: uploads[1],
+        tool_upload: uploads[2],
+        tool_comment_upload: uploads[3],
+        reply_upload,
         later,
         scheduled: [scheduled[0], scheduled[1]],
         harness,
@@ -2724,9 +2806,11 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         path_case(
             "POST /api/v1/channels/{id}/messages",
             &[channel()],
-            json_body(json!({"content": text("Net message")})),
+            json_body(json!({"content": text("Net message"), "attachments": [ax.channel_upload]})),
         )
-        .rejecting(vec![json!({"content": text("Net file"), "attachments": [b.file]})]),
+        .rejecting(vec![
+            json!({"content": text("Net message"), "attachments": [bx.channel_upload]}),
+        ]),
         path_case(
             "POST /api/v1/channels/{id}/threads",
             &[channel()],
@@ -2751,9 +2835,11 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         path_case(
             "POST /api/v1/threads/{id}/messages",
             &[id(&a.thread, &b.thread)],
-            json_body(json!({"content": text("Net reply")})),
+            json_body(json!({"content": text("Net reply"), "attachments": [sp.thread_upload]})),
         )
-        .rejecting(vec![json!({"content": text("Net reply"), "attachments": [b.file]})]),
+        .rejecting(vec![
+            json!({"content": text("Net reply"), "attachments": [bx.channel_upload]}),
+        ]),
         path_case(
             "POST /api/v1/threads/{id}/agent-runs",
             &[id(sp.run_threads[0], b.run_thread)],
@@ -2814,9 +2900,11 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         path_case(
             "POST /api/v1/conversations/{id}/messages",
             &[id(&a.dm, &b.dm)],
-            json_body(json!({"content": text("Net DM")})),
+            json_body(json!({"content": text("Net DM"), "attachments": [sp.dm_upload]})),
         )
-        .rejecting(vec![json!({"content": text("Net DM"), "attachments": [b.file]})])
+        .rejecting(vec![
+            json!({"content": text("Net DM"), "attachments": [bx.channel_upload]}),
+        ])
         .and(vec![
             (
                 Call::new(
@@ -3952,9 +4040,11 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         path_case(
             "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/comments",
             &[project(), task()],
-            json_body(json!({"content": text("Net comment")})),
+            json_body(json!({"content": text("Net comment"), "attachments": [ax.comment_upload]})),
         )
-        .rejecting(vec![json!({"content": text("Net comment"), "attachments": [b.file]})]),
+        .rejecting(vec![
+            json!({"content": text("Net comment"), "attachments": [bx.comment_upload]}),
+        ]),
         path_case(
             "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/dependencies",
             &[project(), task()],
@@ -4526,7 +4616,12 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         ]),
         mcp_case(
             "message_send",
-            json!({"conversationId": a.channel, "text": "Net message", "clientRequestId": "net-send-own"}),
+            json!({
+                "conversationId": a.channel,
+                "text": "Net message",
+                "attachmentIds": [sp.tool_upload],
+                "clientRequestId": "net-send-own",
+            }),
             vec![
                 json!({"conversationId": b.channel, "text": "Net message", "clientRequestId": "net-send-b1"}),
                 json!({"conversationId": b.dm, "text": "Net message", "clientRequestId": "net-send-b2"}),
@@ -4536,7 +4631,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         .rejecting(vec![json!({
             "conversationId": a.channel,
             "text": "Net message",
-            "attachmentIds": [b.file],
+            "attachmentIds": [bx.channel_upload],
             "clientRequestId": "net-send-mixed",
         })]),
         mcp_case(
@@ -4660,6 +4755,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 "generation": generation(sp.reply_claim),
                 "text": "Net reply",
                 "final": true,
+                "attachmentIds": [sp.reply_upload],
                 "clientRequestId": "net-reply-own",
             }),
             vec![json!({
@@ -4670,6 +4766,16 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 "clientRequestId": "net-reply-b",
             })],
         )
+        // On the request the agent already holds, as `reply_claim` hasn't
+        // claimed the own call's one yet when this runs.
+        .rejecting(vec![json!({
+            "requestId": ax.claimed_reply,
+            "generation": generation(ax.claimed_reply),
+            "text": "Net reply",
+            "final": true,
+            "attachmentIds": [bx.channel_upload],
+            "clientRequestId": "net-reply-mixed",
+        })])
         .by_agent(),
         mcp_case(
             "reply_pass",
@@ -4790,9 +4896,20 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         })]),
         mcp_case(
             "task_comment",
-            json!({"taskId": a.task, "text": "Net comment", "clientRequestId": "net-comment-own"}),
+            json!({
+                "taskId": a.task,
+                "text": "Net comment",
+                "attachmentIds": [sp.tool_comment_upload],
+                "clientRequestId": "net-comment-own",
+            }),
             vec![json!({"taskId": b.task, "text": "Net comment", "clientRequestId": "net-comment-b"})],
-        ),
+        )
+        .rejecting(vec![json!({
+            "taskId": a.task,
+            "text": "Net comment",
+            "attachmentIds": [bx.comment_upload],
+            "clientRequestId": "net-comment-mixed",
+        })]),
         mcp_case(
             "task_mark_blocked",
             json!({
