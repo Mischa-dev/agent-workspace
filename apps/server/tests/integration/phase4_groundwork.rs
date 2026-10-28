@@ -602,8 +602,7 @@ async fn the_run_cap_counts_every_active_run_and_holds_a_lock() {
     third.rollback().await.expect("rollback third");
 
     drop(pool);
-    admin
-        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+    agent_workspace_server::test_support::drop_schema(&admin, &schema)
         .await
         .expect("drop schema");
 }

@@ -302,8 +302,7 @@ done
 
     supervisors.shutdown_all().await;
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
-        .execute(&administrative_pool)
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("drop isolated start-failure schema");
 }

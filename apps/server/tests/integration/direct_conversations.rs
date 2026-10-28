@@ -175,8 +175,7 @@ async fn direct_conversations_are_private_to_their_members() {
         "the direct space is not an ordinary Project"
     );
 
-    admin
-        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+    agent_workspace_server::test_support::drop_schema(&admin, &schema)
         .await
         .expect("drop schema");
 }

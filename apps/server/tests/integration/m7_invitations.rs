@@ -381,8 +381,7 @@ async fn project_invitations_are_digest_only_role_scoped_and_revocable() {
 
     drop(application);
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
-        .execute(&administrative_pool)
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("drop isolated M7 schema");
 }
@@ -776,8 +775,7 @@ async fn invitation_acceptance_creates_or_extends_one_human_identity_atomically(
 
     drop(application);
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
-        .execute(&administrative_pool)
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("drop isolated M7 acceptance schema");
 }

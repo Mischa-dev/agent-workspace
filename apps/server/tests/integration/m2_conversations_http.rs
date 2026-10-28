@@ -789,8 +789,7 @@ async fn authenticated_conversation_http_flow_is_scoped_idempotent_and_paginated
     assert_eq!(channel_capabilities["archive"], true);
     assert_eq!(capabilities(thread_id).await["restore"], true);
 
-    administrative_pool
-        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("drop isolated M2 HTTP schema");
 }

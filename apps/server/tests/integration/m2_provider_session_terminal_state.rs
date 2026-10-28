@@ -372,8 +372,7 @@ impl TestHarness {
 
     async fn cleanup(self) {
         self.pool.close().await;
-        sqlx::query(&format!("DROP SCHEMA {} CASCADE", self.schema))
-            .execute(&self.administrative_pool)
+        agent_workspace_server::test_support::drop_schema(&self.administrative_pool, &self.schema)
             .await
             .expect("drop isolated Provider Session schema");
     }

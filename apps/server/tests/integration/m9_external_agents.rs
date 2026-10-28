@@ -1411,8 +1411,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
 
     drop(application);
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
-        .execute(&administrative_pool)
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("drop isolated M9 schema");
 }
@@ -2218,8 +2217,7 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
     terminate_mcp(&application, &approver_token, &approver_session).await;
     drop(application);
     pool.close().await;
-    administrative_pool
-        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("account fixture operation");
 }
@@ -2413,8 +2411,7 @@ async fn workos_link_start_requires_csrf_and_callback_is_bound_to_the_browser() 
     );
     drop(application);
     pool.close().await;
-    administrative_pool
-        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("account fixture operation");
 }

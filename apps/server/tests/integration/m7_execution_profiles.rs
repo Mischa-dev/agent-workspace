@@ -410,10 +410,7 @@ async fn drop_isolated_schema(administrative_pool: &PgPool, schema: &str) {
     const MAX_ATTEMPTS: u32 = 5;
 
     for attempt in 1..=MAX_ATTEMPTS {
-        match administrative_pool
-            .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
-            .await
-        {
+        match agent_workspace_server::test_support::drop_schema(administrative_pool, schema).await {
             Ok(_) => return,
             Err(sqlx::Error::Database(error))
                 if error.code().as_deref() == Some("40P01") && attempt < MAX_ATTEMPTS =>

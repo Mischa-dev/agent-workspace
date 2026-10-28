@@ -239,8 +239,7 @@ async fn hosted_client_can_sign_in_as_an_agent() {
         "disabled agent is refused"
     );
 
-    admin
-        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+    agent_workspace_server::test_support::drop_schema(&admin, &schema)
         .await
         .expect("drop schema");
 }

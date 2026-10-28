@@ -740,8 +740,7 @@ async fn queued_runs_are_idempotent_and_create_no_workspace_before_admission() {
     wait_for_claim_release(&pool, second_run_id).await;
     supervisors.shutdown_all().await;
     pool.close().await;
-    administrative_pool
-        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("drop scheduler schema");
 }

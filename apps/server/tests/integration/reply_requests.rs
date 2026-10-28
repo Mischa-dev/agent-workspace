@@ -196,8 +196,7 @@ async fn agents_are_asked_claim_and_answer_exactly_once() {
     assert_eq!(still["requestId"], mara_request["requestId"], "{still}");
     assert_eq!(still["status"], "pending", "{still}");
 
-    admin
-        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+    agent_workspace_server::test_support::drop_schema(&admin, &schema)
         .await
         .expect("drop schema");
 }
@@ -439,8 +438,7 @@ async fn requests_of_agents_removed_from_a_group_are_withdrawn() {
         .await;
     assert_eq!(status, StatusCode::CONFLICT, "{refused}");
 
-    admin
-        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+    agent_workspace_server::test_support::drop_schema(&admin, &schema)
         .await
         .expect("drop schema");
 }
@@ -606,8 +604,7 @@ async fn agents_report_progress_and_post_interim_messages_on_one_claim() {
     }
     assert_eq!(agent_messages(&pool, &dm_id).await, 3);
 
-    admin
-        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+    agent_workspace_server::test_support::drop_schema(&admin, &schema)
         .await
         .expect("drop schema");
 }
@@ -815,8 +812,7 @@ async fn channel_tags_open_a_thread_and_follow_ups_stick_to_it() {
         "nothing claimed now: {again}"
     );
 
-    admin
-        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+    agent_workspace_server::test_support::drop_schema(&admin, &schema)
         .await
         .expect("drop schema");
 }
@@ -949,8 +945,7 @@ async fn stop_cancels_the_claim_and_refuses_the_next_call() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(statuses(&pool, &[&request_id]).await, ["pending"]);
 
-    admin
-        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+    agent_workspace_server::test_support::drop_schema(&admin, &schema)
         .await
         .expect("drop schema");
 }
@@ -1091,8 +1086,7 @@ async fn webhooks_say_what_happened_without_message_text() {
 
     shutdown.send(true).expect("stop worker");
     worker.await.expect("worker");
-    admin
-        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+    agent_workspace_server::test_support::drop_schema(&admin, &schema)
         .await
         .expect("drop schema");
 }

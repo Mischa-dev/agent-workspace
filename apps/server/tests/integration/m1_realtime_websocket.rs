@@ -283,8 +283,7 @@ async fn websocket_upgrade_delivery_isolation_logout_revocation_and_lag_resync()
         .expect("server task");
 
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
-        .execute(&administrative_pool)
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("drop isolated realtime schema");
 }
