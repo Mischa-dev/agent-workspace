@@ -118,6 +118,11 @@ const WRITE_ROUTES: &[&str] = &[
     "DELETE /api/v1/organizations/{organization_id}/harnesses/{harness_id}",
     "PATCH /api/v1/organizations/{organization_id}/harnesses/{harness_id}",
     "POST /api/v1/organizations/{organization_id}/invitations",
+    "PUT /api/v1/organizations/{organization_id}/layout",
+    "PUT /api/v1/organizations/{organization_id}/layout/mine",
+    "POST /api/v1/organizations/{organization_id}/layout/presets",
+    "DELETE /api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
+    "PATCH /api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
     "POST /api/v1/organizations/{organization_id}/leave",
     "DELETE /api/v1/organizations/{organization_id}/mail",
     "PUT /api/v1/organizations/{organization_id}/mail",
@@ -194,6 +199,8 @@ const WRITE_ROUTES: &[&str] = &[
     "PATCH /api/v1/projects/{project_id}/labels/{label_id}",
     "POST /api/v1/projects/{project_id}/launches",
     "POST /api/v1/projects/{project_id}/launches/{launch_id}/cancel",
+    "PUT /api/v1/projects/{project_id}/layout",
+    "PUT /api/v1/projects/{project_id}/layout/rules",
     "POST /api/v1/projects/{project_id}/members",
     "PATCH /api/v1/projects/{project_id}/members/{actor_id}",
     "POST /api/v1/projects/{project_id}/milestones",
@@ -396,6 +403,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "pin_set",
     "plan_import",
     "project_archive",
+    "project_layout_set",
     "project_member_set",
     "project_update",
     "reply_claim",
@@ -1054,9 +1062,13 @@ struct Targets {
     decision: Uuid,
     /// A status the task isn't in.
     status: Uuid,
+    /// A task in Backlog, where a new task goes (the fixture's are in
+    /// Ready), to place another before.
+    backlog_task: Uuid,
+    /// The workspace's saved layout preset.
+    layout_preset: Uuid,
     task_type: Uuid,
     suggestion: Uuid,
-    run_event: Uuid,
     /// The connected app's grant.
     grant: Uuid,
     /// The owner's newest session: B's is the one A tries to revoke.
@@ -1076,6 +1088,20 @@ struct Targets {
     /// checks whose files they are.
     channel_upload: Uuid,
     comment_upload: Uuid,
+    /// The same in the thread and the DM, and the agent's own in the group
+    /// of the request it holds.
+    thread_upload: Uuid,
+    dm_upload: Uuid,
+    claimed_upload: Uuid,
+    /// A reply request the owner stopped, to retry.
+    stopped_reply: Uuid,
+    /// Threads with no repository or run yet, to start runs in: one over
+    /// HTTP, one through MCP.
+    run_threads: [Uuid; 2],
+    /// A run that failed, and the event that says so, to acknowledge and
+    /// retry.
+    failed_run: Uuid,
+    failed_event: Uuid,
 }
 
 async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targets {
@@ -1190,11 +1216,20 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         json!({"expectedVersion": version, "role": "related"}),
     )
     .await;
+    ok(
+        app,
+        browser,
+        "POST",
+        &format!("/api/v1/projects/{project}/work-items"),
+        json!({"title": "Net backlog task"}),
+    )
+    .await;
 
-    // The agent's reply requests: one waiting, one it holds.
+    // The agent's reply requests: one waiting, one it holds, one stopped.
     let (reply, _) = reply_request(app, pool, browser, agent, "pending").await;
     let (claimed_reply, claimed_conversation) =
         reply_request(app, pool, browser, agent, "claimed").await;
+    let (stopped_reply, _) = reply_request(app, pool, browser, agent, "cancelled").await;
 
     // An unread notification for the owner, and a failed webhook delivery.
     let notification = Uuid::now_v7();
@@ -1249,6 +1284,119 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         format!("Net unsent comment {tag}").into_bytes(),
     )
     .await;
+    let mut uploads = Vec::new();
+    for conversation in [&world.thread, &world.dm] {
+        uploads.push(
+            upload(
+                app,
+                browser,
+                &format!("/api/v1/conversations/{conversation}/files?name=net-unsent-{tag}.txt"),
+                "text/plain",
+                format!("Net unsent {tag}").into_bytes(),
+            )
+            .await,
+        );
+    }
+    let agent_session = initialize(app, &world.agent_token)
+        .await
+        .expect("agent MCP");
+    let (_, uploaded) = call_tool(
+        app,
+        &world.agent_token,
+        &agent_session,
+        "file_upload",
+        json!({
+            "conversationId": claimed_conversation,
+            "name": format!("net-unsent-{tag}.txt"),
+            "text": format!("Net unsent reply {tag}"),
+        }),
+    )
+    .await;
+    let claimed_upload = structured(&uploaded)["value"]["fileId"]
+        .as_str()
+        .and_then(|id| Uuid::parse_str(id).ok())
+        .unwrap_or_else(|| panic!("agent upload: {uploaded}"));
+
+    // Runs. The owner's Codex profile counts as signed in (admission checks
+    // the stored state), so runs can start; nothing here runs them. Two
+    // threads with no repository yet to start runs in, then one with a run
+    // that failed, made the way the fixture makes its run.
+    sqlx::query("UPDATE execution_profiles SET account_state = 'authenticated' WHERE id = $1")
+        .bind(world.profile)
+        .execute(pool)
+        .await
+        .expect("profile signed in");
+    let mut run_threads = Vec::new();
+    for index in 0..3 {
+        let thread = Uuid::now_v7();
+        sqlx::query(
+            r#"
+            INSERT INTO conversations (id, project_id, kind, parent_channel_id, repository_id, name)
+            VALUES ($1, $2, 'thread', $3::uuid, $4, $5)
+            "#,
+        )
+        .bind(thread)
+        .bind(project)
+        .bind(&world.channel)
+        .bind((index == 2).then_some(world.repository))
+        .bind(format!("Net run thread {index}"))
+        .execute(pool)
+        .await
+        .expect("run thread");
+        run_threads.push(thread);
+    }
+    let failed_run = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO agent_runs (
+            id, conversation_id, execution_worker_id, requesting_actor_id,
+            execution_profile_id, repository_id, state, prompt,
+            authorization_snapshot, failure_reason, started_at, finished_at
+        )
+        SELECT $1, $2, execution_worker_id, $3, $4, $5, 'failed', 'Net run', '{}'::jsonb,
+               'Net failure.', now(), now()
+        FROM agent_runs WHERE id = $6
+        "#,
+    )
+    .bind(failed_run)
+    .bind(run_threads[2])
+    .bind(owner)
+    .bind(world.profile)
+    .bind(world.repository)
+    .bind(world.run)
+    .execute(pool)
+    .await
+    .expect("failed run");
+    let failed_event = Uuid::now_v7();
+    let mut transaction = pool.begin().await.expect("failure transaction");
+    sqlx::query(
+        r#"
+        INSERT INTO agent_run_events (id, agent_run_id, event_key, kind, summary, payload)
+        VALUES ($1, $2, 'net:failed', 'run_failed', 'Net failure.', '{}'::jsonb)
+        "#,
+    )
+    .bind(failed_event)
+    .bind(failed_run)
+    .execute(&mut *transaction)
+    .await
+    .expect("failure event");
+    let sequence = allocate_conversation_sequence(&mut transaction, run_threads[2])
+        .await
+        .expect("failure sequence");
+    sqlx::query(
+        r#"
+        INSERT INTO conversation_entries (id, conversation_id, sequence, kind, agent_run_event_id)
+        VALUES ($1, $2, $3, 'worker_event', $4)
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(run_threads[2])
+    .bind(sequence)
+    .bind(failed_event)
+    .execute(&mut *transaction)
+    .await
+    .expect("failure entry");
+    transaction.commit().await.expect("commit failure");
 
     let in_project = |sql: &'static str| scalar(pool, sql, project);
     let in_organization = |sql: &'static str| scalar(pool, sql, organization);
@@ -1320,17 +1468,17 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
             world.task,
         )
         .await,
+        backlog_task: in_project(
+            "SELECT id FROM work_items WHERE project_id = $1 AND title = 'Net backlog task'",
+        )
+        .await,
+        layout_preset: in_organization("SELECT id FROM layout_presets WHERE organization_id = $1")
+            .await,
         task_type: in_project(
             "SELECT id FROM work_item_types WHERE project_id = $1 AND enabled ORDER BY position LIMIT 1",
         )
         .await,
         suggestion: in_project("SELECT id FROM ai_suggestions WHERE project_id = $1").await,
-        run_event: scalar(
-            pool,
-            "SELECT id FROM agent_run_events WHERE agent_run_id = $1",
-            world.run,
-        )
-        .await,
         grant: scalar(
             pool,
             r#"
@@ -1358,6 +1506,13 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         claimed_conversation,
         channel_upload,
         comment_upload,
+        thread_upload: uploads[0],
+        dm_upload: uploads[1],
+        claimed_upload,
+        stopped_reply,
+        run_threads: [run_threads[0], run_threads[1]],
+        failed_run,
+        failed_event,
     }
 }
 
@@ -1375,11 +1530,8 @@ struct Spares {
     /// Deleted over HTTP and through MCP.
     messages: [String; 2],
     file: Uuid,
-    /// Unsent uploads A's own messages attach: in the thread and the DM
-    /// over HTTP; in the channel and for a task comment through MCP; and
-    /// the agent's, in the group its reply goes to.
-    thread_upload: Uuid,
-    dm_upload: Uuid,
+    /// Unsent uploads A's own tool calls attach: in the channel and for a
+    /// task comment, and the agent's, in the group its reply goes to.
     tool_upload: Uuid,
     tool_comment_upload: Uuid,
     reply_upload: Uuid,
@@ -1400,8 +1552,8 @@ struct Spares {
     /// A second connected app, revoked.
     grant: Uuid,
     oauth_client: String,
-    /// Reply requests: stopped and retried over HTTP; claimed, then progress
-    /// and a reply; passed; released (held already); stopped through MCP.
+    /// Reply requests: stopped over HTTP; claimed, then progress and a
+    /// reply; passed; released (held already); stopped through MCP.
     reply_stop: Uuid,
     reply_claim: Uuid,
     reply_pass: Uuid,
@@ -1414,13 +1566,6 @@ struct Spares {
     session: Uuid,
     /// An agent in A's project that may ask a person to run Codex.
     requester_token: String,
-    /// Threads with no repository or run yet, to start runs in: one over
-    /// HTTP, one through MCP.
-    run_threads: [Uuid; 2],
-    /// A run that failed, and the event that says so, to acknowledge and
-    /// retry.
-    failed_run: Uuid,
-    failed_event: Uuid,
     /// A repository with no runs, archived.
     repository: Uuid,
 }
@@ -1527,11 +1672,6 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
     .await;
     let mut uploads = Vec::new();
     for uri in [
-        format!(
-            "/api/v1/conversations/{}/files?name=net-thread.txt",
-            a.thread
-        ),
-        format!("/api/v1/conversations/{}/files?name=net-dm.txt", a.dm),
         format!(
             "/api/v1/conversations/{}/files?name=net-tool.txt",
             a.channel
@@ -1673,19 +1813,10 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
     .await;
     let repository = Uuid::parse_str(&string_at(&repository, "/id")).expect("repository");
 
-    // Runs. The owner's Codex profile counts as signed in (admission checks
-    // the stored state), so runs can start; nothing here runs them. Two
-    // threads with no repository yet to start runs in, then one with a
-    // failed run and two with a run waiting on an approval, made the way
-    // the fixture makes its run.
-    sqlx::query("UPDATE execution_profiles SET account_state = 'authenticated' WHERE id = $1")
-        .bind(a.profile)
-        .execute(pool)
-        .await
-        .expect("profile signed in");
-    // Rook's own profile, signed in the same way, for the run whose approval
-    // the owner answers through MCP: a run only works on its requester's
-    // profile.
+    // Two runs waiting on an approval, each in a thread of its own, made the
+    // way `more_targets` makes its failed run: the owner's, and one on
+    // rook's own profile, signed in the same way, whose approval the owner
+    // answers through MCP (a run only works on its requester's profile).
     let rook = login_as(app, "rook-a").await;
     ok(
         app,
@@ -1713,8 +1844,11 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         a.run,
     )
     .await;
-    let mut run_threads = Vec::new();
-    for index in 0..5 {
+    let mut runs = Vec::new();
+    for (index, (requester, profile)) in [(ax.owner, a.profile), (a.rook, rook_profile)]
+        .into_iter()
+        .enumerate()
+    {
         let thread = Uuid::now_v7();
         sqlx::query(
             r#"
@@ -1725,19 +1859,11 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         .bind(thread)
         .bind(project)
         .bind(&a.channel)
-        .bind((index >= 2).then_some(a.repository))
-        .bind(format!("Net run thread {index}"))
+        .bind(a.repository)
+        .bind(format!("Net approval thread {index}"))
         .execute(pool)
         .await
-        .expect("run thread");
-        run_threads.push(thread);
-    }
-    let mut runs = Vec::new();
-    for (thread, requester, profile) in [
-        (run_threads[2], ax.owner, a.profile),
-        (run_threads[3], ax.owner, a.profile),
-        (run_threads[4], a.rook, rook_profile),
-    ] {
+        .expect("approval thread");
         let run = Uuid::now_v7();
         sqlx::query(
             r#"
@@ -1761,16 +1887,15 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         .expect("run");
         runs.push(run);
     }
-    let failed_run = runs[0];
     sqlx::query(
         "UPDATE agent_runs SET state = 'blocked', failure_reason = NULL, finished_at = NULL WHERE id = ANY($1)",
     )
-    .bind(&runs[1..])
+    .bind(&runs)
     .execute(pool)
     .await
     .expect("runs blocked");
     let mut approvals = Vec::new();
-    for (run, requester) in [(runs[1], ax.owner), (runs[2], a.rook)] {
+    for (run, requester) in [(runs[0], ax.owner), (runs[1], a.rook)] {
         let approval = Uuid::now_v7();
         sqlx::query(
             r#"
@@ -1792,36 +1917,6 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         .expect("approval");
         approvals.push(approval);
     }
-    let failed_event = Uuid::now_v7();
-    let mut transaction = pool.begin().await.expect("failure transaction");
-    sqlx::query(
-        r#"
-        INSERT INTO agent_run_events (id, agent_run_id, event_key, kind, summary, payload)
-        VALUES ($1, $2, 'net:failed', 'run_failed', 'Net failure.', '{}'::jsonb)
-        "#,
-    )
-    .bind(failed_event)
-    .bind(failed_run)
-    .execute(&mut *transaction)
-    .await
-    .expect("failure event");
-    let sequence = allocate_conversation_sequence(&mut transaction, run_threads[2])
-        .await
-        .expect("failure sequence");
-    sqlx::query(
-        r#"
-        INSERT INTO conversation_entries (id, conversation_id, sequence, kind, agent_run_event_id)
-        VALUES ($1, $2, $3, 'worker_event', $4)
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(run_threads[2])
-    .bind(sequence)
-    .bind(failed_event)
-    .execute(&mut *transaction)
-    .await
-    .expect("failure entry");
-    transaction.commit().await.expect("commit failure");
 
     let mut suggestions = Vec::new();
     for (work_item, other) in [(a.task, task), (a.subtask, task)] {
@@ -1942,10 +2037,8 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         projects: [projects[0].clone(), projects[1].clone()],
         messages: [messages[0].clone(), messages[1].clone()],
         file,
-        thread_upload: uploads[0],
-        dm_upload: uploads[1],
-        tool_upload: uploads[2],
-        tool_comment_upload: uploads[3],
+        tool_upload: uploads[0],
+        tool_comment_upload: uploads[1],
         reply_upload,
         later,
         scheduled: [scheduled[0], scheduled[1]],
@@ -1966,9 +2059,6 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         types,
         session,
         requester_token,
-        run_threads: [run_threads[0], run_threads[1]],
-        failed_run,
-        failed_event,
         repository,
     }
 }
@@ -2757,14 +2847,14 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         ),
         path_case(
             "POST /api/v1/agent-runs/{id}/acknowledge-failure",
-            &[id(sp.failed_run, b.run)],
+            &[id(ax.failed_run, bx.failed_run)],
             |values| {
                 Payload::Json(json!({
-                    "eventId": if is_a(values, &sp.failed_run.to_string()) { sp.failed_event } else { bx.run_event }
+                    "eventId": if is_a(values, &ax.failed_run.to_string()) { ax.failed_event } else { bx.failed_event }
                 }))
             },
         )
-        .rejecting(vec![json!({"eventId": bx.run_event})]),
+        .rejecting(vec![json!({"eventId": bx.failed_event})]),
         path_case(
             "POST /api/v1/agent-runs/{id}/interrupt",
             &[id(a.run, b.run)],
@@ -2773,7 +2863,7 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         .last(),
         path_case(
             "POST /api/v1/agent-runs/{id}/retry",
-            &[id(sp.failed_run, b.run)],
+            &[id(ax.failed_run, bx.failed_run)],
             empty(),
         ),
         // Bug report links
@@ -2835,14 +2925,14 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         path_case(
             "POST /api/v1/threads/{id}/messages",
             &[id(&a.thread, &b.thread)],
-            json_body(json!({"content": text("Net reply"), "attachments": [sp.thread_upload]})),
+            json_body(json!({"content": text("Net reply"), "attachments": [ax.thread_upload]})),
         )
         .rejecting(vec![
-            json!({"content": text("Net reply"), "attachments": [bx.channel_upload]}),
+            json!({"content": text("Net reply"), "attachments": [bx.thread_upload]}),
         ]),
         path_case(
             "POST /api/v1/threads/{id}/agent-runs",
-            &[id(sp.run_threads[0], b.run_thread)],
+            &[id(ax.run_threads[0], bx.run_threads[0])],
             json_body(json!({"prompt": "Net run"})),
         )
         .rejecting(vec![
@@ -2900,10 +2990,10 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         path_case(
             "POST /api/v1/conversations/{id}/messages",
             &[id(&a.dm, &b.dm)],
-            json_body(json!({"content": text("Net DM"), "attachments": [sp.dm_upload]})),
+            json_body(json!({"content": text("Net DM"), "attachments": [ax.dm_upload]})),
         )
         .rejecting(vec![
-            json!({"content": text("Net DM"), "attachments": [bx.channel_upload]}),
+            json!({"content": text("Net DM"), "attachments": [bx.dm_upload]}),
         ])
         .and(vec![
             (
@@ -3013,13 +3103,15 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         // Files
         path_case(
             "DELETE /api/v1/files/{id}",
-            &[id(sp.file, b.task_file)],
+            &[id(sp.file, bx.channel_upload)],
             empty(),
         )
+        // And a task's own file, which anyone who may edit the task removes.
+        // A message's files go with the message, for anyone.
         .and(vec![(
             Call::new(
                 "DELETE",
-                format!("/api/v1/files/{}", b.file),
+                format!("/api/v1/files/{}", b.task_file),
                 Payload::Json(json!({})),
             ),
             Expect::Refused,
@@ -3136,6 +3228,51 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             &[organization()],
             json_body(json!({"role": "member", "expiresInHours": 24})),
         ),
+        // Layouts: a saved preset is the workspace's own, so B's is refused
+        // wherever A's would do.
+        path_case(
+            "PUT /api/v1/organizations/{organization_id}/layout",
+            &[organization()],
+            |values| {
+                let preset = if is_a(values, &a.organization.to_string()) {
+                    ax.layout_preset
+                } else {
+                    bx.layout_preset
+                };
+                Payload::Json(json!({"layout": {"preset": preset}}))
+            },
+        )
+        .rejecting(vec![json!({"layout": {"preset": bx.layout_preset}})]),
+        path_case(
+            "PUT /api/v1/organizations/{organization_id}/layout/mine",
+            &[organization()],
+            json_body(json!({"hidden": [], "showHidden": true})),
+        ),
+        path_case(
+            "POST /api/v1/organizations/{organization_id}/layout/presets",
+            &[organization()],
+            |values| {
+                let preset = if is_a(values, &a.organization.to_string()) {
+                    ax.layout_preset
+                } else {
+                    bx.layout_preset
+                };
+                Payload::Json(json!({"name": "Net preset", "layout": {"preset": preset}}))
+            },
+        )
+        .rejecting(vec![json!({"name": "Net preset b", "layout": {"preset": bx.layout_preset}})]),
+        path_case(
+            "PATCH /api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
+            &[organization(), id(ax.layout_preset, bx.layout_preset)],
+            json_body(json!({"description": "Net preset"})),
+        )
+        .rejecting(vec![json!({"layout": {"preset": bx.layout_preset}})]),
+        path_case(
+            "DELETE /api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
+            &[organization(), id(ax.layout_preset, bx.layout_preset)],
+            empty(),
+        )
+        .last(),
         path_case(
             "POST /api/v1/organizations/{organization_id}/leave",
             &[organization()],
@@ -3714,6 +3851,45 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             &[project(), id(ax.launch, bx.launch)],
             empty(),
         ),
+        // Layouts
+        path_case(
+            "PUT /api/v1/projects/{project_id}/layout",
+            &[project()],
+            |values| {
+                let preset = if is_a(values, &a.project) {
+                    ax.layout_preset
+                } else {
+                    bx.layout_preset
+                };
+                Payload::Json(json!({"layout": {"preset": preset}}))
+            },
+        )
+        .rejecting(vec![json!({"layout": {"preset": bx.layout_preset}})]),
+        path_case(
+            "PUT /api/v1/projects/{project_id}/layout/rules",
+            &[project()],
+            |values| {
+                let (preset, person) = if is_a(values, &a.project) {
+                    (ax.layout_preset, a.rook)
+                } else {
+                    (bx.layout_preset, b.rook)
+                };
+                Payload::Json(json!({"rules": [
+                    {"role": "viewer", "preset": preset},
+                    {"actorId": person, "preset": "bug_reporting"},
+                ]}))
+            },
+        )
+        .rejecting(vec![
+            json!({"rules": [
+                {"role": "viewer", "preset": bx.layout_preset},
+                {"actorId": a.rook, "preset": "bug_reporting"},
+            ]}),
+            json!({"rules": [
+                {"role": "viewer", "preset": ax.layout_preset},
+                {"actorId": b.rook, "preset": "bug_reporting"},
+            ]}),
+        ]),
         path_case(
             "POST /api/v1/projects/{project_id}/members",
             &[project()],
@@ -4189,7 +4365,7 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         ),
         path_case(
             "POST /api/v1/reply-requests/{id}/retry",
-            &[id(sp.reply_stop, bx.reply)],
+            &[id(ax.stopped_reply, bx.stopped_reply)],
             empty(),
         ),
         // Settings
@@ -4587,6 +4763,12 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         )
         .rejecting(vec![json!({"accountId": a.provider_account, "taskIds": [b.task], "clientRequestId": "net-batch-mixed"})]),
         mcp_case(
+            "project_layout_set",
+            json!({"projectId": a.project, "preset": "Software team"}),
+            vec![json!({"projectId": b.project, "preset": "Software team"})],
+        )
+        .rejecting(vec![json!({"projectId": a.project, "preset": bx.layout_preset})]),
+        mcp_case(
             "project_member_set",
             json!({"projectId": a.project, "person": "@wren", "role": "viewer"}),
             vec![json!({"projectId": b.project, "person": "@wren", "role": "viewer"})],
@@ -4773,7 +4955,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "generation": generation(ax.claimed_reply),
             "text": "Net reply",
             "final": true,
-            "attachmentIds": [bx.channel_upload],
+            "attachmentIds": [bx.claimed_upload],
             "clientRequestId": "net-reply-mixed",
         })])
         .by_agent(),
@@ -4813,7 +4995,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 ("milestone", json!(bx.milestone)),
                 ("status", json!(bx.status)),
                 ("type", json!(bx.task_type)),
-                ("beforeTaskId", json!(b.task)),
+                ("beforeTaskId", json!(bx.backlog_task)),
             ]
             .into_iter()
             .enumerate()
@@ -4838,7 +5020,8 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 ("milestone", json!(bx.milestone)),
                 ("status", json!(bx.status)),
                 ("type", json!(bx.task_type)),
-                ("beforeTaskId", json!(b.task)),
+                // In Ready, as the task is.
+                ("beforeTaskId", json!(b.subtask)),
             ]
             .into_iter()
             .map(|(key, value)| {
@@ -4964,7 +5147,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"taskIds": [sp.second_task], "afterTaskId": sp.task}),
             vec![json!({"taskIds": [b.task], "afterTaskId": b.subtask})],
         )
-        .rejecting(vec![json!({"taskIds": [sp.second_task], "beforeTaskId": b.task})]),
+        .rejecting(vec![json!({"taskIds": [sp.second_task], "beforeTaskId": bx.backlog_task})]),
         mcp_case(
             "task_claim",
             json!({"taskId": a.subtask, "note": "Net claim"}),
@@ -5259,15 +5442,15 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         mcp_case(
             "run_start",
             json!({
-                "threadId": sp.run_threads[1],
+                "threadId": ax.run_threads[1],
                 "repositoryId": a.repository,
                 "prompt": "Net run",
                 "clientRequestId": "net-run-own",
             }),
-            vec![json!({"threadId": b.run_thread, "prompt": "Net run", "clientRequestId": "net-run-b"})],
+            vec![json!({"threadId": bx.run_threads[1], "prompt": "Net run", "clientRequestId": "net-run-b"})],
         )
         .rejecting(vec![json!({
-            "threadId": sp.run_threads[1],
+            "threadId": ax.run_threads[1],
             "prompt": "Net run",
             "repositoryId": b.repository,
             "clientRequestId": "net-run-mixed",
@@ -5284,14 +5467,14 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         mcp_case(
             "run_request",
             json!({
-                "conversationId": sp.run_threads[1],
+                "conversationId": ax.run_threads[1],
                 "repositoryId": a.repository,
                 "sponsorActorId": ax.owner,
                 "prompt": "Net request",
                 "clientRequestId": "net-request-own",
             }),
             vec![json!({
-                "conversationId": b.run_thread,
+                "conversationId": bx.run_threads[1],
                 "repositoryId": b.repository,
                 "sponsorActorId": bx.owner,
                 "prompt": "Net request",
@@ -5300,14 +5483,14 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         )
         .rejecting(vec![
             json!({
-                "conversationId": sp.run_threads[1],
+                "conversationId": ax.run_threads[1],
                 "repositoryId": b.repository,
                 "sponsorActorId": ax.owner,
                 "prompt": "Net request",
                 "clientRequestId": "net-request-m1",
             }),
             json!({
-                "conversationId": sp.run_threads[1],
+                "conversationId": ax.run_threads[1],
                 "repositoryId": a.repository,
                 "sponsorActorId": bx.owner,
                 "prompt": "Net request",
