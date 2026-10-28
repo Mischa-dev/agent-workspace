@@ -407,10 +407,20 @@ function TwoFactorSetupFlow({
       <div>
         <h3 className="aw-formcard__title">Add it to your authenticator app</h3>
         <p className="aw-formcard__desc">
+          {setup.qrSvg ? 'Scan this code with the app. ' : null}
           On this device, <a href={setup.otpauthUri}>open it in your authenticator app</a>. Elsewhere, add an account by
           hand with this key:
         </p>
       </div>
+      {setup.qrSvg ? (
+        <img
+          alt="QR code for your authenticator app"
+          className="aw-twofactor-qr"
+          height={200}
+          src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(setup.qrSvg)}`}
+          width={200}
+        />
+      ) : null}
       <dl className="aw-dl">
         <div className="aw-dl__row">
           <dt>Account</dt>
