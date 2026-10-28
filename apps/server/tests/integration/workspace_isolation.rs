@@ -122,6 +122,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/organizations/{organization_id}/audit-events/facets",
     "/api/v1/organizations/{organization_id}/harnesses",
     "/api/v1/organizations/{organization_id}/invitations",
+    "/api/v1/organizations/{organization_id}/layout",
     "/api/v1/organizations/{organization_id}/mail",
     "/api/v1/organizations/{organization_id}/members",
     "/api/v1/organizations/{organization_id}/model-catalog",
@@ -166,6 +167,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{project_id}/invitations",
     "/api/v1/projects/{project_id}/labels",
     "/api/v1/projects/{project_id}/launches",
+    "/api/v1/projects/{project_id}/layout",
     "/api/v1/projects/{project_id}/member-candidates",
     "/api/v1/projects/{project_id}/members",
     "/api/v1/projects/{project_id}/milestones",
@@ -740,7 +742,7 @@ async fn second_workspace_owner(pool: &PgPool) -> Uuid {
     organization
 }
 
-async fn login_as(app: &axum::Router, login_name: &str) -> Browser {
+pub(super) async fn login_as(app: &axum::Router, login_name: &str) -> Browser {
     let response = app
         .clone()
         .oneshot(
@@ -777,7 +779,7 @@ async fn login_as(app: &axum::Router, login_name: &str) -> Browser {
 }
 
 /// A person who can sign in, with the same handle in both workspaces.
-async fn add_person(
+pub(super) async fn add_person(
     setup: &Setup,
     projects: &[&str],
     login_name: &str,
@@ -1593,6 +1595,55 @@ async fn build_workspace(
         status.is_success(),
         "{label} bug report link: {status} {created}"
     );
+
+    // Layouts: a saved preset, the workspace's default and the project's
+    // layout, and rules for viewers and for Rook.
+    let (status, created) = send(
+        app,
+        browser.request(
+            "POST",
+            &format!("/api/v1/organizations/{organization}/layout/presets"),
+            None,
+            json!({
+                "name": format!("Chores{m}"),
+                "description": format!("For the house{m}"),
+                "layout": {
+                    "preset": "household",
+                    "words": {"task": {"one": format!("chore{m}"), "many": format!("chores{m}")}},
+                },
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "{label} layout preset: {created}"
+    );
+    let layout_preset = string_at(&created, "/id");
+    for (path, body) in [
+        (
+            format!("/api/v1/organizations/{organization}/layout"),
+            json!({"layout": {"preset": layout_preset}}),
+        ),
+        (
+            format!("/api/v1/projects/{project}/layout"),
+            json!({"layout": {
+                "preset": "personal_life",
+                "words": {"page": {"one": format!("note{m}"), "many": format!("notes{m}")}},
+            }}),
+        ),
+        (
+            format!("/api/v1/projects/{project}/layout/rules"),
+            json!({"rules": [
+                {"role": "viewer", "preset": layout_preset},
+                {"actorId": rook, "preset": "bug_reporting"},
+            ]}),
+        ),
+    ] {
+        let (status, changed) = send(app, browser.request("PUT", &path, None, body)).await;
+        assert!(status.is_success(), "{label} {path}: {status} {changed}");
+    }
 
     // Whiteboards: one for the whole workspace, drawn on and with an image,
     // and one in the project, linked to the task, the project and the page.
@@ -2536,6 +2587,7 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             "/api/v1/projects/{project_id}/bug-report-links",
             "/bug-report-links",
         ),
+        project_route("/api/v1/projects/{project_id}/layout", "/layout"),
         {
             let (own, foreign) =
                 pair(&|outer, inner| format!("{}/automations/{}/runs", p(outer), inner.rule));
@@ -2580,6 +2632,12 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             "/api/v1/my-work",
             vec!["/api/v1/my-work".to_owned()],
             vec![],
+            vec![],
+        ),
+        case(
+            "/api/v1/organizations/{organization_id}/layout",
+            vec![format!("/api/v1/organizations/{}/layout", a.organization)],
+            vec![format!("/api/v1/organizations/{}/layout", b.organization)],
             vec![],
         ),
         case(

@@ -127,6 +127,11 @@ pub enum SettingType {
     Choice {
         options: &'static [&'static str],
     },
+    /// A layout: a preset with parts turned on or off and nouns renamed
+    /// (see [`crate::layouts`]). `null` means none is chosen here.
+    Layout,
+    /// Layout part ids, such as `area.runs`.
+    PartList,
 }
 
 /// One setting.
@@ -184,6 +189,8 @@ impl SettingDef {
             (SettingType::Choice { options }, Value::String(text)) => {
                 options.contains(&text.as_str())
             }
+            (SettingType::Layout, value) => crate::layouts::valid_layout_value(value),
+            (SettingType::PartList, value) => crate::layouts::valid_part_list(value),
             _ => false,
         };
         if valid {
@@ -446,7 +453,41 @@ pub const REGISTRY: &[SettingDef] = &[
         launch_override: false,
         default: "true",
     },
+    // Layouts change through their own routes (crate::layouts), which check
+    // presets and parts against the workspace; the generic routes refuse them.
+    SettingDef {
+        key: "layout.default",
+        label: "Layout",
+        description: "Which parts of the app people see: a preset, with parts turned on or off and a few words renamed. Visual only; it never changes what anyone may do.",
+        kind: SettingType::Layout,
+        scopes: TEAM_SCOPES,
+        launch_override: false,
+        default: "null",
+    },
+    SettingDef {
+        key: "layout.my_view",
+        label: "My view",
+        description: "Parts you hide for yourself, on top of the layout.",
+        kind: SettingType::PartList,
+        scopes: &[Scope::User],
+        launch_override: false,
+        default: "[]",
+    },
+    SettingDef {
+        key: "layout.show_hidden",
+        label: "Show hidden parts",
+        description: "Show the parts a layout hides, in projects you own or administer.",
+        kind: SettingType::Bool,
+        scopes: &[Scope::User],
+        launch_override: false,
+        default: "false",
+    },
 ];
+
+/// Settings written only through their own routes, never the generic ones.
+fn has_own_routes(key: &str) -> bool {
+    key.starts_with("layout.")
+}
 
 pub fn definition(key: &str) -> Option<&'static SettingDef> {
     REGISTRY.iter().find(|definition| definition.key == key)
@@ -850,7 +891,7 @@ async fn current_version(
 // ---------------------------------------------------------------------------
 // Who may read and write (shared with secrets)
 
-fn actor_kind(value: &str) -> Result<ActorKind, AppError> {
+pub(crate) fn actor_kind(value: &str) -> Result<ActorKind, AppError> {
     match value {
         "human" => Ok(ActorKind::Human),
         "external_agent" => Ok(ActorKind::ExternalAgent),
@@ -861,7 +902,7 @@ fn actor_kind(value: &str) -> Result<ActorKind, AppError> {
     }
 }
 
-fn membership_role(value: &str) -> Result<MembershipRole, AppError> {
+pub(crate) fn membership_role(value: &str) -> Result<MembershipRole, AppError> {
     match value {
         "owner" => Ok(MembershipRole::Owner),
         "admin" => Ok(MembershipRole::Admin),
@@ -1267,6 +1308,9 @@ async fn set_value(
 ) -> Result<Json<WriteResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
     let definition = definition(&key).ok_or(AppError::NotFound("setting"))?;
+    if has_own_routes(definition.key) {
+        return Err(AppError::Validation("setting key"));
+    }
     let mut transaction = state.pool.begin().await?;
     let target = authorize_target(
         &mut transaction,
@@ -1316,6 +1360,9 @@ async fn reset_value(
 ) -> Result<Json<WriteResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
     let definition = definition(&key).ok_or(AppError::NotFound("setting"))?;
+    if has_own_routes(definition.key) {
+        return Err(AppError::Validation("setting key"));
+    }
     let mut transaction = state.pool.begin().await?;
     let target = authorize_target(
         &mut transaction,
