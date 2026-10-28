@@ -71,6 +71,12 @@ Several agents build at once, so changes must merge in either order.
 - In shared registries (the tool list in `mcp.rs`, routes in `api.rs` and
   `App.tsx`, `policy_inventory.rs`, `ui/index.ts`) add lines next to related
   ones rather than at the end, and don't reorder.
+- New user-facing parts (a sidebar row, a tab, a task field or section, a
+  composer extra) register in the layout registry,
+  `apps/web/src/experience/registry.json`, and say which presets show them;
+  pages check `shows(part)` before rendering them. Layouts are visual only.
+  `experience/registry.test.tsx` fails on a sidebar row or tab that isn't
+  registered.
 
 ## Architecture rules
 

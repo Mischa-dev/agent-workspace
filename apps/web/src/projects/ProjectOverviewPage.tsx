@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 
 import { requestJson } from '../api/client'
 import { useAuthenticatedSession } from '../auth/session'
+import { useProjectExperience, type Experience } from '../experience/layout'
 import { useProjectConversationSidebar } from '../conversations/hooks'
 import type { SidebarChannel, SidebarThread } from '../conversations/types'
 import { inboxKeys, isExternalHref, normalizePage, useUpdateInbox, type InboxNotification } from '../inbox/api'
@@ -51,6 +52,7 @@ export function ProjectOverviewPage() {
   const session = useAuthenticatedSession()
   const { projectId = '' } = useParams()
   const project = useProject(projectId)
+  const experience = useProjectExperience(projectId)
   const navigationSync = useRememberProjectLocation(
     projectId,
     { kind: 'project_overview' },
@@ -90,7 +92,8 @@ export function ProjectOverviewPage() {
           mark={<ProjectInitials project={project.data} size={40} />}
           title={project.data.name}
         >
-          {project.data.key} · {roleLabel(project.data.role)}
+          {experience.shows('tech.task_keys') ? `${project.data.key} · ` : ''}
+          {roleLabel(project.data.role)}
         </PageHeader>
         {project.data.archivedAt && (
           <Banner className="aw-page__banner" icon="archive" title="This project is archived.">
@@ -100,13 +103,22 @@ export function ProjectOverviewPage() {
         <div className="aw-overview">
           <div className="aw-overview__column">
             <NeedsYouHere base={base} project={project.data} />
-            <Channels base={base} project={project.data} />
+            {experience.shows('area.chat') ? <Channels base={base} project={project.data} /> : null}
           </div>
-          <RecentTasks base={base} canCreate={project.data.role !== 'viewer' && !project.data.archivedAt} projectId={project.data.id} />
+          {experience.shows('area.tasks') ? (
+            <RecentTasks
+              base={base}
+              canCreate={project.data.role !== 'viewer' && !project.data.archivedAt}
+              experience={experience}
+              projectId={project.data.id}
+            />
+          ) : null}
         </div>
-        <Suspense fallback={null}>
-          <ProjectWhiteboards canEdit={project.data.role !== 'viewer' && !project.data.archivedAt} projectId={project.data.id} />
-        </Suspense>
+        {experience.shows('area.whiteboards') ? (
+          <Suspense fallback={null}>
+            <ProjectWhiteboards canEdit={project.data.role !== 'viewer' && !project.data.archivedAt} projectId={project.data.id} />
+          </Suspense>
+        ) : null}
       </div>
     </AppShell>
   )
@@ -325,15 +337,16 @@ function ThreadRow({ base, thread }: { base: string; thread: ThreadInChannel }) 
   )
 }
 
-function RecentTasks({ base, canCreate, projectId }: { base: string; canCreate: boolean; projectId: string }) {
+function RecentTasks({ base, canCreate, experience, projectId }: { base: string; canCreate: boolean; experience: Experience; projectId: string }) {
   const work = useWorkItems(projectId, RECENT_WORK)
+  const many = experience.word('task', 'many')
   return (
     <div className="aw-overview__column">
-      <Section actions={<MoreLink to={`${base}/work-items`}>All tasks</MoreLink>} title="Recent tasks">
-        {work.isPending && <ListSkeleton label="Loading tasks" rows={3} />}
+      <Section actions={<MoreLink to={`${base}/work-items`}>{`All ${many}`}</MoreLink>} title={`Recent ${many}`}>
+        {work.isPending && <ListSkeleton label={`Loading ${many}`} rows={3} />}
         {work.isError && (
           <Banner onRetry={() => void work.refetch()} tone="danger">
-            Tasks didn’t load.
+            {experience.label('task', 'many')} didn’t load.
           </Banner>
         )}
         {work.isSuccess && !work.data.items.length && (
@@ -341,18 +354,18 @@ function RecentTasks({ base, canCreate, projectId }: { base: string; canCreate: 
             action={
               canCreate ? (
                 <ButtonLink icon="plus" to={`${base}/work-items?create=task`} variant="primary">
-                  New task
+                  New {experience.word('task')}
                 </ButtonLink>
               ) : null
             }
             icon="work"
-            title="No tasks yet"
+            title={`No ${many} yet`}
           >
             Track what needs doing here, then hand it to a person or an agent.
           </EmptyState>
         )}
         {work.isSuccess && work.data.items.length > 0 && (
-          <RowList label="Recent tasks">
+          <RowList label={`Recent ${many}`}>
             {work.data.items.map((item) => (
               <Row
                 actions={
@@ -363,7 +376,7 @@ function RecentTasks({ base, canCreate, projectId }: { base: string; canCreate: 
                 className="aw-row--link"
                 key={item.id}
                 leading={<StatusIcon category={item.status.semanticCategory} label={item.status.name} />}
-                meta={`${item.key} · ${item.status.name}`}
+                meta={experience.shows('tech.task_keys') ? `${item.key} · ${item.status.name}` : item.status.name}
                 title={
                   <Link className="aw-row__link" to={`${base}/work-items/${encodeURIComponent(item.id)}`}>
                     {item.title}

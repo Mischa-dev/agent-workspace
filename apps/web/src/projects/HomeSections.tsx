@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
 import { toastError } from '../app/mutations'
+import { useHomeExperience } from '../experience/layout'
 import { isExternalHref, useInbox, useUpdateInbox, type InboxNotification } from '../inbox/api'
 import { getOnboarding, onboardingKeys, progressText, STEP_TITLES, updateOnboarding } from '../onboarding/api'
 import { listUsage, usageKeys, type AccountUsage, type UsageWindow } from '../settings/account/usageApi'
@@ -117,8 +118,10 @@ const waitingText = (queued: number) => `${countLabel(queued, 'run')} waiting fo
 /** Agents working now, across every project you can open. */
 export function WorkingNow() {
   const home = useQuery({ queryKey: homeKeys.summary, queryFn: getHome, refetchInterval: 30_000 })
+  const experience = useHomeExperience()
+  const keys = experience.shows('tech.task_keys')
   return (
-    <Section actions={<MoreLink to="/runs">Runs</MoreLink>} id="home-working" title="Working now">
+    <Section actions={experience.shows('workspace.runs') ? <MoreLink to="/runs">Runs</MoreLink> : null} id="home-working" title="Working now">
       {home.isPending ? (
         <ListSkeleton label="Loading runs" rows={2} />
       ) : home.isError ? (
@@ -149,7 +152,7 @@ export function WorkingNow() {
                   <Link className="aw-row__link" to={run.href}>
                     {run.task ? (
                       <>
-                        <span className="aw-home__key">{run.task.key}</span> {run.task.title}
+                        {keys ? <span className="aw-home__key">{run.task.key}</span> : null} {run.task.title}
                       </>
                     ) : (
                       run.threadName
@@ -261,8 +264,10 @@ export function YourTasks() {
   const seen = new Set<string>()
   const unique = items.filter((item) => (seen.has(item.id) ? false : (seen.add(item.id), true)))
   const more = work.data ? moreTasks(work.data, Math.min(unique.length, MAX_ROWS), unique.length) : null
+  const experience = useHomeExperience()
+  const keys = experience.shows('tech.task_keys')
   return (
-    <Section actions={<MoreLink to="/my-work">My work</MoreLink>} id="home-tasks" title="Your tasks">
+    <Section actions={<MoreLink to="/my-work">My work</MoreLink>} id="home-tasks" title={`Your ${experience.word('task', 'many')}`}>
       {work.isPending ? (
         <ListSkeleton label="Loading your tasks" rows={3} />
       ) : work.isError ? (
@@ -280,7 +285,7 @@ export function YourTasks() {
                 meta={taskMeta(item)}
                 title={
                   <Link className="aw-row__link" to={`/projects/${encodeURIComponent(item.projectId)}/work-items/${encodeURIComponent(item.id)}`}>
-                    <span className="aw-home__key">{item.key}</span> {item.title}
+                    {keys ? <span className="aw-home__key">{item.key}</span> : null} {item.title}
                   </Link>
                 }
               />

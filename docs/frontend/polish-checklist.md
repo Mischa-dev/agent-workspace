@@ -64,6 +64,14 @@ their own pages; nobody else will.
 15. **Errors are reported**: unexpected errors reach `AppErrorBoundary`, which
     sends them to telemetry; don't swallow them in a `catch` that only logs.
 
+## Layouts
+
+16. **Every part takes part**: a new user-facing part is in the layout
+    registry (`src/experience/registry.json`) and its presets say whether they
+    show it; the page hides it when the layout does, and the nouns a layout
+    renames (task, milestone, page, channel) come from `experience.word`.
+    Check the page with Software team, Personal life and Bug reporting.
+
 ## Areas
 
 The areas below passed this list in W13 (#149). A workstream that adds or

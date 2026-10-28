@@ -95,6 +95,8 @@ type StructuredComposerProps = {
   ) => Promise<SlashOutcome>
   /** Shows Schedule next to Send: send this message at a later time. */
   onSchedule?: (content: MessageContentV1, at: Date) => Promise<void>
+  /** Suggest only people after @, for a project whose layout leaves agent mentions out. Typed handles still work. */
+  peopleOnly?: boolean
   /** Up arrow in an empty box: edit your newest message. True when there was one. */
   onEditLast?: () => boolean
   /**
@@ -196,6 +198,7 @@ function ComposerBox({
   commands,
   onCommand,
   onSchedule,
+  peopleOnly = false,
   onEditLast,
   focusOnOpen = false,
 }: StructuredComposerProps) {
@@ -345,7 +348,14 @@ function ComposerBox({
     const timer = window.setTimeout(() => {
       const search: Promise<Suggestion[]> =
         trigger.kind === 'mention'
-          ? searchers.current.searchActors(trigger.query).then((actors) => actors.slice(0, 8).map((actor) => ({ kind: 'mention', actor })))
+          ? searchers.current
+              .searchActors(trigger.query)
+              .then((actors) =>
+                actors
+                  .filter((actor) => !peopleOnly || actor.kind === 'human')
+                  .slice(0, 8)
+                  .map((actor) => ({ kind: 'mention', actor })),
+              )
           : (searchers.current.searchWorkItems?.(trigger.query) ?? Promise.resolve([])).then((items) =>
               items.slice(0, 8).map((item) => ({ kind: 'work', item })),
             )
@@ -365,7 +375,7 @@ function ComposerBox({
         })
     }, 120)
     return () => window.clearTimeout(timer)
-  }, [trigger])
+  }, [peopleOnly, trigger])
 
   const updateTrigger = (value: string, caret: number) => {
     const next = activeTrigger(value, caret, Boolean(searchWorkItems))

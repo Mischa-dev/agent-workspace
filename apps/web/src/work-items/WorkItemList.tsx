@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 
+import { useProjectExperience } from '../experience/layout'
 import { Button, EmptyState, ErrorState, Icon, ListSkeleton, countLabel } from '../ui'
 import { Table, type TableRow } from '../ui/pickers'
 import { FieldPicker, type PickerField, type PickResult } from './FieldPicker'
+import { pickerShown, useCardFields, type CardFields } from './cardFields'
 import { AssigneeMark, DoneToggle, DueDate, GroupHeader, PickerCell, TaskBadges } from './ListCells'
 import { LIST_COLUMNS } from './taskDisplay'
 import { workItemHref } from './links'
@@ -32,6 +34,7 @@ type PickerState = { field: PickerField; anchor: HTMLElement; targets: WorkItemC
 function taskCells({
   card,
   disabled,
+  fields,
   onOpen,
   onPick,
   onSelect,
@@ -39,6 +42,7 @@ function taskCells({
 }: {
   card: WorkItemCard
   disabled: boolean
+  fields: CardFields
   onOpen: (card: WorkItemCard, event: MouseEvent<HTMLAnchorElement>) => void
   onPick: (card: WorkItemCard, field: PickerField, anchor: HTMLElement) => void
   onSelect: (card: WorkItemCard, event: MouseEvent<HTMLInputElement>) => void
@@ -83,13 +87,13 @@ function taskCells({
     title: (
       <>
         <a className="aw-tasks__title" href={workItemHref(card.projectId, card.id)} onClick={(event) => onOpen(card, event)} tabIndex={-1}>
-          <span className="aw-tasks__phonekey">{card.key} </span>
+          {fields.keys ? <span className="aw-tasks__phonekey">{card.key} </span> : null}
           {card.title}
         </a>
         {card.archivedAt ? <span className="aw-worklist__tag">Archived</span> : null}
       </>
     ),
-    details: <TaskBadges card={card} />,
+    details: <TaskBadges card={card} fields={fields} />,
     due: <DueDate card={card} />,
     assignee: editable ? (
       <PickerCell field="assignee" label={card.assignee ? `Assigned to ${card.assignee.displayName}, change` : `Assign ${card.key}`} onPick={pick}>
@@ -141,6 +145,8 @@ export function WorkItemList({
   const queryKey = JSON.stringify(query)
   const pages = useWorkItemPages(projectId, query)
   const groups = useWorkItemGroups(projectId, query, Boolean(state.groupBy))
+  const fields = useCardFields(projectId)
+  const experience = useProjectExperience(projectId)
   const doneCount = useDoneCount(projectId, state.filters, workflow, tucked)
   const done = useDoneItems(projectId, query, tucked && state.showDone)
   const [collapsedState, setCollapsedState] = useState<{ groupBy: string | null; keys: Set<string> }>({ groupBy: null, keys: new Set() })
@@ -302,7 +308,7 @@ export function WorkItemList({
       return true
     }
     const field = PICKER_KEYS[key]
-    if (field && !event.shiftKey) {
+    if (field && !event.shiftKey && pickerShown(field, fields)) {
       const element = currentKey ? bodyRef.current?.querySelector<HTMLElement>(`[data-row-key="${CSS.escape(currentKey)}"]`) : null
       const card = row?.kind === 'task' ? row.item : undefined
       if (!card && !selection.ids.size) return false
@@ -312,14 +318,14 @@ export function WorkItemList({
     return false
   })
 
-  if (pages.isPending) return <ListSkeleton label="Loading tasks" rows={6} />
-  if (pages.isError && !pages.data) return <ErrorState error={pages.error} onRetry={() => void pages.refetch()} title="Tasks didn’t load" />
+  if (pages.isPending) return <ListSkeleton label={`Loading ${experience.word('task', 'many')}`} rows={6} />
+  if (pages.isError && !pages.data) return <ErrorState error={pages.error} onRetry={() => void pages.refetch()} title={`${experience.label('task', 'many')} didn’t load`} />
   if (items.length === 0 && !pages.hasNextPage && !(tucked && doneCount > 0)) {
     return (
       <EmptyState
         action={hasFilters ? <Button onClick={onClearFilters}>Clear filters</Button> : emptyAction}
         icon="work"
-        title={hasFilters ? 'No matching tasks' : 'No tasks yet'}
+        title={hasFilters ? `No matching ${experience.word('task', 'many')}` : `No ${experience.word('task', 'many')} yet`}
       >
         {hasFilters ? 'Try a different search, or clear some filters.' : 'Write down what needs doing, then hand it to a person or an agent.'}
       </EmptyState>
@@ -389,6 +395,7 @@ export function WorkItemList({
       cells: taskCells({
         card,
         disabled,
+        fields,
         selected,
         onOpen: (target, event: MouseEvent<HTMLAnchorElement>) => {
           if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return
@@ -411,7 +418,7 @@ export function WorkItemList({
   return (
     <div className="aw-tasks">
       <p aria-live="polite" className="aw-tasks__summary">
-        {countLabel(total, 'task')}
+        {countLabel(total, experience.word('task'), experience.word('task', 'many'))}
         {pages.isFetching && !pages.isFetchingNextPage ? <Icon className="aw-spin" name="loader" size={12} /> : null}
       </p>
       <Table
@@ -419,7 +426,14 @@ export function WorkItemList({
         ariaMultiselectable
         bodyRef={bodyRef}
         className="aw-tasks__table"
-        columns={state.fields ? LIST_COLUMNS.filter((column) => column.id === 'select' || column.id === 'title' || state.fields?.includes(column.id)) : LIST_COLUMNS}
+        columns={LIST_COLUMNS.filter(
+          (column) =>
+            (column.id === 'select' || column.id === 'title' || !state.fields || state.fields.includes(column.id)) &&
+            // The layout's hidden fields stay out whatever the view asks for.
+            !(column.id === 'priority' && !fields.priority) &&
+            !(column.id === 'key' && !fields.keys) &&
+            !(column.id === 'due' && !fields.dates),
+        )}
         label="Tasks"
         onActivate={(key) => {
           const row = rowByKey(key)

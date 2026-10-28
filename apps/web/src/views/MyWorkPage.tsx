@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
+import { useProjectExperience } from '../experience/layout'
 import { AppShell } from '../shell/AppShell'
 import { useProjects } from '../projects/hooks'
 import { ButtonLink, EmptyState, ErrorState, ListSkeleton, PageHeader, Section, StatusChip, actorKind, countLabel } from '../ui'
@@ -132,12 +133,18 @@ function TaskSection({
 }
 
 function TaskRow({ showClaim, task }: { showClaim: boolean; task: MyWorkTask }) {
+  // Each task follows its own project's layout.
+  const experience = useProjectExperience(task.projectId)
   return (
     <li className="aw-mywork__row">
-      <PriorityIcon decorative priority={task.priority as WorkItemPriority} />
+      {experience.shows('task.priority') ? (
+        <PriorityIcon decorative priority={task.priority as WorkItemPriority} />
+      ) : (
+        <span aria-hidden="true" className="aw-mywork__icon" />
+      )}
       <StatusIcon category={task.statusCategory} label={task.statusName} />
       <Link className="aw-mywork__title" to={workItemHref(task.projectId, task.id)}>
-        <span className="aw-mywork__key">{task.key}</span> {task.title}
+        {experience.shows('tech.task_keys') ? <span className="aw-mywork__key">{task.key}</span> : null} {task.title}
       </Link>
       <span className="aw-mywork__meta">
         {task.blocked ? <StatusChip tone="warning">Blocked</StatusChip> : null}
@@ -147,7 +154,7 @@ function TaskRow({ showClaim, task }: { showClaim: boolean; task: MyWorkTask }) 
           </StatusChip>
         ) : null}
         <span className="aw-mywork__project">{task.projectName}</span>
-        {task.dueDate ? (
+        {task.dueDate && experience.shows('task.dates') ? (
           <span className={task.overdue ? 'aw-mywork__due is-overdue' : 'aw-mywork__due'}>
             {task.overdue ? 'Overdue · ' : ''}
             {dayLabel(task.dueDate)}

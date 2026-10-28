@@ -1,7 +1,8 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
+import { useProjectExperience } from '../experience/layout'
 import { NavigationSyncAlert } from '../projects/NavigationSyncAlert'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
 import { useProject } from '../projects/hooks'
@@ -13,7 +14,6 @@ import { BoardSkeleton } from './BoardSkeleton'
 import { CreateWorkItemDialog } from './CreateWorkItemDialog'
 import { FilterBar } from './FilterBar'
 import { useWorkItemWorkflow } from './hooks'
-import { LabelManager } from './LabelManager'
 import { activeFilterKeys, parametersFromRemembered, rememberedState } from './listModel'
 import { notify } from './notice'
 import { TaskDetail } from './TaskDetail'
@@ -22,6 +22,8 @@ import { WorkItemList } from './WorkItemList'
 import './work.css'
 
 const ViewsMenu = lazy(() => import('./ViewsMenu'))
+// Managing labels loads when someone opens it.
+const LabelManager = lazy(() => import('./LabelManager').then((module) => ({ default: module.LabelManager })))
 // The board is its own chunk: most visits open the list.
 const WorkItemBoard = lazy(() => import('./WorkItemBoard').then((module) => ({ default: module.WorkItemBoard })))
 
@@ -51,6 +53,12 @@ export function WorkItemsPage() {
   }, [createRequested, parameters, setParameters])
   const createButtonRef = useRef<HTMLButtonElement>(null)
   const project = useProject(projectId)
+  const experience = useProjectExperience(projectId)
+  // A layout without the board shows the list, whatever the link says, and
+  // the filters, Views menu and list all go by what's shown.
+  const board = experience.shows('area.board')
+  const shown = useMemo(() => (board || state.view === 'list' ? state : { ...state, view: 'list' as const }), [board, state])
+  const view = shown.view
   const workflow = useWorkItemWorkflow(projectId)
   const savedFilters = project.data?.navigation.filters
   // The remembered view comes back only when the page is entered with an
@@ -111,23 +119,25 @@ export function WorkItemsPage() {
   const hasFilters = activeFilterKeys(state).length > 0 || Boolean(state.filters.q)
   const newButton = readOnly ? null : (
     <Button disabled={!workflow.data} icon="plus" onClick={() => setCreateOpen(true)} ref={createButtonRef} variant="primary">
-      New task
+      New {experience.word('task')}
     </Button>
   )
   const toggleDone = () => update((current) => ({ ...current, showDone: !current.showDone }), { replace: true })
   const headerActions = (
     <>
-      <SegmentedControl
-        label="View"
-        onChange={(view) => update((current) => ({ ...current, view }))}
-        options={[
-          { value: 'list', label: 'List', icon: 'list' },
-          { value: 'board', label: 'Board', icon: 'board' },
-        ]}
-        value={state.view}
-      />
+      {board ? (
+        <SegmentedControl
+          label="View"
+          onChange={(next) => update((current) => ({ ...current, view: next }))}
+          options={[
+            { value: 'list', label: 'List', icon: 'list' },
+            { value: 'board', label: 'Board', icon: 'board' },
+          ]}
+          value={state.view}
+        />
+      ) : null}
       <Suspense fallback={null}>
-        <ViewsMenu actorId={session.user.actorId} projectId={projectId} readOnly={archived} state={state} update={update} />
+        <ViewsMenu actorId={session.user.actorId} projectId={projectId} readOnly={archived} state={shown} update={update} />
       </Suspense>
       {newButton}
     </>
@@ -156,21 +166,21 @@ export function WorkItemsPage() {
 
   return (
     <AppShell context={panel} contextKey={state.task ?? undefined} onContextDismiss={closeTask} project={project.data} user={session.user}>
-      <div className={state.view === 'board' ? 'aw-page aw-page--wide aw-workpage aw-workpage--board' : 'aw-page aw-page--wide aw-workpage'}>
+      <div className={view === 'board' ? 'aw-page aw-page--wide aw-workpage aw-workpage--board' : 'aw-page aw-page--wide aw-workpage'}>
         <NavigationSyncAlert {...navigationSync} />
-        <PageHeader actions={headerActions} icon="work" title="Tasks">
+        <PageHeader actions={headerActions} icon="work" title={experience.label('task', 'many')}>
           Everything that needs doing in {project.data.name}.
         </PageHeader>
         <WorkTabs current="items" projectId={projectId} />
-        <FilterBar projectId={projectId} state={state} update={update} workflow={workflow.data} />
+        <FilterBar projectId={projectId} state={shown} update={update} workflow={workflow.data} />
         {archived ? (
           <Banner className="aw-page__banner" icon="archive">
             This project is archived, so its tasks can’t change.
           </Banner>
         ) : null}
-        {workflow.isPending ? (state.view === 'board' ? <BoardSkeleton /> : <ListSkeleton label="Loading tasks" rows={6} />) : null}
-        {workflow.isError ? <ErrorState error={workflow.error} onRetry={() => void workflow.refetch()} title="Tasks didn’t load" /> : null}
-        {workflow.data && state.view === 'list' ? (
+        {workflow.isPending ? (view === 'board' ? <BoardSkeleton /> : <ListSkeleton label={`Loading ${experience.word('task', 'many')}`} rows={6} />) : null}
+        {workflow.isError ? <ErrorState error={workflow.error} onRetry={() => void workflow.refetch()} title={`${experience.label('task', 'many')} didn’t load`} /> : null}
+        {workflow.data && view === 'list' ? (
           <WorkItemList
             disabled={readOnly}
             emptyAction={newButton}
@@ -183,11 +193,11 @@ export function WorkItemsPage() {
             onToggleDone={toggleDone}
             openTaskId={state.task}
             projectId={projectId}
-            state={state}
+            state={shown}
             workflow={workflow.data}
           />
         ) : null}
-        {workflow.data && state.view === 'board' ? (
+        {workflow.data && view === 'board' ? (
           <Suspense fallback={<BoardSkeleton />}>
             <WorkItemBoard
               disabled={readOnly}
@@ -216,7 +226,11 @@ export function WorkItemsPage() {
           workflow={workflow.data}
         />
       ) : null}
-      {managingLabels ? <LabelManager onClose={() => setManagingLabels(false)} projectId={projectId} /> : null}
+      {managingLabels ? (
+        <Suspense fallback={null}>
+          <LabelManager onClose={() => setManagingLabels(false)} projectId={projectId} />
+        </Suspense>
+      ) : null}
     </AppShell>
   )
 }

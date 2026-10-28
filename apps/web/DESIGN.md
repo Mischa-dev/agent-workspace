@@ -25,6 +25,14 @@ explains how themes and overrides resolve.
 4. **Every state.** Default, hover, pressed, focus-visible, disabled and busy
    for controls; loading, empty and error for content. Both themes, desktop
    and a 390px phone.
+5. **Every part takes part in layouts.** A new user-facing part (a sidebar
+   row, a tab, a section, a field on a task, a composer extra) registers in
+   `src/experience/registry.json` with a label, a one-line description and a
+   group, says which presets show it (`only` lists, or `hide` lists that
+   leave it out), and checks `useProjectExperience(projectId).shows(part)`
+   (or `useHomeExperience()` on workspace pages) before it renders. Hiding is
+   visual only: never gate what someone may do on a layout. Nouns in copy
+   use `experience.word(...)` where a layout can rename them.
 
 ## Theme
 

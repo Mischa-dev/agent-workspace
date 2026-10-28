@@ -228,7 +228,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Get oriented in one project: its guide page (read this first), other pages, recent decisions, what's next on the board, blocked and claimed tasks, open threads, channels, repositories and labels.",
+        description = "Get oriented in one project: its guide page (read this first), other pages, recent decisions, what's next on the board, blocked and claimed tasks, open threads, channels, repositories, labels, and its layout (match its tone and the words it uses).",
         annotations(title = "Open project", read_only_hint = true, open_world_hint = false)
     )]
     async fn project_open(
@@ -408,6 +408,25 @@ impl McpServer {
     ) -> Json<common::ToolResult<admin::ProjectValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(admin::project_archive(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Set what a project is for: pick its layout preset (such as Personal life, Bug reporting or Software team), which decides the parts of the app people see there and words like \"to-dos\" for tasks. Visual only: it never changes what anyone may do. Leave preset out to follow the workspace's default again. The project's owners and admins only, as themselves.",
+        annotations(
+            title = "Set project layout",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn project_layout_set(
+        &self,
+        Parameters(arguments): Parameters<admin::ProjectLayoutSetArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<admin::ProjectLayoutValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(admin::project_layout_set(&self.state, principal, arguments).await)
     }
 
     // -- Conversations -------------------------------------------------------

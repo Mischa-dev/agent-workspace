@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 use super::{
     McpPrincipal,
+    briefing::LayoutLine,
     common::{ToolResult, insert_audit, parse_id, project_role, public_url, role_allows},
     tasks::command_actor,
     workflow::Workflow,
@@ -20,8 +21,10 @@ use super::{
 use crate::{
     AppState,
     error::AppError,
+    layouts::{self, Layout},
     memory,
     policy::{Action, ActorKind},
+    settings::Target,
     work_item_commands::lock_membership,
     work_item_workflow::{
         self, AllTransitions, StatusDraft, TransitionDraft, TransitionsDraft, TypeDraft,
@@ -1026,6 +1029,142 @@ async fn project_reference(
     .fetch_all(&state.pool)
     .await?;
     Ok(matches.first().copied())
+}
+
+// ---------------------------------------------------------------------------
+// project_layout_set
+
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct ProjectLayoutSetArguments {
+    /// The project's ID, link or key (such as "AWD").
+    pub project_id: String,
+    /// The preset, by name: a built-in one such as "Personal life", "Bug
+    /// reporting" or "Software team", or one the workspace saved. A name
+    /// that isn't found lists them all. Leave it out to follow the
+    /// workspace's default again.
+    pub preset: Option<String>,
+    /// The layout version you last read. Leave it out to replace whatever
+    /// is set.
+    pub expected_version: Option<i64>,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ProjectLayoutValue {
+    pub project_id: String,
+    /// The layout the project now uses, its own or the workspace's
+    /// default. Missing when nothing is chosen: everything shows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layout: Option<LayoutLine>,
+    /// The project's layout version, for expectedVersion; 0 while it
+    /// follows the workspace.
+    pub version: i64,
+}
+
+pub(super) async fn project_layout_set(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: ProjectLayoutSetArguments,
+) -> ToolResult<ProjectLayoutValue> {
+    if !principal.can_write() {
+        return ToolResult::read_only();
+    }
+    if principal.actor_kind != ActorKind::Human {
+        return ToolResult::denied(ADMIN_ONLY);
+    }
+    if parse_id(&arguments.project_id) != Some(principal.project_id) {
+        return ToolResult::not_found("That project");
+    }
+    let project_id = principal.project_id;
+    let result = async {
+        let mut transaction = state.pool.begin().await?;
+        let Some(row) = admin_row(&mut transaction, principal, project_id).await? else {
+            return Ok(ToolResult::not_found("That project"));
+        };
+        // The same people who change it in the project's settings: the
+        // project's owners and admins, whatever their role in the workspace.
+        if !role_allows(principal, project_id, &row.role, Action::SettingsManage) {
+            return Ok(ToolResult::denied(ADMIN_ONLY));
+        }
+        if row.kind == "direct" {
+            return Ok(ToolResult::invalid(
+                "projectId",
+                "The Messages space has no layout of its own.",
+            ));
+        }
+        let (organization_id, archived) = sqlx::query_as::<_, (Uuid, bool)>(
+            "SELECT organization_id, archived_at IS NOT NULL FROM projects WHERE id = $1",
+        )
+        .bind(project_id)
+        .fetch_one(&mut *transaction)
+        .await?;
+        if archived {
+            return Ok(ToolResult::conflict(
+                "That project is archived. Restore it with project_archive first.",
+            ));
+        }
+        let wanted = arguments
+            .preset
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty());
+        let layout = match wanted {
+            Some(text) => {
+                let Some(preset) =
+                    layouts::find_preset(&mut transaction, organization_id, text).await?
+                else {
+                    let names = layouts::preset_names(&mut transaction, organization_id).await?;
+                    return Ok(ToolResult::invalid(
+                        "preset",
+                        format!(
+                            "There's no preset called \"{text}\". Pick one of: {}.",
+                            names.join(", ")
+                        ),
+                    ));
+                };
+                Some(Layout::preset(preset))
+            }
+            None => None,
+        };
+        let preset = layout.as_ref().map(|layout| layout.preset.clone());
+        let version = layouts::write_layout(
+            &mut transaction,
+            Target::Project {
+                organization_id,
+                project_id,
+            },
+            layout,
+            arguments.expected_version,
+            principal.actor_id,
+        )
+        .await?;
+        insert_audit(
+            &mut transaction,
+            principal,
+            project_id,
+            "layout.project_changed",
+            "project",
+            project_id,
+            serde_json::json!({
+                "preset": preset,
+                "version": version,
+                "organizationId": organization_id,
+            }),
+        )
+        .await?;
+        let layout = layouts::project_tone(&mut transaction, project_id)
+            .await?
+            .map(LayoutLine::from);
+        transaction.commit().await?;
+        Ok::<_, AppError>(ToolResult::ok(ProjectLayoutValue {
+            project_id: project_id.to_string(),
+            layout,
+            version,
+        }))
+    }
+    .await;
+    result.unwrap_or_else(|error| ToolResult::from_error(error, "project_layout_set"))
 }
 
 // ---------------------------------------------------------------------------

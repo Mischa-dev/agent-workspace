@@ -85,6 +85,50 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/settings/values/{key}/reset",
         SettingsManage
     ),
+    // Layouts: owners and admins of the project or workspace, checked in the
+    // handler; "mine" is each person's own view.
+    policy_route!(
+        "layouts",
+        Put,
+        "/api/v1/projects/{project_id}/layout",
+        SettingsManage
+    ),
+    policy_route!(
+        "layouts",
+        Put,
+        "/api/v1/projects/{project_id}/layout/rules",
+        SettingsManage
+    ),
+    policy_route!(
+        "layouts",
+        Put,
+        "/api/v1/organizations/{organization_id}/layout",
+        SettingsManage
+    ),
+    policy_route!(
+        "layouts",
+        Put,
+        "/api/v1/organizations/{organization_id}/layout/mine",
+        NavigationWrite
+    ),
+    policy_route!(
+        "layouts",
+        Post,
+        "/api/v1/organizations/{organization_id}/layout/presets",
+        SettingsManage
+    ),
+    policy_route!(
+        "layouts",
+        Patch,
+        "/api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
+        SettingsManage
+    ),
+    policy_route!(
+        "layouts",
+        Delete,
+        "/api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
+        SettingsManage
+    ),
     policy_route!(
         "environments",
         Post,
