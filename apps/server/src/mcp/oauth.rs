@@ -595,11 +595,18 @@ struct TokenResponse {
 
 async fn token(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Form(request): Form<TokenRequest>,
 ) -> Result<Response, OAuthError> {
     let refreshing = request.grant_type == "refresh_token";
+    let address = crate::rate_limit::client_address(&headers);
+    // A refresh is charged to its app only once its token checks out (in
+    // `refresh`), and a refused one to its sender, so junk refreshes can't
+    // spend the budget real apps need.
     let budget = if refreshing {
-        state.rate_limits.check_oauth_refresh(&request.client_id)
+        state
+            .rate_limits
+            .check_oauth_refresh_sender(address, &request.client_id)
     } else {
         state.rate_limits.check_oauth_ceremony(&request.client_id)
     };
@@ -616,8 +623,19 @@ async fn token(
         _ => Err(OAuthError::unsupported_grant("unsupported grant type")),
     };
     let response = match outcome {
-        Ok(response) => response,
+        Ok(response) => {
+            state
+                .rate_limits
+                .note_oauth_client_success(&request.client_id);
+            response
+        }
         Err(error) => {
+            if refreshing
+                && error.status.is_client_error()
+                && error.status != StatusCode::TOO_MANY_REQUESTS
+            {
+                state.rate_limits.note_oauth_refresh_failure(address);
+            }
             // A refused refresh is what drops a connected app's tools, so say
             // why. Only the static reason is logged, never the request.
             if error.status != StatusCode::SERVICE_UNAVAILABLE {
@@ -890,6 +908,11 @@ async fn refresh(state: &AppState, request: &TokenRequest) -> Result<TokenRespon
             "refresh token client binding is invalid",
         ));
     }
+    // Only now, with a token that checks out, does the refresh count against
+    // its app's budget. Refused here, nothing is rotated.
+    state
+        .rate_limits
+        .check_oauth_refresh(&row.client_id.to_string())?;
     let retired_seconds = row
         .used_at
         .map(|used_at| (chrono::Utc::now() - used_at).num_seconds());

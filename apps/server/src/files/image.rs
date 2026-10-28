@@ -15,6 +15,9 @@ pub const THUMBNAIL_SIDE: u32 = 800;
 const MAX_THUMBNAIL_SOURCE_PIXELS: u64 = 40_000_000;
 /// Small images are their own preview.
 const SMALL_IMAGE_BYTES: usize = 300 * 1024;
+/// Pictures worked on at once. Drawing a preview of a big photo takes a few
+/// hundred megabytes, so big uploads arriving together wait their turn.
+static WORKING: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
 /// A GIF up to this size is its own preview, so it stays animated.
 const ANIMATED_PREVIEW_BYTES: usize = 5 * 1024 * 1024;
 
@@ -72,8 +75,17 @@ pub struct Thumbnail {
     pub content_type: &'static str,
 }
 
+/// Runs `work` (a [`process`] or [`shrink`]) on a blocking thread once
+/// fewer than two pictures are being worked on. None if it panicked.
+pub async fn one_at_a_time<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Option<T> {
+    let _turn = WORKING.acquire().await.ok()?;
+    tokio::task::spawn_blocking(work).await.ok()
+}
+
 /// Strips metadata and makes the preview. None when the bytes aren't an
-/// image we can read (they are then stored as an ordinary file).
+/// image we can read.
 pub fn process(bytes: Vec<u8>) -> Option<ProcessedImage> {
     let prepared = prepare(bytes)?;
     let (width, height) = prepared.shown_size();

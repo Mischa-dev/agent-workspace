@@ -387,9 +387,8 @@ async fn preview_image(
     url: &str,
 ) -> Option<(Vec<u8>, &'static str, u32, u32)> {
     let bytes = page::fetch_image(policy, url).await.ok()?;
-    tokio::task::spawn_blocking(move || image::shrink(bytes, IMAGE_SIDE))
+    image::one_at_a_time(move || image::shrink(bytes, IMAGE_SIDE))
         .await
-        .ok()
         .flatten()
 }
 

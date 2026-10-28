@@ -145,6 +145,8 @@ struct SessionUser {
 #[serde(rename_all = "camelCase")]
 struct SessionCapabilities {
     create_project: bool,
+    /// Runs this server, so sees Settings › Workspace › Server.
+    server_status: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -178,7 +180,11 @@ async fn login(
             return Err(error);
         }
     };
-    if let Err(error) = state.rate_limits.check_login(&login_name) {
+    if let Err(error) = state
+        .rate_limits
+        .check_login_sender(crate::rate_limit::client_address(&headers))
+        .and_then(|()| state.rate_limits.check_login(&login_name))
+    {
         request.password.zeroize();
         return Err(error);
     }
@@ -604,7 +610,10 @@ async fn session_response(
             login_name: principal.login_name.clone(),
             display_name: principal.display_name.clone(),
             default_organization_id,
-            capabilities: SessionCapabilities { create_project },
+            capabilities: SessionCapabilities {
+                create_project,
+                server_status: crate::server_status::is_operator(state, principal).await?,
+            },
         }),
         organizations,
     })

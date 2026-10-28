@@ -8,6 +8,7 @@
 use std::sync::{Arc, Mutex};
 
 use agent_workspace_server::{
+    config::AppConfig,
     jobs::{self, WorkerOptions},
     notification_email, password_reset,
 };
@@ -25,11 +26,11 @@ use tokio::{
 use uuid::Uuid;
 
 use super::{
-    agent_interface::{Browser, PASSWORD, send},
+    agent_interface::{Browser, PASSWORD, connect_app, send},
     mcp_admin::{Setup, create_project},
     message_edits::{add_person, copies, create_channel, owner_id, say},
     notifications::drain,
-    w9_capacity_and_push::{Fixture, call, fixture},
+    w9_capacity_and_push::{Fixture, call, fixture_with},
 };
 
 const SMTP_PASSWORD: &str = "w19-relay-password-do-not-store";
@@ -77,6 +78,12 @@ impl Captured {
 }
 
 type Inbox = Arc<Mutex<Vec<Captured>>>;
+
+/// The fake mail server listens on this machine, which only the server's
+/// operator can allow.
+fn with_local_relay(config: &mut AppConfig) {
+    config.allow_private_addresses = true;
+}
 
 /// A mail server on this machine that accepts everything and keeps it.
 async fn fake_smtp() -> (u16, Inbox) {
@@ -273,7 +280,7 @@ async fn complete(setup: &Setup, token: &str, password: &str, code: Option<&str>
 
 #[tokio::test]
 async fn mail_settings_confirmations_and_reset_links_follow_their_rules() {
-    let Some(fixture) = fixture("w19_reset").await else {
+    let Some(fixture) = fixture_with("w19_reset", with_local_relay).await else {
         return;
     };
     let setup = &fixture.setup;
@@ -631,7 +638,7 @@ async fn browser_settings(setup: &Setup, browser: &Browser, change: Value) -> Va
 
 #[tokio::test]
 async fn notification_email_waits_for_a_confirmed_address_and_respects_the_digest() {
-    let Some(fixture) = fixture("w19_notify").await else {
+    let Some(fixture) = fixture_with("w19_notify", with_local_relay).await else {
         return;
     };
     let setup = &fixture.setup;
@@ -767,4 +774,71 @@ async fn notification_email_waits_for_a_confirmed_address_and_respects_the_diges
     .expect("queue digest");
     run_jobs(&fixture).await;
     assert_eq!(mail_count(&inbox), before + 1);
+}
+
+async fn live_app_credentials(setup: &Setup, actor_id: Uuid) -> (i64, i64, i64) {
+    sqlx::query_as::<_, (i64, i64, i64)>(
+        r#"
+        SELECT
+            (SELECT count(*) FROM mcp_oauth_grants
+              WHERE actor_id = $1 AND revoked_at IS NULL),
+            (SELECT count(*) FROM mcp_oauth_access_tokens token
+               JOIN mcp_oauth_grants grant_row ON grant_row.id = token.grant_id
+              WHERE grant_row.actor_id = $1 AND token.revoked_at IS NULL),
+            (SELECT count(*) FROM mcp_oauth_refresh_tokens token
+               JOIN mcp_oauth_grants grant_row ON grant_row.id = token.grant_id
+              WHERE grant_row.actor_id = $1 AND token.revoked_at IS NULL)
+        "#,
+    )
+    .bind(actor_id)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("app credentials")
+}
+
+#[tokio::test]
+async fn a_reset_keeps_connected_apps_unless_asked_to_disconnect_them() {
+    let Some(fixture) = fixture_with("w19_apps", |_| {}).await else {
+        return;
+    };
+    let setup = &fixture.setup;
+    let owner = owner_id(&setup.pool).await;
+    connect_app(&setup.app, &setup.browser, "Phone", "full").await;
+    let connected = live_app_credentials(setup, owner).await;
+    assert_eq!(connected.0, 1, "{connected:?}");
+    assert!(connected.1 > 0 && connected.2 > 0, "{connected:?}");
+
+    // Reconnecting every app is a chore, so a plain reset leaves them be.
+    let (owner_user, epoch) = user_of(setup, owner).await;
+    let link = plant_reset(setup, owner_user, epoch, "30 minutes").await;
+    assert_eq!(
+        complete(setup, &link, "a new password that keeps apps", None).await,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(live_app_credentials(setup, owner).await, connected);
+
+    // Asked to, it disconnects them all, every token included.
+    let (_, epoch) = user_of(setup, owner).await;
+    let link = plant_reset(setup, owner_user, epoch, "30 minutes").await;
+    let (status, body) = public(
+        setup,
+        "POST",
+        "/api/v1/auth/password-reset/complete",
+        json!({
+            "token": link,
+            "newPassword": "a new password that ends apps",
+            "disconnectApps": true,
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    assert_eq!(live_app_credentials(setup, owner).await, (0, 0, 0));
+    let audited = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM audit_events WHERE actor_id = $1 AND action = 'connected_app.revoked'",
+    )
+    .bind(owner)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("audit");
+    assert_eq!(audited, 1);
 }
