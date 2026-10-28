@@ -1,11 +1,13 @@
 import { useDeferredValue, useState, type MouseEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 
+import { toastError } from '../app/mutations'
 import { useAuthenticatedSession } from '../auth/session'
 import { AppShell } from '../shell/AppShell'
 import {
   Badge,
   Banner,
+  Button,
   ButtonLink,
   EmptyState,
   ErrorState,
@@ -14,17 +16,21 @@ import {
   PageHeader,
   Row,
   RowList,
+  SegmentedControl,
   TextField,
   countLabel,
   relativeDay,
+  showToast,
 } from '../ui'
-import { useProjects, useProjectSearch, useSwitchProject } from './hooks'
+import { useArchivedProjects, useProjects, useProjectSearch, useRestoreProject, useSwitchProject } from './hooks'
 import './home.css'
 import { ProjectInitials } from './ProjectInitials'
 import type { Project } from './types'
 
 /** The list asks the server for this many; past it, typing searches the rest. */
 const LIST_LIMIT = 100
+
+type Shown = 'active' | 'archived'
 
 function projectMeta(project: Project) {
   const opened = project.navigation.lastOpenedAt ? relativeDay(project.navigation.lastOpenedAt) : null
@@ -48,6 +54,11 @@ export function ProjectsPage() {
     .sort((left, right) => left.name.localeCompare(right.name))
   const total = (all.data?.projects ?? []).filter((project) => !project.archivedAt).length
   const canCreate = session.user.capabilities.createProject
+  // Archived projects stay out of the way until asked for.
+  const archived = useArchivedProjects()
+  const archivedProjects = archived.data?.projects ?? []
+  const [chosen, setChosen] = useState<Shown>('active')
+  const shown: Shown = archivedProjects.length ? chosen : 'active'
 
   // Opens the project at once where you left it, and records the visit in the background.
   const openProject = (project: Project, event: MouseEvent<HTMLAnchorElement>) => {
@@ -77,7 +88,21 @@ export function ProjectsPage() {
         >
           {all.isSuccess ? (total ? `${countLabel(total, 'project')} you belong to.` : 'You don’t belong to any projects yet.') : ' '}
         </PageHeader>
-        {total > 8 || wanted ? (
+        {archivedProjects.length ? (
+          <SegmentedControl<Shown>
+            label="Projects to show"
+            onChange={setChosen}
+            options={[
+              { value: 'active', label: 'Active' },
+              { value: 'archived', label: `Archived (${archivedProjects.length})` },
+            ]}
+            value={shown}
+          />
+        ) : null}
+        {shown === 'archived' ? (
+          <ArchivedProjects projects={archivedProjects} />
+        ) : null}
+        {shown === 'active' && (total > 8 || wanted) ? (
           <TextField
             aria-label="Find a project"
             className="aw-projects__search"
@@ -87,11 +112,11 @@ export function ProjectsPage() {
             value={query}
           />
         ) : null}
-        {source.isPending ? <ListSkeleton label="Loading your projects" rows={6} /> : null}
-        {source.isError ? (
+        {shown === 'archived' ? null : source.isPending ? <ListSkeleton label="Loading your projects" rows={6} /> : null}
+        {shown === 'archived' ? null : source.isError ? (
           <ErrorState error={source.error} onRetry={() => void source.refetch()} title="Your projects didn’t load" />
         ) : null}
-        {source.isSuccess && projects.length === 0 ? (
+        {shown === 'active' && source.isSuccess && projects.length === 0 ? (
           wanted ? (
             <EmptyState icon="search" title="No projects match">
               Try another name or key, or clear the search.
@@ -114,7 +139,7 @@ export function ProjectsPage() {
             </EmptyState>
           )
         ) : null}
-        {projects.length > 0 ? (
+        {shown === 'active' && projects.length > 0 ? (
           <RowList label="Projects">
             {projects.map((project) => (
               <Row
@@ -141,12 +166,53 @@ export function ProjectsPage() {
             ))}
           </RowList>
         ) : null}
-        {!wanted && total >= LIST_LIMIT ? (
+        {shown === 'active' && !wanted && total >= LIST_LIMIT ? (
           <Banner className="aw-projects__note" tone="info">
             Showing the first {LIST_LIMIT}. Find a project by name to see the others.
           </Banner>
         ) : null}
       </div>
     </AppShell>
+  )
+}
+
+/** Archived projects, newest first: open one to read it, or bring it back if you manage it. */
+function ArchivedProjects({ projects }: { projects: Project[] }) {
+  const restore = useRestoreProject()
+  const restoreProject = (project: Project) =>
+    restore.mutate(
+      { projectId: project.id, expectedVersion: project.version },
+      {
+        onSuccess: () => showToast({ tone: 'success', title: `${project.name} is back`, description: 'Everyone in it can work in it again.' }),
+        onError: (error) => toastError(`${project.name} wasn’t restored`, error),
+      },
+    )
+  return (
+    <RowList label="Archived projects">
+      {projects.map((project) => (
+        <Row
+          actions={
+            project.capabilities.manage ? (
+              <Button
+                busy={restore.isPending && restore.variables?.projectId === project.id}
+                icon="undo"
+                onClick={() => restoreProject(project)}
+                size="sm"
+              >
+                Restore
+              </Button>
+            ) : null
+          }
+          key={project.id}
+          leading={<ProjectInitials project={project} size={36} />}
+          meta={[project.key, project.archivedAt ? `Archived ${relativeDay(project.archivedAt)}` : null].filter(Boolean).join(' · ')}
+          title={
+            <Link className="aw-row__link" to={project.navigation.href}>
+              {project.name}
+            </Link>
+          }
+        />
+      ))}
+    </RowList>
   )
 }

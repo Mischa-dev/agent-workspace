@@ -34,6 +34,7 @@ pub fn router() -> Router<AppState> {
             get(get_project).patch(update_project),
         )
         .route("/api/v1/projects/{id}/archive", post(archive_project))
+        .route("/api/v1/projects/{id}/restore", post(restore_project))
         .route(
             "/api/v1/projects/{id}/navigation",
             get(get_navigation).put(update_navigation),
@@ -115,6 +116,8 @@ pub struct NavigationLocation {
 struct ProjectListQuery {
     q: Option<String>,
     limit: Option<u16>,
+    /// Archived projects instead of active ones, most recently archived first.
+    archived: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -261,7 +264,7 @@ async fn list_projects(
          )
         WHERE pm.actor_id = $1
           AND pm.enabled
-          AND p.archived_at IS NULL
+          AND (p.archived_at IS NOT NULL) = $5
           AND p.kind = 'standard'
           AND (
               $2::text IS NULL
@@ -271,6 +274,7 @@ async fn list_projects(
         ORDER BY
             -- An exact key comes first, so `/KEY-12` finds its Project before the limit.
             (upper(p.project_key) = upper($4)) IS TRUE DESC,
+            p.archived_at DESC NULLS LAST,
             (pns.pinned_at IS NOT NULL) DESC,
             pns.pinned_at ASC NULLS LAST,
             pns.last_opened_at DESC NULLS LAST,
@@ -283,6 +287,7 @@ async fn list_projects(
     .bind(search_pattern)
     .bind(limit)
     .bind(search)
+    .bind(query.archived.unwrap_or(false))
     .fetch_all(&state.pool)
     .await?;
     let attention = crate::notifications::attention_counts(&state.pool, principal.actor_id).await?;
@@ -710,6 +715,61 @@ async fn archive_project(
         &principal,
         Some(project_id),
         "project.archived",
+        "project",
+        project_id,
+        serde_json::json!({"previous_version": project.version}),
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(Json(fetch_project(&state, &principal, project_id).await?))
+}
+
+/// Brings an archived project back, for whoever may manage it, against the
+/// version they read. Its channels, tasks and settings were kept as they were.
+async fn restore_project(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath(project_id): ApiPath<Uuid>,
+    ApiJson(request): ApiJson<ArchiveProjectRequest>,
+) -> Result<Json<ProjectView>, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    let mut transaction = state.pool.begin().await?;
+    let project = lock_project_membership(&mut transaction, principal.actor_id, project_id)
+        .await?
+        .ok_or(AppError::NotFound("project"))?;
+    authorize_project_action(&principal, &project, Action::ProjectManage)?;
+    if project.archived_at.is_none() {
+        transaction.commit().await?;
+        return Ok(Json(fetch_project(&state, &principal, project_id).await?));
+    }
+    if project.version != request.expected_version {
+        return Err(AppError::VersionConflict {
+            resource: "project",
+            current_version: project.version,
+        });
+    }
+    let restored = sqlx::query(
+        r#"
+        UPDATE projects
+        SET archived_at = NULL, archived_by_actor_id = NULL,
+            version = version + 1, updated_at = now()
+        WHERE id = $1 AND kind = 'standard'
+        "#,
+    )
+    .bind(project_id)
+    .execute(&mut *transaction)
+    .await?
+    .rows_affected();
+    if restored == 0 {
+        return Err(AppError::Forbidden);
+    }
+    insert_audit_event(
+        &mut transaction,
+        &headers,
+        &principal,
+        Some(project_id),
+        "project.restored",
         "project",
         project_id,
         serde_json::json!({"previous_version": project.version}),

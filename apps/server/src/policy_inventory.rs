@@ -1153,6 +1153,12 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     ),
     policy_route!(
         "projects",
+        Post,
+        "/api/v1/projects/{id}/restore",
+        ProjectManage
+    ),
+    policy_route!(
+        "projects",
         Put,
         "/api/v1/projects/{id}/navigation",
         NavigationWrite

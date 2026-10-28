@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 
 import { requestJson } from '../api/client'
+import { toastError } from '../app/mutations'
 import { useAuthenticatedSession } from '../auth/session'
 import { useProjectConversationSidebar } from '../conversations/hooks'
 import type { SidebarChannel, SidebarThread } from '../conversations/types'
@@ -27,11 +28,12 @@ import {
   countLabel,
   formatFullDate,
   formatRelative,
+  showToast,
 } from '../ui'
 import { useWorkItems } from '../work-items/hooks'
 import { StatusIcon } from '../work-items/WorkItemIcons'
 import { roleLabel } from './format'
-import { useProject } from './hooks'
+import { useProject, useRestoreProject } from './hooks'
 import { MoreLink } from './MoreLink'
 import { NavigationSyncAlert } from './NavigationSyncAlert'
 import './overview.css'
@@ -92,11 +94,7 @@ export function ProjectOverviewPage() {
         >
           {project.data.key} · {roleLabel(project.data.role)}
         </PageHeader>
-        {project.data.archivedAt && (
-          <Banner className="aw-page__banner" icon="archive" title="This project is archived.">
-            You can read everything in it, but nothing new can be added.
-          </Banner>
-        )}
+        {project.data.archivedAt && <ArchivedBanner project={project.data} />}
         <div className="aw-overview">
           <div className="aw-overview__column">
             <NeedsYouHere base={base} project={project.data} />
@@ -143,6 +141,40 @@ function useProjectUnread(projectId: string) {
  * badge and the Inbox count: unread inbox items here, then threads waiting on
  * an answer that the inbox doesn't already list.
  */
+/** Says an archived project is read-only, with a way back for whoever manages it. */
+function ArchivedBanner({ project }: { project: Project }) {
+  const restore = useRestoreProject()
+  return (
+    <Banner
+      action={
+        project.capabilities.manage ? (
+          <Button
+            busy={restore.isPending}
+            icon="undo"
+            onClick={() =>
+              restore.mutate(
+                { projectId: project.id, expectedVersion: project.version },
+                {
+                  onSuccess: () => showToast({ tone: 'success', title: `${project.name} is back` }),
+                  onError: (error) => toastError(`${project.name} wasn’t restored`, error),
+                },
+              )
+            }
+            size="sm"
+          >
+            Restore
+          </Button>
+        ) : null
+      }
+      className="aw-page__banner"
+      icon="archive"
+      title="This project is archived."
+    >
+      You can read everything in it, but nothing new can be added.
+    </Banner>
+  )
+}
+
 function NeedsYouHere({ base, project }: { base: string; project: Project }) {
   const unread = useProjectUnread(project.id)
   const sidebar = useProjectConversationSidebar(project.id)

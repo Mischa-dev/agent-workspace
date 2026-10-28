@@ -12,6 +12,7 @@ import {
   getProject,
   getProjectNavigation,
   listProjects,
+  restoreProject,
 } from './api'
 import {
   enqueueProjectNavigationUpdate,
@@ -37,6 +38,15 @@ export function useProjectSearch(query: string) {
     queryFn: () => listProjects(normalized),
     enabled: Boolean(normalized),
     staleTime: 15_000,
+  })
+}
+
+/** Archived projects you still belong to, most recently archived first. */
+export function useArchivedProjects() {
+  return useQuery({
+    queryKey: ['projects', 'archived'] as const,
+    queryFn: () => listProjects(undefined, { archived: true }),
+    staleTime: 30_000,
   })
 }
 
@@ -77,6 +87,24 @@ export function useArchiveProject() {
       projectId: string
       expectedVersion: number
     }) => archiveProject(projectId, expectedVersion),
+    onSuccess: (project) => {
+      queryClient.setQueryData(queryKeys.project(project.id), project)
+      removeProjectFromListCaches(queryClient, project.id)
+      void queryClient.invalidateQueries({ queryKey: ['projects'] })
+    },
+  })
+}
+
+export function useRestoreProject() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      projectId,
+      expectedVersion,
+    }: {
+      projectId: string
+      expectedVersion: number
+    }) => restoreProject(projectId, expectedVersion),
     onSuccess: (project) => {
       queryClient.setQueryData(queryKeys.project(project.id), project)
       removeProjectFromListCaches(queryClient, project.id)

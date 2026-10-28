@@ -94,10 +94,11 @@ export function normalizeProject(value: unknown): Project {
   }
 }
 
-export async function listProjects(query?: string): Promise<ProjectListResponse> {
+export async function listProjects(query?: string, options: { archived?: boolean } = {}): Promise<ProjectListResponse> {
   const parameters = new URLSearchParams()
   if (query?.trim()) parameters.set('q', query.trim())
   parameters.set('limit', '100')
+  if (options.archived) parameters.set('archived', 'true')
   const suffix = parameters.toString()
   const payload = await requestJson<{ projects?: unknown[] } | unknown[]>(
     `/api/v1/projects?${suffix}`,
@@ -145,6 +146,22 @@ export async function archiveProject(
 ): Promise<Project> {
   const payload = await requestJson<unknown>(
     `/api/v1/projects/${encodeURIComponent(projectId)}/archive`,
+    {
+      method: 'POST',
+      json: { expectedVersion },
+    },
+  )
+  const record = asRecord(payload)
+  return normalizeProject(record.project ?? payload)
+}
+
+/** Brings an archived project back, against the version the caller read. */
+export async function restoreProject(
+  projectId: string,
+  expectedVersion: number,
+): Promise<Project> {
+  const payload = await requestJson<unknown>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/restore`,
     {
       method: 'POST',
       json: { expectedVersion },
