@@ -516,8 +516,9 @@ export function WorkItemBoard({
       return true
     }
     // J and K walk down each column from anywhere but a field. With nothing
-    // focused, an arrow starts on the card you were on, or the first one.
-    if (key === 'j' || key === 'k' || (key.startsWith('arrow') && pageHasFocus())) {
+    // focused (or the board itself, after a click between cards), an arrow
+    // starts on the card you were on, or the first one.
+    if (key === 'j' || key === 'k' || (key.startsWith('arrow') && (pageHasFocus() || document.activeElement === scrollerRef.current))) {
       if (!readingOrder.length) return false
       const index = current ? readingOrder.indexOf(current) : -1
       const step = key === 'j' ? 1 : key === 'k' ? -1 : 0

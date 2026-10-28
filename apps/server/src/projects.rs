@@ -3,7 +3,7 @@ use axum::{
     extract::State,
     http::{HeaderMap, HeaderValue, StatusCode, header::LOCATION},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, post, put},
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -24,11 +24,14 @@ const MAX_PROJECT_NAME_BYTES: usize = 120;
 const MAX_SEARCH_BYTES: usize = 120;
 const MAX_FILTER_BYTES: usize = 50_000;
 const MAX_IDEMPOTENCY_KEY_BYTES: usize = 200;
+/// Most projects one rail order places.
+const MAX_RAIL_PROJECTS: usize = 200;
 const PROJECT_CREATE_SCOPE: &str = "projects.create";
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/projects", get(list_projects).post(create_project))
+        .route("/api/v1/projects/rail-order", put(set_rail_order))
         .route(
             "/api/v1/projects/{id}",
             get(get_project).patch(update_project),
@@ -57,6 +60,7 @@ struct ProjectRow {
     context_drawer_open: Option<bool>,
     filters: Option<serde_json::Value>,
     pinned_at: Option<String>,
+    rail_position: Option<i32>,
     last_opened_at: Option<String>,
     navigation_version: Option<i64>,
 }
@@ -100,6 +104,8 @@ pub struct NavigationView {
     context_drawer_open: bool,
     filters: serde_json::Value,
     pinned: bool,
+    /// Where you dragged this pinned project in your rail; unplaced pins follow.
+    rail_position: Option<i32>,
     last_opened_at: Option<String>,
     version: i64,
 }
@@ -161,6 +167,20 @@ struct UpdateNavigationRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SwitchProjectRequest {
     expected_version: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RailOrderRequest {
+    /// Your pinned projects, top to bottom.
+    project_ids: Vec<Uuid>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RailOrderResponse {
+    /// The listed projects that were placed: those you can still open.
+    project_ids: Vec<Uuid>,
 }
 
 #[derive(Debug, FromRow)]
@@ -244,6 +264,7 @@ async fn list_projects(
             pns.context_drawer_open,
             pns.filters,
             pns.pinned_at::text AS pinned_at,
+            pns.rail_position,
             pns.last_opened_at::text AS last_opened_at,
             pns.version AS navigation_version
         FROM project_memberships pm
@@ -287,6 +308,7 @@ async fn list_projects(
             (upper(p.project_key) = upper($4)) IS TRUE DESC,
             p.archived_at DESC NULLS LAST,
             (pns.pinned_at IS NOT NULL) DESC,
+            pns.rail_position ASC NULLS LAST,
             pns.pinned_at ASC NULLS LAST,
             pns.last_opened_at DESC NULLS LAST,
             lower(p.name),
@@ -475,6 +497,7 @@ async fn create_project(
             context_drawer_open: false,
             filters: serde_json::json!({}),
             pinned: false,
+            rail_position: None,
             last_opened_at: None,
             version: 1,
         },
@@ -887,6 +910,8 @@ async fn update_navigation(
                 WHEN $7 THEN project_navigation_states.pinned_at
                 ELSE NULL
             END,
+            -- Pinned again later, a project goes to the end, not its old place.
+            rail_position = CASE WHEN $7 THEN project_navigation_states.rail_position END,
             last_opened_at = now(),
             version = project_navigation_states.version + 1,
             updated_at = now()
@@ -905,6 +930,7 @@ async fn update_navigation(
             context_drawer_open,
             filters,
             pinned_at::text AS pinned_at,
+            rail_position,
             last_opened_at::text AS last_opened_at,
             version AS navigation_version
         "#,
@@ -999,6 +1025,103 @@ struct SwitchProjectResponse {
     href: String,
 }
 
+/// Puts your rail in your own order, from a drag: each listed project is
+/// pinned at its place, and your other pins keep their pin and follow, in the
+/// order you pinned them. Only your own navigation changes. A listed project
+/// you can't open any more (removed, archived) is left out, not refused, so
+/// a rail drawn a moment ago still saves.
+async fn set_rail_order(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiJson(request): ApiJson<RailOrderRequest>,
+) -> Result<Json<RailOrderResponse>, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    let mut seen = std::collections::HashSet::new();
+    if request.project_ids.len() > MAX_RAIL_PROJECTS
+        || !request.project_ids.iter().all(|id| seen.insert(*id))
+    {
+        return Err(AppError::Validation("project_ids"));
+    }
+    let mut transaction = state.pool.begin().await?;
+    let memberships = sqlx::query_as::<_, ProjectMembershipRow>(
+        r#"
+        SELECT
+            p.id,
+            pm.role,
+            p.version,
+            p.archived_at::text AS archived_at
+        FROM projects p
+        JOIN project_memberships pm
+          ON pm.project_id = p.id AND pm.actor_id = $1 AND pm.enabled
+        JOIN organization_memberships om
+          ON om.organization_id = p.organization_id
+         AND om.actor_id = $1
+         AND om.enabled
+        WHERE p.id = ANY($2)
+          AND p.kind = 'standard'
+          AND p.archived_at IS NULL
+        ORDER BY p.id
+        FOR SHARE OF pm, om
+        "#,
+    )
+    .bind(principal.actor_id)
+    .bind(&request.project_ids)
+    .fetch_all(&mut *transaction)
+    .await?;
+    let allowed = memberships
+        .iter()
+        .filter(|membership| {
+            authorize_project_action(&principal, *membership, Action::NavigationWrite).is_ok()
+        })
+        .map(|membership| membership.id)
+        .collect::<std::collections::HashSet<_>>();
+    let placed = request
+        .project_ids
+        .into_iter()
+        .filter(|id| allowed.contains(id))
+        .collect::<Vec<_>>();
+    sqlx::query(
+        r#"
+        UPDATE project_navigation_states
+        SET rail_position = NULL, updated_at = now()
+        WHERE actor_id = $1
+          AND rail_position IS NOT NULL
+          AND project_id <> ALL($2)
+        "#,
+    )
+    .bind(principal.actor_id)
+    .bind(&placed)
+    .execute(&mut *transaction)
+    .await?;
+    // The rest of a project's navigation and its version stay as they are:
+    // the order is its own setting, so it never conflicts with a place being
+    // remembered at the same moment.
+    sqlx::query(
+        r#"
+        INSERT INTO project_navigation_states (
+            project_id, actor_id, location_kind, context_drawer_open, filters,
+            pinned_at, rail_position, last_opened_at, version
+        )
+        SELECT placed.project_id, $1, 'project_overview', false, '{}'::jsonb,
+               now(), placed.position::integer - 1, now(), 1
+        FROM unnest($2::uuid[]) WITH ORDINALITY AS placed(project_id, position)
+        ON CONFLICT (project_id, actor_id) DO UPDATE
+        SET pinned_at = COALESCE(project_navigation_states.pinned_at, now()),
+            rail_position = EXCLUDED.rail_position,
+            updated_at = now()
+        "#,
+    )
+    .bind(principal.actor_id)
+    .bind(&placed)
+    .execute(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+    Ok(Json(RailOrderResponse {
+        project_ids: placed,
+    }))
+}
+
 async fn fetch_project(
     state: &AppState,
     principal: &AuthenticatedActor,
@@ -1050,6 +1173,7 @@ async fn fetch_project_row(
             pns.context_drawer_open,
             pns.filters,
             pns.pinned_at::text AS pinned_at,
+            pns.rail_position,
             pns.last_opened_at::text AS last_opened_at,
             pns.version AS navigation_version
         FROM projects p
@@ -1122,6 +1246,7 @@ async fn fetch_project_row_in_transaction(
             pns.context_drawer_open,
             pns.filters,
             pns.pinned_at::text AS pinned_at,
+            pns.rail_position,
             pns.last_opened_at::text AS last_opened_at,
             pns.version AS navigation_version
         FROM projects p
@@ -1228,6 +1353,7 @@ fn navigation_view(row: &ProjectRow) -> Result<NavigationView, AppError> {
         context_drawer_open: row.context_drawer_open.unwrap_or(false),
         filters: row.filters.clone().unwrap_or_else(|| serde_json::json!({})),
         pinned: row.pinned_at.is_some(),
+        rail_position: row.rail_position,
         last_opened_at: row.last_opened_at.clone(),
         version: row.navigation_version.unwrap_or(0),
     })

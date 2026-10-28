@@ -1160,6 +1160,12 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     policy_route!(
         "projects",
         Put,
+        "/api/v1/projects/rail-order",
+        NavigationWrite
+    ),
+    policy_route!(
+        "projects",
+        Put,
         "/api/v1/projects/{id}/navigation",
         NavigationWrite
     ),

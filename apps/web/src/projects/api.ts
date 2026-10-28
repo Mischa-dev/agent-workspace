@@ -55,6 +55,7 @@ export function normalizeNavigation(
       location,
     ),
     pinned: asBoolean(record.pinned, Boolean(pinnedAt)),
+    railPosition: typeof record.railPosition === 'number' && Number.isFinite(record.railPosition) ? record.railPosition : null,
     lastOpenedAt: asNullableString(record.lastOpenedAt),
     version: Math.max(0, asNumber(record.version)),
     contextDrawerOpen:
@@ -200,6 +201,12 @@ export async function updateProjectNavigation(
   )
   const record = asRecord(payload)
   return normalizeNavigation(projectId, record.navigation ?? payload)
+}
+
+/** Your pinned projects in your own order, top to bottom; returns the ones placed. */
+export async function setRailOrder(projectIds: string[]): Promise<string[]> {
+  const payload = asRecord(await requestJson<unknown>('/api/v1/projects/rail-order', { method: 'PUT', json: { projectIds } }))
+  return Array.isArray(payload.projectIds) ? payload.projectIds.filter((id): id is string => typeof id === 'string') : []
 }
 
 export async function switchProject(

@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
 import type { Project } from '../projects/types'
-import { railProjects } from './railProjects'
+import { railOrderAfterDrop, railOrderAfterStep, railProjects } from './railProjects'
 
-function project(name: string, lastOpenedAt: string | null, pinned = false): Project {
+function project(name: string, lastOpenedAt: string | null, pinned = false, railPosition: number | null = null): Project {
   return {
     id: name.toLowerCase(),
     organizationId: 'organization-a',
@@ -18,6 +18,7 @@ function project(name: string, lastOpenedAt: string | null, pinned = false): Pro
       location: { kind: 'project_overview' },
       href: `/projects/${name.toLowerCase()}`,
       pinned,
+      railPosition,
       lastOpenedAt,
       version: 1,
     },
@@ -52,5 +53,41 @@ describe('railProjects', () => {
     ]
     expect(names(railProjects(projects, null))).toEqual(['Zinc', 'Apple', 'Basil', 'Clove', 'Date', 'Elm', 'Fig'])
     expect(names(railProjects(projects, 'never'))).toEqual(['Zinc', 'Apple', 'Basil', 'Clove', 'Date', 'Elm', 'Fig', 'Never'])
+  })
+
+  it('puts dragged pins in their places, ahead of pins never placed', () => {
+    const projects = [project('Zinc', null, true), project('Apple', null, true, 1), project('Mint', null, true, 0)]
+    expect(names(railProjects(projects, null))).toEqual(['Mint', 'Apple', 'Zinc'])
+  })
+})
+
+describe('reordering the rail', () => {
+  const rail = [
+    project('Alder', null, true, 0),
+    project('Birch', null, true, 1),
+    project('Cedar', null, true, 2),
+    project('Elm', '2026-10-19T05:00:00Z'),
+  ]
+
+  it('drops a pin before or after another', () => {
+    expect(railOrderAfterDrop(rail, 'cedar', { id: 'alder', after: false })).toEqual(['cedar', 'alder', 'birch'])
+    expect(railOrderAfterDrop(rail, 'alder', { id: 'birch', after: true })).toEqual(['birch', 'alder', 'cedar'])
+  })
+
+  it('pins a recent project where it is dropped, and puts a pin dropped among the recent ones last', () => {
+    expect(railOrderAfterDrop(rail, 'elm', { id: 'birch', after: false })).toEqual(['alder', 'elm', 'birch', 'cedar'])
+    expect(railOrderAfterDrop(rail, 'alder', { id: 'elm', after: false })).toEqual(['birch', 'cedar', 'alder'])
+  })
+
+  it('saves nothing when a tile lands where it was', () => {
+    expect(railOrderAfterDrop(rail, 'birch', { id: 'birch', after: true })).toBeNull()
+    expect(railOrderAfterDrop(rail, 'birch', { id: 'alder', after: true })).toBeNull()
+    expect(railOrderAfterDrop(rail, 'cedar', { id: 'elm', after: false })).toBeNull()
+  })
+
+  it('moves a pin one place with the keyboard, but not past the ends', () => {
+    expect(railOrderAfterStep(rail, 'birch', -1)).toEqual(['birch', 'alder', 'cedar'])
+    expect(railOrderAfterStep(rail, 'cedar', 1)).toBeNull()
+    expect(railOrderAfterStep(rail, 'elm', -1)).toBeNull()
   })
 })

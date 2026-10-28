@@ -27,6 +27,8 @@ export type ProjectNavigation = {
   location: ProjectLocation
   href: string
   pinned: boolean
+  /** Where this pinned project sits in your rail, from a drag; unplaced pins follow. */
+  railPosition?: number | null
   lastOpenedAt: string | null
   version: number
   contextDrawerOpen?: boolean

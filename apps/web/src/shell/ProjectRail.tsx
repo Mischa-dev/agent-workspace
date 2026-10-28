@@ -1,12 +1,13 @@
-import { Suspense, lazy, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
+import { Suspense, lazy, useState, type CSSProperties, type DragEvent, type MouseEvent, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
+import { toastError } from '../app/mutations'
 import { clearAuthenticatedQueryCache, logout, type SessionUser } from '../auth/session'
 import { useDirectOverview } from '../direct/api'
 import { projectLocationHref } from '../projects/locations'
-import { useProjects, useSwitchProject } from '../projects/hooks'
+import { useProjects, useSetRailOrder, useSwitchProject } from '../projects/hooks'
 import type { Project } from '../projects/types'
 import { Avatar, Badge, Icon, Menu, Tooltip, showToast, swatchFor, type IconName } from '../ui'
 import { useOptionalRealtime } from '../realtime/realtimeContext'
@@ -15,10 +16,15 @@ import { inHomeSpace, useInboxUnread } from './homeSpace'
 import { loadShellLazy } from './loadShellLazy'
 import { isMobileWidth } from './mobileNavigation'
 import { usePausedUntil } from './pauseStatus'
-import { railProjects } from './railProjects'
+import { railOrderAfterDrop, railProjects } from './railProjects'
 
 // Loaded after the first paint: whether you've paused notifications.
 const PausedMark = lazy(() => loadShellLazy().then((module) => ({ default: module.PausedMark })))
+
+/** What a dragged project tile carries, so other drags (files, text) don't reorder the rail. */
+const RAIL_DRAG_TYPE = 'application/x-agent-workspace-project'
+
+type RailDrag = { id: string; over: { id: string; after: boolean } | null }
 
 function projectHref(project: Project) {
   return projectLocationHref(project.id, project.navigation.location)
@@ -114,6 +120,32 @@ export function ProjectRail({
   const projects = (projectsQuery.data?.projects ?? []).filter((project) => !project.archivedAt)
   const inboxUnread = useInboxUnread() ?? 0
   const visibleProjects = railProjects(projects, currentProjectId)
+  // Tiles drag into your own order (not on phones, where the rail is a drawer).
+  const setRailOrder = useSetRailOrder()
+  const [drag, setDrag] = useState<RailDrag | null>(null)
+  const startDrag = (event: DragEvent<HTMLAnchorElement>, project: Project) => {
+    if (isMobileWidth() || !project.capabilities.navigationWrite) return
+    event.dataTransfer.effectAllowed = 'all'
+    event.dataTransfer.setData(RAIL_DRAG_TYPE, project.id)
+    setDrag({ id: project.id, over: null })
+  }
+  const dragOver = (event: DragEvent<HTMLDivElement>) => {
+    if (!drag || !event.dataTransfer.types.includes(RAIL_DRAG_TYPE)) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+    const tile = (event.target as HTMLElement).closest<HTMLElement>('[data-rail-project]')
+    if (!tile) return
+    const box = tile.getBoundingClientRect()
+    const over = { id: tile.dataset.railProject ?? '', after: event.clientY > box.top + box.height / 2 }
+    if (drag.over?.id !== over.id || drag.over.after !== over.after) setDrag({ ...drag, over })
+  }
+  const drop = (event: DragEvent<HTMLDivElement>) => {
+    if (!drag) return
+    event.preventDefault()
+    const order = drag.over ? railOrderAfterDrop(visibleProjects, drag.id, drag.over) : null
+    setDrag(null)
+    if (order) setRailOrder.mutate(order, { onError: (reason) => toastError('The rail’s order wasn’t saved', reason) })
+  }
 
   // Opens the project at once from what's cached, then records the visit
   // (the rail's "recent") in the background. The page says if the project is gone.
@@ -171,18 +203,32 @@ export function ProjectRail({
           to="/messages"
         />
         <span className="aw-rail__divider" role="separator" />
-        <div aria-label="Pinned and recent projects" className="aw-rail__projects project-list" role="group">
+        <div
+          aria-label="Pinned and recent projects"
+          className="aw-rail__projects project-list"
+          data-dragging={drag ? 'true' : undefined}
+          onDragLeave={(event) => {
+            if (drag?.over && !event.currentTarget.contains(event.relatedTarget as Node | null)) setDrag({ ...drag, over: null })
+          }}
+          onDragOver={dragOver}
+          onDrop={drop}
+          role="group"
+        >
           {projectsQuery.isPending ? <span aria-label="Loading projects" className="aw-rail__loading" role="status" /> : null}
           {visibleProjects.map((project) => {
             const active = project.id === currentProjectId
+            const dropMark = drag?.over?.id === project.id && drag.id !== project.id ? (drag.over.after ? ' is-drop-after' : ' is-drop-before') : ''
             return (
               <Tooltip key={project.id} label={project.name} side="right">
                 <a
                   aria-current={active ? 'page' : undefined}
                   aria-label={`${project.name}${project.attentionCount ? `, ${project.attentionCount} unread` : ''}`}
-                  className={`aw-tile aw-tile--space${active ? ' is-active' : ''}${project.attentionCount ? ' is-unread' : ''}`}
+                  className={`aw-tile aw-tile--space${active ? ' is-active' : ''}${project.attentionCount ? ' is-unread' : ''}${drag?.id === project.id ? ' is-dragging' : ''}${dropMark}`}
+                  data-rail-project={project.id}
                   href={projectHref(project)}
                   onClick={(event) => selectProject(project, event)}
+                  onDragEnd={() => setDrag(null)}
+                  onDragStart={(event) => startDrag(event, project)}
                 >
                   <TileFace swatch={swatchFor(project.id)}>{project.key.slice(0, 2)}</TileFace>
                   {project.attentionCount > 0 ? (

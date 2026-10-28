@@ -1,4 +1,4 @@
-import { useRef, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from 'react'
+import { useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from 'react'
 
 import './pickers.css'
 
@@ -8,7 +8,7 @@ export type TableColumn = {
   /** A CSS grid track, such as `minmax(0, 1fr)` or `96px`. */
   width?: string
   align?: 'start' | 'end'
-  /** Hidden below 640px wide so phones keep the essentials. */
+  /** Hidden when the table is narrow (on a phone, or beside a wide side panel), so the rest keep their room. */
   hideOnPhone?: boolean
   /** Hides the header text (the column still has a name for screen readers). */
   quietHeader?: boolean
@@ -30,6 +30,22 @@ export type TableRow = {
 }
 
 const track = (column: TableColumn) => column.width ?? 'minmax(0, 1fr)'
+
+/** Narrower than this, a table shows only the columns phones get. */
+const NARROW_BELOW = 600
+
+/** Whether the table itself is narrow, wherever it sits: the side panel and the sidebar take part of the window. */
+function useNarrow(root: RefObject<HTMLElement | null>) {
+  const [narrow, setNarrow] = useState(() => typeof window !== 'undefined' && window.innerWidth <= 640)
+  useLayoutEffect(() => {
+    const element = root.current
+    if (!element || typeof ResizeObserver === 'undefined') return undefined
+    const observer = new ResizeObserver(([entry]) => setNarrow(entry.contentRect.width < NARROW_BELOW))
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [root])
+  return narrow
+}
 
 const columnsStyle = (columns: TableColumn[]) =>
   ({
@@ -85,6 +101,8 @@ export function Table({
 }) {
   const ownBody = useRef<HTMLDivElement>(null)
   const body = bodyRef ?? ownBody
+  const root = useRef<HTMLDivElement>(null)
+  const narrow = useNarrow(root)
   const focusable = rows.filter((row) => !row.inert)
   const current = activeKey ?? focusable[0]?.key ?? null
 
@@ -110,7 +128,8 @@ export function Table({
       aria-label={label}
       aria-multiselectable={ariaMultiselectable || undefined}
       aria-rowcount={rowCount !== undefined ? rowCount + 1 : undefined}
-      className={['aw-table', className].filter(Boolean).join(' ')}
+      className={['aw-table', narrow ? 'is-narrow' : '', className].filter(Boolean).join(' ')}
+      ref={root}
       role="grid"
       style={columnsStyle(columns)}
     >

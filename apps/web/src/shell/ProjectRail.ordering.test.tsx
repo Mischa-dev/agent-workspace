@@ -20,6 +20,7 @@ vi.mock('../auth/session', () => ({
 vi.mock('../projects/hooks', () => ({
   useProjectSearch: vi.fn(),
   useProjects: vi.fn(),
+  useSetRailOrder: () => ({ mutate: vi.fn() }),
   useSwitchProject: vi.fn(),
   useUpdateProjectNavigation: vi.fn(),
 }))

@@ -2,8 +2,8 @@
 //! would be silent: who may edit and delete a task comment, a deleted
 //! comment's text surviving anywhere, reading a conversation leaving its
 //! notifications unread, an unnamed thread keeping a removed message's
-//! text as its name, and a remembered place pointing at a page someone can't
-//! open.
+//! text as its name, a remembered place pointing at a page someone can't
+//! open, and one person's rail order touching anyone else's.
 
 use axum::http::StatusCode;
 use serde_json::{Value, json};
@@ -572,4 +572,119 @@ async fn a_project_remembers_each_tab_and_page_but_not_an_archived_or_foreign_pa
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// The projects someone's rail lists, pinned ones first: (key, pinned, place).
+async fn rail(
+    setup: &super::mcp_admin::Setup,
+    browser: &super::agent_interface::Browser,
+) -> Vec<(String, bool, Value)> {
+    let (status, listed) = get(setup, browser, "/api/v1/projects").await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    listed["projects"]
+        .as_array()
+        .expect("projects")
+        .iter()
+        .map(|project| {
+            (
+                project["key"].as_str().expect("key").to_owned(),
+                project["navigation"]["pinned"].as_bool().expect("pinned"),
+                project["navigation"]["railPosition"].clone(),
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn the_rail_keeps_each_persons_own_order_and_nobody_elses() {
+    let Some(setup) = setup("rail_order").await else {
+        return;
+    };
+    let alpha = create_project(&setup, "ALP", "Alpha").await;
+    let beta = create_project(&setup, "BET", "Beta").await;
+    let gamma = create_project(&setup, "GAM", "Gamma").await;
+    // Mara isn't in this one.
+    let hidden = create_project(&setup, "HID", "Hidden").await;
+    let (mara, mara_browser) = add_person(&setup, &[&alpha, &beta, &gamma], "mara").await;
+    let order = |ids: &[&str]| {
+        mara_browser.request(
+            "PUT",
+            "/api/v1/projects/rail-order",
+            None,
+            json!({"projectIds": ids}),
+        )
+    };
+
+    // Gamma dragged above Alpha pins both there; a project Mara isn't in is left out.
+    let (status, placed) = send(&setup.app, order(&[&gamma, &hidden, &alpha])).await;
+    assert_eq!(status, StatusCode::OK, "{placed}");
+    assert_eq!(placed["projectIds"], json!([gamma, alpha]));
+    assert_eq!(
+        rail(&setup, &mara_browser).await,
+        vec![
+            ("GAM".to_owned(), true, json!(0)),
+            ("ALP".to_owned(), true, json!(1)),
+            ("BET".to_owned(), false, Value::Null),
+        ]
+    );
+    let hidden_rows = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM project_navigation_states WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(hidden.parse::<Uuid>().expect("project"))
+    .bind(mara)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("hidden navigation");
+    assert_eq!(hidden_rows, 0);
+    // The owner's rail is their own: nothing of Mara's order shows there.
+    assert!(
+        rail(&setup, &setup.browser)
+            .await
+            .iter()
+            .all(|(_, pinned, place)| !pinned && place.is_null())
+    );
+
+    // A new order leaves Alpha pinned, after the placed ones.
+    let (status, placed) = send(&setup.app, order(&[&beta, &gamma])).await;
+    assert_eq!(status, StatusCode::OK, "{placed}");
+    assert_eq!(
+        rail(&setup, &mara_browser).await,
+        vec![
+            ("BET".to_owned(), true, json!(0)),
+            ("GAM".to_owned(), true, json!(1)),
+            ("ALP".to_owned(), true, Value::Null),
+        ]
+    );
+
+    // Unpinned, Gamma loses its place, so pinning it again puts it last.
+    let navigation = format!("/api/v1/projects/{gamma}/navigation");
+    let (_, current) = get(&setup, &mara_browser, &navigation).await;
+    let (status, saved) = send(
+        &setup.app,
+        mara_browser.request(
+            "PUT",
+            &navigation,
+            None,
+            json!({"location": current["location"], "expectedVersion": current["version"], "pinned": false}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["pinned"], false);
+    assert_eq!(saved["railPosition"], Value::Null);
+
+    // The same project twice is refused; an archived one is left out.
+    let (status, _) = send(&setup.app, order(&[&beta, &beta])).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    sqlx::query(
+        "UPDATE projects SET archived_at = now(), archived_by_actor_id = $2, version = version + 1 WHERE id = $1",
+    )
+    .bind(beta.parse::<Uuid>().expect("project"))
+    .bind(mara)
+    .execute(&setup.pool)
+    .await
+    .expect("archive");
+    let (status, placed) = send(&setup.app, order(&[&beta, &alpha])).await;
+    assert_eq!(status, StatusCode::OK, "{placed}");
+    assert_eq!(placed["projectIds"], json!([alpha]));
 }

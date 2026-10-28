@@ -13,6 +13,7 @@ import {
   getProjectNavigation,
   listProjects,
   restoreProject,
+  setRailOrder,
 } from './api'
 import {
   enqueueProjectNavigationUpdate,
@@ -129,6 +130,41 @@ export function removeProjectFromListCaches(
           }
         : current,
   )
+}
+
+/**
+ * Saves your rail's order from a drag. The rail moves at once; if the save
+ * fails it goes back to what the server has.
+ */
+export function useSetRailOrder() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (projectIds: string[]) => setRailOrder(projectIds),
+    onMutate: async (projectIds) => {
+      await queryClient.cancelQueries({ queryKey: queryKeys.projects })
+      const place = new Map(projectIds.map((id, index) => [id, index]))
+      queryClient.setQueryData<ProjectListResponse>(queryKeys.projects, (current) =>
+        current
+          ? {
+              ...current,
+              projects: current.projects.map((project) => {
+                const position = place.get(project.id)
+                if (position === undefined && project.navigation.railPosition == null) return project
+                return {
+                  ...project,
+                  navigation: {
+                    ...project.navigation,
+                    pinned: position === undefined ? project.navigation.pinned : true,
+                    railPosition: position ?? null,
+                  },
+                }
+              }),
+            }
+          : current,
+      )
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['projects'] }),
+  })
 }
 
 export function useSwitchProject() {

@@ -7,7 +7,7 @@ export const LIST_COLUMNS: TableColumn[] = [
   { id: 'key', header: 'Key', width: '76px', hideOnPhone: true },
   { id: 'status', header: 'Status', width: '32px', quietHeader: true },
   { id: 'title', header: 'Title', width: 'minmax(0, 1fr)' },
-  { id: 'details', header: 'Details', width: 'minmax(0, 240px)', hideOnPhone: true, quietHeader: true, align: 'end' },
+  { id: 'details', header: 'Details', width: 'minmax(0, min(240px, 25%))', hideOnPhone: true, quietHeader: true, align: 'end' },
   { id: 'due', header: 'Due', width: '84px', hideOnPhone: true },
   { id: 'assignee', header: 'Assignee', width: '40px', quietHeader: true, align: 'end' },
 ]

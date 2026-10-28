@@ -432,10 +432,8 @@
   font-weight: var(--weight-bold);
 }
 
-@media (max-width: 640px) {
-  .aw-tasks__phonekey {
-    display: inline;
-  }
+.aw-table.is-narrow .aw-tasks__phonekey {
+  display: inline;
 }
 
 /* Bulk bar and notices */

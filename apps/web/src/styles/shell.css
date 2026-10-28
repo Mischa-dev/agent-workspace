@@ -2,6 +2,11 @@
 
 .aw-shell {
   --inset-bottom: var(--app-inset-bottom, env(safe-area-inset-bottom));
+  /* The sidebar and side panel as wide as the person dragged them, but never
+     so wide that the page between disappears (ResizeEdge.tsx holds the same shares). */
+  --shell-sidebar: min(var(--sidebar-width, var(--size-sidebar)), max(var(--size-sidebar), 25vw));
+  --shell-panel: min(var(--panel-width, var(--size-thread)), max(var(--size-thread), 40vw));
+  position: relative;
   display: grid;
   grid-template-columns: var(--size-rail) minmax(0, 1fr);
   height: 100dvh;
@@ -13,11 +18,61 @@
 }
 
 .aw-shell[data-has-sidebar="true"] {
-  grid-template-columns: var(--size-rail) var(--size-sidebar) minmax(0, 1fr);
+  grid-template-columns: var(--size-rail) var(--shell-sidebar) minmax(0, 1fr);
 }
 
 .aw-shell[data-has-sidebar="true"][data-has-context="true"] {
-  grid-template-columns: var(--size-rail) var(--size-sidebar) minmax(0, 1fr) var(--size-thread);
+  grid-template-columns: var(--size-rail) var(--shell-sidebar) minmax(0, 1fr) var(--shell-panel);
+}
+
+/* The edges between the sidebar, the page and the side panel: a line shows
+   where to grab, and dragging (or the arrow keys) resizes. */
+.aw-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: var(--layer-sticky);
+  width: 9px;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+
+.aw-resize--sidebar {
+  left: calc(var(--size-rail) + var(--shell-sidebar));
+  translate: -50% 0;
+}
+
+.aw-resize--panel {
+  right: var(--shell-panel);
+  translate: 50% 0;
+}
+
+.aw-resize::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  translate: -50% 0;
+  background: transparent;
+  content: '';
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.aw-resize:hover::after,
+.aw-resize.is-dragging::after {
+  background: var(--accent);
+}
+
+.aw-resize:focus-visible::after {
+  background: var(--focus-ring);
+}
+
+:root[data-resizing],
+:root[data-resizing] * {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .aw-skip-link {
@@ -168,6 +223,31 @@
 
 .aw-tile--space:hover .aw-tile__face {
   filter: brightness(1.08);
+}
+
+/* A project tile being dragged, and a line in the gap where it would land. */
+.aw-tile.is-dragging {
+  opacity: 0.4;
+}
+
+.aw-tile.is-drop-before::after,
+.aw-tile.is-drop-after::after {
+  position: absolute;
+  right: 0;
+  left: 0;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--rail-indicator);
+  content: '';
+  pointer-events: none;
+}
+
+.aw-tile.is-drop-before::after {
+  top: calc(-1 * var(--space-1) - 1px);
+}
+
+.aw-tile.is-drop-after::after {
+  bottom: calc(-1 * var(--space-1) - 1px);
 }
 
 .aw-tile__indicator {
@@ -365,6 +445,34 @@ button.aw-sidebar__title[aria-expanded="true"] {
   background: var(--sidebar-hover);
 }
 
+/* A sidebar row being dragged, and a line where it would land. */
+.aw-item.is-dragging {
+  opacity: 0.5;
+}
+
+.aw-dropline {
+  position: relative;
+}
+
+.aw-dropline::after {
+  position: absolute;
+  right: var(--space-2);
+  left: var(--space-2);
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  content: '';
+  pointer-events: none;
+}
+
+.aw-dropline.is-before::after {
+  top: -1px;
+}
+
+.aw-dropline.is-after::after {
+  bottom: -1px;
+}
+
 .aw-item__lead {
   display: grid;
   place-items: center;
@@ -513,6 +621,11 @@ button.aw-sidebar__title[aria-expanded="true"] {
   .aw-shell[data-has-sidebar="true"],
   .aw-shell[data-has-sidebar="true"][data-has-context="true"] {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* On phones the sidebar and panel are drawers, as wide as they always are. */
+  .aw-resize {
+    display: none;
   }
 
   .aw-rail,

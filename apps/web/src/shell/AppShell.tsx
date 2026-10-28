@@ -13,6 +13,7 @@ import { MenuButton } from './MenuButton'
 import { MOBILE_QUERY, ShellHeaderContext, isMobileWidth, useMobileNavigation } from './mobileNavigation'
 import { ProjectRail } from './ProjectRail'
 import { ProjectSidebar } from './ProjectSidebar'
+import { ResizeEdge } from './ResizeEdge'
 import { useKeyboardViewport } from './useKeyboardViewport'
 import { useSwipe } from './useSwipe'
 
@@ -309,6 +310,7 @@ export function AppShell({
             </Suspense>
           </div>
         ) : null}
+        {hasSidebar ? <ResizeEdge edge="sidebar" /> : null}
         <main
           className={`aw-main ${mainClassName ?? 'aw-main--page'}`}
           data-region="content"
@@ -335,6 +337,7 @@ export function AppShell({
           )}
           {children}
         </main>
+        {hasSidebar && context ? <ResizeEdge edge="panel" /> : null}
         {hasSidebar && context && (
           <div
             aria-label={contextOpen ? 'Details' : undefined}
