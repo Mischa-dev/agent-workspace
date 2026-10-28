@@ -501,6 +501,63 @@ async fn trashed_boards_go_for_good_only_when_someone_who_can_edit_asks() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
+
+    // Boards someone can only look at never fill their batch: with more of
+    // them in the trash than one Empty trash takes, all older than a board
+    // of their own, their own board still goes.
+    let theirs = create_project(&setup, "THEIRS", "Theirs").await;
+    add_member(&setup, &theirs, viewer_id, "member").await;
+    let own = create_board(
+        &setup,
+        &viewer,
+        json!({"title": "Mine", "projectId": theirs}),
+    )
+    .await;
+    sqlx::query(
+        r#"
+        INSERT INTO whiteboards (
+            id, organization_id, project_id, title, created_by_actor_id,
+            deleted_at, deleted_by_actor_id
+        )
+        SELECT gen_random_uuid(), board.organization_id, board.project_id, 'Old ' || n,
+               board.created_by_actor_id, now() - interval '1 day' + n * interval '1 second',
+               board.created_by_actor_id
+        FROM whiteboards board, generate_series(1, 201) AS n
+        WHERE board.id::text = $1
+        "#,
+    )
+    .bind(&copy)
+    .execute(&setup.pool)
+    .await
+    .expect("older trashed boards");
+    let (status, _) = request(
+        &setup,
+        &viewer,
+        "PATCH",
+        &format!("/api/v1/whiteboards/{own}"),
+        json!({"deleted": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, emptied) = request(
+        &setup,
+        &viewer,
+        "POST",
+        "/api/v1/whiteboard-trash/empty",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{emptied}");
+    assert_eq!(emptied["deleted"], 1, "{emptied}");
+    let (status, _) = request(
+        &setup,
+        &viewer,
+        "GET",
+        &format!("/api/v1/whiteboards/{own}"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
