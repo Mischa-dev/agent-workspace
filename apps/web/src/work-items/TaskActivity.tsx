@@ -26,11 +26,12 @@ import {
   formatRelative,
   type MenuEntry,
 } from '../ui'
-import { searchWorkItemReferences } from './api'
+import { commentContent, searchWorkItemReferences } from './api'
 import { CommentEditor, CommentHistoryDialog, DeleteCommentDialog, type PostedComment } from './CommentEditing'
 import { formatChanges, type FormattedChange } from './historyFormat'
 import { taskFilesKey, useCreateWorkItemComment, useTaskFiles, useWorkItemTimeline } from './hooks'
 import { useSetWatching } from './planningHooks'
+import { workItemHref } from './links'
 import type { WorkItem, WorkItemTimelineEntry } from './types'
 
 /** "Priority High → Urgent", with the old value struck through for sighted readers. */
@@ -266,12 +267,9 @@ export function TaskActivity({ disabled, item, projectArchived }: { disabled: bo
           disabled={createComment.isPending}
           draftKey={`comment:${item.id}`}
           label="Add a comment"
+          outbox={{ kind: 'comment', projectId: item.projectId, workItemId: item.id, href: workItemHref(item.projectId, item.id) }}
           onSubmit={async ({ attachments, content, idempotencyKey, text }) => {
-            // A comment needs words; one that is only files says what it attaches.
-            const words =
-              text || !attachments?.length
-                ? content
-                : { version: 1 as const, nodes: [{ type: 'text' as const, text: `Attached ${attachments.map((file) => file.name).join(', ')}`.slice(0, 2000) }] }
+            const words = commentContent({ attachments, content, text })
             await createComment.mutateAsync({ projectId: item.projectId, workItemId: item.id, content: words, idempotencyKey, attachments })
             if (attachments?.length) void queryClient.invalidateQueries({ queryKey: taskFilesKey(item.projectId, item.id) })
           }}

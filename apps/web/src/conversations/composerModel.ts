@@ -1,6 +1,7 @@
 import type { FileAttachment } from '../files/model'
 import type {
   ConversationActor,
+  ConversationKind,
   ConversationWorkItemReference,
   MessageContentV1,
   MessageNode,
@@ -90,6 +91,22 @@ export type ComposerDraft = {
   text: string
   mentions: ConversationActor[]
   workItems: ConversationWorkItemReference[]
+}
+
+/** Where a send waiting for the connection goes, so it can go out from any page, and where to see it. */
+export type OutboxTarget =
+  | { kind: 'message'; conversationId: string; conversationKind: ConversationKind; href: string }
+  | { kind: 'comment'; projectId: string; workItemId: string; href: string }
+
+/**
+ * A send that couldn't reach the server, kept under `unsent:<draftKey>` to
+ * send again with the same key, with the people and tasks it named so a
+ * refusal puts all of it back.
+ */
+export type QueuedSend = ComposerSubmission & { text: string } & Partial<Pick<ComposerDraft, 'mentions' | 'workItems'>> & {
+  target?: OutboxTarget
+  /** Refused while its box was closed: it goes back into the box when that opens. */
+  refused?: boolean
 }
 
 /**

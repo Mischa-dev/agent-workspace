@@ -646,6 +646,13 @@ export async function removeAcceptanceCriterion(input: {
   )
 }
 
+/** A comment needs words; one that is only files says what it attaches. */
+export function commentContent({ attachments, content, text }: { attachments?: { name: string }[]; content: MessageContentV1; text?: string }): MessageContentV1 {
+  return text || !attachments?.length
+    ? content
+    : { version: 1, nodes: [{ type: 'text', text: `Attached ${attachments.map((file) => file.name).join(', ')}`.slice(0, 2000) }] }
+}
+
 export async function createWorkItemComment(input: {
   projectId: string
   workItemId: string
