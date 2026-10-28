@@ -368,6 +368,55 @@ fn client() -> &'static reqwest::Client {
     })
 }
 
+/// The client for one job. A provider's own address is built in and public,
+/// so the shared client calls it. An address the workspace chose
+/// (`ai.base_url`) must be public unless the server's operator allows
+/// private ones: it's resolved now, and the client connects only to the
+/// addresses checked, with no proxy picking another.
+async fn provider_client(
+    state: &AppState,
+    resolved: &ResolvedModel,
+) -> Result<reqwest::Client, AiError> {
+    let Some(address) = resolved.base_url.as_deref() else {
+        return Ok(client().clone());
+    };
+    if state.config.allow_private_addresses {
+        return Ok(client().clone());
+    }
+    let not_public = || {
+        AiError::NotConfigured(
+            "The provider address must be a public address. A model on a private network needs this server's operator to allow private addresses.".to_owned(),
+        )
+    };
+    let url = url::Url::parse(address.trim()).map_err(|_| {
+        AiError::NotConfigured("The provider address isn't a web address.".to_owned())
+    })?;
+    let (Some(host), Some(port)) = (url.host_str(), url.port_or_known_default()) else {
+        return Err(AiError::NotConfigured(
+            "The provider address isn't a web address.".to_owned(),
+        ));
+    };
+    let pinned =
+        crate::outbound::resolve(host, port, false)
+            .await
+            .map_err(|refusal| match refusal {
+                crate::outbound::Refusal::Private => not_public(),
+                crate::outbound::Refusal::Unresolved => AiError::Provider(
+                    ProviderError::Unavailable("couldn't find the provider address".to_owned()),
+                ),
+            })?;
+    let mut builder = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(15))
+        .no_proxy();
+    if matches!(url.host(), Some(url::Host::Domain(_))) {
+        builder = builder.resolve_to_addrs(host, &pinned);
+    }
+    builder
+        .build()
+        .map_err(|_| AiError::App(AppError::Internal("provider client")))
+}
+
 /// A checked answer and what made it.
 #[derive(Clone, Debug)]
 pub struct Answer<T> {
@@ -470,6 +519,7 @@ pub async fn run_with<T: DeserializeOwned>(
         None => None,
     };
     let prices = prices(&state.pool, scope.organization_id, resolved).await?;
+    let client = provider_client(state, resolved).await?;
     let mut system = prompt.system.to_owned();
     for attempt in 0..2 {
         let started = std::time::Instant::now();
@@ -484,7 +534,7 @@ pub async fn run_with<T: DeserializeOwned>(
             base_url: resolved.base_url.as_deref(),
             timeout: tier.timeout(),
         };
-        let result = resolved.provider.complete(client(), &request).await;
+        let result = resolved.provider.complete(&client, &request).await;
         let latency_ms = i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX);
         let completion = match result {
             Ok(completion) => completion,

@@ -1,6 +1,10 @@
-//! Settings › Workspace › Server, for owners: which build is running, the
-//! checks `preflight` makes (run live), when the nightly backup last ran
-//! and whether it worked, and whether the workspace can send email.
+//! Settings › Workspace › Server, for the server's operators: which build
+//! is running, the checks `preflight` makes (run live), when the nightly
+//! backup last ran and whether it worked, the job queue, and whether the
+//! workspace can send email. Operators are whoever set the server up from
+//! its terminal (`bootstrap-admin`) and anyone named in
+//! `AGENT_WORKSPACE_OPERATOR_LOGINS`; a workspace's owner on a shared server
+//! isn't one, and sees nothing of the server here.
 //!
 //! The backup timer runs as root, outside the app, so it leaves a small
 //! status file in the data folder (`backup-status.json`, written by
@@ -34,6 +38,33 @@ pub fn router() -> Router<AppState> {
         "/api/v1/organizations/{organization_id}/server",
         get(read_http),
     )
+}
+
+/// Whether `principal` runs this server: set it up from its terminal, or is
+/// named in `AGENT_WORKSPACE_OPERATOR_LOGINS`.
+pub async fn is_operator(
+    state: &AppState,
+    principal: &AuthenticatedActor,
+) -> Result<bool, AppError> {
+    if state
+        .config
+        .operator_logins
+        .iter()
+        .any(|login| login.eq_ignore_ascii_case(&principal.login_name))
+    {
+        return Ok(true);
+    }
+    Ok(sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM audit_events
+            WHERE actor_id = $1 AND action = 'identity.bootstrap_admin' AND outcome = 'succeeded'
+        )
+        "#,
+    )
+    .bind(principal.actor_id)
+    .fetch_one(&state.pool)
+    .await?)
 }
 
 pub fn backup_status_path(data_root: &Path) -> PathBuf {
@@ -195,6 +226,9 @@ async fn read_http(
         {
             return Err(AppError::Forbidden);
         }
+    }
+    if !is_operator(&state, &principal).await? {
+        return Err(AppError::Forbidden);
     }
     state
         .rate_limits
