@@ -8,6 +8,8 @@ import { toastError } from '../app/mutations'
 import { useAuthenticatedSession } from '../auth/session'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
 import { useProject } from '../projects/hooks'
+import { RememberPlace } from '../projects/RememberPlace'
+import type { Project, ProjectLocation } from '../projects/types'
 import { AppShell } from '../shell/AppShell'
 import { MemoryTabs } from '../shell/ProjectTabs'
 import { usePageTitle } from '../shell/documentTitleModel'
@@ -76,8 +78,8 @@ function excerptText(excerpt: string) {
   return plainPreview(blocks.filter(Boolean).join(' · '), 240)
 }
 
-/** Loads the project and renders its frame, or the loading and error states. */
-function ProjectFrame({ children }: { children: (projectId: string) => ReactNode }) {
+/** Loads the project and renders its frame, or the loading and error states, remembering `place` as where the person is. */
+function ProjectFrame({ children, place }: { children: (project: Project) => ReactNode; place?: ProjectLocation }) {
   const session = useAuthenticatedSession()
   const { projectId = '' } = useParams()
   const project = useProject(projectId)
@@ -97,7 +99,10 @@ function ProjectFrame({ children }: { children: (projectId: string) => ReactNode
   }
   return (
     <AppShell mainClassName="aw-main--page" project={project.data} user={session.user}>
-      <div className="aw-page">{children(project.data.id)}</div>
+      <div className="aw-page">
+        {place ? <RememberPlace location={place} project={project.data} /> : null}
+        {children(project.data)}
+      </div>
     </AppShell>
   )
 }
@@ -105,7 +110,7 @@ function ProjectFrame({ children }: { children: (projectId: string) => ReactNode
 const pagesHref = (projectId: string) => `/projects/${encodeURIComponent(projectId)}/pages`
 
 export function PagesPage() {
-  return <ProjectFrame>{(projectId) => <PagesList projectId={projectId} />}</ProjectFrame>
+  return <ProjectFrame place={{ kind: 'pages' }}>{(project) => <PagesList projectId={project.id} />}</ProjectFrame>
 }
 
 function PagesList({ projectId }: { projectId: string }) {
@@ -251,12 +256,13 @@ function NewPageDialog({
 
 export function PageDetailPage() {
   const { pageId = '' } = useParams()
-  return <ProjectFrame>{(projectId) => <PageDetail key={pageId} pageId={pageId} projectId={projectId} />}</ProjectFrame>
+  return <ProjectFrame>{(project) => <PageDetail key={pageId} pageId={pageId} project={project} />}</ProjectFrame>
 }
 
 type Viewing = { version: number; title: string; body: string }
 
-function PageDetail({ pageId, projectId }: { pageId: string; projectId: string }) {
+function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
+  const projectId = project.id
   const queryClient = useQueryClient()
   const page = useQuery({ queryKey: memoryKeys.page(projectId, pageId), queryFn: () => getPage(pageId) })
   usePageTitle(page.data?.title ?? null)
@@ -317,6 +323,7 @@ function PageDetail({ pageId, projectId }: { pageId: string; projectId: string }
   }
   return (
     <>
+      <RememberPlace location={{ kind: 'page', pageId }} project={project} />
       <PageHeader
         actions={
           canEdit && !editing ? (
@@ -573,7 +580,7 @@ function PageEditor({
 }
 
 export function DecisionsPage() {
-  return <ProjectFrame>{(projectId) => <DecisionsList projectId={projectId} />}</ProjectFrame>
+  return <ProjectFrame place={{ kind: 'decisions' }}>{(project) => <DecisionsList projectId={project.id} />}</ProjectFrame>
 }
 
 /** Where a decision was made, as the app links to it: "#design", a thread's name, or a DM. */

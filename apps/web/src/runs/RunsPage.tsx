@@ -6,6 +6,7 @@ import { LaunchQueue } from '../launch/LaunchQueue'
 import { launchesHref } from '../launch/launchModel'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
 import { useProject, useProjects } from '../projects/hooks'
+import { RememberPlace } from '../projects/RememberPlace'
 import type { Project } from '../projects/types'
 import { AppShell } from '../shell/AppShell'
 import {
@@ -124,6 +125,7 @@ export function RunsPage({ project }: { project?: Project } = {}) {
             ? `Agents working on tasks in ${project.name}: what waits to start, what ran, what it used and what it cost.`
             : 'What agents did on your tasks, what they used and what it cost.'}
         </PageHeader>
+        {project ? <RememberPlace location={{ kind: 'runs' }} project={project} /> : null}
         {projectId ? <LaunchQueue projectId={projectId} /> : null}
         <div className="aw-runs__filters">
           <SegmentedControl label="Show runs" onChange={(value) => update('status', value === 'all' ? null : value)} options={TABS} value={status} />

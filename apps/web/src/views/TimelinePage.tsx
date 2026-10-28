@@ -7,6 +7,7 @@ import { isApiError } from '../api/errors'
 import { useAuthenticatedSession } from '../auth/session'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
 import { useProject } from '../projects/hooks'
+import { RememberPlace } from '../projects/RememberPlace'
 import { AppShell } from '../shell/AppShell'
 import { WorkTabs } from '../shell/ProjectTabs'
 import { Banner, Button, ButtonLink, Checkbox, EmptyState, ErrorState, ListSkeleton, PageHeader, SegmentedControl, SelectField, countLabel, describeError, showToast } from '../ui'
@@ -256,6 +257,7 @@ export function TimelinePage() {
           Milestones and tasks in {project.data.name} by date. Drag one, or focus it and press ← or →, to see what slips.
         </PageHeader>
         <WorkTabs current="timeline" projectId={project.data.id} />
+        <RememberPlace location={{ kind: 'timeline' }} project={project.data} />
         <div className="aw-timeline__toolbar">
           <SelectField aria-label="Milestone" compact onChange={(event) => setParameter('milestoneId', event.target.value || null)} value={milestoneId}>
             <option value="">All milestones</option>

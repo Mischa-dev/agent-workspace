@@ -53,6 +53,7 @@ struct ProjectRow {
     archived_at: Option<String>,
     location_kind: Option<String>,
     conversation_id: Option<Uuid>,
+    page_id: Option<Uuid>,
     context_drawer_open: Option<bool>,
     filters: Option<serde_json::Value>,
     pinned_at: Option<String>,
@@ -109,6 +110,8 @@ pub struct NavigationLocation {
     kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     conversation_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    page_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -227,6 +230,8 @@ async fn list_projects(
                 WHEN p.archived_at IS NOT NULL
                   OR (pns.location_kind IN ('channel', 'thread') AND navc.id IS NULL)
                 THEN 'project_overview'
+                -- A page that was archived since falls back to the pages list.
+                WHEN pns.location_kind = 'page' AND navp.id IS NULL THEN 'pages'
                 ELSE pns.location_kind
             END AS location_kind,
             CASE
@@ -235,6 +240,7 @@ async fn list_projects(
                 THEN NULL
                 ELSE pns.conversation_id
             END AS conversation_id,
+            CASE WHEN p.archived_at IS NULL THEN navp.id END AS page_id,
             pns.context_drawer_open,
             pns.filters,
             pns.pinned_at::text AS pinned_at,
@@ -248,6 +254,11 @@ async fn list_projects(
          AND om.enabled
         LEFT JOIN project_navigation_states pns
           ON pns.project_id = p.id AND pns.actor_id = pm.actor_id
+        LEFT JOIN project_pages navp
+          ON navp.project_id = p.id
+         AND navp.id = pns.page_id
+         AND pns.location_kind = 'page'
+         AND navp.archived_at IS NULL
         LEFT JOIN conversations navc
           ON navc.project_id = p.id
          AND navc.id = pns.conversation_id
@@ -458,6 +469,7 @@ async fn create_project(
             location: NavigationLocation {
                 kind: "project_overview".to_owned(),
                 conversation_id: None,
+                page_id: None,
             },
             href: format!("/projects/{project_id}"),
             context_drawer_open: false,
@@ -856,16 +868,18 @@ async fn update_navigation(
         r#"
         INSERT INTO project_navigation_states (
             project_id, actor_id, location_kind, conversation_id,
-            context_drawer_open, filters, pinned_at, last_opened_at, version
+            context_drawer_open, filters, pinned_at, last_opened_at, version,
+            page_id
         )
         VALUES (
             $1, $2, $3, $4, $5, $6,
             CASE WHEN $7 THEN now() ELSE NULL END,
-            now(), 1
+            now(), 1, $9
         )
         ON CONFLICT (project_id, actor_id) DO UPDATE
         SET location_kind = EXCLUDED.location_kind,
             conversation_id = EXCLUDED.conversation_id,
+            page_id = EXCLUDED.page_id,
             context_drawer_open = EXCLUDED.context_drawer_open,
             filters = EXCLUDED.filters,
             pinned_at = CASE
@@ -887,6 +901,7 @@ async fn update_navigation(
             (SELECT archived_at::text FROM projects WHERE id = $1) AS archived_at,
             location_kind,
             conversation_id,
+            page_id,
             context_drawer_open,
             filters,
             pinned_at::text AS pinned_at,
@@ -902,6 +917,7 @@ async fn update_navigation(
     .bind(filters)
     .bind(pinned)
     .bind(request.expected_version)
+    .bind(request.location.page_id)
     .fetch_optional(&mut *transaction)
     .await?
     .ok_or(AppError::VersionConflict {
@@ -1020,6 +1036,8 @@ async fn fetch_project_row(
                 WHEN p.archived_at IS NOT NULL
                   OR (pns.location_kind IN ('channel', 'thread') AND navc.id IS NULL)
                 THEN 'project_overview'
+                -- A page that was archived since falls back to the pages list.
+                WHEN pns.location_kind = 'page' AND navp.id IS NULL THEN 'pages'
                 ELSE pns.location_kind
             END AS location_kind,
             CASE
@@ -1028,6 +1046,7 @@ async fn fetch_project_row(
                 THEN NULL
                 ELSE pns.conversation_id
             END AS conversation_id,
+            CASE WHEN p.archived_at IS NULL THEN navp.id END AS page_id,
             pns.context_drawer_open,
             pns.filters,
             pns.pinned_at::text AS pinned_at,
@@ -1042,6 +1061,11 @@ async fn fetch_project_row(
          AND om.enabled
         LEFT JOIN project_navigation_states pns
           ON pns.project_id = p.id AND pns.actor_id = $2
+        LEFT JOIN project_pages navp
+          ON navp.project_id = p.id
+         AND navp.id = pns.page_id
+         AND pns.location_kind = 'page'
+         AND navp.archived_at IS NULL
         LEFT JOIN conversations navc
           ON navc.project_id = p.id
          AND navc.id = pns.conversation_id
@@ -1084,6 +1108,8 @@ async fn fetch_project_row_in_transaction(
                 WHEN p.archived_at IS NOT NULL
                   OR (pns.location_kind IN ('channel', 'thread') AND navc.id IS NULL)
                 THEN 'project_overview'
+                -- A page that was archived since falls back to the pages list.
+                WHEN pns.location_kind = 'page' AND navp.id IS NULL THEN 'pages'
                 ELSE pns.location_kind
             END AS location_kind,
             CASE
@@ -1092,6 +1118,7 @@ async fn fetch_project_row_in_transaction(
                 THEN NULL
                 ELSE pns.conversation_id
             END AS conversation_id,
+            CASE WHEN p.archived_at IS NULL THEN navp.id END AS page_id,
             pns.context_drawer_open,
             pns.filters,
             pns.pinned_at::text AS pinned_at,
@@ -1106,6 +1133,11 @@ async fn fetch_project_row_in_transaction(
          AND om.enabled
         LEFT JOIN project_navigation_states pns
           ON pns.project_id = p.id AND pns.actor_id = $2
+        LEFT JOIN project_pages navp
+          ON navp.project_id = p.id
+         AND navp.id = pns.page_id
+         AND pns.location_kind = 'page'
+         AND navp.archived_at IS NULL
         LEFT JOIN conversations navc
           ON navc.project_id = p.id
          AND navc.id = pns.conversation_id
@@ -1187,6 +1219,7 @@ fn navigation_view(row: &ProjectRow) -> Result<NavigationView, AppError> {
             .clone()
             .unwrap_or_else(|| "project_overview".to_owned()),
         conversation_id: row.conversation_id,
+        page_id: row.page_id,
     };
     let href = navigation_href(row.id, &location)?;
     Ok(NavigationView {
@@ -1200,18 +1233,39 @@ fn navigation_view(row: &ProjectRow) -> Result<NavigationView, AppError> {
     })
 }
 
-fn navigation_href(project_id: Uuid, location: &NavigationLocation) -> Result<String, AppError> {
-    match (location.kind.as_str(), location.conversation_id) {
-        ("work_items", None) => Ok(format!("/projects/{project_id}/work-items")),
+/// The address of a place in a project that doesn't name a conversation or a page.
+fn plain_location_path(kind: &str) -> Option<&'static str> {
+    Some(match kind {
         // Older clients saved settings as the last place; opening the Project
         // from there should lead out of settings, so it lands on the overview.
-        ("project_overview" | "settings", None) => Ok(format!("/projects/{project_id}")),
-        ("thread", Some(conversation_id)) => {
+        "project_overview" | "settings" => "",
+        "work_items" => "/work-items",
+        "milestones" => "/milestones",
+        "timeline" => "/timeline",
+        "planning" => "/next",
+        "pages" => "/pages",
+        "decisions" => "/decisions",
+        "runs" => "/launches",
+        _ => return None,
+    })
+}
+
+fn navigation_href(project_id: Uuid, location: &NavigationLocation) -> Result<String, AppError> {
+    match (
+        location.kind.as_str(),
+        location.conversation_id,
+        location.page_id,
+    ) {
+        ("thread", Some(conversation_id), None) => {
             Ok(format!("/projects/{project_id}/threads/{conversation_id}"))
         }
-        ("channel", Some(conversation_id)) => {
+        ("channel", Some(conversation_id), None) => {
             Ok(format!("/projects/{project_id}/channels/{conversation_id}"))
         }
+        ("page", None, Some(page_id)) => Ok(format!("/projects/{project_id}/pages/{page_id}")),
+        (kind, None, None) => plain_location_path(kind)
+            .map(|path| format!("/projects/{project_id}{path}"))
+            .ok_or(AppError::Internal("stored Project navigation location")),
         _ => Err(AppError::Internal("stored Project navigation location")),
     }
 }
@@ -1221,9 +1275,33 @@ async fn validate_navigation_location(
     project_id: Uuid,
     location: &NavigationLocation,
 ) -> Result<(), AppError> {
-    match (location.kind.as_str(), location.conversation_id) {
-        ("project_overview" | "work_items" | "settings", None) => Ok(()),
-        (kind @ ("channel" | "thread"), Some(conversation_id)) => {
+    match (
+        location.kind.as_str(),
+        location.conversation_id,
+        location.page_id,
+    ) {
+        ("page", None, Some(page_id)) => {
+            let active = sqlx::query_scalar::<_, bool>(
+                r#"
+                SELECT archived_at IS NULL
+                FROM project_pages
+                WHERE id = $1 AND project_id = $2
+                FOR SHARE
+                "#,
+            )
+            .bind(page_id)
+            .bind(project_id)
+            .fetch_optional(&mut **transaction)
+            .await?
+            .unwrap_or(false);
+            if active {
+                Ok(())
+            } else {
+                Err(AppError::NotFound("page"))
+            }
+        }
+        (kind, None, None) if plain_location_path(kind).is_some() => Ok(()),
+        (kind @ ("channel" | "thread"), Some(conversation_id), None) => {
             let conversation = sqlx::query_as::<_, (String, Option<Uuid>)>(
                 r#"
                 SELECT kind, parent_channel_id
@@ -1539,6 +1617,7 @@ mod tests {
                 &NavigationLocation {
                     kind: "thread".to_owned(),
                     conversation_id: Some(conversation_id),
+                    page_id: None,
                 },
             )
             .expect("thread href"),
@@ -1550,6 +1629,7 @@ mod tests {
                 &NavigationLocation {
                     kind: "thread".to_owned(),
                     conversation_id: None,
+                    page_id: None,
                 },
             )
             .is_err()
@@ -1560,6 +1640,7 @@ mod tests {
                 &NavigationLocation {
                     kind: "channel".to_owned(),
                     conversation_id: Some(conversation_id),
+                    page_id: None,
                 },
             )
             .expect("channel href"),
@@ -1571,11 +1652,42 @@ mod tests {
                 &NavigationLocation {
                     kind: "work_items".to_owned(),
                     conversation_id: None,
+                    page_id: None,
                 },
             )
             .expect("Work Items href"),
             format!("/projects/{project_id}/work-items")
         );
+        let page_id = Uuid::now_v7();
+        let place = |kind: &str, page_id: Option<Uuid>| {
+            navigation_href(
+                project_id,
+                &NavigationLocation {
+                    kind: kind.to_owned(),
+                    conversation_id: None,
+                    page_id,
+                },
+            )
+        };
+        assert_eq!(
+            place("page", Some(page_id)).expect("page href"),
+            format!("/projects/{project_id}/pages/{page_id}")
+        );
+        assert!(place("page", None).is_err());
+        assert!(place("pages", Some(page_id)).is_err());
+        assert_eq!(
+            place("planning", None).expect("planning href"),
+            format!("/projects/{project_id}/next")
+        );
+        assert_eq!(
+            place("runs", None).expect("runs href"),
+            format!("/projects/{project_id}/launches")
+        );
+        assert_eq!(
+            place("settings", None).expect("settings href"),
+            format!("/projects/{project_id}")
+        );
+        assert!(place("somewhere", None).is_err());
     }
 
     #[test]

@@ -1,8 +1,9 @@
 //! The polish leftovers (brief 2026-10-28-keyboard-drag-polish) where a bug
 //! would be silent: who may edit and delete a task comment, a deleted
 //! comment's text surviving anywhere, reading a conversation leaving its
-//! notifications unread, and an unnamed thread keeping a removed message's
-//! text as its name.
+//! notifications unread, an unnamed thread keeping a removed message's
+//! text as its name, and a remembered place pointing at a page someone can't
+//! open.
 
 use axum::http::StatusCode;
 use serde_json::{Value, json};
@@ -457,4 +458,118 @@ async fn unnamed_threads_go_by_their_first_message_until_named() {
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{clash}");
+}
+
+#[tokio::test]
+async fn a_project_remembers_each_tab_and_page_but_not_an_archived_or_foreign_page() {
+    let Some(setup) = setup("remembered_places").await else {
+        return;
+    };
+    let project = create_project(&setup, "NAV", "Navigation").await;
+    let other = create_project(&setup, "OTH", "Other").await;
+    let page_in = |project: &str| {
+        let request = setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{project}/pages"),
+            None,
+            json!({"title": format!("Runbook {project}"), "body": "Steps"}),
+        );
+        async {
+            let (status, page) = send(&setup.app, request).await;
+            assert_eq!(status, StatusCode::OK, "{page}");
+            page["id"].as_str().expect("page").to_owned()
+        }
+    };
+    let page = page_in(&project).await;
+    let foreign_page = page_in(&other).await;
+    let navigation = format!("/api/v1/projects/{project}/navigation");
+    let remember = |location: Value, version: &Value| {
+        setup.browser.request(
+            "PUT",
+            &navigation,
+            None,
+            json!({"location": location, "expectedVersion": version}),
+        )
+    };
+    let (status, current) = get(&setup, &setup.browser, &navigation).await;
+    assert_eq!(status, StatusCode::OK, "{current}");
+
+    for (kind, path) in [
+        ("milestones", "/milestones"),
+        ("timeline", "/timeline"),
+        ("planning", "/next"),
+        ("pages", "/pages"),
+        ("decisions", "/decisions"),
+        ("runs", "/launches"),
+    ] {
+        let (_, current) = get(&setup, &setup.browser, &navigation).await;
+        let (status, saved) = send(
+            &setup.app,
+            remember(json!({"kind": kind}), &current["version"]),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{kind}: {saved}");
+        assert_eq!(saved["href"], format!("/projects/{project}{path}"));
+    }
+
+    // A page in another project, or no page at all, isn't a place here.
+    let (_, current) = get(&setup, &setup.browser, &navigation).await;
+    let (status, _) = send(
+        &setup.app,
+        remember(
+            json!({"kind": "page", "pageId": foreign_page}),
+            &current["version"],
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = send(
+        &setup.app,
+        remember(json!({"kind": "page"}), &current["version"]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (status, saved) = send(
+        &setup.app,
+        remember(json!({"kind": "page", "pageId": page}), &current["version"]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["location"]["pageId"], page.as_str());
+    assert_eq!(saved["href"], format!("/projects/{project}/pages/{page}"));
+    let (_, listed) = get(&setup, &setup.browser, "/api/v1/projects").await;
+    let listed = listed["projects"]
+        .as_array()
+        .expect("projects")
+        .iter()
+        .find(|listed| listed["id"] == project.as_str())
+        .expect("the project")
+        .clone();
+    assert_eq!(
+        listed["navigation"]["href"],
+        format!("/projects/{project}/pages/{page}")
+    );
+
+    // Once the page is archived, the project opens on its pages instead.
+    let (status, archived) = send(
+        &setup.app,
+        setup.browser.request(
+            "PATCH",
+            &format!("/api/v1/pages/{page}"),
+            None,
+            json!({"archived": true}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{archived}");
+    let (_, current) = get(&setup, &setup.browser, &navigation).await;
+    assert_eq!(current["location"], json!({"kind": "pages"}));
+    assert_eq!(current["href"], format!("/projects/{project}/pages"));
+    let (status, _) = send(
+        &setup.app,
+        remember(json!({"kind": "page", "pageId": page}), &current["version"]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }

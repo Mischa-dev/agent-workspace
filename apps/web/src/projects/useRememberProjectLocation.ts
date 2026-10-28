@@ -6,9 +6,9 @@ import { enqueueProjectNavigationUpdate } from './navigationQueue'
 import type { ProjectLocation, ProjectNavigation } from './types'
 
 function locationKey(location: ProjectLocation) {
-  return location.kind === 'thread' || location.kind === 'channel'
-    ? `${location.kind}:${location.conversationId}`
-    : location.kind
+  if (location.kind === 'thread' || location.kind === 'channel') return `${location.kind}:${location.conversationId}`
+  if (location.kind === 'page') return `page:${location.pageId}`
+  return location.kind
 }
 
 export function useRememberProjectLocation(

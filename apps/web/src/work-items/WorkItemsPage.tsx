@@ -62,10 +62,9 @@ export function WorkItemsPage() {
   if (project.isSuccess && entry?.projectId !== projectId) {
     setEntry({
       projectId,
-      restore:
-        viewParameters === 0 &&
-        project.data.navigation.location.kind === 'work_items' &&
-        Boolean(savedFilters && Object.keys(savedFilters).length > 0),
+      // The view is remembered however the person left Tasks: for another
+      // tab, a page or a channel.
+      restore: viewParameters === 0 && Boolean(savedFilters && Object.keys(savedFilters).length > 0),
     })
   } else if (entry?.restore && viewParameters > 0) {
     setEntry({ ...entry, restore: false })
