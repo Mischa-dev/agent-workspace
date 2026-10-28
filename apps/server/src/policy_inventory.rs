@@ -1518,10 +1518,14 @@ mod tests {
 
     use super::{MUTATING_ENTRY_POINTS, MutationMethod};
 
+    /// A route registration. Spelled in two parts so this file holds no
+    /// route call of its own for the source scans here and in the
+    /// workspace-isolation test to trip over.
+    const ROUTE_CALL: &str = concat!(".route", "(");
+
     /// Every file under `src/` that adds routes, found when the test runs so
     /// a new router file can't be missed. Test modules are left out (they
-    /// build throwaway routers), and so is this file, whose parser below
-    /// mentions `.route(` itself.
+    /// build throwaway routers), and so is this file.
     fn router_sources() -> Vec<(String, String)> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut folders = vec![root.clone()];
@@ -1542,7 +1546,7 @@ mod tests {
                 if let Some(tests) = source.find("\n#[cfg(test)]\nmod tests") {
                     source.truncate(tests);
                 }
-                if !source.contains(".route(") {
+                if !source.contains(ROUTE_CALL) {
                     continue;
                 }
                 let module = path
@@ -1612,7 +1616,7 @@ mod tests {
     fn route_blocks(source: &str) -> Vec<&str> {
         let mut blocks = Vec::new();
         let mut remaining = source;
-        while let Some(relative_start) = remaining.find(".route(") {
+        while let Some(relative_start) = remaining.find(ROUTE_CALL) {
             let start = source.len() - remaining.len() + relative_start;
             let open = start + ".route".len();
             let mut depth = 0_u32;
