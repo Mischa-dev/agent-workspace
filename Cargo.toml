@@ -21,3 +21,13 @@ unsafe_code = "forbid"
 dbg_macro = "deny"
 todo = "deny"
 unwrap_used = "deny"
+
+# Password hashing runs at production strength in tests too (a weaker
+# setting would test the wrong thing), and unoptimized it takes about three
+# seconds a hash. Optimizing just these two crates keeps test builds quick
+# to compile and cuts the Rust test suite by about five minutes.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3

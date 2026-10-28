@@ -104,6 +104,13 @@ pub enum AppError {
     Invalid(&'static str),
     #[error("validation failed: {0}")]
     Validation(&'static str),
+    /// Refused for a reason the person can act on: `message` is shown to them
+    /// as it is, so it never carries anything they sent.
+    #[error("refused: {field}")]
+    Refused {
+        field: &'static str,
+        message: &'static str,
+    },
     #[error("the project key already exists")]
     ProjectKeyConflict,
     #[error("the project has an active run")]
@@ -147,7 +154,7 @@ impl AppError {
             Self::Conflict(_, _) => "conflict",
             Self::VersionConflict { .. } => "version_conflict",
             Self::Invalid(_) => "invalid",
-            Self::Validation(_) => "validation",
+            Self::Validation(_) | Self::Refused { .. } => "validation",
             Self::ProjectKeyConflict => "project_key_conflict",
             Self::ProjectHasActiveRuns => "project_has_active_runs",
             Self::ProjectArchived => "project_archived",
@@ -291,6 +298,9 @@ impl IntoResponse for AppError {
                 "One or more fields are invalid.",
                 None,
             ),
+            Self::Refused { message, .. } => {
+                (StatusCode::BAD_REQUEST, "validation_failed", message, None)
+            }
             Self::ProjectKeyConflict => (
                 StatusCode::CONFLICT,
                 "project_key_conflict",

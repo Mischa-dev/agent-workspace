@@ -414,7 +414,7 @@ pub const REGISTRY: &[SettingDef] = &[
     SettingDef {
         key: "ai.base_url",
         label: "Provider address",
-        description: "The address of an OpenAI-compatible server (OpenRouter, Ollama, vLLM), or another address for a provider's API.",
+        description: "The address of an OpenAI-compatible server (OpenRouter, Ollama, vLLM), or another address for a provider's API. A private address works only if the server's operator allows private addresses.",
         kind: SettingType::Text {
             max_chars: 300,
             optional: true,

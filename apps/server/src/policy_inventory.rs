@@ -35,6 +35,11 @@ pub enum MutationAction {
     /// the link's maker, through the task tools, after checking that they
     /// can still add tasks in the project.
     BugReportLinkToken,
+    /// An agent trading its own credential (its agent token, or a refresh
+    /// token bound to it) for a short-lived token from the sign-in
+    /// provider. No person's session is involved; the credential decides
+    /// which agent it is.
+    AgentCredentialExchange,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1151,6 +1156,24 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/projects/{project_id}/external-agents/{connection_id}/webhook/test",
         ExternalAgentManage
     ),
+    policy_route!(
+        "auth/workos/agents",
+        Post,
+        "/api/v1/projects/{project_id}/external-agents/{connection_id}/workos",
+        ExternalAgentManage
+    ),
+    policy_route!(
+        "auth/workos/agents",
+        Delete,
+        "/api/v1/projects/{project_id}/external-agents/{connection_id}/workos/{binding_id}",
+        ExternalAgentManage
+    ),
+    boundary_route!(
+        "auth/workos/agents",
+        Post,
+        "/api/v1/agents/token",
+        AgentCredentialExchange
+    ),
     boundary_route!("mcp/oauth", Post, "/oauth/register", OAuthProtocol),
     boundary_route!("mcp/oauth", Post, "/oauth/authorize", OAuthProtocol),
     boundary_route!("mcp/oauth", Post, "/connect/confirm", OAuthProtocol),
@@ -1539,67 +1562,67 @@ mod tests {
 
     use super::{MUTATING_ENTRY_POINTS, MutationMethod};
 
-    const ROUTER_SOURCES: &[(&str, &str)] = &[
-        ("account", include_str!("account.rs")),
-        ("account_security", include_str!("account_security.rs")),
-        ("password_reset", include_str!("password_reset.rs")),
-        ("api", include_str!("api.rs")),
-        ("auth", include_str!("auth/mod.rs")),
-        ("auth/workos", include_str!("auth/workos.rs")),
-        ("conversations", include_str!("conversations.rs")),
-        ("direct", include_str!("direct.rs")),
-        ("replies", include_str!("replies.rs")),
-        ("message_edits", include_str!("message_edits.rs")),
-        ("reactions", include_str!("reactions.rs")),
-        ("files/http", include_str!("files/http.rs")),
-        ("link_previews", include_str!("link_previews.rs")),
-        ("notifications", include_str!("notifications.rs")),
-        (
-            "notification_settings",
-            include_str!("notification_settings.rs"),
-        ),
-        ("push", include_str!("push.rs")),
-        ("later", include_str!("later.rs")),
-        ("scheduled_messages", include_str!("scheduled_messages.rs")),
-        ("forwarding", include_str!("forwarding.rs")),
-        ("usage", include_str!("usage.rs")),
-        ("github", include_str!("github.rs")),
-        ("github/connect", include_str!("github/connect.rs")),
-        ("invitations", include_str!("invitations.rs")),
-        ("memberships", include_str!("memberships.rs")),
-        ("workspace", include_str!("workspace.rs")),
-        ("onboarding", include_str!("onboarding.rs")),
-        ("audit_log", include_str!("audit_log.rs")),
-        ("mcp/oauth", include_str!("mcp/oauth.rs")),
-        ("public_api", include_str!("public_api.rs")),
-        ("projects", include_str!("projects.rs")),
-        ("repositories", include_str!("repositories.rs")),
-        ("work_items", include_str!("work_items.rs")),
-        ("ai/http", include_str!("ai/http.rs")),
-        ("execution", include_str!("execution.rs")),
-        ("external_agents", include_str!("external_agents.rs")),
-        ("memory", include_str!("memory.rs")),
-        ("whiteboards/http", include_str!("whiteboards/http.rs")),
-        ("connected_apps", include_str!("connected_apps.rs")),
-        ("webhooks", include_str!("webhooks.rs")),
-        ("bug_reports", include_str!("bug_reports.rs")),
-        ("settings", include_str!("settings.rs")),
-        ("layouts", include_str!("layouts.rs")),
-        ("environments", include_str!("environments.rs")),
-        ("harnesses", include_str!("harnesses.rs")),
-        ("agent_profiles", include_str!("agent_profiles.rs")),
-        ("run_views", include_str!("run_views.rs")),
-        ("launch", include_str!("launch.rs")),
-        ("automations", include_str!("automations.rs")),
-        ("agent_sessions", include_str!("agent_sessions.rs")),
-        ("secrets", include_str!("secrets.rs")),
-        ("mail/http", include_str!("mail/http.rs")),
-        ("metrics", include_str!("metrics.rs")),
-    ];
+    /// A route registration. Spelled in two parts so this file holds no
+    /// route call of its own for the source scans here and in the
+    /// workspace-isolation test to trip over.
+    const ROUTE_CALL: &str = concat!(".route", "(");
+
+    /// Every file under `src/` that adds routes, found when the test runs so
+    /// a new router file can't be missed. Test modules are left out (they
+    /// build throwaway routers), and so is this file.
+    fn router_sources() -> Vec<(String, String)> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut folders = vec![root.clone()];
+        let mut sources = Vec::new();
+        while let Some(folder) = folders.pop() {
+            for entry in std::fs::read_dir(&folder).expect("read source folder") {
+                let path = entry.expect("source entry").path();
+                if path.is_dir() {
+                    folders.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|extension| extension != "rs")
+                    || path.ends_with("policy_inventory.rs")
+                {
+                    continue;
+                }
+                let mut source = std::fs::read_to_string(&path).expect("read source file");
+                if let Some(tests) = source.find("\n#[cfg(test)]\nmod tests") {
+                    source.truncate(tests);
+                }
+                if !source.contains(ROUTE_CALL) {
+                    continue;
+                }
+                let module = path
+                    .strip_prefix(&root)
+                    .expect("file under src")
+                    .with_extension("")
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let module = module.strip_suffix("/mod").unwrap_or(&module).to_owned();
+                sources.push((module, source));
+            }
+        }
+        sources
+    }
 
     #[test]
     fn every_http_mutation_route_has_exactly_one_typed_action() {
-        let actual = ROUTER_SOURCES
+        let sources = router_sources();
+        // A sanity floor: the walk must find the long-standing router files.
+        for module in [
+            "api",
+            "auth",
+            "auth/workos/agents",
+            "mcp/oauth",
+            "work_items",
+        ] {
+            assert!(
+                sources.iter().any(|(found, _)| found == module),
+                "router file {module} not found"
+            );
+        }
+        let actual = sources
             .iter()
             .flat_map(|(module, source)| mutation_routes(module, source))
             .collect::<BTreeSet<_>>();
@@ -1614,9 +1637,9 @@ mod tests {
     }
 
     fn mutation_routes<'a>(
-        module: &'static str,
+        module: &'a str,
         source: &'a str,
-    ) -> Vec<(&'static str, MutationMethod, &'a str)> {
+    ) -> Vec<(&'a str, MutationMethod, &'a str)> {
         route_blocks(source)
             .into_iter()
             .flat_map(|block| {
@@ -1637,7 +1660,7 @@ mod tests {
     fn route_blocks(source: &str) -> Vec<&str> {
         let mut blocks = Vec::new();
         let mut remaining = source;
-        while let Some(relative_start) = remaining.find(".route(") {
+        while let Some(relative_start) = remaining.find(ROUTE_CALL) {
             let start = source.len() - remaining.len() + relative_start;
             let open = start + ".route".len();
             let mut depth = 0_u32;

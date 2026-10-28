@@ -46,6 +46,8 @@ function page(
 
 const manager = ({ workspace }: SettingsVisibility) => workspace?.role === 'owner' || workspace?.role === 'admin'
 const owner = ({ workspace }: SettingsVisibility) => workspace?.role === 'owner'
+/** Owns this workspace and runs the server it's on. */
+const serverOperator = (context: SettingsVisibility) => owner(context) && context.session.user.capabilities.serverStatus === true
 const manageProject = ({ project }: SettingsVisibility) => project?.capabilities.manage === true
 const projectMember = ({ project }: SettingsVisibility) => Boolean(project) && project?.role !== 'viewer'
 const runsSomewhere = ({ projects }: SettingsVisibility) => projects.some((project) => project.role !== 'viewer')
@@ -73,7 +75,7 @@ export const SETTINGS_PAGES: SettingsPage[] = [
   page('workspace', 'layout', 'Layout', PanelsTopLeft, ['layout', 'presets', 'hide', 'show', 'simplify', 'personal', 'words', 'rename', 'sidebar', 'my view', 'hidden parts', 'default layout'], () => import('./workspace/LayoutPage')),
   page('workspace', 'github', 'GitHub', 'pull-request', ['installation', 'app', 'repositories'], () => import('./workspace/GitHubPage'), { visible: manager }),
   page('workspace', 'audit-log', 'Audit log', ScrollText, ['history', 'activity', 'who changed', 'events'], () => import('./workspace/AuditLogPage'), { visible: manager }),
-  page('workspace', 'server', 'Server', Server, ['version', 'commit', 'backup', 'backups', 'health', 'preflight', 'disk', 'migrations', 'self-hosting'], () => import('./workspace/ServerPage'), { visible: owner }),
+  page('workspace', 'server', 'Server', Server, ['version', 'commit', 'backup', 'backups', 'health', 'preflight', 'disk', 'migrations', 'self-hosting'], () => import('./workspace/ServerPage'), { visible: serverOperator }),
   // Project
   page('project', 'general', 'General', 'settings', ['about', 'archive', 'key', 'name'], () => import('./project/GeneralPage')),
   page('project', 'layout', 'Layout', PanelsTopLeft, ['layout', 'presets', 'hide', 'show', 'simplify', 'roles', 'people', 'words', 'rename', 'sidebar', 'bug reporting', 'personal'], () => import('./project/LayoutPage')),

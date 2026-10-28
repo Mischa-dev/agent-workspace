@@ -137,11 +137,7 @@ fn workos_start_key(headers: &HeaderMap, link_session_id: Option<Uuid>) -> Optio
     if let Some(session_id) = link_session_id {
         return Some(format!("session:{session_id}"));
     }
-    headers
-        .get("cf-connecting-ip")
-        .and_then(|value| value.to_str().ok())
-        .filter(|value| !value.is_empty() && value.len() <= 64)
-        .map(|address| format!("address:{address}"))
+    crate::rate_limit::client_address(headers).map(|address| format!("address:{address}"))
 }
 async fn start(
     State(state): State<AppState>,

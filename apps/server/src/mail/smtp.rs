@@ -1,8 +1,10 @@
 //! SMTP, the first mail provider: a small client for submitting one message
-//! to the operator's mail server (their provider's submission port, or a
+//! to the workspace's mail server (their provider's submission port, or a
 //! relay on this host). TLS is required unless the server is on this
 //! machine; credentials are only ever sent inside TLS or to a loopback
-//! relay. Nothing here logs a reply, a credential or a message.
+//! relay. The server must be a public address on a mail port unless the
+//! server's operator allows private addresses (see [`crate::outbound`]).
+//! Nothing here logs a reply, a credential or a message.
 
 use std::{net::IpAddr, sync::Arc, time::Duration};
 
@@ -73,6 +75,28 @@ impl Settings {
                 || username.chars().any(char::is_control))
         {
             return Err("username");
+        }
+        Ok(())
+    }
+}
+
+/// Why a mail server was refused: what an owner sees when saving settings
+/// or testing them.
+pub const NOT_PUBLIC: &str = "The mail server must be a public address on a mail port (25, 465, 587 or 2525). A relay on this server or a private network needs the server's operator to allow private addresses.";
+
+impl Settings {
+    /// Whether this server may connect there. Unless the operator allows
+    /// private addresses: a mail port, and a host that isn't plainly private
+    /// (the addresses it resolves to are checked when mail goes out).
+    pub fn check_destination(&self, allow_private: bool) -> Result<(), &'static str> {
+        if allow_private {
+            return Ok(());
+        }
+        if !crate::outbound::MAIL_PORTS.contains(&self.port) {
+            return Err("port");
+        }
+        if crate::outbound::plainly_private(self.host.trim()) {
+            return Err("host");
         }
         Ok(())
     }
@@ -297,21 +321,32 @@ pub fn dot_stuff(data: &[u8]) -> Vec<u8> {
     output
 }
 
-/// Submit one message.
+/// Submit one message. `allow_private` is the operator's
+/// `AGENT_WORKSPACE_ALLOW_PRIVATE_ADDRESSES`.
 pub async fn send(
     settings: &Settings,
     password: Option<&str>,
     envelope: &Envelope<'_>,
+    allow_private: bool,
 ) -> Result<(), MailError> {
     settings
         .validate()
         .map_err(|_| MailError::Permanent("the mail settings aren't valid".into()))?;
+    settings
+        .check_destination(allow_private)
+        .map_err(|_| MailError::Permanent(NOT_PUBLIC.into()))?;
     let host = settings.host.trim();
-    let address = (
-        host.trim_start_matches('[').trim_end_matches(']'),
-        settings.port,
-    );
-    let tcp = timeout(CONNECT_TIMEOUT, TcpStream::connect(address))
+    // Resolved and checked once; the connection goes only to the addresses
+    // checked, each tried in turn.
+    let addresses = crate::outbound::resolve(host, settings.port, allow_private)
+        .await
+        .map_err(|refusal| match refusal {
+            crate::outbound::Refusal::Private => MailError::Permanent(NOT_PUBLIC.into()),
+            crate::outbound::Refusal::Unresolved => {
+                MailError::Retry("couldn't find the mail server (check the host)".into())
+            }
+        })?;
+    let tcp = timeout(CONNECT_TIMEOUT, TcpStream::connect(addresses.as_slice()))
         .await
         .map_err(|_| MailError::Retry("couldn't reach the mail server in time".into()))?
         .map_err(|_| {
@@ -438,6 +473,35 @@ mod tests {
         }
         settings.host = "bad host\r\n".into();
         assert_eq!(settings.validate(), Err("host"));
+    }
+
+    #[test]
+    fn mail_goes_to_public_mail_servers_unless_the_operator_allows_private_ones() {
+        let mut settings = Settings {
+            host: "smtp.example.com".into(),
+            port: 587,
+            security: Security::Starttls,
+            username: None,
+        };
+        for port in [25, 465, 587, 2525] {
+            settings.port = port;
+            assert_eq!(settings.check_destination(false), Ok(()), "{port}");
+        }
+        settings.port = 6379;
+        assert_eq!(settings.check_destination(false), Err("port"));
+        assert_eq!(settings.check_destination(true), Ok(()));
+        settings.port = 25;
+        for host in [
+            "127.0.0.1",
+            "localhost",
+            "10.0.0.2",
+            "relay",
+            "mail.internal",
+        ] {
+            settings.host = host.into();
+            assert_eq!(settings.check_destination(false), Err("host"), "{host}");
+            assert_eq!(settings.check_destination(true), Ok(()), "{host}");
+        }
     }
 
     #[test]
