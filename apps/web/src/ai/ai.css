@@ -1,9 +1,5 @@
 /* AI planning: Up next, Suggestions, the dependency graph, plan import, the task panel and catch-up summaries. */
 
-.aw-page--full {
-  max-width: none;
-}
-
 .aw-ai-page .aw-tabs {
   margin-bottom: var(--space-4);
 }
@@ -365,6 +361,10 @@
 .aw-ai-readiness--compact strong {
   color: var(--content-fg);
   font-weight: var(--weight-semibold);
+}
+
+.aw-ai-readiness--shared {
+  margin-bottom: var(--space-3);
 }
 
 .aw-ai-readiness__chips {

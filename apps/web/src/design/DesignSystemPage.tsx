@@ -77,7 +77,7 @@ export function DesignSystemPage() {
 
   return (
     <AppShell mainClassName="aw-main--page" user={session.user}>
-      <div className="aw-page aw-page--wide aw-ds">
+      <div className="aw-page aw-page--full aw-ds">
         <PageHeader icon="palette" title="Design system">
           The tokens and shared components every page is built from, in the current theme. Pick a theme to preview each one here; nothing
           is saved, and your own choice stays on <Link to="/settings/appearance">Appearance</Link>.

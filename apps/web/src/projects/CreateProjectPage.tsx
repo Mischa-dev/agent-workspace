@@ -58,7 +58,7 @@ export function CreateProjectPage() {
   if (!canCreate) {
     return (
       <AppShell mainClassName="aw-main--page" user={session.user}>
-        <div className="aw-page aw-page--narrow">
+        <div className="aw-page aw-page--reading">
           <ErrorState
             action={
               <ButtonLink to="/home" variant="primary">
@@ -119,11 +119,8 @@ export function CreateProjectPage() {
   const organizationName = creatableOrganizations[0]?.name
   return (
     <AppShell mainClassName="aw-main--page" user={session.user}>
-      <div className="aw-page aw-page--form">
-        <PageHeader icon="plus" title="New project">
-          A project holds its own channels, threads, tasks, repositories and agents.
-          {creatableOrganizations.length === 1 && organizationName ? ` It will belong to ${organizationName}.` : ''}
-        </PageHeader>
+      <div className="aw-page aw-page--reading">
+        <PageHeader icon="plus" title="New project" />
         {error && (
           <Banner className="aw-page__banner" ref={errorRef} tabIndex={-1} tone="danger">
             {error}
@@ -146,6 +143,7 @@ export function CreateProjectPage() {
           )}
           <TextField
             autoFocus
+            hint={creatableOrganizations.length === 1 && organizationName ? `It will belong to ${organizationName}.` : undefined}
             id="project-name"
             label="Project name"
             maxLength={120}

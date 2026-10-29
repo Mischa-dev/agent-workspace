@@ -252,6 +252,9 @@
   --size-page-mark: 40px;
   --size-thread: 420px;
   --size-measure: 760px;
+  /* Page widths (DESIGN.md, Layout): reading for one column of text or a form, wide for everything else; lists and boards fill the window. */
+  --size-page-reading: 760px;
+  --size-page-wide: 1120px;
   --layer-sticky: 20;
   --layer-dropdown: 40;
   --layer-backdrop: 60;

@@ -99,7 +99,7 @@ function ProjectFrame({ children, place }: { children: (project: Project) => Rea
   }
   return (
     <AppShell mainClassName="aw-main--page" project={project.data} user={session.user}>
-      <div className="aw-page">
+      <div className="aw-page aw-page--reading">
         {place ? <RememberPlace location={place} project={project.data} /> : null}
         {children(project.data)}
       </div>
@@ -131,10 +131,7 @@ function PagesList({ projectId }: { projectId: string }) {
         }
         icon="list"
         title="Pages"
-      >
-        What’s true for this project now: how it works, conventions, plans. People and agents both read and edit these, and every
-        version is kept.
-      </PageHeader>
+      />
       <MemoryTabs current="pages" projectId={projectId} />
       {pages.isPending ? <ListSkeleton label="Loading pages" rows={3} /> : null}
       {pages.isError ? <ErrorState error={pages.error} onRetry={() => void pages.refetch()} title="Pages didn’t load" /> : null}
@@ -633,10 +630,7 @@ function DecisionsList({ projectId }: { projectId: string }) {
         }
         icon="check"
         title="Decisions"
-      >
-        What was settled and why. Save one from any message, or record it here. A decision from a private conversation is only
-        visible to the people in it.
-      </PageHeader>
+      />
       <MemoryTabs current="decisions" projectId={projectId} />
       <div className="aw-memory__toolbar">
         <Checkbox checked={showSuperseded} label="Show replaced decisions" onChange={setShowSuperseded} />

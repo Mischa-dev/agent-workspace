@@ -2,11 +2,11 @@ import { useMemo, useState, type KeyboardEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 
 import { useMilestoneList } from '../work-items/planningHooks'
-import { Banner, Button, Checkbox, EmptyState, ErrorState, Icon, PageSkeleton, SegmentedControl, SelectField, StatusChip, countLabel } from '../ui'
+import { Banner, Button, ButtonLink, Checkbox, EmptyState, ErrorState, Icon, PageSkeleton, SegmentedControl, SelectField, StatusChip, countLabel } from '../ui'
 import type { Graph, GraphEdge, GraphNode } from './api'
 import { PlanningFrame, PlanningIntro } from './frame'
 import { NODE_HEIGHT, NODE_WIDTH, edgePath, layoutGraph } from './graphLayout'
-import { useDecideSuggestion, useGraph } from './hooks'
+import { useAnalyze, useDecideSuggestion, useGraph, useProjectAi } from './hooks'
 import { aiErrorMessage, planningHref } from './links'
 
 type View = 'graph' | 'list'
@@ -18,7 +18,7 @@ const shorten = (text: string, length: number) => (text.length > length ? `${tex
 /** What blocks what, what can start now, and the longest chain of open work. */
 export function GraphPage() {
   return (
-    <PlanningFrame label="Loading the graph" tab="graph" wide>
+    <PlanningFrame label="Loading the graph" tab="graph">
       {(project) => <GraphBody projectId={project.id} />}
     </PlanningFrame>
   )
@@ -32,6 +32,10 @@ function GraphBody({ projectId }: { projectId: string }) {
   const milestones = useMilestoneList(projectId)
   const graph = useGraph(projectId, { milestoneId: milestoneId || null, includeFinished })
   const suggested = graph.data?.edges.filter((edge) => edge.suggestionId) ?? []
+  const status = useProjectAi(projectId)
+  const analyze = useAnalyze(projectId)
+  // Tasks with no line between them would draw as one tall column of boxes.
+  const unlinked = graph.isSuccess && !graph.data.edges.length
 
   return (
     <>
@@ -63,25 +67,43 @@ function GraphBody({ projectId }: { projectId: string }) {
       </div>
       {graph.isPending ? <PageSkeleton cards={2} label="Loading the graph" /> : null}
       {graph.isError ? <ErrorState error={graph.error} onRetry={() => void graph.refetch()} title="The graph didn’t load" /> : null}
-      {graph.isSuccess && !graph.data.nodes.length ? (
-        <EmptyState icon="branch" title="No dependencies to show">
-          Tasks show up here once one blocks another. Add “blocked by” on a task, or review what’s suggested in{' '}
-          <Link to={planningHref(projectId, 'suggestions')}>Suggestions</Link>.
+      {unlinked ? (
+        <EmptyState
+          action={
+            status.data?.configured && status.data.canEdit ? (
+              <Button busy={analyze.isPending} icon="bot" onClick={() => analyze.mutate()} variant="primary">
+                Suggest dependencies
+              </Button>
+            ) : (
+              <ButtonLink to={planningHref(projectId, 'suggestions')}>Open suggestions</ButtonLink>
+            )
+          }
+          icon="branch"
+          title="No dependencies yet"
+        >
+          {analyze.isSuccess
+            ? 'Looking for dependencies now. What’s found shows in Suggestions to accept or dismiss.'
+            : 'Tasks show up here once one blocks another. Add “blocked by” on a task, or have dependencies suggested to review.'}
         </EmptyState>
+      ) : null}
+      {analyze.isError ? (
+        <Banner className="aw-page__banner" onRetry={() => analyze.mutate()} title="The analysis didn’t start." tone="danger">
+          {aiErrorMessage(analyze.error, 'Analyzing')}
+        </Banner>
       ) : null}
       {graph.data?.truncated ? (
         <Banner className="aw-page__banner" role="note" tone="info">
           This project has more open tasks than the graph can show at once. Pick a milestone to see all of its tasks.
         </Banner>
       ) : null}
-      {graph.isSuccess && graph.data.nodes.length ? (
+      {graph.isSuccess && !unlinked ? (
         view === 'graph' ? (
           <GraphCanvas graph={graph.data} onSelectEdge={setSelected} selected={selected} />
         ) : (
           <GraphList graph={graph.data} />
         )
       ) : null}
-      {graph.isSuccess && graph.data.nodes.length ? <Legend /> : null}
+      {graph.isSuccess && !unlinked ? <Legend /> : null}
       {suggested.length ? (
         <SuggestedEdges canEdit={graph.data?.canEdit ?? false} edges={suggested} graph={graph.data!} projectId={projectId} selected={selected} />
       ) : null}

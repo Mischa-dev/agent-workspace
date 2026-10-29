@@ -92,9 +92,7 @@ export function MyWorkPage() {
   return (
     <AppShell context={panel} contextKey={shown?.id} home mainClassName="aw-main--page" onContextDismiss={closeTask} user={session.user}>
       <div className="aw-page aw-mywork" ref={pageRef}>
-        <PageHeader icon="checklist" title="My work">
-          What’s yours in every project, soonest due first.
-        </PageHeader>
+        <PageHeader icon="checklist" title="My work" />
         {work.isPending ? <ListSkeleton label="Loading your work" rows={6} /> : null}
         {work.isError ? <ErrorState error={work.error} onRetry={() => void work.refetch()} title="Your work didn’t load" /> : null}
         {empty ? (

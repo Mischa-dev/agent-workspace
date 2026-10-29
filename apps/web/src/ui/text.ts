@@ -57,3 +57,19 @@ export function plainPreview(markdown: string | null | undefined, maxLength = 0)
   const space = cut.lastIndexOf(' ')
   return `${(space > maxLength * 0.6 ? cut.slice(0, space) : cut).replace(/[\s.,;:!?-]+$/, '')}…`
 }
+
+/**
+ * A fragment cut out of longer text, such as a search snippet, with an
+ * ellipsis wherever it starts or stops mid-sentence, so it never reads as if
+ * the text ended on "why it". Control characters (used as match markers) are
+ * ignored when deciding.
+ */
+export function withEllipses(fragment: string): string {
+  const text = fragment.trim()
+  // eslint-disable-next-line no-control-regex
+  const bare = text.replace(/[\u0000-\u001f]/g, '')
+  if (!bare) return text
+  const opensSentence = /^[\p{Lu}\p{N}"“‘'([#@`…]/u.test(bare)
+  const closesSentence = /[.!?…:)"”’'`\]]$/u.test(bare)
+  return `${opensSentence ? '' : '…'}${text}${closesSentence ? '' : '…'}`
+}

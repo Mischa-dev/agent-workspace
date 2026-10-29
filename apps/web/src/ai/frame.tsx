@@ -31,12 +31,10 @@ export function PlanningFrame({
   children,
   label,
   tab,
-  wide = false,
 }: {
   children: (project: Project) => ReactNode
   label: string
   tab: PlanningTab
-  wide?: boolean
 }) {
   const session = useAuthenticatedSession()
   const { projectId = '' } = useParams()
@@ -59,10 +57,8 @@ export function PlanningFrame({
   const pending = status.data?.pendingSuggestions ?? 0
   return (
     <AppShell project={project.data} user={session.user}>
-      <div className={`aw-page ${wide ? 'aw-page--full' : 'aw-page--wide'} aw-ai-page`}>
-        <PageHeader icon="branch" title="Planning">
-          What can start next in {project.data.name}, what depends on what, and plans to turn into tasks.
-        </PageHeader>
+      <div className="aw-page aw-page--full aw-ai-page">
+        <PageHeader icon="branch" title="Planning" />
         <WorkTabs current="planning" projectId={projectId} />
         <RememberPlace location={{ kind: 'planning' }} project={project.data} />
         <nav aria-label="Planning" className="aw-seg aw-ai-subnav">

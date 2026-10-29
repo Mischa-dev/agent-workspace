@@ -28,26 +28,47 @@
   max-width: 200px;
 }
 
-/* Phones: search and Filter on one row, the two view selects sharing the next. */
+/* Sort and grouping (or columns and lanes) sit in the row on wider screens, in View options on phones. */
+.aw-filterbar__view {
+  display: contents;
+}
+
+.aw-filterbar__more {
+  display: none;
+}
+
+.aw-filterbar__sheet {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-2);
+}
+
+.aw-filterbar__sheet .aw-filterbar__select .aw-field__control--select select {
+  width: 100%;
+  max-width: none;
+}
+
+/* Phones: one row of search, Filter and View options; the list starts right under it. */
 @media (max-width: 640px) {
+  .aw-filterbar__row {
+    flex-wrap: nowrap;
+  }
+
   .aw-filterbar__search {
-    flex: 1 1 60%;
+    flex: 1 1 auto;
+    min-width: 0;
     max-width: none;
   }
 
-  .aw-filterbar__spacer {
+  .aw-filterbar__spacer,
+  .aw-filterbar__view,
+  .aw-filterbar__row .aw-tasks__help,
+  .aw-workpage__viewswitch {
     display: none;
   }
 
-  /* Each as wide as its text, growing to share the row; side by side when both fit. */
-  .aw-filterbar__select {
-    flex: 1 1 auto;
-    min-width: 0;
-  }
-
-  .aw-filterbar__select .aw-field__control--select select {
-    width: 100%;
-    max-width: none;
+  .aw-filterbar__more {
+    display: inline-flex;
   }
 }
 
@@ -290,6 +311,23 @@
 
 .aw-tasks__title:hover {
   text-decoration: underline;
+}
+
+.aw-tasks__title.is-twoline {
+  display: grid;
+  gap: var(--space-half);
+}
+
+.aw-tasks__titletext {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.aw-tasks__subline {
+  overflow: hidden;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+  text-overflow: ellipsis;
 }
 
 .aw-tasks__phonekey {

@@ -255,10 +255,8 @@ export function TimelinePage() {
   const slipCount = slipped?.tasks.size ?? 0
   return (
     <AppShell mainClassName="aw-main--page" project={project.data} user={session.user}>
-      <div className="aw-page aw-page--wide aw-timeline">
-        <PageHeader icon="clock" title="Timeline">
-          Milestones and tasks in {project.data.name} by date. Drag one, or focus it and press ← or →, to see what slips.
-        </PageHeader>
+      <div className="aw-page aw-page--full aw-timeline">
+        <PageHeader icon="clock" title="Timeline" />
         <WorkTabs current="timeline" projectId={project.data.id} />
         <RememberPlace location={{ kind: 'timeline' }} project={project.data} />
         <div className="aw-timeline__toolbar">
@@ -312,6 +310,7 @@ export function TimelinePage() {
             This shows the first 1,000 tasks. Pick a milestone to see the rest.
           </Banner>
         ) : null}
+        {data && rows.length ? <p className="aw-timeline__hint">Drag a bar, or focus it and press ← or →, to see what slips.</p> : null}
         {data && rows.length ? (
           <div className="aw-timeline__scroll" ref={scroller} style={{ scrollPaddingLeft: labelWidth + scale.width * 2 }} tabIndex={-1}>
             <div className="aw-timeline__chart" style={{ width: labelWidth + days * scale.width, height: HEADER_HEIGHT + rows.length * ROW_HEIGHT }}>

@@ -9,7 +9,7 @@ import { AssigneeMark, DoneToggle, DueDate, GroupHeader, PickerCell, TaskBadges 
 import { LIST_COLUMNS } from './taskDisplay'
 import { workItemHref } from './links'
 import { PriorityIcon, StatusIcon } from './WorkItemIcons'
-import { useCoarsePointer } from './useCoarsePointer'
+import { useCoarsePointer, usePhoneWidth } from './useCoarsePointer'
 import { tucksDone, withoutDone } from './doneModel'
 import { listQuery, type ListState } from './listModel'
 import { buildListRows, DONE_GROUP, DONE_LOADING, visibleTaskIds, withDoneRows, type ListRow } from './listRows'
@@ -35,6 +35,7 @@ function taskCells({
   card,
   disabled,
   fields,
+  twoLine = false,
   onOpen,
   onPick,
   onSelect,
@@ -43,6 +44,8 @@ function taskCells({
   card: WorkItemCard
   disabled: boolean
   fields: CardFields
+  /** Phones: the title on one line, the key and status under it. */
+  twoLine?: boolean
   onOpen: (card: WorkItemCard, event: MouseEvent<HTMLAnchorElement>) => void
   onPick: (card: WorkItemCard, field: PickerField, anchor: HTMLElement) => void
   onSelect: (card: WorkItemCard, event: MouseEvent<HTMLInputElement>) => void
@@ -86,10 +89,17 @@ function taskCells({
     ),
     title: (
       <>
-        <a className="aw-tasks__title" href={workItemHref(card.projectId, card.id)} onClick={(event) => onOpen(card, event)} tabIndex={-1}>
-          {fields.keys ? <span className="aw-tasks__phonekey">{card.key} </span> : null}
-          {card.title}
-        </a>
+        {twoLine ? (
+          <a className="aw-tasks__title is-twoline" href={workItemHref(card.projectId, card.id)} onClick={(event) => onOpen(card, event)} tabIndex={-1}>
+            <span className="aw-tasks__titletext">{card.title}</span>
+            <span className="aw-tasks__subline">{[fields.keys ? card.key : null, card.status.name].filter(Boolean).join(' · ')}</span>
+          </a>
+        ) : (
+          <a className="aw-tasks__title" href={workItemHref(card.projectId, card.id)} onClick={(event) => onOpen(card, event)} tabIndex={-1}>
+            {fields.keys ? <span className="aw-tasks__phonekey">{card.key} </span> : null}
+            {card.title}
+          </a>
+        )}
         {card.archivedAt ? <span className="aw-worklist__tag">Archived</span> : null}
       </>
     ),
@@ -182,8 +192,11 @@ export function WorkItemList({
   const cardsById = useMemo(() => new Map(items.map((item) => [item.id, item])), [items])
   const order = useMemo(() => visibleTaskIds(rows), [rows])
   const selection = useMemo(() => keepLoaded(selectionState, new Set(cardsById.keys())), [cardsById, selectionState])
+  const phone = usePhoneWidth()
   const rowHeight = coarse ? 44 : 36
-  const heights = useMemo(() => rows.map(() => rowHeight), [rowHeight, rows])
+  // Tasks take two lines on phones; group and loading rows keep one.
+  const taskRowHeight = phone ? 56 : rowHeight
+  const heights = useMemo(() => rows.map((row) => (row.kind === 'task' ? taskRowHeight : rowHeight)), [rowHeight, rows, taskRowHeight])
   const windowed = useWindowedRows(bodyRef, heights)
   const statusCategories = useMemo(() => new Map(workflow.statuses.map((status) => [status.id, status.semanticCategory])), [workflow.statuses])
 
@@ -404,7 +417,7 @@ export function WorkItemList({
     return {
       key: row.key,
       index,
-      height: rowHeight,
+      height: taskRowHeight,
       selected,
       className: card.id === openTaskId ? 'is-open' : undefined,
       label: `${card.key} ${card.title}`,
@@ -412,6 +425,7 @@ export function WorkItemList({
         card,
         disabled,
         fields,
+        twoLine: phone,
         selected,
         onOpen: (target, event: MouseEvent<HTMLAnchorElement>) => {
           if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return
