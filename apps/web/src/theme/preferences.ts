@@ -3,7 +3,7 @@ import { isThemePreset, sanitizeOverrides, type ThemePreset } from './slots'
 export const APPEARANCE_STORAGE_KEY = 'agent-workspace:appearance:v2'
 const LEGACY_STORAGE_KEY = 'agent-workspace:appearance:v1'
 
-/** A preset, or "system": Indigo in light mode and Midnight in dark mode. */
+/** A preset, or "system": Daylight in light mode and Midnight in dark mode. */
 export type ThemeChoice = ThemePreset | 'system'
 export type DensityPreference = 'comfortable' | 'compact'
 export type TextSizePreference = 'small' | 'default' | 'large'
@@ -18,7 +18,7 @@ export type AppearancePreferences = {
   panelWidth: number | null
 }
 
-/** Until someone picks a theme, it follows the device: Indigo in light mode, Midnight in dark. */
+/** Until someone picks a theme, it follows the device: Daylight in light mode, Midnight in dark. */
 export const DEFAULT_APPEARANCE: AppearancePreferences = {
   theme: 'system',
   overrides: {},
@@ -85,5 +85,5 @@ export function writeAppearancePreferences(
 
 export function resolvePreset(theme: ThemeChoice, prefersDark: boolean): ThemePreset {
   if (theme !== 'system') return theme
-  return prefersDark ? 'midnight' : 'indigo'
+  return prefersDark ? 'midnight' : 'daylight'
 }

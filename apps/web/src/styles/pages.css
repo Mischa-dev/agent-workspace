@@ -136,40 +136,41 @@
   gap: var(--space-2);
 }
 
-/* New message */
-.aw-newmsg {
-  display: grid;
-  gap: var(--space-4);
-}
-
-.aw-newmsg__to {
+/* New message: an empty chat with a To bar at the top and the message box at the bottom */
+.aw-newchat__to {
+  position: relative;
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-1-5);
-  min-height: var(--size-control-lg);
-  padding: var(--space-1-5) var(--space-3);
-  border: 1px solid var(--control-border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-raised);
+  align-items: flex-start;
+  gap: var(--space-2);
+  flex: none;
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--content-border);
+  background: var(--content-bg);
 }
 
-.aw-newmsg__to:focus-within {
-  border-color: var(--focus-ring);
-  box-shadow: 0 0 0 1px var(--focus-ring);
-}
-
-.aw-newmsg__label {
-  margin-right: var(--space-1);
+.aw-newchat__label {
+  flex: none;
   font: var(--t-ui-strong);
+  line-height: var(--size-control);
   color: var(--content-fg-muted);
 }
 
-.aw-newmsg__chip {
+.aw-newchat__field {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  flex: 1;
+  gap: var(--space-1-5);
+  min-width: 0;
+  min-height: var(--size-control);
+}
+
+.aw-newchat__chip {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1-5);
-  height: 28px;
+  max-width: 100%;
+  height: var(--size-control-sm);
   padding: 0 var(--space-1-5) 0 var(--space-1);
   border: 0;
   border-radius: var(--radius-sm);
@@ -178,10 +179,10 @@
   font: var(--t-ui-strong);
 }
 
-.aw-newmsg__input {
+.aw-newchat__input {
   flex: 1;
-  min-width: 160px;
-  height: 28px;
+  min-width: 120px;
+  height: var(--size-control-sm);
   border: 0;
   outline: 0;
   background: none;
@@ -189,77 +190,71 @@
   font: var(--t-body);
 }
 
-.aw-newmsg__people {
-  display: grid;
-  gap: var(--space-half);
-  margin: 0;
+.aw-newchat__list {
+  position: absolute;
+  top: 100%;
+  right: var(--space-4);
+  left: var(--space-4);
+  z-index: var(--layer-dropdown);
+  max-height: min(320px, 50vh);
+  margin: var(--space-1) 0 0;
   padding: var(--space-1);
-  border: 1px solid var(--content-border);
+  overflow-y: auto;
   border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-popover);
+  list-style: none;
 }
 
-.aw-newmsg__none {
-  margin: 0;
-  padding: var(--space-3);
-  font: var(--t-small);
-  color: var(--content-fg-muted);
-}
-
-.aw-person {
-  position: relative;
+.aw-newchat__option {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  min-height: 48px;
-  padding: 0 var(--space-3) 0 var(--space-2);
+  gap: var(--space-2-5);
+  min-height: var(--size-control-lg);
+  padding: 0 var(--space-2);
   border-radius: var(--radius-sm);
   font: var(--t-ui);
   cursor: pointer;
 }
 
-.aw-person:hover {
+.aw-newchat__option[aria-selected="true"] {
   background: var(--content-hover);
 }
 
-.aw-person.is-checked {
-  background: var(--accent-soft);
-}
-
-.aw-person input {
-  position: absolute;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.aw-person:has(input:focus-visible) {
-  outline: var(--focus-width) solid var(--r-focus);
-  outline-offset: calc(-1 * var(--focus-width));
-}
-
-.aw-person__name {
+.aw-newchat__name {
+  overflow: hidden;
   font-weight: var(--weight-bold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.aw-person__handle {
+.aw-newchat__handle {
   margin-left: auto;
+  overflow: hidden;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-newchat__none {
+  padding: var(--space-3);
   font: var(--t-small);
   color: var(--content-fg-muted);
 }
 
-.aw-person__check {
-  display: grid;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  border: 1.5px solid var(--control-border);
-  border-radius: var(--radius-full);
-  color: transparent;
+.aw-newchat__body {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
-.aw-person.is-checked .aw-person__check {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--on-accent);
+.aw-newchat__group {
+  max-width: var(--size-measure);
+  padding: 0 var(--space-4) var(--space-4);
 }
 
 /* Agents */
@@ -1803,6 +1798,25 @@
 .aw-agentform .aw-seg {
   max-width: 100%;
   overflow-x: auto;
+}
+
+/* On a phone the four kinds of agent sit two by two instead of running off the edge. */
+@media (max-width: 640px) {
+  .aw-agentform .aw-seg {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .aw-agentform .aw-seg__opt {
+    justify-content: center;
+    min-width: 0;
+  }
+}
+
+.aw-agentplace {
+  max-width: 360px;
+  margin-bottom: var(--space-6);
 }
 
 .aw-agentform__hint {

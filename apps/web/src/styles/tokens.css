@@ -118,20 +118,21 @@
   --shadow-dialog: 0 0 0 1px #ffffff0f, 0 16px 40px -8px #000000b3;
 }
 
+/* The default in light mode: a quiet grey rail and sidebar, so the conversation leads. */
 [data-theme="daylight"] {
   color-scheme: light;
-  --rail-bg: oklch(0.915 0.014 280);
-  --rail-fg: oklch(0.4 0.03 280);
-  --rail-tile: oklch(0.99 0.003 280);
-  --rail-indicator: oklch(0.25 0.03 280);
-  --sidebar-bg: oklch(0.962 0.008 280);
-  --sidebar-border: oklch(0.9 0.01 280);
-  --sidebar-hover: oklch(0.925 0.012 280);
-  --sidebar-fg: oklch(0.36 0.025 280);
-  --sidebar-fg-strong: oklch(0.18 0.02 280);
-  --sidebar-fg-muted: oklch(0.47 0.025 280);
-  --sidebar-active-bg: oklch(0.9 0.048 277);
-  --sidebar-active-fg: oklch(0.36 0.16 277);
+  --rail-bg: oklch(0.945 0.004 280);
+  --rail-fg: oklch(0.42 0.015 280);
+  --rail-tile: oklch(0.995 0.002 280);
+  --rail-indicator: oklch(0.25 0.02 280);
+  --sidebar-bg: oklch(0.972 0.003 280);
+  --sidebar-border: oklch(0.915 0.005 280);
+  --sidebar-hover: oklch(0.935 0.005 280);
+  --sidebar-fg: oklch(0.36 0.015 280);
+  --sidebar-fg-strong: oklch(0.18 0.015 280);
+  --sidebar-fg-muted: oklch(0.47 0.015 280);
+  --sidebar-active-bg: oklch(0.915 0.008 280);
+  --sidebar-active-fg: oklch(0.18 0.015 280);
   --presence-online: oklch(0.6 0.158 152);
   --agent-working: oklch(0.58 0.098 200);
 }
