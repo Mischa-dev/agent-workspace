@@ -225,6 +225,13 @@ async fn create_connection(
     if access.project_archived {
         return Err(AppError::ProjectArchived);
     }
+    require_grantable(
+        &mut transaction,
+        access.organization_id,
+        principal.actor_id,
+        &normalized.role,
+    )
+    .await?;
     let created = insert_agent(
         &mut transaction,
         access.organization_id,
@@ -506,6 +513,13 @@ pub async fn provision(
     {
         return Err(AppError::Forbidden);
     }
+    require_grantable(
+        &mut transaction,
+        organization_id,
+        owner_actor_id,
+        &normalized.role,
+    )
+    .await?;
     let created = insert_agent(
         &mut transaction,
         organization_id,
@@ -819,6 +833,15 @@ async fn mutate_connection(
         });
     }
     let next_role = requested_role.as_deref().unwrap_or(&current.role);
+    if next_role != current.role {
+        require_grantable(
+            &mut transaction,
+            access.organization_id,
+            principal.actor_id,
+            next_role,
+        )
+        .await?;
+    }
     let next_enabled = if remove {
         false
     } else {
@@ -1091,6 +1114,24 @@ fn normalize_scopes(mut scopes: Vec<String>) -> Result<Vec<String>, AppError> {
         return Err(AppError::Validation("external_agent_scopes"));
     }
     Ok(scopes)
+}
+
+/// Refuses giving an agent a role that holds a permission the person
+/// giving it doesn't, so a narrowed admin can't win back what their role
+/// leaves out through an agent of their own.
+async fn require_grantable(
+    transaction: &mut Transaction<'_, Postgres>,
+    organization_id: Uuid,
+    caller_actor_id: Uuid,
+    role: &str,
+) -> Result<(), AppError> {
+    let grant = RoleGrant::stored(role, None::<&[String]>)
+        .map_err(|_| AppError::Validation("agent role"))?;
+    let caller = crate::roles::standing(transaction, organization_id, caller_actor_id).await?;
+    if !grant.permissions().is_subset_of(caller.permissions) {
+        return Err(AppError::Forbidden);
+    }
+    Ok(())
 }
 
 fn authorize_management(

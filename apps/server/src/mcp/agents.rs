@@ -311,6 +311,10 @@ pub(super) async fn agent_list(
             });
         }
 
+        // Claimed tasks only from projects where the caller sees tasks.
+        let task_projects =
+            crate::search::projects_showing_tasks(&state.pool, principal.actor_id, &projects)
+                .await?;
         let claim_rows = sqlx::query_as::<_, ClaimRow>(
             r#"
             SELECT claim.actor_id, item.id AS task_id,
@@ -327,7 +331,7 @@ pub(super) async fn agent_list(
             "#,
         )
         .bind(&actor_ids)
-        .bind(&projects)
+        .bind(&task_projects)
         .fetch_all(&state.pool)
         .await?;
         let mut claims: HashMap<Uuid, Vec<AgentClaim>> = HashMap::new();
