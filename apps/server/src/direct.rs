@@ -1135,7 +1135,9 @@ struct ReachableAgent {
 }
 
 /// Agents a person can message that aren't in the Messages space yet: active
-/// agents of the space's workspace that share a project with the person,
+/// agents of the space's workspace that share a project with the person and
+/// can actually work there (`agent_connection_can_access`, so not one whose
+/// home project is archived),
 /// named as they are in the earliest such project. `only` narrows the list
 /// to those Actors. Members of the space, enabled or not, are left out, so
 /// an agent switched off there stays off.
@@ -1171,7 +1173,9 @@ async fn reachable_agents(
           AND ($3::uuid[] IS NULL OR actor.id = ANY($3))
           AND EXISTS (
               SELECT 1 FROM external_agent_connections connection
-              WHERE connection.actor_id = actor.id AND connection.status = 'active'
+              WHERE connection.actor_id = actor.id
+                AND connection.status = 'active'
+                AND agent_connection_can_access(connection.id, project.id)
           )
           AND NOT EXISTS (
               SELECT 1 FROM project_memberships joined

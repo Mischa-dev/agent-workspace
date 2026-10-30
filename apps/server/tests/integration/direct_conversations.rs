@@ -289,7 +289,29 @@ async fn agents_in_your_projects_can_be_messaged() {
     let watcher = connect(build, "Watcher", "viewer").await;
     let off = connect(build, "Off", "member").await;
     let ghost = connect(elsewhere, "Ghost", "member").await;
+    // Stale also works in Build, but its home project is archived, so its
+    // connection can't reach anything any more.
+    let attic = project("ATTIC").await;
+    let stale = connect(attic, "Stale", "member").await;
     let owner = owner_actor(&pool).await;
+    sqlx::query(
+        r#"
+        INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle)
+        VALUES ($1, $2, $3, 'member', 'Stale', 'stale')
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(build)
+    .bind(stale)
+    .execute(&pool)
+    .await
+    .expect("add Stale to Build");
+    sqlx::query("UPDATE projects SET archived_at = now(), archived_by_actor_id = $2 WHERE id = $1")
+        .bind(attic)
+        .bind(owner)
+        .execute(&pool)
+        .await
+        .expect("archive Attic");
     // The owner leaves Elsewhere, so Ghost shares no project with them.
     sqlx::query(
         "UPDATE project_memberships SET enabled = false WHERE project_id = $1 AND actor_id = $2",
@@ -322,6 +344,10 @@ async fn agents_in_your_projects_can_be_messaged() {
         !listed.contains(&off),
         "a switched-off agent can't be messaged"
     );
+    assert!(
+        !listed.contains(&stale),
+        "an agent whose home project is archived can't answer"
+    );
 
     let (status, dm) = call(
         &app,
@@ -336,7 +362,7 @@ async fn agents_in_your_projects_can_be_messaged() {
     assert!(visible(&pool, dm_id, mara).await);
     assert!(!visible(&pool, dm_id, rook).await);
 
-    for unreachable in [ghost, off] {
+    for unreachable in [ghost, off, stale] {
         let (status, _) = call(
             &app,
             "POST",
