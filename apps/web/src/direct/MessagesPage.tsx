@@ -2,10 +2,11 @@ import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 
 import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 
+import { writeLocal } from '../app/localDrafts'
 import { useAuthenticatedSession } from '../auth/session'
 import { sendConversationMessage } from '../conversations/api'
 import { ConversationHeader } from '../conversations/ConversationHeader'
-import type { ComposerSubmission } from '../conversations/composerModel'
+import type { ComposerDraft, ComposerSubmission } from '../conversations/composerModel'
 import { StructuredComposer } from '../conversations/StructuredComposer'
 import { PendingMessages } from '../conversations/Timeline'
 import type { ConversationActor } from '../conversations/types'
@@ -152,6 +153,9 @@ export function MessagesPage() {
     started.current = null
     groupKey.current = crypto.randomUUID()
     await queryClient.invalidateQueries({ queryKey: directQueryKey })
+    // Anything typed while the first message went out becomes the conversation's draft, so leaving here keeps it.
+    const followUp = document.querySelector<HTMLTextAreaElement>('.aw-newchat__composer textarea')?.value ?? ''
+    if (followUp.trim()) writeLocal<ComposerDraft>(`draft:${conversationId}`, { text: followUp, mentions: [], workItems: [] })
     navigate(`/messages/${encodeURIComponent(conversationId)}`)
   }
 
