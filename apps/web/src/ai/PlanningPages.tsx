@@ -93,8 +93,8 @@ function NextBody({ projectId }: { projectId: string }) {
   const ranking = useRanking(projectId, { scope, milestoneId: milestoneId || null, limit })
   const tasks = ranking.data?.tasks ?? []
   const showsReadiness = (task: (typeof tasks)[number]) => scope === 'all' || !task.readiness.readyForAgents
-  // What every row would repeat ("no repository to work in") is said once, above the list.
-  const shared = sharedMissingChecks(tasks.filter(showsReadiness).map((task) => task.readiness))
+  // What every listed task misses ("no repository to work in") is said once, above the list.
+  const shared = sharedMissingChecks(tasks.map((task) => task.readiness))
   const sharedIds = new Set(shared.map((check) => check.id))
 
   return (
