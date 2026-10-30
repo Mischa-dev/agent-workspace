@@ -341,6 +341,8 @@ export function AgentsPage() {
   const projects = useProjects()
   const queryClient = useQueryClient()
   const [place, setPlace] = useState<string | null>(null)
+  // A token on screen, or a change on its way, belongs to the place it was made in.
+  const [placeHeld, setPlaceHeld] = useState(false)
   // New agents should appear in the people list as soon as you leave here.
   useEffect(() => () => void queryClient.invalidateQueries({ queryKey: directQueryKey }), [queryClient])
   const spaceId = overview.data?.projectId ?? ''
@@ -363,7 +365,8 @@ export function AgentsPage() {
             {places.length > 1 ? (
               <div className="aw-agentplace">
                 <SelectField
-                  hint="The agents listed below, and where a new one starts."
+                  disabled={placeHeld}
+                  hint={placeHeld ? 'Finish with the agent below first.' : 'The agents listed below, and where a new one starts.'}
                   id="agent-place"
                   label="Where they work"
                   onChange={(event) => setPlace(event.target.value)}
@@ -377,7 +380,7 @@ export function AgentsPage() {
                 </SelectField>
               </div>
             ) : null}
-            <ExternalAgentSettings key={shown} projectId={shown} />
+            <ExternalAgentSettings key={shown} onBusy={setPlaceHeld} projectId={shown} />
           </>
         ) : overview.data ? (
           <Banner tone="info">Only the workspace owner can add and manage agents.</Banner>
