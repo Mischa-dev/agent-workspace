@@ -394,6 +394,38 @@ async fn agents_in_your_projects_can_be_messaged() {
     assert_eq!(status, StatusCode::CREATED, "{group}");
     assert!(visible(&pool, uuid(&group["conversation"], "id"), rook).await);
 
+    // Three agents with the same handle, from three projects, can all join.
+    let mut twins = Vec::new();
+    for (key, name) in [("TWINA", "TwinA"), ("TWINB", "TwinB"), ("TWINC", "TwinC")] {
+        let home = project(key).await;
+        let twin = connect(home, name, "member").await;
+        sqlx::query("UPDATE project_memberships SET handle = 'twin' WHERE project_id = $1 AND actor_id = $2")
+            .bind(home)
+            .bind(twin)
+            .execute(&pool)
+            .await
+            .expect("same handle");
+        twins.push(twin);
+    }
+    let (status, trio) = call(
+        &app,
+        "POST",
+        "/api/v1/direct/groups",
+        &headers(Some("group-of-twins")),
+        json!({ "memberIds": twins }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{trio}");
+    let handles = sqlx::query_scalar::<_, String>(
+        "SELECT handle FROM project_memberships WHERE project_id = $1 AND actor_id = ANY($2)",
+    )
+    .bind(space_id)
+    .bind(&twins)
+    .fetch_all(&pool)
+    .await
+    .expect("twin handles");
+    assert_eq!(handles.len(), 3);
+
     // Each keeps its access: the read-only agent stays read-only here.
     let roles = sqlx::query_as::<_, (Uuid, String)>(
         "SELECT actor_id, role FROM project_memberships WHERE project_id = $1 AND actor_id = ANY($2)",

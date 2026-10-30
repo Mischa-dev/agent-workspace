@@ -167,6 +167,12 @@ export function MessagesPage() {
     navigate(`/messages/${encodeURIComponent(conversationId)}`)
   }
 
+  // Agents from different projects can share a handle; each needs its own @token here (mentions carry the actor's ID).
+  const mentionable = chosen.map((person) =>
+    chosen.some((other) => other.id !== person.id && other.handle === person.handle)
+      ? { ...person, handle: `${person.handle}-${person.id.replace(/-/g, '').slice(-4)}` }
+      : person,
+  )
   const names = chosen.map((person) => person.displayName)
   const only = chosen.length === 1 ? chosen[0] : null
   const onlyKind = only ? actorKind(only.kind) : 'person'
@@ -329,7 +335,7 @@ export function MessagesPage() {
           placeholder={only ? `Message ${only.displayName}` : chosen.length ? `Message ${listNames(names)}` : 'Write a message'}
           searchActors={async (text) => {
             const lowered = text.trim().toLowerCase()
-            return chosen.filter(
+            return mentionable.filter(
               (person) => !lowered || person.handle.toLowerCase().includes(lowered) || person.displayName.toLowerCase().includes(lowered),
             )
           }}

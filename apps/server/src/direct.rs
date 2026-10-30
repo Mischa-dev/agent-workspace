@@ -1216,15 +1216,17 @@ async fn join_reachable_agents(
         } else {
             "member"
         };
-        let handle = agent.person.handle;
-        // Handles are unique per project; someone here may already have it.
-        let fallback = format!(
-            "{}-{}",
-            handle.chars().take(24).collect::<String>(),
-            &agent.person.id.simple().to_string()[..6]
+        // Handles are unique per project; someone here may already have this
+        // one. Fall back to suffixes from the agent's random ID bits, then
+        // fresh random ones, until one is free.
+        let base = agent.person.handle.chars().take(24).collect::<String>();
+        let id = agent.person.id.simple().to_string();
+        let mut candidates = vec![agent.person.handle.clone(), format!("{base}-{}", &id[26..])];
+        candidates.extend(
+            (0..4).map(|_| format!("{base}-{}", &Uuid::now_v7().simple().to_string()[26..])),
         );
-        for candidate in [handle, fallback] {
-            sqlx::query(
+        for candidate in candidates {
+            let inserted = sqlx::query(
                 r#"
                 INSERT INTO project_memberships (
                     id, project_id, actor_id, role, display_name, handle, invited_by_actor_id
@@ -1240,7 +1242,11 @@ async fn join_reachable_agents(
             .bind(&candidate)
             .bind(actor_id)
             .execute(&mut **transaction)
-            .await?;
+            .await?
+            .rows_affected();
+            if inserted > 0 {
+                break;
+            }
         }
     }
     Ok(())
