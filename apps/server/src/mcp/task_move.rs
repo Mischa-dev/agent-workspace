@@ -163,13 +163,25 @@ pub(super) async fn task_move(
         mark_via(&mut transaction, principal).await?;
         let source_actor = command_actor(principal, source_project_id);
         let target_actor = command_actor(principal, target_project_id);
+        // A move archives the source and creates in the target, so it takes
+        // both of those permissions as well as changing tasks.
         let mut projects = [
-            (&source_actor, source_project_id, "this task's project"),
-            (&target_actor, target_project_id, "the target project"),
+            (
+                &source_actor,
+                source_project_id,
+                "this task's project",
+                Action::WorkItemArchive,
+            ),
+            (
+                &target_actor,
+                target_project_id,
+                "the target project",
+                Action::WorkItemCreate,
+            ),
         ];
         // Opposite moves must take the same first project lock.
-        projects.sort_by_key(|(_, project, _)| *project);
-        for (actor, project, what) in projects {
+        projects.sort_by_key(|(_, project, _, _)| *project);
+        for (actor, project, what, also) in projects {
             let Some(membership) =
                 lock_membership(&mut transaction, principal.actor_id, project).await?
             else {
@@ -179,7 +191,8 @@ pub(super) async fn task_move(
                 return Ok(ToolResult::not_found("That project"));
             }
             let decision = authorize_mutation(actor, &membership, Action::McpWrite, None)?;
-            if !matches!(decision, Decision::Allow) {
+            let also = authorize_mutation(actor, &membership, also, None)?;
+            if !matches!(decision, Decision::Allow) || !matches!(also, Decision::Allow) {
                 return Ok(ToolResult::denied(format!(
                     "You can't change tasks in {what}."
                 )));

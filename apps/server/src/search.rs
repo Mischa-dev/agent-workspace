@@ -106,29 +106,8 @@ pub async fn search(
     } else {
         kinds
     };
-    // Tasks only from projects where the viewer's role (and, for an app
-    // acting for them, its limit) still lets them see tasks.
     let task_projects = if kinds.contains(&SearchKind::Tasks) {
-        sqlx::query_scalar::<_, Uuid>(
-            r#"
-            SELECT project_id FROM project_memberships
-            WHERE actor_id = $1 AND project_id = ANY($2) AND enabled
-              AND custom_role_allows(role_id, 'tasks.view')
-            "#,
-        )
-        .bind(viewer)
-        .bind(projects)
-        .fetch_all(pool)
-        .await?
-        .into_iter()
-        .filter(|project| {
-            crate::policy::current_agent_limit(
-                viewer,
-                crate::policy::MembershipScope::Project(*project),
-            )
-            .is_none_or(|limit| limit.contains(crate::policy::Permission::TasksView))
-        })
-        .collect::<Vec<_>>()
+        projects_showing_tasks(pool, viewer, projects).await?
     } else {
         Vec::new()
     };
@@ -382,6 +361,35 @@ const FILES_SQL: &str = r#"
 "#;
 
 /// Every Project a person can search from the browser.
+/// Of `projects`, those where the viewer's role (and, for an app acting for
+/// them, its limit) still lets them see tasks.
+pub async fn projects_showing_tasks(
+    pool: &PgPool,
+    viewer: Uuid,
+    projects: &[Uuid],
+) -> Result<Vec<Uuid>, AppError> {
+    Ok(sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT project_id FROM project_memberships
+        WHERE actor_id = $1 AND project_id = ANY($2) AND enabled
+          AND custom_role_allows(role_id, 'tasks.view')
+        "#,
+    )
+    .bind(viewer)
+    .bind(projects)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .filter(|project| {
+        crate::policy::current_agent_limit(
+            viewer,
+            crate::policy::MembershipScope::Project(*project),
+        )
+        .is_none_or(|limit| limit.contains(crate::policy::Permission::TasksView))
+    })
+    .collect())
+}
+
 pub async fn browser_projects(pool: &PgPool, actor_id: Uuid) -> Result<Vec<Uuid>, AppError> {
     Ok(sqlx::query_scalar::<_, Uuid>(
         r#"

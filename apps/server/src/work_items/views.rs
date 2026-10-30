@@ -961,6 +961,7 @@ pub(crate) async fn my_work(
     reader: Uuid,
     projects: &[Uuid],
 ) -> Result<MyWork, AppError> {
+    let projects = &crate::search::projects_showing_tasks(pool, reader, projects).await?[..];
     let due_first = format!(
         "item.due_date IS NULL, item.due_date, {PRIORITY_RANK}, item.updated_at DESC, item.id"
     );

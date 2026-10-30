@@ -283,6 +283,7 @@ pub(super) async fn task_lines(
         }
         TaskFilter::Claimed => "claim.actor_id = $2",
     };
+    let projects = crate::search::projects_showing_tasks(&state.pool, actor_id, projects).await?;
     Ok(sqlx::query_as::<_, TaskLine>(&format!(
         r#"
         SELECT item.id::text AS id, project.project_key || '-' || item.number::text AS key,
@@ -301,7 +302,7 @@ pub(super) async fn task_lines(
         LIMIT 20
         "#
     ))
-    .bind(projects)
+    .bind(&projects)
     .bind(actor_id)
     .fetch_all(&state.pool)
     .await?)
@@ -647,9 +648,24 @@ pub(super) async fn project_open(
         .bind(project_id)
         .fetch_all(&state.pool)
         .await?;
-        let next = project_tasks(state, project_id, ProjectTaskFilter::Next).await?;
-        let blocked = project_tasks(state, project_id, ProjectTaskFilter::Blocked).await?;
-        let claimed = project_tasks(state, project_id, ProjectTaskFilter::Claimed).await?;
+        // Tasks only for those whose role (and limit) lets them see tasks.
+        let sees_tasks = !crate::search::projects_showing_tasks(
+            &state.pool,
+            principal.actor_id,
+            &[project_id],
+        )
+        .await?
+        .is_empty();
+        let (next, blocked, claimed) = if sees_tasks {
+            (
+                project_tasks(state, project_id, ProjectTaskFilter::Next).await?,
+                project_tasks(state, project_id, ProjectTaskFilter::Blocked).await?,
+                project_tasks(state, project_id, ProjectTaskFilter::Claimed).await?,
+            )
+        } else {
+            (Vec::new(), Vec::new(), Vec::new())
+        };
+        let by_status = if sees_tasks { by_status } else { Vec::new() };
         let conversations = list_rows(
             state,
             principal.actor_id,

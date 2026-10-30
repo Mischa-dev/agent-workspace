@@ -772,6 +772,36 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
         keys(&mine["value"]["project"]["permissions"]),
         ["projects.view", "tasks.view"]
     );
+    // Without "see tasks", search and overviews leave tasks out.
+    let search = json!({"query": "Allowed", "kinds": ["tasks"], "projectId": work});
+    let found = tool(app, &mara_token, &mara_session, "search", search.clone()).await;
+    assert_eq!(
+        found["value"]["results"].as_array().map(Vec::len),
+        Some(1),
+        "{found}"
+    );
+    sqlx::query("UPDATE workspace_roles SET permissions = '{}' WHERE id = $1")
+        .bind(
+            readers["id"]
+                .as_str()
+                .expect("id")
+                .parse::<Uuid>()
+                .expect("UUID"),
+        )
+        .execute(&setup.pool)
+        .await
+        .expect("Readers see nothing");
+    let found = tool(app, &mara_token, &mara_session, "search", search).await;
+    assert_eq!(found["value"]["results"], json!([]), "{found}");
+    let opened = tool(
+        app,
+        &mara_token,
+        &mara_session,
+        "project_open",
+        json!({"projectId": work}),
+    )
+    .await;
+    assert_eq!(opened["value"]["tasks"]["next"], json!([]), "{opened}");
 
     // Only a person changes roles: never an agent as itself, never a
     // member's app.
