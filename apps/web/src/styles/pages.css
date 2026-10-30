@@ -4,27 +4,26 @@
   overflow-y: auto;
 }
 
+/* Three page widths (DESIGN.md, Layout). Wide is the default; tabs of one area share theirs. */
 .aw-page {
   width: 100%;
-  max-width: 1040px;
+  max-width: var(--size-page-wide);
   margin: 0 auto;
   padding: var(--space-8) var(--space-6) var(--space-12);
 }
 
-.aw-page--narrow {
-  max-width: 720px;
+/* One column to read or fill in: forms, search results, pages and decisions. */
+.aw-page--reading {
+  max-width: var(--size-page-reading);
 }
 
-.aw-page--form {
-  max-width: 640px;
+/* Lists, boards and timelines use the whole window. */
+.aw-page--full {
+  max-width: none;
 }
 
 .aw-page--settings {
   max-width: 880px;
-}
-
-.aw-page--wide {
-  max-width: 1280px;
 }
 
 .aw-page__banner {
@@ -39,10 +38,15 @@
 
 .aw-pagehead {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
   margin-bottom: var(--space-6);
+}
+
+/* A settings page's sentence under its title keeps the actions at the top. */
+.aw-pagehead:has(.aw-pagehead__lede) {
+  align-items: flex-start;
 }
 
 .aw-pagehead__text {
@@ -1134,8 +1138,12 @@
     padding: var(--space-5) var(--space-4) var(--space-10);
   }
 
+  /* Title and actions share a row while they fit, so the content starts higher. */
   .aw-pagehead {
-    flex-direction: column;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
+    margin-bottom: var(--space-4);
   }
 
   .aw-appearance__row {

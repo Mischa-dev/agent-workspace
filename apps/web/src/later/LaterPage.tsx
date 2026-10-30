@@ -157,10 +157,7 @@ export function LaterPage() {
             </Button>
           }
           icon="bookmark"
-          title="Later"
-        >
-          Messages and tasks you saved, your reminders, and messages waiting to send.
-        </PageHeader>
+          title="Later" />
         <div className="aw-later__tabs">
           <SegmentedControl label="Show" onChange={setTab} options={TABS} value={tab} />
           {tab === 'open' && saved.data ? (

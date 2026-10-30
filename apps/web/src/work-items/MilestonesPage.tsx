@@ -82,10 +82,8 @@ export function MilestonesPage() {
 
   return (
     <AppShell project={project.data} user={session.user}>
-      <div className="aw-page aw-page--wide aw-milestones">
-        <PageHeader actions={newMilestone} icon="checklist" title="Milestones">
-          Groups of tasks with a target date in {project.data.name}.
-        </PageHeader>
+      <div className="aw-page aw-page--full aw-milestones">
+        <PageHeader actions={newMilestone} icon="checklist" title="Milestones" />
         <WorkTabs current="milestones" projectId={project.data.id} />
         <RememberPlace location={{ kind: 'milestones' }} project={project.data} />
         {archivedCount ? (

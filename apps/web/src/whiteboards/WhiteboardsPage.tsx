@@ -81,11 +81,7 @@ export function WhiteboardsPage() {
             </Button>
           }
           icon="whiteboard"
-          title="Whiteboards"
-        >
-          Sketch, plan and diagram together. Agents can read and draw on the same whiteboards, and one whiteboard can sit on many
-          tasks, projects and pages.
-        </PageHeader>
+          title="Whiteboards" />
         <div className="aw-boards__filters">
           <TextField
             aria-label="Search whiteboards"

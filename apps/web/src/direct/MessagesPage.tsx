@@ -356,17 +356,18 @@ export function AgentsPage() {
   return (
     <AppShell direct mainClassName="aw-main--page" user={session.user}>
       <div className="aw-page">
-        <PageHeader icon="bot" title="Agents">
-          Every agent you add can be messaged directly. Choose a project when it should also work there, in its tasks and
-          channels.
-        </PageHeader>
+        <PageHeader icon="bot" title="Agents" />
         {overview.data?.capabilities.manageAgents ? (
           <>
             {places.length > 1 ? (
               <div className="aw-agentplace">
                 <SelectField
                   disabled={placeHeld}
-                  hint={placeHeld ? 'Finish with the agent below first.' : 'The agents listed below, and where a new one starts.'}
+                  hint={
+                    placeHeld
+                      ? 'Finish with the agent below first.'
+                      : 'Every agent can be messaged directly. Pick a project when it should also work there, in its tasks and channels.'
+                  }
                   id="agent-place"
                   label="Where they work"
                   onChange={(event) => setPlace(event.target.value)}

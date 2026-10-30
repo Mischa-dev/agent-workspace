@@ -18,7 +18,6 @@ import {
   RowList,
   SegmentedControl,
   TextField,
-  countLabel,
   relativeDay,
   showToast,
 } from '../ui'
@@ -74,7 +73,7 @@ export function ProjectsPage() {
 
   return (
     <AppShell home mainClassName="aw-main--page" user={session.user}>
-      <div className="aw-page aw-page--narrow">
+      <div className="aw-page aw-page--reading">
         <PageHeader
           actions={
             canCreate ? (
@@ -84,10 +83,7 @@ export function ProjectsPage() {
             ) : null
           }
           icon="list"
-          title="All projects"
-        >
-          {all.isSuccess ? (total ? `${countLabel(total, 'project')} you belong to.` : 'You don’t belong to any projects yet.') : ' '}
-        </PageHeader>
+          title="All projects" />
         {archivedProjects.length ? (
           <SegmentedControl<Shown>
             label="Projects to show"

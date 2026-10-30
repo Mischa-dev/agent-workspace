@@ -12,9 +12,37 @@ import { getMyWork, viewKeys, type MyWork } from '../views/api'
 import { priorityLabel } from '../work-items/constants'
 import type { WorkItemPriority } from '../work-items/types'
 import { getHome, homeKeys, type WorkingRun } from './homeApi'
+import type { QuietSections } from './homeQuiet'
 import { MoreLink } from './MoreLink'
 
 const MAX_ROWS = 5
+
+/** The empty sections, folded into one line: "Nothing needs you, no agents are working and nothing is assigned to you." */
+export function QuietLine({ quiet, sections }: { quiet: QuietSections; sections: Array<keyof QuietSections> }) {
+  const experience = useHomeExperience()
+  const shown = sections.filter((section) => quiet[section])
+  if (!shown.length) return null
+  const phrases: Record<Exclude<keyof QuietSections, 'capacity'>, string> = {
+    needsYou: 'nothing needs you',
+    working: 'no agents are working',
+    tasks: `no ${experience.word('task', 'many')} are assigned to you`,
+  }
+  const said = shown.filter((section) => section !== 'capacity').map((section) => phrases[section as Exclude<keyof QuietSections, 'capacity'>])
+  const sentence = said.length
+    ? `${said.length > 1 ? `${said.slice(0, -1).join(', ')} and ${said.at(-1)}` : said[0]}.`
+    : ''
+  return (
+    <p className="aw-home__allquiet" role="status">
+      <span>{sentence ? sentence.charAt(0).toUpperCase() + sentence.slice(1) : null}</span>
+      {shown.includes('capacity') ? (
+        <span>
+          {' '}
+          No accounts for runs yet: <Link to="/settings/account/provider-accounts">add one</Link> to run agents and see their limits.
+        </span>
+      ) : null}
+    </p>
+  )
+}
 
 /** The first-run path, until it's done or put away (P5). */
 export function SetupCard({ organizationId }: { organizationId: string }) {

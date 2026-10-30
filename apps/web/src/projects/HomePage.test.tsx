@@ -19,13 +19,14 @@ vi.mock('../shell/AppShell', () => ({
 vi.mock('./HomeSections', () => ({
   Capacity: () => null,
   NeedsYou: () => null,
+  QuietLine: () => null,
   SetupCard: () => null,
   WorkingNow: () => null,
   YourTasks: () => null,
 }))
 
-vi.mock('../shell/homeSpace', () => ({
-  useInboxUnread: () => 0,
+vi.mock('./homeQuiet', () => ({
+  useQuietSections: () => ({ needsYou: false, working: false, capacity: false, tasks: false }),
 }))
 
 vi.mock('./hooks', () => ({

@@ -15,3 +15,20 @@ export function useCoarsePointer() {
   )
 }
 
+
+function subscribePhone(callback: () => void) {
+  const query = typeof window.matchMedia === 'function' ? window.matchMedia(PHONE) : null
+  query?.addEventListener('change', callback)
+  return () => query?.removeEventListener('change', callback)
+}
+
+const PHONE = '(max-width: 640px)'
+
+/** A phone-width window, where task rows take two lines: the title, then key and status. */
+export function usePhoneWidth() {
+  return useSyncExternalStore(
+    subscribePhone,
+    () => typeof window.matchMedia === 'function' && window.matchMedia(PHONE).matches,
+    () => false,
+  )
+}
