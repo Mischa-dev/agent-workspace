@@ -174,6 +174,10 @@ BEGIN
     IF NOT FOUND OR custom.organization_id <> target_organization THEN
         RAISE EXCEPTION 'role belongs to another workspace' USING ERRCODE = '23514';
     END IF;
+    IF custom.built_in AND TG_TABLE_NAME = 'organization_memberships'
+       AND custom.base_role = 'viewer' THEN
+        RAISE EXCEPTION 'a workspace has no viewer role' USING ERRCODE = '23514';
+    END IF;
     IF custom.built_in THEN
         -- A built-in role is named by `role` alone.
         NEW.role := custom.base_role;
@@ -234,8 +238,26 @@ CREATE UNIQUE INDEX project_layout_rules_custom_role
     WHERE role_id IS NOT NULL;
 
 -- Invitations can name a custom role too.
+-- A role that is removed leaves its finished invitations naming the base
+-- role; the server refuses to remove one an open invitation still names.
 ALTER TABLE workspace_invitations
-    ADD COLUMN role_id UUID REFERENCES workspace_roles(id);
+    ADD COLUMN role_id UUID REFERENCES workspace_roles(id) ON DELETE SET NULL;
 
 ALTER TABLE project_invitations
-    ADD COLUMN role_id UUID REFERENCES workspace_roles(id);
+    ADD COLUMN role_id UUID REFERENCES workspace_roles(id) ON DELETE SET NULL;
+
+-- The views a project's member starts with pinned, from their role's
+-- defaults; NULL when the role names none (My tasks and Ready for agents).
+CREATE FUNCTION role_default_pinned_views(target_project UUID, target_actor UUID)
+RETURNS TEXT[]
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT ARRAY(SELECT jsonb_array_elements_text(held.defaults->'pinnedViews'))
+    FROM project_memberships membership
+    JOIN projects project ON project.id = membership.project_id
+    JOIN workspace_roles held ON held.organization_id = project.organization_id
+     AND (held.id = membership.role_id OR (membership.role_id IS NULL AND held.key = membership.role))
+    WHERE membership.project_id = target_project AND membership.actor_id = target_actor
+      AND jsonb_typeof(held.defaults->'pinnedViews') = 'array'
+$$;

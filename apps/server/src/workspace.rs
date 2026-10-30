@@ -161,6 +161,11 @@ pub(crate) async fn caller_role(
 pub(crate) struct MemberCapabilities {
     pub change_role: bool,
     pub remove: bool,
+    /// Give them another role (AWD-74): owners for anyone but owners,
+    /// admins for members.
+    pub assign_role: bool,
+    /// Limit what apps acting for them may do.
+    pub limit_apps: bool,
 }
 
 /// The rules for managing one member, in one place so the list and the
@@ -172,6 +177,12 @@ pub(crate) fn member_capabilities(
     target_is_person: bool,
     target_enabled: bool,
 ) -> MemberCapabilities {
+    if caller_is_target && target_enabled {
+        return MemberCapabilities {
+            limit_apps: target_is_person,
+            ..MemberCapabilities::default()
+        };
+    }
     if caller_is_target || !target_enabled || target_role == WorkspaceRole::Owner {
         return MemberCapabilities::default();
     }
@@ -179,11 +190,18 @@ pub(crate) fn member_capabilities(
         WorkspaceRole::Owner => MemberCapabilities {
             change_role: target_is_person,
             remove: true,
+            assign_role: true,
+            limit_apps: target_is_person,
         },
-        WorkspaceRole::Admin => MemberCapabilities {
-            change_role: false,
-            remove: target_role == WorkspaceRole::Member,
-        },
+        WorkspaceRole::Admin => {
+            let member = target_role == WorkspaceRole::Member;
+            MemberCapabilities {
+                change_role: false,
+                remove: member,
+                assign_role: member,
+                limit_apps: member && target_is_person,
+            }
+        }
         WorkspaceRole::Member => MemberCapabilities::default(),
     }
 }
@@ -370,6 +388,9 @@ struct MemberRow {
     handle: String,
     login_name: Option<String>,
     role: String,
+    role_id: Option<Uuid>,
+    role_name: Option<String>,
+    agent_limit: Option<Vec<String>>,
     enabled: bool,
     version: i64,
     joined_at: DateTime<Utc>,
@@ -385,6 +406,12 @@ struct MemberView {
     handle: String,
     login_name: Option<String>,
     role: String,
+    /// The custom role they hold (AWD-74), and the name of the role they
+    /// hold, custom or built-in.
+    role_id: Option<Uuid>,
+    role_name: String,
+    /// What apps acting for them may do in the workspace, when limited.
+    agent_limit: Option<Vec<String>>,
     enabled: bool,
     version: i64,
     joined_at: DateTime<Utc>,
@@ -402,7 +429,8 @@ const MEMBER_COLUMNS: &str = r#"
     membership.actor_id, actor.kind,
     COALESCE(profile.display_name, user_account.display_name, 'Unknown') AS display_name,
     COALESCE(profile.handle, user_account.login_name, 'unknown') AS handle,
-    user_account.login_name, membership.role, membership.enabled, membership.version,
+    user_account.login_name, membership.role, membership.role_id, held.name AS role_name,
+    membership.agent_limit, membership.enabled, membership.version,
     membership.created_at AS joined_at,
     (SELECT count(*) FROM project_memberships project_membership
       JOIN projects project ON project.id = project_membership.project_id
@@ -420,6 +448,8 @@ const MEMBER_FROM: &str = r#"
       ON profile.organization_id = membership.organization_id
      AND profile.actor_id = membership.actor_id
     LEFT JOIN users user_account ON user_account.actor_id = membership.actor_id
+    LEFT JOIN workspace_roles held ON held.organization_id = membership.organization_id
+     AND (held.id = membership.role_id OR (membership.role_id IS NULL AND held.key = membership.role))
 "#;
 
 fn member_view(
@@ -442,7 +472,12 @@ fn member_view(
         display_name: row.display_name,
         handle: row.handle,
         login_name: row.login_name,
+        role_name: row.role_name.unwrap_or_else(|| row.role.clone()),
         role: row.role,
+        role_id: row.role_id,
+        agent_limit: (caller.manages() || is_you)
+            .then_some(row.agent_limit)
+            .flatten(),
         enabled: row.enabled,
         version: row.version,
         joined_at: row.joined_at,
@@ -510,7 +545,7 @@ struct UpdateMemberRequest {
 
 /// One lock per workspace for membership changes, so two removals or a
 /// removal and an ownership change never interleave.
-async fn lock_workspace_memberships(
+pub(crate) async fn lock_workspace_memberships(
     transaction: &mut Transaction<'_, Postgres>,
     organization_id: Uuid,
 ) -> Result<(), AppError> {
@@ -901,6 +936,9 @@ async fn leave_workspace(
 struct InvitationView {
     id: Uuid,
     role: String,
+    /// A custom role it gives (AWD-74), and that role's name.
+    role_id: Option<Uuid>,
+    role_name: Option<String>,
     token_prefix: String,
     status: String,
     version: i64,
@@ -913,7 +951,8 @@ struct InvitationView {
 }
 
 const INVITATION_COLUMNS: &str = r#"
-    invitation.id, invitation.role, invitation.token_prefix,
+    invitation.id, invitation.role, invitation.role_id, invited_role.name AS role_name,
+    invitation.token_prefix,
     CASE WHEN invitation.status = 'active' AND invitation.expires_at <= now()
          THEN 'expired' ELSE invitation.status END AS status,
     invitation.version,
@@ -922,6 +961,7 @@ const INVITATION_COLUMNS: &str = r#"
     COALESCE(acceptor.display_name, acceptor_user.display_name) AS accepted_by_display_name,
     invitation.accepted_at, invitation.created_at, invitation.note
     FROM workspace_invitations invitation
+    LEFT JOIN workspace_roles invited_role ON invited_role.id = invitation.role_id
     LEFT JOIN organization_actor_profiles issuer
       ON issuer.organization_id = invitation.organization_id
      AND issuer.actor_id = invitation.issued_by_actor_id
@@ -973,6 +1013,9 @@ async fn fetch_invitation(
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct IssueRequest {
     role: String,
+    /// A custom role of the workspace, instead of `role`.
+    #[serde(default)]
+    role_id: Option<Uuid>,
     expires_in_hours: i32,
     #[serde(default)]
     note: Option<String>,
@@ -1033,8 +1076,41 @@ async fn issue_invitation(
     if !role.manages() {
         return Err(AppError::Forbidden);
     }
-    if !may_invite(role, &request.role) {
-        return Err(if matches!(request.role.as_str(), "admin" | "member") {
+    // A custom role is invited as the workspace role it's based on, and
+    // nobody invites to a role holding more than they do.
+    let (invited_role, role_id) = match request.role_id {
+        None => (request.role.clone(), None),
+        Some(role_id) => {
+            let (built_in, base, permissions) =
+                sqlx::query_as::<_, (bool, String, Vec<String>)>(
+                    "SELECT built_in, base_role, permissions FROM workspace_roles WHERE organization_id = $1 AND id = $2",
+                )
+                .bind(organization_id)
+                .bind(role_id)
+                .fetch_optional(&mut *transaction)
+                .await?
+                .ok_or(AppError::NotFound("role"))?;
+            let grant = if built_in {
+                crate::policy::RoleGrant::stored(&base, None::<&[String]>)?
+            } else {
+                crate::policy::RoleGrant::stored(&base, Some(&permissions))?
+            };
+            let standing =
+                crate::roles::standing(&mut transaction, organization_id, principal.actor_id)
+                    .await?;
+            if !grant.permissions().is_subset_of(standing.permissions) {
+                return Err(AppError::Forbidden);
+            }
+            match (built_in, base.as_str()) {
+                (true, "admin" | "member") => (base, None),
+                (false, "admin") => ("admin".to_owned(), Some(role_id)),
+                (false, "member" | "viewer") => ("member".to_owned(), Some(role_id)),
+                _ => return Err(AppError::Validation("invitation role")),
+            }
+        }
+    };
+    if !may_invite(role, &invited_role) {
+        return Err(if matches!(invited_role.as_str(), "admin" | "member") {
             AppError::Forbidden
         } else {
             AppError::Validation("invitation role")
@@ -1046,18 +1122,19 @@ async fn issue_invitation(
         r#"
         INSERT INTO workspace_invitations (
             id, organization_id, role, note, token_prefix, token_digest,
-            issued_by_actor_id, expires_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, now() + make_interval(hours => $8))
+            issued_by_actor_id, expires_at, role_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, now() + make_interval(hours => $8), $9)
         "#,
     )
     .bind(invitation_id)
     .bind(organization_id)
-    .bind(&request.role)
+    .bind(&invited_role)
     .bind(&note)
     .bind(&token_prefix)
     .bind(token_digest.to_vec())
     .bind(principal.actor_id)
     .bind(request.expires_in_hours)
+    .bind(role_id)
     .execute(&mut *transaction)
     .await?;
     audit(
@@ -1068,7 +1145,11 @@ async fn issue_invitation(
         "workspace.invitation.issue",
         "workspace_invitation",
         Some(invitation_id),
-        serde_json::json!({ "role": request.role, "expiresInHours": request.expires_in_hours }),
+        serde_json::json!({
+            "role": invited_role,
+            "roleId": role_id,
+            "expiresInHours": request.expires_in_hours,
+        }),
     )
     .await?;
     let invitation = fetch_invitation(&mut transaction, invitation_id).await?;
@@ -1167,6 +1248,7 @@ struct ValidInvitation {
     organization_id: Uuid,
     organization_name: String,
     role: String,
+    role_id: Option<Uuid>,
     token_digest: Vec<u8>,
     issued_by_actor_id: Uuid,
     expires_at: DateTime<Utc>,
@@ -1178,7 +1260,7 @@ fn valid_invitation_sql(lock: bool) -> String {
     format!(
         r#"
         SELECT invitation.id, invitation.organization_id,
-               organization.name AS organization_name, invitation.role,
+               organization.name AS organization_name, invitation.role, invitation.role_id,
                invitation.token_digest, invitation.issued_by_actor_id, invitation.expires_at
         FROM workspace_invitations invitation
         JOIN organizations organization ON organization.id = invitation.organization_id
@@ -1351,7 +1433,7 @@ async fn join_workspace(
             sqlx::query(
                 r#"
                 UPDATE organization_memberships
-                SET enabled = true, role = $3, role_explicit = $4,
+                SET enabled = true, role = $3, role_explicit = $4, role_id = $5,
                     version = version + 1, updated_at = now()
                 WHERE organization_id = $1 AND actor_id = $2
                 "#,
@@ -1359,21 +1441,23 @@ async fn join_workspace(
             .bind(invitation.organization_id)
             .bind(actor_id)
             .bind(next)
-            .bind(invitation.role == "admin")
+            .bind(invitation.role == "admin" || invitation.role_id.is_some())
+            .bind(invitation.role_id)
             .execute(&mut **transaction)
             .await?;
         }
         None => {
             sqlx::query(
                 r#"
-                INSERT INTO organization_memberships (organization_id, actor_id, role, role_explicit)
-                VALUES ($1, $2, $3, $4)
+                INSERT INTO organization_memberships (organization_id, actor_id, role, role_explicit, role_id)
+                VALUES ($1, $2, $3, $4, $5)
                 "#,
             )
             .bind(invitation.organization_id)
             .bind(actor_id)
             .bind(&invitation.role)
-            .bind(invitation.role == "admin")
+            .bind(invitation.role == "admin" || invitation.role_id.is_some())
+            .bind(invitation.role_id)
             .execute(&mut **transaction)
             .await
             .map_err(map_join_error)?;
@@ -1712,7 +1796,11 @@ mod tests {
         );
         assert_eq!(
             member_capabilities(Owner, true, Owner, true, true),
-            MemberCapabilities::default()
+            MemberCapabilities {
+                limit_apps: true,
+                ..MemberCapabilities::default()
+            },
+            "people limit their own apps and nothing else about themselves"
         );
         let admin_on_member = member_capabilities(Admin, false, Member, true, true);
         assert!(!admin_on_member.change_role && admin_on_member.remove);

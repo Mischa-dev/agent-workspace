@@ -131,10 +131,14 @@ pub(crate) fn status_for(result: &Value) -> StatusCode {
 
 /// Groups operations by the noun their tool starts with.
 pub(crate) fn tag_for(tool: &str) -> &'static str {
+    if tool == "my_permissions" {
+        return "Roles and access";
+    }
     let noun = tool.split('_').next().unwrap_or(tool);
     match noun {
         "briefing" | "inbox" | "notification" | "mark" => "Inbox and notifications",
         "project" | "projects" | "workflow" | "settings" => "Projects",
+        "role" => "Roles and access",
         "conversation" | "message" | "file" | "thread" | "channel" | "pin" | "people" => {
             "Conversations"
         }

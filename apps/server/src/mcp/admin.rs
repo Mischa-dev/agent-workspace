@@ -1210,8 +1210,9 @@ pub(super) struct MemberSetArguments {
     /// Who: an @handle or actor ID of someone in your organization, person
     /// or agent.
     pub person: String,
-    /// admin, member, or viewer. Agents can be members or viewers. Leave it
-    /// out when removing; new members default to member.
+    /// admin, member, viewer, or the name of a custom role of the workspace
+    /// (role_list lists them). Agents hold member, viewer, or roles based on
+    /// them. Leave it out when removing; new members default to member.
     pub role: Option<String>,
     /// True to remove them from the project. Their access ends at once;
     /// what they wrote stays.
@@ -1239,12 +1240,10 @@ pub(super) async fn project_member_set(
     if remove && arguments.role.is_some() {
         return ToolResult::invalid("role", "Leave out role when removing someone.");
     }
-    if let Some(role) = arguments.role.as_deref()
-        && !matches!(role, "admin" | "member" | "viewer")
-    {
+    if arguments.role.as_deref() == Some("owner") {
         return ToolResult::invalid(
             "role",
-            "Use admin, member, or viewer. Ownership can only be given in the web app.",
+            "Use admin, member, viewer, or a custom role. Ownership can only be given in the web app.",
         );
     }
     let project_id = principal.project_id;
@@ -1284,6 +1283,28 @@ pub(super) async fn project_member_set(
                 "You can't change your own membership. Ask another owner.",
             ));
         }
+        // A built-in role by name, or a custom role of the workspace.
+        let (role, role_id) = match arguments.role.as_deref().map(str::trim) {
+            None => (None, None),
+            Some(role @ ("admin" | "member" | "viewer")) => (Some(role.to_owned()), None),
+            Some(text) => {
+                let organization_id = sqlx::query_scalar::<_, Uuid>(
+                    "SELECT organization_id FROM projects WHERE id = $1",
+                )
+                .bind(project_id)
+                .fetch_one(&mut *transaction)
+                .await?;
+                match crate::roles::find_role(&mut transaction, organization_id, text).await? {
+                    Some(role_id) => (None, Some(role_id)),
+                    None => {
+                        return Ok(ToolResult::invalid(
+                            "role",
+                            "Use admin, member, viewer, or a custom role's name from role_list.",
+                        ));
+                    }
+                }
+            }
+        };
         let existing = sqlx::query_scalar::<_, bool>(
             "SELECT enabled FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
         )
@@ -1301,7 +1322,8 @@ pub(super) async fn project_member_set(
                     principal.actor_id,
                     project_id,
                     actor_id,
-                    arguments.role.as_deref().unwrap_or("member"),
+                    role.as_deref().unwrap_or("member"),
+                    role_id,
                 )
                 .await?;
                 added.inserted.then_some("project_membership.mcp_added")
@@ -1312,7 +1334,8 @@ pub(super) async fn project_member_set(
                     principal.actor_id,
                     project_id,
                     actor_id,
-                    arguments.role.as_deref(),
+                    role.as_deref(),
+                    role_id,
                     Some(!remove),
                     arguments.expected_version,
                 )

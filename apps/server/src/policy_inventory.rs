@@ -287,6 +287,36 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/organizations/{organization_id}/transfer-ownership",
         MembershipManage
     ),
+    policy_route!(
+        "roles",
+        Post,
+        "/api/v1/organizations/{organization_id}/roles",
+        RoleManage
+    ),
+    policy_route!(
+        "roles",
+        Patch,
+        "/api/v1/organizations/{organization_id}/roles/{role_id}",
+        RoleManage
+    ),
+    policy_route!(
+        "roles",
+        Delete,
+        "/api/v1/organizations/{organization_id}/roles/{role_id}",
+        RoleManage
+    ),
+    policy_route!(
+        "roles",
+        Put,
+        "/api/v1/organizations/{organization_id}/members/{actor_id}/role",
+        MembershipManage
+    ),
+    policy_route!(
+        "roles",
+        Put,
+        "/api/v1/organizations/{organization_id}/members/{actor_id}/agent-limit",
+        MembershipManage
+    ),
     boundary_route!(
         "workspace",
         Post,

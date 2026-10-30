@@ -749,7 +749,7 @@ pub async fn with_agent_limits<F: std::future::Future>(limits: AgentLimits, call
 }
 
 /// The limit on `actor_id` in `scope` while a call acting for them runs.
-fn current_agent_limit(actor_id: Uuid, scope: MembershipScope) -> Option<PermissionSet> {
+pub fn current_agent_limit(actor_id: Uuid, scope: MembershipScope) -> Option<PermissionSet> {
     AGENT_LIMITS
         .try_with(|limits| (limits.actor_id == actor_id).then(|| limits.for_scope(scope)))
         .ok()

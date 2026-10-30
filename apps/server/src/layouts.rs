@@ -335,6 +335,29 @@ async fn saved_preset(
     .map(SavedPreset::from))
 }
 
+/// Whether a role's default layout (AWD-74) names a preset this workspace
+/// can use: a built-in one, or one of its saved presets that isn't removed.
+pub(crate) async fn preset_is_known(
+    connection: &mut PgConnection,
+    organization_id: Uuid,
+    preset: &str,
+) -> Result<bool, AppError> {
+    if builtin(preset).is_some() {
+        return Ok(true);
+    }
+    let Ok(id) = Uuid::parse_str(preset) else {
+        return Ok(false);
+    };
+    Ok(saved_preset(connection, organization_id, id)
+        .await?
+        .is_some_and(|preset| !preset.removed))
+}
+
+/// Whether a part id is in the layout registry.
+pub(crate) fn part_is_known(id: &str) -> bool {
+    part_known(id)
+}
+
 // ---------------------------------------------------------------------------
 // Working out what shows
 
