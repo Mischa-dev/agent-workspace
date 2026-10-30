@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 
 import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 
-import { writeLocal } from '../app/localDrafts'
+import { readLocal, writeLocal } from '../app/localDrafts'
 import { useAuthenticatedSession } from '../auth/session'
 import { sendConversationMessage } from '../conversations/api'
 import { ConversationHeader } from '../conversations/ConversationHeader'
@@ -150,12 +150,20 @@ export function MessagesPage() {
       started.current = { key, conversationId }
     }
     await sendConversationMessage({ conversationId, kind: isGroup ? 'group' : 'dm', ...submission })
-    started.current = null
-    groupKey.current = crypto.randomUUID()
+    // `started` stays set until the page goes: a second message sent before then joins the same conversation.
     await queryClient.invalidateQueries({ queryKey: directQueryKey })
     // Anything typed while the first message went out becomes the conversation's draft, so leaving here keeps it.
     const followUp = document.querySelector<HTMLTextAreaElement>('.aw-newchat__composer textarea')?.value ?? ''
-    if (followUp.trim()) writeLocal<ComposerDraft>(`draft:${conversationId}`, { text: followUp, mentions: [], workItems: [] })
+    if (followUp.trim()) {
+      // After any draft already waiting there, never over it.
+      const waiting = readLocal<ComposerDraft>(`draft:${conversationId}`)
+      writeLocal<ComposerDraft>(
+        `draft:${conversationId}`,
+        waiting?.text.trim()
+          ? { ...waiting, text: `${waiting.text}\n${followUp}` }
+          : { text: followUp, mentions: [], workItems: [] },
+      )
+    }
     navigate(`/messages/${encodeURIComponent(conversationId)}`)
   }
 
