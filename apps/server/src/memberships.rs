@@ -293,6 +293,16 @@ pub(crate) async fn change_member(
     };
     let next_role = next_role.as_str();
     authorize_target(&access, &target, next_role)?;
+    if next_role != target.role || next_role_id != target.role_id {
+        require_grantable(
+            transaction,
+            caller_actor_id,
+            project_id,
+            next_role,
+            next_role_id,
+        )
+        .await?;
+    }
     if let Some(expected_version) = expected_version
         && target.version != expected_version
     {
@@ -389,6 +399,32 @@ pub(crate) async fn change_member(
         before: target,
         updated: Some(updated),
     })
+}
+
+/// Refuses a project role that would give someone a permission the caller
+/// doesn't hold themselves in the workspace (a narrowed admin can't hand out
+/// a plain Member, say).
+pub(crate) async fn require_grantable(
+    transaction: &mut Transaction<'_, Postgres>,
+    caller_actor_id: Uuid,
+    project_id: Uuid,
+    role: &str,
+    role_id: Option<Uuid>,
+) -> Result<(), AppError> {
+    let (organization_id, permissions) = sqlx::query_as::<_, (Uuid, Option<Vec<String>>)>(
+        "SELECT organization_id, workspace_role_permissions($2) FROM projects WHERE id = $1",
+    )
+    .bind(project_id)
+    .bind(role_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(AppError::NotFound("project"))?;
+    let grant = crate::policy::RoleGrant::stored(role, permissions.as_deref())?;
+    let caller = crate::roles::standing(transaction, organization_id, caller_actor_id).await?;
+    if !grant.permissions().is_subset_of(caller.permissions) {
+        return Err(AppError::Forbidden);
+    }
+    Ok(())
 }
 
 /// A custom role of the project's workspace, as the built-in role it's
@@ -983,6 +1019,7 @@ pub(crate) async fn add_member(
         project_id,
         Action::MembershipManage,
     )?;
+    require_grantable(tx, caller_actor_id, project_id, role, role_id).await?;
     if access.project_archived {
         return Err(AppError::ProjectArchived);
     }

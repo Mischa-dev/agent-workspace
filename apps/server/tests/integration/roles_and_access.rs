@@ -263,6 +263,68 @@ async fn built_in_roles_stay_as_they_were_and_nobody_grants_more_than_they_hold(
         StatusCode::FORBIDDEN,
         "Contractor holds tasks.edit, which Ops doesn't: {refused}"
     );
+    // Nor through a project role or an invitation (Ops has no members.invite).
+    let project = work.parse::<Uuid>().expect("project");
+    sqlx::query(
+        "UPDATE project_memberships SET role = 'viewer' WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project)
+    .bind(bea)
+    .execute(&setup.pool)
+    .await
+    .expect("bea views");
+    sqlx::query("UPDATE project_memberships SET role = 'admin', role_id = $3 WHERE project_id = $1 AND actor_id = $2")
+        .bind(project)
+        .bind(alex)
+        .bind(narrowed["id"].as_str().expect("id").parse::<Uuid>().expect("UUID"))
+        .execute(&setup.pool)
+        .await
+        .expect("alex is Ops in the project too");
+    let version = sqlx::query_scalar::<_, i64>(
+        "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project)
+    .bind(bea)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("version");
+    let (status, refused) = send(
+        &setup.app,
+        alex_browser.request(
+            "PATCH",
+            &format!("/api/v1/projects/{work}/members/{bea}"),
+            Some("ops-promotes-bea"),
+            json!({"expectedVersion": version, "role": "member"}),
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "plain Member holds more than Ops: {refused}"
+    );
+    let (status, refused) = send(
+        &setup.app,
+        alex_browser.request(
+            "POST",
+            &format!(
+                "/api/v1/organizations/{}/invitations",
+                setup.organization_id
+            ),
+            None,
+            json!({"role": "member", "expiresInHours": 24}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    sqlx::query(
+        "UPDATE project_memberships SET role = 'member' WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project)
+    .bind(bea)
+    .execute(&setup.pool)
+    .await
+    .expect("bea is a member again");
     let (status, assigned) = assign(
         &setup,
         &setup.browser,

@@ -17,7 +17,7 @@
 use crate::policy::Permission::{
     self, ChannelsCreate, ChannelsPost, CodeView, MembersManage, MembersView, PagesEdit,
     ProjectsCreate, ProjectsManage, RolesManage, RunsApprove, RunsLaunch, SettingsManage,
-    TasksCreate, TasksEdit, TasksView, TasksWorkflow, WhiteboardsEdit,
+    TasksCreate, TasksDelete, TasksEdit, TasksView, TasksWorkflow, WhiteboardsEdit,
 };
 
 pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
@@ -158,6 +158,29 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("external_event_poll", None),
 ];
 
+/// Tools another permission also opens, for the use the handler then
+/// checks itself: archiving through the task update tools needs only
+/// "archive tasks".
+const ALSO_OPENED_BY: &[(&str, Permission)] = &[
+    ("task_update", TasksDelete),
+    ("task_update_many", TasksDelete),
+];
+
+/// Whether a caller holding `reach` may use a tool at all. A tool missing
+/// from the table is never reachable.
+pub(super) fn reachable(tool: &str, reach: crate::policy::PermissionSet) -> bool {
+    match needs(tool) {
+        Ok(None) => true,
+        Ok(Some(permission)) => {
+            reach.contains(permission)
+                || ALSO_OPENED_BY
+                    .iter()
+                    .any(|(name, also)| *name == tool && reach.contains(*also))
+        }
+        Err(()) => false,
+    }
+}
+
 /// What a tool needs, or `None` for one any member may use. A tool missing
 /// from the table needs everything: the guard test keeps that from
 /// happening.
@@ -192,6 +215,14 @@ mod tests {
         assert!(missing.is_empty(), "say what these tools need: {missing:?}");
         let gone = unique.difference(&tools).collect::<Vec<_>>();
         assert!(gone.is_empty(), "these tools no longer exist: {gone:?}");
+    }
+
+    #[test]
+    fn archiving_alone_opens_the_task_update_tools() {
+        let archive_only = PermissionSet::from_keys(&["tasks.view", "tasks.delete"]);
+        assert!(super::reachable("task_update", archive_only));
+        assert!(super::reachable("task_update_many", archive_only));
+        assert!(!super::reachable("task_comment", archive_only));
     }
 
     #[test]

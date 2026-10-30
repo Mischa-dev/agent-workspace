@@ -1088,13 +1088,28 @@ async fn issue_invitation(
     }
     let mut transaction = state.pool.begin().await?;
     let role = caller_role(&mut transaction, &principal, organization_id, true).await?;
-    if !role.manages() {
+    let standing =
+        crate::roles::standing(&mut transaction, organization_id, principal.actor_id).await?;
+    if !role.manages()
+        || !standing
+            .permissions
+            .contains(crate::policy::Permission::MembersInvite)
+    {
         return Err(AppError::Forbidden);
     }
     // A custom role is invited as the workspace role it's based on, and
     // nobody invites to a role holding more than they do.
     let (invited_role, role_id) = match request.role_id {
-        None => (request.role.clone(), None),
+        None => {
+            if matches!(request.role.as_str(), "admin" | "member")
+                && !crate::policy::RoleGrant::stored(&request.role, None::<&[String]>)?
+                    .permissions()
+                    .is_subset_of(standing.permissions)
+            {
+                return Err(AppError::Forbidden);
+            }
+            (request.role.clone(), None)
+        }
         Some(role_id) => {
             let (built_in, base, permissions) =
                 sqlx::query_as::<_, (bool, String, Vec<String>)>(
@@ -1110,9 +1125,6 @@ async fn issue_invitation(
             } else {
                 crate::policy::RoleGrant::stored(&base, Some(&permissions))?
             };
-            let standing =
-                crate::roles::standing(&mut transaction, organization_id, principal.actor_id)
-                    .await?;
             if !grant.permissions().is_subset_of(standing.permissions) {
                 return Err(AppError::Forbidden);
             }

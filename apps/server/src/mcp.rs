@@ -2848,11 +2848,7 @@ async fn caller_reach(
 
 /// Whether a tool shows in the caller's list.
 fn tool_listed(name: &str, reach: PermissionSet) -> bool {
-    match tool_permissions::needs(name) {
-        Ok(None) => true,
-        Ok(Some(permission)) => reach.contains(permission),
-        Err(()) => false,
-    }
+    tool_permissions::reachable(name, reach)
 }
 
 /// A refusal in the shape the tool's own results take when it can say
@@ -2913,7 +2909,7 @@ async fn run_tool(
         }
     };
     if let Ok(Some(permission)) = tool_permissions::needs(&request.name)
-        && !reach.contains(permission)
+        && !tool_permissions::reachable(&request.name, reach)
     {
         let whose = if limits.is_some() {
             "your roles allow apps acting for you"

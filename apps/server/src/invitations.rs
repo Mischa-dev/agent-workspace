@@ -271,6 +271,14 @@ async fn issue_invitation(
         }
     };
     authorize_manage(principal.actor_id, project_id, &access, Some(&role))?;
+    crate::memberships::require_grantable(
+        &mut transaction,
+        principal.actor_id,
+        project_id,
+        &role,
+        role_id,
+    )
+    .await?;
     sqlx::query(
         r#"
         INSERT INTO project_invitations (
