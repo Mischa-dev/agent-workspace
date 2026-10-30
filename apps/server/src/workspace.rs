@@ -120,6 +120,31 @@ impl WorkspaceRole {
     }
 }
 
+/// The caller's role for managing members: an owner or admin whose custom
+/// role leaves out "manage members" counts as a member here.
+async fn member_manager_role(
+    connection: &mut sqlx::PgConnection,
+    principal: &AuthenticatedActor,
+    organization_id: Uuid,
+    lock: bool,
+) -> Result<WorkspaceRole, AppError> {
+    let role = caller_role(connection, principal, organization_id, lock).await?;
+    if !role.manages() {
+        return Ok(role);
+    }
+    let standing = crate::roles::standing(connection, organization_id, principal.actor_id).await?;
+    Ok(
+        if standing
+            .permissions
+            .contains(crate::policy::Permission::MembersManage)
+        {
+            role
+        } else {
+            WorkspaceRole::Member
+        },
+    )
+}
+
 /// The caller's role in the workspace, if they're an active person in it.
 /// `lock` holds the row until the transaction ends.
 pub(crate) async fn caller_role(
@@ -508,7 +533,7 @@ async fn list_members(
     ApiPath(organization_id): ApiPath<Uuid>,
 ) -> Result<Json<MembersResponse>, AppError> {
     let mut connection = state.pool.acquire().await?;
-    let caller = caller_role(&mut connection, &principal, organization_id, false).await?;
+    let caller = member_manager_role(&mut connection, &principal, organization_id, false).await?;
     // Removed members are listed only for those who manage the workspace.
     let rows = sqlx::query_as::<_, MemberRow>(&format!(
         r#"
@@ -591,7 +616,7 @@ async fn update_member(
     }
     let mut transaction = state.pool.begin().await?;
     lock_workspace_memberships(&mut transaction, organization_id).await?;
-    let caller = caller_role(&mut transaction, &principal, organization_id, true).await?;
+    let caller = member_manager_role(&mut transaction, &principal, organization_id, true).await?;
     if !caller.manages() {
         return Err(AppError::NotFound("workspace member"));
     }
