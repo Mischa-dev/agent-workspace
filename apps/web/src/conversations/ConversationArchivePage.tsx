@@ -82,10 +82,8 @@ export function ConversationArchivePage() {
   const base = `/projects/${encodeURIComponent(projectId)}`
   return (
     <AppShell mainClassName="aw-main--page" project={project.data} user={session.user}>
-      <div className="aw-page aw-page--narrow">
-        <PageHeader icon="archive" title="Archived conversations">
-          Archived channels and threads stay readable here. Nobody can post in them until they’re restored.
-        </PageHeader>
+      <div className="aw-page aw-page--reading">
+        <PageHeader icon="archive" title="Archived conversations" />
         {conversations.isPending ? <ListSkeleton label="Loading archived conversations" rows={4} /> : null}
         {conversations.isError ? (
           <ErrorState error={conversations.error} onRetry={() => void conversations.refetch()} title="The archive didn’t load" />

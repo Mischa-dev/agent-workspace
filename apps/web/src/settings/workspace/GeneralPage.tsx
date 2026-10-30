@@ -67,7 +67,12 @@ export default function GeneralPage({ session, workspace: summary }: SettingsPag
             <DetailList
               items={[
                 { label: 'Your role', value: roleLabel(workspace.data.role) },
-                { label: 'Members', value: String(workspace.data.memberCount) },
+                ...(workspace.data.peopleCount === undefined || workspace.data.agentCount === undefined
+                  ? [{ label: 'Members', value: String(workspace.data.memberCount) }]
+                  : [
+                      { label: 'People', value: String(workspace.data.peopleCount) },
+                      { label: 'Agents', value: String(workspace.data.agentCount) },
+                    ]),
                 { label: 'Projects', value: String(workspace.data.projectCount) },
                 {
                   label: 'Created',

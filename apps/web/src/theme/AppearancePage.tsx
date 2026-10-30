@@ -326,7 +326,7 @@ export default function AppearancePage({ session }: SettingsPageProps) {
                           type="button"
                         >
                           <span aria-hidden="true" className="aw-mini aw-mini--split">
-                            <PresetMini id="indigo" />
+                            <PresetMini id="daylight" />
                             <PresetMini id="midnight" />
                           </span>
                           <span className="aw-preset__name">Match system</span>

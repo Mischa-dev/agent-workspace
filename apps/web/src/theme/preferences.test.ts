@@ -68,7 +68,7 @@ describe('appearance preferences', () => {
     expect(readAppearancePreferences(light)).toMatchObject({ theme: 'indigo' })
     expect(readAppearancePreferences({ getItem: () => { throw new Error('disabled') } })).toEqual(DEFAULT_APPEARANCE)
     expect(resolvePreset('system', true)).toBe('midnight')
-    expect(resolvePreset('system', false)).toBe('indigo')
+    expect(resolvePreset('system', false)).toBe('daylight')
   })
 
   it('round-trips theme codes and derives follower slots from changed bases', () => {

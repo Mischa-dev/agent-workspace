@@ -4,11 +4,11 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuthenticatedSession } from '../auth/session'
 import { useHomeExperience } from '../experience/layout'
 import { AppShell } from '../shell/AppShell'
-import { useInboxUnread } from '../shell/homeSpace'
 import { defaultWorkspace } from '../settings/workspaceChoice'
-import { Badge, Banner, ButtonLink, EmptyState, ErrorState, Icon, ListSkeleton, PageHeader, Row, RowList, Section, countLabel, relativeDay } from '../ui'
+import { Badge, Banner, ButtonLink, EmptyState, ErrorState, Icon, ListSkeleton, PageHeader, Row, RowList, Section, relativeDay } from '../ui'
 import { firstName, homeGreeting } from './greeting'
-import { Capacity, NeedsYou, SetupCard, WorkingNow, YourTasks } from './HomeSections'
+import { Capacity, NeedsYou, QuietLine, SetupCard, WorkingNow, YourTasks } from './HomeSections'
+import { useQuietSections } from './homeQuiet'
 import { useProjects, useSwitchProject } from './hooks'
 import './home.css'
 import { MoreLink } from './MoreLink'
@@ -27,13 +27,6 @@ function openedAt(project: Project) {
   return project.navigation.lastOpenedAt ? Date.parse(project.navigation.lastOpenedAt) || 0 : 0
 }
 
-function waitingLede(unread: number | null) {
-  // Held blank until the count arrives, so the line doesn't change under you.
-  if (unread === null) return ' '
-  if (unread === 0) return 'You’re all caught up.'
-  return `${countLabel(unread, 'thing')} ${unread === 1 ? 'needs' : 'need'} you.`
-}
-
 /** Home (P3): what needs you, agents working now, capacity, your tasks and recent projects, in one look. */
 export function HomePage() {
   const session = useAuthenticatedSession()
@@ -41,7 +34,7 @@ export function HomePage() {
   const experience = useHomeExperience()
   const projects = useProjects()
   const switchProject = useSwitchProject()
-  const unread = useInboxUnread()
+  const quiet = useQuietSections()
   const navigate = useNavigate()
   const location = useLocation()
   const notice =
@@ -69,6 +62,20 @@ export function HomePage() {
     }
   }
 
+  // Sections this layout shows; the ones that loaded empty fold into one line above the rest.
+  const sections = (
+    [
+      ['needsYou', true],
+      ['working', experience.shows('home.working_now')],
+      ['capacity', experience.shows('home.capacity')],
+      ['tasks', experience.shows('workspace.my_work')],
+    ] as const
+  )
+    .filter(([, shown]) => shown)
+    .map(([section]) => section)
+  const left = sections.filter((section) => (section === 'needsYou' || section === 'working') && !quiet[section])
+  const right = sections.filter((section) => (section === 'capacity' || section === 'tasks') && !quiet[section])
+
   const newProject = (
     <ButtonLink icon="plus" to="/projects/new" variant="primary">
       New project
@@ -79,23 +86,24 @@ export function HomePage() {
     <AppShell home mainClassName="aw-main--page" user={session.user}>
       <div className="aw-page aw-home">
         {/* With no projects yet, the empty state below holds the one New project button. */}
-        <PageHeader actions={canCreate && !noProjects ? newProject : null} title={homeGreeting(firstName(session.user.displayName), firstVisit)}>
-          {waitingLede(unread)}
-        </PageHeader>
+        <PageHeader actions={canCreate && !noProjects ? newProject : null} title={homeGreeting(firstName(session.user.displayName), firstVisit)} />
         {notice && (
           <Banner className="aw-page__banner" tone="success">
             {notice}
           </Banner>
         )}
         {workspace ? <SetupCard organizationId={workspace.id} /> : null}
+        <QuietLine quiet={quiet} sections={sections} />
         <div className="aw-home__grid">
+          {left.length ? (
+            <div className="aw-home__column">
+              {left.includes('needsYou') ? <NeedsYou /> : null}
+              {left.includes('working') ? <WorkingNow /> : null}
+            </div>
+          ) : null}
           <div className="aw-home__column">
-            <NeedsYou />
-            {experience.shows('home.working_now') ? <WorkingNow /> : null}
-          </div>
-          <div className="aw-home__column">
-            {experience.shows('home.capacity') ? <Capacity /> : null}
-            {experience.shows('workspace.my_work') ? <YourTasks /> : null}
+            {right.includes('capacity') ? <Capacity /> : null}
+            {right.includes('tasks') ? <YourTasks /> : null}
             <Section
               actions={activeProjects.length > 0 ? <MoreLink to="/projects">All projects</MoreLink> : null}
               id="recent-projects-heading"

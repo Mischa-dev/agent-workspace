@@ -41,7 +41,10 @@ their own pages; nobody else will.
    a card). No raw `<button>`, `<input>` or `<select>` in a page. New styles
    use the tokens; `src/styles/designSystem.test.ts` fails on hand-typed
    colors, type, spacing, corners, focus rings and timings. Check new pieces
-   on `/design-system` in a light and a dark theme.
+   on `/design-system` in a light and a dark theme. The page picks one of the
+   three widths (reading, wide or full; DESIGN.md, Layout), shares it with
+   the other tabs of its area, and its header has no sentence under the title
+   unless it's a settings page.
 9. **Keyboard**: every action is reachable with Tab, the focus ring shows,
    dialogs trap and restore focus, and Escape closes what it opened.
 10. **Accessible names**: icon buttons have a `label`, lists and regions have a

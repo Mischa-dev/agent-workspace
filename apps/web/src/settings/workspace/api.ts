@@ -9,6 +9,9 @@ export type Workspace = {
   createdAt: string
   role: OrganizationRole
   memberCount: number
+  /** Missing from servers before people and agents were counted apart. */
+  peopleCount?: number
+  agentCount?: number
   projectCount: number
   capabilities: {
     rename: boolean

@@ -113,7 +113,7 @@ const keyPages: KeyPage[] = [
 
 // The theme each scheme should resolve to when the person picks "Match system".
 const schemes = [
-  { scheme: 'light', theme: 'indigo' },
+  { scheme: 'light', theme: 'daylight' },
   { scheme: 'dark', theme: 'midnight' },
 ] as const
 

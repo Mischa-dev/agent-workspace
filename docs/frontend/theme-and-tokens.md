@@ -5,7 +5,7 @@
 `ThemeProvider` owns presentation preferences only:
 
 - theme: a preset (`indigo`, `midnight`, `daylight`, `evergreen`, `graphite`)
-  or `system` (Indigo in light mode, Midnight in dark mode)
+  or `system` (Daylight in light mode, Midnight in dark mode)
 - overrides: a map of theme slot to six-digit hex color
 - density: `comfortable` or `compact`
 - text size: `small`, `default` or `large`

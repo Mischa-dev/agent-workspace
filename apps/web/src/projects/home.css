@@ -23,6 +23,13 @@
   color: var(--content-fg-muted);
 }
 
+/* Empty sections folded into one line: "Nothing needs you and no agents are working." */
+.aw-home__allquiet {
+  margin: 0 0 var(--space-2);
+  font: var(--t-body);
+  color: var(--content-fg-muted);
+}
+
 /* "And 3 more in the inbox." under a list. */
 .aw-home__more {
   margin: var(--space-2) 0 0;

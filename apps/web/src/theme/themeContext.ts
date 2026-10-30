@@ -30,7 +30,7 @@ export type ThemeContextValue = AppearancePreferences & {
 
 export const ThemeContext = createContext<ThemeContextValue>({
   ...DEFAULT_APPEARANCE,
-  preset: 'indigo',
+  preset: 'daylight',
   previewPreset: null,
   previewTheme: () => undefined,
   setTheme: () => undefined,

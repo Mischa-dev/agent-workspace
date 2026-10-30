@@ -138,6 +138,12 @@
   background: var(--warning-soft);
 }
 
+.aw-timeline__hint {
+  margin: 0 0 var(--space-2);
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
 .aw-timeline__scroll {
   overflow: auto;
   max-height: calc(100vh - 260px);

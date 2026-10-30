@@ -105,7 +105,7 @@ export function boardColumns(dropped: boolean | 'moving'): BoardColumn[] {
 export function TasksPage({ children, over, view }: { children: ReactNode; over?: ReactNode; view: 'list' | 'board' }) {
   return (
     <div className="tr-pagestack">
-      <div className={view === 'board' ? 'aw-page aw-page--wide aw-workpage aw-workpage--board' : 'aw-page aw-page--wide aw-workpage'}>
+      <div className={view === 'board' ? 'aw-page aw-page--full aw-workpage aw-workpage--board' : 'aw-page aw-page--full aw-workpage'}>
         <TasksHeader view={view} />
         <TasksToolbar />
         {children}

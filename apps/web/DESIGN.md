@@ -36,10 +36,11 @@ explains how themes and overrides resolve.
 
 ## Theme
 
-The default follows the device: "Match system" shows Indigo (a deep indigo rail
-and sidebar beside a light reading surface) in light mode and Midnight (dark
-everywhere) in dark mode. Five presets ship, Indigo, Midnight, Daylight (light
-everywhere), Evergreen and Graphite, plus classic editor themes (Nord, Dracula,
+The default follows the device: "Match system" shows Daylight (light
+everywhere, with a quiet grey sidebar so the conversation leads) in light mode
+and Midnight (dark everywhere) in dark mode. Five presets ship, Daylight,
+Midnight, Indigo (the earlier default: a deep navy rail and sidebar beside a
+light reading surface), Evergreen and Graphite, plus classic editor themes (Nord, Dracula,
 Solarized and others) loaded only for people who pick one. Every color token is
 a theme slot a person can override on the Appearance page; see
 `docs/frontend/theme-and-tokens.md`.
@@ -143,9 +144,30 @@ message shows its toolbar. Menus and pickers sit above drawers and dialogs
 `public/sw.js`), follows the keyboard on iOS, and keeps clear of the home
 indicator.
 
-Other pages use `.aw-page` (1040px) with a `PageHeader`: `--narrow` (720px) for
-Home, `--form` (640px) for New project, `--settings` (880px) and `--wide`
-(1280px) for tasks. Project settings are tabs (`PageTabs`, addressed by
+Other pages use `.aw-page` with a `PageHeader`, at one of three widths
+(`--size-page-*` tokens):
+
+| Width | Class | Max | For |
+| --- | --- | --- | --- |
+| Reading | `.aw-page--reading` | 760px | One column to read or fill in: New project, New task, New message, Search, All projects, Pages and Decisions, archived conversations |
+| Wide | `.aw-page` (the default) | 1120px | Everything else: Home, a project's overview, My work, Later, Runs, Whiteboards, Agents |
+| Full | `.aw-page--full` | the window | Lists and boards: Tasks, Milestones, Timeline, Planning, Inbox |
+
+Every page is centred in the space beside the sidebar. Tabs of one area share
+a width, so their title and New button don't move when you switch tabs (Tasks,
+Milestones, Timeline and Planning are all full; Pages and Decisions both
+reading). Settings keep their own 880px column (`--settings`) beside the
+settings navigation.
+
+Page headers are quiet: an icon tile (or a mark), the title, and actions on
+the right. What a page is for is said in its empty state, not under the title;
+only settings pages keep one sentence there, and a page may show facts (a
+version, a role). On phones the title and actions share a row while they fit.
+Toolbars on phones keep one row (search, Filter and a View options button that
+opens a sheet with the rest), and list rows go to two lines: the title, then
+the key and status.
+
+Project settings are tabs (`PageTabs`, addressed by
 `?tab=`), so each part is one short page. A task reads like a document: the
 title and description are edited in place, a properties panel sits on the right
 (under the title below 1100px), and a save bar appears at the bottom only when
@@ -162,7 +184,7 @@ The core set, with what each one is for. Their variants and states are all on
 | `IconButton` | sm, md; `pressed` | hover, pressed, expanded, focus, disabled | `label` is its name and tooltip. |
 | `TextField`, `TextArea`, `SelectField` | 40px; `compact` 32px for toolbars; `prefix`, `mono` | focus, invalid (`error` replaces `hint`), disabled | Always a visible label, or an `aria-label` in a toolbar. |
 | `Checkbox`, `Switch`, `SegmentedControl` | — | checked, focus, disabled | Checkbox saves with a form; Switch applies at once; SegmentedControl switches views (arrow keys move). |
-| `PageHeader` | `icon` tile or a `mark` (project, avatar) | — | Title, one sentence, actions on the right. Every page starts with one. |
+| `PageHeader` | `icon` tile or a `mark` (project, avatar) | — | Title and actions on the right; a sentence under it only on settings pages. Every page starts with one. |
 | `Section` | `description`, `actions` | — | A page's titled parts. `actions` are ghost `sm` buttons. |
 | `RowList` + `Row`, `DetailList` | — | hover when the row links somewhere | The card surface for lists. Never a card inside a card. |
 | `.aw-card` | — | — | A single raised box (a form, a one-time token). |
