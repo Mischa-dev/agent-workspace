@@ -2,11 +2,10 @@ import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 
 import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 
-import { readLocal, writeLocal } from '../app/localDrafts'
 import { useAuthenticatedSession } from '../auth/session'
 import { sendConversationMessage } from '../conversations/api'
 import { ConversationHeader } from '../conversations/ConversationHeader'
-import type { ComposerDraft, ComposerSubmission } from '../conversations/composerModel'
+import type { ComposerSubmission } from '../conversations/composerModel'
 import { StructuredComposer } from '../conversations/StructuredComposer'
 import { PendingMessages } from '../conversations/Timeline'
 import type { ConversationActor } from '../conversations/types'
@@ -62,7 +61,7 @@ export function MessagesPage() {
   // Arrowed to a name: Enter picks it even with nothing typed.
   const [browsing, setBrowsing] = useState(false)
   const [groupName, setGroupName] = useState('')
-  // The first message while it starts the conversation, shown dimmed as in any chat.
+  // The first message while it starts the conversation, shown dimmed as in any chat. The box is locked meanwhile.
   const [sending, setSending] = useState<ComposerSubmission[]>([])
   const people = useMemo(() => overview.data?.people ?? [], [overview.data?.people])
   const chosen = selected.map((id) => people.find((person) => person.id === id)).filter((person): person is ConversationActor => Boolean(person))
@@ -152,18 +151,6 @@ export function MessagesPage() {
     await sendConversationMessage({ conversationId, kind: isGroup ? 'group' : 'dm', ...submission })
     // `started` stays set until the page goes: a second message sent before then joins the same conversation.
     await queryClient.invalidateQueries({ queryKey: directQueryKey })
-    // Anything typed while the first message went out becomes the conversation's draft, so leaving here keeps it.
-    const followUp = document.querySelector<HTMLTextAreaElement>('.aw-newchat__composer textarea')?.value ?? ''
-    if (followUp.trim()) {
-      // After any draft already waiting there, never over it.
-      const waiting = readLocal<ComposerDraft>(`draft:${conversationId}`)
-      writeLocal<ComposerDraft>(
-        `draft:${conversationId}`,
-        waiting?.text.trim()
-          ? { ...waiting, text: `${waiting.text}\n${followUp}` }
-          : { text: followUp, mentions: [], workItems: [] },
-      )
-    }
     navigate(`/messages/${encodeURIComponent(conversationId)}`)
   }
 
@@ -330,6 +317,8 @@ export function MessagesPage() {
       {overview.data && people.length > 0 ? (
         <StructuredComposer
           className="aw-newchat__composer"
+          // One message starts the conversation; the box waits until it has, then the conversation opens.
+          disabled={sending.length > 0}
           label={only ? `Message ${only.displayName}` : chosen.length ? `Message ${listNames(names)}` : 'Message'}
           onSubmit={send}
           placeholder={only ? `Message ${only.displayName}` : chosen.length ? `Message ${listNames(names)}` : 'Write a message'}
