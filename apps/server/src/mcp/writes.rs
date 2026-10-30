@@ -549,7 +549,9 @@ async fn create_task(
         return Ok(WriteResult::invalid("clientRequestId", REQUEST_ID_MESSAGE));
     };
     let mut transaction = state.pool.begin().await?;
-    if let Some(result) = authorize_write(&mut transaction, principal).await? {
+    if let Some(result) =
+        authorize_write_for(&mut transaction, principal, Action::WorkItemCreate).await?
+    {
         return Ok(result);
     }
     let scope = match parent_id {

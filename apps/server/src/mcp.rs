@@ -2855,10 +2855,33 @@ fn tool_listed(name: &str, reach: PermissionSet) -> bool {
     }
 }
 
-fn refusal(message: String) -> rmcp::model::CallToolResponse {
-    rmcp::model::CallToolResponse::Complete(rmcp::model::CallToolResult::error(vec![
-        rmcp::model::ContentBlock::text(message),
-    ]))
+/// A refusal in the shape the tool's own results take when it can say
+/// "permission denied" (almost all of them), so clients that check results
+/// against the output schema accept it; otherwise a plain error.
+fn refusal(tool: &str, message: String) -> rmcp::model::CallToolResponse {
+    static SAYS_DENIED: OnceLock<std::collections::HashSet<String>> = OnceLock::new();
+    let says_denied = SAYS_DENIED.get_or_init(|| {
+        McpServer::tools()
+            .list_all()
+            .into_iter()
+            .filter(|tool| {
+                tool.output_schema.as_ref().is_some_and(|schema| {
+                    serde_json::to_string(schema)
+                        .is_ok_and(|text| text.contains("permission_denied"))
+                })
+            })
+            .map(|tool| tool.name.to_string())
+            .collect()
+    });
+    rmcp::model::CallToolResponse::Complete(if says_denied.contains(tool) {
+        rmcp::model::CallToolResult::structured(serde_json::json!({
+            "outcome": "permission_denied",
+            "retryCategory": "role",
+            "message": message,
+        }))
+    } else {
+        rmcp::model::CallToolResult::error(vec![rmcp::model::ContentBlock::text(message)])
+    })
 }
 
 /// Runs one tool call. A tool none of the caller's roles allows is refused
@@ -2884,6 +2907,7 @@ async fn run_tool(
                 "MCP tool access lookup failed"
             );
             return Ok(refusal(
+                &request.name,
                 "Couldn't check your access just now. Try again.".to_owned(),
             ));
         }
@@ -2896,11 +2920,14 @@ async fn run_tool(
         } else {
             "your roles allow"
         };
-        return Ok(refusal(format!(
-            "{} needs \"{}\", which none of {whose}. Check my_permissions, or ask a workspace owner or admin.",
-            request.name,
-            permission.info().label,
-        )));
+        return Ok(refusal(
+            &request.name,
+            format!(
+                "{} needs \"{}\", which none of {whose}. Check my_permissions, or ask a workspace owner or admin.",
+                request.name,
+                permission.info().label,
+            ),
+        ));
     }
     let call = McpServer::tools().call(rmcp::handler::server::tool::ToolCallContext::new(
         server, request, context,

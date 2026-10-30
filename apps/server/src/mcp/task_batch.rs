@@ -529,7 +529,7 @@ async fn create_many(
 
     let mut transaction = state.pool.begin().await?;
     if let Some(refused) = BatchResult::refused_access(
-        check_write_access(&mut transaction, principal).await?,
+        check_access_for(&mut transaction, principal, Action::WorkItemCreate).await?,
         &project_key,
         "creating",
     ) {

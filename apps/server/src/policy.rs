@@ -1956,7 +1956,8 @@ mod tests {
                 None,
             )
         };
-        let reader = holder(RoleGrant::stored("member", Some(&["tasks.view"])).unwrap());
+        let reader =
+            holder(RoleGrant::stored("member", Some(&["tasks.view"])).expect("valid in the test"));
         assert!(authorize(&reader, Action::WorkItemView, resource).is_allowed());
         // Opening the project comes with every role.
         assert!(authorize(&reader, Action::ProjectView, resource).is_allowed());
@@ -1970,7 +1971,7 @@ mod tests {
                 "viewer",
                 Some(&["tasks.edit", "settings.manage", "nonsense"]),
             )
-            .unwrap(),
+            .expect("valid in the test"),
         );
         for action in Action::ALL {
             let resource = project_resource(action, MembershipRole::Viewer);
@@ -1983,13 +1984,13 @@ mod tests {
                     super::MembershipScope::Organization(id) => Membership::organization(
                         id,
                         RoleGrant::stored("viewer", Some(&["tasks.edit", "settings.manage"]))
-                            .unwrap(),
+                            .expect("valid in the test"),
                         true,
                     ),
                     super::MembershipScope::Project(id) => Membership::project(
                         id,
                         RoleGrant::stored("viewer", Some(&["tasks.edit", "settings.manage"]))
-                            .unwrap(),
+                            .expect("valid in the test"),
                         true,
                     ),
                 }),
@@ -2117,7 +2118,7 @@ mod tests {
             let action = Action::ALL
                 .into_iter()
                 .find(|action| action.permission() == info.permission)
-                .unwrap();
+                .expect("valid in the test");
             let resource = project_resource(action, MembershipRole::Owner);
             let agent = subject(
                 ActorKind::ExternalAgent,

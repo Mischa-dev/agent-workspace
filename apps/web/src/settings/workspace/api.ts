@@ -26,17 +26,24 @@ export type WorkspaceMember = {
   handle: string
   loginName: string | null
   role: OrganizationRole
+  /** The custom role they hold, and the name of the role they hold (AWD-74). */
+  roleId: string | null
+  roleName: string
+  /** What apps acting for them may do, when limited; shown to managers and to them. */
+  agentLimit: string[] | null
   enabled: boolean
   version: number
   joinedAt: string
   projectCount: number
   isYou: boolean
-  capabilities: { changeRole: boolean; remove: boolean }
+  capabilities: { changeRole: boolean; remove: boolean; assignRole: boolean; limitApps: boolean }
 }
 
 export type WorkspaceInvitation = {
   id: string
   role: 'admin' | 'member'
+  roleId: string | null
+  roleName: string | null
   tokenPrefix: string
   status: 'active' | 'accepted' | 'revoked' | 'expired'
   version: number
@@ -135,7 +142,7 @@ export const listWorkspaceInvitations = (organizationId: string) =>
 
 export const createWorkspaceInvitation = (
   organizationId: string,
-  input: { role: 'admin' | 'member'; expiresInHours: number; note?: string },
+  input: { role: 'admin' | 'member'; roleId?: string; expiresInHours: number; note?: string },
 ) =>
   requestJson<WorkspaceInvitation & { invitationUrl: string }>(`${base(organizationId)}/invitations`, {
     method: 'POST',

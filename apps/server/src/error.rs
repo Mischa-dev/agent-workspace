@@ -427,6 +427,12 @@ impl IntoResponse for AppError {
     }
 }
 
+impl From<crate::policy::UnknownRole> for AppError {
+    fn from(_: crate::policy::UnknownRole) -> Self {
+        Self::Internal("stored membership role")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use axum::{
@@ -528,11 +534,5 @@ mod tests {
                 "{uri}"
             );
         }
-    }
-}
-
-impl From<crate::policy::UnknownRole> for AppError {
-    fn from(_: crate::policy::UnknownRole) -> Self {
-        Self::Internal("stored membership role")
     }
 }

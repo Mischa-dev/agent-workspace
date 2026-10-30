@@ -205,7 +205,7 @@ mod tests {
             "workflow_get",
             "project_export",
         ] {
-            let need = super::needs(tool).unwrap();
+            let need = super::needs(tool).expect("listed");
             assert!(need.is_none_or(|need| viewer.contains(need)), "{tool}");
         }
     }

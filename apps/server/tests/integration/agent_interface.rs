@@ -933,9 +933,14 @@ async fn output_schema(app: &axum::Router, token: &str, session: &str, name: &st
         .pointer("/result/tools")
         .and_then(Value::as_array)
         .and_then(|tools| tools.iter().find(|tool| tool["name"] == name))
-        .and_then(|tool| tool.get("outputSchema"))
-        .cloned()
-        .unwrap_or_else(|| panic!("no outputSchema for {name}"))
+        .map(|tool| {
+            tool.get("outputSchema")
+                .cloned()
+                .unwrap_or_else(|| panic!("no outputSchema for {name}"))
+        })
+        // A tool the caller's roles don't let them use isn't in their list
+        // (AWD-74); its refusal has nothing to check against.
+        .unwrap_or_else(|| json!({}))
 }
 
 /// Checks the parts of JSON Schema our generated schemas use: `$ref`,

@@ -718,10 +718,10 @@ async fn checked_defaults(
     organization_id: Uuid,
     mut defaults: RoleDefaults,
 ) -> Result<RoleDefaults, AppError> {
-    if let Some(preset) = defaults.layout_preset.as_deref() {
-        if !layouts::preset_is_known(connection, organization_id, preset).await? {
-            return Err(AppError::Validation("role layout preset"));
-        }
+    if let Some(preset) = defaults.layout_preset.as_deref()
+        && !layouts::preset_is_known(connection, organization_id, preset).await?
+    {
+        return Err(AppError::Validation("role layout preset"));
     }
     let mut channels = Vec::new();
     for channel in &defaults.channels {
@@ -1501,13 +1501,12 @@ pub(crate) async fn set_agent_limit(
             message: "Agents with their own identity follow their role; limits are for people's apps.",
         });
     }
-    if actor_id != caller.actor_id {
-        if !caller.may(Permission::MembersManage)
+    if actor_id != caller.actor_id
+        && (!caller.may(Permission::MembersManage)
             || (matches!(target.role.as_str(), "owner" | "admin") && !caller.is_owner())
-            || target.role == "owner"
-        {
-            return Err(AppError::Forbidden);
-        }
+            || target.role == "owner")
+    {
+        return Err(AppError::Forbidden);
     }
     let keys = limit_keys(limit.as_deref())?;
     let before = target
@@ -1560,9 +1559,9 @@ pub(crate) async fn apply_arrival_defaults(
          AND conversation.kind = 'channel' AND conversation.visibility = 'members'
          AND conversation.archived_at IS NULL
          AND lower(conversation.name) IN (
-             SELECT lower(name) FROM jsonb_array_elements_text(
+             SELECT lower(wanted.channel) FROM jsonb_array_elements_text(
                  CASE WHEN jsonb_typeof(held.defaults->'channels') = 'array'
-                      THEN held.defaults->'channels' ELSE '[]'::jsonb END) AS name)
+                      THEN held.defaults->'channels' ELSE '[]'::jsonb END) AS wanted (channel))
         WHERE membership.project_id = $1 AND membership.actor_id = $2 AND membership.enabled
           AND $2 <> $3
           AND EXISTS (SELECT 1 FROM project_memberships adder
@@ -1988,7 +1987,7 @@ mod tests {
             MembershipRole::Member,
             &["tasks.edit".to_owned()],
         )
-        .unwrap();
+        .expect("valid in the test");
         assert!(
             fine.contains(Permission::ProjectsView),
             "required is always held"
@@ -2050,13 +2049,13 @@ mod tests {
     fn starting_points_are_valid_custom_roles() {
         let owner = caller(MembershipRole::Owner);
         for point in starting_points() {
-            let base = MembershipRole::parse(point.base_role).unwrap();
+            let base = MembershipRole::parse(point.base_role).expect("valid in the test");
             let keys = point
                 .permissions
                 .iter()
                 .map(|key| (*key).to_owned())
                 .collect::<Vec<_>>();
-            let permissions = custom_permissions(owner, base, &keys).unwrap();
+            let permissions = custom_permissions(owner, base, &keys).expect("valid in the test");
             assert_eq!(permissions.keys(), point.permissions, "{}", point.key);
             for key in point.agent_limit.iter().flatten() {
                 assert!(Permission::from_key(key).is_some(), "{key}");
@@ -2069,6 +2068,18 @@ mod tests {
             for part in &point.defaults.home_hidden {
                 assert!(layouts::part_is_known(part), "{part}");
             }
+        }
+    }
+
+    #[test]
+    fn the_web_app_knows_every_permission() {
+        let web = include_str!("../../web/src/settings/workspace/roles.ts");
+        for info in PERMISSIONS {
+            assert!(
+                web.contains(&format!("'{}'", info.key)),
+                "add '{}' to PERMISSION_KEYS in apps/web/src/settings/workspace/roles.ts",
+                info.key
+            );
         }
     }
 

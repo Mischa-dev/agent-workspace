@@ -65,6 +65,11 @@ const keyPages: KeyPage[] = [
     ready: (page) => expect(page.getByRole('heading', { name: 'Project agents' })).toBeVisible(),
   },
   {
+    name: 'workspace-roles',
+    path: () => '/settings/workspace/roles',
+    ready: (page) => expect(page.getByRole('heading', { name: 'Start from' })).toBeVisible(),
+  },
+  {
     name: 'harnesses',
     path: () => '/settings/workspace/harnesses',
     ready: (page) => expect(page.getByRole('heading', { name: 'Harnesses', exact: true })).toBeVisible(),

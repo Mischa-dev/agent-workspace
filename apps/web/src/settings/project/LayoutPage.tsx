@@ -10,6 +10,7 @@ import { MyViewSection, OwnRuleNote, YourLayout } from '../../experience/LayoutS
 import { REGISTRY, presetName, type Layout, type SavedPreset } from '../../experience/registry'
 import type { Project } from '../../projects/types'
 import { listMembers } from '../../team/api'
+import { listRoles, roleKeys } from '../workspace/roles'
 import { Button, ErrorState, Icon, IconButton, PageHeader, Section, SelectField, SettingsSkeleton, showToast } from '../../ui'
 import type { SettingsPageProps } from '../types'
 
@@ -98,10 +99,14 @@ const ROLES: { role: RuleRole; label: string; meta: string }[] = [
   { role: 'viewer', label: 'Viewers', meta: 'Everyone who only reads' },
 ]
 
-type RuleInput = { role?: RuleRole; actorId?: string; preset: string }
+type RuleInput = { role?: RuleRole; roleId?: string; actorId?: string; preset: string }
 
 const inputOf = (rule: LayoutRule): RuleInput =>
-  rule.person ? { actorId: rule.person.actorId, preset: rule.preset } : { role: rule.role ?? 'member', preset: rule.preset }
+  rule.person
+    ? { actorId: rule.person.actorId, preset: rule.preset }
+    : rule.roleId
+      ? { roleId: rule.roleId, preset: rule.preset }
+      : { role: rule.role ?? 'member', preset: rule.preset }
 
 function PresetOptions({ current, saved }: { current: string; saved: SavedPreset[] }) {
   return (
@@ -127,6 +132,13 @@ function PresetOptions({ current, saved }: { current: string; saved: SavedPreset
 function Rules({ project, view }: { project: Project; view: ProjectLayoutView }) {
   const queryClient = useQueryClient()
   const members = useQuery({ queryKey: queryKeys.members(project.id), queryFn: () => listMembers(project.id) })
+  // The workspace's custom roles get rules of their own (AWD-74).
+  const roles = useQuery({
+    queryKey: roleKeys.roles(project.organizationId),
+    queryFn: () => listRoles(project.organizationId),
+    enabled: Boolean(project.organizationId),
+  })
+  const customRoles = (roles.data?.roles ?? []).filter((role) => !role.builtIn)
   const [person, setPerson] = useState('')
   const [personPreset, setPersonPreset] = useState('bug_reporting')
   const save = useMutation({
@@ -138,10 +150,17 @@ function Rules({ project, view }: { project: Project; view: ProjectLayoutView })
     },
   })
   const rules = view.rules.map(inputOf)
-  const roleRule = (role: RuleRole) => view.rules.find((rule) => rule.role === role)
+  const roleRule = (role: RuleRole) => view.rules.find((rule) => rule.role === role && !rule.roleId)
+  const customRule = (roleId: string) => view.rules.find((rule) => rule.roleId === roleId)
+  const setCustomRole = (roleId: string, name: string, preset: string) => {
+    const others = rules.filter((rule) => rule.roleId !== roleId)
+    save.mutate(preset ? [...others, { roleId, preset }] : others, {
+      onSuccess: () => showToast({ tone: 'success', title: preset ? `${name} now see ${presetName(preset, view.savedPresets)}` : 'Rule removed' }),
+    })
+  }
   const people = view.rules.filter((rule) => rule.person)
   const setRole = (role: RuleRole, preset: string) => {
-    const others = rules.filter((rule) => rule.role !== role)
+    const others = rules.filter((rule) => rule.role !== role || rule.roleId)
     save.mutate(preset ? [...others, { role, preset }] : others, {
       onSuccess: () => showToast({ tone: 'success', title: preset ? `${ROLES.find((entry) => entry.role === role)?.label} now see ${presetName(preset, view.savedPresets)}` : 'Rule removed' }),
     })
@@ -176,6 +195,25 @@ function Rules({ project, view }: { project: Project; view: ProjectLayoutView })
             >
               <option value="">The project’s layout</option>
               <PresetOptions current={roleRule(entry.role)?.preset ?? ''} saved={view.savedPresets} />
+            </SelectField>
+            <span />
+          </div>
+        ))}
+        {customRoles.map((role) => (
+          <div className="aw-layoutrule" key={role.id}>
+            <span className="aw-layoutrule__who">
+              <span className="aw-layoutrule__name">{role.name}</span>
+              <span className="aw-layoutrule__meta">Custom role</span>
+            </span>
+            <SelectField
+              aria-label={`Preset for ${role.name}`}
+              compact
+              disabled={save.isPending}
+              onChange={(event) => setCustomRole(role.id, role.name, event.target.value)}
+              value={customRule(role.id)?.preset ?? ''}
+            >
+              <option value="">No rule of its own</option>
+              <PresetOptions current={customRule(role.id)?.preset ?? ''} saved={view.savedPresets} />
             </SelectField>
             <span />
           </div>

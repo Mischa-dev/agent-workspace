@@ -243,6 +243,7 @@ pub(crate) struct MemberChange {
 /// Only organization owners and admins manage members, never their own
 /// membership, and admins only manage members and viewers. A Project always
 /// keeps an owner. Removing someone revokes their credentials there.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn change_member(
     transaction: &mut Transaction<'_, Postgres>,
     caller_actor_id: Uuid,
