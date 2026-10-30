@@ -9,7 +9,7 @@ export default function AgentsPage({ project }: SettingsPageProps) {
   return (
     <>
       <PageHeader icon="bot" title="Agents">
-        Agents that work in {project.name}: ones made here from a template, and ones that connect with their own credentials.
+        Agents that work in {project.name}: ones made here from a template, and ones that connect with their own credentials. People here can message connected agents directly too.
       </PageHeader>
       <AgentProfiles projectId={project.id} />
       <ExternalAgentSettings projectId={project.id} />

@@ -36,10 +36,11 @@ explains how themes and overrides resolve.
 
 ## Theme
 
-The default follows the device: "Match system" shows Indigo (a deep indigo rail
-and sidebar beside a light reading surface) in light mode and Midnight (dark
-everywhere) in dark mode. Five presets ship, Indigo, Midnight, Daylight (light
-everywhere), Evergreen and Graphite, plus classic editor themes (Nord, Dracula,
+The default follows the device: "Match system" shows Daylight (light
+everywhere, with a quiet grey sidebar so the conversation leads) in light mode
+and Midnight (dark everywhere) in dark mode. Five presets ship, Daylight,
+Midnight, Indigo (the earlier default: a deep navy rail and sidebar beside a
+light reading surface), Evergreen and Graphite, plus classic editor themes (Nord, Dracula,
 Solarized and others) loaded only for people who pick one. Every color token is
 a theme slot a person can override on the Appearance page; see
 `docs/frontend/theme-and-tokens.md`.

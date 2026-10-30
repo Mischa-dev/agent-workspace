@@ -41,13 +41,13 @@
   // Until someone picks a theme, it follows the device (DEFAULT_APPEARANCE in preferences.ts).
   if (presets.indexOf(theme) < 0 && classic.indexOf(theme) < 0) theme = 'system'
   if (theme === 'system') {
-    theme = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'midnight' : 'indigo'
+    theme = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'midnight' : 'daylight'
   }
   if (classic.indexOf(theme) >= 0) {
-    // Written by the parser, so the stylesheet holds the first paint and nothing flashes in Indigo.
+    // Written by the parser, so the stylesheet holds the first paint and nothing flashes in Daylight.
     document.write('<link rel="stylesheet" href="/themes/classic.css" data-classic-themes>')
   }
-  root.setAttribute('data-theme', presets.indexOf(theme) >= 0 || classic.indexOf(theme) >= 0 ? theme : 'indigo')
+  root.setAttribute('data-theme', presets.indexOf(theme) >= 0 || classic.indexOf(theme) >= 0 ? theme : 'daylight')
   root.setAttribute('data-density', saved.density === 'compact' ? 'compact' : 'comfortable')
   root.setAttribute('data-text-size', saved.textSize === 'small' || saved.textSize === 'large' ? saved.textSize : 'default')
   // The sidebar and side panel as wide as they were dragged (SIDEBAR_WIDTHS and PANEL_WIDTHS in preferences.ts).
