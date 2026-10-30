@@ -33,7 +33,7 @@ use crate::{
         OutboxConversationKind, OutboxEventPayload,
     },
     policy::{
-        Action, ActorKind, Membership, MembershipRole, ProjectScope, Resource, Subject, authorize,
+        Action, ActorKind, Membership, ProjectScope, Resource, RoleGrant, Subject, authorize,
     },
     projects::membership_handle,
     replies::{self, Withdraw},
@@ -59,7 +59,7 @@ pub fn router() -> Router<AppState> {
 
 struct DirectSpace {
     project_id: Uuid,
-    role: MembershipRole,
+    role: RoleGrant,
     enabled: bool,
 }
 
@@ -852,11 +852,13 @@ pub(crate) async fn space_for_actor(
     transaction: &mut Transaction<'_, Postgres>,
     actor_id: Uuid,
     agent_connection_id: Option<Uuid>,
-) -> Result<(Uuid, MembershipRole), AppError> {
+) -> Result<(Uuid, RoleGrant), AppError> {
     if let Some(connection_id) = agent_connection_id {
-        let (project_id, role) = sqlx::query_as::<_, (Uuid, String)>(
-            r#"
-            SELECT project.id, membership.role
+        let (project_id, role, role_permissions) =
+            sqlx::query_as::<_, (Uuid, String, Option<Vec<String>>)>(
+                r#"
+            SELECT project.id, membership.role,
+                   workspace_role_permissions(membership.role_id)
             FROM projects project
             JOIN project_memberships membership
               ON membership.project_id = project.id
@@ -867,13 +869,16 @@ pub(crate) async fn space_for_actor(
             ORDER BY project.created_at, project.id
             LIMIT 1
             "#,
-        )
-        .bind(actor_id)
-        .bind(connection_id)
-        .fetch_optional(&mut **transaction)
-        .await?
-        .ok_or(AppError::NotFound("direct messages"))?;
-        return Ok((project_id, parse_role(&role)?));
+            )
+            .bind(actor_id)
+            .bind(connection_id)
+            .fetch_optional(&mut **transaction)
+            .await?
+            .ok_or(AppError::NotFound("direct messages"))?;
+        return Ok((
+            project_id,
+            RoleGrant::stored(&role, role_permissions.as_deref())?,
+        ));
     }
     let (login_name, display_name) = sqlx::query_as::<_, (String, String)>(
         "SELECT login_name, display_name FROM users WHERE actor_id = $1 AND status = 'active'",
@@ -1084,8 +1089,20 @@ async fn ensure_space_in(
         .execute(&mut **transaction)
         .await?;
     }
-    let (role, enabled) = sqlx::query_as::<_, (String, bool)>(
-        "SELECT role, enabled FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    // The Messages space follows the person's workspace role: a custom one
+    // narrows what they may do there as everywhere else.
+    let (role, role_permissions, enabled) = sqlx::query_as::<_, (String, Option<Vec<String>>, bool)>(
+        r#"
+        SELECT membership.role,
+               workspace_role_permissions(COALESCE(membership.role_id, organization_membership.role_id)),
+               membership.enabled
+        FROM project_memberships membership
+        JOIN projects project ON project.id = membership.project_id
+        LEFT JOIN organization_memberships organization_membership
+          ON organization_membership.organization_id = project.organization_id
+         AND organization_membership.actor_id = membership.actor_id
+        WHERE membership.project_id = $1 AND membership.actor_id = $2
+        "#,
     )
     .bind(project_id)
     .bind(principal.actor_id)
@@ -1094,7 +1111,7 @@ async fn ensure_space_in(
     .ok_or(AppError::Internal("direct space membership"))?;
     Ok(DirectSpace {
         project_id,
-        role: parse_role(&role)?,
+        role: RoleGrant::stored(&role, role_permissions.as_deref())?,
         enabled,
     })
 }
@@ -1249,17 +1266,6 @@ fn default_group_name(people: &[PersonRow]) -> String {
         joined
     } else {
         format!("{}…", joined.chars().take(119).collect::<String>())
-    }
-}
-
-fn parse_role(value: &str) -> Result<MembershipRole, AppError> {
-    match value {
-        "owner" => Ok(MembershipRole::Owner),
-        "admin" => Ok(MembershipRole::Admin),
-        "member" => Ok(MembershipRole::Member),
-        "viewer" => Ok(MembershipRole::Viewer),
-        "worker" => Ok(MembershipRole::Worker),
-        _ => Err(AppError::Internal("stored membership role")),
     }
 }
 

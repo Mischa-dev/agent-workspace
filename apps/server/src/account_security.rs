@@ -1250,7 +1250,8 @@ async fn list_api_tokens(
     let projects = sqlx::query_as::<_, TokenProject>(
         r#"
         SELECT project.id, project.name, project.project_key AS key,
-               membership.role IN ('owner', 'admin', 'member') AS can_write
+               (membership.role IN ('owner', 'admin', 'member')
+                AND custom_role_allows(membership.role_id, 'tasks.edit')) AS can_write
         FROM project_memberships membership
         JOIN projects project ON project.id = membership.project_id
          AND project.archived_at IS NULL

@@ -17,7 +17,7 @@ use crate::{
     outbox,
     policy::{
         Action, ActorKind, ApprovalEligibility, ApprovalRequirements, Decision, Membership,
-        MembershipRole, ProjectScope, Resource, Subject, authorize,
+        MembershipRole, ProjectScope, Resource, RoleGrant, Subject, authorize,
     },
 };
 
@@ -132,6 +132,7 @@ struct ApprovalContext {
     version: i64,
     created_at: String,
     membership_role: String,
+    membership_role_permissions: Option<Vec<String>>,
     /// The agent's connection; `None` for a person acting through an app.
     connection_id: Option<Uuid>,
 }
@@ -481,6 +482,7 @@ async fn load_context(
                approval.status, approval.version,
                approval.created_at::text AS created_at,
                membership.role AS membership_role,
+               workspace_role_permissions(membership.role_id) AS membership_role_permissions,
                connection.id AS connection_id
         FROM mcp_client_credentials credential
         JOIN external_agent_connections connection
@@ -541,7 +543,13 @@ async fn load_context(
 }
 
 fn require_policy(principal: &McpPrincipal, context: &ApprovalContext) -> Result<(), AppError> {
-    let role = parse_role(&context.membership_role)?;
+    let role = match RoleGrant::stored(
+        &context.membership_role,
+        context.membership_role_permissions.as_deref(),
+    ) {
+        Ok(role) if role.role() != MembershipRole::Worker => role,
+        _ => return Err(AppError::NotFound("agent_approval")),
+    };
     let eligibility = match context.eligible_actor_id {
         Some(actor_id) => ApprovalEligibility::Actor(actor_id),
         None if context.eligible_role == ANY_AUTHORIZED_APPROVER => {
@@ -720,6 +728,7 @@ async fn person_context(
                approval.status, approval.version,
                approval.created_at::text AS created_at,
                membership.role AS membership_role,
+               workspace_role_permissions(membership.role_id) AS membership_role_permissions,
                NULL::uuid AS connection_id
         FROM agent_approvals approval
         JOIN agent_runs run ON run.id = approval.agent_run_id
@@ -805,6 +814,7 @@ pub async fn list(
                    approval.status, approval.version,
                    approval.created_at::text AS created_at,
                    membership.role AS membership_role,
+               workspace_role_permissions(membership.role_id) AS membership_role_permissions,
                    NULL::uuid AS connection_id
             FROM agent_approvals approval
             JOIN agent_runs run ON run.id = approval.agent_run_id

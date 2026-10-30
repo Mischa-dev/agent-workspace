@@ -17,8 +17,8 @@ use crate::{
     error::{ApiJson, ApiPath, AppError},
     external_events::enqueue_external_event,
     policy::{
-        Action, ActorKind, Decision, Membership, MembershipRole, ProjectScope, Resource, Subject,
-        authorize,
+        Action, ActorKind, Decision, Membership, MembershipRole, Permission, ProjectScope,
+        Resource, RoleGrant, Subject, authorize,
     },
 };
 
@@ -72,6 +72,7 @@ struct AccessRow {
     organization_role: String,
     organization_enabled: bool,
     project_role: String,
+    project_role_permissions: Option<Vec<String>>,
     project_enabled: bool,
 }
 
@@ -484,21 +485,25 @@ pub async fn provision(
     })?;
     let mut transaction = pool.begin().await?;
     lock_project(&mut transaction, project_id).await?;
-    let (organization_id, owner_role) = sqlx::query_as::<_, (Uuid, String)>(
-        r#"
-        SELECT project.organization_id, membership.role
+    let (organization_id, owner_role, owner_role_permissions) =
+        sqlx::query_as::<_, (Uuid, String, Option<Vec<String>>)>(
+            r#"
+        SELECT project.organization_id, membership.role,
+               workspace_role_permissions(membership.role_id)
         FROM projects project
         JOIN project_memberships membership
           ON membership.project_id = project.id AND membership.actor_id = $2
         WHERE project.id = $1 AND project.archived_at IS NULL AND membership.enabled
         "#,
-    )
-    .bind(project_id)
-    .bind(owner_actor_id)
-    .fetch_optional(&mut *transaction)
-    .await?
-    .ok_or(AppError::NotFound("project"))?;
-    if !matches!(owner_role.as_str(), "owner" | "admin") {
+        )
+        .bind(project_id)
+        .bind(owner_actor_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or(AppError::NotFound("project"))?;
+    if !RoleGrant::stored(&owner_role, owner_role_permissions.as_deref())
+        .is_ok_and(|grant| grant.permissions().contains(Permission::AgentsManage))
+    {
         return Err(AppError::Forbidden);
     }
     let created = insert_agent(
@@ -1099,11 +1104,11 @@ fn authorize_management(
     {
         return Err(AppError::NotFound("project"));
     }
-    let role = match access.project_role.as_str() {
-        "owner" => MembershipRole::Owner,
-        "admin" => MembershipRole::Admin,
-        "member" => MembershipRole::Member,
-        "viewer" => MembershipRole::Viewer,
+    let role = match RoleGrant::stored(
+        &access.project_role,
+        access.project_role_permissions.as_deref(),
+    ) {
+        Ok(role) if role.role() != MembershipRole::Worker => role,
         _ => return Err(AppError::NotFound("project")),
     };
     let subject = Subject::new(
@@ -1169,7 +1174,9 @@ fn access_sql(lock: bool) -> &'static str {
         r#"
         SELECT p.organization_id, p.archived_at IS NOT NULL AS project_archived,
                om.role AS organization_role, om.enabled AS organization_enabled,
-               pm.role AS project_role, pm.enabled AS project_enabled
+               pm.role AS project_role,
+               workspace_role_permissions(pm.role_id) AS project_role_permissions,
+               pm.enabled AS project_enabled
         FROM projects p
         JOIN organization_memberships om
           ON om.organization_id = p.organization_id AND om.actor_id = $1
@@ -1182,7 +1189,9 @@ fn access_sql(lock: bool) -> &'static str {
         r#"
         SELECT p.organization_id, p.archived_at IS NOT NULL AS project_archived,
                om.role AS organization_role, om.enabled AS organization_enabled,
-               pm.role AS project_role, pm.enabled AS project_enabled
+               pm.role AS project_role,
+               workspace_role_permissions(pm.role_id) AS project_role_permissions,
+               pm.enabled AS project_enabled
         FROM projects p
         JOIN organization_memberships om
           ON om.organization_id = p.organization_id AND om.actor_id = $1

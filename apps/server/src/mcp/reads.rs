@@ -5,7 +5,8 @@ use uuid::Uuid;
 
 use super::McpPrincipal;
 use crate::policy::{
-    Action, Decision, Membership, MembershipRole, ProjectScope, Resource, Subject, authorize,
+    Action, Decision, Membership, MembershipRole, ProjectScope, Resource, RoleGrant, Subject,
+    authorize,
 };
 
 const MAX_DESCRIPTION_CHARACTERS: usize = 20_000;
@@ -377,7 +378,12 @@ async fn authorize_read(pool: &sqlx::PgPool, principal: &McpPrincipal) -> bool {
     .await
     .ok()
     .flatten();
-    let Some(role) = role.and_then(|role| parse_membership_role(&role)) else {
+    // Reading needs only "Open projects", which every role holds, custom
+    // ones included, so the built-in role decides it.
+    let Some(role) = role
+        .and_then(|role| parse_membership_role(&role))
+        .map(RoleGrant::built_in)
+    else {
         return false;
     };
     matches!(

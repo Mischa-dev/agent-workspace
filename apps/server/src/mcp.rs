@@ -55,8 +55,8 @@ use crate::{
     AppState,
     error::AppError,
     policy::{
-        Action, ActorKind, Decision, Membership, MembershipRole, ProjectScope, Resource, Subject,
-        authorize,
+        Action, ActorKind, Decision, Membership, MembershipRole, ProjectScope, Resource, RoleGrant,
+        Subject, authorize,
     },
 };
 
@@ -3818,9 +3818,9 @@ async fn validate_issue_command(
     {
         return Err(AppError::Invalid("mcp_scopes"));
     }
-    let role = sqlx::query_scalar::<_, String>(
+    let role = sqlx::query_as::<_, (String, Option<Vec<String>>)>(
         r#"
-        SELECT pm.role
+        SELECT pm.role, workspace_role_permissions(pm.role_id)
         FROM project_memberships pm
         JOIN projects p ON p.id = pm.project_id
         JOIN organization_memberships om
@@ -3846,12 +3846,13 @@ async fn validate_issue_command(
     } else {
         Action::McpRead
     };
-    if !role.is_some_and(|role| {
+    if !role.is_some_and(|(role, role_permissions)| {
         mcp_policy_allows(
             command.actor_id,
             ActorKind::Human,
             command.project_id,
             &role,
+            role_permissions.as_deref(),
             action,
         )
     }) {
@@ -3865,13 +3866,11 @@ fn mcp_policy_allows(
     actor_kind: ActorKind,
     project_id: Uuid,
     role: &str,
+    role_permissions: Option<&[String]>,
     action: Action,
 ) -> bool {
-    let role = match role {
-        "owner" => MembershipRole::Owner,
-        "admin" => MembershipRole::Admin,
-        "member" => MembershipRole::Member,
-        "viewer" => MembershipRole::Viewer,
+    let role = match RoleGrant::stored(role, role_permissions) {
+        Ok(role) if role.role() != MembershipRole::Worker => role,
         _ => return false,
     };
     matches!(

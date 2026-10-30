@@ -29,7 +29,7 @@ use crate::{
     },
     policy::{
         Action, ActorKind, ApprovalEligibility, ApprovalRequirements, Decision, Membership,
-        MembershipRole, ProjectScope, Resource, Subject, authorize,
+        MembershipRole, ProjectScope, Resource, RoleGrant, Subject, authorize,
     },
     reactions::{self, ReactionView},
     replies::{self, ReplyRequestView},
@@ -98,6 +98,7 @@ struct ProjectAccessRow {
     project_id: Uuid,
     project_archived: bool,
     membership_role: String,
+    membership_role_permissions: Option<Vec<String>>,
     membership_enabled: bool,
 }
 
@@ -118,6 +119,7 @@ pub(crate) struct ConversationAccessRow {
     pub(crate) thread_outcome: Option<String>,
     pub(crate) next_entry_sequence: i64,
     membership_role: String,
+    membership_role_permissions: Option<Vec<String>>,
     membership_enabled: bool,
 }
 
@@ -166,7 +168,10 @@ impl ConversationAccessRow {
             true,
             Some(Membership::project(
                 self.project_id,
-                parse_membership_role(&self.membership_role)?,
+                RoleGrant::stored(
+                    &self.membership_role,
+                    self.membership_role_permissions.as_deref(),
+                )?,
                 self.membership_enabled,
             )),
             None,
@@ -836,6 +841,7 @@ async fn list_channels(
     let create_channel = policy_allows(
         &principal,
         &access.membership_role,
+        access.membership_role_permissions.as_deref(),
         access.membership_enabled,
         project_id,
         Action::ChannelCreate,
@@ -2188,6 +2194,7 @@ pub(crate) async fn lock_message_conversation(
                conversation.thread_outcome,
                conversation.next_entry_sequence,
                membership.role AS membership_role,
+            workspace_role_permissions(membership.role_id) AS membership_role_permissions,
                membership.enabled AS membership_enabled
         FROM conversations conversation
         JOIN projects project ON project.id = conversation.project_id
@@ -2232,7 +2239,10 @@ pub(crate) async fn lock_message_conversation(
         true,
         Some(Membership::project(
             row.project_id,
-            parse_membership_role(&row.membership_role)?,
+            RoleGrant::stored(
+                &row.membership_role,
+                row.membership_role_permissions.as_deref(),
+            )?,
             row.membership_enabled,
         )),
         None,
@@ -3119,6 +3129,7 @@ pub(crate) async fn set_conversation_archived(
             thread_outcome,
             next_entry_sequence,
             $3::text AS membership_role,
+            $6::text[] AS membership_role_permissions,
             true AS membership_enabled
         "#,
     )
@@ -3127,6 +3138,7 @@ pub(crate) async fn set_conversation_archived(
     .bind(&conversation.membership_role)
     .bind(&conversation.parent_kind)
     .bind(archive)
+    .bind(&conversation.membership_role_permissions)
     .fetch_one(&mut **transaction)
     .await
     .map_err(|error| {
@@ -3429,6 +3441,7 @@ async fn project_conversation_sidebar(
     let create_channel = policy_allows(
         &principal,
         &access.membership_role,
+        access.membership_role_permissions.as_deref(),
         access.membership_enabled,
         project_id,
         Action::ChannelCreate,
@@ -3569,6 +3582,7 @@ async fn authorized_project(
             project.id AS project_id,
             project.archived_at IS NOT NULL AS project_archived,
             membership.role AS membership_role,
+            workspace_role_permissions(membership.role_id) AS membership_role_permissions,
             membership.enabled AS membership_enabled
         FROM projects project
         JOIN organization_memberships organization_membership
@@ -3589,6 +3603,7 @@ async fn authorized_project(
     require_policy(
         principal,
         &row.membership_role,
+        row.membership_role_permissions.as_deref(),
         row.membership_enabled,
         row.project_id,
         action,
@@ -3609,6 +3624,7 @@ async fn lock_project_access(
             project.id AS project_id,
             project.archived_at IS NOT NULL AS project_archived,
             membership.role AS membership_role,
+            workspace_role_permissions(membership.role_id) AS membership_role_permissions,
             membership.enabled AS membership_enabled
         FROM projects project
         JOIN organization_memberships organization_membership
@@ -3630,6 +3646,7 @@ async fn lock_project_access(
     require_policy(
         principal,
         &row.membership_role,
+        row.membership_role_permissions.as_deref(),
         row.membership_enabled,
         row.project_id,
         action,
@@ -3675,6 +3692,7 @@ pub(crate) async fn fetch_conversation_access(
             conversation.thread_outcome,
             conversation.next_entry_sequence,
             membership.role AS membership_role,
+            workspace_role_permissions(membership.role_id) AS membership_role_permissions,
             membership.enabled AS membership_enabled
         FROM conversations conversation
         JOIN projects project ON project.id = conversation.project_id
@@ -3784,6 +3802,7 @@ pub(crate) async fn lock_conversation_for(
             conversation.thread_outcome,
             conversation.next_entry_sequence,
             membership.role AS membership_role,
+            workspace_role_permissions(membership.role_id) AS membership_role_permissions,
             membership.enabled AS membership_enabled
         FROM conversations conversation
         JOIN projects project ON project.id = conversation.project_id
@@ -3882,12 +3901,21 @@ pub(crate) fn require_conversation_kind(
 fn require_policy(
     principal: &AuthenticatedActor,
     role: &str,
+    role_permissions: Option<&[String]>,
     enabled: bool,
     project_id: Uuid,
     action: Action,
     scope: ProjectScope,
 ) -> Result<(), AppError> {
-    if policy_allows(principal, role, enabled, project_id, action, scope)? {
+    if policy_allows(
+        principal,
+        role,
+        role_permissions,
+        enabled,
+        project_id,
+        action,
+        scope,
+    )? {
         Ok(())
     } else {
         // Resource lookup and authorization intentionally collapse to the same
@@ -3899,6 +3927,7 @@ fn require_policy(
 fn policy_allows(
     principal: &AuthenticatedActor,
     role: &str,
+    role_permissions: Option<&[String]>,
     enabled: bool,
     project_id: Uuid,
     action: Action,
@@ -3910,7 +3939,7 @@ fn policy_allows(
         true,
         Some(Membership::project(
             project_id,
-            parse_membership_role(role)?,
+            RoleGrant::stored(role, role_permissions)?,
             enabled,
         )),
         None,
@@ -3929,17 +3958,6 @@ pub(crate) fn parse_actor_kind(value: &str) -> Result<ActorKind, AppError> {
         "integration" => Ok(ActorKind::Integration),
         "system" => Ok(ActorKind::System),
         _ => Err(AppError::Internal("stored Actor kind")),
-    }
-}
-
-fn parse_membership_role(value: &str) -> Result<MembershipRole, AppError> {
-    match value {
-        "owner" => Ok(MembershipRole::Owner),
-        "admin" => Ok(MembershipRole::Admin),
-        "member" => Ok(MembershipRole::Member),
-        "viewer" => Ok(MembershipRole::Viewer),
-        "worker" => Ok(MembershipRole::Worker),
-        _ => Err(AppError::Internal("stored membership role")),
     }
 }
 
@@ -4327,6 +4345,7 @@ async fn fetch_run_projection(
         let interrupt = policy_allows(
             principal,
             &conversation.membership_role,
+            conversation.membership_role_permissions.as_deref(),
             conversation.membership_enabled,
             conversation.project_id,
             Action::RunInterrupt,
@@ -4350,6 +4369,7 @@ async fn fetch_run_projection(
             && policy_allows(
                 principal,
                 &conversation.membership_role,
+                conversation.membership_role_permissions.as_deref(),
                 conversation.membership_enabled,
                 conversation.project_id,
                 Action::WorkerInvoke,
@@ -4367,6 +4387,7 @@ async fn fetch_run_projection(
             && policy_allows(
                 principal,
                 &conversation.membership_role,
+                conversation.membership_role_permissions.as_deref(),
                 conversation.membership_enabled,
                 conversation.project_id,
                 Action::RepositoryPublish,
@@ -4385,6 +4406,7 @@ async fn fetch_run_projection(
             && policy_allows(
                 principal,
                 &conversation.membership_role,
+                conversation.membership_role_permissions.as_deref(),
                 conversation.membership_enabled,
                 conversation.project_id,
                 Action::PullRequestCreate,
@@ -4401,6 +4423,7 @@ async fn fetch_run_projection(
             && policy_allows(
                 principal,
                 &conversation.membership_role,
+                conversation.membership_role_permissions.as_deref(),
                 conversation.membership_enabled,
                 conversation.project_id,
                 Action::PullRequestRefresh,
@@ -4430,7 +4453,10 @@ async fn fetch_run_projection(
         true,
         Some(Membership::project(
             conversation.project_id,
-            parse_membership_role(&conversation.membership_role)?,
+            RoleGrant::stored(
+                &conversation.membership_role,
+                conversation.membership_role_permissions.as_deref(),
+            )?,
             conversation.membership_enabled,
         )),
         None,
@@ -4444,7 +4470,10 @@ async fn fetch_run_projection(
             let eligibility = if approval.eligible_role == "any_authorized" {
                 ApprovalEligibility::AnyAuthorizedMember
             } else {
-                ApprovalEligibility::Role(parse_membership_role(&approval.eligible_role)?)
+                ApprovalEligibility::Role(
+                    MembershipRole::parse(&approval.eligible_role)
+                        .ok_or(AppError::Internal("stored membership role"))?,
+                )
             };
             let respond = approval.status == "pending"
                 && matches!(

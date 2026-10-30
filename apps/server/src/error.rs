@@ -530,3 +530,9 @@ mod tests {
         }
     }
 }
+
+impl From<crate::policy::UnknownRole> for AppError {
+    fn from(_: crate::policy::UnknownRole) -> Self {
+        Self::Internal("stored membership role")
+    }
+}

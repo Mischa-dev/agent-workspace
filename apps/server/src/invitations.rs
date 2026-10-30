@@ -23,7 +23,7 @@ use crate::{
     },
     error::{ApiJson, ApiPath, AppError},
     policy::{
-        Action, ActorKind, Decision, Membership, MembershipRole, ProjectScope, Resource, Subject,
+        Action, ActorKind, Decision, Membership, ProjectScope, Resource, RoleGrant, Subject,
         authorize,
     },
 };
@@ -119,6 +119,7 @@ struct InvitationAccess {
     organization_role: String,
     organization_membership_enabled: bool,
     project_role: String,
+    project_role_permissions: Option<Vec<String>>,
     project_membership_enabled: bool,
 }
 
@@ -150,6 +151,7 @@ struct InvitationMutationRow {
     organization_role: String,
     organization_membership_enabled: bool,
     project_role: String,
+    project_role_permissions: Option<Vec<String>>,
     project_membership_enabled: bool,
 }
 
@@ -321,6 +323,7 @@ async fn revoke_invitation(
         organization_role: row.organization_role,
         organization_membership_enabled: row.organization_membership_enabled,
         project_role: row.project_role,
+        project_role_permissions: row.project_role_permissions,
         project_membership_enabled: row.project_membership_enabled,
     };
     authorize_manage(principal.actor_id, row.project_id, &access, Some(&row.role))?;
@@ -395,6 +398,7 @@ async fn replace_invitation(
         organization_role: row.organization_role,
         organization_membership_enabled: row.organization_membership_enabled,
         project_role: row.project_role,
+        project_role_permissions: row.project_role_permissions,
         project_membership_enabled: row.project_membership_enabled,
     };
     authorize_manage(principal.actor_id, row.project_id, &access, Some(&row.role))?;
@@ -482,6 +486,7 @@ async fn lock_invitation_for_mutation(
                organization_membership.role AS organization_role,
                organization_membership.enabled AS organization_membership_enabled,
                project_membership.role AS project_role,
+               workspace_role_permissions(project_membership.role_id) AS project_role_permissions,
                project_membership.enabled AS project_membership_enabled
         FROM project_invitations invitation
         JOIN projects project ON project.id = invitation.project_id
@@ -1001,6 +1006,7 @@ async fn invitation_access(
                organization_membership.role AS organization_role,
                organization_membership.enabled AS organization_membership_enabled,
                project_membership.role AS project_role,
+               workspace_role_permissions(project_membership.role_id) AS project_role_permissions,
                project_membership.enabled AS project_membership_enabled
         FROM projects project
         JOIN organization_memberships organization_membership
@@ -1031,6 +1037,7 @@ async fn lock_invitation_access(
                organization_membership.role AS organization_role,
                organization_membership.enabled AS organization_membership_enabled,
                project_membership.role AS project_role,
+               workspace_role_permissions(project_membership.role_id) AS project_role_permissions,
                project_membership.enabled AS project_membership_enabled
         FROM projects project
         JOIN organization_memberships organization_membership
@@ -1070,7 +1077,10 @@ fn authorize_manage(
                     true,
                     Some(Membership::project(
                         project_id,
-                        parse_membership_role(&access.project_role)?,
+                        RoleGrant::stored(
+                            &access.project_role,
+                            access.project_role_permissions.as_deref(),
+                        )?,
                         access.project_membership_enabled,
                     )),
                     None,
@@ -1086,17 +1096,6 @@ fn authorize_manage(
         return Err(AppError::Forbidden);
     }
     Ok(())
-}
-
-fn parse_membership_role(role: &str) -> Result<MembershipRole, AppError> {
-    match role {
-        "owner" => Ok(MembershipRole::Owner),
-        "admin" => Ok(MembershipRole::Admin),
-        "member" => Ok(MembershipRole::Member),
-        "viewer" => Ok(MembershipRole::Viewer),
-        "worker" => Ok(MembershipRole::Worker),
-        _ => Err(AppError::Internal("invalid membership role")),
-    }
 }
 
 fn validate_invitation_role(role: &str) -> Result<(), AppError> {
@@ -1226,6 +1225,7 @@ mod tests {
             organization_role: "owner".to_owned(),
             organization_membership_enabled: true,
             project_role: "owner".to_owned(),
+            project_role_permissions: None,
             project_membership_enabled: true,
         };
         let actor_id = Uuid::now_v7();

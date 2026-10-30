@@ -46,7 +46,7 @@ use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, AppError},
-    policy::{Action, Membership, ProjectScope, Resource, Subject, authorize},
+    policy::{Action, Membership, Permission, ProjectScope, Resource, Subject, authorize},
     settings::{self, Target},
 };
 
@@ -500,6 +500,8 @@ struct Inputs<'a> {
     project: Option<&'a Layout>,
     workspace: Option<&'a Layout>,
     saved: &'a [SavedPreset],
+    /// Parts their role starts them without (Home sections).
+    role_hidden: &'a [String],
     my_view: &'a [String],
     /// They may and want to see what the layout hides.
     show_hidden: bool,
@@ -527,6 +529,10 @@ fn effective(inputs: &Inputs<'_>) -> Effective {
         }
         None => (base_source, base),
     };
+    let mut shape = shape;
+    for part in inputs.role_hidden {
+        shape.visible.remove(part.as_str());
+    }
     let parts = || registry().parts.iter().map(|part| part.id.as_str());
     let mine = inputs
         .my_view
@@ -604,6 +610,8 @@ pub struct RuleView {
     pub id: Uuid,
     /// admin (which covers owners), member or viewer.
     pub role: Option<String>,
+    /// A custom role of the workspace's.
+    pub role_id: Option<Uuid>,
     pub person: Option<RulePerson>,
     /// A built-in preset's id or a saved preset's ID.
     pub preset: String,
@@ -733,6 +741,7 @@ impl Stored {
 struct RuleRow {
     id: Uuid,
     role: Option<String>,
+    role_id: Option<Uuid>,
     actor_id: Option<Uuid>,
     builtin_preset: Option<String>,
     saved_preset_id: Option<Uuid>,
@@ -753,6 +762,7 @@ impl RuleRow {
         RuleView {
             id: self.id,
             role: self.role.clone(),
+            role_id: self.role_id,
             person: self.actor_id.map(|actor_id| RulePerson {
                 actor_id,
                 name: self.name.clone().unwrap_or_default(),
@@ -767,7 +777,8 @@ impl RuleRow {
 async fn rules(connection: &mut PgConnection, project_id: Uuid) -> Result<Vec<RuleRow>, AppError> {
     Ok(sqlx::query_as::<_, RuleRow>(
         r#"
-        SELECT rule.id, rule.role, rule.actor_id, rule.builtin_preset, rule.saved_preset_id,
+        SELECT rule.id, rule.role, rule.role_id, rule.actor_id, rule.builtin_preset,
+               rule.saved_preset_id,
                rule.version,
                COALESCE(membership.display_name, account.display_name) AS name,
                COALESCE(membership.enabled, false) AS in_project
@@ -776,7 +787,8 @@ async fn rules(connection: &mut PgConnection, project_id: Uuid) -> Result<Vec<Ru
           ON membership.project_id = rule.project_id AND membership.actor_id = rule.actor_id
         LEFT JOIN users account ON account.actor_id = rule.actor_id
         WHERE rule.project_id = $1
-        ORDER BY rule.role NULLS LAST, lower(COALESCE(membership.display_name, account.display_name)), rule.id
+        ORDER BY rule.role NULLS LAST, rule.role_id NULLS LAST,
+                 lower(COALESCE(membership.display_name, account.display_name)), rule.id
         "#,
     )
     .bind(project_id)
@@ -798,7 +810,13 @@ fn rule_role(project_role: &str) -> Option<&'static str> {
 struct ProjectAccess {
     organization_id: Uuid,
     role: String,
+    role_permissions: Option<Vec<String>>,
+    /// The custom role they hold here, if any.
+    role_id: Option<Uuid>,
+    /// The preset their role (custom or built-in) starts people with.
+    role_layout: Option<String>,
     organization_role: String,
+    organization_role_permissions: Option<Vec<String>>,
     archived: bool,
 }
 
@@ -811,7 +829,12 @@ async fn project_access(
     let access = sqlx::query_as::<_, ProjectAccess>(
         r#"
         SELECT project.organization_id, membership.role,
+               workspace_role_permissions(membership.role_id) AS role_permissions,
+               membership.role_id,
+               held.defaults->>'layoutPreset' AS role_layout,
                organization_membership.role AS organization_role,
+               workspace_role_permissions(organization_membership.role_id)
+                 AS organization_role_permissions,
                project.archived_at IS NOT NULL AS archived
         FROM projects project
         JOIN project_memberships membership
@@ -821,6 +844,10 @@ async fn project_access(
           ON organization_membership.organization_id = project.organization_id
          AND organization_membership.actor_id = $2 AND organization_membership.enabled
         JOIN actors actor ON actor.id = $2 AND actor.status = 'active'
+        LEFT JOIN workspace_roles held
+          ON held.organization_id = project.organization_id
+         AND (held.id = membership.role_id
+              OR (membership.role_id IS NULL AND held.key = membership.role))
         WHERE project.id = $1
         "#,
     )
@@ -835,7 +862,7 @@ async fn project_access(
         true,
         Some(Membership::project(
             project_id,
-            settings::membership_role(&access.role)?,
+            settings::membership_grant(&access.role, access.role_permissions.as_deref())?,
             true,
         )),
         None,
@@ -847,10 +874,12 @@ async fn project_access(
     Ok(access)
 }
 
-/// Owners and admins, as people: who may change a layout, and who may show
-/// what one hides.
-fn manages(principal: &AuthenticatedActor, role: &str) -> bool {
-    principal.actor_kind == "human" && matches!(role, "owner" | "admin")
+/// Owners and admins (or a role that kept "Manage settings"), as people:
+/// who may change a layout, and who may show what one hides.
+fn manages(principal: &AuthenticatedActor, role: &str, permissions: Option<&[String]>) -> bool {
+    principal.actor_kind == "human"
+        && settings::membership_grant(role, permissions)
+            .is_ok_and(|grant| grant.permissions().contains(Permission::SettingsManage))
 }
 
 async fn project_view(
@@ -859,7 +888,7 @@ async fn project_view(
     project_id: Uuid,
 ) -> Result<ProjectLayoutView, AppError> {
     let access = project_access(connection, principal, project_id).await?;
-    let manager = manages(principal, &access.role);
+    let manager = manages(principal, &access.role, access.role_permissions.as_deref());
     let stored = Stored::load(
         connection,
         access.organization_id,
@@ -868,22 +897,32 @@ async fn project_view(
     )
     .await?;
     let rules = rules(connection, project_id).await?;
-    let mut also = stored.saved_ids();
-    also.extend(rules.iter().filter_map(|rule| rule.saved_preset_id));
-    let saved = saved_presets(connection, access.organization_id, &also).await?;
     let person = rules
         .iter()
         .find(|rule| rule.actor_id == Some(principal.actor_id))
         .map(RuleRow::preset);
-    let role = rule_role(&access.role)
-        .and_then(|role| rules.iter().find(|rule| rule.role.as_deref() == Some(role)))
-        .map(RuleRow::preset);
+    // The project's rule for their custom role, then for its base role, then
+    // the preset their role starts people with.
+    let role = access
+        .role_id
+        .and_then(|role_id| rules.iter().find(|rule| rule.role_id == Some(role_id)))
+        .or_else(|| {
+            rule_role(&access.role)
+                .and_then(|role| rules.iter().find(|rule| rule.role.as_deref() == Some(role)))
+        })
+        .map(RuleRow::preset)
+        .or_else(|| access.role_layout.clone());
+    let mut also = stored.saved_ids();
+    also.extend(rules.iter().filter_map(|rule| rule.saved_preset_id));
+    also.extend(role.as_deref().and_then(|role| Uuid::parse_str(role).ok()));
+    let saved = saved_presets(connection, access.organization_id, &also).await?;
     let effective = effective(&Inputs {
         person: person.as_deref(),
         role: role.as_deref(),
         project: stored.project.as_ref(),
         workspace: stored.workspace.as_ref(),
         saved: &saved,
+        role_hidden: &[],
         my_view: &stored.my_view,
         show_hidden: manager && stored.show_hidden,
     });
@@ -903,9 +942,23 @@ async fn project_view(
         my_view: stored.my_view(manager),
         capabilities: LayoutCapabilities {
             manage: manager && !access.archived,
-            manage_workspace: manages(principal, &access.organization_role),
+            manage_workspace: manages(
+                principal,
+                &access.organization_role,
+                access.organization_role_permissions.as_deref(),
+            ),
         },
     })
+}
+
+#[derive(FromRow)]
+struct WorkspaceAccess {
+    role: String,
+    role_permissions: Option<Vec<String>>,
+    /// Where their workspace role starts people: a preset, and Home parts
+    /// it hides.
+    role_layout: Option<String>,
+    role_home_hidden: Option<Value>,
 }
 
 /// The caller's role in the workspace, if they're an active member.
@@ -913,12 +966,19 @@ async fn workspace_role(
     connection: &mut PgConnection,
     actor_id: Uuid,
     organization_id: Uuid,
-) -> Result<String, AppError> {
-    sqlx::query_scalar::<_, String>(
+) -> Result<WorkspaceAccess, AppError> {
+    sqlx::query_as::<_, WorkspaceAccess>(
         r#"
-        SELECT membership.role
+        SELECT membership.role,
+               workspace_role_permissions(membership.role_id) AS role_permissions,
+               held.defaults->>'layoutPreset' AS role_layout,
+               held.defaults->'homeHidden' AS role_home_hidden
         FROM organization_memberships membership
         JOIN actors actor ON actor.id = membership.actor_id
+        LEFT JOIN workspace_roles held
+          ON held.organization_id = membership.organization_id
+         AND (held.id = membership.role_id
+              OR (membership.role_id IS NULL AND held.key = membership.role))
         WHERE membership.organization_id = $1 AND membership.actor_id = $2
           AND membership.enabled AND actor.status = 'active'
         "#,
@@ -935,16 +995,28 @@ async fn workspace_view(
     principal: &AuthenticatedActor,
     organization_id: Uuid,
 ) -> Result<WorkspaceLayoutView, AppError> {
-    let role = workspace_role(connection, principal.actor_id, organization_id).await?;
-    let manager = manages(principal, &role);
+    let access = workspace_role(connection, principal.actor_id, organization_id).await?;
+    let manager = manages(principal, &access.role, access.role_permissions.as_deref());
     let stored = Stored::load(connection, organization_id, None, principal.actor_id).await?;
-    let saved = saved_presets(connection, organization_id, &stored.saved_ids()).await?;
+    let mut also = stored.saved_ids();
+    also.extend(
+        access
+            .role_layout
+            .as_deref()
+            .and_then(|role| Uuid::parse_str(role).ok()),
+    );
+    let saved = saved_presets(connection, organization_id, &also).await?;
+    let role_hidden = access
+        .role_home_hidden
+        .and_then(|value| serde_json::from_value::<Vec<String>>(value).ok())
+        .unwrap_or_default();
     let effective = effective(&Inputs {
         person: None,
-        role: None,
+        role: access.role_layout.as_deref(),
         project: None,
         workspace: stored.workspace.as_ref(),
         saved: &saved,
+        role_hidden: &role_hidden,
         my_view: &stored.my_view,
         show_hidden: manager && stored.show_hidden,
     });
@@ -1325,6 +1397,9 @@ struct RuleInput {
     /// admin (owners too), member or viewer.
     #[serde(default)]
     role: Option<String>,
+    /// One of the workspace's custom roles.
+    #[serde(default)]
+    role_id: Option<Uuid>,
     /// One person in the project.
     #[serde(default)]
     actor_id: Option<Uuid>,
@@ -1385,17 +1460,33 @@ async fn change_project_rules(
     .collect::<BTreeSet<_>>();
     allowed.extend(existing.iter().filter_map(|rule| rule.actor_id));
 
+    // Custom roles must be this workspace's.
+    let custom_roles = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM workspace_roles WHERE organization_id = $1 AND NOT built_in",
+    )
+    .bind(organization_id)
+    .fetch_all(&mut *transaction)
+    .await?
+    .into_iter()
+    .collect::<BTreeSet<_>>();
+
     let mut seen_roles = BTreeSet::new();
+    let mut seen_custom_roles = BTreeSet::new();
     let mut seen_people = BTreeSet::new();
     let mut kept = Vec::new();
     for rule in &request.rules {
-        match (rule.role.as_deref(), rule.actor_id) {
-            (Some(role @ ("admin" | "member" | "viewer")), None) => {
+        match (rule.role.as_deref(), rule.role_id, rule.actor_id) {
+            (Some(role @ ("admin" | "member" | "viewer")), None, None) => {
                 if !seen_roles.insert(role) {
                     return Err(AppError::Validation("rule role"));
                 }
             }
-            (None, Some(actor_id)) => {
+            (None, Some(role_id), None) => {
+                if !custom_roles.contains(&role_id) || !seen_custom_roles.insert(role_id) {
+                    return Err(AppError::Validation("rule role"));
+                }
+            }
+            (None, None, Some(actor_id)) => {
                 if !allowed.contains(&actor_id) || !seen_people.insert(actor_id) {
                     return Err(AppError::Validation("rule person"));
                 }
@@ -1405,7 +1496,9 @@ async fn change_project_rules(
         let (builtin_preset, saved_preset_id) =
             rule_preset(&mut transaction, organization_id, &rule.preset).await?;
         let current = existing.iter().find(|candidate| {
-            candidate.role.as_deref() == rule.role.as_deref() && candidate.actor_id == rule.actor_id
+            candidate.role.as_deref() == rule.role.as_deref()
+                && candidate.role_id == rule.role_id
+                && candidate.actor_id == rule.actor_id
         });
         match current {
             Some(current)
@@ -1437,8 +1530,8 @@ async fn change_project_rules(
                     r#"
                     INSERT INTO project_layout_rules (
                         id, organization_id, project_id, role, actor_id, builtin_preset,
-                        saved_preset_id, created_by_actor_id, updated_by_actor_id
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+                        saved_preset_id, created_by_actor_id, updated_by_actor_id, role_id
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9)
                     "#,
                 )
                 .bind(id)
@@ -1449,6 +1542,7 @@ async fn change_project_rules(
                 .bind(&builtin_preset)
                 .bind(saved_preset_id)
                 .bind(principal.actor_id)
+                .bind(rule.role_id)
                 .execute(&mut *transaction)
                 .await?;
                 kept.push(id);
@@ -1470,6 +1564,7 @@ async fn change_project_rules(
         Some(project_id),
         json!({
             "roles": seen_roles.into_iter().collect::<Vec<_>>(),
+            "customRoles": seen_custom_roles.into_iter().collect::<Vec<_>>(),
             "people": seen_people.len(),
             "organizationId": organization_id,
         }),
@@ -1829,6 +1924,7 @@ mod tests {
             project: None,
             workspace: None,
             saved,
+            role_hidden: &[],
             my_view,
             show_hidden: false,
         }

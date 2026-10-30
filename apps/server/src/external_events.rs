@@ -219,6 +219,7 @@ async fn external_approval_recipients(
          AND membership.actor_id = connection.actor_id
          AND membership.enabled
          AND membership.role IN ('owner', 'admin', 'member')
+         AND custom_role_allows(membership.role_id, 'runs.approve')
         JOIN organization_memberships organization_membership
           ON organization_membership.organization_id = project.organization_id
          AND organization_membership.actor_id = connection.actor_id

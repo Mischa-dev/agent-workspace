@@ -709,7 +709,7 @@ pub(super) async fn project_open(
                 } else {
                     name
                 },
-                role,
+                role: role.role,
                 url: public_url(
                     state,
                     &if kind == "direct" {

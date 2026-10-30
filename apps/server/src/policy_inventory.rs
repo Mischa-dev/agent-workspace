@@ -720,80 +720,75 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         ThreadCreate
     ),
     policy_route!("conversations", Patch, "/api/v1/threads/{id}", ThreadCreate),
-    policy_route!("memory", Post, "/api/v1/projects/{id}/pages", WorkItemEdit),
-    policy_route!("memory", Patch, "/api/v1/pages/{id}", WorkItemEdit),
+    policy_route!("memory", Post, "/api/v1/projects/{id}/pages", PageEdit),
+    policy_route!("memory", Patch, "/api/v1/pages/{id}", PageEdit),
     policy_route!(
         "whiteboards/http",
         Post,
         "/api/v1/whiteboards",
-        WorkItemEdit
+        WhiteboardEdit
     ),
     policy_route!(
         "whiteboards/http",
         Patch,
         "/api/v1/whiteboards/{id}",
-        WorkItemEdit
+        WhiteboardEdit
     ),
     policy_route!(
         "whiteboards/http",
         Delete,
         "/api/v1/whiteboards/{id}",
-        WorkItemEdit
+        WhiteboardEdit
     ),
     policy_route!(
         "whiteboards/http",
         Post,
         "/api/v1/whiteboard-trash/empty",
-        WorkItemEdit
+        WhiteboardEdit
     ),
     policy_route!(
         "whiteboards/http",
         Post,
         "/api/v1/whiteboards/{id}/duplicate",
-        WorkItemEdit
+        WhiteboardEdit
     ),
     policy_route!(
         "whiteboards/http",
         Post,
         "/api/v1/whiteboards/{id}/scene",
-        WorkItemEdit
+        WhiteboardEdit
     ),
     policy_route!(
         "whiteboards/http",
         Post,
         "/api/v1/whiteboards/{id}/operations",
-        WorkItemEdit
+        WhiteboardEdit
     ),
     policy_route!(
         "whiteboards/http",
         Post,
         "/api/v1/whiteboards/{id}/files",
-        WorkItemEdit
+        WhiteboardEdit
     ),
     policy_route!(
         "whiteboards/http",
         Post,
         "/api/v1/whiteboards/{id}/revisions/{revision}/restore",
-        WorkItemEdit
+        WhiteboardEdit
     ),
     policy_route!(
         "whiteboards/http",
         Post,
         "/api/v1/whiteboards/{id}/links",
-        WorkItemEdit
+        WhiteboardEdit
     ),
     policy_route!(
         "whiteboards/http",
         Delete,
         "/api/v1/whiteboards/{id}/links/{kind}/{target_id}",
-        WorkItemEdit
+        WhiteboardEdit
     ),
-    policy_route!(
-        "memory",
-        Post,
-        "/api/v1/projects/{id}/decisions",
-        MessageSend
-    ),
+    policy_route!("memory", Post, "/api/v1/projects/{id}/decisions", PageEdit),
     policy_route!(
         "memory",
         Post,
@@ -1258,7 +1253,7 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "work_items",
         Post,
         "/api/v1/projects/{project_id}/work-items/{work_item_id}/archive",
-        WorkItemEdit
+        WorkItemArchive
     ),
     policy_route!(
         "work_items",
@@ -1312,7 +1307,7 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "work_items",
         Post,
         "/api/v1/projects/{project_id}/work-items/{work_item_id}/restore",
-        WorkItemEdit
+        WorkItemArchive
     ),
     policy_route!(
         "work_items",
@@ -1600,7 +1595,7 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "work_items",
         Put,
         "/api/v1/projects/{project_id}/work-item-workflow",
-        ProjectManage
+        WorkflowManage
     ),
 ];
 

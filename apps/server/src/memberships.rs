@@ -10,7 +10,7 @@ use crate::{
     idempotency::{IdempotencyKey, IdempotencyOutcome, RequestHash, complete, reserve},
     outbox::{OutboxEventPayload, ProjectMembershipUpdatedPayload, enqueue_typed},
     policy::{
-        Action, ActorKind, Decision, Membership, MembershipRole, ProjectScope, Resource, Subject,
+        Action, ActorKind, Decision, Membership, ProjectScope, Resource, RoleGrant, Subject,
         authorize,
     },
 };
@@ -35,9 +35,20 @@ pub fn router() -> Router<AppState> {
 struct AccessRow {
     project_archived: bool,
     organization_role: String,
+    organization_role_permissions: Option<Vec<String>>,
     organization_enabled: bool,
     project_role: String,
+    project_role_permissions: Option<Vec<String>>,
     project_enabled: bool,
+}
+
+impl AccessRow {
+    fn organization_grant(&self) -> Result<RoleGrant, AppError> {
+        Ok(RoleGrant::stored(
+            &self.organization_role,
+            self.organization_role_permissions.as_deref(),
+        )?)
+    }
 }
 
 #[derive(Clone, Debug, FromRow)]
@@ -381,8 +392,13 @@ fn authorize_access(
     project_id: Uuid,
     action: Action,
 ) -> Result<(), AppError> {
+    // Managing members takes the permission in the workspace as well as in
+    // the project.
     if !access.organization_enabled
-        || !matches!(access.organization_role.as_str(), "owner" | "admin")
+        || !access
+            .organization_grant()?
+            .permissions()
+            .contains(action.permission())
     {
         return Err(AppError::NotFound("project"));
     }
@@ -392,7 +408,10 @@ fn authorize_access(
         true,
         Some(Membership::project(
             project_id,
-            parse_role(&access.project_role)?,
+            RoleGrant::stored(
+                &access.project_role,
+                access.project_role_permissions.as_deref(),
+            )?,
             access.project_enabled,
         )),
         None,
@@ -494,8 +513,11 @@ fn access_sql(lock: bool) -> &'static str {
         r#"
         SELECT project.archived_at IS NOT NULL AS project_archived,
                organization_membership.role AS organization_role,
+               workspace_role_permissions(organization_membership.role_id)
+                 AS organization_role_permissions,
                organization_membership.enabled AS organization_enabled,
                project_membership.role AS project_role,
+               workspace_role_permissions(project_membership.role_id) AS project_role_permissions,
                project_membership.enabled AS project_enabled
         FROM projects project
         JOIN organization_memberships organization_membership
@@ -511,8 +533,11 @@ fn access_sql(lock: bool) -> &'static str {
         r#"
         SELECT project.archived_at IS NOT NULL AS project_archived,
                organization_membership.role AS organization_role,
+               workspace_role_permissions(organization_membership.role_id)
+                 AS organization_role_permissions,
                organization_membership.enabled AS organization_enabled,
                project_membership.role AS project_role,
+               workspace_role_permissions(project_membership.role_id) AS project_role_permissions,
                project_membership.enabled AS project_enabled
         FROM projects project
         JOIN organization_memberships organization_membership
@@ -732,17 +757,6 @@ async fn insert_audit_event(
     .execute(&mut **transaction)
     .await?;
     Ok(())
-}
-
-fn parse_role(value: &str) -> Result<MembershipRole, AppError> {
-    match value {
-        "owner" => Ok(MembershipRole::Owner),
-        "admin" => Ok(MembershipRole::Admin),
-        "member" => Ok(MembershipRole::Member),
-        "viewer" => Ok(MembershipRole::Viewer),
-        "worker" => Ok(MembershipRole::Worker),
-        _ => Err(AppError::Internal("invalid membership role")),
-    }
 }
 
 fn map_membership_database_error(error: sqlx::Error) -> AppError {
