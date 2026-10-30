@@ -1,5 +1,5 @@
-import { ListFilter } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { ListFilter, SlidersHorizontal } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
 import { useProjectExperience, type Experience } from '../experience/layout'
 import type { PartId } from '../experience/parts'
@@ -88,15 +88,20 @@ export function FilterBar({
   projectId,
   state,
   update,
+  viewSwitch,
   workflow,
 }: {
   projectId: string
   state: ListState
   update: UpdateListState
+  /** List or board, which the page header holds on wider screens; on phones it moves into View options. */
+  viewSwitch?: ReactNode
   workflow: WorkItemWorkflow | undefined
 }) {
   const [search, setSearch] = useDebouncedSearch(state.filters.q ?? '', update)
   const [open, setOpen] = useState<Open | null>(null)
+  // Phones keep one row (search, Filter, View options); the rest waits in a sheet.
+  const [viewOptions, setViewOptions] = useState<HTMLElement | null>(null)
   const body = useRef<HTMLDivElement>(null)
   const experience = useProjectExperience(projectId)
   const labels = useLabels(projectId)
@@ -132,6 +137,76 @@ export function FilterBar({
     else if (!root.contains(document.activeElement)) root.querySelector<HTMLElement>('button:not([disabled])')?.focus({ preventScroll: true })
   }, [open?.field])
 
+  const viewControls =
+    state.view === 'list' ? (
+      <>
+        <SelectField
+          aria-label="Sort"
+          className="aw-filterbar__select"
+          compact
+          onChange={(event) => update((current) => ({ ...current, sort: event.target.value as WorkItemSort }))}
+          prefix={<TaskGlyph name="sort" />}
+          value={state.sort}
+        >
+          {SORTS.map((sort) => (
+            <option key={sort.value} value={sort.value}>
+              {sort.label}
+            </option>
+          ))}
+        </SelectField>
+        <SelectField
+          aria-label="Group by"
+          className="aw-filterbar__select"
+          compact
+          onChange={(event) => update((current) => ({ ...current, groupBy: (event.target.value || null) as WorkItemGroupBy | null }))}
+          prefix={<TaskGlyph name="group" />}
+          value={state.groupBy ?? ''}
+        >
+          <option value="">No grouping</option>
+          {GROUPINGS.filter((grouping) => offered(experience, grouping.value, state.groupBy)).map((grouping) => (
+            <option key={grouping.value} value={grouping.value}>
+              By {grouping.label.toLocaleLowerCase()}
+            </option>
+          ))}
+        </SelectField>
+      </>
+    ) : (
+      <>
+        <SelectField
+          aria-label="Columns"
+          className="aw-filterbar__select"
+          compact
+          onChange={(event) => {
+            const columnsBy = event.target.value as BoardColumnsBy
+            // Lanes by the same field as the columns would leave only the diagonal.
+            update((current) => ({ ...current, columnsBy, lanes: current.lanes === columnsBy ? 'none' : current.lanes }))
+          }}
+          prefix={<TaskGlyph name="group" />}
+          value={state.columnsBy}
+        >
+          {COLUMN_FIELDS.filter((field) => offered(experience, field.value, state.columnsBy)).map((field) => (
+            <option key={field.value} value={field.value}>
+              Columns by {field.label.toLocaleLowerCase()}
+            </option>
+          ))}
+        </SelectField>
+        <SelectField
+          aria-label="Swimlanes"
+          className="aw-filterbar__select"
+          compact
+          onChange={(event) => update((current) => ({ ...current, lanes: event.target.value as ListState['lanes'] }))}
+          prefix={<TaskGlyph name="lanes" />}
+          value={state.lanes}
+        >
+          {LANE_FIELDS.filter((field) => field.value !== state.columnsBy && offered(experience, field.value, state.lanes)).map((field) => (
+            <option key={field.value} value={field.value}>
+              {field.value === 'none' ? field.label : `Lanes by ${field.label.toLocaleLowerCase()}`}
+            </option>
+          ))}
+        </SelectField>
+      </>
+    )
+
   return (
     <div className="aw-filterbar">
       <div aria-label={`Filter ${experience.word('task', 'many')}`} className="aw-filterbar__row" role="search">
@@ -149,75 +224,18 @@ export function FilterBar({
         <Button aria-haspopup="dialog" icon={ListFilter} onClick={(event) => setOpen({ field: null, anchor: event.currentTarget })} variant="secondary">
           Filter
         </Button>
+        <Button
+          aria-expanded={Boolean(viewOptions)}
+          aria-haspopup="dialog"
+          aria-label="View options"
+          className="aw-filterbar__more"
+          icon={SlidersHorizontal}
+          onClick={(event) => setViewOptions(viewOptions ? null : event.currentTarget)}
+          title="View options"
+          variant="secondary"
+        />
         <span className="aw-filterbar__spacer" />
-        {state.view === 'list' ? (
-          <>
-            <SelectField
-              aria-label="Sort"
-              className="aw-filterbar__select"
-              compact
-              onChange={(event) => update((current) => ({ ...current, sort: event.target.value as WorkItemSort }))}
-              prefix={<TaskGlyph name="sort" />}
-              value={state.sort}
-            >
-              {SORTS.map((sort) => (
-                <option key={sort.value} value={sort.value}>
-                  {sort.label}
-                </option>
-              ))}
-            </SelectField>
-            <SelectField
-              aria-label="Group by"
-              className="aw-filterbar__select"
-              compact
-              onChange={(event) => update((current) => ({ ...current, groupBy: (event.target.value || null) as WorkItemGroupBy | null }))}
-              prefix={<TaskGlyph name="group" />}
-              value={state.groupBy ?? ''}
-            >
-              <option value="">No grouping</option>
-              {GROUPINGS.filter((grouping) => offered(experience, grouping.value, state.groupBy)).map((grouping) => (
-                <option key={grouping.value} value={grouping.value}>
-                  By {grouping.label.toLocaleLowerCase()}
-                </option>
-              ))}
-            </SelectField>
-          </>
-        ) : (
-          <>
-            <SelectField
-              aria-label="Columns"
-              className="aw-filterbar__select"
-              compact
-              onChange={(event) => {
-                const columnsBy = event.target.value as BoardColumnsBy
-                // Lanes by the same field as the columns would leave only the diagonal.
-                update((current) => ({ ...current, columnsBy, lanes: current.lanes === columnsBy ? 'none' : current.lanes }))
-              }}
-              prefix={<TaskGlyph name="group" />}
-              value={state.columnsBy}
-            >
-              {COLUMN_FIELDS.filter((field) => offered(experience, field.value, state.columnsBy)).map((field) => (
-                <option key={field.value} value={field.value}>
-                  Columns by {field.label.toLocaleLowerCase()}
-                </option>
-              ))}
-            </SelectField>
-            <SelectField
-              aria-label="Swimlanes"
-              className="aw-filterbar__select"
-              compact
-              onChange={(event) => update((current) => ({ ...current, lanes: event.target.value as ListState['lanes'] }))}
-              prefix={<TaskGlyph name="lanes" />}
-              value={state.lanes}
-            >
-              {LANE_FIELDS.filter((field) => field.value !== state.columnsBy && offered(experience, field.value, state.lanes)).map((field) => (
-                <option key={field.value} value={field.value}>
-                  {field.value === 'none' ? field.label : `Lanes by ${field.label.toLocaleLowerCase()}`}
-                </option>
-              ))}
-            </SelectField>
-          </>
-        )}
+        <div className="aw-filterbar__view">{viewControls}</div>
         <ShortcutHelp shortcuts={state.view === 'list' ? LIST_SHORTCUTS : BOARD_SHORTCUTS} />
       </div>
       {chips.length ? (
@@ -241,6 +259,14 @@ export function FilterBar({
             </Button>
           </li>
         </ul>
+      ) : null}
+      {viewOptions ? (
+        <Popover anchor={viewOptions} label="View options" onClose={() => setViewOptions(null)} open placement="bottom-end" width={300}>
+          <div className="aw-filterbar__sheet">
+            {viewSwitch}
+            {viewControls}
+          </div>
+        </Popover>
       ) : null}
       {open && open.field !== 'parent' ? (
         <Popover anchor={open.anchor} label={open.field ? `Filter by ${FILTER_FIELDS.find((entry) => entry.field === open.field)?.label.toLocaleLowerCase()}` : 'Add a filter'} onClose={() => setOpen(null)} open width={300}>

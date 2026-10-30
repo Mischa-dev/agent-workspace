@@ -125,11 +125,7 @@ export function RunsPage({ project }: { project?: Project } = {}) {
   return (
     <AppShell home={!project} mainClassName="aw-main--page" project={project} user={session.user}>
       <div className="aw-page aw-runs">
-        <PageHeader icon="activity" title="Runs">
-          {project
-            ? `Agents working on tasks in ${project.name}: what waits to start, what ran, what it used and what it cost.`
-            : 'What agents did on your tasks, what they used and what it cost.'}
-        </PageHeader>
+        <PageHeader icon="activity" title="Runs" />
         {project ? <RememberPlace location={{ kind: 'runs' }} project={project} /> : null}
         {projectId ? <LaunchQueue projectId={projectId} /> : null}
         <div className="aw-runs__filters">

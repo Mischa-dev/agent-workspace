@@ -122,19 +122,20 @@ export function WorkItemsPage() {
     </Button>
   )
   const toggleDone = () => update((current) => ({ ...current, showDone: !current.showDone }), { replace: true })
+  const viewSwitch = board ? (
+    <SegmentedControl
+      label="View"
+      onChange={(next) => update((current) => ({ ...current, view: next }))}
+      options={[
+        { value: 'list', label: 'List', icon: 'list' },
+        { value: 'board', label: 'Board', icon: 'board' },
+      ]}
+      value={state.view}
+    />
+  ) : null
   const headerActions = (
     <>
-      {board ? (
-        <SegmentedControl
-          label="View"
-          onChange={(next) => update((current) => ({ ...current, view: next }))}
-          options={[
-            { value: 'list', label: 'List', icon: 'list' },
-            { value: 'board', label: 'Board', icon: 'board' },
-          ]}
-          value={state.view}
-        />
-      ) : null}
+      {viewSwitch ? <span className="aw-workpage__viewswitch">{viewSwitch}</span> : null}
       <Suspense fallback={null}>
         <ViewsMenu actorId={session.user.actorId} projectId={projectId} readOnly={archived} state={shown} update={update} />
       </Suspense>
@@ -147,13 +148,11 @@ export function WorkItemsPage() {
 
   return (
     <AppShell context={panel} contextKey={state.task ?? undefined} onContextDismiss={closeTask} project={project.data} user={session.user}>
-      <div className={view === 'board' ? 'aw-page aw-page--wide aw-workpage aw-workpage--board' : 'aw-page aw-page--wide aw-workpage'}>
+      <div className={view === 'board' ? 'aw-page aw-page--full aw-workpage aw-workpage--board' : 'aw-page aw-page--full aw-workpage'}>
         <NavigationSyncAlert {...navigationSync} />
-        <PageHeader actions={headerActions} icon="work" title={experience.label('task', 'many')}>
-          Everything that needs doing in {project.data.name}.
-        </PageHeader>
+        <PageHeader actions={headerActions} icon="work" title={experience.label('task', 'many')} />
         <WorkTabs current="items" projectId={projectId} />
-        <FilterBar projectId={projectId} state={shown} update={update} workflow={workflow.data} />
+        <FilterBar projectId={projectId} state={shown} update={update} viewSwitch={viewSwitch} workflow={workflow.data} />
         {archived ? (
           <Banner className="aw-page__banner" icon="archive">
             This project is archived, so its tasks can’t change.

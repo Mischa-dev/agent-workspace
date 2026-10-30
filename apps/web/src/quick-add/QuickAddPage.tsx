@@ -66,10 +66,8 @@ export function QuickAddPage() {
 
   return (
     <AppShell mainClassName="aw-main--page" user={session.user}>
-      <div className="aw-page aw-page--form aw-quick">
-        <PageHeader icon={sharing ? 'link' : 'plus'} title={sharing ? 'Share' : 'New task'}>
-          {sharing ? 'Make it a task, or post it in a conversation.' : 'Add a task to a project. It stays here until it’s created, even offline.'}
-        </PageHeader>
+      <div className="aw-page aw-page--reading aw-quick">
+        <PageHeader icon={sharing ? 'link' : 'plus'} title={sharing ? 'Share' : 'New task'} />
         {shared ? <SharedPreview shared={shared} /> : null}
         {files?.length ? (
           <ul aria-label="Shared files" className="aw-quick__files">

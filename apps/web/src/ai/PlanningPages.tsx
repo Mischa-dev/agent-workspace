@@ -10,7 +10,8 @@ import type { WorkItemPriority } from '../work-items/types'
 import { aiKeys, listSuggestions, type AiRun, type ProjectAi, type RankScope, type SuggestionStatus } from './api'
 import { PlanningFrame, PlanningIntro } from './frame'
 import { useAnalyze, useDecideSuggestion, useProjectAi, useRanking } from './hooks'
-import { AiNotConfigured, ReadinessChecks, SuggestionCard } from './parts'
+import { AiNotConfigured, ReadinessChecks, SharedReadiness, SuggestionCard } from './parts'
+import { sharedMissingChecks } from './readiness'
 import { aiErrorMessage, planningHref } from './links'
 
 const PAGE = 50
@@ -91,6 +92,10 @@ function NextBody({ projectId }: { projectId: string }) {
   const milestones = useMilestoneList(projectId)
   const ranking = useRanking(projectId, { scope, milestoneId: milestoneId || null, limit })
   const tasks = ranking.data?.tasks ?? []
+  const showsReadiness = (task: (typeof tasks)[number]) => scope === 'all' || !task.readiness.readyForAgents
+  // What every listed task misses ("no repository to work in") is said once, above the list.
+  const shared = sharedMissingChecks(tasks.map((task) => task.readiness))
+  const sharedIds = new Set(shared.map((check) => check.id))
 
   return (
     <>
@@ -135,6 +140,7 @@ function NextBody({ projectId }: { projectId: string }) {
               : 'Create tasks or import a plan to get started.'}
         </EmptyState>
       ) : null}
+      {tasks.length ? <SharedReadiness checks={shared} /> : null}
       {tasks.length ? (
         <ol aria-label="Tasks, best first" className="aw-ai-ranking" onKeyDown={(event) => moveFocus(event, '.aw-ai-rank__title')}>
           {tasks.map((task, index) => (
@@ -157,7 +163,7 @@ function NextBody({ projectId }: { projectId: string }) {
                   {task.claimed ? <StatusChip icon="lock" tone="agent">Claimed</StatusChip> : null}
                 </div>
                 {task.reasons.length ? <p className="aw-ai-rank__why">{task.reasons.join(' · ')}</p> : null}
-                {scope === 'all' || !task.readiness.readyForAgents ? <ReadinessChecks compact readiness={task.readiness} /> : null}
+                {showsReadiness(task) ? <ReadinessChecks compact omit={sharedIds} readiness={task.readiness} /> : null}
               </div>
             </li>
           ))}

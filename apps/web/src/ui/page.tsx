@@ -3,7 +3,13 @@ import { Link } from 'react-router-dom'
 
 import { Icon, type IconName } from './icons'
 
-/** A settings-style page: a title, a sentence about it, and actions on the right. */
+/**
+ * The top of every page: an icon tile (or a mark), the title and actions on
+ * the right. Pages in the app say what they are through their empty states,
+ * not under the title; `children` is a line for settings pages, where a
+ * sentence about what a setting does belongs, and for facts such as a page's
+ * version.
+ */
 export function PageHeader({
   actions,
   children,

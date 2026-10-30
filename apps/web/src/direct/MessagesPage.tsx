@@ -72,10 +72,8 @@ export function MessagesPage() {
 
   return (
     <AppShell direct mainClassName="aw-main--page" user={session.user}>
-      <div className="aw-page aw-page--narrow">
-        <PageHeader icon="compose" title="New message">
-          Pick one person or agent for a direct message, or several for a group.
-        </PageHeader>
+      <div className="aw-page aw-page--reading">
+        <PageHeader icon="compose" title="New message" />
         {overview.isPending ? <ListSkeleton label="Loading people" rows={2} avatars /> : null}
         {overview.isError ? (
           <ErrorState error={overview.error} onRetry={() => void overview.refetch()} title="Messages didn’t load" />
@@ -175,9 +173,7 @@ export function AgentsPage() {
   return (
     <AppShell direct mainClassName="aw-main--page" user={session.user}>
       <div className="aw-page">
-        <PageHeader icon="bot" title="Agents">
-          Each agent connects with its own credential and posts as itself. Any client that speaks MCP can connect.
-        </PageHeader>
+        <PageHeader icon="bot" title="Agents" />
         {overview.data?.capabilities.manageAgents ? (
           <ExternalAgentSettings projectId={overview.data.projectId} />
         ) : overview.data ? (

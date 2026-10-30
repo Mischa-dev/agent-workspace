@@ -369,7 +369,7 @@ export function InboxPage() {
 
   return (
     <AppShell home mainClassName="aw-main--page" user={session.user}>
-      <div className="aw-page aw-inbox" data-detail-open={showingDetail ? 'true' : 'false'} ref={pageRef}>
+      <div className="aw-page aw-page--full aw-inbox" data-detail-open={showingDetail ? 'true' : 'false'} ref={pageRef}>
         <PageHeader
           actions={
             view === 'inbox' || view === 'unread' ? (
@@ -379,10 +379,7 @@ export function InboxPage() {
             ) : null
           }
           icon="inbox"
-          title="Inbox"
-        >
-          Mentions, assignments, approvals, runs and pull requests from every project.{unreadCount > 0 ? ` ${unreadCount} unread.` : null}
-        </PageHeader>
+          title="Inbox" />
         <div className="aw-inbox__filters">
           <SegmentedControl label="Show" onChange={(value) => setFilter('view', value)} options={VIEWS} value={view} />
           <div aria-label="Kind" className="aw-inbox__chips" role="group">
