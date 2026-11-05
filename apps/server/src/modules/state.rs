@@ -408,11 +408,118 @@ impl ProjectModules {
             .map(|(_, set, _)| *set)
             .unwrap_or_default()
     }
+
+    /// Whether a notification of `kind` in a project shows: its module is
+    /// on there, and for conversations, the one its project's kind needs.
+    pub fn allows_notification(&self, project_id: Uuid, kind: &str) -> bool {
+        let Some((_, set, direct)) = self
+            .projects
+            .iter()
+            .find(|(project, _, _)| *project == project_id)
+        else {
+            return true;
+        };
+        match manifest::of_notification(kind) {
+            Some(module) if module.id == "messages" => {
+                set.allows_conversations_in(if *direct { "direct" } else { "standard" })
+            }
+            Some(module) => set.contains(&module.id),
+            None => true,
+        }
+    }
+}
+
+/// The switches a module needs on: its own and, through its needs, every
+/// module below it.
+pub fn required_switches(module: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut queue = vec![module.to_owned()];
+    while let Some(next) = queue.pop() {
+        let Some(manifest) = manifest::get(&next) else {
+            continue;
+        };
+        let key = setting_key(&manifest.id);
+        if manifest.switchable && !found.contains(&key) {
+            found.push(key);
+        }
+        queue.extend(manifest.needs.iter().cloned());
+    }
+    found.sort();
+    found
+}
+
+fn sql_array(keys: &[String]) -> String {
+    if keys.is_empty() {
+        return "ARRAY[]::text[]".to_owned();
+    }
+    let quoted = keys
+        .iter()
+        // Keys come from the compiled-in manifests: lower-case letters,
+        // dots and underscores only (a manifest test checks module ids).
+        .map(|key| format!("'{}'", key.replace('\'', "")))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("ARRAY[{quoted}]::text[]")
+}
+
+/// A SQL condition, for notification reads, that is true when the
+/// notification `n`'s module is switched on in its project's workspace (and
+/// every module that one needs). Generated once from the manifests.
+pub fn notification_switches_sql() -> &'static str {
+    static SQL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    SQL.get_or_init(|| {
+        let mut cases = String::new();
+        for module in manifest::core() {
+            for kind in &module.notifications {
+                let kind = kind.replace('\'', "");
+                let keys = if module.id == "messages" {
+                    format!(
+                        "CASE WHEN module_project.kind = 'direct' THEN {} ELSE {} END",
+                        sql_array(&required_switches("messages")),
+                        sql_array(&required_switches("channels")),
+                    )
+                } else {
+                    sql_array(&required_switches(&module.id))
+                };
+                cases.push_str(&format!(" WHEN '{kind}' THEN {keys}"));
+            }
+        }
+        format!(
+            r#"NOT EXISTS (
+                SELECT 1
+                FROM projects module_project
+                JOIN settings module_switch
+                  ON module_switch.organization_id = module_project.organization_id
+                 AND module_switch.scope = 'workspace'
+                 AND module_switch.value = 'false'::jsonb
+                WHERE module_project.id = n.project_id
+                  AND module_switch.key = ANY(CASE n.kind{cases} ELSE ARRAY[]::text[] END)
+            )"#
+        )
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::ModuleSet;
+
+    #[test]
+    fn module_switch_sql_names_every_notification_kind() {
+        let sql = super::notification_switches_sql();
+        assert!(sql.contains("WHEN 'assigned' THEN ARRAY['modules.projects', 'modules.tasks']::text[]"));
+        assert!(sql.contains("WHEN 'mention' THEN CASE WHEN module_project.kind = 'direct'"));
+        assert_eq!(
+            super::required_switches("runs"),
+            [
+                "modules.channels",
+                "modules.code",
+                "modules.messages",
+                "modules.projects",
+                "modules.runs",
+                "modules.tasks"
+            ]
+        );
+    }
 
     #[test]
     fn needs_carry_switches_down() {

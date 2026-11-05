@@ -250,6 +250,7 @@ pub struct EventDecl {
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Thing {
+    #[schemars(with = "String")]
     pub id: Uuid,
     pub kind: String,
     /// The module that makes it.
@@ -262,6 +263,7 @@ pub struct Thing {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<ThingOwner>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
     pub project_id: Option<Uuid>,
     /// Where it opens in the app.
     pub href: String,
@@ -272,6 +274,7 @@ pub struct Thing {
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThingOwner {
+    #[schemars(with = "String")]
     pub id: Uuid,
     pub name: String,
 }

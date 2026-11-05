@@ -48,6 +48,7 @@ pub(super) struct ModuleDetail {
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct ModuleListValue {
+    #[schemars(with = "String")]
     pub workspace_id: Uuid,
     pub modules: Vec<modules::http::ModuleView>,
     /// The preset the workspace's switches match, such as
