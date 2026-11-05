@@ -35,6 +35,13 @@ admit() { unshare -r "${admit_src}" "$@"; }
 
 # Is the lock free right now? Tried on a descriptor of our own.
 lock_free() (exec {fd}<"${lock}" && flock -n -x "${fd}")
+# Is process $1 still running? A zombie isn't: where PID 1 doesn't reap
+# orphans (some containers), a killed child stays a zombie that kill -0 finds.
+running() {
+  local state
+  state="$(sed 's/^.*) //' "/proc/$1/stat" 2>/dev/null | cut -d' ' -f1)" || return 1
+  [ -n "${state}" ] && [ "${state}" != Z ] && [ "${state}" != X ]
+}
 # Wait up to three seconds for the lock to come free.
 comes_free() {
   local i
@@ -150,7 +157,7 @@ top=$!
 for _ in $(seq 30); do [ -s "${tmp}/child" ] && break; sleep 0.1; done
 child="$(cat "${tmp}/child" 2>/dev/null)"
 kill -KILL "${top}" 2>/dev/null; wait "${top}" 2>/dev/null
-[ -n "${child}" ] && kill -0 "${child}" 2>/dev/null && ! lock_free &&
+[ -n "${child}" ] && running "${child}" && ! lock_free &&
   pass "a child that keeps the descriptor holds the lock after its parent dies" ||
   fail "a child that keeps the descriptor holds the lock after its parent dies" "child '${child}'"
 kill -TERM "${child}" 2>/dev/null
@@ -159,7 +166,7 @@ comes_free && pass "the lock ends with the last process that has it" || fail "th
 rm -f "${tmp}/child"
 admit "${lock}" bash -c '( eval "exec ${BUILD_ADMISSION_FD}<&-"; sleep 5 ) & echo $! > "$1"' _ "${tmp}/child"
 child="$(cat "${tmp}/child" 2>/dev/null)"
-[ -n "${child}" ] && kill -0 "${child}" 2>/dev/null && lock_free &&
+[ -n "${child}" ] && running "${child}" && lock_free &&
   pass "limit: a child that closes the descriptor and detaches outlives the lock" ||
   fail "limit: a child that closes the descriptor and detaches outlives the lock" "child '${child}'"
 kill -TERM "${child}" 2>/dev/null
@@ -171,7 +178,7 @@ for _ in $(seq 30); do [ -s "${tmp}/child" ] && break; sleep 0.1; done
 child="$(cat "${tmp}/child" 2>/dev/null)"
 lock_free && fail "cancelling the group" "the lock wasn't held before cancelling"
 kill -TERM -- "-${top}" 2>/dev/null; wait "${top}" 2>/dev/null
-comes_free && ! kill -0 "${child}" 2>/dev/null && pass "cancelling the group frees the lock and stops the children" ||
+comes_free && ! running "${child}" && pass "cancelling the group frees the lock and stops the children" ||
   fail "cancelling the group frees the lock and stops the children"
 
 # 6. checks.sh. Its admitted(), step() and ci_exit_status() run here as they do
