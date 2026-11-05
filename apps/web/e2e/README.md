@@ -22,6 +22,10 @@ be a test matrix. Unit and component tests stay in `src/` with Vitest.
 - `whiteboards.spec.ts`: creating a whiteboard, drawing a rectangle on it,
   seeing a second tab on the same board pull the change from the live stream,
   and finding it still there after a reload
+- `fields.spec.ts`: custom fields (AWD-89) at 1440 and 390 px in light and
+  dark: Settings › Fields, a task with every kind of value and its choice
+  editor, the list with field columns, and board cards. Each page must render
+  without sideways scrolling; the PNGs land beside the other screenshots.
 - `screenshots.spec.ts`: Home, Whiteboards, a project channel, the task list and
   board, Appearance, Webhooks, API reference, Automation rules and both Runs and models
   settings pages, each in light and dark ("Match system" with
