@@ -347,9 +347,10 @@ impl ProjectModules {
         .await?;
         let mut sets: BTreeMap<Uuid, ModuleSet> = BTreeMap::new();
         for row in &rows {
-            if !sets.contains_key(&row.organization_id) {
-                let set = for_member(connection, row.organization_id, actor_id).await?;
-                sets.insert(row.organization_id, set);
+            if let std::collections::btree_map::Entry::Vacant(slot) =
+                sets.entry(row.organization_id)
+            {
+                slot.insert(for_member(connection, row.organization_id, actor_id).await?);
             }
         }
         Ok(Self {

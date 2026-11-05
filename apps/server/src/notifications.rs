@@ -231,7 +231,7 @@ pub async fn deliver(
     }
     // AWD-75: a module that's off sends nothing, not even a push.
     let modules = crate::modules::state::ProjectModules::load(
-        &mut **transaction,
+        transaction,
         notification.recipient_actor_id,
         &[notification.project_id],
     )
