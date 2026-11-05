@@ -297,12 +297,12 @@ fn uuid_in(written: &str) -> Option<Uuid> {
     // A link's last ID is the record's; the ones before name its project.
     written
         .split(|character: char| !(character.is_ascii_hexdigit() || character == '-'))
-        .filter_map(|part| {
+        .rev()
+        .find_map(|part| {
             (part.len() == 36)
                 .then(|| part.parse::<Uuid>().ok())
                 .flatten()
         })
-        .last()
 }
 
 /// A task key such as AWD-12, as (key, number).

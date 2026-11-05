@@ -1723,7 +1723,7 @@ mod tests {
             ]),
             None,
         )
-        .unwrap();
+        .expect("test value");
         field
     }
 
@@ -1761,7 +1761,7 @@ mod tests {
             }]),
             None,
         )
-        .unwrap();
+        .expect("test value");
         assert_eq!(renamed.options[0].id, high.id);
         assert_eq!(renamed.options[0].color, "#e5484d");
         assert_eq!(renamed.options[1].id, low.id);
@@ -1783,7 +1783,7 @@ mod tests {
             ]),
             None,
         );
-        assert_eq!(duplicate.unwrap_err().field, "options");
+        assert_eq!(duplicate.expect_err("test value").field, "options");
         let stranger = normalize_config(
             FieldType::SingleChoice,
             Some(&field.config),
@@ -1800,7 +1800,7 @@ mod tests {
     #[test]
     fn links_need_a_target_that_never_changes() {
         assert!(normalize_config(FieldType::Link, None, None, None).is_err());
-        let page = normalize_config(FieldType::Link, None, None, Some("page")).unwrap();
+        let page = normalize_config(FieldType::Link, None, None, Some("page")).expect("test value");
         assert_eq!(page.target, Some(LinkTarget::Page));
         assert!(normalize_config(FieldType::Link, Some(&page), None, Some("task")).is_err());
         assert!(normalize_config(FieldType::Text, None, None, Some("task")).is_err());
@@ -1880,7 +1880,7 @@ mod tests {
             normalize_value(&single, &json!(high.clone())),
             Ok(Normalized::Value(json!(high)))
         );
-        let refused = normalize_value(&single, &json!("Medium")).unwrap_err();
+        let refused = normalize_value(&single, &json!("Medium")).expect_err("test value");
         assert!(refused.contains("Low, High"), "{refused}");
 
         let multiple = choice(FieldType::MultipleChoice);
@@ -1916,7 +1916,7 @@ mod tests {
             r#"[{{"field":"{}","op":"is","values":["{high}"]}}]"#,
             single.id
         );
-        let clauses = parse_clauses(&param).unwrap();
+        let clauses = parse_clauses(&param).expect("test value");
         assert_eq!(clauses[0].op, FieldOp::Is);
         assert!(check_clause(&single, &clauses[0]).is_ok());
         assert_eq!(parse_clauses(&clauses_param(&clauses)), Some(clauses));
@@ -1936,12 +1936,14 @@ mod tests {
             .is_none()
         );
 
-        let written = clause_from_written(&single, FieldOp::Is, &["high".to_owned()]).unwrap();
+        let written =
+            clause_from_written(&single, FieldOp::Is, &["high".to_owned()]).expect("test value");
         assert_eq!(written.values, vec![high.to_string()]);
         assert!(clause_from_written(&single, FieldOp::Contains, &["h".to_owned()]).is_err());
 
         let checkbox = field(FieldType::Checkbox);
-        let unchecked = clause_from_written(&checkbox, FieldOp::Is, &["false".to_owned()]).unwrap();
+        let unchecked =
+            clause_from_written(&checkbox, FieldOp::Is, &["false".to_owned()]).expect("test value");
         assert_eq!(unchecked.op, FieldOp::Empty);
         assert!(unchecked.values.is_empty());
 
@@ -1969,7 +1971,7 @@ mod tests {
             "item.field_values",
             "item.project_id",
         )
-        .unwrap();
+        .expect("test value");
         assert!(!group.join.contains("DROP"));
         assert!(group_sql(single.id, FieldType::Text, "c", "p").is_none());
     }

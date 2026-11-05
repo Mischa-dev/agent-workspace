@@ -200,7 +200,7 @@ pub enum CreateWorkItemOutcome {
     },
     InvalidAssignee,
     ParentNotFound,
-    ParentArchived(LockedWorkItem),
+    ParentArchived(Box<LockedWorkItem>),
     /// The subtask would sit deeper than MAX_SUBTASK_LEVELS.
     ParentTooDeep,
     InvalidPlacement(PlacementProblem),
@@ -463,7 +463,7 @@ pub async fn create_work_item(
             return Ok(CreateWorkItemOutcome::ParentNotFound);
         };
         if parent.archived {
-            return Ok(CreateWorkItemOutcome::ParentArchived(parent));
+            return Ok(CreateWorkItemOutcome::ParentArchived(Box::new(parent)));
         }
         let parent_levels = subtask_level(transaction, actor.project_id, parent_id).await?;
         if parent_levels + 1 > MAX_SUBTASK_LEVELS {

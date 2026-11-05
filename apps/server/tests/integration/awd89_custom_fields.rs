@@ -163,7 +163,9 @@ async fn fields_are_typed_checked_recorded_and_filtered_the_same_for_agents_and_
             ("Customer".to_owned(), Value::Null),
         ]
     );
-    let version = opened["value"]["task"]["version"].as_i64().expect("version");
+    let version = opened["value"]["task"]["version"]
+        .as_i64()
+        .expect("version");
 
     // Wrong types, unknown fields, people outside the project and links to
     // another project's tasks are refused, and nothing changes.
@@ -191,7 +193,10 @@ async fn fields_are_typed_checked_recorded_and_filtered_the_same_for_agents_and_
         app,
         setup.browser.request(
             "PATCH",
-            &format!("/api/v1/projects/{work}/work-items/{}", created["workItemId"].as_str().expect("id")),
+            &format!(
+                "/api/v1/projects/{work}/work-items/{}",
+                created["workItemId"].as_str().expect("id")
+            ),
             Some("web-wrong"),
             json!({"expectedVersion": version, "fieldValues": {risk.clone(): "Medium"}}),
         ),
@@ -256,13 +261,31 @@ async fn fields_are_typed_checked_recorded_and_filtered_the_same_for_agents_and_
 
     // task_list filters on fields, by name, as stored values.
     for (filters, expected) in [
-        (json!([{"field": "Risk", "op": "is", "values": ["low"]}]), vec!["WORK-2"]),
-        (json!([{"field": "Risk", "op": "is", "values": ["High"]}]), vec![]),
+        (
+            json!([{"field": "Risk", "op": "is", "values": ["low"]}]),
+            vec!["WORK-2"],
+        ),
+        (
+            json!([{"field": "Risk", "op": "is", "values": ["High"]}]),
+            vec![],
+        ),
         (json!([{"field": "Risk", "op": "empty"}]), vec!["WORK-1"]),
-        (json!([{"field": "Owner", "op": "is", "values": ["me"]}]), vec!["WORK-2"]),
-        (json!([{"field": "Shipped", "op": "is", "values": ["false"]}]), vec!["WORK-1"]),
-        (json!([{"field": "Launch", "op": "gt", "values": ["2026-11-30"]}]), vec!["WORK-2"]),
-        (json!([{"field": "Customer", "op": "contains", "values": ["acm"]}]), vec!["WORK-2"]),
+        (
+            json!([{"field": "Owner", "op": "is", "values": ["me"]}]),
+            vec!["WORK-2"],
+        ),
+        (
+            json!([{"field": "Shipped", "op": "is", "values": ["false"]}]),
+            vec!["WORK-1"],
+        ),
+        (
+            json!([{"field": "Launch", "op": "gt", "values": ["2026-11-30"]}]),
+            vec!["WORK-2"],
+        ),
+        (
+            json!([{"field": "Customer", "op": "contains", "values": ["acm"]}]),
+            vec!["WORK-2"],
+        ),
     ] {
         let listed = agent(
             "task_list",
@@ -279,7 +302,10 @@ async fn fields_are_typed_checked_recorded_and_filtered_the_same_for_agents_and_
         assert_eq!(keys, expected, "{filters}");
     }
     let listed = agent("task_list", json!({"projectId": "WORK", "query": "WORK-2"})).await;
-    assert_eq!(listed["value"]["tasks"][0]["fields"]["Risk"], "Low", "{listed}");
+    assert_eq!(
+        listed["value"]["tasks"][0]["fields"]["Risk"], "Low",
+        "{listed}"
+    );
     let refused = agent(
         "task_list",
         json!({"projectId": "WORK", "fieldFilters": [{"field": "Risk", "op": "gt", "values": ["1"]}]}),
@@ -336,11 +362,19 @@ async fn fields_are_typed_checked_recorded_and_filtered_the_same_for_agents_and_
         .as_array()
         .expect("groups")
         .iter()
-        .map(|group| (group["label"].as_str().unwrap_or_default().to_owned(), group["count"].clone()))
+        .map(|group| {
+            (
+                group["label"].as_str().unwrap_or_default().to_owned(),
+                group["count"].clone(),
+            )
+        })
         .collect::<Vec<_>>();
     assert_eq!(
         labels,
-        [("Low".to_owned(), json!(1)), ("No value".to_owned(), json!(1))]
+        [
+            ("Low".to_owned(), json!(1)),
+            ("No value".to_owned(), json!(1))
+        ]
     );
     let (status, sorted) = send(
         app,
@@ -359,7 +393,9 @@ async fn fields_are_typed_checked_recorded_and_filtered_the_same_for_agents_and_
         json!({"projectId": "SIDE", "name": "Size", "type": "number"}),
     )
     .await;
-    let side_field = side_field["value"]["field"]["id"].as_str().expect("side field");
+    let side_field = side_field["value"]["field"]["id"]
+        .as_str()
+        .expect("side field");
     for query in [
         format!("sort=field:{side_field}"),
         format!("groupBy=field:{side_field}"),
@@ -396,7 +432,9 @@ async fn fields_are_typed_checked_recorded_and_filtered_the_same_for_agents_and_
             .any(|(name, _)| name == "Risk"),
         "{opened}"
     );
-    let version = opened["value"]["task"]["version"].as_i64().expect("version");
+    let version = opened["value"]["task"]["version"]
+        .as_i64()
+        .expect("version");
     let refused = agent(
         "task_update",
         json!({"taskId": "WORK-2", "expectedVersion": version, "fields": {"Risk": "High"}}),

@@ -713,7 +713,7 @@ async fn create_task(
             return Ok(WriteResult::Conflict {
                 work_item_id: parent.id.to_string(),
                 current_version: parent.version,
-                current: Some((&parent).into()),
+                current: Some((&*parent).into()),
                 changed_fields: vec!["archived".to_owned()],
                 retry_category: "do_not_retry".to_owned(),
                 message: Some(format!(
