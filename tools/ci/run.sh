@@ -54,13 +54,16 @@ load_host() {
       memory_max=5G cpu_weight=20 jobs=1 probe=yes
       build_lock=/run/build-admission.lock
       # Each checks.sh step makes this memory check (and the old CPU one) once
-      # it holds that lock; the probe below no longer does. 7 is the probe's old
-      # value, kept as is: provisional until a guarded CI run is measured here.
+      # it holds that lock; the probe below no longer does. 6 GB, still
+      # provisional, is a little above the 5G cap. The first guarded run's
+      # heaviest compile peaked at 4,991 MiB, and the old 7 GB stopped healthy
+      # runs at about 6 GB free. It's headroom for one job, not a promise
+      # about the whole machine.
       # memory_max=5G is a provisional per-job cap for the first guarded runs
       # (down from 8G), not a measured server requirement: a step that needs
       # more fails inside its own scope. It caps CI; it doesn't reserve
       # anything for the desktop.
-      min_free_gb=7
+      min_free_gb=6
       # Playwright's own Chromium builds don't run on NixOS; the system Chrome does.
       browser=/run/current-system/sw/bin/google-chrome-stable
       ;;
