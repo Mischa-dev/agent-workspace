@@ -73,6 +73,7 @@
       "/welcome",
       "/search",
       "/design-system",
+      "/design-system/pieces",
       "*"
     ],
     "parts": ["tech.ids"],
