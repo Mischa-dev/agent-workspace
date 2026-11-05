@@ -26,6 +26,8 @@ use crate::{
 pub const KIND: RecordKind = RecordKind::Task;
 /// Field values one change can set.
 pub const MAX_VALUES_PER_CHANGE: usize = 50;
+/// The most a task's values may take, as JSON, under the column's 64 KB limit.
+pub const MAX_VALUES_BYTES: usize = 60_000;
 
 /// The project's task fields.
 pub async fn definitions(

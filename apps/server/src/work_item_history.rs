@@ -34,7 +34,15 @@ const MAX_DIFF_CELLS: usize = 2_000_000;
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FieldChanges {
     fields: Map<String, Value>,
+    /// Bytes custom field changes have taken, against CUSTOM_BUDGET_BYTES.
+    custom_bytes: usize,
 }
+
+/// Most bytes custom field changes may take in one payload, beside a
+/// description diff and the one-line fields, under its 8 KB limit.
+const CUSTOM_BUDGET_BYTES: usize = 1_800;
+/// Longest text kept on each side of a custom field change.
+const MAX_CUSTOM_CHARACTERS: usize = 80;
 
 impl FieldChanges {
     pub fn is_empty(&self) -> bool {
@@ -74,13 +82,26 @@ impl FieldChanges {
             return;
         }
         let cut = |value: Value| match value {
-            Value::String(text) => Value::String(cut_text(&text)),
+            Value::String(text) => Value::String(cut_to(&text, MAX_CUSTOM_CHARACTERS)),
+            Value::Array(items) => Value::String(cut_to(
+                &items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                MAX_CUSTOM_CHARACTERS,
+            )),
             other => other,
         };
-        self.fields.insert(
-            format!("{CUSTOM_FIELD_PREFIX}{field_id}"),
-            json!({ "field": name, "from": cut(from), "to": cut(to) }),
-        );
+        let mut change = json!({ "field": name, "from": cut(from), "to": cut(to) });
+        let size = change.to_string().len();
+        if self.custom_bytes + size > CUSTOM_BUDGET_BYTES {
+            // Past the budget a change still says which field changed.
+            change = json!({ "field": name, "from": null, "to": "…" });
+        }
+        self.custom_bytes += change.to_string().len();
+        self.fields
+            .insert(format!("{CUSTOM_FIELD_PREFIX}{field_id}"), change);
     }
 
     pub fn id(&mut self, field: &str, from: Option<Uuid>, to: Option<Uuid>) {
@@ -102,13 +123,14 @@ impl FieldChanges {
 }
 
 fn cut_text(text: &str) -> String {
-    if text.chars().count() <= MAX_TEXT_CHARACTERS {
+    cut_to(text, MAX_TEXT_CHARACTERS)
+}
+
+fn cut_to(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
         return text.to_owned();
     }
-    let mut cut = text
-        .chars()
-        .take(MAX_TEXT_CHARACTERS - 1)
-        .collect::<String>();
+    let mut cut = text.chars().take(max - 1).collect::<String>();
     cut.push('…');
     cut
 }

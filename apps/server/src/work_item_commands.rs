@@ -544,11 +544,15 @@ pub async fn create_work_item(
     .bind(command.fields.start_date)
     .bind(command.fields.due_date)
     .bind(command.fields.estimate)
-    .bind(
-        command
+    .bind({
+        let values = command
             .field_values
-            .map_or_else(|| serde_json::json!({}), FieldValueChanges::initial),
-    )
+            .map_or_else(|| serde_json::json!({}), FieldValueChanges::initial);
+        if values.to_string().len() > crate::work_item_fields::MAX_VALUES_BYTES {
+            return Err(AppError::Validation("fieldValues"));
+        }
+        values
+    })
     .execute(&mut **transaction)
     .await?;
     add_watcher(transaction, actor.project_id, work_item_id, actor.actor_id).await?;
@@ -754,6 +758,9 @@ pub async fn update_locked_work_item(
         Some(values) => values.applied_to(&current.field_values),
         None => current.field_values.clone(),
     };
+    if field_values.to_string().len() > crate::work_item_fields::MAX_VALUES_BYTES {
+        return Err(AppError::Validation("fieldValues"));
+    }
     let parent_work_item_id = match command.parent_work_item_id {
         Some(parent) if parent != current.parent_work_item_id => {
             if let Some(parent_id) = parent

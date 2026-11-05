@@ -2054,7 +2054,7 @@ pub(super) async fn list_work_items(
     State(state): State<AppState>,
     principal: AuthenticatedActor,
     ApiPath(project_id): ApiPath<Uuid>,
-    ApiQuery(query): ApiQuery<TaskListQuery>,
+    ApiQuery(mut query): ApiQuery<TaskListQuery>,
 ) -> Result<Json<TaskListResponse>, AppError> {
     state
         .rate_limits
@@ -2063,6 +2063,10 @@ pub(super) async fn list_work_items(
         .await?
         .ok_or(AppError::NotFound("project"))?;
     authorize_work_item(&principal, &membership, Action::WorkItemView, None)?;
+    // "me" in a person field's filter is whoever is reading.
+    query.field_filters = query
+        .field_filters
+        .map(|value| resolve_me("fieldFilters", &value, principal.actor_id));
     if query.columns_by.is_some() {
         return Err(AppError::Validation("columnsBy"));
     }
@@ -2110,7 +2114,7 @@ pub(super) async fn list_work_item_groups(
     State(state): State<AppState>,
     principal: AuthenticatedActor,
     ApiPath(project_id): ApiPath<Uuid>,
-    ApiQuery(query): ApiQuery<TaskListQuery>,
+    ApiQuery(mut query): ApiQuery<TaskListQuery>,
 ) -> Result<Json<GroupsResponse>, AppError> {
     state
         .rate_limits
@@ -2119,6 +2123,10 @@ pub(super) async fn list_work_item_groups(
         .await?
         .ok_or(AppError::NotFound("project"))?;
     authorize_work_item(&principal, &membership, Action::WorkItemView, None)?;
+    // "me" in a person field's filter is whoever is reading.
+    query.field_filters = query
+        .field_filters
+        .map(|value| resolve_me("fieldFilters", &value, principal.actor_id));
     if query.cursor.is_some() || query.columns_by.is_some() {
         return Err(AppError::Validation("groups query"));
     }
@@ -2173,7 +2181,7 @@ pub(super) async fn get_work_item_board(
     State(state): State<AppState>,
     principal: AuthenticatedActor,
     ApiPath(project_id): ApiPath<Uuid>,
-    ApiQuery(query): ApiQuery<TaskListQuery>,
+    ApiQuery(mut query): ApiQuery<TaskListQuery>,
 ) -> Result<Json<BoardResponse>, AppError> {
     state
         .rate_limits
@@ -2182,6 +2190,10 @@ pub(super) async fn get_work_item_board(
         .await?
         .ok_or(AppError::NotFound("project"))?;
     authorize_work_item(&principal, &membership, Action::WorkItemView, None)?;
+    // "me" in a person field's filter is whoever is reading.
+    query.field_filters = query
+        .field_filters
+        .map(|value| resolve_me("fieldFilters", &value, principal.actor_id));
     if query.cursor.is_some() {
         return Err(AppError::Invalid("board cursor"));
     }

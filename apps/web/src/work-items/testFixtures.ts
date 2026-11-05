@@ -19,6 +19,8 @@ export const EMPTY_PLANNING: Pick<
   | 'watchers'
   | 'watching'
   | 'estimateUnit'
+  | 'fieldValues'
+  | 'fieldReferences'
 > = {
   parent: null,
   milestone: null,
@@ -36,4 +38,6 @@ export const EMPTY_PLANNING: Pick<
   watchers: [],
   watching: false,
   estimateUnit: 'points',
+  fieldValues: {},
+  fieldReferences: [],
 }

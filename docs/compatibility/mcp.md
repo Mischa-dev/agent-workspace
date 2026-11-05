@@ -120,8 +120,8 @@ remain distinct outcomes.
 Among the task tools, `task_create`, `task_create_many`, `task_comment`,
 `task_reorder`, `task_claim`, `task_release` and `task_link_pull_request` are
 marked non-destructive; `task_update`, `task_update_many`, `task_criteria`,
-`task_mark_blocked`, `task_mark_ready_for_review`, `task_link`, `task_move`
-and `label_write` are destructive. Only `task_link` and
+`task_mark_blocked`, `task_mark_ready_for_review`, `task_link`, `task_move`,
+`label_write` and `field_write` are destructive. Only `task_link` and
 `task_link_pull_request` are open-world.
 
 ## MCP Phase 2 changes (October 1, 2026)

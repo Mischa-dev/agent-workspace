@@ -1,3 +1,5 @@
+import type { FieldReference, FieldValue, FieldValues } from '../fields/fieldModel'
+
 export type WorkItemCapabilities = {
   view: boolean
   edit: boolean
@@ -68,6 +70,10 @@ export type WorkItem = {
   watchers: ActorRef[]
   watching: boolean
   estimateUnit: EstimateUnit
+  /** Custom field values by field ID (AWD-89). */
+  fieldValues: FieldValues
+  /** The people, tasks and pages those values name. */
+  fieldReferences: FieldReference[]
 }
 
 export type EstimateUnit = 'points' | 'hours'
@@ -177,6 +183,8 @@ export type WorkItemCard = Pick<
   | 'dueDate'
   | 'estimate'
   | 'ready'
+  | 'fieldValues'
+  | 'fieldReferences'
 > & {
   parentId: string | null
   blockedReason: string | null
@@ -216,9 +224,11 @@ export type WorkItemPriority =
   | 'high'
   | 'urgent'
 
-export type WorkItemSort = 'newest' | 'oldest' | 'updated' | 'priority' | 'due' | 'title' | 'manual'
+/** A custom field sorts as `field:<id>`, or `field:<id>:desc`. */
+export type WorkItemSort = 'newest' | 'oldest' | 'updated' | 'priority' | 'due' | 'title' | 'manual' | `field:${string}`
 
-export type WorkItemGroupBy = 'status' | 'assignee' | 'priority' | 'label' | 'milestone' | 'parent' | 'type'
+/** A custom field (choice, person or checkbox) groups as `field:<id>`. */
+export type WorkItemGroupBy = 'status' | 'assignee' | 'priority' | 'label' | 'milestone' | 'parent' | 'type' | `field:${string}`
 
 export type BoardColumnsBy = 'status' | 'assignee' | 'priority' | 'milestone' | 'type' | 'label'
 
@@ -257,6 +267,8 @@ export type WorkItemFilters = {
   dueAfter?: string
   overdue?: boolean
   includeDone?: 'false'
+  /** Custom field filters: a JSON array of `FieldClause`s, all of which must match. */
+  fieldFilters?: string
   sort?: WorkItemSort
   groupBy?: WorkItemGroupBy
   cursor?: string
@@ -358,10 +370,12 @@ export type WorkItemPatch = {
   blockedReason?: string | null
   addLabelIds?: string[]
   removeLabelIds?: string[]
+  /** Custom field values by field ID; null clears one. */
+  fieldValues?: Record<string, FieldValue | null>
 }
 
-/** One field's before and after in a history entry. Ids are already display text. */
-export type FieldChange = { from: string | number | null; to: string | number | null }
+/** One field's before and after in a history entry. Ids are already display text. A custom field's carries its name. */
+export type FieldChange = { from: string | number | null; to: string | number | null; label?: string }
 
 export type DescriptionChange = { diff: string; truncated: boolean }
 

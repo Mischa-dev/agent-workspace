@@ -378,7 +378,11 @@ pub(crate) fn normalize_fields(
     };
     let mut kept = Vec::new();
     for field in fields {
-        if !VIEW_FIELDS.contains(&field.as_str()) {
+        // A custom field's column is `field:<id>` (AWD-89).
+        let custom = field
+            .strip_prefix("field:")
+            .is_some_and(|id| id.parse::<Uuid>().is_ok());
+        if !custom && !VIEW_FIELDS.contains(&field.as_str()) {
             return Err("fields");
         }
         if !kept.contains(field) {

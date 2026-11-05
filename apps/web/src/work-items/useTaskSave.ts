@@ -7,8 +7,10 @@ import { useUpdateWorkItem } from './hooks'
 import { conflictCurrent, editErrorMessage } from './taskEdits'
 import type { WorkItem, WorkItemPatch } from './types'
 
-/** The parts of a task that save on their own, one at a time. */
-export type TaskField =
+/** The parts of a task that save on their own, one at a time; each custom field is `field:<id>`. */
+export type TaskField = BuiltInField | `field:${string}`
+
+type BuiltInField =
   | 'title'
   | 'description'
   | 'status'
@@ -24,7 +26,7 @@ export type TaskField =
   | 'blocked'
 
 /** How each field reads in a sentence: "the due date". */
-export const FIELD_NAMES: Record<TaskField, string> = {
+export const FIELD_NAMES: Record<BuiltInField, string> = {
   title: 'title',
   description: 'description',
   status: 'status',
@@ -42,9 +44,20 @@ export const FIELD_NAMES: Record<TaskField, string> = {
 
 type Patch = Omit<WorkItemPatch, 'expectedVersion'>
 
+function customId(field: TaskField) {
+  return field.startsWith('field:') ? field.slice('field:'.length) : null
+}
+
+/** A field's name in a sentence; a custom field is "field". */
+export function fieldName(field: TaskField) {
+  return customId(field) === null ? FIELD_NAMES[field as BuiltInField] : 'field'
+}
+
 /** A field's value as text, to compare what someone saw with what the task holds now. */
 export function fieldValue(item: WorkItem, field: TaskField): string {
-  switch (field) {
+  const custom = customId(field)
+  if (custom !== null) return JSON.stringify(item.fieldValues[custom] ?? null)
+  switch (field as BuiltInField) {
     case 'title':
       return item.title
     case 'description':
@@ -79,7 +92,9 @@ export function fieldValue(item: WorkItem, field: TaskField): string {
 
 /** What a patch sets, in fieldValue's terms. Labels are added and removed, so they never clash. */
 function patchValue(field: TaskField, patch: Patch): string | null {
-  switch (field) {
+  const custom = customId(field)
+  if (custom !== null) return JSON.stringify(patch.fieldValues?.[custom] ?? null)
+  switch (field as BuiltInField) {
     case 'title':
       return patch.title ?? ''
     case 'description':
@@ -228,7 +243,7 @@ export function useTaskSave(item: WorkItem) {
       } catch (error) {
         const theirs = conflictCurrent(error)
         if (!theirs) {
-          change(id, { state: 'failed', message: problemFor(error, FIELD_NAMES[entry.field]).message })
+          change(id, { state: 'failed', message: problemFor(error, fieldName(entry.field)).message })
           return
         }
         // The task moved on. The next round checks whether this field is one of the things that changed.

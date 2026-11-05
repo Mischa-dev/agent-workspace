@@ -670,6 +670,12 @@ pub fn normalize_value(field: &FieldDefinition, input: &Value) -> Result<Normali
             let references = match input {
                 Value::Array(items) => items.clone(),
                 Value::String(text) if text.trim().is_empty() => Vec::new(),
+                // One option, or several written "A, B" (imports, rules).
+                Value::String(text) if field.active_option(text).is_none() => text
+                    .split([',', ';', '|'])
+                    .map(|part| Value::String(part.trim().to_owned()))
+                    .filter(|part| part.as_str().is_some_and(|part| !part.is_empty()))
+                    .collect(),
                 Value::String(_) => vec![input.clone()],
                 _ => {
                     return Err(format!(
@@ -1891,6 +1897,10 @@ mod tests {
         assert_eq!(
             normalize_value(&multiple, &json!([])),
             Ok(Normalized::Clear)
+        );
+        assert_eq!(
+            normalize_value(&multiple, &json!("High, low")),
+            Ok(Normalized::Value(json!([ids[0], ids[1]])))
         );
         assert_eq!(
             display_value(&multiple, &json!([ids[1]]), &|_| None),

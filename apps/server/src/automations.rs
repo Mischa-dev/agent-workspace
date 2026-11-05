@@ -253,7 +253,8 @@ pub struct Conditions {
     #[schemars(with = "Option<String>")]
     pub view_id: Option<Uuid>,
     /// List query parameters as the task list's URL has them (status,
-    /// priority, assignee, label, q, ...). "me" is the rule's maker.
+    /// priority, assignee, label, q, fieldFilters for custom fields, ...).
+    /// "me" is the rule's maker.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub filters: BTreeMap<String, String>,
 }
@@ -306,7 +307,8 @@ pub enum Action {
     /// Change a field on the task (or the matching tasks).
     SetField {
         /// status (by name), priority, assignee ("me", "none", a handle),
-        /// add_label or remove_label.
+        /// add_label, remove_label, or a custom field as "field:<name>"
+        /// (see field_list), whose value is written as task_update takes it.
         field: String,
         value: String,
     },
@@ -341,6 +343,8 @@ const SET_FIELDS: &[&str] = &[
     "add_label",
     "remove_label",
 ];
+/// How a set_field action names a custom field (AWD-89): "field:Risk".
+const CUSTOM_FIELD: &str = "field:";
 const RUN_OUTCOMES: &[&str] = &["completed", "failed", "canceled", "interrupted"];
 
 fn clean_text(value: &str, field: &'static str) -> Result<String, AppError> {
@@ -443,8 +447,16 @@ fn check_shape(
                 }
             }
             Action::SetField { field, value } => {
-                if !SET_FIELDS.contains(&field.as_str()) {
-                    return Err(AppError::Validation("actions.field"));
+                let custom = field
+                    .strip_prefix(CUSTOM_FIELD)
+                    .map(crate::fields::normalize_name);
+                match custom {
+                    Some(Some(name)) => *field = format!("{CUSTOM_FIELD}{name}"),
+                    Some(None) => return Err(AppError::Validation("actions.field")),
+                    None if !SET_FIELDS.contains(&field.as_str()) => {
+                        return Err(AppError::Validation("actions.field"));
+                    }
+                    None => {}
                 }
                 let trimmed = value.trim();
                 if trimmed.is_empty() || trimmed.chars().count() > 200 {
@@ -2252,16 +2264,22 @@ async fn run_action(
                     "expectedVersion": version,
                     "clientRequestId": format!("automation-{run_id}-{index}-{task}"),
                 });
-                let key = match field.as_str() {
-                    "add_label" => "addLabels",
-                    "remove_label" => "removeLabels",
-                    other => other,
-                };
-                arguments[key] = if key.ends_with("Labels") {
-                    json!([value])
+                if let Some(name) = field.strip_prefix(CUSTOM_FIELD) {
+                    let mut values = serde_json::Map::new();
+                    values.insert(name.to_owned(), json!(value));
+                    arguments["fields"] = Value::Object(values);
                 } else {
-                    json!(value)
-                };
+                    let key = match field.as_str() {
+                        "add_label" => "addLabels",
+                        "remove_label" => "removeLabels",
+                        other => other,
+                    };
+                    arguments[key] = if key.ends_with("Labels") {
+                        json!([value])
+                    } else {
+                        json!(value)
+                    };
+                }
                 match call_tool(state, rule, acting, "task_update", arguments).await {
                     Ok(_) => changed += 1,
                     Err(error) => last_error = Some(error),

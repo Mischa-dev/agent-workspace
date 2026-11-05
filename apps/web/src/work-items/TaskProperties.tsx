@@ -6,6 +6,9 @@ import { DatePicker } from '../ui/pickers'
 import { priorityLabel } from './constants'
 import { FieldPicker, type PickerField } from './FieldPicker'
 import { pickToPatch } from './taskEdits'
+import { useFields } from '../fields/api'
+import { isEmpty } from '../fields/fieldModel'
+import { TaskCustomFields } from './TaskCustomFields'
 import { EstimateField } from './TaskFields'
 import { TaskGlyph } from './TaskGlyph'
 import { isOverdue } from './taskDisplay'
@@ -47,10 +50,15 @@ export function TaskProperties({
   const showMilestone = experience.shows('task.milestone')
   const showDates = experience.shows('task.dates')
   const showEstimate = experience.shows('task.estimate')
+  const showCustom = experience.shows('task.custom_fields')
+  const customFields = useFields({ projectId: item.projectId }).data?.fields ?? []
   const hidden = [
     showMilestone && tucked(!item.milestone) ? 'Milestone' : null,
     showDates && tucked(!item.startDate) ? 'Start date' : null,
     showEstimate && tucked(item.estimate === null) ? 'Estimate' : null,
+    ...(showCustom ? customFields : [])
+      .filter((custom) => tucked(isEmpty(item.fieldValues[custom.id])))
+      .map((custom) => custom.name),
   ].filter((name) => name !== null)
   const group = useRef<HTMLDivElement>(null)
   const showMore = () => {
@@ -218,6 +226,17 @@ export function TaskProperties({
     showType
       ? field('Type', pickerButton('type', `Type: ${item.itemType.name}. Change`, <span className="aw-prop__text">{item.itemType.name}</span>))
       : null,
+    showCustom ? (
+      <TaskCustomFields
+        control={control}
+        disabled={disabled}
+        item={item}
+        key="custom-fields"
+        render={field}
+        save={save}
+        tucked={!rail && !more && !disabled}
+      />
+    ) : null,
     hidden.length ? (
       <span className="aw-pills__item" key="more">
         <button aria-label={`More fields: ${hidden.join(', ').toLowerCase()}`} className="aw-pill is-empty" onClick={showMore} type="button">
