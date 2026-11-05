@@ -60,6 +60,49 @@ if ! type -P pnpm >/dev/null; then
   export PATH="${HOME}/.local/bin:${PATH}"
 fi
 
+# Puts the Node pinned in .node-version first on PATH. A host whose own Node
+# differs gets the official build, checked against nodejs.org's SHA-256 list,
+# in the CI user's cache (no root, nothing the app's service uses), so CI
+# follows the pin instead of waiting for each host's Node to be upgraded.
+use_pinned_node() {
+  [ -f .node-version ] || return 0
+  local version arch name cache tmp
+  version=$(tr -d '[:space:]' < .node-version)
+  if [ "$(node --version 2>/dev/null || true)" = "v${version}" ]; then
+    return 0
+  fi
+  case "$(uname -m)" in
+    x86_64) arch=x64 ;;
+    aarch64 | arm64) arch=arm64 ;;
+    *) echo "No official Node build for $(uname -m)." >&2; return 1 ;;
+  esac
+  name="node-v${version}-linux-${arch}"
+  cache="${CI_NODE_CACHE:-${HOME}/.cache/aw-ci/node}"
+  if [ ! -x "${cache}/${name}/bin/node" ]; then
+    echo "Fetching ${name} (host has $(node --version 2>/dev/null || echo 'no Node'))."
+    mkdir -p "${cache}"
+    tmp=$(mktemp -d "${cache}/.fetch.XXXXXX")
+    if ! (
+      cd "${tmp}" &&
+        curl -fsSL --retry 3 -o SHASUMS256.txt "https://nodejs.org/dist/v${version}/SHASUMS256.txt" &&
+        curl -fsSL --retry 3 -o "${name}.tar.xz" "https://nodejs.org/dist/v${version}/${name}.tar.xz" &&
+        grep -E "^[0-9a-f]{64}  ${name}\.tar\.xz\$" SHASUMS256.txt | sha256sum -c --strict - &&
+        tar -xJf "${name}.tar.xz" &&
+        "./${name}/bin/node" --version > /dev/null
+    ); then
+      rm -rf "${tmp}"
+      return 1
+    fi
+    # Another run may have unpacked it meanwhile; either copy will do.
+    mv -T "${tmp}/${name}" "${cache}/${name}" 2> /dev/null || true
+    rm -rf "${tmp}"
+  fi
+  export PATH="${cache}/${name}/bin:${PATH}"
+  # This Node's own corepack provides the pinned pnpm.
+  corepack enable --install-directory "${cache}/${name}/bin" pnpm
+  node --version
+}
+
 # `step <name> <command...>`: a folded, timed section in the GitHub log.
 step() {
   local name="$1" t0=$(date +%s) status=0
@@ -117,10 +160,11 @@ if has rust; then
   step "agentos-nyx tests" python3 -m unittest discover -s integrations/agentos-nyx -p 'test_*.py'
 fi
 if has web; then
+  step "Node toolchain" use_pinned_node
   step "Node version" node -e '
     const expected = require("node:fs").readFileSync(".node-version", "utf8").trim();
     if (process.version !== `v${expected}`) {
-      throw new Error(`CI needs Node ${expected}; selected host has ${process.version}. Update its Node PATH before retrying.`);
+      throw new Error(`CI needs Node ${expected}; selected host has ${process.version}.`);
     }
     console.log(`Node ${process.version}`);
   '

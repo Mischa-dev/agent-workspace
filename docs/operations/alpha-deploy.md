@@ -7,8 +7,8 @@ PR's description has the detail behind its line here.
 
 ## Before
 
-Stage Node 24.22.1 with `install-toolchains.sh --node-only`, update the CI
-runner's Node PATH, and pass the checks before cutover. Existing hosts also
+Stage Node 24.22.1 with `install-toolchains.sh --node-only` and pass the
+checks before cutover (CI fetches the pinned Node itself). Existing hosts also
 need the reviewed application service unit installed and systemd reloaded;
 `deploy-release.sh` does not replace that unit. Follow "Updating an existing
 Node toolchain" in `docs/self-hosted-red-hat.md` for the staging, harness

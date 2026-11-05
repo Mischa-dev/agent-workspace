@@ -112,13 +112,11 @@ directory. It leaves the existing Node directories, Codex installation and
 symlink, service unit, and `current` release selector in place. Do not remove
 the old toolchain while a retained release or wrapper still references it.
 
-Run `tools/ci/run.sh` before cutover. It uses the selected host's environment,
-not this shell's PATH: the Red Hat runner loads
-`/opt/aw-runner/actions-runner/.env`, and the NixOS runner uses its own login
-environment. Stage 24.22.1 for each participating runner and update its Node
-PATH through the host's configuration before running the checks. On NixOS,
-keep that configuration declarative. Confirm `node --version` is `v24.22.1`
-in the runner account, then run lint, typecheck, tests, build, asset budgets,
+Run `tools/ci/run.sh` before cutover. CI follows `.node-version` by itself:
+on a host whose own Node differs, `tools/ci/checks.sh` fetches the official
+build, checked against nodejs.org's SHA-256 list, into the runner account's
+cache (`~/.cache/aw-ci/node`) and puts it first on PATH, so the runners need
+no Node change. Then run lint, typecheck, tests, build, asset budgets,
 and browser smoke checks. Also test each configured Node-based harness CLI
 with the new PATH as the service user, including its ordinary `--version`
 command. A successful web build alone does not test those CLIs.

@@ -118,6 +118,24 @@ class AreaValidationTests(unittest.TestCase):
         self.assertIn("Node version failed", result.stdout)
         self.assertFalse(any(call.startswith("pnpm ") for call in calls))
 
+    def test_host_on_the_pinned_node_fetches_nothing(self):
+        (self.root / ".node-version").write_text("24.22.1\n")
+        self.stub(self.bin / "node", output="v24.22.1")
+        self.stub(self.bin / "curl", status=97)
+        result, calls = self.run_script("checks.sh", ["web"], scoped=True)
+        self.assertFalse(any(call.startswith("curl ") for call in calls), calls)
+        self.assertNotIn("Node toolchain failed", result.stdout)
+
+    def test_host_on_another_node_fetches_the_pin_or_stops(self):
+        (self.root / ".node-version").write_text("24.22.1\n")
+        self.stub(self.bin / "node", output="v22.22.2")
+        self.stub(self.bin / "curl", status=22)
+        result, calls = self.run_script("checks.sh", ["web"], scoped=True)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Node toolchain failed", result.stdout)
+        self.assertTrue(any("nodejs.org/dist/v24.22.1/" in call for call in calls), calls)
+        self.assertFalse(any(call.startswith("pnpm ") for call in calls))
+
     def test_runner_accepts_documented_areas_and_default(self):
         for args in ([], ["--areas", "rust,web"], ["--areas", "rust"], ["--areas", "web"]):
             with self.subTest(args=args):
