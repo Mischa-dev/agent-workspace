@@ -1,0 +1,193 @@
+# Modules (AWD-75)
+
+Every feature of Agent Workspace is a module with a manifest. Core modules
+(the ones in this repository) fill in the same contract an extension will;
+their only privilege is that their code runs in the server's process. A
+workspace switches modules on and off, roles narrow that for the people who
+hold them, agent limits narrow it for their agents, and layouts decide what
+each person sees. Off means hidden, never deleted.
+
+This is the first version. It covers the manifest format, the switches, the
+guards, and the shared contract that lets any module work with the others.
+
+## Manifests
+
+One file per core module in `modules/` at the repository root, read by the
+server (`apps/server/src/modules/manifest.rs`) and the web app
+(`apps/web/src/modules/slots.ts`, which bundles only each manifest's `slots`
+and `name`).
+
+| Module | Needs | What it is |
+| --- | --- | --- |
+| `workspace` | (always on) | Home, search, people, roles, settings, notifications, files |
+| `messages` | | DMs and group conversations, replies, scheduling |
+| `projects` | | Projects, their members and settings |
+| `channels` | projects, messages | A project's channels and threads |
+| `tasks` | projects | Tasks, board, timeline, milestones, planning, views, templates |
+| `pages` | projects | Pages, decisions, skills, the guide |
+| `whiteboards` | projects | Whiteboards |
+| `code` | projects | Repositories and pull requests |
+| `runs` | tasks, channels, code | Runs on harnesses, approvals, usage |
+| `agents` | | The agent directory, profiles, @-mentioning agents |
+| `inbox` | | The inbox and Later |
+| `automations` | projects | Rules and webhooks |
+| `suggestions` | | Model suggestions and summaries |
+
+A manifest declares:
+
+- who it is: `id`, `name`, `description`, `version`, `kind` (core, built,
+  connected), `switchable`, `needs` and `worksWith`;
+- `permissions`: the permission keys (AWD-74) it owns;
+- `tools`: its MCP and public API tools, each with what it does (see the
+  agent tool pattern below);
+- `routes`: its server routes, as the router writes their paths (a trailing
+  `*` matches anything after it; the longest match wins);
+- `events` it emits and listens to, `notifications` it sends, `search` kinds
+  it answers, and the automation `triggers` and `actions` it brings;
+- `things`, `links` and `embeds` (the shared contract, below);
+- `slots`: where it shows up in the app: `pages` (web routes), `parts`
+  (layout parts: sidebar rows, tabs, task fields, composer extras),
+  `sidebar` (rail and sidebar rows that aren't parts), `home` sections,
+  `settings` pages, `palette` entries, `shortcuts`, `slash` commands and
+  `setup` steps;
+- `settings` keys and `nouns` it owns.
+
+### Adding something
+
+A new route, tool, layout part, setting, setup step, event, notification
+kind, search kind, automation trigger or action, web route, palette entry,
+shortcut, slash command, settings page or Home section goes in the manifest
+of the module it belongs to. The guards fail until it does:
+
+- server: `cargo test -p agent-workspace-server --lib -- modules::`
+  (`apps/server/src/modules/mod.rs`), which reads the routes from the source
+  as `policy_inventory` does, and the tool list from the MCP router;
+- web: `apps/web/src/modules/slots.test.ts`, which reads `App.tsx`'s routes,
+  the command palette's entries, the shortcut sheet, the slash commands, the
+  settings registry and the Home sections.
+
+Each value must be claimed by exactly one module, and every claim must match
+something that exists.
+
+## Switching modules
+
+- A module's switch is the `modules.<id>` setting at workspace scope, on
+  unless set to `false`. The settings routes refuse these keys; they change
+  through `PUT /api/v1/organizations/{id}/modules` (owners and admins,
+  audited with what was off before and after), which takes `switches` and an
+  optional `preset`. `GET` on the same path lists every module and why one is
+  off.
+- A module is on when its switch is and everything it `needs` is on.
+- Presets (`modules/presets.json`): Everything, Chat with my agents
+  (projects off, so channels, tasks, pages, whiteboards, code, runs and
+  automations go too), Pages only (projects and pages), DMs only (messages).
+- Roles narrow modules once AWD-74's roles model lands; see "Next".
+
+### What follows the switches
+
+- **Layouts.** The layout response (`/projects/{id}/layout`,
+  `/organizations/{id}/layout`) carries `modulesOff` and adds every off
+  module's parts to `hidden`, which "Show hidden parts" doesn't undo. So
+  every `shows(part)` in the web app follows modules with no further code.
+  `experience.moduleOn(id)` asks about a module directly.
+- **Pages.** A link into an off module opens a "turned off" page that says
+  nothing was deleted, not a 404 (`ModuleGate` in
+  `AuthenticatedRouteBoundary`).
+- **Navigation.** Rail tiles, the Home sidebar, Home sections, the command
+  palette, the shortcut sheet and keys, slash commands and settings pages
+  leave out what belongs to off modules.
+- **Search** searches each kind only where its module is on; DMs need
+  Messages, a project's channels and threads need Channels.
+- **Notifications** of an off module aren't delivered (no push or email),
+  and every notification read leaves them out (one SQL condition generated
+  from the manifests).
+- **Briefing and `project_open`** leave out sections of off modules;
+  `project_open` lists `modulesOff`.
+- **Automations and webhooks** don't follow a workspace's events while
+  Automations is off; a rule whose trigger or actions belong to an off module
+  doesn't fire, and a queued run of one is recorded as skipped with the
+  reason.
+- **Setup steps** of off modules don't show.
+- **Agents' tools**: `module_list` says what's on and what each module does.
+  Hiding an off module's tools from `tools/list`, and refusing a call to one
+  with "X is turned off in this workspace", go into the tool-list and
+  tool-call code AWD-74 (#194) rewrites, so they land on top of it.
+
+## The shared contract (principle 1)
+
+Defined in `apps/server/src/modules/contract.rs`, mirrored in
+`apps/web/src/modules/contract.ts`.
+
+- **Things.** Everything a module makes is a `Thing`: `id`, `kind`,
+  `module`, `title`, `status`, `owner`, `projectId` and `href`. A manifest
+  declares its kinds (`things`) with the fields each carries beyond the
+  shared ones. Today tasks, pages, decisions, whiteboards, threads, channels,
+  conversations and projects are things (`apps/server/src/modules/things.rs`).
+- **Links.** `part_of`, `blocks`, `about`, `made_from`, `relates_to` and
+  `duplicates`, each read both ways ("Blocks" and "Blocked by", "About" and
+  "Referenced in"). The links stored today (subtasks, dependencies,
+  relations, a task's pages, decisions and threads, a whiteboard's links)
+  read through `GET /api/v1/things/{kind}/{id}` and the `thing_open` tool, as
+  far as the reader can see, from modules that are on. This is the seam for
+  "Referenced in" (AWD-58).
+- **Embeds.** A module offers live blocks for pages by declaring them
+  (`embeds`: an id, a label, the kind of thing, and the piece that draws it),
+  never by changing the page editor. Docs (AWD-53) reads these.
+- **Fields and views.** One set of field types (`text`, `long_text`,
+  `number`, `date`, `checkbox`, `url`, `choice`, `status`, `person`,
+  `people`, `labels`, `thing`) and view types (`list`, `table`, `board`,
+  `calendar`, `timeline`, `gallery`). Task fields (AWD-89) and collections
+  (AWD-90) fill these in; a thing's own field values travel in `fields`.
+- **Events.** Named `<thing>.<what happened>` (`task.created`,
+  `run.finished`); each is emitted by exactly one module, and manifests say
+  which they follow.
+- **The agent tool pattern.** Each tool does one of five things:
+  `describe` (open one thing or the module), `query` (find or list),
+  `create`, `change`, or `suggest` (propose a change for a person to accept).
+  Every core tool is labelled in its manifest, and `module_list` groups a
+  module's tools that way.
+
+## Pieces the app draws (principle 5)
+
+A module never draws its own layout. It names a piece of one kind of thing
+with some fields, and the kit draws it for every width
+(`apps/web/src/modules/pieces/`):
+
+| Piece | Wide | Narrow (under 600 px of its own width) |
+| --- | --- | --- |
+| list | rows, grouped by a field | the same, wrapping |
+| table | columns | a card per row, each value labelled |
+| board | a column per value | scrolls sideways inside itself |
+| detail | title, status, fields, actions | the same, stacked |
+| fields | labelled values | the same |
+| form | fields to fill in, a button | the same |
+| card | one thing, small | the same |
+| actions | buttons | one menu |
+
+Each piece is its own CSS container, so it fits wherever it sits: a page, a
+Home card, a side panel or an embed. `/design-system/pieces` draws every
+piece a manifest declares, plus each kind of piece once, with made-up things
+(long titles and values on purpose). Two guards:
+
+- `apps/web/src/modules/pieces/Pieces.test.tsx` draws each declared piece and
+  runs axe;
+- `apps/web/e2e/pieces.spec.ts` opens the gallery at 1440 and 390 px in light
+  and dark, and fails on content cut off sideways, the page scrolling
+  sideways, or an axe error. A new module's pieces are checked the day it's
+  added.
+
+Core pages don't use the pieces yet; they move onto them over time.
+
+## Next
+
+- **On AWD-74's roles (#194):** roles narrow modules (a role's modules off,
+  in the role editor), the permissions each manifest lists group the Roles
+  page, a guard that every permission belongs to exactly one module, and
+  agents' tool lists and calls following modules, roles and agent limits
+  together.
+- **Server routes** of an off module answer "turned off" too, not only the
+  app and the tools.
+- **Pages outside projects**, so "Pages only" doesn't need Projects.
+- **Built and connected modules** (AWD-90, M5) fill in the same manifest from
+  data; packages (AWD-76) set modules, roles and layouts at once.
+- **Core pages on the pieces**, starting with the smallest lists.
