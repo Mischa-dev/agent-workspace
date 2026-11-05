@@ -64,6 +64,9 @@ pub(super) struct RoleLine {
     pub agent_limit: Option<Vec<String>>,
     /// Where holders start: layoutPreset, channels, pinnedViews, homeHidden.
     pub defaults: serde_json::Value,
+    /// Modules holders don't get, on top of what the workspace has off.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modules_off: Vec<String>,
     pub is_default: bool,
     pub version: i64,
     pub holders: i64,
@@ -86,6 +89,7 @@ fn line(view: RoleView) -> RoleLine {
             .agent_limit
             .map(|keys| keys.iter().map(|key| (*key).to_owned()).collect()),
         defaults: serde_json::to_value(&view.defaults).unwrap_or_default(),
+        modules_off: view.modules_off,
         is_default: view.is_default,
         version: view.version,
         holders: view.workspace_holders + view.project_holders,
@@ -297,6 +301,11 @@ pub(super) struct RoleWriteArguments {
     /// Where holders start: {"layoutPreset", "channels", "pinnedViews",
     /// "homeHidden"}.
     pub defaults: Option<serde_json::Value>,
+    /// Modules (ids from module_list, such as "runs") that holders don't
+    /// get, on top of what the workspace has off. An empty list gives them
+    /// every module the workspace has on; leave it out to keep it. Never for
+    /// the owner role.
+    pub modules_off: Option<Vec<String>>,
     /// True makes it the role new members and invitations start with.
     pub is_default: Option<bool>,
     /// True removes the role. Only custom roles nobody holds can go.
@@ -381,6 +390,7 @@ pub(super) async fn role_write(
                         permissions,
                         agent_limit: arguments.agent_limit.clone(),
                         defaults: defaults.unwrap_or_default(),
+                        modules_off: arguments.modules_off.clone().unwrap_or_default(),
                         is_default: arguments.is_default.unwrap_or(false),
                     },
                 )
@@ -416,6 +426,7 @@ pub(super) async fn role_write(
                         permissions: arguments.permissions.clone(),
                         agent_limit,
                         defaults,
+                        modules_off: arguments.modules_off.clone(),
                         is_default: arguments.is_default,
                     },
                 )

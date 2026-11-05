@@ -252,56 +252,148 @@ pub async fn workspace(
     Ok(switches(connection, organization_id).await?.set())
 }
 
+/// The modules off for the holders of the role a membership holds, from
+/// `workspace_roles.modules_off` (AWD-75 on AWD-74's roles). `{org}` and
+/// `{membership}` are SQL aliases, as in `roles::held_role_join`.
+const HELD_MODULES_OFF: &str = "COALESCE((SELECT held.modules_off FROM workspace_roles held \
+     WHERE held.organization_id = {org} AND (held.id = {membership}.role_id \
+     OR ({membership}.role_id IS NULL AND held.key = {membership}.role))), '{}')";
+
+fn held_modules_off(organization: &str, membership: &str) -> String {
+    HELD_MODULES_OFF
+        .replace("{org}", organization)
+        .replace("{membership}", membership)
+}
+
+/// A workspace's switches narrowed by a role's modules off: on when the
+/// switch and the role both leave it on, and everything it needs is on.
+pub fn narrowed(switches: &Switches, role_off: &[String]) -> ModuleSet {
+    ModuleSet::from_switches(|module| {
+        switches.is_off(module) || role_off.iter().any(|off| off == module)
+    })
+}
+
+/// The modules someone's workspace role turns off, if they're a member.
+async fn workspace_role_off(
+    connection: &mut PgConnection,
+    organization_id: Uuid,
+    actor_id: Uuid,
+) -> Result<Vec<String>, AppError> {
+    Ok(sqlx::query_scalar::<_, Vec<String>>(&format!(
+        r#"
+        SELECT {off} FROM organization_memberships membership
+        WHERE membership.organization_id = $1 AND membership.actor_id = $2 AND membership.enabled
+        "#,
+        off = held_modules_off("membership.organization_id", "membership"),
+    ))
+    .bind(organization_id)
+    .bind(actor_id)
+    .fetch_optional(&mut *connection)
+    .await?
+    .unwrap_or_default())
+}
+
 /// The modules on for someone in a workspace: the workspace's, narrowed by
 /// their role there.
 pub async fn for_member(
     connection: &mut PgConnection,
     organization_id: Uuid,
-    _actor_id: Uuid,
+    actor_id: Uuid,
 ) -> Result<ModuleSet, AppError> {
-    workspace(connection, organization_id).await
+    let switches = switches(connection, organization_id).await?;
+    let role_off = workspace_role_off(connection, organization_id, actor_id).await?;
+    Ok(narrowed(&switches, &role_off))
 }
 
-/// The modules on for someone in the workspace a project belongs to; none
-/// when there's no such project.
+#[derive(FromRow)]
+struct ProjectRow {
+    id: Uuid,
+    organization_id: Uuid,
+    kind: String,
+    /// The modules the holder's role turns off here: the project role when
+    /// they're in the project (the one that counts there), else the
+    /// workspace role.
+    role_off: Vec<String>,
+}
+
+/// Projects with their workspace, kind and the role narrowing for `actor_id`.
+async fn project_rows(
+    connection: &mut PgConnection,
+    actor_id: Uuid,
+    projects: &[Uuid],
+) -> Result<Vec<ProjectRow>, AppError> {
+    Ok(sqlx::query_as::<_, ProjectRow>(&format!(
+        r#"
+        SELECT project.id, project.organization_id, project.kind,
+               COALESCE(
+                   (SELECT {project_off} FROM project_memberships membership
+                    WHERE membership.project_id = project.id AND membership.actor_id = $2
+                      AND membership.enabled),
+                   (SELECT {workspace_off} FROM organization_memberships membership
+                    WHERE membership.organization_id = project.organization_id
+                      AND membership.actor_id = $2 AND membership.enabled),
+                   '{{}}'
+               ) AS role_off
+        FROM projects project
+        WHERE project.id = ANY($1)
+        "#,
+        project_off = held_modules_off("project.organization_id", "membership"),
+        workspace_off = held_modules_off("membership.organization_id", "membership"),
+    ))
+    .bind(projects)
+    .bind(actor_id)
+    .fetch_all(&mut *connection)
+    .await?)
+}
+
+/// The modules on for someone in a project (their project role narrows the
+/// workspace's switches); none when there's no such project.
 pub async fn for_project(
     connection: &mut PgConnection,
     project_id: Uuid,
     actor_id: Uuid,
 ) -> Result<Option<ModuleSet>, AppError> {
-    let organization_id =
-        sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
-            .bind(project_id)
-            .fetch_optional(&mut *connection)
-            .await?;
-    match organization_id {
-        Some(organization_id) => Ok(Some(
-            for_member(connection, organization_id, actor_id).await?,
-        )),
-        None => Ok(None),
-    }
+    let Some(row) = project_rows(connection, actor_id, &[project_id])
+        .await?
+        .pop()
+    else {
+        return Ok(None);
+    };
+    let switches = switches(connection, row.organization_id).await?;
+    Ok(Some(narrowed(&switches, &row.role_off)))
 }
 
-/// The modules on for someone in each workspace they're an active member of.
+/// The modules on for someone in each workspace they're an active member
+/// of, narrowed by their workspace role.
 pub async fn by_workspace(
     connection: &mut PgConnection,
     actor_id: Uuid,
 ) -> Result<BTreeMap<Uuid, ModuleSet>, AppError> {
-    let organizations = sqlx::query_scalar::<_, Uuid>(
-        "SELECT organization_id FROM organization_memberships WHERE actor_id = $1 AND enabled",
-    )
+    let memberships = sqlx::query_as::<_, (Uuid, Vec<String>)>(&format!(
+        r#"
+        SELECT membership.organization_id, {off}
+        FROM organization_memberships membership
+        WHERE membership.actor_id = $1 AND membership.enabled
+        "#,
+        off = held_modules_off("membership.organization_id", "membership"),
+    ))
     .bind(actor_id)
     .fetch_all(&mut *connection)
     .await?;
+    let organizations = memberships.iter().map(|(id, _)| *id).collect::<Vec<_>>();
     let switches = switches_of(connection, &organizations).await?;
-    Ok(switches
+    Ok(memberships
         .into_iter()
-        .map(|(organization_id, switches)| (organization_id, switches.set()))
+        .map(|(organization_id, role_off)| {
+            let found = switches.get(&organization_id).cloned().unwrap_or_default();
+            (organization_id, narrowed(&found, &role_off))
+        })
         .collect())
 }
 
-/// Modules on for someone in at least one of their workspaces: what an
-/// agent's tool list follows.
+/// Modules on for someone in at least one of their workspaces or projects:
+/// what an agent's tool list follows. A project role can leave on there what
+/// the workspace role turns off.
 pub async fn anywhere(
     connection: &mut PgConnection,
     actor_id: Uuid,
@@ -310,21 +402,26 @@ pub async fn anywhere(
     if sets.is_empty() {
         return Ok(ModuleSet::all());
     }
+    let projects = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT membership.project_id FROM project_memberships membership
+        JOIN projects project ON project.id = membership.project_id
+        WHERE membership.actor_id = $1 AND membership.enabled AND project.archived_at IS NULL
+        "#,
+    )
+    .bind(actor_id)
+    .fetch_all(&mut *connection)
+    .await?;
+    let in_projects = ProjectModules::load(connection, actor_id, &projects).await?;
     Ok(sets
         .into_values()
+        .chain(in_projects.projects.iter().map(|(_, set, _)| *set))
         .fold(ModuleSet::always_on(), ModuleSet::union))
 }
 
-#[derive(FromRow)]
-struct ProjectRow {
-    id: Uuid,
-    organization_id: Uuid,
-    kind: String,
-}
-
-/// The modules on for someone in each of some projects' workspaces, with
-/// each project's kind (`direct` for the hidden project DMs live in,
-/// `standard` otherwise).
+/// The modules on for someone in each of some projects (each project's
+/// switches narrowed by their role there), with each project's kind
+/// (`direct` for the hidden project DMs live in, `standard` otherwise).
 #[derive(Clone, Debug, Default)]
 pub struct ProjectModules {
     projects: Vec<(Uuid, ModuleSet, bool)>,
@@ -339,27 +436,25 @@ impl ProjectModules {
         if projects.is_empty() {
             return Ok(Self::default());
         }
-        let rows = sqlx::query_as::<_, ProjectRow>(
-            "SELECT id, organization_id, kind FROM projects WHERE id = ANY($1)",
-        )
-        .bind(projects)
-        .fetch_all(&mut *connection)
-        .await?;
-        let mut sets: BTreeMap<Uuid, ModuleSet> = BTreeMap::new();
-        for row in &rows {
-            if let std::collections::btree_map::Entry::Vacant(slot) =
-                sets.entry(row.organization_id)
-            {
-                slot.insert(for_member(connection, row.organization_id, actor_id).await?);
-            }
-        }
+        let rows = project_rows(connection, actor_id, projects).await?;
+        let mut organizations = rows
+            .iter()
+            .map(|row| row.organization_id)
+            .collect::<Vec<_>>();
+        organizations.sort();
+        organizations.dedup();
+        let switches = switches_of(connection, &organizations).await?;
         Ok(Self {
             projects: rows
                 .iter()
                 .map(|row| {
+                    let found = switches
+                        .get(&row.organization_id)
+                        .cloned()
+                        .unwrap_or_default();
                     (
                         row.id,
-                        sets.get(&row.organization_id).copied().unwrap_or_default(),
+                        narrowed(&found, &row.role_off),
                         row.kind == "direct",
                     )
                 })

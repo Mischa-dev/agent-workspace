@@ -974,8 +974,10 @@ async fn project_view(
         show_hidden: manager && stored.show_hidden,
     })
     .with_modules(
-        crate::modules::state::for_member(connection, access.organization_id, principal.actor_id)
-            .await?,
+        // In a project, the project role is the one that counts.
+        crate::modules::state::for_project(connection, project_id, principal.actor_id)
+            .await?
+            .unwrap_or_default(),
     );
     Ok(ProjectLayoutView {
         organization_id: access.organization_id,

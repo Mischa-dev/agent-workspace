@@ -261,6 +261,48 @@ mod tests {
     }
 
     #[test]
+    fn every_permission_names_its_module() {
+        let keys = crate::policy::PERMISSIONS
+            .iter()
+            .map(|info| info.key.to_owned())
+            .collect::<BTreeSet<_>>();
+        each_named("permissions", &keys, |module| &module.permissions);
+        // The Roles page groups permissions by AWD-74's groups; each group is
+        // one module, and members and settings are the workspace's own.
+        for info in crate::policy::PERMISSIONS {
+            let owner =
+                manifest::owner_by(|module| &module.permissions, info.key).expect("claimed above");
+            let expected = match info.module {
+                "members" | "settings" => "workspace",
+                group => group,
+            };
+            assert_eq!(
+                owner.id, expected,
+                "{} is in the {} group on the Roles page but in the {} manifest",
+                info.key, info.module, owner.id
+            );
+        }
+    }
+
+    #[test]
+    fn role_modules_off_never_reach_the_workspace_itself() {
+        // A role narrows only modules that can be switched off; the
+        // workspace stays.
+        let set = super::state::narrowed(
+            &super::state::Switches::default(),
+            &["workspace".to_owned(), "runs".to_owned()],
+        );
+        assert!(set.contains("workspace"));
+        assert!(!set.contains("runs"));
+        assert!(set.contains("tasks"));
+        // A role can't turn on what the workspace has off.
+        let mut switches = super::state::Switches::default();
+        switches.values.insert("tasks".to_owned(), (false, 1));
+        let set = super::state::narrowed(&switches, &[]);
+        assert!(!set.contains("tasks") && !set.contains("runs"));
+    }
+
+    #[test]
     fn every_setting_names_its_module() {
         let keys = crate::settings::REGISTRY
             .iter()

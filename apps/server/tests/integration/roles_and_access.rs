@@ -478,7 +478,7 @@ async fn built_in_roles_stay_as_they_were_and_nobody_grants_more_than_they_hold(
 }
 
 /// A personal API token's call to the public API.
-async fn public_call(
+pub(super) async fn public_call(
     app: &axum::Router,
     token: &str,
     tool: &str,
@@ -507,7 +507,7 @@ async fn public_call(
     )
 }
 
-async fn listed_tools(app: &axum::Router, token: &str, session: &str) -> Vec<String> {
+pub(super) async fn listed_tools(app: &axum::Router, token: &str, session: &str) -> Vec<String> {
     let response = app
         .clone()
         .oneshot(

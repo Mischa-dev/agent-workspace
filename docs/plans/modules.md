@@ -81,7 +81,14 @@ something that exists.
 - Presets (`modules/presets.json`): Everything, Chat with my agents
   (projects off, so channels, tasks, pages, whiteboards, code, runs and
   automations go too), Pages only (projects and pages), DMs only (messages).
-- Roles narrow modules once AWD-74's roles model lands; see "Next".
+- Roles narrow modules (AWD-74's roles): a role's `modules_off` turns
+  modules off for its holders and their agents, on top of the workspace's
+  switches. In a project the project role counts, elsewhere the workspace
+  role. A role only narrows; the owner role never does. Owners and admins
+  set it in the role editor, or apps acting for them with `role_write`
+  (`modulesOff`); it's audited with the role.
+- Every permission belongs to exactly one module (test-enforced), matching
+  the Roles page's groups; members and settings are the workspace's.
 
 ### What follows the switches
 
@@ -108,10 +115,13 @@ something that exists.
   doesn't fire, and a queued run of one is recorded as skipped with the
   reason.
 - **Setup steps** of off modules don't show.
-- **Agents' tools**: `module_list` says what's on and what each module does.
-  Hiding an off module's tools from `tools/list`, and refusing a call to one
-  with "X is turned off in this workspace", go into the tool-list and
-  tool-call code AWD-74 (#194) rewrites, so they land on top of it.
+- **Agents' tools** follow modules, roles and agent limits together:
+  `tools/list` leaves out tools of modules that are off for the caller
+  everywhere they belong, and a call to one where it acts (the project it
+  names) is refused with `permission_denied`, `retryCategory: "module"`,
+  saying the module is turned off. The same check runs for the public API
+  and automations, which call tools the same way. `module_list` says
+  what's on, what each module does and why one is off.
 
 ## The shared contract (principle 1)
 
@@ -180,11 +190,6 @@ Core pages don't use the pieces yet; they move onto them over time.
 
 ## Next
 
-- **On AWD-74's roles (#194):** roles narrow modules (a role's modules off,
-  in the role editor), the permissions each manifest lists group the Roles
-  page, a guard that every permission belongs to exactly one module, and
-  agents' tool lists and calls following modules, roles and agent limits
-  together.
 - **Server routes** of an off module answer "turned off" too, not only the
   app and the tools.
 - **Pages outside projects**, so "Pages only" doesn't need Projects.
