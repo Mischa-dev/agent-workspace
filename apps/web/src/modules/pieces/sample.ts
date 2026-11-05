@@ -23,8 +23,10 @@ function sampleValue(field: FieldDecl, index: number): FieldValue {
       return new Date(Date.UTC(2026, 10, 4 + index * 5)).toISOString()
     case 'checkbox':
       return index % 2 === 0
-    case 'choice':
+    case 'single_choice':
       return field.options?.length ? field.options[index % field.options.length] : null
+    case 'multiple_choice':
+      return field.options?.length ? field.options.slice(0, index % (field.options.length + 1)) : []
     case 'people':
     case 'labels':
       return index % 3 === 0 ? [] : PEOPLE.slice(0, 1 + (index % 3))

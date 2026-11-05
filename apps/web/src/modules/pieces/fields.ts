@@ -21,7 +21,10 @@ export const words = (value: string) => value.replace(/_/g, ' ').replace(/^\w/, 
 /** A field's value in words; null when it has none. */
 export function fieldText(field: FieldDecl, value: FieldValue | undefined): string | null {
   if (value === null || value === undefined || value === '') return null
-  if (Array.isArray(value)) return value.length ? value.join(', ') : null
+  if (Array.isArray(value)) {
+    const items = field.type === 'multiple_choice' ? value.map(words) : value
+    return items.length ? items.join(', ') : null
+  }
   switch (field.type) {
     case 'checkbox':
       return value ? 'Yes' : 'No'
@@ -29,7 +32,7 @@ export function fieldText(field: FieldDecl, value: FieldValue | undefined): stri
       const date = new Date(String(value))
       return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
     }
-    case 'choice':
+    case 'single_choice':
       return words(String(value))
     default:
       return String(value)

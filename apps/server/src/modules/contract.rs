@@ -116,6 +116,8 @@ pub enum LinkDirection {
 }
 
 /// A field's type, shared by tasks, collections and every module's records.
+/// The names are the ones task fields store (AWD-89, `crate::fields`): one
+/// vocabulary, no translation between them.
 #[derive(
     Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
 )]
@@ -128,14 +130,16 @@ pub enum FieldType {
     Checkbox,
     Url,
     /// One of a fixed list of options.
-    Choice,
+    SingleChoice,
+    /// Any of a fixed list of options.
+    MultipleChoice,
     /// A status from the thing's workflow.
     Status,
     Person,
     People,
     Labels,
-    /// Another thing, by kind.
-    Thing,
+    /// A link to another thing, such as a task or a page.
+    Link,
 }
 
 /// A way to look at many things at once.
@@ -298,4 +302,29 @@ pub struct ThingLink {
     /// The link in words from this side, such as "Blocked by".
     pub label: String,
     pub other: Thing,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FieldType;
+
+    /// Task fields (AWD-89) store these names; the contract uses the same
+    /// ones, so there's nothing to translate between them.
+    #[test]
+    fn field_types_are_named_as_task_fields_store_them() {
+        let name = |kind: FieldType| serde_json::to_value(kind).expect("name");
+        for (kind, stored) in [
+            (FieldType::Text, "text"),
+            (FieldType::Number, "number"),
+            (FieldType::Date, "date"),
+            (FieldType::SingleChoice, "single_choice"),
+            (FieldType::MultipleChoice, "multiple_choice"),
+            (FieldType::Person, "person"),
+            (FieldType::Url, "url"),
+            (FieldType::Checkbox, "checkbox"),
+            (FieldType::Link, "link"),
+        ] {
+            assert_eq!(name(kind), serde_json::json!(stored));
+        }
+    }
 }

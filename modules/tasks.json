@@ -74,7 +74,7 @@
       "href": "/projects/{projectId}/work-items/{id}",
       "fields": [
         { "id": "key", "label": "Key", "type": "text" },
-        { "id": "priority", "label": "Priority", "type": "choice", "options": ["no_priority", "low", "medium", "high", "urgent"] },
+        { "id": "priority", "label": "Priority", "type": "single_choice", "options": ["no_priority", "low", "medium", "high", "urgent"] },
         { "id": "dueDate", "label": "Due", "type": "date" },
         { "id": "estimate", "label": "Estimate", "type": "number" },
         { "id": "labels", "label": "Labels", "type": "labels" }

@@ -8,7 +8,7 @@ export type ToolVerb = 'describe' | 'query' | 'create' | 'change' | 'suggest'
 /** How one thing relates to another; every link reads both ways. */
 export type LinkKind = 'part_of' | 'blocks' | 'about' | 'made_from' | 'relates_to' | 'duplicates'
 
-/** A field's type, shared by tasks, collections and every module's records. */
+/** A field's type, shared by tasks, collections and every module's records, named as task fields (AWD-89) store them. */
 export type FieldType =
   | 'text'
   | 'long_text'
@@ -16,12 +16,13 @@ export type FieldType =
   | 'date'
   | 'checkbox'
   | 'url'
-  | 'choice'
+  | 'single_choice'
+  | 'multiple_choice'
   | 'status'
   | 'person'
   | 'people'
   | 'labels'
-  | 'thing'
+  | 'link'
 
 /** A way to look at many things at once. */
 export type ViewType = 'list' | 'table' | 'board' | 'calendar' | 'timeline' | 'gallery'

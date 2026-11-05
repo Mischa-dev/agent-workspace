@@ -228,7 +228,23 @@ function FormPiece({ decl, label, onSubmit, piece }: PieceProps) {
 
 function FormField({ field, onChange, value }: { field: FieldDecl; onChange: (value: FieldValue) => void; value: FieldValue }) {
   if (field.type === 'checkbox') return <Checkbox checked={value === true} label={field.label} onChange={onChange} />
-  if (field.type === 'choice' && field.options?.length) {
+  if (field.type === 'multiple_choice' && field.options?.length) {
+    const chosen = Array.isArray(value) ? value : []
+    return (
+      <fieldset className="aw-piece__choices">
+        <legend className="aw-piece__group-title">{field.label}</legend>
+        {field.options.map((option) => (
+          <Checkbox
+            checked={chosen.includes(option)}
+            key={option}
+            label={words(option)}
+            onChange={(on) => onChange(on ? [...chosen, option] : chosen.filter((entry) => entry !== option))}
+          />
+        ))}
+      </fieldset>
+    )
+  }
+  if (field.type === 'single_choice' && field.options?.length) {
     return (
       <SelectField label={field.label} onChange={(event) => onChange(event.target.value || null)} value={typeof value === 'string' ? value : ''}>
         <option value="">None</option>

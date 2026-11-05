@@ -143,9 +143,13 @@ Defined in `apps/server/src/modules/contract.rs`, mirrored in
 - **Embeds.** A module offers live blocks for pages by declaring them
   (`embeds`: an id, a label, the kind of thing, and the piece that draws it),
   never by changing the page editor. Docs (AWD-53) reads these.
-- **Fields and views.** One set of field types (`text`, `long_text`,
-  `number`, `date`, `checkbox`, `url`, `choice`, `status`, `person`,
-  `people`, `labels`, `thing`) and view types (`list`, `table`, `board`,
+- **Fields and views.** One set of field types, named as task fields
+  (AWD-89) store them: `text`, `number`, `date`, `single_choice`,
+  `multiple_choice`, `person`, `url`, `checkbox` and `link` (a link to
+  another thing, such as a task or a page), plus `long_text`, `status`,
+  `people` and `labels`. There is no translation layer between the two;
+  "thing" is the contract's word for what links point at, never a field
+  type. And view types and view types (`list`, `table`, `board`,
   `calendar`, `timeline`, `gallery`). Task fields (AWD-89) and collections
   (AWD-90) fill these in; a thing's own field values travel in `fields`.
 - **Events.** Named `<thing>.<what happened>` (`task.created`,

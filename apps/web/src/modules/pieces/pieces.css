@@ -252,3 +252,11 @@
   color: var(--content-fg-muted);
   font: var(--t-small);
 }
+
+.aw-piece__choices {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}

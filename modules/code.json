@@ -45,7 +45,7 @@
       "many": "Pull requests",
       "href": "{url}",
       "fields": [
-        { "id": "checks", "label": "Checks", "type": "choice", "options": ["pending", "passed", "failed"] },
+        { "id": "checks", "label": "Checks", "type": "single_choice", "options": ["pending", "passed", "failed"] },
         { "id": "branch", "label": "Branch", "type": "text" }
       ]
     }
