@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { describeError } from '../../app/mutations'
 import { useWorkspaceLayout } from '../../experience/api'
 import { REGISTRY } from '../../experience/registry'
+import { MODULE_SLOTS, moduleName } from '../../modules/slots'
 import {
   Banner,
   Button,
@@ -43,6 +44,9 @@ import {
   type WorkspaceRoleView,
 } from './roles'
 import './roles.css'
+
+// AWD-75: the modules a role can turn off for its holders.
+const SWITCHABLE_MODULES = Object.keys(MODULE_SLOTS).filter((module) => module !== 'workspace')
 
 const BASE_LABELS: Record<BaseRole, string> = { owner: 'Owner', admin: 'Admin', member: 'Member', viewer: 'Viewer' }
 const PINNABLE_VIEWS = [
@@ -224,6 +228,7 @@ function initialInput(editing: Editing, data: RolesResponse): RoleInput {
       permissions: role.permissions,
       agentLimit: role.agentLimit,
       defaults: role.defaults,
+      modulesOff: role.modulesOff ?? [],
       isDefault: role.isDefault,
     }
   }
@@ -236,6 +241,7 @@ function initialInput(editing: Editing, data: RolesResponse): RoleInput {
       permissions: point.permissions,
       agentLimit: point.agentLimit,
       defaults: point.defaults,
+      modulesOff: [],
       isDefault: false,
     }
   }
@@ -248,6 +254,7 @@ function initialInput(editing: Editing, data: RolesResponse): RoleInput {
     permissions: copy?.permissions ?? builtInPermissions(data.permissions, baseRole),
     agentLimit: copy?.agentLimit ?? null,
     defaults: copy?.defaults ?? {},
+    modulesOff: copy?.modulesOff ?? [],
     isDefault: false,
   }
 }
@@ -299,6 +306,7 @@ function RoleEditor({
           ...(role.builtIn ? {} : { permissions: input.permissions }),
           ...(isOwnerRole ? {} : { agentLimit: input.agentLimit }),
           defaults,
+          ...(isOwnerRole ? {} : { modulesOff: input.modulesOff }),
           ...(isOwnerRole ? {} : { isDefault: input.isDefault }),
         })
       }
@@ -463,6 +471,27 @@ function RoleEditor({
             ) : null}
           </fieldset>
         ) : null}
+
+        {isOwnerRole ? null : (
+          <fieldset className="aw-roles__group">
+            <legend className="aw-roles__legend">Modules</legend>
+            <p className="aw-quiet">Holders don't get the modules turned off here, for themselves or their agents. Modules the workspace has off stay off.</p>
+            {SWITCHABLE_MODULES.map((module) => (
+              <Checkbox
+                checked={!input.modulesOff.includes(module)}
+                disabled={readOnly}
+                key={module}
+                label={moduleName(module)}
+                onChange={(on) =>
+                  setInput((current) => ({
+                    ...current,
+                    modulesOff: on ? current.modulesOff.filter((entry) => entry !== module) : [...new Set([...current.modulesOff, module])],
+                  }))
+                }
+              />
+            ))}
+          </fieldset>
+        )}
 
         <fieldset className="aw-roles__group">
           <legend className="aw-roles__legend">Where holders start</legend>

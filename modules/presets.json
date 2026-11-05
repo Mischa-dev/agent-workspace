@@ -1,0 +1,39 @@
+[
+  {
+    "id": "everything",
+    "name": "Everything",
+    "description": "Every module on: chat, projects, tasks, pages, whiteboards, runs, code and automations.",
+    "on": [
+      "messages",
+      "projects",
+      "channels",
+      "tasks",
+      "pages",
+      "whiteboards",
+      "runs",
+      "code",
+      "agents",
+      "inbox",
+      "automations",
+      "suggestions"
+    ]
+  },
+  {
+    "id": "chat_with_agents",
+    "name": "Chat with my agents",
+    "description": "Messages with people and agents, the inbox and Later. No projects, so no channels, tasks or runs.",
+    "on": ["messages", "agents", "inbox", "suggestions"]
+  },
+  {
+    "id": "pages_only",
+    "name": "Pages only",
+    "description": "Projects that hold pages and decisions, and nothing else.",
+    "on": ["projects", "pages"]
+  },
+  {
+    "id": "dms_only",
+    "name": "DMs only",
+    "description": "Direct messages and group conversations, and nothing else.",
+    "on": ["messages"]
+  }
+]

@@ -10,7 +10,7 @@ export function HomeSidebar({ mobileOpen, onNavigate }: { mobileOpen: boolean; o
     <SidebarFrame id="project-sidebar" label="Home navigation" mobileOpen={mobileOpen} space="home" title="Home">
       <ul className="aw-section__list aw-sidebar__top">
         <SidebarLink end icon="home" label="Home" onNavigate={onNavigate} to="/home" />
-        <SidebarLink badge={inboxUnread} icon="inbox" label="Inbox" onNavigate={onNavigate} to="/inbox" />
+        {experience.moduleOn('inbox') ? <SidebarLink badge={inboxUnread} icon="inbox" label="Inbox" onNavigate={onNavigate} to="/inbox" /> : null}
         {experience.shows('workspace.my_work') ? <SidebarLink icon="checklist" label="My work" onNavigate={onNavigate} to="/my-work" /> : null}
         {experience.shows('workspace.later') ? <SidebarLink icon="bookmark" label="Later" onNavigate={onNavigate} to="/later" /> : null}
         {experience.shows('workspace.runs') ? <SidebarLink icon="activity" label="Runs" onNavigate={onNavigate} to="/runs" /> : null}

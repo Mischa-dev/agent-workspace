@@ -17,6 +17,7 @@ use crate::{
     AppState,
     auth::AuthenticatedActor,
     error::{ApiQuery, AppError},
+    modules::state::ProjectModules,
 };
 
 pub const MAX_QUERY_CHARACTERS: usize = 200;
@@ -44,6 +45,18 @@ impl SearchKind {
         Self::Messages,
         Self::Files,
     ];
+
+    /// The kind's name, as search results and module manifests use it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Messages => "messages",
+            Self::Threads => "threads",
+            Self::Tasks => "tasks",
+            Self::Pages => "pages",
+            Self::Decisions => "decisions",
+            Self::Files => "files",
+        }
+    }
 
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
@@ -106,6 +119,12 @@ pub async fn search(
     } else {
         kinds
     };
+    // AWD-75: each kind searches only where its module is on.
+    let modules = {
+        let mut connection = pool.acquire().await?;
+        ProjectModules::load(&mut connection, viewer, projects).await?
+    };
+    // AWD-74: tasks only where the role (and an agent's limit) shows them.
     let task_projects = if kinds.contains(&SearchKind::Tasks) {
         projects_showing_tasks(pool, viewer, projects).await?
     } else {
@@ -113,6 +132,20 @@ pub async fn search(
     };
     let mut hits = Vec::new();
     for kind in kinds {
+        let projects = match kind {
+            SearchKind::Messages | SearchKind::Threads => modules.with_conversations(projects),
+            SearchKind::Tasks => modules.with(&task_projects, "tasks"),
+            SearchKind::Pages | SearchKind::Decisions => modules.with(projects, "pages"),
+            // Files hang off messages and tasks.
+            SearchKind::Files => modules.keep(projects, |set, direct| {
+                set.allows_conversations_in(if direct { "direct" } else { "standard" })
+                    || (!direct && set.contains("tasks"))
+            }),
+        };
+        if projects.is_empty() {
+            continue;
+        }
+        let projects = projects.as_slice();
         let sql = match kind {
             SearchKind::Messages => MESSAGES_SQL,
             SearchKind::Threads => THREADS_SQL,
@@ -123,11 +156,7 @@ pub async fn search(
         };
         let rows = sqlx::query_as::<_, SearchHit>(sql)
             .bind(viewer)
-            .bind(if *kind == SearchKind::Tasks {
-                &task_projects[..]
-            } else {
-                projects
-            })
+            .bind(projects)
             .bind(text)
             .bind(filter.conversation_id)
             .bind(filter.author_id)

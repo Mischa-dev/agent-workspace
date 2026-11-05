@@ -175,6 +175,21 @@ fn one() -> u32 {
     1
 }
 
+/// Every trigger kind, as [`Trigger::kind`] names them (AWD-75: each names
+/// its module in a manifest).
+pub const TRIGGER_KINDS: &[&str] = &[
+    "task_created",
+    "task_matches",
+    "run_finished",
+    "pull_request_checks_failed",
+    "message_posted",
+    "schedule",
+    "capacity_window",
+];
+
+/// Every action kind, as [`Action::kind`] names them.
+pub const ACTION_KINDS: &[&str] = &["launch", "set_field", "notify", "post_message"];
+
 impl Trigger {
     pub fn kind(&self) -> &'static str {
         match self {
@@ -533,6 +548,37 @@ const RULE_SELECT: &str = r#"
     LEFT JOIN users person ON person.actor_id = rule.owner_actor_id
     LEFT JOIN saved_views view ON view.project_id = rule.project_id AND view.id = rule.view_id
 "#;
+
+/// AWD-75: a module a rule needs (Automations, its trigger's and its
+/// actions') that's off in its workspace for its maker. Such a rule doesn't
+/// fire, and comes back when the module does.
+async fn module_off(
+    pool: &PgPool,
+    rule: &RuleRow,
+) -> Result<Option<&'static crate::modules::Manifest>, AppError> {
+    use crate::modules::manifest;
+    let mut connection = pool.acquire().await?;
+    let Some(modules) =
+        crate::modules::state::for_project(&mut connection, rule.project_id, rule.owner_actor_id)
+            .await?
+    else {
+        return Ok(None);
+    };
+    if modules.is_all() {
+        return Ok(None);
+    }
+    let mut needed = vec![manifest::get("automations")];
+    if let Ok(trigger) = rule.trigger() {
+        needed.push(manifest::of_trigger(trigger.kind()));
+    }
+    for action in rule.actions().unwrap_or_default() {
+        needed.push(manifest::of_action(action.kind()));
+    }
+    Ok(needed
+        .into_iter()
+        .flatten()
+        .find(|module| !modules.contains(&module.id)))
+}
 
 impl RuleRow {
     fn trigger(&self) -> Result<Trigger, AppError> {
@@ -1350,6 +1396,9 @@ pub async fn on_event(state: &AppState, event: &Event) -> Result<usize, AppError
             continue;
         }
         // Only what its maker could see fires it.
+        if module_off(pool, &rule).await?.is_some() {
+            continue;
+        }
         if !crate::webhooks::visible_to(pool, rule.owner_actor_id, rule.project_id, subject).await?
         {
             continue;
@@ -1855,6 +1904,10 @@ async fn fire(state: &AppState, run_id: Uuid) -> Result<(), AppError> {
     };
     if !rule.enabled {
         return finish(pool, run_id, "skipped", Some("The rule is off."), &[]).await;
+    }
+    if let Some(module) = module_off(pool, &rule).await? {
+        let reason = format!("{} is turned off in this workspace.", module.name);
+        return finish(pool, run_id, "skipped", Some(reason.as_str()), &[]).await;
     }
     let recent = sqlx::query_scalar::<_, i64>(
         r#"

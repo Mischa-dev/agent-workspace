@@ -40,6 +40,8 @@ export type EffectiveLayout = {
   lead: string[]
   /** An owner or admin is seeing what the layout hides. */
   showingHidden: boolean
+  /** Modules that are off for this person (AWD-75); their parts are in `hidden` too. */
+  modulesOff: string[]
 }
 
 /** A layout GET: what the person sees, and what the Layout settings pages read. */
@@ -89,6 +91,7 @@ export function normalizeEffective(value: unknown): EffectiveLayout {
     words,
     lead: strings(raw.lead),
     showingHidden: raw.showingHidden === true,
+    modulesOff: strings(raw.modulesOff),
   }
 }
 
@@ -96,6 +99,8 @@ export function normalizeEffective(value: unknown): EffectiveLayout {
 export type Experience = {
   /** Whether the person sees this part. Everything shows while the layout loads, or if it can't. */
   shows: (part: PartId) => boolean
+  /** Whether a module (`tasks`, `pages`, ...) is on for the person. All are while the layout loads. */
+  moduleOn: (module: string) => boolean
   /** A noun as the layout says it, in lower case: "task", or "to-do" in Personal life. */
   word: (noun: NounId, form?: 'one' | 'many') => string
   /** The same, with a capital first letter, for labels and titles: "Tasks", "To-dos". */
@@ -112,9 +117,11 @@ export function capitalized(text: string) {
 
 export function experienceFrom(effective: EffectiveLayout | null | undefined): Experience {
   const hidden = new Set(effective?.hidden ?? [])
+  const off = new Set(effective?.modulesOff ?? [])
   const word = (noun: NounId, form: 'one' | 'many' = 'one') => (effective?.words[noun] ?? OWN_WORDS[noun])[form]
   return {
     shows: (part) => !hidden.has(part),
+    moduleOn: (module) => !off.has(module),
     word,
     label: (noun, form = 'one') => capitalized(word(noun, form)),
     lead: effective?.lead ?? [],

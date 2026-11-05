@@ -49,6 +49,7 @@ pub mod message_content;
 pub mod message_edits;
 pub mod metrics;
 pub mod migration_preflight;
+pub mod modules;
 pub mod notification_email;
 pub mod notification_settings;
 pub mod notifications;
@@ -187,6 +188,7 @@ pub fn router(state: AppState) -> Router {
         .merge(agent_docs::router())
         .merge(settings::router())
         .merge(layouts::router())
+        .merge(modules::router())
         .merge(secrets::router())
         .merge(metrics::router())
         .merge(mcp::oauth_router())

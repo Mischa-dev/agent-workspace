@@ -1,0 +1,262 @@
+/* Pieces the app draws for modules (AWD-75). Each piece is its own
+   container, so it fits wherever it sits: a page, a Home card, a side panel or
+   an embed in a page. Below 600px of its own width a table turns into cards,
+   actions fold into a menu, and a board keeps scrolling inside itself. */
+
+.aw-piece {
+  container-type: inline-size;
+  min-width: 0;
+  color: var(--content-fg);
+  font: var(--t-body);
+}
+
+.aw-piece__title {
+  color: var(--content-fg);
+  font: var(--t-ui-strong);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.aw-piece__title:hover {
+  color: var(--link);
+  text-decoration: underline;
+}
+
+.aw-piece__none,
+.aw-piece__empty,
+.aw-piece__count,
+.aw-piece__kind {
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+}
+
+.aw-piece__value {
+  overflow-wrap: anywhere;
+}
+
+.aw-piece__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+}
+
+.aw-piece__meta-item,
+.aw-piece__meta dd {
+  margin: 0;
+  min-width: 0;
+}
+
+.aw-piece__group + .aw-piece__group {
+  margin-top: var(--space-4);
+}
+
+.aw-piece__group-title {
+  margin: 0 0 var(--space-2);
+  color: var(--content-fg-muted);
+  font: var(--t-caption-strong);
+}
+
+.aw-piece__rows,
+.aw-piece__cards {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-piece__row {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--border-width) solid var(--content-border);
+  min-width: 0;
+}
+
+/* Table: real columns when there's room. */
+.aw-piece__table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.aw-piece__table th {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--border-width) solid var(--content-border);
+  color: var(--content-fg-muted);
+  font: var(--t-caption-strong);
+  text-align: start;
+}
+
+.aw-piece__table td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--border-width) solid var(--content-border);
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.aw-piece__table th:first-child {
+  width: 40%;
+}
+
+/* Board: columns side by side, scrolling sideways inside the board. */
+.aw-piece__board {
+  display: flex;
+  gap: var(--space-3);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  padding-bottom: var(--space-2);
+  scroll-snap-type: x proximity;
+}
+
+.aw-piece__board:focus-visible {
+  outline: var(--focus-width) solid var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+.aw-piece__column {
+  flex: 0 0 var(--size-sidebar);
+  min-width: 0;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  scroll-snap-align: start;
+}
+
+.aw-piece__card {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border: var(--border-width) solid var(--content-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-card);
+  min-width: 0;
+}
+
+.aw-piece__card--alone {
+  max-width: var(--size-measure);
+}
+
+.aw-piece__kind {
+  margin: 0;
+}
+
+.aw-piece__detail {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.aw-piece__detail-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.aw-piece__detail-title {
+  margin: 0;
+  font: var(--t-title);
+  overflow-wrap: anywhere;
+}
+
+.aw-piece__form {
+  display: grid;
+  gap: var(--space-3);
+  max-width: var(--size-measure);
+}
+
+.aw-piece__form-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.aw-piece__actions {
+  display: flex;
+}
+
+.aw-piece__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.aw-piece__menu {
+  display: none;
+}
+
+@container (max-width: 600px) {
+  /* A table becomes a list of cards, each cell saying what it is. */
+  .aw-piece__table,
+  .aw-piece__table tbody,
+  .aw-piece__table tr,
+  .aw-piece__table td {
+    display: block;
+    width: auto;
+  }
+
+  .aw-piece__table thead {
+    display: none;
+  }
+
+  .aw-piece__table tr {
+    margin-bottom: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border: var(--border-width) solid var(--content-border);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+  }
+
+  .aw-piece__table td {
+    display: flex;
+    gap: var(--space-2);
+    padding: var(--space-1) 0;
+    border-bottom: 0;
+  }
+
+  .aw-piece__table td::before {
+    content: attr(data-label);
+    flex: 0 0 35%;
+    color: var(--content-fg-muted);
+    font: var(--t-small);
+  }
+
+  .aw-piece__buttons {
+    display: none;
+  }
+
+  .aw-piece__menu {
+    display: block;
+  }
+}
+
+/* The pieces gallery's frames. */
+.aw-piece-sample {
+  display: grid;
+  gap: var(--space-2);
+  margin-bottom: var(--space-6);
+  min-width: 0;
+}
+
+.aw-piece-sample__title {
+  margin: 0;
+  font: var(--t-ui-strong);
+}
+
+.aw-piece-sample__note {
+  margin: 0;
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+}
+
+.aw-piece__choices {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}

@@ -1,0 +1,68 @@
+{
+  "id": "pages",
+  "name": "Pages",
+  "description": "Pages and decisions kept with a project: its guide, notes, plans, agent skills and what it decided. Every version is kept.",
+  "version": 1,
+  "kind": "core",
+  "switchable": true,
+  "needs": ["projects"],
+  "worksWith": ["tasks", "whiteboards"],
+  "permissions": ["pages.edit"],
+  "tools": {
+    "page_list": "query",
+    "page_get": "describe",
+    "page_write": "change",
+    "skill_list": "query",
+    "skill_get": "describe",
+    "decision_list": "query",
+    "decision_record": "create"
+  },
+  "routes": [
+    "/api/v1/pages/*",
+    "/api/v1/projects/{id}/pages",
+    "/api/v1/projects/{id}/decisions"
+  ],
+  "events": { "emits": [], "listens": [] },
+  "notifications": [],
+  "search": ["pages", "decisions"],
+  "automations": { "triggers": [], "actions": [] },
+  "things": [
+    {
+      "kind": "page",
+      "one": "Page",
+      "many": "Pages",
+      "href": "/projects/{projectId}/pages/{id}",
+      "fields": [{ "id": "updatedAt", "label": "Edited", "type": "date" }]
+    },
+    {
+      "kind": "decision",
+      "one": "Decision",
+      "many": "Decisions",
+      "href": "/projects/{projectId}/decisions",
+      "fields": [{ "id": "decidedAt", "label": "Decided", "type": "date" }]
+    }
+  ],
+  "links": [],
+  "embeds": [
+    {
+      "id": "pages.card",
+      "label": "Page",
+      "description": "A page's title, who edited it last and when.",
+      "thing": "page",
+      "piece": { "type": "card", "thing": "page", "fields": ["owner", "updatedAt"], "actions": ["open"] }
+    }
+  ],
+  "slots": {
+    "pages": ["/projects/:projectId/pages", "/projects/:projectId/pages/:pageId", "/projects/:projectId/decisions"],
+    "parts": ["area.pages", "area.decisions"],
+    "sidebar": [],
+    "home": [],
+    "settings": [],
+    "palette": ["p:pages", "p:decisions"],
+    "shortcuts": ["go-pages", "go-decisions"],
+    "slash": [],
+    "setup": []
+  },
+  "settings": [],
+  "nouns": ["page"]
+}

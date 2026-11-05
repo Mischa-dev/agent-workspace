@@ -326,6 +326,8 @@ struct RoleRow {
     permissions: Vec<String>,
     agent_limit: Option<Vec<String>>,
     defaults: Value,
+    /// Modules off for holders (AWD-75).
+    modules_off: Vec<String>,
     is_default: bool,
     version: i64,
     updated_at: DateTime<Utc>,
@@ -366,6 +368,9 @@ pub(crate) struct RoleView {
     /// same as the holder.
     pub agent_limit: Option<Vec<&'static str>>,
     pub defaults: RoleDefaults,
+    /// Modules holders don't get, on top of what the workspace has off
+    /// (AWD-75). Never any for the owner role.
+    pub modules_off: Vec<String>,
     pub is_default: bool,
     pub version: i64,
     pub updated_at: DateTime<Utc>,
@@ -428,6 +433,7 @@ fn role_view(caller: Standing, row: RoleRow) -> Result<RoleView, AppError> {
             .as_deref()
             .map(|keys| PermissionSet::from_keys(keys).keys()),
         defaults,
+        modules_off: row.modules_off,
         is_default: row.is_default,
         version: row.version,
         updated_at: row.updated_at,
@@ -439,7 +445,8 @@ fn role_view(caller: Standing, row: RoleRow) -> Result<RoleView, AppError> {
 
 const ROLE_SELECT: &str = r#"
     SELECT role.id, role.key, role.built_in, role.base_role, role.name, role.description,
-           role.permissions, role.agent_limit, role.defaults, role.is_default, role.version,
+           role.permissions, role.agent_limit, role.defaults, role.modules_off, role.is_default,
+           role.version,
            role.updated_at,
            (SELECT count(*) FROM organization_memberships holder
              JOIN actors actor ON actor.id = holder.actor_id AND actor.status = 'active'
@@ -843,6 +850,7 @@ fn audit_shape(view: &RoleView) -> Value {
         "permissions": view.permissions,
         "agentLimit": view.agent_limit,
         "defaults": view.defaults,
+        "modulesOff": view.modules_off,
         "isDefault": view.is_default,
     })
 }
@@ -862,6 +870,9 @@ pub(crate) struct RoleInput {
     pub agent_limit: Option<Vec<String>>,
     #[serde(default)]
     pub defaults: RoleDefaults,
+    /// Modules off for holders (AWD-75).
+    #[serde(default)]
+    pub modules_off: Vec<String>,
     #[serde(default)]
     pub is_default: bool,
 }
@@ -895,6 +906,24 @@ fn custom_permissions(
         return Err(AppError::Forbidden);
     }
     Ok(permissions)
+}
+
+/// AWD-75: the modules a role turns off: modules that can be switched off,
+/// once each, in the order the Modules page lists them.
+fn checked_modules_off(modules: &[String]) -> Result<Vec<String>, AppError> {
+    for module in modules {
+        if !crate::modules::manifest::get(module).is_some_and(|found| found.switchable) {
+            return Err(AppError::Refused {
+                field: "modulesOff",
+                message: "Name modules from module_list that can be turned off.",
+            });
+        }
+    }
+    Ok(crate::modules::core()
+        .iter()
+        .filter(|module| modules.contains(&module.id))
+        .map(|module| module.id.clone())
+        .collect())
 }
 
 fn limit_keys(keys: Option<&[String]>) -> Result<Option<Vec<&'static str>>, AppError> {
@@ -949,6 +978,7 @@ pub(crate) async fn create(
             message: "New members can't start with a role based on Admin.",
         });
     }
+    let modules_off = checked_modules_off(&input.modules_off)?;
     let defaults = checked_defaults(transaction, organization_id, input.defaults).await?;
     lock_roles(transaction, organization_id).await?;
     let count = sqlx::query_scalar::<_, i64>(
@@ -986,8 +1016,9 @@ pub(crate) async fn create(
         r#"
         INSERT INTO workspace_roles (
             id, organization_id, key, built_in, base_role, name, description, permissions,
-            agent_limit, defaults, is_default, created_by_actor_id, updated_by_actor_id
-        ) VALUES ($1, $2, $3, false, $4, $5, $6, $7, $8, $9, $10, $11, $11)
+            agent_limit, defaults, is_default, created_by_actor_id, updated_by_actor_id,
+            modules_off
+        ) VALUES ($1, $2, $3, false, $4, $5, $6, $7, $8, $9, $10, $11, $11, $12)
         "#,
     )
     .bind(id)
@@ -1001,6 +1032,7 @@ pub(crate) async fn create(
     .bind(serde_json::to_value(&defaults).map_err(|_| AppError::Internal("role defaults"))?)
     .bind(input.is_default)
     .bind(caller.actor_id)
+    .bind(&modules_off)
     .execute(&mut **transaction)
     .await
     .map_err(name_taken)?;
@@ -1050,6 +1082,9 @@ pub(crate) struct RoleChange {
     pub agent_limit: Option<Option<Vec<String>>>,
     #[serde(default)]
     pub defaults: Option<RoleDefaults>,
+    /// Modules off for holders (AWD-75); left out, they stay.
+    #[serde(default)]
+    pub modules_off: Option<Vec<String>>,
     #[serde(default)]
     pub is_default: Option<bool>,
 }
@@ -1119,6 +1154,16 @@ pub(crate) async fn change(
         None => before.defaults.clone(),
         Some(defaults) => checked_defaults(transaction, organization_id, defaults).await?,
     };
+    let modules_off = match change.modules_off.as_deref() {
+        None => before.modules_off.clone(),
+        Some(modules) if before.key == "owner" && !modules.is_empty() => {
+            return Err(AppError::Refused {
+                field: "modulesOff",
+                message: "Owners always have every module the workspace has on.",
+            });
+        }
+        Some(modules) => checked_modules_off(modules)?,
+    };
     let is_default = change.is_default.unwrap_or(before.is_default);
     if is_default && !before.is_default {
         if matches!(base, MembershipRole::Owner | MembershipRole::Admin) {
@@ -1139,7 +1184,7 @@ pub(crate) async fn change(
         UPDATE workspace_roles
         SET name = $3, description = $4, permissions = COALESCE($5, permissions),
             agent_limit = $6, defaults = $7, is_default = $8, updated_by_actor_id = $9,
-            version = version + 1, updated_at = now()
+            modules_off = $10, version = version + 1, updated_at = now()
         WHERE organization_id = $1 AND id = $2
         "#,
     )
@@ -1152,6 +1197,7 @@ pub(crate) async fn change(
     .bind(serde_json::to_value(&defaults).map_err(|_| AppError::Internal("role defaults"))?)
     .bind(is_default)
     .bind(caller.actor_id)
+    .bind(&modules_off)
     .execute(&mut **transaction)
     .await
     .map_err(name_taken)?;

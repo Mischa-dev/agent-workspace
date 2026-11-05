@@ -112,6 +112,12 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         NavigationWrite
     ),
     policy_route!(
+        "modules/http",
+        Put,
+        "/api/v1/organizations/{organization_id}/modules",
+        SettingsManage
+    ),
+    policy_route!(
         "layouts",
         Post,
         "/api/v1/organizations/{organization_id}/layout/presets",

@@ -209,7 +209,21 @@ pub async fn queue_route(
 /// automations. Public so tests can route without the job queue.
 pub(crate) async fn route(state: &AppState, payload: &RoutePayload) -> Result<usize, AppError> {
     let events = expand(&state.pool, payload).await?;
+    // AWD-75: with Automations off (it holds webhooks too), nothing follows
+    // the workspace's events; nor do events of a module that's off.
+    let modules = {
+        let mut connection = state.pool.acquire().await?;
+        crate::modules::state::workspace(&mut connection, payload.organization_id).await?
+    };
+    if !modules.contains("automations") {
+        return Ok(0);
+    }
     for event in &events {
+        if crate::modules::manifest::of_event(&event.event_type)
+            .is_some_and(|module| !modules.contains(&module.id))
+        {
+            continue;
+        }
         crate::webhooks::fan_out(state, event).await?;
         crate::automations::on_event(state, event).await?;
     }

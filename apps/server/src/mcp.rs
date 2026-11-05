@@ -82,6 +82,7 @@ mod later_tools;
 mod launch_tools;
 mod memory_tools;
 mod message_edits;
+mod module_tools;
 mod notifications;
 mod oauth;
 mod planning;
@@ -270,6 +271,19 @@ impl McpServer {
     ) -> Json<common::ToolResult<settings_tools::SettingsValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(settings_tools::settings_get(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Which modules are on in a workspace (Messages, Projects, Channels, Tasks, Pages, Whiteboards, Runs, Code, Agents, Inbox, Automations, Suggestions) and what each does: its kinds of thing, its tools by what they do (describe, query, create, change, suggest), the live blocks it offers for pages, and why one is off. Pass module for one module's full declaration. Tools of a module that's off aren't listed and say so when called.",
+        annotations(title = "List modules", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn module_list(
+        &self,
+        Parameters(arguments): Parameters<module_tools::ModuleListArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<module_tools::ModuleListValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(module_tools::module_list(&self.state, principal, arguments).await)
     }
 
     #[tool(
@@ -1625,6 +1639,19 @@ impl McpServer {
     // -- Search and memory ---------------------------------------------------
 
     #[tool(
+        description = "Open any thing (a task, page, decision, whiteboard, thread, channel, conversation or project) with its title, status, owner and link, and its links read both ways: part of, blocks and blocked by, about and referenced in, related to, duplicates. Only things you can see, from modules that are on.",
+        annotations(title = "Open a thing", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn thing_open(
+        &self,
+        Parameters(arguments): Parameters<module_tools::ThingOpenArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<module_tools::ThingOpenValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(module_tools::thing_open(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
         description = "Search messages, threads, tasks, pages and decisions you can see. Settled things (decisions, pages, thread outcomes) rank first. Narrow by kind, project, conversation, author (from), or dates.",
         annotations(title = "Search", read_only_hint = true, open_world_hint = false)
     )]
@@ -2805,10 +2832,18 @@ impl ServerHandler for McpServer {
                 PermissionSet::required()
             }
         };
+        // AWD-75: and only tools of modules that are on for them somewhere.
+        let modules = match caller_modules_anywhere(&self.state, &principal).await {
+            Ok(modules) => modules,
+            Err(error) => {
+                tracing::error!(category = error.log_category(), "MCP module lookup failed");
+                crate::modules::ModuleSet::always_on()
+            }
+        };
         Ok(ListToolsResult::with_all_items(
             tools
                 .into_iter()
-                .filter(|tool| tool_listed(&tool.name, reach))
+                .filter(|tool| tool_listed(&tool.name, reach) && modules.allows_tool(&tool.name))
                 .collect(),
         )
         .with_ttl_ms(LIST_TTL_MS)
@@ -2876,6 +2911,56 @@ async fn caller_reach(
             crate::roles::agent_union(&mut connection, principal.actor_id).await?,
             None,
         ))
+    }
+}
+
+/// The modules on for the caller in at least one workspace or project they
+/// belong to (AWD-75): what their tool list follows, with their roles and
+/// agent limits.
+async fn caller_modules_anywhere(
+    state: &AppState,
+    principal: &McpPrincipal,
+) -> Result<crate::modules::ModuleSet, AppError> {
+    let mut connection = state.pool.acquire().await?;
+    crate::modules::state::anywhere(&mut connection, principal.actor_id).await
+}
+
+/// The modules on for the caller where a call acts: the project it names
+/// (or the connection's own), narrowed by their role there. An app
+/// connected for a person's whole account that names no project follows
+/// every workspace they're in.
+async fn caller_modules_here(
+    state: &AppState,
+    principal: &McpPrincipal,
+) -> Result<crate::modules::ModuleSet, AppError> {
+    let mut connection = state.pool.acquire().await?;
+    if (principal.project_explicit || !principal.account_wide)
+        && let Some(modules) = crate::modules::state::for_project(
+            &mut connection,
+            principal.project_id,
+            principal.actor_id,
+        )
+        .await?
+    {
+        return Ok(modules);
+    }
+    crate::modules::state::anywhere(&mut connection, principal.actor_id).await
+}
+
+/// A call to a tool of a module that's off, in the shape `refusal` uses.
+fn module_refusal(tool: &str, module: &str) -> rmcp::model::CallToolResponse {
+    let message = format!(
+        "{tool} belongs to {module}, which is turned off here (for this workspace, or for your role). module_list says which modules are on and why."
+    );
+    match refusal(tool, message) {
+        rmcp::model::CallToolResponse::Complete(mut result) => {
+            if let Some(structured) = result.structured_content.as_mut() {
+                structured["retryCategory"] = serde_json::json!("module");
+                structured["module"] = serde_json::json!(module);
+            }
+            rmcp::model::CallToolResponse::Complete(result)
+        }
+        other => other,
     }
 }
 
@@ -2957,6 +3042,24 @@ async fn run_tool(
                 permission.info().label,
             ),
         ));
+    }
+    // AWD-75: a tool of a module that's off where the call acts says so.
+    if let Some(module) = crate::modules::manifest::of_tool(&request.name)
+        && module.switchable
+    {
+        match caller_modules_here(&server.state, &principal).await {
+            Ok(modules) if modules.contains(&module.id) => {}
+            Ok(_) => {
+                return Ok(module_refusal(&request.name, &module.name));
+            }
+            Err(error) => {
+                tracing::error!(category = error.log_category(), "MCP module lookup failed");
+                return Ok(refusal(
+                    &request.name,
+                    "Couldn't check your access just now. Try again.".to_owned(),
+                ));
+            }
+        }
     }
     let call = McpServer::tools().call(rmcp::handler::server::tool::ToolCallContext::new(
         server, request, context,

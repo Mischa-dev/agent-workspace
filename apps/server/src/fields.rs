@@ -1727,6 +1727,22 @@ mod tests {
         field
     }
 
+    /// The modules contract (AWD-75) names field types as task fields
+    /// store them; every stored type must be one it reads.
+    #[test]
+    fn every_field_type_is_a_contract_field_type() {
+        for field_type in FieldType::ALL {
+            let read = serde_json::from_value::<crate::modules::contract::FieldType>(json!(
+                field_type.as_str()
+            ));
+            assert!(
+                read.is_ok(),
+                "{} isn't a contract field type",
+                field_type.as_str()
+            );
+        }
+    }
+
     #[test]
     fn types_read_the_way_people_write_them() {
         assert_eq!(

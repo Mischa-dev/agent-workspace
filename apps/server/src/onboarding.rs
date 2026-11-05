@@ -263,8 +263,14 @@ pub async fn onboarding_for(
         Some((project_id, _)) => done.extend(project_steps(state, *project_id, actor_id).await?),
         None => done.extend(STEPS[2..].iter().map(|step| (*step, false))),
     }
+    // AWD-75: steps of modules that are off don't show.
+    let modules = {
+        let mut connection = state.pool.acquire().await?;
+        crate::modules::state::for_member(&mut connection, organization_id, actor_id).await?
+    };
     let steps = done
         .into_iter()
+        .filter(|(id, _)| modules.allows_setup_step(id))
         .map(|(id, done)| Step {
             id,
             done,
