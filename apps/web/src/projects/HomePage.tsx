@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
 import { useHomeExperience } from '../experience/layout'
+import { moduleOf } from '../modules/slots'
 import { AppShell } from '../shell/AppShell'
 import { defaultWorkspace } from '../settings/workspaceChoice'
 import { Badge, Banner, ButtonLink, EmptyState, ErrorState, Icon, ListSkeleton, PageHeader, Row, RowList, Section, relativeDay } from '../ui'
@@ -62,10 +63,15 @@ export function HomePage() {
     }
   }
 
+  // AWD-75: a Home section of a module that's off doesn't show.
+  const homeOn = (section: string) => {
+    const module = moduleOf('home', section)
+    return !module || experience.moduleOn(module)
+  }
   // Sections this layout shows; the ones that loaded empty fold into one line above the rest.
   const sections = (
     [
-      ['needsYou', true],
+      ['needsYou', homeOn('needsYou')],
       ['working', experience.shows('home.working_now')],
       ['capacity', experience.shows('home.capacity')],
       ['tasks', experience.shows('workspace.my_work')],
@@ -86,7 +92,7 @@ export function HomePage() {
     <AppShell home mainClassName="aw-main--page" user={session.user}>
       <div className="aw-page aw-home">
         {/* With no projects yet, the empty state below holds the one New project button. */}
-        <PageHeader actions={canCreate && !noProjects ? newProject : null} title={homeGreeting(firstName(session.user.displayName), firstVisit)} />
+        <PageHeader actions={canCreate && !noProjects && homeOn('recent') ? newProject : null} title={homeGreeting(firstName(session.user.displayName), firstVisit)} />
         {notice && (
           <Banner className="aw-page__banner" tone="success">
             {notice}
@@ -104,6 +110,7 @@ export function HomePage() {
           <div className="aw-home__column">
             {right.includes('capacity') ? <Capacity /> : null}
             {right.includes('tasks') ? <YourTasks /> : null}
+            {homeOn('recent') ? (
             <Section
               actions={activeProjects.length > 0 ? <MoreLink to="/projects">All projects</MoreLink> : null}
               id="recent-projects-heading"
@@ -146,6 +153,7 @@ export function HomePage() {
                 </RowList>
               )}
             </Section>
+            ) : null}
           </div>
         </div>
       </div>

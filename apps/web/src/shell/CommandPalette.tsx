@@ -4,10 +4,12 @@ import { useLocation, useNavigate } from 'react-router-dom'
 
 import { clearAuthenticatedQueryCache, logout, useAuthenticatedSession } from '../auth/session'
 import { useProjectConversationSidebar } from '../conversations/hooks'
+import { useHomeExperience, useProjectExperience } from '../experience/layout'
 import { conversationTitle, openDm, useDirectOverview } from '../direct/api'
 import { projectLocationHref } from '../projects/locations'
 import { projectSettingsHref } from '../settings/paths'
 import { useProjectSearch, useProjects, useSwitchProject, useUpdateProjectNavigation } from '../projects/hooks'
+import { moduleOf } from '../modules/slots'
 import { ProjectInitials } from '../projects/ProjectInitials'
 import type { Project } from '../projects/types'
 import { THEME_PRESETS } from '../theme/slots'
@@ -79,6 +81,10 @@ export function CommandPalette() {
     [projectsQuery.data?.projects],
   )
   const current = useRouteProject(projects)
+  // AWD-75: entries of modules that are off for the person don't show.
+  const projectExperience = useProjectExperience(current?.id)
+  const homeExperience = useHomeExperience()
+  const experience = current ? projectExperience : homeExperience
   const direct = useDirectOverview()
   const { mutateAsync: updateNavigation } = useUpdateProjectNavigation()
   const { mutateAsync: switchProject } = useSwitchProject()
@@ -401,13 +407,22 @@ export function CommandPalette() {
     return list
   }, [current, direct.data, location.pathname, navigate, notificationPause, projectSearch.data, projects, query, queryClient, session.user, sidebar.data, state.open, state.page, switchProject, tasks.data, theme, updateNavigation])
 
+  const shownItems = useMemo(
+    () =>
+      items.filter((item) => {
+        const module = paletteModule(item.id)
+        return !module || experience.moduleOn(module)
+      }),
+    [experience, items],
+  )
+
   // With nothing typed, show where you'd most likely go; everything else is a search away.
   const visibleItems = useMemo(() => {
-    if (query.trim()) return items
+    if (query.trim()) return shownItems
     const quiet = new Set(['Threads', 'People', 'Theme'])
     // The project's main places; the rest (Timeline, Graph, Import a plan…) come up as you type.
     const projectFirst = new Set(['p:overview', 'p:tasks', 'p:board', 'p:pages'])
-    return items.filter(
+    return shownItems.filter(
       (item) =>
         !quiet.has(item.group) &&
         !(item.id.startsWith('p:') && !projectFirst.has(item.id)) &&
@@ -415,7 +430,7 @@ export function CommandPalette() {
         !item.id.startsWith('a:create-task:') &&
         !item.id.startsWith('a:pause-notifications:'),
     )
-  }, [items, query])
+  }, [shownItems, query])
 
   return (
     <>
@@ -458,6 +473,11 @@ function ShortcutSheet({ inProject, onClose, open, taskView }: { inProject: bool
   const groups = ['General', 'Go to', 'Conversations'] as const
   // The sheet already says how to open itself.
   const taskKeys = (taskView === 'board' ? BOARD_SHORTCUTS : LIST_SHORTCUTS).filter((shortcut) => shortcut.keys.join() !== '?')
+  const experience = useHomeExperience()
+  const shortcutOn = (action: string) => {
+    const module = moduleOf('shortcuts', action)
+    return !module || experience.moduleOn(module)
+  }
   return (
     <Dialog
       description={
@@ -495,7 +515,7 @@ function ShortcutSheet({ inProject, onClose, open, taskView }: { inProject: bool
           <section key={group}>
             <h3>{group}</h3>
             <dl>
-              {SHORTCUTS.filter((shortcut) => shortcut.group === group).map((shortcut) => (
+              {SHORTCUTS.filter((shortcut) => shortcut.group === group && shortcutOn(shortcut.action)).map((shortcut) => (
                 <div className="aw-shortcuts__row" key={shortcut.action} style={{ display: 'contents' }}>
                   <dt>{shortcut.label}</dt>
                   <dd aria-label={shortcut.keys.length === 2 && shortcut.keys[0] === 'G' ? `G then ${shortcut.keys[1]}` : shortcut.keys.map(spokenKey).join(' ')}>
@@ -565,4 +585,9 @@ function MarkAllReadDialog({ onClose, open, projectIds }: { onClose: () => void;
       title="Mark all messages read?"
     />
   )
+}
+
+/** The module a palette entry belongs to; slash commands follow their own. */
+function paletteModule(id: string) {
+  return id.startsWith('slash:') ? moduleOf('slash', id.slice('slash:'.length)) : moduleOf('palette', id)
 }
