@@ -32,10 +32,16 @@ function editTarget(card: WorkItemCard): EditTarget {
   return { id: card.id, projectId: card.projectId, version: card.version, key: card.key }
 }
 
-/** Custom field columns go just before the assignee, which ends the row, or at the end without it. */
+/**
+ * Custom field columns go just before the assignee, which ends the row, or
+ * at the end without it. Beside them the details column gives up some room,
+ * so the title keeps enough to read.
+ */
 function withCustomColumns(columns: TableColumn[], custom: TableColumn[]): TableColumn[] {
-  const at = columns.findIndex((column) => column.id === 'assignee')
-  return at < 0 ? [...columns, ...custom] : [...columns.slice(0, at), ...custom, ...columns.slice(at)]
+  if (!custom.length) return columns
+  const narrowed = columns.map((column) => (column.id === 'details' ? { ...column, width: 'minmax(0, min(160px, 15%))' } : column))
+  const at = narrowed.findIndex((column) => column.id === 'assignee')
+  return at < 0 ? [...narrowed, ...custom] : [...narrowed.slice(0, at), ...custom, ...narrowed.slice(at)]
 }
 
 type PickerState = { field: PickerField; anchor: HTMLElement; targets: WorkItemCard[] }
@@ -461,7 +467,9 @@ export function WorkItemList({
         ...Object.fromEntries(
           customColumns.map(({ key, field }) => [
             key,
-            <FieldValueView field={field} key={key} references={card.fieldReferences} value={card.fieldValues[field.id]} />,
+            <span className="aw-tasks__field" key={key}>
+              <FieldValueView field={field} references={card.fieldReferences} value={card.fieldValues[field.id]} />
+            </span>,
           ]),
         ),
       },
@@ -488,7 +496,7 @@ export function WorkItemList({
               !(column.id === 'key' && !fields.keys) &&
               !(column.id === 'due' && !fields.dates),
           ),
-          customColumns.map(({ key, field }) => ({ id: key, header: field.name, width: 'minmax(0, 140px)', hideOnPhone: true })),
+          customColumns.map(({ key, field }) => ({ id: key, header: field.name, width: 'minmax(0, 120px)', hideOnPhone: true })),
         )}
         label="Tasks"
         onActivate={(key) => {

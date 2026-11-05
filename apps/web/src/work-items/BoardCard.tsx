@@ -147,20 +147,21 @@ export const BoardCard = memo(function BoardCard({
   )
 })
 
-/** The custom fields a card has values for (AWD-89), each with its name; nothing when it has none. */
+/** Most custom fields a card shows, in the project's order, so cards stay small. */
+const CARD_FIELDS = 4
+
+/** The custom fields a card has values for (AWD-89), each with its name, wrapping onto more lines; nothing when it has none. */
 function CardCustomFields({ card, fields }: { card: WorkItemCard; fields: readonly FieldDefinition[] }) {
-  const set = fields.filter((field) => field.type !== 'text' && !isEmpty(card.fieldValues[field.id]))
+  const set = fields.filter((field) => field.type !== 'text' && !isEmpty(card.fieldValues[field.id])).slice(0, CARD_FIELDS)
   if (!set.length) return null
   return (
-    <div className="aw-tcard__meta">
-      <span className="aw-taskmeta">
-        {set.map((field) => (
-          <span className="aw-taskmeta__item" key={field.id} title={field.name}>
-            <span className="aw-taskmeta__text">{field.name}</span>
-            <FieldValueView field={field} references={card.fieldReferences} value={card.fieldValues[field.id]} />
-          </span>
-        ))}
-      </span>
-    </div>
+    <ul aria-label="Fields" className="aw-tcard__fields">
+      {set.map((field) => (
+        <li className="aw-taskmeta__item" key={field.id} title={field.name}>
+          <span className="aw-taskmeta__text">{field.name}</span>
+          <FieldValueView field={field} references={card.fieldReferences} value={card.fieldValues[field.id]} />
+        </li>
+      ))}
+    </ul>
   )
 }

@@ -405,3 +405,20 @@
     transform: none;
   }
 }
+
+/* A card's custom fields (AWD-89): wrap onto more lines rather than clip. */
+.aw-tcard__fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-tcard__fields .aw-taskmeta__item {
+  flex: 0 1 auto;
+  min-width: 0;
+}
