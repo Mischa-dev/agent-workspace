@@ -6,7 +6,7 @@
 //!
 //! * the types (`FieldType`) and their settings (`FieldConfig`: choice
 //!   options, a link's target);
-//! * the definitions table (migration 20261105040000): list, create, change;
+//! * the definitions table (migration 20261105041500): list, create, change;
 //! * checking a value someone wrote (`normalize_value`) and how a stored
 //!   value reads (`display_value`);
 //! * filters (`FieldClause`), sorts and groups as SQL over a JSONB column of
