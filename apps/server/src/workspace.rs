@@ -199,6 +199,8 @@ struct WorkspaceRow {
     version: i64,
     created_at: DateTime<Utc>,
     member_count: i64,
+    people_count: i64,
+    agent_count: i64,
     project_count: i64,
     owner_count: i64,
 }
@@ -212,7 +214,10 @@ struct WorkspaceView {
     version: i64,
     created_at: DateTime<Utc>,
     role: &'static str,
+    /// People and agents together; `people_count` and `agent_count` split it.
     member_count: i64,
+    people_count: i64,
+    agent_count: i64,
     project_count: i64,
     capabilities: WorkspaceCapabilities,
 }
@@ -248,6 +253,14 @@ async fn load_workspace(
                  JOIN actors actor ON actor.id = membership.actor_id
                  WHERE membership.organization_id = organization.id AND membership.enabled
                    AND actor.kind IN ('human', 'external_agent')) AS member_count,
+               (SELECT count(*) FROM organization_memberships membership
+                 JOIN actors actor ON actor.id = membership.actor_id
+                 WHERE membership.organization_id = organization.id AND membership.enabled
+                   AND actor.kind = 'human') AS people_count,
+               (SELECT count(*) FROM organization_memberships membership
+                 JOIN actors actor ON actor.id = membership.actor_id
+                 WHERE membership.organization_id = organization.id AND membership.enabled
+                   AND actor.kind = 'external_agent') AS agent_count,
                (SELECT count(*) FROM projects project
                  WHERE project.organization_id = organization.id
                    AND project.archived_at IS NULL AND project.kind <> 'direct') AS project_count,
@@ -270,6 +283,8 @@ async fn load_workspace(
         created_at: row.created_at,
         role: role_name(role),
         member_count: row.member_count,
+        people_count: row.people_count,
+        agent_count: row.agent_count,
         project_count: row.project_count,
         capabilities: WorkspaceCapabilities {
             rename: role.manages(),

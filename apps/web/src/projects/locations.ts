@@ -1,12 +1,39 @@
-import type { ProjectLocation } from './types'
+import type { PlainProjectPlace, ProjectLocation } from './types'
 
-const supportedKinds = new Set([
-  'project_overview',
-  'channel',
-  'thread',
-  'work_items',
-  'settings',
-])
+/**
+ * Where each plain place lives under /projects/:id. Settings aren't a place
+ * in the project to come back to: a project that last remembered them (older
+ * clients saved it) opens on its overview, so its own tile always leads out of
+ * settings.
+ */
+const PLACE_PATHS: Record<PlainProjectPlace, string> = {
+  project_overview: '',
+  settings: '',
+  work_items: '/work-items',
+  milestones: '/milestones',
+  timeline: '/timeline',
+  planning: '/next',
+  pages: '/pages',
+  decisions: '/decisions',
+  runs: '/launches',
+}
+
+/** Paths that open a plain place (the first match wins); a task opens within Tasks. */
+const PATH_PLACES: [string, PlainProjectPlace][] = [
+  ['/work-items', 'work_items'],
+  ['/milestones', 'milestones'],
+  ['/timeline', 'timeline'],
+  ['/next', 'planning'],
+  ['/suggestions', 'planning'],
+  ['/graph', 'planning'],
+  ['/plan-import', 'planning'],
+  ['/decisions', 'decisions'],
+  ['/launches', 'runs'],
+]
+
+function isPlainPlace(kind: string): kind is PlainProjectPlace {
+  return Object.hasOwn(PLACE_PATHS, kind)
+}
 
 export function projectLocationHref(
   projectId: string,
@@ -19,11 +46,10 @@ export function projectLocationHref(
   if (location.kind === 'thread') {
     return `/projects/${project}/threads/${encodeURIComponent(location.conversationId)}`
   }
-  // Settings aren't a place in the Project to come back to: opening a Project
-  // that last remembered them (older clients saved it) lands on its overview,
-  // so the Project's own tile always leads out of settings.
-  if (location.kind === 'work_items') return `/projects/${project}/work-items`
-  return `/projects/${project}`
+  if (location.kind === 'page') {
+    return `/projects/${project}/pages/${encodeURIComponent(location.pageId)}`
+  }
+  return `/projects/${project}${PLACE_PATHS[location.kind]}`
 }
 
 export function safeProjectHref(
@@ -35,6 +61,18 @@ export function safeProjectHref(
   return href === canonical ? href : canonical
 }
 
+/** The one id after `prefix` in `pathname`, or null when there isn't exactly one. */
+function idAfter(pathname: string, prefix: string) {
+  if (!pathname.startsWith(prefix)) return null
+  const encodedId = pathname.slice(prefix.length)
+  if (!encodedId || encodedId.includes('/')) return null
+  try {
+    return decodeURIComponent(encodedId) || null
+  } catch {
+    return null
+  }
+}
+
 export function projectLocationFromPath(
   projectId: string,
   pathname: string,
@@ -42,46 +80,23 @@ export function projectLocationFromPath(
   const projectRoot = `/projects/${encodeURIComponent(projectId)}`
   if (pathname === projectRoot) return { kind: 'project_overview' }
   if (pathname === `${projectRoot}/settings`) return { kind: 'settings' }
-  if (
-    pathname === `${projectRoot}/work-items` ||
-    pathname.startsWith(`${projectRoot}/work-items/`)
-  ) {
-    return { kind: 'work_items' }
+  if (pathname === `${projectRoot}/pages`) return { kind: 'pages' }
+  for (const [path, kind] of PATH_PLACES) {
+    if (pathname === `${projectRoot}${path}` || pathname.startsWith(`${projectRoot}${path}/`)) return { kind }
   }
-  const channelPrefix = `${projectRoot}/channels/`
-  if (pathname.startsWith(channelPrefix)) {
-    const encodedId = pathname.slice(channelPrefix.length)
-    if (!encodedId || encodedId.includes('/')) return null
-    try {
-      const conversationId = decodeURIComponent(encodedId)
-      return conversationId ? { kind: 'channel', conversationId } : null
-    } catch {
-      return null
-    }
-  }
-  const threadPrefix = `${projectRoot}/threads/`
-  if (pathname.startsWith(threadPrefix)) {
-    const encodedId = pathname.slice(threadPrefix.length)
-    if (!encodedId || encodedId.includes('/')) return null
-    try {
-      const conversationId = decodeURIComponent(encodedId)
-      return conversationId ? { kind: 'thread', conversationId } : null
-    } catch {
-      return null
-    }
-  }
+  const pageId = idAfter(pathname, `${projectRoot}/pages/`)
+  if (pageId) return { kind: 'page', pageId }
+  const channelId = idAfter(pathname, `${projectRoot}/channels/`)
+  if (channelId) return { kind: 'channel', conversationId: channelId }
+  const threadId = idAfter(pathname, `${projectRoot}/threads/`)
+  if (threadId) return { kind: 'thread', conversationId: threadId }
   return null
 }
 
 export function normalizeLocation(value: unknown): ProjectLocation {
   if (!value || typeof value !== 'object') return { kind: 'project_overview' }
-  const candidate = value as { kind?: unknown; conversationId?: unknown }
-  if (
-    typeof candidate.kind !== 'string' ||
-    !supportedKinds.has(candidate.kind)
-  ) {
-    return { kind: 'project_overview' }
-  }
+  const candidate = value as { kind?: unknown; conversationId?: unknown; pageId?: unknown }
+  if (typeof candidate.kind !== 'string') return { kind: 'project_overview' }
   if (
     (candidate.kind === 'channel' || candidate.kind === 'thread') &&
     typeof candidate.conversationId === 'string' &&
@@ -89,8 +104,10 @@ export function normalizeLocation(value: unknown): ProjectLocation {
   ) {
     return { kind: candidate.kind, conversationId: candidate.conversationId }
   }
-  if (candidate.kind === 'settings') return { kind: 'settings' }
-  if (candidate.kind === 'work_items') return { kind: 'work_items' }
+  if (candidate.kind === 'page' && typeof candidate.pageId === 'string' && candidate.pageId) {
+    return { kind: 'page', pageId: candidate.pageId }
+  }
+  if (isPlainPlace(candidate.kind)) return { kind: candidate.kind }
   return { kind: 'project_overview' }
 }
 
@@ -105,5 +122,6 @@ export function locationsEqual(
   ) {
     return left.conversationId === right.conversationId
   }
+  if (left.kind === 'page' && right.kind === 'page') return left.pageId === right.pageId
   return true
 }

@@ -246,6 +246,13 @@ in `AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS`, comma separated, such as
 `http://100.119.56.3:8732`. Set it before upgrading to a release with these
 checks, or those wakeups start failing and agents fall back to their timers.
 
+Two more optional settings. `AGENT_WORKSPACE_OPERATOR_LOGINS` lists, comma
+separated, the logins (besides whoever ran `bootstrap-admin`) who see
+Settings › Workspace › Server; a workspace owner who doesn't run the server
+doesn't. `AGENT_WORKSPACE_ALLOW_PRIVATE_ADDRESSES=true` lets a workspace point
+its model provider or SMTP server at this machine or a private network (such
+as a local model or mail relay); without it both must be public addresses.
+
 GitHub App settings are optional and must be installed as separate owner-only
 files before adding their paths to this environment. Never print those files.
 

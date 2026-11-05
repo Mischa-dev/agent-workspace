@@ -137,11 +137,7 @@ fn workos_start_key(headers: &HeaderMap, link_session_id: Option<Uuid>) -> Optio
     if let Some(session_id) = link_session_id {
         return Some(format!("session:{session_id}"));
     }
-    headers
-        .get("cf-connecting-ip")
-        .and_then(|value| value.to_str().ok())
-        .filter(|value| !value.is_empty() && value.len() <= 64)
-        .map(|address| format!("address:{address}"))
+    crate::rate_limit::client_address(headers).map(|address| format!("address:{address}"))
 }
 async fn start(
     State(state): State<AppState>,
@@ -265,30 +261,56 @@ async fn callback(
     ApiQuery(query): ApiQuery<Callback>,
 ) -> Response {
     let mut step = "start";
-    match finish_callback(&state, &headers, query, &mut step).await {
+    let mut linking = false;
+    match finish_callback(&state, &headers, query, &mut step, &mut linking).await {
         Ok(response) => response,
         Err(error) => {
             // Log only which step failed, so a failed sign-in can be traced;
             // never provider errors, authorization codes, or response bodies.
-            tracing::warn!(step, "WorkOS sign-in did not finish");
-            // Someone whose sign-in worked at WorkOS but who has no account
-            // here is told how to link one; everything else is a retry.
-            let reason = match (step, error) {
-                ("account", AppError::Forbidden) => "unlinked",
-                _ => "1",
-            };
+            if worth_logging(step, &error) {
+                tracing::warn!(step, "WorkOS sign-in did not finish");
+            }
             let mut response =
-                Redirect::to(&format!("/sign-in?workosError={reason}")).into_response();
+                Redirect::to(&failure_location(step, &error, linking)).into_response();
             let _ = append_cookie(response.headers_mut(), browser_cookie(&state, "", true));
             response
         }
     }
+}
+/// Steps a callback passes before it matches a login attempt. Anyone can fail
+/// these, and the callback isn't rate limited the way starting one is, so
+/// such failures aren't logged; a database error still is.
+const UNMATCHED_STEPS: [&str; 4] = ["start", "callback", "browser cookie", "login attempt"];
+fn worth_logging(step: &str, error: &AppError) -> bool {
+    matches!(error, AppError::Database(_)) || !UNMATCHED_STEPS.contains(&step)
+}
+/// Someone whose sign-in worked at WorkOS but who has no account here is told
+/// how to link one, and someone linking an identity another account here
+/// already has is told so; everything else is a retry.
+fn failure_reason(step: &str, error: &AppError) -> &'static str {
+    match (step, error) {
+        ("account", AppError::Forbidden) => "unlinked",
+        ("account", AppError::Conflict(..)) => "linked_elsewhere",
+        _ => "1",
+    }
+}
+/// A failed link goes back to Account settings, where it was started: the
+/// browser is still signed in there, and the sign-in page would send it on
+/// to the home page before the reason could be read.
+fn failure_location(step: &str, error: &AppError, linking: bool) -> String {
+    let page = if linking {
+        "/settings/account/profile"
+    } else {
+        "/sign-in"
+    };
+    format!("{page}?workosError={}", failure_reason(step, error))
 }
 async fn finish_callback(
     state: &AppState,
     headers: &HeaderMap,
     query: Callback,
     step: &mut &'static str,
+    linking: &mut bool,
 ) -> Result<Response, AppError> {
     let config = config(state)?;
     *step = "callback";
@@ -298,12 +320,6 @@ async fn finish_callback(
             .filter(|v| v.len() <= 256)
             .ok_or(AppError::InvalidCredentials)?,
     );
-    let code = Zeroizing::new(
-        query
-            .code
-            .filter(|v| v.len() <= 2048)
-            .ok_or(AppError::InvalidCredentials)?,
-    );
     *step = "browser cookie";
     let browser = cookie_value(headers, cookie_name(state))
         .filter(|v| v.len() <= 256)
@@ -311,6 +327,16 @@ async fn finish_callback(
     *step = "login attempt";
     let attempt=sqlx::query_as::<_,LoginAttempt>("DELETE FROM workos_login_attempts WHERE state_hash=$1 AND browser_hash=$2 AND expires_at>now() RETURNING link_session_id,signup_username")
         .bind(hash_secret(&nonce).to_vec()).bind(hash_secret(&browser).to_vec()).fetch_optional(&state.pool).await?.ok_or(AppError::InvalidCredentials)?;
+    *linking = attempt.link_session_id.is_some();
+    // Only now: a callback that brings an error instead of a code (someone
+    // cancelled at WorkOS) still has to find its way back to a link.
+    *step = "authorization code";
+    let code = Zeroizing::new(
+        query
+            .code
+            .filter(|v| v.len() <= 2048)
+            .ok_or(AppError::InvalidCredentials)?,
+    );
     *step = "code exchange";
     let pkce = Zeroizing::new(verifier(config, &nonce)?);
     let response=client()?.post(format!("{}/user_management/authenticate", config.api_base))
@@ -438,7 +464,10 @@ async fn resolve_identity(
     };
     if let Some(existing) = existing {
         if linked.is_some_and(|id| id != existing) {
-            return Err(AppError::Forbidden);
+            return Err(AppError::Conflict(
+                "single sign-on identity",
+                "linked to another account",
+            ));
         }
         return Ok(existing);
     }
@@ -732,6 +761,59 @@ mod tests {
     use crate::config::SecretString;
     use sqlx::{Executor, postgres::PgPoolOptions};
 
+    #[test]
+    fn failed_links_return_to_account_settings() {
+        let conflict = AppError::Conflict("single sign-on identity", "linked to another account");
+        assert_eq!(
+            failure_location("account", &conflict, true),
+            "/settings/account/profile?workosError=linked_elsewhere"
+        );
+        assert_eq!(
+            failure_location(
+                "code exchange rejected",
+                &AppError::InvalidCredentials,
+                true
+            ),
+            "/settings/account/profile?workosError=1"
+        );
+        assert_eq!(
+            failure_location("account", &AppError::Forbidden, false),
+            "/sign-in?workosError=unlinked"
+        );
+        assert_eq!(
+            failure_location("login attempt", &AppError::InvalidCredentials, false),
+            "/sign-in?workosError=1"
+        );
+    }
+    #[test]
+    fn callbacks_that_match_no_login_attempt_are_not_logged() {
+        // Anyone can send these to the public callback, as often as they like.
+        for step in ["start", "callback", "browser cookie", "login attempt"] {
+            assert!(
+                !worth_logging(step, &AppError::InvalidCredentials),
+                "{step}"
+            );
+        }
+        assert!(!worth_logging(
+            "start",
+            &AppError::NotFound("WorkOS sign-in")
+        ));
+        assert!(worth_logging(
+            "login attempt",
+            &AppError::Database(sqlx::Error::PoolTimedOut)
+        ));
+        // Past this point the callback used up an attempt that a rate-limited
+        // start created.
+        for step in [
+            "code exchange",
+            "code exchange rejected",
+            "account",
+            "session",
+        ] {
+            assert!(worth_logging(step, &AppError::InvalidCredentials), "{step}");
+        }
+    }
+
     #[tokio::test]
     async fn identities_require_explicit_linking_and_signup_is_isolated() {
         let Ok(database_url) = std::env::var("AGENT_WORKSPACE_DATABASE_URL") else {
@@ -875,19 +957,21 @@ mod tests {
             id: "user_test_one".into(),
             ..second_provider
         };
-        assert!(
-            resolve_identity(
-                &mut tx,
-                &config,
-                &first_provider,
-                &LoginAttempt {
-                    link_session_id: Some(sid),
-                    signup_username: None
-                }
-            )
-            .await
-            .is_err(),
-            "cannot link someone else's provider identity"
+        let conflict = resolve_identity(
+            &mut tx,
+            &config,
+            &first_provider,
+            &LoginAttempt {
+                link_session_id: Some(sid),
+                signup_username: None,
+            },
+        )
+        .await
+        .expect_err("cannot link someone else's provider identity");
+        assert_eq!(
+            failure_reason("account", &conflict),
+            "linked_elsewhere",
+            "an identity linked to another account is not reported as unlinked"
         );
         tx.rollback().await.expect("WorkOS test operation");
         let unlinked_provider = ProviderUser {
@@ -915,9 +999,26 @@ mod tests {
             "revoked sessions cannot finish a link"
         );
         tx.rollback().await.expect("WorkOS test operation");
+        let closed = WorkOsConfig {
+            allow_signup: false,
+            ..config
+        };
+        let mut tx = pool.begin().await.expect("WorkOS test operation");
+        let unlinked = resolve_identity(
+            &mut tx,
+            &closed,
+            &unlinked_provider,
+            &LoginAttempt {
+                link_session_id: None,
+                signup_username: None,
+            },
+        )
+        .await
+        .expect_err("no account here and no sign-up");
+        assert_eq!(failure_reason("account", &unlinked), "unlinked");
+        tx.rollback().await.expect("WorkOS test operation");
         pool.close().await;
-        admin
-            .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+        crate::test_support::drop_schema(&admin, &schema)
             .await
             .expect("WorkOS test operation");
     }

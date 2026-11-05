@@ -2,6 +2,7 @@ import { Suspense, useEffect, useId, useMemo, useRef, useState, type KeyboardEve
 import { Link, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom'
 
 import { useAuthenticatedSession, type AuthenticatedSession } from '../auth/session'
+import { useProjectExperience } from '../experience/layout'
 import { ProjectPageError } from '../projects/ProjectPageStates'
 import { useProject, useProjects } from '../projects/hooks'
 import { projectLocationHref } from '../projects/locations'
@@ -15,7 +16,7 @@ import { GitHubReturnBanner } from './GitHubReturnBanner'
 import { parseSettingsPath } from './route'
 import { GROUP_LABELS, SETTINGS_PAGES, findPage, pagesIn, type SettingsPage } from './registry'
 import type { SettingsGroup, SettingsPageProps, SettingsVisibility } from './types'
-import { defaultWorkspace, useSwitchWorkspace } from './workspaceChoice'
+import { defaultWorkspace, useViewedWorkspace } from './workspaceChoice'
 import './settings.css'
 
 const LAST_PROJECT_KEY = 'agent-workspace:settings:project'
@@ -56,6 +57,7 @@ export default function SettingsArea() {
   const projectList = useProjects()
   const projects = useMemo(() => projectList.data?.projects ?? [], [projectList.data])
   const workspace = defaultWorkspace(session)
+  const [viewedWorkspace, viewWorkspace] = useViewedWorkspace(session)
   const [navOpen, setNavOpen] = useState(false)
 
   const routeProjectId = route.kind === 'page' && route.group === 'project' ? route.projectId : null
@@ -78,10 +80,11 @@ export default function SettingsArea() {
     projects.find((project) => project.id === preferredProjectId) ??
     null
 
+  const projectExperience = useProjectExperience(pickerProject?.id)
   const contexts: Record<SettingsGroup, SettingsVisibility> = {
     account: { session, workspace, project: null, projects },
-    workspace: { session, workspace, project: null, projects },
-    project: { session, workspace: organizationFor(session, pickerProject), project: pickerProject, projects },
+    workspace: { session, workspace: viewedWorkspace, project: null, projects },
+    project: { session, workspace: organizationFor(session, pickerProject), project: pickerProject, projects, experience: projectExperience },
   }
 
   // Close the phone menu whenever the page changes.
@@ -119,7 +122,7 @@ export default function SettingsArea() {
         Project settings appear here once you create or join a project.
       </EmptyState>
     )
-  } else if (group === 'workspace' && !workspace) {
+  } else if (group === 'workspace' && !viewedWorkspace) {
     content = (
       <EmptyState icon="users" title="You’re not in a workspace">
         Join a workspace with an invitation link to see its settings.
@@ -144,7 +147,8 @@ export default function SettingsArea() {
       const first = pagesIn(group, context)[0]
       return <Navigate replace to={first ? (hrefFor(first, null) ?? accountSettingsHref('profile')) : accountSettingsHref('profile')} />
     } else {
-      content = <PageBody entry={entry} props={{ session, workspace, project: null, projects }} />
+      // A new page for each workspace, so nothing typed for one is saved to the next.
+      content = <PageBody entry={entry} key={context.workspace?.id} props={{ ...context, project: null }} />
     }
   }
 
@@ -174,10 +178,14 @@ export default function SettingsArea() {
           onPickProject={(projectId) =>
             navigate(projectSettingsHref(projectId, group === 'project' ? route.section : 'general'))
           }
+          onPickWorkspace={(organizationId) => {
+            viewWorkspace(organizationId)
+            if (group !== 'workspace') navigate(workspaceSettingsHref('general'))
+          }}
           pickerProject={pickerProject}
           projects={projects}
           session={session}
-          workspace={workspace}
+          workspace={viewedWorkspace}
         />
         <div className="aw-settings__content">
           {!(group === 'project' && route.section === 'repositories') && (
@@ -239,7 +247,7 @@ function ProjectScope({
     return <Navigate replace to={projectSettingsHref(project.id)} />
   }
   return (
-    <PageBody entry={entry} props={{ session, workspace, project, projects }} />
+    <PageBody entry={entry} key={project.id} props={{ session, workspace, project, projects }} />
   )
 }
 
@@ -248,6 +256,7 @@ function SettingsNav({
   currentGroup,
   currentSection,
   onPickProject,
+  onPickWorkspace,
   pickerProject,
   projects,
   session,
@@ -257,14 +266,14 @@ function SettingsNav({
   currentGroup: SettingsGroup
   currentSection: string
   onPickProject: (projectId: string) => void
+  /** Only changes which workspace's settings show; the default stays. */
+  onPickWorkspace: (organizationId: string) => void
   pickerProject: Project | null
   projects: Project[]
   session: AuthenticatedSession
   workspace: SettingsVisibility['workspace']
 }) {
   const [query, setQuery] = useState('')
-  const switchWorkspace = useSwitchWorkspace()
-  const navigate = useNavigate()
   const workspaceId = useId()
   const projectId = useId()
   const searching = query.trim().length > 0
@@ -302,18 +311,7 @@ function SettingsNav({
                   <label className="visually-hidden" htmlFor={workspaceId}>
                     Workspace
                   </label>
-                  <select
-                    disabled={switchWorkspace.isPending}
-                    id={workspaceId}
-                    onChange={(event) =>
-                      switchWorkspace.mutate(event.target.value, {
-                        onSuccess: () => {
-                          if (currentGroup === 'workspace') navigate(workspaceSettingsHref('general'))
-                        },
-                      })
-                    }
-                    value={workspace.id}
-                  >
+                  <select id={workspaceId} onChange={(event) => onPickWorkspace(event.target.value)} value={workspace.id}>
                     {session.organizations.map((organization) => (
                       <option key={organization.id} value={organization.id}>
                         {organization.name}

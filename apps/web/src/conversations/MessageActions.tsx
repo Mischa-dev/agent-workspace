@@ -8,7 +8,7 @@ import { dropRemovedMessage, invalidateConversation, refreshMemoryCaches, setCac
 import { MessageEditor, RemoveMessageDialog } from './MessageEditing'
 import { MessageHistoryDialog } from './MessageHistoryDialog'
 import { useMessageMemory } from './MessageMemory'
-import { MessageReactions, ReactionPicker } from './Reactions'
+import { MessageReactions, QuickReactions, ReactionPicker } from './Reactions'
 import { applyReaction, type ReactionChoice } from './reactions'
 import { useMessageLater } from './useMessageLater'
 import type {
@@ -242,7 +242,10 @@ export function useMessageActions({
     return (
       <>
         {canReact(message) ? (
-          <ReactionPicker onPick={(choice, reacted) => react(message, choice, reacted)} reactions={message.reactions ?? []} />
+          <>
+            <QuickReactions onPick={(choice, reacted) => react(message, choice, reacted)} reactions={message.reactions ?? []} />
+            <ReactionPicker onPick={(choice, reacted) => react(message, choice, reacted)} reactions={message.reactions ?? []} />
+          </>
         ) : null}
         {primaryFor?.(message, entry)}
         {later.saveButton(message)}

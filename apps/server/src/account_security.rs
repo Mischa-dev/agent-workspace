@@ -459,6 +459,20 @@ fn matching_step(secret: &[u8], code: &str, now: u64, last_used: Option<u64>) ->
     found
 }
 
+/// A QR code of `text` as a standalone SVG, black on white with its quiet
+/// zone, so authenticator apps read it in either theme.
+fn qr_svg(text: &str) -> Result<String, AppError> {
+    let code = qrcode::QrCode::with_error_correction_level(text.as_bytes(), qrcode::EcLevel::M)
+        .map_err(|_| AppError::Internal("draw the two-factor QR code"))?;
+    Ok(code
+        .render::<qrcode::render::svg::Color<'_>>()
+        .min_dimensions(200, 200)
+        .dark_color(qrcode::render::svg::Color("#000000"))
+        .light_color(qrcode::render::svg::Color("#ffffff"))
+        .quiet_zone(true)
+        .build())
+}
+
 fn otpauth_uri(secret_base32: &str, account_name: &str) -> String {
     let label = format!("{ISSUER}:{account_name}");
     let mut uri = url::Url::parse("otpauth://totp/").expect("static URI");
@@ -937,6 +951,9 @@ impl Drop for PasswordConfirmation {
 struct SetupResponse {
     secret: String,
     otpauth_uri: String,
+    /// The same link as a QR code, drawn here so no third party sees the
+    /// secret and the browser needs no QR library.
+    qr_svg: String,
     issuer: &'static str,
     account_name: String,
 }
@@ -992,8 +1009,10 @@ async fn two_factor_setup(
     .await?;
     transaction.commit().await?;
     let encoded = base32_encode(secret.as_ref());
+    let uri = otpauth_uri(&encoded, &principal.login_name);
     Ok(Json(SetupResponse {
-        otpauth_uri: otpauth_uri(&encoded, &principal.login_name),
+        qr_svg: qr_svg(&uri)?,
+        otpauth_uri: uri,
         secret: encoded,
         issuer: ISSUER,
         account_name: principal.login_name.clone(),
@@ -1509,6 +1528,19 @@ mod tests {
         assert_eq!(base32_encode(b"f"), "MY");
         assert_eq!(base32_encode(b"fo"), "MZXQ");
         assert_eq!(base32_encode(b"foobar"), "MZXW6YTBOI");
+    }
+
+    #[test]
+    fn the_qr_code_is_a_standalone_svg_without_scripts() {
+        let svg =
+            qr_svg("otpauth://totp/Agent%20Workspace:mischa?secret=MZXW6YTBOI").expect("qr code");
+        assert!(svg.starts_with("<?xml") || svg.starts_with("<svg"), "{svg}");
+        assert!(svg.contains("</svg>"));
+        assert!(!svg.to_lowercase().contains("<script"));
+        assert!(
+            !svg.contains("MZXW6YTBOI"),
+            "the secret is drawn, not written out"
+        );
     }
 
     #[test]

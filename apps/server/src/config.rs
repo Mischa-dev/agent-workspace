@@ -126,6 +126,17 @@ pub struct AppConfig {
     pub metrics_token_path: Option<PathBuf>,
     /// Background jobs run at once in this process (F9).
     pub job_concurrency: usize,
+    /// Lets workspaces point their model provider (`ai.base_url`) and mail
+    /// server at private, loopback and tailnet addresses, and mail at any
+    /// port. Off, both must be public addresses, and mail must use a mail
+    /// port: those requests leave from inside this server's network, and a
+    /// workspace's owner isn't necessarily the person who runs the server.
+    /// An operator running a local model or mail relay turns it on.
+    pub allow_private_addresses: bool,
+    /// People who run this server, by login name, besides whoever set it up
+    /// from its terminal (`bootstrap-admin`). Only they see Settings ›
+    /// Workspace › Server.
+    pub operator_logins: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -390,6 +401,8 @@ impl AppConfig {
                 reason: "must be between 1 and 64".into(),
             });
         }
+        let allow_private_addresses = parse(values, "ALLOW_PRIVATE_ADDRESSES", "false")?;
+        let operator_logins = operator_logins(values)?;
         Ok(Self {
             environment,
             server_addr,
@@ -423,6 +436,8 @@ impl AppConfig {
             push_contact,
             metrics_token_path,
             job_concurrency,
+            allow_private_addresses,
+            operator_logins,
         })
     }
 }
@@ -738,6 +753,31 @@ fn public_origin(
         });
     }
     Ok(Some(value.to_owned()))
+}
+
+fn operator_logins(values: &BTreeMap<String, String>) -> Result<Vec<String>, ConfigError> {
+    let key = format!("{PREFIX}OPERATOR_LOGINS");
+    let configured = values.get(&key).map(String::as_str).unwrap_or_default();
+    let mut logins = Vec::new();
+    for candidate in configured
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let login = candidate.to_ascii_lowercase();
+        if login.len() > 64
+            || !login
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        {
+            return Err(ConfigError::Invalid {
+                key,
+                reason: format!("{candidate}: list login names separated by commas"),
+            });
+        }
+        logins.push(login);
+    }
+    Ok(logins)
 }
 
 fn webhook_trusted_origins(values: &BTreeMap<String, String>) -> Result<Vec<String>, ConfigError> {

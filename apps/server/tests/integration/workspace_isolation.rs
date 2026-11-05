@@ -78,10 +78,10 @@ use super::{
     message_edits::{create_channel, edit, say, text},
 };
 
-const MARKER: &str = "zebra";
+pub(super) const MARKER: &str = "zebra";
 /// A 1x1 PNG, for a whiteboard image.
-const TINY_PNG: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
-const ORIGIN: &str = "http://127.0.0.1:3100";
+pub(super) const TINY_PNG: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+pub(super) const ORIGIN: &str = "http://127.0.0.1:3100";
 
 /// Every GET route under `/api/v1` this suite calls, as written in the
 /// server's `.route(...)` calls.
@@ -122,6 +122,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/organizations/{organization_id}/audit-events/facets",
     "/api/v1/organizations/{organization_id}/harnesses",
     "/api/v1/organizations/{organization_id}/invitations",
+    "/api/v1/organizations/{organization_id}/layout",
     "/api/v1/organizations/{organization_id}/mail",
     "/api/v1/organizations/{organization_id}/members",
     "/api/v1/organizations/{organization_id}/model-catalog",
@@ -166,6 +167,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{project_id}/invitations",
     "/api/v1/projects/{project_id}/labels",
     "/api/v1/projects/{project_id}/launches",
+    "/api/v1/projects/{project_id}/layout",
     "/api/v1/projects/{project_id}/member-candidates",
     "/api/v1/projects/{project_id}/members",
     "/api/v1/projects/{project_id}/milestones",
@@ -193,6 +195,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/readiness",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/launch",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/timeline",
+    "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}/revisions",
     "/api/v1/push/config",
     "/api/v1/push/subscriptions",
     "/api/v1/runs",
@@ -307,7 +310,7 @@ fn every_get_route_and_read_tool_has_an_isolation_case() {
     );
 }
 
-fn collect_sources(directory: &std::path::Path, sources: &mut Vec<(String, String)>) {
+pub(super) fn collect_sources(directory: &std::path::Path, sources: &mut Vec<(String, String)>) {
     let mut entries = std::fs::read_dir(directory)
         .unwrap_or_else(|error| panic!("read {directory:?}: {error}"))
         .map(|entry| entry.expect("directory entry").path())
@@ -333,7 +336,7 @@ fn get_routes(source: &str) -> Vec<String> {
 }
 
 /// `token` appears as a call, not as the end of a longer name.
-fn has_call(block: &str, token: &str) -> bool {
+pub(super) fn has_call(block: &str, token: &str) -> bool {
     block.match_indices(token).any(|(index, _)| {
         !block[..index]
             .chars()
@@ -343,7 +346,7 @@ fn has_call(block: &str, token: &str) -> bool {
 }
 
 /// The same balanced-parenthesis scan `policy_inventory`'s test uses.
-fn route_blocks(source: &str) -> Vec<&str> {
+pub(super) fn route_blocks(source: &str) -> Vec<&str> {
     let mut blocks = Vec::new();
     let mut remaining = source;
     while let Some(relative_start) = remaining.find(".route(") {
@@ -384,7 +387,7 @@ fn route_blocks(source: &str) -> Vec<&str> {
     blocks
 }
 
-fn first_string_literal(block: &str) -> Option<&str> {
+pub(super) fn first_string_literal(block: &str) -> Option<&str> {
     let start = block.find('"')? + 1;
     let end = block[start..].find('"')? + start;
     Some(&block[start..end])
@@ -422,59 +425,143 @@ fn read_only_tools(source: &str) -> BTreeSet<String> {
 // ---------------------------------------------------------------------------
 
 /// Everything one workspace has, as IDs and keys a client would use.
-struct World {
-    marker: &'static str,
-    browser: Browser,
-    organization: Uuid,
-    rook: Uuid,
-    agent_token: String,
-    agent_connection: Uuid,
-    app_token: String,
-    space: String,
-    project: String,
-    channel: String,
-    message: String,
-    thread: String,
-    dm: String,
-    dm_message: String,
-    group: String,
-    task: Uuid,
-    subtask: Uuid,
-    page: String,
-    repository: Uuid,
-    pull_request: Uuid,
-    pull_request_url: String,
-    profile: Uuid,
-    provider_account: Uuid,
-    run_thread: Uuid,
-    run: Uuid,
-    approval: Uuid,
-    plan: Uuid,
-    import: String,
-    webhook: Uuid,
-    rule: Uuid,
-    whiteboard: Uuid,
-    project_whiteboard: Uuid,
+pub(super) struct World {
+    pub(super) marker: &'static str,
+    pub(super) browser: Browser,
+    pub(super) organization: Uuid,
+    pub(super) rook: Uuid,
+    pub(super) agent_token: String,
+    pub(super) agent_connection: Uuid,
+    pub(super) app_token: String,
+    pub(super) space: String,
+    pub(super) project: String,
+    pub(super) channel: String,
+    pub(super) message: String,
+    pub(super) thread: String,
+    pub(super) dm: String,
+    pub(super) dm_message: String,
+    pub(super) group: String,
+    pub(super) task: Uuid,
+    pub(super) subtask: Uuid,
+    /// A comment on `task`, edited once.
+    pub(super) comment: Uuid,
+    pub(super) page: String,
+    pub(super) repository: Uuid,
+    pub(super) pull_request: Uuid,
+    pub(super) pull_request_url: String,
+    pub(super) profile: Uuid,
+    pub(super) provider_account: Uuid,
+    pub(super) run_thread: Uuid,
+    pub(super) run: Uuid,
+    pub(super) approval: Uuid,
+    pub(super) plan: Uuid,
+    pub(super) import: String,
+    pub(super) webhook: Uuid,
+    pub(super) rule: Uuid,
+    pub(super) whiteboard: Uuid,
+    pub(super) project_whiteboard: Uuid,
     /// A file sent with `file_message` in the channel, and a task's image.
-    file: Uuid,
-    file_message: String,
-    task_file: Uuid,
+    pub(super) file: Uuid,
+    pub(super) file_message: String,
+    pub(super) task_file: Uuid,
     /// The link preview `file_message` shows, made ready by the test.
-    link_preview: Uuid,
+    pub(super) link_preview: Uuid,
 }
 
 #[tokio::test]
 async fn one_workspace_never_sees_another() {
+    let Some(fixture) = two_workspaces("workspace_isolation").await else {
+        return;
+    };
+    let TwoWorkspaces {
+        app,
+        pool,
+        realtime,
+        a,
+        b,
+        ..
+    } = &fixture;
+    let b_ids = sweep_ids(pool, b.organization).await;
+    let a_ids = sweep_ids(pool, a.organization).await;
+    assert!(
+        a_ids.is_disjoint(&b_ids),
+        "the sweeps overlap: {:?}",
+        a_ids.intersection(&b_ids).collect::<Vec<_>>()
+    );
+    for id in [b.project.as_str(), b.channel.as_str(), b.dm.as_str()] {
+        assert!(b_ids.contains(id), "sweep missed {id}");
+    }
+    eprintln!("B owns {} IDs", b_ids.len());
+
+    let mut report = Report::default();
+    check_http(app, a, b, &b_ids, &mut report).await;
+    check_mcp(app, a, b, &b_ids, &mut report).await;
+    check_realtime(app, pool, realtime, a, b, &b_ids, &mut report).await;
+
+    for note in &report.notes {
+        eprintln!("note: {note}");
+    }
+    eprintln!(
+        "checked {} HTTP requests and {} MCP calls",
+        report.http_requests, report.mcp_calls
+    );
+    let failures = report.failures.clone();
+    fixture.finish().await;
+
+    assert!(
+        failures.is_empty(),
+        "{} workspace isolation failures:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// The app on a fresh schema with workspaces A and B built, signed in as
+/// each owner. Shared with `write_isolation`, which runs beside this test.
+pub(super) struct TwoWorkspaces {
+    pub(super) app: axum::Router,
+    pub(super) pool: PgPool,
+    pub(super) realtime: RealtimeHub,
+    pub(super) a: World,
+    pub(super) b: World,
+    admin: PgPool,
+    schema: String,
+    supervisors: SupervisorRegistry,
+    _temporary: tempfile::TempDir,
+    _keys: tempfile::TempDir,
+}
+
+impl TwoWorkspaces {
+    /// Stops the providers and drops the schema.
+    pub(super) async fn finish(self) {
+        self.supervisors.shutdown_all().await;
+        drop(self.app);
+        self.pool.close().await;
+        agent_workspace_server::test_support::drop_schema(&self.admin, &self.schema)
+            .await
+            .expect("drop schema");
+    }
+}
+
+/// None (and a note) when there is no database to test against.
+pub(super) async fn two_workspaces(name: &str) -> Option<TwoWorkspaces> {
+    two_workspaces_with(name, false).await
+}
+
+/// [`two_workspaces`], with a GitHub App configured when `github` is set, so
+/// the GitHub routes get as far as their access checks. Its key is a
+/// placeholder: nothing can sign in to GitHub with it.
+pub(super) async fn two_workspaces_with(name: &str, github: bool) -> Option<TwoWorkspaces> {
     let Ok(database_url) = std::env::var("AGENT_WORKSPACE_DATABASE_URL") else {
         eprintln!("skipping PostgreSQL integration test: AGENT_WORKSPACE_DATABASE_URL is unset");
-        return;
+        return None;
     };
     let admin = PgPoolOptions::new()
         .max_connections(2)
         .connect(&database_url)
         .await
         .expect("connect to PostgreSQL");
-    let schema = format!("workspace_isolation_{}", Uuid::now_v7().simple());
+    let schema = format!("{name}_{}", Uuid::now_v7().simple());
     admin
         .execute(format!("CREATE SCHEMA {schema}").as_str())
         .await
@@ -498,7 +585,7 @@ async fn one_workspace_never_sees_another() {
     .expect("write keyring");
     std::fs::set_permissions(&keyring_path, std::fs::Permissions::from_mode(0o600))
         .expect("keyring permissions");
-    let config = AppConfig::from_values(&BTreeMap::from([
+    let mut values = BTreeMap::from([
         (
             "AGENT_WORKSPACE_DATABASE_URL".to_owned(),
             database_url.clone(),
@@ -537,8 +624,47 @@ async fn one_workspace_never_sees_another() {
             "AGENT_WORKSPACE_CODEX_SHUTDOWN_TIMEOUT_SECONDS".to_owned(),
             "1".to_owned(),
         ),
-    ]))
-    .expect("test configuration");
+    ]);
+    if github {
+        for (key, file, value) in [
+            (
+                "GITHUB_PRIVATE_KEY_PATH",
+                "github-app.pem",
+                "placeholder-key",
+            ),
+            (
+                "GITHUB_WEBHOOK_SECRET_PATH",
+                "github-webhook",
+                "webhook-secret-for-tests",
+            ),
+            (
+                "GITHUB_CLIENT_SECRET_PATH",
+                "github-client",
+                "client-secret-for-tests",
+            ),
+        ] {
+            let path = keys.path().join(file);
+            std::fs::write(&path, value).expect("GitHub secret");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                .expect("GitHub secret permissions");
+            values.insert(
+                format!("AGENT_WORKSPACE_{key}"),
+                path.to_string_lossy().into_owned(),
+            );
+        }
+        for (key, value) in [
+            ("GITHUB_APP_ID", "12345"),
+            ("GITHUB_APP_SLUG", "aw-test"),
+            ("GITHUB_CLIENT_ID", "Iv1.testclient"),
+        ] {
+            values.insert(format!("AGENT_WORKSPACE_{key}"), value.to_owned());
+        }
+    }
+    let mut config = AppConfig::from_values(&values).expect("test configuration");
+    // Uploads here don't depend on how much disk the host has left, which
+    // changes as CI runs.
+    config.data_quota_bytes = u64::MAX;
+    config.minimum_free_bytes = 0;
     let supervisors = SupervisorRegistry::new(&config).expect("supervisors");
     let realtime = RealtimeHub::new(8192);
     let app = router(AppState {
@@ -584,46 +710,18 @@ async fn one_workspace_never_sees_another() {
         )
         .expect("preview image");
     }
-    let b_ids = sweep_ids(&pool, b.organization).await;
-    let a_ids = sweep_ids(&pool, a.organization).await;
-    assert!(
-        a_ids.is_disjoint(&b_ids),
-        "the sweeps overlap: {:?}",
-        a_ids.intersection(&b_ids).collect::<Vec<_>>()
-    );
-    for id in [b.project.as_str(), b.channel.as_str(), b.dm.as_str()] {
-        assert!(b_ids.contains(id), "sweep missed {id}");
-    }
-    eprintln!("B owns {} IDs", b_ids.len());
-
-    let mut report = Report::default();
-    check_http(&app, &a, &b, &b_ids, &mut report).await;
-    check_mcp(&app, &a, &b, &b_ids, &mut report).await;
-    check_realtime(&app, &pool, &realtime, &a, &b, &b_ids, &mut report).await;
-
-    for note in &report.notes {
-        eprintln!("note: {note}");
-    }
-    eprintln!(
-        "checked {} HTTP requests and {} MCP calls",
-        report.http_requests, report.mcp_calls
-    );
-    let failures = report.failures.clone();
-
-    supervisors.shutdown_all().await;
-    drop(app);
-    pool.close().await;
-    admin
-        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
-        .await
-        .expect("drop schema");
-
-    assert!(
-        failures.is_empty(),
-        "{} workspace isolation failures:\n{}",
-        failures.len(),
-        failures.join("\n")
-    );
+    Some(TwoWorkspaces {
+        app,
+        pool,
+        realtime,
+        a,
+        b,
+        admin,
+        schema,
+        supervisors,
+        _temporary: temporary,
+        _keys: keys,
+    })
 }
 
 #[derive(Default)]
@@ -659,7 +757,7 @@ impl Report {
 }
 
 /// The B marker or B IDs found in `body`.
-fn leaked(body: &str, b_ids: &HashSet<String>) -> Vec<String> {
+pub(super) fn leaked(body: &str, b_ids: &HashSet<String>) -> Vec<String> {
     let lower = body.to_ascii_lowercase();
     let mut found = Vec::new();
     if lower.contains(MARKER) {
@@ -741,7 +839,7 @@ async fn second_workspace_owner(pool: &PgPool) -> Uuid {
     organization
 }
 
-async fn login_as(app: &axum::Router, login_name: &str) -> Browser {
+pub(super) async fn login_as(app: &axum::Router, login_name: &str) -> Browser {
     let response = app
         .clone()
         .oneshot(
@@ -778,7 +876,7 @@ async fn login_as(app: &axum::Router, login_name: &str) -> Browser {
 }
 
 /// A person who can sign in, with the same handle in both workspaces.
-async fn add_person(
+pub(super) async fn add_person(
     setup: &Setup,
     projects: &[&str],
     login_name: &str,
@@ -832,7 +930,7 @@ async fn add_person(
     actor_id
 }
 
-fn tiny_png() -> Vec<u8> {
+pub(super) fn tiny_png() -> Vec<u8> {
     use base64::Engine as _;
     base64::engine::general_purpose::STANDARD
         .decode(TINY_PNG.trim_start_matches("data:image/png;base64,"))
@@ -840,7 +938,7 @@ fn tiny_png() -> Vec<u8> {
 }
 
 /// Uploads raw bytes to a file route; returns the file's ID.
-async fn upload(
+pub(super) async fn upload(
     app: &axum::Router,
     browser: &Browser,
     uri: &str,
@@ -861,7 +959,7 @@ async fn upload(
     Uuid::parse_str(&string_at(&uploaded, "/id")).expect("file id")
 }
 
-fn string_at(value: &Value, pointer: &str) -> String {
+pub(super) fn string_at(value: &Value, pointer: &str) -> String {
     value
         .pointer(pointer)
         .and_then(Value::as_str)
@@ -977,9 +1075,16 @@ async fn build_workspace(
     };
     let task = task_number(1).await;
     let subtask = task_number(2).await;
-    call(
+    let comment = call(
         "task_comment",
         json!({"workItemId": "WORK-1", "update": format!("Launch comment{m}"), "clientRequestId": "comment-1"}),
+    )
+    .await;
+    let comment = Uuid::parse_str(&string_at(&comment, "/activityId")).expect("comment id");
+    // An edit, so the comment has versions to read.
+    call(
+        "task_comment_edit",
+        json!({"taskId": "WORK-1", "commentId": comment, "text": format!("Launch comment, corrected{m}")}),
     )
     .await;
     call(
@@ -1595,6 +1700,55 @@ async fn build_workspace(
         "{label} bug report link: {status} {created}"
     );
 
+    // Layouts: a saved preset, the workspace's default and the project's
+    // layout, and rules for viewers and for Rook.
+    let (status, created) = send(
+        app,
+        browser.request(
+            "POST",
+            &format!("/api/v1/organizations/{organization}/layout/presets"),
+            None,
+            json!({
+                "name": format!("Chores{m}"),
+                "description": format!("For the house{m}"),
+                "layout": {
+                    "preset": "household",
+                    "words": {"task": {"one": format!("chore{m}"), "many": format!("chores{m}")}},
+                },
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "{label} layout preset: {created}"
+    );
+    let layout_preset = string_at(&created, "/id");
+    for (path, body) in [
+        (
+            format!("/api/v1/organizations/{organization}/layout"),
+            json!({"layout": {"preset": layout_preset}}),
+        ),
+        (
+            format!("/api/v1/projects/{project}/layout"),
+            json!({"layout": {
+                "preset": "personal_life",
+                "words": {"page": {"one": format!("note{m}"), "many": format!("notes{m}")}},
+            }}),
+        ),
+        (
+            format!("/api/v1/projects/{project}/layout/rules"),
+            json!({"rules": [
+                {"role": "viewer", "preset": layout_preset},
+                {"actorId": rook, "preset": "bug_reporting"},
+            ]}),
+        ),
+    ] {
+        let (status, changed) = send(app, browser.request("PUT", &path, None, body)).await;
+        assert!(status.is_success(), "{label} {path}: {status} {changed}");
+    }
+
     // Whiteboards: one for the whole workspace, drawn on and with an image,
     // and one in the project, linked to the task, the project and the page.
     let (status, created) = send(
@@ -1763,6 +1917,7 @@ async fn build_workspace(
         group,
         task,
         subtask,
+        comment,
         page,
         repository,
         pull_request,
@@ -1788,7 +1943,7 @@ async fn build_workspace(
 /// Every ID a workspace owns: its organization, its people and agents, and
 /// every row (in any table) of its projects, their conversations, tasks and
 /// runs. Found from the catalog, so new tables are swept automatically.
-async fn sweep_ids(pool: &PgPool, organization: Uuid) -> HashSet<String> {
+pub(super) async fn sweep_ids(pool: &PgPool, organization: Uuid) -> HashSet<String> {
     let mut ids = BTreeSet::<Uuid>::new();
     ids.insert(organization);
     let projects =
@@ -2537,6 +2692,7 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             "/api/v1/projects/{project_id}/bug-report-links",
             "/bug-report-links",
         ),
+        project_route("/api/v1/projects/{project_id}/layout", "/layout"),
         {
             let (own, foreign) =
                 pair(&|outer, inner| format!("{}/automations/{}/runs", p(outer), inner.rule));
@@ -2581,6 +2737,12 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             "/api/v1/my-work",
             vec!["/api/v1/my-work".to_owned()],
             vec![],
+            vec![],
+        ),
+        case(
+            "/api/v1/organizations/{organization_id}/layout",
+            vec![format!("/api/v1/organizations/{}/layout", a.organization)],
+            vec![format!("/api/v1/organizations/{}/layout", b.organization)],
             vec![],
         ),
         case(
@@ -2661,6 +2823,19 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
         }
         cases.push(case(route, own, foreign, vec![]));
     }
+
+    let (own, foreign) = pair(&|outer, inner| {
+        format!(
+            "/api/v1/projects/{}/work-items/{}/comments/{}/revisions",
+            outer.project, outer.task, inner.comment
+        )
+    });
+    cases.push(case(
+        "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}/revisions",
+        own,
+        foreign,
+        vec![],
+    ));
 
     let (own, foreign) =
         pair(&|outer, inner| format!("/api/v1/projects/{}/ai/plans/{}", outer.project, inner.plan));
@@ -3596,7 +3771,7 @@ async fn check_mcp(
     }
 }
 
-async fn mcp_post(
+pub(super) async fn mcp_post(
     app: &axum::Router,
     token: &str,
     session: &str,
@@ -3627,7 +3802,7 @@ async fn mcp_post(
 }
 
 /// Call a tool without asserting anything; returns the raw response.
-async fn call_tool(
+pub(super) async fn call_tool(
     app: &axum::Router,
     token: &str,
     session: &str,
@@ -3646,14 +3821,14 @@ async fn call_tool(
     .await
 }
 
-fn succeeded(outcome: &Value) -> bool {
+pub(super) fn succeeded(outcome: &Value) -> bool {
     matches!(
         outcome.as_str(),
         Some("ok" | "found" | "applied" | "events")
     )
 }
 
-fn json_body(text: &str) -> Value {
+pub(super) fn json_body(text: &str) -> Value {
     let json = text
         .lines()
         .filter_map(|line| line.strip_prefix("data: "))
@@ -3663,14 +3838,14 @@ fn json_body(text: &str) -> Value {
 }
 
 /// A tool result's structured content, or Null.
-fn structured(text: &str) -> Value {
+pub(super) fn structured(text: &str) -> Value {
     json_body(text)
         .pointer("/result/structuredContent")
         .cloned()
         .unwrap_or(Value::Null)
 }
 
-async fn list_tools(app: &axum::Router, token: &str, session: &str) -> Vec<Value> {
+pub(super) async fn list_tools(app: &axum::Router, token: &str, session: &str) -> Vec<Value> {
     let (status, body) = mcp_post(
         app,
         token,

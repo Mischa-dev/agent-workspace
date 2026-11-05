@@ -1,5 +1,5 @@
 import { useDeferredValue, useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from 'react-router-dom'
 
 import { toastError } from '../app/mutations'
@@ -9,6 +9,7 @@ import { useTheme } from '../theme/themeContext'
 import {
   Banner,
   Button,
+  ConfirmDialog,
   EmptyState,
   ErrorState,
   IconButton,
@@ -19,12 +20,15 @@ import {
   StatusChip,
   TextField,
   countLabel,
+  describeError,
   formatFullDate,
   formatRelative,
   showToast,
 } from '../ui'
 import {
+  deleteWhiteboardForever,
   duplicateWhiteboard,
+  emptyWhiteboardTrash,
   isDarkPreset,
   listWhiteboards,
   previewUrl,
@@ -51,6 +55,22 @@ export function WhiteboardsPage() {
     placeholderData: (previous) => previous,
   })
   const workspaces = boards.data?.workspaces ?? []
+  const queryClient = useQueryClient()
+  const [emptying, setEmptying] = useState(false)
+  const empty = useMutation({
+    mutationFn: emptyWhiteboardTrash,
+    onSuccess: ({ deleted }) => {
+      setEmptying(false)
+      void queryClient.invalidateQueries({ queryKey: whiteboardKeys.all })
+      const shown = boards.data?.whiteboards.length ?? 0
+      showToast({
+        tone: 'success',
+        title: `Deleted ${countLabel(deleted, 'whiteboard')} for good`,
+        description: deleted < shown ? 'The rest are in projects where you can only look.' : undefined,
+      })
+    },
+  })
+  const trashed = view === 'trash' && !search.trim() && (boards.data?.whiteboards.length ?? 0) > 0
   return (
     <AppShell home mainClassName="aw-main--page" user={session.user}>
       <div className="aw-page">
@@ -61,11 +81,7 @@ export function WhiteboardsPage() {
             </Button>
           }
           icon="whiteboard"
-          title="Whiteboards"
-        >
-          Sketch, plan and diagram together. Agents can read and draw on the same whiteboards, and one whiteboard can sit on many
-          tasks, projects and pages.
-        </PageHeader>
+          title="Whiteboards" />
         <div className="aw-boards__filters">
           <TextField
             aria-label="Search whiteboards"
@@ -85,6 +101,11 @@ export function WhiteboardsPage() {
             ]}
             value={view}
           />
+          {trashed ? (
+            <Button icon="trash" onClick={() => setEmptying(true)} variant="danger">
+              Empty trash
+            </Button>
+          ) : null}
         </div>
         {boards.isPending ? <PageSkeleton cards={6} label="Loading whiteboards" /> : null}
         {boards.isError ? <ErrorState error={boards.error} onRetry={() => void boards.refetch()} title="Whiteboards didn’t load" /> : null}
@@ -111,7 +132,7 @@ export function WhiteboardsPage() {
               icon="trash"
               title="The trash is empty"
             >
-              Whiteboards you move to the trash wait here, drawing and links intact, until you bring them back.
+              Whiteboards you move to the trash wait here, drawing and links intact, until you bring them back or delete them for good.
             </EmptyState>
           ) : (
             <EmptyState
@@ -139,6 +160,20 @@ export function WhiteboardsPage() {
         ) : null}
       </div>
       <NewWhiteboardDialog onClose={() => setCreating(false)} open={creating} workspaces={workspaces} />
+      <ConfirmDialog
+        busy={empty.isPending}
+        confirmLabel="Empty trash"
+        error={empty.error ? describeError(empty.error).message : null}
+        onClose={() => {
+          setEmptying(false)
+          empty.reset()
+        }}
+        onConfirm={() => empty.mutate()}
+        open={emptying}
+        title="Empty the trash?"
+      >
+        Every whiteboard in the trash is deleted for good, with its drawing, images and history. This can’t be undone.
+      </ConfirmDialog>
     </AppShell>
   )
 }
@@ -148,6 +183,15 @@ function BoardCard({ board }: { board: Whiteboard }) {
   const navigate = useNavigate()
   const { preset } = useTheme()
   const [renaming, setRenaming] = useState(false)
+  const [purging, setPurging] = useState(false)
+  const purge = useMutation({
+    mutationFn: () => deleteWhiteboardForever(board.id),
+    onSuccess: () => {
+      setPurging(false)
+      void refresh()
+      showToast({ tone: 'success', title: `Deleted “${board.title}” for good` })
+    },
+  })
   const href = whiteboardPath(board.id)
   const refresh = () => queryClient.invalidateQueries({ queryKey: whiteboardKeys.all })
   const trash = (deleted: boolean) =>
@@ -185,7 +229,11 @@ function BoardCard({ board }: { board: Whiteboard }) {
           <Menu
             items={
               board.deleted
-                ? [{ label: 'Restore', icon: 'undo', onSelect: () => void trash(false) }]
+                ? [
+                    { label: 'Restore', icon: 'undo', onSelect: () => void trash(false) },
+                    { separator: true },
+                    { label: 'Delete forever', icon: 'trash', danger: true, onSelect: () => setPurging(true) },
+                  ]
                 : [
                     { label: 'Rename', icon: 'pencil', onSelect: () => setRenaming(true) },
                     { label: 'Duplicate', icon: 'copy', onSelect: () => void duplicate() },
@@ -214,6 +262,20 @@ function BoardCard({ board }: { board: Whiteboard }) {
         </p>
       </div>
       <RenameDialog board={board} onClose={() => setRenaming(false)} open={renaming} />
+      <ConfirmDialog
+        busy={purge.isPending}
+        confirmLabel="Delete forever"
+        error={purge.error ? describeError(purge.error).message : null}
+        onClose={() => {
+          setPurging(false)
+          purge.reset()
+        }}
+        onConfirm={() => purge.mutate()}
+        open={purging}
+        title={`Delete “${board.title}” forever?`}
+      >
+        Its drawing, images and history go for good, and it comes off every task, project and page it’s on. Copies stay.
+      </ConfirmDialog>
     </li>
   )
 }

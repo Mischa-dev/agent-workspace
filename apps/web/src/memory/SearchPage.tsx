@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from 'react'
+import { useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 
@@ -20,7 +20,9 @@ import {
   formatFullDate,
   formatRelative,
   plainPreview,
+  withEllipses,
 } from '../ui'
+import { useListKeys } from '../ui/listKeys'
 
 type SearchHit = {
   kind: 'message' | 'thread' | 'task' | 'page' | 'decision' | 'file'
@@ -65,7 +67,7 @@ const STOP = '\u0002'
 
 /** The snippet as plain text, with the words that matched (the server wraps them in `**`) marked. */
 function Snippet({ text }: { text: string }) {
-  const plain = plainPreview(text.replace(/\*\*([\s\S]*?)\*\*/g, `${START}$1${STOP}`), 320)
+  const plain = withEllipses(plainPreview(text.replace(/\*\*([\s\S]*?)\*\*/g, `${START}$1${STOP}`), 320))
   const parts: ReactNode[] = []
   for (const [index, part] of plain.split(new RegExp(`(${START}[^${STOP}]*${STOP})`)).entries()) {
     if (!part) continue
@@ -105,6 +107,9 @@ export function SearchPage() {
     next.set('q', draft.trim())
     setParams(next)
   }
+  // Down and Up (or J and K) step through the results once you leave the box.
+  const resultsRef = useRef<HTMLDivElement>(null)
+  useListKeys(resultsRef, '.aw-row__link')
   const searchEverything = () => {
     const next = new URLSearchParams(params)
     next.delete('projectId')
@@ -112,10 +117,8 @@ export function SearchPage() {
   }
   return (
     <AppShell mainClassName="aw-main--page" project={scope} user={session.user}>
-      <div className="aw-page">
-        <PageHeader icon="search" title="Search">
-          Messages, threads, tasks, pages, decisions and files you can see. Decisions and pages come first.
-        </PageHeader>
+      <div className="aw-page aw-page--reading">
+        <PageHeader icon="search" title="Search" />
         <form className="aw-inline-form aw-search__form" onSubmit={submit} role="search">
           <TextField
             aria-label={scope ? `Search ${scope.name}` : 'Search'}
@@ -140,7 +143,7 @@ export function SearchPage() {
             </Button>
           </p>
         ) : null}
-        <div className="aw-search__results">
+        <div className="aw-search__results" ref={resultsRef}>
           {results.isLoading ? <ListSkeleton label="Searching" rows={3} /> : null}
           {results.isError ? (
             <Banner onRetry={() => void results.refetch()} tone="danger" title="Search didn’t work.">

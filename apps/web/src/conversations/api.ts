@@ -525,9 +525,10 @@ export async function getMessageRevisions(
   }
 }
 
+/** Starts a thread. Without a name it goes by its first message until someone names it. */
 export async function createThread(input: {
   channelId: string
-  name: string
+  name?: string
   originMessageId?: string
   idempotencyKey: string
 }) {
@@ -537,7 +538,7 @@ export async function createThread(input: {
       method: 'POST',
       idempotencyKey: input.idempotencyKey,
       json: {
-        name: input.name,
+        ...(input.name ? { name: input.name } : {}),
         ...(input.originMessageId
           ? { originMessageId: input.originMessageId }
           : {}),
@@ -548,7 +549,7 @@ export async function createThread(input: {
   if (typeof conversation.id !== 'string') {
     throw new Error('Created Thread response is malformed.')
   }
-  return { id: conversation.id, name: string(conversation.name, input.name) }
+  return { id: conversation.id, name: string(conversation.name, input.name ?? '') }
 }
 
 export async function archiveConversation(input: {

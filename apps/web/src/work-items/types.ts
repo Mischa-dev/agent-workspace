@@ -390,7 +390,30 @@ export type WorkItemTimelineEntry = {
     createdAt: string
     /** The connected app it was written through, when the author shows it. */
     via?: string | null
+    /** 1 until it's edited; an edit saves against the revision it opened at. */
+    revision: number
+    editedAt: string | null
+    /** Set once it's deleted; its text is gone then. */
+    removed: { removedAt: string; removedBy: AssignableActor | null } | null
   } | null
+}
+
+export type CommentRevision = {
+  revision: number
+  /** Null once the comment was deleted. */
+  content: MessageContentV1 | null
+  plainText: string | null
+  writtenBy: AssignableActor
+  writtenAt: string
+  redacted: boolean
+}
+
+export type CommentRevisions = {
+  commentId: string
+  revision: number
+  removed: boolean
+  /** Oldest first; empty for a comment never edited. */
+  revisions: CommentRevision[]
 }
 
 export type WorkWithWorkerResponse = {

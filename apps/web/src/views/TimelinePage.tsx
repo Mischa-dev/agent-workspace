@@ -5,8 +5,10 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { queryKeys } from '../api/queryKeys'
 import { isApiError } from '../api/errors'
 import { useAuthenticatedSession } from '../auth/session'
+import { useProjectExperience } from '../experience/layout'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
 import { useProject } from '../projects/hooks'
+import { RememberPlace } from '../projects/RememberPlace'
 import { AppShell } from '../shell/AppShell'
 import { WorkTabs } from '../shell/ProjectTabs'
 import { Banner, Button, ButtonLink, Checkbox, EmptyState, ErrorState, ListSkeleton, PageHeader, SegmentedControl, SelectField, countLabel, describeError, showToast } from '../ui'
@@ -65,6 +67,8 @@ function rowsOf(timeline: Timeline): Row[] {
 export function TimelinePage() {
   const session = useAuthenticatedSession()
   const { projectId = '' } = useParams()
+  const showKeys = useProjectExperience(projectId).shows('tech.task_keys')
+  const named = (task: TimelineTask) => (showKeys ? `${task.key} ${task.title}` : task.title)
   const [parameters, setParameters] = useSearchParams()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -251,11 +255,10 @@ export function TimelinePage() {
   const slipCount = slipped?.tasks.size ?? 0
   return (
     <AppShell mainClassName="aw-main--page" project={project.data} user={session.user}>
-      <div className="aw-page aw-page--wide aw-timeline">
-        <PageHeader icon="clock" title="Timeline">
-          Milestones and tasks in {project.data.name} by date. Drag one, or focus it and press ← or →, to see what slips.
-        </PageHeader>
+      <div className="aw-page aw-page--full aw-timeline">
+        <PageHeader icon="clock" title="Timeline" />
         <WorkTabs current="timeline" projectId={project.data.id} />
+        <RememberPlace location={{ kind: 'timeline' }} project={project.data} />
         <div className="aw-timeline__toolbar">
           <SelectField aria-label="Milestone" compact onChange={(event) => setParameter('milestoneId', event.target.value || null)} value={milestoneId}>
             <option value="">All milestones</option>
@@ -307,6 +310,7 @@ export function TimelinePage() {
             This shows the first 1,000 tasks. Pick a milestone to see the rest.
           </Banner>
         ) : null}
+        {data && rows.length ? <p className="aw-timeline__hint">Drag a bar, or focus it and press ← or →, to see what slips.</p> : null}
         {data && rows.length ? (
           <div className="aw-timeline__scroll" ref={scroller} style={{ scrollPaddingLeft: labelWidth + scale.width * 2 }} tabIndex={-1}>
             <div className="aw-timeline__chart" style={{ width: labelWidth + days * scale.width, height: HEADER_HEIGHT + rows.length * ROW_HEIGHT }}>
@@ -387,20 +391,20 @@ export function TimelinePage() {
                   const done = task.statusCategory === 'completed' || task.statusCategory === 'canceled'
                   return (
                     <li className="aw-timeline__row" key={task.id} style={{ height: ROW_HEIGHT }}>
-                      <span className="aw-timeline__label" style={{ width: labelWidth }} title={`${task.key} ${task.title}`}>
-                        <span className="aw-timeline__key">{task.key}</span>
+                      <span className="aw-timeline__label" style={{ width: labelWidth }} title={named(task)}>
+                        {showKeys ? <span className="aw-timeline__key">{task.key}</span> : null}
                         <span className="aw-timeline__name">{task.title}</span>
                       </span>
                       {span ? (
                         <button
-                          aria-label={`${task.key} ${task.title}, ${dayLabel(dayFromNumber(span.start))} to ${dayLabel(dayFromNumber(span.end))}${reason ? `, slips: ${reason}` : ''}${canEdit ? '. Arrow keys move it, Shift with arrows changes the due date, Enter saves.' : ''}`}
+                          aria-label={`${named(task)}, ${dayLabel(dayFromNumber(span.start))} to ${dayLabel(dayFromNumber(span.end))}${reason ? `, slips: ${reason}` : ''}${canEdit ? '. Arrow keys move it, Shift with arrows changes the due date, Enter saves.' : ''}`}
                           className={`aw-timeline__bar${done ? ' is-done' : ''}${task.blocked ? ' is-blocked' : ''}${reason ? ' is-slipping' : ''}`}
                           onKeyDown={(event) => keys(event, (shift, wide) => ({ kind: 'task', id: task.id, days: shift, edge: wide ? 'end' : 'move' }))}
                           onPointerDown={(event) => begin(event, { kind: 'task', id: task.id, days: 0, edge: (event.target as HTMLElement).dataset.edge === 'end' ? 'end' : 'move' })}
                           onPointerMove={move}
                           onPointerUp={() => end(() => navigate(workItemHref(projectId, task.id)))}
                           style={{ left: x(span.start), width: Math.max(scale.width, (span.end - span.start + 1) * scale.width) }}
-                          title={reason ?? `${task.key} ${task.title}`}
+                          title={reason ?? named(task)}
                           type="button"
                         >
                           {task.assigneeName ? (

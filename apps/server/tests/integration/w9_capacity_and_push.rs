@@ -44,6 +44,14 @@ pub(super) struct Fixture {
 }
 
 pub(super) async fn fixture(prefix: &str) -> Option<Fixture> {
+    fixture_with(prefix, |_| {}).await
+}
+
+/// [`fixture`] with its configuration changed by `configure` first.
+pub(super) async fn fixture_with(
+    prefix: &str,
+    configure: impl FnOnce(&mut AppConfig),
+) -> Option<Fixture> {
     let Ok(database_url) = std::env::var("AGENT_WORKSPACE_DATABASE_URL") else {
         eprintln!("skipping PostgreSQL integration test: AGENT_WORKSPACE_DATABASE_URL is unset");
         return None;
@@ -111,6 +119,7 @@ pub(super) async fn fixture(prefix: &str) -> Option<Fixture> {
     .expect("config");
     config.data_quota_bytes = u64::MAX;
     config.minimum_free_bytes = 0;
+    configure(&mut config);
     let supervisors = SupervisorRegistry::new(&config).expect("supervisors");
     let state = AppState {
         config: Arc::new(config),

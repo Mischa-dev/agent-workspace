@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
 import { toastError } from '../app/mutations'
+import { useHomeExperience } from '../experience/layout'
 import { isExternalHref, useInbox, useUpdateInbox, type InboxNotification } from '../inbox/api'
 import { getOnboarding, onboardingKeys, progressText, STEP_TITLES, updateOnboarding } from '../onboarding/api'
 import { listUsage, usageKeys, type AccountUsage, type UsageWindow } from '../settings/account/usageApi'
@@ -11,9 +12,37 @@ import { getMyWork, viewKeys, type MyWork } from '../views/api'
 import { priorityLabel } from '../work-items/constants'
 import type { WorkItemPriority } from '../work-items/types'
 import { getHome, homeKeys, type WorkingRun } from './homeApi'
+import type { QuietSections } from './homeQuiet'
 import { MoreLink } from './MoreLink'
 
 const MAX_ROWS = 5
+
+/** The empty sections, folded into one line: "Nothing needs you, no agents are working and nothing is assigned to you." */
+export function QuietLine({ quiet, sections }: { quiet: QuietSections; sections: Array<keyof QuietSections> }) {
+  const experience = useHomeExperience()
+  const shown = sections.filter((section) => quiet[section])
+  if (!shown.length) return null
+  const phrases: Record<Exclude<keyof QuietSections, 'capacity'>, string> = {
+    needsYou: 'nothing needs you',
+    working: 'no agents are working',
+    tasks: `no ${experience.word('task', 'many')} are assigned to you`,
+  }
+  const said = shown.filter((section) => section !== 'capacity').map((section) => phrases[section as Exclude<keyof QuietSections, 'capacity'>])
+  const sentence = said.length
+    ? `${said.length > 1 ? `${said.slice(0, -1).join(', ')} and ${said.at(-1)}` : said[0]}.`
+    : ''
+  return (
+    <p className="aw-home__allquiet" role="status">
+      <span>{sentence ? sentence.charAt(0).toUpperCase() + sentence.slice(1) : null}</span>
+      {shown.includes('capacity') ? (
+        <span>
+          {' '}
+          No accounts for runs yet: <Link to="/settings/account/provider-accounts">add one</Link> to run agents and see their limits.
+        </span>
+      ) : null}
+    </p>
+  )
+}
 
 /** The first-run path, until it's done or put away (P5). */
 export function SetupCard({ organizationId }: { organizationId: string }) {
@@ -117,8 +146,10 @@ const waitingText = (queued: number) => `${countLabel(queued, 'run')} waiting fo
 /** Agents working now, across every project you can open. */
 export function WorkingNow() {
   const home = useQuery({ queryKey: homeKeys.summary, queryFn: getHome, refetchInterval: 30_000 })
+  const experience = useHomeExperience()
+  const keys = experience.shows('tech.task_keys')
   return (
-    <Section actions={<MoreLink to="/runs">Runs</MoreLink>} id="home-working" title="Working now">
+    <Section actions={experience.shows('workspace.runs') ? <MoreLink to="/runs">Runs</MoreLink> : null} id="home-working" title="Working now">
       {home.isPending ? (
         <ListSkeleton label="Loading runs" rows={2} />
       ) : home.isError ? (
@@ -149,7 +180,7 @@ export function WorkingNow() {
                   <Link className="aw-row__link" to={run.href}>
                     {run.task ? (
                       <>
-                        <span className="aw-home__key">{run.task.key}</span> {run.task.title}
+                        {keys ? <span className="aw-home__key">{run.task.key}</span> : null} {run.task.title}
                       </>
                     ) : (
                       run.threadName
@@ -261,8 +292,10 @@ export function YourTasks() {
   const seen = new Set<string>()
   const unique = items.filter((item) => (seen.has(item.id) ? false : (seen.add(item.id), true)))
   const more = work.data ? moreTasks(work.data, Math.min(unique.length, MAX_ROWS), unique.length) : null
+  const experience = useHomeExperience()
+  const keys = experience.shows('tech.task_keys')
   return (
-    <Section actions={<MoreLink to="/my-work">My work</MoreLink>} id="home-tasks" title="Your tasks">
+    <Section actions={<MoreLink to="/my-work">My work</MoreLink>} id="home-tasks" title={`Your ${experience.word('task', 'many')}`}>
       {work.isPending ? (
         <ListSkeleton label="Loading your tasks" rows={3} />
       ) : work.isError ? (
@@ -280,7 +313,7 @@ export function YourTasks() {
                 meta={taskMeta(item)}
                 title={
                   <Link className="aw-row__link" to={`/projects/${encodeURIComponent(item.projectId)}/work-items/${encodeURIComponent(item.id)}`}>
-                    <span className="aw-home__key">{item.key}</span> {item.title}
+                    {keys ? <span className="aw-home__key">{item.key}</span> : null} {item.title}
                   </Link>
                 }
               />

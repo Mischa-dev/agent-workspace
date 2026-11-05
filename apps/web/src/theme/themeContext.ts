@@ -20,6 +20,9 @@ export type ThemeContextValue = AppearancePreferences & {
   setOverrides: (overrides: Record<string, string>) => void
   setDensity: (density: DensityPreference) => void
   setTextSize: (textSize: TextSizePreference) => void
+  /** Null goes back to the standard width. */
+  setSidebarWidth: (width: number | null) => void
+  setPanelWidth: (width: number | null) => void
   resetAppearance: () => void
   /** Take a whole saved appearance, such as the one stored on the account. */
   replaceAppearance: (preferences: AppearancePreferences) => void
@@ -27,13 +30,15 @@ export type ThemeContextValue = AppearancePreferences & {
 
 export const ThemeContext = createContext<ThemeContextValue>({
   ...DEFAULT_APPEARANCE,
-  preset: 'indigo',
+  preset: 'daylight',
   previewPreset: null,
   previewTheme: () => undefined,
   setTheme: () => undefined,
   setOverrides: () => undefined,
   setDensity: () => undefined,
   setTextSize: () => undefined,
+  setSidebarWidth: () => undefined,
+  setPanelWidth: () => undefined,
   resetAppearance: () => undefined,
   replaceAppearance: () => undefined,
 })

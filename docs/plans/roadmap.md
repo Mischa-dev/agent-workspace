@@ -2083,6 +2083,12 @@ runs a workstream').
 **Done when:** The suite covers every existing list and search route and MCP
 read tool, and fails if one leaks across workspaces.
 
+Writes have their own net on the same fixture (`write_isolation.rs`): every
+POST, PUT, PATCH and DELETE route and every MCP tool that writes is called as
+one workspace with the other's IDs, must be refused, and must leave every row
+that mentions the other workspace as it was. Its guard fails when a new write
+has no case.
+
 #### O8. Self-host in one command
 
 *In [W15](#w15-open-up) Open up · Needs S1, S3*
@@ -2174,8 +2180,8 @@ Defaults for the rest. Say if any is wrong:
    leak (S1), settings resolve in the right order (S2), every adapter passes
    the same contract tests (H2), AI suggestions never cite anything the
    reader can't see (AI2), anything that acts later stops for someone who
-   lost access (principle 9), and the workstream's lists and tools are in the
-   two-workspace isolation tests (O7).
+   lost access (principle 9), and the workstream's lists, writes and tools
+   are in the two-workspace isolation tests (O7).
 8. Follow principle 8: new tables belong to a workspace, background work
    uses the job queue, and nothing in the code names a machine.
 9. Provider CLIs and APIs (Codex Cloud, Claude Code, rate-limit reads)

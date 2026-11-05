@@ -5,6 +5,7 @@ import { isApiError } from '../api/errors'
 import { useAuthenticatedSession } from '../auth/session'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
 import { useProject } from '../projects/hooks'
+import { RememberPlace } from '../projects/RememberPlace'
 import { AppShell } from '../shell/AppShell'
 import { WorkTabs } from '../shell/ProjectTabs'
 import { Banner, Button, Dialog, EmptyState, ErrorState, ListSkeleton, PageHeader, SegmentedControl, TextArea, TextField, countLabel, describeError, showToast } from '../ui'
@@ -81,11 +82,10 @@ export function MilestonesPage() {
 
   return (
     <AppShell project={project.data} user={session.user}>
-      <div className="aw-page aw-page--wide aw-milestones">
-        <PageHeader actions={newMilestone} icon="checklist" title="Milestones">
-          Groups of tasks with a target date in {project.data.name}.
-        </PageHeader>
+      <div className="aw-page aw-page--full aw-milestones">
+        <PageHeader actions={newMilestone} icon="checklist" title="Milestones" />
         <WorkTabs current="milestones" projectId={project.data.id} />
+        <RememberPlace location={{ kind: 'milestones' }} project={project.data} />
         {archivedCount ? (
           <SegmentedControl<Shown>
             label="Milestones to show"

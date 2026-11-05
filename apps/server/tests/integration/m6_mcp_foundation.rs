@@ -1539,8 +1539,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
 
     drop(application);
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
-        .execute(&administrative_pool)
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("drop isolated M6 schema");
 }

@@ -20,7 +20,7 @@ use super::{
     talk::{ConversationSummary, ListFilter, list_rows, summary},
 };
 use crate::{
-    AppState, error::AppError, memory, policy::ActorKind, work_item_labels,
+    AppState, error::AppError, layouts, memory, policy::ActorKind, work_item_labels,
     work_item_planning::HAS_OPEN_BLOCKER,
 };
 
@@ -449,6 +449,55 @@ pub(super) struct ProjectOverview {
     /// Labels used here; label_list has colors and counts.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
+    /// The project's layout: what it's for, how to write for the people in
+    /// it and the nouns it renames. Match its tone and words. Missing when
+    /// nobody chose one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layout: Option<LayoutLine>,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct LayoutLine {
+    /// The preset's name, such as "Personal life" or "Software team".
+    pub preset: String,
+    /// How to write for people in this project.
+    pub tone: String,
+    /// Nouns this project calls something else, such as tasks called
+    /// "to-dos". Use these words when you write to people here; tool names
+    /// and arguments stay the same.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub words: Vec<WordLine>,
+    /// True when the project follows the workspace's default layout.
+    pub from_workspace: bool,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct WordLine {
+    /// The app's own noun, such as "task".
+    pub noun: String,
+    pub one: String,
+    pub many: String,
+}
+
+impl From<crate::layouts::ProjectTone> for LayoutLine {
+    fn from(tone: crate::layouts::ProjectTone) -> Self {
+        Self {
+            preset: tone.preset,
+            tone: tone.tone,
+            words: tone
+                .words
+                .into_iter()
+                .map(|(noun, word)| WordLine {
+                    noun,
+                    one: word.one,
+                    many: word.many,
+                })
+                .collect(),
+            from_workspace: tone.from_workspace,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -645,6 +694,12 @@ pub(super) async fn project_open(
         .fetch_all(&state.pool)
         .await?;
         let labels = work_item_labels::project_names(&state.pool, project_id, PROJECT_LABELS).await?;
+        let layout = {
+            let mut connection = state.pool.acquire().await?;
+            layouts::project_tone(&mut connection, project_id)
+                .await?
+                .map(LayoutLine::from)
+        };
         Ok::<_, AppError>(ToolResult::ok(ProjectOverview {
             project: ProjectHeader {
                 id: project_id.to_string(),
@@ -678,6 +733,7 @@ pub(super) async fn project_open(
             channels,
             repositories,
             labels,
+            layout,
         }))
     }
     .await;

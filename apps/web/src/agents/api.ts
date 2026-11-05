@@ -123,6 +123,13 @@ export function updateProfile(projectId: string, profileId: string, input: Profi
   })
 }
 
+/** Deleted outright when it never did anything; hidden when runs or messages still point at it. */
+export type ProfileRemoval = { outcome: 'deleted' | 'hidden' }
+
+export function deleteProfile(projectId: string, profileId: string) {
+  return requestJson<ProfileRemoval>(projectPath(projectId, `agent-profiles/${encodeURIComponent(profileId)}`), { method: 'DELETE' })
+}
+
 export function listPresence(projectId: string) {
   return requestJson<{ agents: AgentPresence[] }>(projectPath(projectId, 'agents'))
 }

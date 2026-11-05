@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { WorkOsAgentSettings } from './WorkOsAgentSettings'
@@ -69,7 +69,14 @@ function RoleOptions() {
 
 type Confirming = { kind: 'rotate' | 'remove'; connection: ExternalAgentConnection }
 
-export function ExternalAgentSettings({ projectId }: { projectId: string }) {
+export function ExternalAgentSettings({
+  onBusy,
+  projectId,
+}: {
+  /** True while a change is on its way or a new token is on screen, so the page keeps this place in view. */
+  onBusy?: (busy: boolean) => void
+  projectId: string
+}) {
   const queryClient = useQueryClient()
   const connections = useQuery({
     queryKey: queryKeys.externalAgents(projectId),
@@ -140,6 +147,11 @@ export function ExternalAgentSettings({ projectId }: { projectId: string }) {
   })
   const confirmMutation = confirming?.kind === 'rotate' ? rotateMutation : removeMutation
   const pending = createMutation.isPending || enableMutation.isPending || rotateMutation.isPending || removeMutation.isPending
+  const holding = pending || oneTimeCredential !== null
+  useEffect(() => {
+    onBusy?.(holding)
+  }, [holding, onBusy])
+  useEffect(() => () => onBusy?.(false), [onBusy])
 
   if (connections.isPending) return <ListSkeleton label="Loading agents" rows={2} avatars />
   if (connections.isError) {

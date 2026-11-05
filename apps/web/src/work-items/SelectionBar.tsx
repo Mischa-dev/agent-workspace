@@ -1,10 +1,12 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
+import { useProjectExperience } from '../experience/layout'
 import { LazyLaunchDialog as LaunchDialog } from '../launch/LazyLaunchDialog'
 import { launchSummary, launchesHref } from '../launch/launchModel'
 import { countLabel } from '../ui'
 import { BulkBar } from './BulkBar'
+import { useCardFields } from './cardFields'
 import type { PickerField } from './FieldPicker'
 import type { Notice } from './notice'
 import { bulkUpdateWorkItems } from './planningApi'
@@ -33,6 +35,8 @@ export function SelectionBar({
   selected: readonly WorkItemCard[]
 }) {
   const invalidate = useInvalidateWorkItems()
+  const fields = useCardFields(projectId)
+  const launch = useProjectExperience(projectId).shows('task.runs')
   const navigate = useNavigate()
   const [saving, setSaving] = useState(false)
   const [launching, setLaunching] = useState<WorkItemCard[] | null>(null)
@@ -82,10 +86,11 @@ export function SelectionBar({
         archived={selected.length > 0 && selected.every((card) => Boolean(card.archivedAt))}
         busy={saving || busy}
         count={selected.length}
+        fields={fields}
         onArchive={() => void archive()}
         onClear={onClear}
         onDueDate={(value) => void setDueDate(value)}
-        onLaunch={() => setLaunching(selected.filter((card) => !card.archivedAt))}
+        onLaunch={launch ? () => setLaunching(selected.filter((card) => !card.archivedAt)) : undefined}
         onPick={onPick}
         onRestore={() => void restore()}
       />

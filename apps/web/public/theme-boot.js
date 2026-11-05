@@ -6,7 +6,9 @@
   var classic = [
     'nord', 'dracula', 'gruvbox-dark', 'solarized-dark', 'catppuccin-frappe', 'catppuccin-macchiato',
     'catppuccin-mocha', 'tokyo-night', 'one-dark', 'rose-pine', 'github-dark', 'monokai',
+    'everforest-dark', 'kanagawa',
     'gruvbox-light', 'solarized-light', 'catppuccin-latte', 'rose-pine-dawn', 'github-light',
+    'everforest-light', 'one-light',
   ]
   var derived = {
     'rail-tile': 'color-mix(in oklch, var(--rail-fg) 12%, var(--rail-bg))',
@@ -39,15 +41,23 @@
   // Until someone picks a theme, it follows the device (DEFAULT_APPEARANCE in preferences.ts).
   if (presets.indexOf(theme) < 0 && classic.indexOf(theme) < 0) theme = 'system'
   if (theme === 'system') {
-    theme = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'midnight' : 'indigo'
+    theme = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'midnight' : 'daylight'
   }
   if (classic.indexOf(theme) >= 0) {
-    // Written by the parser, so the stylesheet holds the first paint and nothing flashes in Indigo.
+    // Written by the parser, so the stylesheet holds the first paint and nothing flashes in Daylight.
     document.write('<link rel="stylesheet" href="/themes/classic.css" data-classic-themes>')
   }
-  root.setAttribute('data-theme', presets.indexOf(theme) >= 0 || classic.indexOf(theme) >= 0 ? theme : 'indigo')
+  root.setAttribute('data-theme', presets.indexOf(theme) >= 0 || classic.indexOf(theme) >= 0 ? theme : 'daylight')
   root.setAttribute('data-density', saved.density === 'compact' ? 'compact' : 'comfortable')
   root.setAttribute('data-text-size', saved.textSize === 'small' || saved.textSize === 'large' ? saved.textSize : 'default')
+  // The sidebar and side panel as wide as they were dragged (SIDEBAR_WIDTHS and PANEL_WIDTHS in preferences.ts).
+  var widths = { '--sidebar-width': [saved.sidebarWidth, 200, 480], '--panel-width': [saved.panelWidth, 320, 800] }
+  Object.keys(widths).forEach(function (name) {
+    var width = widths[name]
+    if (typeof width[0] === 'number' && isFinite(width[0])) {
+      root.style.setProperty(name, Math.round(Math.min(width[2], Math.max(width[1], width[0]))) + 'px')
+    }
+  })
   var overrides = saved.overrides && typeof saved.overrides === 'object' ? saved.overrides : {}
   var changed = {}
   Object.keys(overrides).forEach(function (slot) {

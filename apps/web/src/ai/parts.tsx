@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { Banner, Button, ButtonLink, Icon, StatusChip, Tooltip, formatRelative } from '../ui'
 import { priorityLabel } from '../work-items/constants'
 import type { WorkItemPriority } from '../work-items/types'
-import type { ProjectAi, Readiness, Suggestion, TaskRef } from './api'
+import type { ProjectAi, Readiness, ReadinessCheck, Suggestion, TaskRef } from './api'
 import { projectAiSettingsHref } from './links'
 import './ai.css'
 
@@ -165,10 +165,20 @@ export function SuggestionCard({
  * agent. Compact, for lists: only what's missing, on one line, and no "Ready
  * to start" where the list already says so.
  */
-export function ReadinessChecks({ readiness, compact = false }: { readiness: Readiness; compact?: boolean }) {
-  const checks = compact ? readiness.checks.filter((check) => !check.ok) : readiness.checks
+export function ReadinessChecks({
+  readiness,
+  compact = false,
+  omit,
+}: {
+  readiness: Readiness
+  compact?: boolean
+  /** Checks the list already names once above itself, because every row misses them (compact only). */
+  omit?: ReadonlySet<string>
+}) {
+  const checks = compact ? readiness.checks.filter((check) => !check.ok && !omit?.has(check.id)) : readiness.checks
   if (compact) {
     if (readiness.ready && readiness.readyForAgents) return null
+    if (omit?.size && !checks.length) return null
     return (
       <p className="aw-ai-readiness aw-ai-readiness--compact">
         <Icon name={readiness.ready ? 'bot' : 'clock'} size={14} />
@@ -200,6 +210,21 @@ export function ReadinessChecks({ readiness, compact = false }: { readiness: Rea
         </ul>
       ) : null}
     </div>
+  )
+}
+
+/** Says once, above a list, what every task in it is missing, so the rows show only what differs. */
+export function SharedReadiness({ checks }: { checks: ReadinessCheck[] }) {
+  if (!checks.length) return null
+  const forAgents = checks.every((check) => check.forAgents)
+  return (
+    <p className="aw-ai-readiness aw-ai-readiness--compact aw-ai-readiness--shared" role="note">
+      <Icon name={forAgents ? 'bot' : 'clock'} size={14} />
+      <span>
+        <strong>{forAgents ? 'None of these is ready for an agent yet' : 'None of these is ready to start yet'}</strong>
+        {`: ${checks.map((check) => check.label.charAt(0).toLocaleLowerCase() + check.label.slice(1)).join(' · ')}`}
+      </span>
+    </p>
   )
 }
 

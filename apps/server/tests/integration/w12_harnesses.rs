@@ -549,4 +549,180 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
             .expect("read account key")
             .is_none()
     );
+
+    // Deleting an agent: only managers may; one that's working is refused;
+    // one that never did anything goes for good, and one with runs is
+    // hidden so they keep its name.
+    let planner = send(
+        &application,
+        owner,
+        "POST",
+        &profiles,
+        "planner",
+        json!({"template": "planner"}),
+    )
+    .await;
+    assert_eq!(planner.0, StatusCode::OK, "{}", planner.1);
+    let planner_path = format!("{profiles}/{}", uuid_field(&planner.2, "id"));
+    let refused = send(
+        &application,
+        member,
+        "DELETE",
+        &planner_path,
+        "member-delete",
+        json!(null),
+    )
+    .await;
+    assert!(
+        matches!(refused.0, StatusCode::FORBIDDEN | StatusCode::NOT_FOUND),
+        "a member deleted an agent: {}",
+        refused.0
+    );
+    let deleted = send(
+        &application,
+        owner,
+        "DELETE",
+        &planner_path,
+        "planner-delete",
+        json!(null),
+    )
+    .await;
+    assert_eq!(deleted.0, StatusCode::OK, "{}", deleted.1);
+    assert_eq!(deleted.2["outcome"], "deleted");
+    let left = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM actors WHERE id = $1")
+        .bind(uuid_field(&planner.2, "actorId"))
+        .fetch_one(&pool)
+        .await
+        .expect("planner actor");
+    assert_eq!(left, 0, "a deleted agent left its actor behind");
+    let reviewer_path = format!("{profiles}/{profile_id}");
+    let busy = send(
+        &application,
+        owner,
+        "DELETE",
+        &reviewer_path,
+        "reviewer-busy",
+        json!(null),
+    )
+    .await;
+    assert_eq!(busy.0, StatusCode::CONFLICT, "{}", busy.1);
+    sqlx::query("UPDATE agent_runs SET state = 'completed', finished_at = now(), updated_at = now() WHERE execution_worker_id = (SELECT execution_worker_id FROM agent_profiles WHERE id = $1)")
+        .bind(profile_id)
+        .execute(&pool)
+        .await
+        .expect("finish the reviewer's runs");
+    let hidden = send(
+        &application,
+        owner,
+        "DELETE",
+        &reviewer_path,
+        "reviewer-delete",
+        json!(null),
+    )
+    .await;
+    assert_eq!(hidden.0, StatusCode::OK, "{}", hidden.1);
+    assert_eq!(hidden.2["outcome"], "hidden");
+    let listed = send_get(&application, owner, &profiles).await;
+    assert!(
+        listed.2["profiles"]
+            .as_array()
+            .is_some_and(|profiles| profiles
+                .iter()
+                .all(|profile| profile["id"] != json!(profile_id))),
+        "a hidden agent is still listed: {}",
+        listed.1
+    );
+    let run = send_get(
+        &application,
+        member,
+        &format!("/api/v1/agent-runs/{run_id}"),
+    )
+    .await;
+    assert_eq!(run.0, StatusCode::OK, "{}", run.1);
+    assert_eq!(
+        run.2["agentName"], "Reviewer",
+        "a past run lost its agent's name"
+    );
+
+    // Deleting an account: one never used goes with its home; the one the
+    // project's runs used is signed out and hidden.
+    let spare = send(
+        &application,
+        owner,
+        "POST",
+        &accounts,
+        "create-spare",
+        json!({"adapterKind": "demo", "name": "Spare"}),
+    )
+    .await;
+    assert!(spare.0.is_success(), "create spare account: {}", spare.1);
+    let spare_id = uuid_field(&spare.2, "id");
+    let spare_home =
+        sqlx::query_scalar::<_, String>("SELECT home_path FROM provider_accounts WHERE id = $1")
+            .bind(spare_id)
+            .fetch_one(&pool)
+            .await
+            .expect("spare home");
+    assert!(std::path::Path::new(&spare_home).exists());
+    let refused = send(
+        &application,
+        member,
+        "DELETE",
+        &format!("{accounts}/{spare_id}"),
+        "member-account-delete",
+        json!(null),
+    )
+    .await;
+    assert_eq!(refused.0, StatusCode::NOT_FOUND, "{}", refused.1);
+    let gone = send(
+        &application,
+        owner,
+        "DELETE",
+        &format!("{accounts}/{spare_id}"),
+        "spare-delete",
+        json!(null),
+    )
+    .await;
+    assert_eq!(gone.0, StatusCode::OK, "{}", gone.1);
+    assert_eq!(gone.2["outcome"], "deleted");
+    assert!(
+        !std::path::Path::new(&spare_home).exists(),
+        "a deleted account kept its home"
+    );
+    sqlx::query("UPDATE agent_runs SET state = 'completed', finished_at = now(), updated_at = now() WHERE state NOT IN ('completed', 'failed', 'cancelled')")
+        .execute(&pool)
+        .await
+        .expect("finish every run");
+    let used = send(
+        &application,
+        owner,
+        "DELETE",
+        &account,
+        "used-delete",
+        json!(null),
+    )
+    .await;
+    assert_eq!(used.0, StatusCode::OK, "{}", used.1);
+    assert_eq!(used.2["outcome"], "hidden");
+    let (status, state) = sqlx::query_as::<_, (String, String)>(
+        "SELECT status, account_state FROM provider_accounts WHERE id = $1",
+    )
+    .bind(account_id)
+    .fetch_one(&pool)
+    .await
+    .expect("hidden account");
+    assert_eq!(
+        (status.as_str(), state.as_str()),
+        ("disabled", "logged_out")
+    );
+    let listed = send_get(&application, owner, &accounts).await;
+    assert!(
+        listed.2["accounts"]
+            .as_array()
+            .is_some_and(|accounts| accounts
+                .iter()
+                .all(|listed| listed["id"] != json!(account_id))),
+        "a hidden account is still listed: {}",
+        listed.1
+    );
 }

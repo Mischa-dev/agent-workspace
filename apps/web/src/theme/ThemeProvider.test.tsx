@@ -30,7 +30,14 @@ afterEach(() => {
 
 describe('ThemeProvider preview', () => {
   it('shows a preset without saving it or dropping custom colors, here or on the account', async () => {
-    const saved = { theme: 'indigo' as const, overrides: { accent: '#ff0066' }, density: 'comfortable' as const, textSize: 'default' as const }
+    const saved = {
+      theme: 'indigo' as const,
+      overrides: { accent: '#ff0066' },
+      density: 'comfortable' as const,
+      textSize: 'default' as const,
+      sidebarWidth: null,
+      panelWidth: 560,
+    }
     writeAppearancePreferences(saved)
     const stored = window.localStorage.getItem(APPEARANCE_STORAGE_KEY)
     const fetch = vi.fn(async (_url: string, init?: RequestInit) =>

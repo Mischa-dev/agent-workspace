@@ -743,8 +743,7 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
 
     supervisors.shutdown_all().await;
     pool.close().await;
-    administrative_pool
-        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("drop harness schema");
 }

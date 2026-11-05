@@ -114,6 +114,16 @@ export function updateWhiteboard(
   return requestJson<WhiteboardDetail>(board(id), { method: 'PATCH', json: change })
 }
 
+/** Deletes a whiteboard in the trash for good, with its drawing, images and history. */
+export function deleteWhiteboardForever(id: string) {
+  return requestJson<void>(board(id), { method: 'DELETE' })
+}
+
+/** Deletes for good every whiteboard in the trash you can change. */
+export function emptyWhiteboardTrash() {
+  return requestJson<{ deleted: number }>('/api/v1/whiteboard-trash/empty', { method: 'POST', json: {} })
+}
+
 export function duplicateWhiteboard(id: string, title?: string) {
   return requestJson<WhiteboardDetail>(`${board(id)}/duplicate`, { method: 'POST', json: title ? { title } : {} })
 }

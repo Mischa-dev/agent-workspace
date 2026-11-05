@@ -9,9 +9,10 @@ import type { WorkItemCard, WorkItemGroupBy } from './types'
 import { PriorityIcon, StatusIcon } from './WorkItemIcons'
 import { WorkItemLabels } from './WorkItemLabels'
 import { isOverdue } from './taskDisplay'
+import { ALL_FIELDS, type CardFields } from './cardFields'
 
 /** Small marks for what else is true of a task: blocked, subtasks, milestone, labels. */
-export function TaskBadges({ card, compact = false }: { card: WorkItemCard; compact?: boolean }) {
+export function TaskBadges({ card, compact = false, fields = ALL_FIELDS }: { card: WorkItemCard; compact?: boolean; fields?: CardFields }) {
   const blocked = Boolean(card.blockedReason) || card.openBlockerCount > 0
   return (
     <span className="aw-taskmeta">
@@ -39,13 +40,13 @@ export function TaskBadges({ card, compact = false }: { card: WorkItemCard; comp
           </span>
         </span>
       ) : null}
-      {card.milestone && !compact ? (
+      {card.milestone && fields.milestone && !compact ? (
         <span className="aw-taskmeta__item" title={`Milestone: ${card.milestone.name}`}>
           <TaskGlyph name="milestone" />
           <span className="aw-taskmeta__text aw-taskmeta__name">{card.milestone.name}</span>
         </span>
       ) : null}
-      <WorkItemLabels fit labels={card.labels} />
+      {fields.labels ? <WorkItemLabels fit labels={card.labels} /> : null}
     </span>
   )
 }

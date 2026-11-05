@@ -28,26 +28,47 @@
   max-width: 200px;
 }
 
-/* Phones: search and Filter on one row, the two view selects sharing the next. */
+/* Sort and grouping (or columns and lanes) sit in the row on wider screens, in View options on phones. */
+.aw-filterbar__view {
+  display: contents;
+}
+
+.aw-filterbar__more {
+  display: none;
+}
+
+.aw-filterbar__sheet {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-2);
+}
+
+.aw-filterbar__sheet .aw-filterbar__select .aw-field__control--select select {
+  width: 100%;
+  max-width: none;
+}
+
+/* Phones: one row of search, Filter and View options; the list starts right under it. */
 @media (max-width: 640px) {
+  .aw-filterbar__row {
+    flex-wrap: nowrap;
+  }
+
   .aw-filterbar__search {
-    flex: 1 1 60%;
+    flex: 1 1 auto;
+    min-width: 0;
     max-width: none;
   }
 
-  .aw-filterbar__spacer {
+  .aw-filterbar__spacer,
+  .aw-filterbar__view,
+  .aw-filterbar__row .aw-tasks__help,
+  .aw-workpage__viewswitch {
     display: none;
   }
 
-  /* Each as wide as its text, growing to share the row; side by side when both fit. */
-  .aw-filterbar__select {
-    flex: 1 1 auto;
-    min-width: 0;
-  }
-
-  .aw-filterbar__select .aw-field__control--select select {
-    width: 100%;
-    max-width: none;
+  .aw-filterbar__more {
+    display: inline-flex;
   }
 }
 
@@ -292,6 +313,23 @@
   text-decoration: underline;
 }
 
+.aw-tasks__title.is-twoline {
+  display: grid;
+  gap: var(--space-half);
+}
+
+.aw-tasks__titletext {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.aw-tasks__subline {
+  overflow: hidden;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+  text-overflow: ellipsis;
+}
+
 .aw-tasks__phonekey {
   display: none;
   font: var(--t-code);
@@ -432,10 +470,8 @@
   font-weight: var(--weight-bold);
 }
 
-@media (max-width: 640px) {
-  .aw-tasks__phonekey {
-    display: inline;
-  }
+.aw-table.is-narrow .aw-tasks__phonekey {
+  display: inline;
 }
 
 /* Bulk bar and notices */
@@ -1623,6 +1659,31 @@ span.aw-taskstart__fix {
 .aw-activity__time,
 .aw-activity__via {
   font: var(--t-caption);
+  color: var(--content-fg-muted);
+}
+
+.aw-activity__edited {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: var(--t-caption);
+  color: var(--content-fg-muted);
+  text-decoration: underline dotted;
+  cursor: pointer;
+}
+
+.aw-activity__edited:hover {
+  color: var(--content-fg);
+}
+
+.aw-activity__actions {
+  margin-left: auto;
+}
+
+.aw-activity__removed {
+  margin: var(--space-1) 0 0;
+  font: var(--t-small);
+  font-style: italic;
   color: var(--content-fg-muted);
 }
 

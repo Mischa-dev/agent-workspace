@@ -3,7 +3,7 @@ use axum::{
     extract::State,
     http::{HeaderMap, HeaderValue, StatusCode, header::LOCATION},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, post, put},
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -24,16 +24,20 @@ const MAX_PROJECT_NAME_BYTES: usize = 120;
 const MAX_SEARCH_BYTES: usize = 120;
 const MAX_FILTER_BYTES: usize = 50_000;
 const MAX_IDEMPOTENCY_KEY_BYTES: usize = 200;
+/// Most projects one rail order places.
+const MAX_RAIL_PROJECTS: usize = 200;
 const PROJECT_CREATE_SCOPE: &str = "projects.create";
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/projects", get(list_projects).post(create_project))
+        .route("/api/v1/projects/rail-order", put(set_rail_order))
         .route(
             "/api/v1/projects/{id}",
             get(get_project).patch(update_project),
         )
         .route("/api/v1/projects/{id}/archive", post(archive_project))
+        .route("/api/v1/projects/{id}/restore", post(restore_project))
         .route(
             "/api/v1/projects/{id}/navigation",
             get(get_navigation).put(update_navigation),
@@ -52,9 +56,11 @@ struct ProjectRow {
     archived_at: Option<String>,
     location_kind: Option<String>,
     conversation_id: Option<Uuid>,
+    page_id: Option<Uuid>,
     context_drawer_open: Option<bool>,
     filters: Option<serde_json::Value>,
     pinned_at: Option<String>,
+    rail_position: Option<i32>,
     last_opened_at: Option<String>,
     navigation_version: Option<i64>,
 }
@@ -98,6 +104,8 @@ pub struct NavigationView {
     context_drawer_open: bool,
     filters: serde_json::Value,
     pinned: bool,
+    /// Where you dragged this pinned project in your rail; unplaced pins follow.
+    rail_position: Option<i32>,
     last_opened_at: Option<String>,
     version: i64,
 }
@@ -108,6 +116,8 @@ pub struct NavigationLocation {
     kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     conversation_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    page_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -115,6 +125,8 @@ pub struct NavigationLocation {
 struct ProjectListQuery {
     q: Option<String>,
     limit: Option<u16>,
+    /// Archived projects instead of active ones, most recently archived first.
+    archived: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -155,6 +167,20 @@ struct UpdateNavigationRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SwitchProjectRequest {
     expected_version: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RailOrderRequest {
+    /// Your pinned projects, top to bottom.
+    project_ids: Vec<Uuid>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RailOrderResponse {
+    /// The listed projects that were placed: those you can still open.
+    project_ids: Vec<Uuid>,
 }
 
 #[derive(Debug, FromRow)]
@@ -224,6 +250,8 @@ async fn list_projects(
                 WHEN p.archived_at IS NOT NULL
                   OR (pns.location_kind IN ('channel', 'thread') AND navc.id IS NULL)
                 THEN 'project_overview'
+                -- A page that was archived since falls back to the pages list.
+                WHEN pns.location_kind = 'page' AND navp.id IS NULL THEN 'pages'
                 ELSE pns.location_kind
             END AS location_kind,
             CASE
@@ -232,9 +260,11 @@ async fn list_projects(
                 THEN NULL
                 ELSE pns.conversation_id
             END AS conversation_id,
+            CASE WHEN p.archived_at IS NULL THEN navp.id END AS page_id,
             pns.context_drawer_open,
             pns.filters,
             pns.pinned_at::text AS pinned_at,
+            pns.rail_position,
             pns.last_opened_at::text AS last_opened_at,
             pns.version AS navigation_version
         FROM project_memberships pm
@@ -245,6 +275,11 @@ async fn list_projects(
          AND om.enabled
         LEFT JOIN project_navigation_states pns
           ON pns.project_id = p.id AND pns.actor_id = pm.actor_id
+        LEFT JOIN project_pages navp
+          ON navp.project_id = p.id
+         AND navp.id = pns.page_id
+         AND pns.location_kind = 'page'
+         AND navp.archived_at IS NULL
         LEFT JOIN conversations navc
           ON navc.project_id = p.id
          AND navc.id = pns.conversation_id
@@ -261,7 +296,7 @@ async fn list_projects(
          )
         WHERE pm.actor_id = $1
           AND pm.enabled
-          AND p.archived_at IS NULL
+          AND (p.archived_at IS NOT NULL) = $5
           AND p.kind = 'standard'
           AND (
               $2::text IS NULL
@@ -271,7 +306,9 @@ async fn list_projects(
         ORDER BY
             -- An exact key comes first, so `/KEY-12` finds its Project before the limit.
             (upper(p.project_key) = upper($4)) IS TRUE DESC,
+            p.archived_at DESC NULLS LAST,
             (pns.pinned_at IS NOT NULL) DESC,
+            pns.rail_position ASC NULLS LAST,
             pns.pinned_at ASC NULLS LAST,
             pns.last_opened_at DESC NULLS LAST,
             lower(p.name),
@@ -283,6 +320,7 @@ async fn list_projects(
     .bind(search_pattern)
     .bind(limit)
     .bind(search)
+    .bind(query.archived.unwrap_or(false))
     .fetch_all(&state.pool)
     .await?;
     let attention = crate::notifications::attention_counts(&state.pool, principal.actor_id).await?;
@@ -453,11 +491,13 @@ async fn create_project(
             location: NavigationLocation {
                 kind: "project_overview".to_owned(),
                 conversation_id: None,
+                page_id: None,
             },
             href: format!("/projects/{project_id}"),
             context_drawer_open: false,
             filters: serde_json::json!({}),
             pinned: false,
+            rail_position: None,
             last_opened_at: None,
             version: 1,
         },
@@ -719,6 +759,61 @@ async fn archive_project(
     Ok(Json(fetch_project(&state, &principal, project_id).await?))
 }
 
+/// Brings an archived project back, for whoever may manage it, against the
+/// version they read. Its channels, tasks and settings were kept as they were.
+async fn restore_project(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath(project_id): ApiPath<Uuid>,
+    ApiJson(request): ApiJson<ArchiveProjectRequest>,
+) -> Result<Json<ProjectView>, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    let mut transaction = state.pool.begin().await?;
+    let project = lock_project_membership(&mut transaction, principal.actor_id, project_id)
+        .await?
+        .ok_or(AppError::NotFound("project"))?;
+    authorize_project_action(&principal, &project, Action::ProjectManage)?;
+    if project.archived_at.is_none() {
+        transaction.commit().await?;
+        return Ok(Json(fetch_project(&state, &principal, project_id).await?));
+    }
+    if project.version != request.expected_version {
+        return Err(AppError::VersionConflict {
+            resource: "project",
+            current_version: project.version,
+        });
+    }
+    let restored = sqlx::query(
+        r#"
+        UPDATE projects
+        SET archived_at = NULL, archived_by_actor_id = NULL,
+            version = version + 1, updated_at = now()
+        WHERE id = $1 AND kind = 'standard'
+        "#,
+    )
+    .bind(project_id)
+    .execute(&mut *transaction)
+    .await?
+    .rows_affected();
+    if restored == 0 {
+        return Err(AppError::Forbidden);
+    }
+    insert_audit_event(
+        &mut transaction,
+        &headers,
+        &principal,
+        Some(project_id),
+        "project.restored",
+        "project",
+        project_id,
+        serde_json::json!({"previous_version": project.version}),
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(Json(fetch_project(&state, &principal, project_id).await?))
+}
+
 async fn get_navigation(
     State(state): State<AppState>,
     principal: AuthenticatedActor,
@@ -796,16 +891,18 @@ async fn update_navigation(
         r#"
         INSERT INTO project_navigation_states (
             project_id, actor_id, location_kind, conversation_id,
-            context_drawer_open, filters, pinned_at, last_opened_at, version
+            context_drawer_open, filters, pinned_at, last_opened_at, version,
+            page_id
         )
         VALUES (
             $1, $2, $3, $4, $5, $6,
             CASE WHEN $7 THEN now() ELSE NULL END,
-            now(), 1
+            now(), 1, $9
         )
         ON CONFLICT (project_id, actor_id) DO UPDATE
         SET location_kind = EXCLUDED.location_kind,
             conversation_id = EXCLUDED.conversation_id,
+            page_id = EXCLUDED.page_id,
             context_drawer_open = EXCLUDED.context_drawer_open,
             filters = EXCLUDED.filters,
             pinned_at = CASE
@@ -813,6 +910,8 @@ async fn update_navigation(
                 WHEN $7 THEN project_navigation_states.pinned_at
                 ELSE NULL
             END,
+            -- Pinned again later, a project goes to the end, not its old place.
+            rail_position = CASE WHEN $7 THEN project_navigation_states.rail_position END,
             last_opened_at = now(),
             version = project_navigation_states.version + 1,
             updated_at = now()
@@ -827,9 +926,11 @@ async fn update_navigation(
             (SELECT archived_at::text FROM projects WHERE id = $1) AS archived_at,
             location_kind,
             conversation_id,
+            page_id,
             context_drawer_open,
             filters,
             pinned_at::text AS pinned_at,
+            rail_position,
             last_opened_at::text AS last_opened_at,
             version AS navigation_version
         "#,
@@ -842,6 +943,7 @@ async fn update_navigation(
     .bind(filters)
     .bind(pinned)
     .bind(request.expected_version)
+    .bind(request.location.page_id)
     .fetch_optional(&mut *transaction)
     .await?
     .ok_or(AppError::VersionConflict {
@@ -923,6 +1025,103 @@ struct SwitchProjectResponse {
     href: String,
 }
 
+/// Puts your rail in your own order, from a drag: each listed project is
+/// pinned at its place, and your other pins keep their pin and follow, in the
+/// order you pinned them. Only your own navigation changes. A listed project
+/// you can't open any more (removed, archived) is left out, not refused, so
+/// a rail drawn a moment ago still saves.
+async fn set_rail_order(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiJson(request): ApiJson<RailOrderRequest>,
+) -> Result<Json<RailOrderResponse>, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    let mut seen = std::collections::HashSet::new();
+    if request.project_ids.len() > MAX_RAIL_PROJECTS
+        || !request.project_ids.iter().all(|id| seen.insert(*id))
+    {
+        return Err(AppError::Validation("project_ids"));
+    }
+    let mut transaction = state.pool.begin().await?;
+    let memberships = sqlx::query_as::<_, ProjectMembershipRow>(
+        r#"
+        SELECT
+            p.id,
+            pm.role,
+            p.version,
+            p.archived_at::text AS archived_at
+        FROM projects p
+        JOIN project_memberships pm
+          ON pm.project_id = p.id AND pm.actor_id = $1 AND pm.enabled
+        JOIN organization_memberships om
+          ON om.organization_id = p.organization_id
+         AND om.actor_id = $1
+         AND om.enabled
+        WHERE p.id = ANY($2)
+          AND p.kind = 'standard'
+          AND p.archived_at IS NULL
+        ORDER BY p.id
+        FOR SHARE OF pm, om
+        "#,
+    )
+    .bind(principal.actor_id)
+    .bind(&request.project_ids)
+    .fetch_all(&mut *transaction)
+    .await?;
+    let allowed = memberships
+        .iter()
+        .filter(|membership| {
+            authorize_project_action(&principal, *membership, Action::NavigationWrite).is_ok()
+        })
+        .map(|membership| membership.id)
+        .collect::<std::collections::HashSet<_>>();
+    let placed = request
+        .project_ids
+        .into_iter()
+        .filter(|id| allowed.contains(id))
+        .collect::<Vec<_>>();
+    sqlx::query(
+        r#"
+        UPDATE project_navigation_states
+        SET rail_position = NULL, updated_at = now()
+        WHERE actor_id = $1
+          AND rail_position IS NOT NULL
+          AND project_id <> ALL($2)
+        "#,
+    )
+    .bind(principal.actor_id)
+    .bind(&placed)
+    .execute(&mut *transaction)
+    .await?;
+    // The rest of a project's navigation and its version stay as they are:
+    // the order is its own setting, so it never conflicts with a place being
+    // remembered at the same moment.
+    sqlx::query(
+        r#"
+        INSERT INTO project_navigation_states (
+            project_id, actor_id, location_kind, context_drawer_open, filters,
+            pinned_at, rail_position, last_opened_at, version
+        )
+        SELECT placed.project_id, $1, 'project_overview', false, '{}'::jsonb,
+               now(), placed.position::integer - 1, now(), 1
+        FROM unnest($2::uuid[]) WITH ORDINALITY AS placed(project_id, position)
+        ON CONFLICT (project_id, actor_id) DO UPDATE
+        SET pinned_at = COALESCE(project_navigation_states.pinned_at, now()),
+            rail_position = EXCLUDED.rail_position,
+            updated_at = now()
+        "#,
+    )
+    .bind(principal.actor_id)
+    .bind(&placed)
+    .execute(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+    Ok(Json(RailOrderResponse {
+        project_ids: placed,
+    }))
+}
+
 async fn fetch_project(
     state: &AppState,
     principal: &AuthenticatedActor,
@@ -960,6 +1159,8 @@ async fn fetch_project_row(
                 WHEN p.archived_at IS NOT NULL
                   OR (pns.location_kind IN ('channel', 'thread') AND navc.id IS NULL)
                 THEN 'project_overview'
+                -- A page that was archived since falls back to the pages list.
+                WHEN pns.location_kind = 'page' AND navp.id IS NULL THEN 'pages'
                 ELSE pns.location_kind
             END AS location_kind,
             CASE
@@ -968,9 +1169,11 @@ async fn fetch_project_row(
                 THEN NULL
                 ELSE pns.conversation_id
             END AS conversation_id,
+            CASE WHEN p.archived_at IS NULL THEN navp.id END AS page_id,
             pns.context_drawer_open,
             pns.filters,
             pns.pinned_at::text AS pinned_at,
+            pns.rail_position,
             pns.last_opened_at::text AS last_opened_at,
             pns.version AS navigation_version
         FROM projects p
@@ -982,6 +1185,11 @@ async fn fetch_project_row(
          AND om.enabled
         LEFT JOIN project_navigation_states pns
           ON pns.project_id = p.id AND pns.actor_id = $2
+        LEFT JOIN project_pages navp
+          ON navp.project_id = p.id
+         AND navp.id = pns.page_id
+         AND pns.location_kind = 'page'
+         AND navp.archived_at IS NULL
         LEFT JOIN conversations navc
           ON navc.project_id = p.id
          AND navc.id = pns.conversation_id
@@ -1024,6 +1232,8 @@ async fn fetch_project_row_in_transaction(
                 WHEN p.archived_at IS NOT NULL
                   OR (pns.location_kind IN ('channel', 'thread') AND navc.id IS NULL)
                 THEN 'project_overview'
+                -- A page that was archived since falls back to the pages list.
+                WHEN pns.location_kind = 'page' AND navp.id IS NULL THEN 'pages'
                 ELSE pns.location_kind
             END AS location_kind,
             CASE
@@ -1032,9 +1242,11 @@ async fn fetch_project_row_in_transaction(
                 THEN NULL
                 ELSE pns.conversation_id
             END AS conversation_id,
+            CASE WHEN p.archived_at IS NULL THEN navp.id END AS page_id,
             pns.context_drawer_open,
             pns.filters,
             pns.pinned_at::text AS pinned_at,
+            pns.rail_position,
             pns.last_opened_at::text AS last_opened_at,
             pns.version AS navigation_version
         FROM projects p
@@ -1046,6 +1258,11 @@ async fn fetch_project_row_in_transaction(
          AND om.enabled
         LEFT JOIN project_navigation_states pns
           ON pns.project_id = p.id AND pns.actor_id = $2
+        LEFT JOIN project_pages navp
+          ON navp.project_id = p.id
+         AND navp.id = pns.page_id
+         AND pns.location_kind = 'page'
+         AND navp.archived_at IS NULL
         LEFT JOIN conversations navc
           ON navc.project_id = p.id
          AND navc.id = pns.conversation_id
@@ -1127,6 +1344,7 @@ fn navigation_view(row: &ProjectRow) -> Result<NavigationView, AppError> {
             .clone()
             .unwrap_or_else(|| "project_overview".to_owned()),
         conversation_id: row.conversation_id,
+        page_id: row.page_id,
     };
     let href = navigation_href(row.id, &location)?;
     Ok(NavigationView {
@@ -1135,23 +1353,45 @@ fn navigation_view(row: &ProjectRow) -> Result<NavigationView, AppError> {
         context_drawer_open: row.context_drawer_open.unwrap_or(false),
         filters: row.filters.clone().unwrap_or_else(|| serde_json::json!({})),
         pinned: row.pinned_at.is_some(),
+        rail_position: row.rail_position,
         last_opened_at: row.last_opened_at.clone(),
         version: row.navigation_version.unwrap_or(0),
     })
 }
 
-fn navigation_href(project_id: Uuid, location: &NavigationLocation) -> Result<String, AppError> {
-    match (location.kind.as_str(), location.conversation_id) {
-        ("work_items", None) => Ok(format!("/projects/{project_id}/work-items")),
+/// The address of a place in a project that doesn't name a conversation or a page.
+fn plain_location_path(kind: &str) -> Option<&'static str> {
+    Some(match kind {
         // Older clients saved settings as the last place; opening the Project
         // from there should lead out of settings, so it lands on the overview.
-        ("project_overview" | "settings", None) => Ok(format!("/projects/{project_id}")),
-        ("thread", Some(conversation_id)) => {
+        "project_overview" | "settings" => "",
+        "work_items" => "/work-items",
+        "milestones" => "/milestones",
+        "timeline" => "/timeline",
+        "planning" => "/next",
+        "pages" => "/pages",
+        "decisions" => "/decisions",
+        "runs" => "/launches",
+        _ => return None,
+    })
+}
+
+fn navigation_href(project_id: Uuid, location: &NavigationLocation) -> Result<String, AppError> {
+    match (
+        location.kind.as_str(),
+        location.conversation_id,
+        location.page_id,
+    ) {
+        ("thread", Some(conversation_id), None) => {
             Ok(format!("/projects/{project_id}/threads/{conversation_id}"))
         }
-        ("channel", Some(conversation_id)) => {
+        ("channel", Some(conversation_id), None) => {
             Ok(format!("/projects/{project_id}/channels/{conversation_id}"))
         }
+        ("page", None, Some(page_id)) => Ok(format!("/projects/{project_id}/pages/{page_id}")),
+        (kind, None, None) => plain_location_path(kind)
+            .map(|path| format!("/projects/{project_id}{path}"))
+            .ok_or(AppError::Internal("stored Project navigation location")),
         _ => Err(AppError::Internal("stored Project navigation location")),
     }
 }
@@ -1161,9 +1401,33 @@ async fn validate_navigation_location(
     project_id: Uuid,
     location: &NavigationLocation,
 ) -> Result<(), AppError> {
-    match (location.kind.as_str(), location.conversation_id) {
-        ("project_overview" | "work_items" | "settings", None) => Ok(()),
-        (kind @ ("channel" | "thread"), Some(conversation_id)) => {
+    match (
+        location.kind.as_str(),
+        location.conversation_id,
+        location.page_id,
+    ) {
+        ("page", None, Some(page_id)) => {
+            let active = sqlx::query_scalar::<_, bool>(
+                r#"
+                SELECT archived_at IS NULL
+                FROM project_pages
+                WHERE id = $1 AND project_id = $2
+                FOR SHARE
+                "#,
+            )
+            .bind(page_id)
+            .bind(project_id)
+            .fetch_optional(&mut **transaction)
+            .await?
+            .unwrap_or(false);
+            if active {
+                Ok(())
+            } else {
+                Err(AppError::NotFound("page"))
+            }
+        }
+        (kind, None, None) if plain_location_path(kind).is_some() => Ok(()),
+        (kind @ ("channel" | "thread"), Some(conversation_id), None) => {
             let conversation = sqlx::query_as::<_, (String, Option<Uuid>)>(
                 r#"
                 SELECT kind, parent_channel_id
@@ -1479,6 +1743,7 @@ mod tests {
                 &NavigationLocation {
                     kind: "thread".to_owned(),
                     conversation_id: Some(conversation_id),
+                    page_id: None,
                 },
             )
             .expect("thread href"),
@@ -1490,6 +1755,7 @@ mod tests {
                 &NavigationLocation {
                     kind: "thread".to_owned(),
                     conversation_id: None,
+                    page_id: None,
                 },
             )
             .is_err()
@@ -1500,6 +1766,7 @@ mod tests {
                 &NavigationLocation {
                     kind: "channel".to_owned(),
                     conversation_id: Some(conversation_id),
+                    page_id: None,
                 },
             )
             .expect("channel href"),
@@ -1511,11 +1778,42 @@ mod tests {
                 &NavigationLocation {
                     kind: "work_items".to_owned(),
                     conversation_id: None,
+                    page_id: None,
                 },
             )
             .expect("Work Items href"),
             format!("/projects/{project_id}/work-items")
         );
+        let page_id = Uuid::now_v7();
+        let place = |kind: &str, page_id: Option<Uuid>| {
+            navigation_href(
+                project_id,
+                &NavigationLocation {
+                    kind: kind.to_owned(),
+                    conversation_id: None,
+                    page_id,
+                },
+            )
+        };
+        assert_eq!(
+            place("page", Some(page_id)).expect("page href"),
+            format!("/projects/{project_id}/pages/{page_id}")
+        );
+        assert!(place("page", None).is_err());
+        assert!(place("pages", Some(page_id)).is_err());
+        assert_eq!(
+            place("planning", None).expect("planning href"),
+            format!("/projects/{project_id}/next")
+        );
+        assert_eq!(
+            place("runs", None).expect("runs href"),
+            format!("/projects/{project_id}/launches")
+        );
+        assert_eq!(
+            place("settings", None).expect("settings href"),
+            format!("/projects/{project_id}")
+        );
+        assert!(place("somewhere", None).is_err());
     }
 
     #[test]

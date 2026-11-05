@@ -41,7 +41,10 @@ their own pages; nobody else will.
    a card). No raw `<button>`, `<input>` or `<select>` in a page. New styles
    use the tokens; `src/styles/designSystem.test.ts` fails on hand-typed
    colors, type, spacing, corners, focus rings and timings. Check new pieces
-   on `/design-system` in a light and a dark theme.
+   on `/design-system` in a light and a dark theme. The page picks one of the
+   three widths (reading, wide or full; DESIGN.md, Layout), shares it with
+   the other tabs of its area, and its header has no sentence under the title
+   unless it's a settings page.
 9. **Keyboard**: every action is reachable with Tab, the focus ring shows,
    dialogs trap and restore focus, and Escape closes what it opened.
 10. **Accessible names**: icon buttons have a `label`, lists and regions have a
@@ -63,6 +66,14 @@ their own pages; nobody else will.
     Home) stays lean, and `corepack pnpm check:assets` passes.
 15. **Errors are reported**: unexpected errors reach `AppErrorBoundary`, which
     sends them to telemetry; don't swallow them in a `catch` that only logs.
+
+## Layouts
+
+16. **Every part takes part**: a new user-facing part is in the layout
+    registry (`src/experience/registry.json`) and its presets say whether they
+    show it; the page hides it when the layout does, and the nouns a layout
+    renames (task, milestone, page, channel) come from `experience.word`.
+    Check the page with Software team, Personal life and Bug reporting.
 
 ## Areas
 

@@ -5,10 +5,11 @@ import { queryKeys } from '../api/queryKeys'
 import { Button, ErrorState, Icon, IconButton, actorKind, Avatar, countLabel } from '../ui'
 import { ASSIGNEE_PAGE, listWorkItems, moveWorkItem, updateWorkItem } from './api'
 import { BoardCard } from './BoardCard'
+import { pickerShown, useCardFields } from './cardFields'
 import { BoardSkeleton } from './BoardSkeleton'
 import { ColumnComposer } from './ColumnComposer'
 import { statusBoardColumns, tucksDone, withoutDone } from './doneModel'
-import { applyMove, dropAnchor, fieldMove, laneOf, lanesFor, orderedIndex, PRIORITY_ORDER, runOptimisticMove } from './boardModel'
+import { applyMove, createSaveQueue, dropAnchor, fieldMove, laneOf, lanesFor, orderedIndex, PRIORITY_ORDER, runOptimisticMove } from './boardModel'
 import { FieldPicker, type PickerField, type PickResult } from './FieldPicker'
 import { allowedStatuses } from './pickerModel'
 import { boardQuery, type ListState } from './listModel'
@@ -18,7 +19,7 @@ import { useAssignableActors } from './hooks'
 import { useBoard, useInvalidateWorkItems, useMilestones } from './planningHooks'
 import { SelectionBar } from './SelectionBar'
 import { emptySelection, keepLoaded, MAX_BULK, pick, pickerCurrent, pickerTargets, selectAll, toggleOne, type Selection } from './selectionModel'
-import { useTaskShortcuts } from './shortcutKeys'
+import { pageHasFocus, useOpenAsYouGo, useTaskShortcuts } from './shortcutKeys'
 import { useDoneCount } from './useDoneWork'
 import { TaskGlyph } from './TaskGlyph'
 import { editErrorMessage, useApplyPick } from './taskEdits'
@@ -79,6 +80,7 @@ export function WorkItemBoard({
   )
   const boardKey = queryKeys.workItemBoard(projectId, query)
   const board = useBoard(projectId, query, true)
+  const fields = useCardFields(projectId)
   const queryClient = useQueryClient()
   const invalidate = useInvalidateWorkItems()
   const applyPick = useApplyPick()
@@ -87,6 +89,8 @@ export function WorkItemBoard({
   const [focusedId, setFocusedId] = useState<string | null>(null)
   const [held, setHeld] = useState<{ dragId: string; target: DropTarget } | null>(null)
   const [announcement, setAnnouncement] = useState('')
+  // A card's moves save in order, each with the version the last one left.
+  const [queueSave] = useState(() => createSaveQueue())
   const [picker, setPicker] = useState<{ field: PickerField; anchor: HTMLElement; targets: WorkItemCard[] } | null>(null)
   const [loadingColumn, setLoadingColumn] = useState<string | null>(null)
   const [selectionState, setSelection] = useState<Selection>(emptySelection)
@@ -212,31 +216,33 @@ export function WorkItemBoard({
       // A status move and a lane change are two saves. When the move saves but
       // the lane change doesn't, the move stands and the error comes back as
       // `laneError`, so the person is told what did and didn't happen.
-      const send = async (): Promise<{ laneError?: unknown }> => {
-        let version = card.version
-        if (columnsBy === 'status') {
-          const moved = await moveWorkItem({
-            projectId,
-            workItemId: card.id,
-            expectedVersion: version,
-            targetStatusId: to.key,
-            ...(anchor.beforeId ? { beforeId: anchor.beforeId } : anchor.afterId ? { afterId: anchor.afterId } : { targetPosition: 1 }),
-            idempotencyKey: crypto.randomUUID(),
-          })
-          version = moved.version
-          if (!laneChange) return {}
-          try {
-            await updateWorkItem({ projectId, workItemId: card.id, idempotencyKey: crypto.randomUUID(), patch: { expectedVersion: version, ...laneChange.patch } })
-          } catch (laneError) {
-            return { laneError }
+      const send = () =>
+        queueSave(card.id, async (savedVersion): Promise<{ result: { laneError?: unknown }; version: number }> => {
+          let version = Math.max(card.version, savedVersion ?? 0)
+          if (columnsBy === 'status') {
+            const moved = await moveWorkItem({
+              projectId,
+              workItemId: card.id,
+              expectedVersion: version,
+              targetStatusId: to.key,
+              ...(anchor.beforeId ? { beforeId: anchor.beforeId } : anchor.afterId ? { afterId: anchor.afterId } : { targetPosition: 1 }),
+              idempotencyKey: crypto.randomUUID(),
+            })
+            version = moved.version
+            if (!laneChange) return { result: {}, version }
+            try {
+              const updated = await updateWorkItem({ projectId, workItemId: card.id, idempotencyKey: crypto.randomUUID(), patch: { expectedVersion: version, ...laneChange.patch } })
+              version = updated.version
+            } catch (laneError) {
+              return { result: { laneError }, version }
+            }
+            return { result: {}, version }
           }
-          return {}
-        }
-        const patch = { ...(columnChange ? columnChange.patch : {}), ...(laneChange?.patch ?? {}) }
-        if (Object.keys(patch).length === 0) return {}
-        await updateWorkItem({ projectId, workItemId: card.id, idempotencyKey: crypto.randomUUID(), patch: { expectedVersion: version, ...patch } })
-        return {}
-      }
+          const patch = { ...(columnChange ? columnChange.patch : {}), ...(laneChange?.patch ?? {}) }
+          if (Object.keys(patch).length === 0) return { result: {}, version }
+          const updated = await updateWorkItem({ projectId, workItemId: card.id, idempotencyKey: crypto.randomUUID(), patch: { expectedVersion: version, ...patch } })
+          return { result: {}, version: updated.version }
+        })
 
       setAnnouncement(`Moved ${card.key} to ${to.label}${laneChange ? `, ${laneLabel}` : ''}.`)
       runOptimisticMove(
@@ -272,7 +278,7 @@ export function WorkItemBoard({
         })
         .finally(() => void invalidate(projectId))
     },
-    [boardKey, columnsBy, invalidate, laneDroppable, lanes, notify, projectId, queryClient, state.lanes, workflow],
+    [boardKey, columnsBy, invalidate, laneDroppable, lanes, notify, projectId, queryClient, queueSave, state.lanes, workflow],
   )
 
   const drag = useBoardDrag({ enabled: canMove, ghostRef, onDrop: performMove, scrollerRef })
@@ -367,6 +373,15 @@ export function WorkItemBoard({
     window.requestAnimationFrame(() => scrollerRef.current?.querySelector<HTMLElement>(`[data-drag-id="${CSS.escape(dragId)}"]`)?.focus())
   }
 
+  // The side panel follows the keyboard from card to card; a click or Enter opens at once.
+  const following = useOpenAsYouGo((id) => {
+    if (id !== openTaskId) onOpenTask(id)
+  })
+  const browseTo = (dragId: string) => {
+    focusCard(dragId)
+    following.follow(splitDragId(dragId).cardId)
+  }
+
   const moveHeld = (key: string) => {
     if (!held) return
     const { target } = held
@@ -406,7 +421,17 @@ export function WorkItemBoard({
       const column = columns.find((entry) => entry.key === target.columnKey)
       const cell = column ? cellCards(column, target.laneKey) : []
       const next = cell[Math.max(0, Math.min(target.index, cell.length - 1))]
-      if (column && next) focusCard(dragIdFor(column.key, next.id))
+      if (column && next) browseTo(dragIdFor(column.key, next.id))
+      return
+    }
+    if (event.key === 'Home' || event.key === 'End') {
+      // The ends of the card's own column (and lane).
+      event.preventDefault()
+      const { columnKey } = splitDragId(dragId)
+      const column = columns.find((entry) => entry.key === columnKey)
+      const cell = column ? cellCards(column, state.lanes === 'none' ? 'all' : laneOf(card, state.lanes).key) : []
+      const next = event.key === 'Home' ? cell[0] : cell[cell.length - 1]
+      if (column && next) browseTo(dragIdFor(column.key, next.id))
       return
     }
     if (event.key === ' ' && canMove && card.capabilities.edit && !card.archivedAt) {
@@ -424,11 +449,12 @@ export function WorkItemBoard({
     }
     if (event.key === 'Enter') {
       event.preventDefault()
+      following.cancel()
       onOpenTask(card.id)
       return
     }
     const field = PICKER_KEYS[event.key.toLowerCase()]
-    if (field && !event.shiftKey && openPicker(field, event.currentTarget, card)) event.preventDefault()
+    if (field && !event.shiftKey && pickerShown(field, fields) && openPicker(field, event.currentTarget, card)) event.preventDefault()
   }
 
   // While a card is held its element moves between columns, so keys are read from the window.
@@ -485,18 +511,21 @@ export function WorkItemBoard({
     }
     if (event.metaKey || event.ctrlKey) return false
     if (key === 'escape') {
+      following.cancel()
       if (openTaskId) onClosePanel()
       else if (selection.ids.size) setSelection(emptySelection)
       else return false
       return true
     }
-    if (key === 'j' || key === 'k') {
+    // J and K walk down each column from anywhere but a field. With nothing
+    // focused (or the board itself, after a click between cards), an arrow
+    // starts on the card you were on, or the first one.
+    if (key === 'j' || key === 'k' || (key.startsWith('arrow') && (pageHasFocus() || document.activeElement === scrollerRef.current))) {
       if (!readingOrder.length) return false
       const index = current ? readingOrder.indexOf(current) : -1
-      const next = readingOrder[index < 0 ? 0 : Math.max(0, Math.min(readingOrder.length - 1, index + (key === 'j' ? 1 : -1)))]
-      focusCard(next.dragId)
-      // With a task open beside the board, the panel follows, the way it does on the list.
-      if (openTaskId && next.card.id !== openTaskId) onOpenTask(next.card.id)
+      const step = key === 'j' ? 1 : key === 'k' ? -1 : 0
+      const next = readingOrder[index < 0 ? 0 : Math.max(0, Math.min(readingOrder.length - 1, index + step))]
+      browseTo(next.dragId)
       return true
     }
     if (key === 'x' && current && canMove) {
@@ -504,7 +533,7 @@ export function WorkItemBoard({
       return true
     }
     const field = PICKER_KEYS[key]
-    if (field && !event.shiftKey) {
+    if (field && !event.shiftKey && pickerShown(field, fields)) {
       const element = current ? scrollerRef.current?.querySelector<HTMLElement>(`[data-drag-id="${CSS.escape(current.dragId)}"]`) : null
       const anchor = element ?? document.querySelector<HTMLElement>('.aw-bulkbar') ?? scrollerRef.current
       return anchor ? openPicker(field, anchor, current?.card) : false
@@ -652,6 +681,7 @@ export function WorkItemBoard({
                             card={entry.card}
                             dragId={entry.dragId}
                             draggable={canMove && entry.card.capabilities.edit && !entry.card.archivedAt}
+                            fields={fields}
                             focused={entry.dragId === tabStop}
                             held={held?.dragId === entry.dragId}
                             key={entry.dragId}
@@ -659,6 +689,7 @@ export function WorkItemBoard({
                             onKeyDown={onCardKeyDown}
                             onOpen={(card) => {
                               if (drag.justDragged()) return
+                              following.cancel()
                               onOpenTask(card.id)
                             }}
                             onPick={(card, field, anchor) => openPicker(field, anchor, card)}

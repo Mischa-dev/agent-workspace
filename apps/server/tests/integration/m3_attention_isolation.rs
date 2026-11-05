@@ -225,8 +225,7 @@ async fn failed_run_acknowledgement_is_private_durable_and_actor_scoped() {
 
     supervisors.shutdown_all().await;
     pool.close().await;
-    administrative_pool
-        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("drop isolated attention schema");
 }

@@ -55,8 +55,12 @@ function checksSummary(run: Run) {
   return { icon: 'loader' as const, tone: 'muted', label: `Checks ${words(checks)}` }
 }
 
-/** The thread's current run: its state, branch and pull request, and what you can do next. */
-export function RunCard({ actions, notes, run }: { actions?: ReactNode; notes?: ReactNode; run: Run }) {
+/**
+ * The thread's current run: its state, branch and pull request, and what you
+ * can do next. `developerDetail` is off when the project's layout hides branch
+ * names and commit hashes.
+ */
+export function RunCard({ actions, developerDetail = true, notes, run }: { actions?: ReactNode; developerDetail?: boolean; notes?: ReactNode; run: Run }) {
   const state = RUN_STATUS[run.state]
   const checks = checksSummary(run)
   const settings = runSettingsFrom(run.config)
@@ -85,7 +89,7 @@ export function RunCard({ actions, notes, run }: { actions?: ReactNode; notes?: 
           <span className="aw-run__meta">{settingsLine}</span>
         </div>
       ) : null}
-      {run.branch ? (
+      {run.branch && developerDetail ? (
         <div className="aw-run__row">
           <Icon name="branch" size={14} />
           <code>{run.branch}</code>

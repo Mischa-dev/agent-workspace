@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useState } from 'react'
 
 import { queryKeys } from '../api/queryKeys'
 import type { AuthenticatedSession } from '../auth/session'
@@ -13,6 +14,35 @@ export function defaultWorkspace(session: AuthenticatedSession) {
     session.organizations[0] ??
     null
   )
+}
+
+const VIEWED_WORKSPACE_KEY = 'agent-workspace:settings:workspace'
+
+function rememberedWorkspace() {
+  try {
+    return window.sessionStorage.getItem(VIEWED_WORKSPACE_KEY)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The workspace whose settings are open: the one last picked in settings this
+ * visit, else the default. Picking one only changes what settings show;
+ * making it the default is its own step.
+ */
+export function useViewedWorkspace(session: AuthenticatedSession) {
+  const [picked, setPicked] = useState(rememberedWorkspace)
+  const workspace = session.organizations.find((organization) => organization.id === picked) ?? defaultWorkspace(session)
+  const view = (organizationId: string) => {
+    setPicked(organizationId)
+    try {
+      window.sessionStorage.setItem(VIEWED_WORKSPACE_KEY, organizationId)
+    } catch {
+      // Only a convenience: settings fall back to the default workspace.
+    }
+  }
+  return [workspace, view] as const
 }
 
 /**

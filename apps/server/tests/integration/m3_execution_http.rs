@@ -227,8 +227,7 @@ async fn execution_resources_are_project_scoped_and_status_only() {
     );
 
     pool.close().await;
-    administrative_pool
-        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("drop isolated M3 execution schema");
 }

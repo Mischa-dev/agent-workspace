@@ -29,6 +29,10 @@
   color: var(--link);
 }
 
+.aw-threadchip .aw-stack {
+  flex: none;
+}
+
 .aw-threadchip__name {
   min-width: 0;
   max-width: 32ch;
@@ -103,6 +107,11 @@
   grid-template-columns: repeat(6, 36px);
   gap: var(--space-half);
   padding: var(--space-1);
+}
+
+.aw-quickreact {
+  font-size: 15px; /* design-exception: emoji */
+  line-height: 1;
 }
 
 .aw-emojigrid__item {

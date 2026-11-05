@@ -26,6 +26,7 @@ import {
 } from './wire'
 import type {
   AssignableActor,
+  CommentRevisions,
   WorkItem,
   BoardColumnsBy,
   WorkItemCard,
@@ -645,6 +646,13 @@ export async function removeAcceptanceCriterion(input: {
   )
 }
 
+/** A comment needs words; one that is only files says what it attaches. */
+export function commentContent({ attachments, content, text }: { attachments?: { name: string }[]; content: MessageContentV1; text?: string }): MessageContentV1 {
+  return text || !attachments?.length
+    ? content
+    : { version: 1, nodes: [{ type: 'text', text: `Attached ${attachments.map((file) => file.name).join(', ')}`.slice(0, 2000) }] }
+}
+
 export async function createWorkItemComment(input: {
   projectId: string
   workItemId: string
@@ -662,6 +670,59 @@ export async function createWorkItemComment(input: {
         : { content: input.content },
     },
   )
+}
+
+const EMPTY_CONTENT: MessageContentV1 = { version: 1, nodes: [] }
+
+function commentActor(value: unknown): AssignableActor {
+  const actor = record(value)
+  return { id: string(actor.id), displayName: string(actor.displayName), handle: string(actor.handle), kind: string(actor.kind) }
+}
+
+function commentRemoval(removal: Record<string, unknown>) {
+  return { removedAt: string(removal.removedAt), removedBy: removal.removedBy ? commentActor(removal.removedBy) : null }
+}
+
+const commentPath = (projectId: string, workItemId: string, commentId: string) =>
+  `/api/v1/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(workItemId)}/comments/${encodeURIComponent(commentId)}`
+
+/** Saves new text for your own comment, against the revision you opened it at. */
+export async function editWorkItemComment(input: {
+  projectId: string
+  workItemId: string
+  commentId: string
+  content: MessageContentV1
+  expectedRevision: number
+}) {
+  return requestJson<unknown>(commentPath(input.projectId, input.workItemId, input.commentId), {
+    method: 'PATCH',
+    json: { content: input.content, expectedRevision: input.expectedRevision },
+  })
+}
+
+/** Deletes a comment and every earlier version of its text: your own, or anyone's as a project owner or admin. */
+export async function deleteWorkItemComment(input: { projectId: string; workItemId: string; commentId: string }) {
+  return requestJson<unknown>(commentPath(input.projectId, input.workItemId, input.commentId), { method: 'DELETE' })
+}
+
+export async function getWorkItemCommentRevisions(projectId: string, workItemId: string, commentId: string): Promise<CommentRevisions> {
+  const payload = record(await requestJson<unknown>(`${commentPath(projectId, workItemId, commentId)}/revisions`))
+  return {
+    commentId: string(payload.commentId),
+    revision: number(payload.revision),
+    removed: payload.removed === true,
+    revisions: (Array.isArray(payload.revisions) ? payload.revisions : []).map((value) => {
+      const revision = record(value)
+      return {
+        revision: number(revision.revision),
+        content: revision.content ? parseMessageContent(revision.content) : null,
+        plainText: nullableString(revision.plainText),
+        writtenBy: commentActor(revision.writtenBy),
+        writtenAt: string(revision.writtenAt),
+        redacted: revision.redacted === true,
+      }
+    }),
+  }
 }
 
 /** One page of a task's timeline, newest first; `nextCursor` reaches older entries. */
@@ -684,7 +745,8 @@ export async function getWorkItemTimeline(
     const activityActor = activity?.actor ? record(activity.actor) : null
     const comment = entry.comment ? record(entry.comment) : null
     const commentAuthor = comment?.author ? record(comment.author) : null
-    const commentContent = comment ? parseMessageContent(comment.content) : null
+    // A deleted comment keeps its place with no text left.
+    const commentContent = comment ? (comment.removed ? EMPTY_CONTENT : parseMessageContent(comment.content)) : null
     return {
       sequence: number(entry.sequence),
       kind: entry.kind === 'comment' ? 'comment' : 'activity',
@@ -729,6 +791,9 @@ export async function getWorkItemTimeline(
               }),
               createdAt: string(comment.createdAt),
               via: typeof comment.via === 'string' ? comment.via.slice(0, 80) : null,
+              revision: typeof comment.revision === 'number' ? comment.revision : 1,
+              editedAt: nullableString(comment.editedAt),
+              removed: comment.removed ? commentRemoval(record(comment.removed)) : null,
             }
           : null,
     }

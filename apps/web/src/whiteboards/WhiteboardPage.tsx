@@ -2,7 +2,7 @@
 import './assetPath'
 
 import { Suspense, lazy, useEffect, useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 
 import { toastError } from '../app/mutations'
@@ -14,6 +14,7 @@ import {
   AvatarStack,
   Banner,
   Button,
+  ConfirmDialog,
   ErrorState,
   Icon,
   IconButton,
@@ -21,10 +22,12 @@ import {
   PageSkeleton,
   StatusChip,
   actorKind,
+  describeError,
   showToast,
 } from '../ui'
 import type { SaveFailure } from './BoardCanvas'
 import {
+  deleteWhiteboardForever,
   duplicateWhiteboard,
   getScene,
   getWhiteboard,
@@ -79,7 +82,7 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
   })
   const [saveState, setSaveState] = useState<SaveState>('saved')
   const [editors, setEditors] = useState<Editor[]>([])
-  const [panel, setPanel] = useState<'links' | 'history' | 'rename' | null>(null)
+  const [panel, setPanel] = useState<'links' | 'history' | 'rename' | 'purge' | null>(null)
   const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null)
   const now = useNow()
   usePageTitle(detail.data?.whiteboard.title ?? null)
@@ -161,9 +164,12 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
             { label: 'History', icon: 'clock', onSelect: () => setPanel('history') },
             { label: 'Duplicate', icon: 'copy', onSelect: () => void duplicate() },
             { separator: true },
-            whiteboard.deleted
-              ? { label: 'Restore from trash', icon: 'undo', disabled: !canEdit, onSelect: () => void trash(false) }
-              : { label: 'Move to trash', icon: 'trash', danger: true, disabled: !canEdit, onSelect: () => void trash(true) },
+            ...(whiteboard.deleted
+              ? [
+                  { label: 'Restore from trash', icon: 'undo' as const, disabled: !canEdit, onSelect: () => void trash(false) },
+                  { label: 'Delete forever', icon: 'trash' as const, danger: true, disabled: !canEdit, onSelect: () => setPanel('purge') },
+                ]
+              : [{ label: 'Move to trash', icon: 'trash' as const, danger: true, disabled: !canEdit, onSelect: () => void trash(true) }]),
           ]}
           label="Whiteboard actions"
           placement="bottom-end"
@@ -174,9 +180,14 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
         <Banner
           action={
             canEdit ? (
-              <Button icon="undo" onClick={() => void trash(false)} size="sm">
-                Restore it
-              </Button>
+              <>
+                <Button icon="undo" onClick={() => void trash(false)} size="sm">
+                  Restore it
+                </Button>
+                <Button icon="trash" onClick={() => setPanel('purge')} size="sm" variant="danger">
+                  Delete forever
+                </Button>
+              </>
             ) : undefined
           }
           tone="offline"
@@ -206,6 +217,41 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
       <LinksDialog canEdit={canEdit} detail={detail.data} onClose={() => setPanel(null)} open={panel === 'links'} />
       <HistoryDialog canEdit={editable} detail={detail.data} onClose={() => setPanel(null)} open={panel === 'history'} />
       <RenameDialog board={whiteboard} onClose={() => setPanel(null)} open={panel === 'rename'} />
+      {panel === 'purge' ? (
+        <PurgeDialog
+          id={whiteboard.id}
+          onClose={() => setPanel(null)}
+          onDeleted={() => {
+            void refresh()
+            navigate('/whiteboards')
+          }}
+          title={whiteboard.title}
+        />
+      ) : null}
     </div>
+  )
+}
+
+/** Asks before a whiteboard in the trash goes for good. */
+function PurgeDialog({ id, onClose, onDeleted, title }: { id: string; onClose: () => void; onDeleted: () => void; title: string }) {
+  const purge = useMutation({
+    mutationFn: () => deleteWhiteboardForever(id),
+    onSuccess: () => {
+      showToast({ tone: 'success', title: `Deleted “${title}” for good` })
+      onDeleted()
+    },
+  })
+  return (
+    <ConfirmDialog
+      busy={purge.isPending}
+      confirmLabel="Delete forever"
+      error={purge.error ? describeError(purge.error).message : null}
+      onClose={onClose}
+      onConfirm={() => purge.mutate()}
+      open
+      title={`Delete “${title}” forever?`}
+    >
+      Its drawing, images and history go for good, and it comes off every task, project and page it’s on. Copies stay.
+    </ConfirmDialog>
   )
 }

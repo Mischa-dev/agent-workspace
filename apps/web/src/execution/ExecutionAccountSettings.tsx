@@ -5,10 +5,24 @@ import { Link } from 'react-router-dom'
 import { queryKeys } from '../api/queryKeys'
 import { humanize } from '../projects/format'
 import { projectSettingsHref } from '../settings/paths'
-import { Banner, Button, EmptyState, ErrorState, Icon, SelectField, SettingsSkeleton, StatusChip, TextField, describeError, showToast } from '../ui'
+import {
+  Banner,
+  Button,
+  ConfirmDialog,
+  EmptyState,
+  ErrorState,
+  Icon,
+  SelectField,
+  SettingsSkeleton,
+  StatusChip,
+  TextField,
+  describeError,
+  showToast,
+} from '../ui'
 import {
   cancelAccountLogin,
   createProviderAccount,
+  deleteProviderAccount,
   getAccountStatus,
   listHarnesses,
   listProviderAccounts,
@@ -183,6 +197,15 @@ function ProviderAccountCard({
     onSuccess: onChange,
     onError: (reason) => setError(errorMessage(reason)),
   })
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const remove = useMutation({
+    mutationFn: () => deleteProviderAccount(projectId, account.id),
+    onSuccess: () => {
+      setConfirmingDelete(false)
+      onChange()
+      showToast({ tone: 'success', title: `${account.name} deleted` })
+    },
+  })
   const [renaming, setRenaming] = useState<string | null>(null)
   const rename = useMutation({
     mutationFn: (name: string) =>
@@ -309,6 +332,9 @@ function ProviderAccountCard({
             Rename
           </Button>
         ) : null}
+        <Button disabled={pending || account.activeRuns > 0} icon="trash" onClick={() => setConfirmingDelete(true)} variant="ghost">
+          Delete
+        </Button>
         {ceremony?.state === 'pending' ? (
           <Button disabled={pending} onClick={() => cancel.mutate()} variant="ghost">
             Cancel sign-in
@@ -355,6 +381,20 @@ function ProviderAccountCard({
           </>
         )}
       </footer>
+      <ConfirmDialog
+        busy={remove.isPending}
+        confirmLabel="Delete account"
+        error={remove.error ? describeError(remove.error).message : null}
+        onClose={() => {
+          setConfirmingDelete(false)
+          remove.reset()
+        }}
+        onConfirm={() => remove.mutate()}
+        open={confirmingDelete}
+        title={`Delete ${account.name}?`}
+      >
+        It’s signed out and its files on this server go, in every project that uses it. Runs it already made keep its name.
+      </ConfirmDialog>
     </article>
   )
 }

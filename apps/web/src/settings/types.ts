@@ -1,4 +1,5 @@
 import type { AuthenticatedSession, OrganizationSummary } from '../auth/session'
+import type { Experience } from '../experience/layout'
 import type { Project } from '../projects/types'
 
 export type SettingsGroup = 'account' | 'workspace' | 'project'
@@ -20,4 +21,6 @@ export type SettingsVisibility = {
   workspace: OrganizationSummary | null
   project: Project | null
   projects: Project[]
+  /** What the person sees there: a page for a part the layout hides stays out of the nav, though links and search still reach it. */
+  experience?: Experience
 }

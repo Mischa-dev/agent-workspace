@@ -86,6 +86,9 @@ struct AddMemberRequest {
 #[serde(rename_all = "camelCase")]
 struct DirectOverview {
     project_id: Uuid,
+    /// The workspace the space belongs to, so the web app can offer that
+    /// workspace's projects as places for an agent to work.
+    organization_id: Uuid,
     conversations: Vec<DirectConversationItem>,
     people: Vec<ActorView>,
     capabilities: DirectCapabilities,
@@ -263,17 +266,39 @@ async fn direct_overview(
     .bind(space.project_id)
     .bind(principal.actor_id)
     .fetch_all(&mut *transaction)
-    .await?
-    .into_iter()
-    .map(ActorView::from)
-    .collect();
+    .await?;
+    // Agents working in the person's projects can be messaged too; the first
+    // DM or group with one brings it into the space.
+    let mut people = people
+        .into_iter()
+        .chain(
+            reachable_agents(&mut transaction, space.project_id, principal.actor_id, None)
+                .await?
+                .into_iter()
+                .map(|agent| agent.person),
+        )
+        .collect::<Vec<_>>();
+    people.sort_by_cached_key(|person| {
+        (
+            person.kind != "external_agent",
+            person.display_name.to_lowercase(),
+            person.id,
+        )
+    });
+    let people = people.into_iter().map(ActorView::from).collect();
     let capabilities = DirectCapabilities {
         start_conversation: allows(&principal, &space, Action::ChannelCreate)?,
         manage_agents: allows(&principal, &space, Action::ExternalAgentManage)?,
     };
+    let organization_id =
+        sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
+            .bind(space.project_id)
+            .fetch_one(&mut *transaction)
+            .await?;
     transaction.commit().await?;
     Ok(Json(DirectOverview {
         project_id: space.project_id,
+        organization_id,
         conversations,
         people,
         capabilities,
@@ -586,6 +611,7 @@ pub(crate) async fn change_group_members(
     let added = if to_add.is_empty() {
         Vec::new()
     } else {
+        join_reachable_agents(transaction, project_id, editor.actor_id, &to_add).await?;
         let people = lock_people(transaction, project_id, &to_add).await?;
         if current.len() + to_add.len() - to_remove.len() > MAX_GROUP_MEMBERS {
             return Err(AppError::Conflict(
@@ -765,6 +791,7 @@ pub(crate) async fn open_dm_in(
     if other_actor_id == actor_id {
         return Err(AppError::Validation("DM recipient"));
     }
+    join_reachable_agents(transaction, project_id, actor_id, &[other_actor_id]).await?;
     lock_people(transaction, project_id, &[other_actor_id]).await?;
     // One DM per pair: the sorted pair is unique within the space, so a
     // second request (or a race) finds the existing conversation.
@@ -823,6 +850,7 @@ pub(crate) async fn create_group_in(
     if others.is_empty() || others.len() >= MAX_GROUP_MEMBERS || others.contains(&actor_id) {
         return Err(AppError::Validation("group members"));
     }
+    join_reachable_agents(transaction, project_id, actor_id, others).await?;
     let people = lock_people(transaction, project_id, others).await?;
     let name = match name {
         Some(name) => name,
@@ -1097,6 +1125,131 @@ async fn ensure_space_in(
         role: parse_role(&role)?,
         enabled,
     })
+}
+
+#[derive(Debug, FromRow)]
+struct ReachableAgent {
+    #[sqlx(flatten)]
+    person: PersonRow,
+    role: String,
+}
+
+/// Agents a person can message that aren't in the Messages space yet: active
+/// agents of the space's workspace that share a project with the person and
+/// can actually work there (`agent_connection_can_access`, so not one whose
+/// home project is archived),
+/// named as they are in the earliest such project. `only` narrows the list
+/// to those Actors. Members of the space, enabled or not, are left out, so
+/// an agent switched off there stays off.
+async fn reachable_agents(
+    transaction: &mut Transaction<'_, Postgres>,
+    space_id: Uuid,
+    person_id: Uuid,
+    only: Option<&[Uuid]>,
+) -> Result<Vec<ReachableAgent>, AppError> {
+    Ok(sqlx::query_as::<_, ReachableAgent>(
+        r#"
+        SELECT DISTINCT ON (actor.id)
+            actor.id, actor.kind, theirs.display_name, theirs.handle, theirs.role
+        FROM projects space
+        JOIN projects project
+          ON project.organization_id = space.organization_id
+         AND project.kind <> 'direct'
+         AND project.archived_at IS NULL
+        JOIN project_memberships mine
+          ON mine.project_id = project.id AND mine.actor_id = $2 AND mine.enabled
+        JOIN project_memberships theirs
+          ON theirs.project_id = project.id AND theirs.enabled
+        JOIN actors actor
+          ON actor.id = theirs.actor_id
+         AND actor.kind = 'external_agent'
+         AND actor.status = 'active'
+        JOIN organization_memberships organization
+          ON organization.organization_id = space.organization_id
+         AND organization.actor_id = actor.id
+         AND organization.enabled
+        WHERE space.id = $1
+          AND space.kind = 'direct'
+          AND ($3::uuid[] IS NULL OR actor.id = ANY($3))
+          AND EXISTS (
+              SELECT 1 FROM external_agent_connections connection
+              WHERE connection.actor_id = actor.id
+                AND connection.status = 'active'
+                AND agent_connection_can_access(connection.id, project.id)
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM project_memberships joined
+              WHERE joined.project_id = space.id AND joined.actor_id = actor.id
+          )
+        ORDER BY actor.id, project.created_at, project.id
+        "#,
+    )
+    .bind(space_id)
+    .bind(person_id)
+    .bind(only)
+    .fetch_all(&mut **transaction)
+    .await?)
+}
+
+/// Bring the agents among `actor_ids` that `actor_id` can reach (see
+/// `reachable_agents`) into the Messages space, so a DM or group with them
+/// can start. Only people do this; an agent never pulls another agent in.
+/// Everyone else is left for `lock_people` to accept or refuse. An agent
+/// keeps its access there: read-only in its project means read-only here.
+async fn join_reachable_agents(
+    transaction: &mut Transaction<'_, Postgres>,
+    space_id: Uuid,
+    actor_id: Uuid,
+    actor_ids: &[Uuid],
+) -> Result<(), AppError> {
+    let human = sqlx::query_scalar::<_, bool>("SELECT kind = 'human' FROM actors WHERE id = $1")
+        .bind(actor_id)
+        .fetch_optional(&mut **transaction)
+        .await?
+        .unwrap_or(false);
+    if !human || actor_ids.is_empty() {
+        return Ok(());
+    }
+    for agent in reachable_agents(transaction, space_id, actor_id, Some(actor_ids)).await? {
+        let role = if agent.role == "viewer" {
+            "viewer"
+        } else {
+            "member"
+        };
+        // Handles are unique per project; someone here may already have this
+        // one. Fall back to suffixes from the agent's random ID bits, then
+        // fresh random ones, until one is free.
+        let base = agent.person.handle.chars().take(24).collect::<String>();
+        let id = agent.person.id.simple().to_string();
+        let mut candidates = vec![agent.person.handle.clone(), format!("{base}-{}", &id[26..])];
+        candidates.extend(
+            (0..4).map(|_| format!("{base}-{}", &Uuid::now_v7().simple().to_string()[26..])),
+        );
+        for candidate in candidates {
+            let inserted = sqlx::query(
+                r#"
+                INSERT INTO project_memberships (
+                    id, project_id, actor_id, role, display_name, handle, invited_by_actor_id
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+                ON CONFLICT DO NOTHING
+                "#,
+            )
+            .bind(Uuid::now_v7())
+            .bind(space_id)
+            .bind(agent.person.id)
+            .bind(role)
+            .bind(&agent.person.display_name)
+            .bind(&candidate)
+            .bind(actor_id)
+            .execute(&mut **transaction)
+            .await?
+            .rows_affected();
+            if inserted > 0 {
+                break;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Lock the given Actors' memberships and confirm each can join a DM or group.

@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
+import { RememberPlace } from '../projects/RememberPlace'
 import { useProject } from '../projects/hooks'
 import type { Project } from '../projects/types'
 import { AppShell } from '../shell/AppShell'
@@ -30,12 +31,10 @@ export function PlanningFrame({
   children,
   label,
   tab,
-  wide = false,
 }: {
   children: (project: Project) => ReactNode
   label: string
   tab: PlanningTab
-  wide?: boolean
 }) {
   const session = useAuthenticatedSession()
   const { projectId = '' } = useParams()
@@ -58,11 +57,10 @@ export function PlanningFrame({
   const pending = status.data?.pendingSuggestions ?? 0
   return (
     <AppShell project={project.data} user={session.user}>
-      <div className={`aw-page ${wide ? 'aw-page--full' : 'aw-page--wide'} aw-ai-page`}>
-        <PageHeader icon="branch" title="Planning">
-          What can start next in {project.data.name}, what depends on what, and plans to turn into tasks.
-        </PageHeader>
+      <div className="aw-page aw-page--full aw-ai-page">
+        <PageHeader icon="branch" title="Planning" />
         <WorkTabs current="planning" projectId={projectId} />
+        <RememberPlace location={{ kind: 'planning' }} project={project.data} />
         <nav aria-label="Planning" className="aw-seg aw-ai-subnav">
           {SUBPAGES.map((page) => (
             <Link aria-current={page.id === tab ? 'page' : undefined} className="aw-seg__opt" key={page.id} to={planningHref(projectId, page.id)}>

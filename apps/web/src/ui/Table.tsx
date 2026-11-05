@@ -1,4 +1,4 @@
-import { useRef, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from 'react'
+import { useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from 'react'
 
 import './pickers.css'
 
@@ -8,7 +8,7 @@ export type TableColumn = {
   /** A CSS grid track, such as `minmax(0, 1fr)` or `96px`. */
   width?: string
   align?: 'start' | 'end'
-  /** Hidden below 640px wide so phones keep the essentials. */
+  /** Hidden when the table is narrow (on a phone, or beside a wide side panel), so the rest keep their room. */
   hideOnPhone?: boolean
   /** Hides the header text (the column still has a name for screen readers). */
   quietHeader?: boolean
@@ -31,6 +31,22 @@ export type TableRow = {
 
 const track = (column: TableColumn) => column.width ?? 'minmax(0, 1fr)'
 
+/** Narrower than this, a table shows only the columns phones get. */
+const NARROW_BELOW = 600
+
+/** Whether the table itself is narrow, wherever it sits: the side panel and the sidebar take part of the window. */
+function useNarrow(root: RefObject<HTMLElement | null>) {
+  const [narrow, setNarrow] = useState(() => typeof window !== 'undefined' && window.innerWidth <= 640)
+  useLayoutEffect(() => {
+    const element = root.current
+    if (!element || typeof ResizeObserver === 'undefined') return undefined
+    const observer = new ResizeObserver(([entry]) => setNarrow(entry.contentRect.width < NARROW_BELOW))
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [root])
+  return narrow
+}
+
 const columnsStyle = (columns: TableColumn[]) =>
   ({
     '--aw-table-columns': columns.map(track).join(' '),
@@ -38,10 +54,10 @@ const columnsStyle = (columns: TableColumn[]) =>
   }) as CSSProperties
 
 /**
- * A data grid with a sticky header and keyboard row movement: Up and Down (or
- * J and K when `letterKeys` is on), Home, End, Page Up and Page Down move
- * between rows and Enter activates one. Rows can be windowed: pass only the
- * rows in view, with `rowCount`, `index` and the space above and below.
+ * A data grid with a sticky header and keyboard row movement: Up and Down,
+ * Home, End, Page Up and Page Down move between rows and Enter activates one.
+ * Rows can be windowed: pass only the rows in view, with `rowCount`, `index`
+ * and the space above and below.
  */
 export function Table({
   activeKey,
@@ -53,6 +69,7 @@ export function Table({
   label,
   onActivate,
   onActiveKeyChange,
+  onMove,
   onRowClick,
   onRowKeyDown,
   rowCount,
@@ -71,6 +88,8 @@ export function Table({
   onActivate?: (key: string) => void
   /** Focus moved to another row. Windowed tables scroll it into view. */
   onActiveKeyChange?: (key: string) => void
+  /** A movement key (not a click or Tab) landed on this row, to open it beside the table. */
+  onMove?: (key: string) => void
   /** A click on the row itself, not on a control inside it. */
   onRowClick?: (event: MouseEvent<HTMLDivElement>, key: string) => void
   /** Keys the table doesn't handle itself, for shortcuts on the focused row. */
@@ -82,6 +101,8 @@ export function Table({
 }) {
   const ownBody = useRef<HTMLDivElement>(null)
   const body = bodyRef ?? ownBody
+  const root = useRef<HTMLDivElement>(null)
+  const narrow = useNarrow(root)
   const focusable = rows.filter((row) => !row.inert)
   const current = activeKey ?? focusable[0]?.key ?? null
 
@@ -97,6 +118,7 @@ export function Table({
     const target = focusable[Math.max(0, Math.min(next, focusable.length - 1))]
     if (!target) return true
     onActiveKeyChange?.(target.key)
+    onMove?.(target.key)
     window.requestAnimationFrame(() => body.current?.querySelector<HTMLElement>(`[data-row-key="${CSS.escape(target.key)}"]`)?.focus())
     return true
   }
@@ -106,7 +128,8 @@ export function Table({
       aria-label={label}
       aria-multiselectable={ariaMultiselectable || undefined}
       aria-rowcount={rowCount !== undefined ? rowCount + 1 : undefined}
-      className={['aw-table', className].filter(Boolean).join(' ')}
+      className={['aw-table', narrow ? 'is-narrow' : '', className].filter(Boolean).join(' ')}
+      ref={root}
       role="grid"
       style={columnsStyle(columns)}
     >

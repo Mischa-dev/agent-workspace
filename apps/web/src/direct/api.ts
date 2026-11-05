@@ -17,6 +17,8 @@ export type DirectConversation = {
 
 export type DirectOverview = {
   projectId: string
+  /** The workspace the Messages space belongs to. */
+  organizationId: string
   conversations: DirectConversation[]
   people: ConversationActor[]
   capabilities: { startConversation: boolean; manageAgents: boolean }
@@ -70,6 +72,7 @@ export async function getDirectOverview(): Promise<DirectOverview> {
   }
   return {
     projectId: root.projectId,
+    organizationId: typeof root.organizationId === 'string' ? root.organizationId : '',
     conversations: Array.isArray(root.conversations)
       ? root.conversations
           .map(normalizeConversation)

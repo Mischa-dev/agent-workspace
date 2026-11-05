@@ -17,6 +17,7 @@ import { isApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
 import { CatchUpButton } from '../ai/CatchUpButton'
 import { useAuthenticatedSession } from '../auth/session'
+import { useProjectExperience } from '../experience/layout'
 import { useProject } from '../projects/hooks'
 import { NavigationSyncAlert } from '../projects/NavigationSyncAlert'
 import {
@@ -73,6 +74,7 @@ export function ThreadPage() {
   const queryClient = useQueryClient()
   const project = useProject(projectId)
   const thread = useThread(projectId, threadId, includeArchived)
+  const developerDetail = useProjectExperience(projectId).shows('tech.ids')
   const workItemLink = useSetWorkItemThreadLink()
   const realtime = useConversationRealtime(threadId)
   const timeline = thread.timeline.data
@@ -469,7 +471,7 @@ export function ThreadPage() {
         ))}
         {runForCard ? (
           <div className="aw-timeline__card">
-            <RunCard actions={cardActions} notes={cardNotes} run={runForCard} />
+            <RunCard actions={cardActions} developerDetail={developerDetail} notes={cardNotes} run={runForCard} />
           </div>
         ) : null}
         {pendingApproval ? (
@@ -491,6 +493,12 @@ export function ThreadPage() {
           draftKey={threadId}
           focusOnOpen
           label={`Message ${threadName}`}
+          outbox={{
+            kind: 'message',
+            conversationId: threadId,
+            conversationKind: 'thread',
+            href: `/projects/${encodeURIComponent(projectId)}/threads/${encodeURIComponent(threadId)}`,
+          }}
           onEditLast={() => messageActions.editLast(entries)}
           onSubmit={sender.send}
           placeholder={`Reply in ${threadName}`}

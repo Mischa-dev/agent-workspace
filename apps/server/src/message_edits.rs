@@ -566,6 +566,14 @@ pub(crate) async fn apply_edit(
         .filter(|actor_id| *actor_id != actor.actor_id && !earlier.contains(actor_id))
         .collect::<Vec<_>>();
 
+    crate::conversations::refresh_auto_thread_names(
+        transaction,
+        locked.project_id,
+        locked.conversation.id,
+        Some(locked.id),
+        false,
+    )
+    .await?;
     enqueue_event(
         transaction,
         locked.project_id,
@@ -710,6 +718,15 @@ pub(crate) async fn apply_removal(
     )
     .unwrap_or(i64::MAX);
     let renamed_threads = neutralize_thread_names(transaction, locked, &texts).await?;
+    // Threads going by its text (nobody named them) take the next text along.
+    crate::conversations::refresh_auto_thread_names(
+        transaction,
+        locked.project_id,
+        locked.conversation.id,
+        Some(locked.id),
+        false,
+    )
+    .await?;
     scrub_thread_replays(transaction, locked).await?;
     scrub_thread_audit_names(transaction, locked).await?;
 
@@ -830,6 +847,7 @@ async fn neutralize_thread_names(
         r#"
         SELECT id, name FROM conversations
         WHERE origin_message_id = $1 AND kind = 'thread' AND parent_channel_id = $2
+          AND NOT auto_named
         ORDER BY created_at, id
         "#,
     )

@@ -53,6 +53,8 @@ export default function AppearanceSync() {
     overrides: theme.overrides,
     density: theme.density,
     textSize: theme.textSize,
+    sidebarWidth: theme.sidebarWidth,
+    panelWidth: theme.panelWidth,
   }
   const localPrint = fingerprint(local)
   const localRef = useRef(local)

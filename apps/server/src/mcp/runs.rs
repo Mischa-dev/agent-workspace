@@ -377,6 +377,9 @@ pub(super) async fn run_start(
         AppError::RepositoryBindingConflict => ToolResult::conflict(
             "That thread already works in a different repository. Start a new thread for this one.",
         ),
+        AppError::ExecutionProfileRequired => ToolResult::conflict(
+            "You have no signed-in provider account for that harness in this project.",
+        ),
         error => ToolResult::from_error(error, "run_start"),
     })
 }

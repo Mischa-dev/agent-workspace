@@ -199,10 +199,12 @@ export function InboxPage() {
       setSelectedId(item.id)
       if (open) setDetailOpen(true)
       if (!item.read && view !== 'archived') setRead(item, true)
+      // Focus moves along with the selection when it was in the list already.
+      const focusRow = !open && Boolean(listRef.current?.contains(document.activeElement))
       window.requestAnimationFrame(() => {
-        listRef.current
-          ?.querySelector<HTMLElement>(`[data-notification="${CSS.escape(item.id)}"]`)
-          ?.scrollIntoView({ block: 'nearest' })
+        const row = listRef.current?.querySelector<HTMLElement>(`[data-notification="${CSS.escape(item.id)}"]`)
+        row?.scrollIntoView({ block: 'nearest' })
+        if (focusRow) row?.querySelector<HTMLElement>('.aw-inbox__row-main')?.focus({ preventScroll: true })
       })
     },
     [detailOpen, setDetailOpen, setRead, view],
@@ -330,6 +332,9 @@ export function InboxPage() {
       } else if (key === 'k' || key === 'ArrowUp') {
         event.preventDefault()
         select(ordered[Math.max(selectedIndex - 1, 0)])
+      } else if (key === 'Home' || key === 'End') {
+        event.preventDefault()
+        select(key === 'Home' ? ordered[0] : ordered[ordered.length - 1])
       } else if ((key === 'Enter' || key === 'o') && current) {
         event.preventDefault()
         open(current)
@@ -351,6 +356,9 @@ export function InboxPage() {
         void answer(current, 'approve')
       } else if (key === 'Escape' && detailOpen) {
         setDetailOpen(false)
+      } else if (key === 'Escape' && selected) {
+        // Beside the list, the preview closes back to its empty state.
+        setSelectedId(null)
       }
     }
     document.addEventListener('keydown', onKey)
@@ -361,7 +369,7 @@ export function InboxPage() {
 
   return (
     <AppShell home mainClassName="aw-main--page" user={session.user}>
-      <div className="aw-page aw-inbox" data-detail-open={showingDetail ? 'true' : 'false'} ref={pageRef}>
+      <div className="aw-page aw-page--full aw-inbox" data-detail-open={showingDetail ? 'true' : 'false'} ref={pageRef}>
         <PageHeader
           actions={
             view === 'inbox' || view === 'unread' ? (
@@ -371,10 +379,7 @@ export function InboxPage() {
             ) : null
           }
           icon="inbox"
-          title="Inbox"
-        >
-          Mentions, assignments, approvals, runs and pull requests from every project.{unreadCount > 0 ? ` ${unreadCount} unread.` : null}
-        </PageHeader>
+          title="Inbox" />
         <div className="aw-inbox__filters">
           <SegmentedControl label="Show" onChange={(value) => setFilter('view', value)} options={VIEWS} value={view} />
           <div aria-label="Kind" className="aw-inbox__chips" role="group">
@@ -397,8 +402,10 @@ export function InboxPage() {
         </div>
         {helpOpen ? (
           <ul aria-label="Keyboard shortcuts" className="aw-inbox__help">
-            <li><Kbd>j</Kbd> <Kbd>k</Kbd> next, previous</li>
+            <li><Kbd>j</Kbd> <Kbd>k</Kbd> or <Kbd>↓</Kbd> <Kbd>↑</Kbd> next, previous</li>
+            <li><Kbd>Home</Kbd> <Kbd>End</Kbd> first, last</li>
             <li><Kbd>Enter</Kbd> open</li>
+            <li><Kbd>Esc</Kbd> close the preview</li>
             <li><Kbd>e</Kbd> archive (restore in Archived)</li>
             <li><Kbd>u</Kbd> read or unread</li>
             <li><Kbd>s</Kbd> snooze until tomorrow</li>

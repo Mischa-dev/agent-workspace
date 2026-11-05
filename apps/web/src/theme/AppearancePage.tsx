@@ -252,6 +252,8 @@ export default function AppearancePage({ session }: SettingsPageProps) {
     overrides: theme.overrides,
     density: theme.density,
     textSize: theme.textSize,
+    sidebarWidth: theme.sidebarWidth,
+    panelWidth: theme.panelWidth,
   })
   // Another preset starts from its own colors, so say what went and offer it back.
   const choose = (next: ThemeChoice) => {
@@ -324,7 +326,7 @@ export default function AppearancePage({ session }: SettingsPageProps) {
                           type="button"
                         >
                           <span aria-hidden="true" className="aw-mini aw-mini--split">
-                            <PresetMini id="indigo" />
+                            <PresetMini id="daylight" />
                             <PresetMini id="midnight" />
                           </span>
                           <span className="aw-preset__name">Match system</span>

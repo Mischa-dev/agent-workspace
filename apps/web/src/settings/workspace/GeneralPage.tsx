@@ -28,7 +28,7 @@ import {
   showToast,
 } from '../../ui'
 import type { SettingsPageProps } from '../types'
-import { useSwitchWorkspace } from '../workspaceChoice'
+import { defaultWorkspace, useSwitchWorkspace } from '../workspaceChoice'
 import {
   getServerVersion,
   getWorkspace,
@@ -67,7 +67,12 @@ export default function GeneralPage({ session, workspace: summary }: SettingsPag
             <DetailList
               items={[
                 { label: 'Your role', value: roleLabel(workspace.data.role) },
-                { label: 'Members', value: String(workspace.data.memberCount) },
+                ...(workspace.data.peopleCount === undefined || workspace.data.agentCount === undefined
+                  ? [{ label: 'Members', value: String(workspace.data.memberCount) }]
+                  : [
+                      { label: 'People', value: String(workspace.data.peopleCount) },
+                      { label: 'Agents', value: String(workspace.data.agentCount) },
+                    ]),
                 { label: 'Projects', value: String(workspace.data.projectCount) },
                 {
                   label: 'Created',
@@ -172,33 +177,33 @@ function RenameSection({ workspace }: { workspace: Workspace }) {
   )
 }
 
+/** Whether the workspace shown is your default, and a button to make it so. */
 function DefaultSection({ current, session }: { current: string; session: SettingsPageProps['session'] }) {
   const switchWorkspace = useSwitchWorkspace()
+  const isDefault = defaultWorkspace(session)?.id === current
   return (
     <Section
-      description="The workspace settings open on, and the one Messages uses for your direct messages."
+      description="The workspace Messages uses for your direct messages, and the one settings open on."
       id="default-workspace-heading"
       title="Default workspace"
     >
-      <div className="aw-inline-form">
-        <SelectField
-          disabled={switchWorkspace.isPending}
-          id="default-workspace"
-          label="Default workspace"
-          onChange={(event) =>
-            switchWorkspace.mutate(event.target.value, {
-              onSuccess: () => showToast({ tone: 'success', title: 'Default workspace changed' }),
-            })
-          }
-          value={current}
-        >
-          {session.organizations.map((organization) => (
-            <option key={organization.id} value={organization.id}>
-              {organization.name}
-            </option>
-          ))}
-        </SelectField>
-      </div>
+      {isDefault ? (
+        <p className="aw-quiet">This is your default workspace.</p>
+      ) : (
+        <div className="aw-inline-form">
+          <Button
+            busy={switchWorkspace.isPending}
+            icon="star"
+            onClick={() =>
+              switchWorkspace.mutate(current, {
+                onSuccess: () => showToast({ tone: 'success', title: 'Default workspace changed' }),
+              })
+            }
+          >
+            Make this my default
+          </Button>
+        </div>
+      )}
     </Section>
   )
 }

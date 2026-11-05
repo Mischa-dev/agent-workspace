@@ -417,6 +417,12 @@ export function DirectConversationPage() {
           draftKey={conversationId}
           focusOnOpen={!openThreadId}
           label={`Message ${title}`}
+          outbox={{
+            kind: 'message',
+            conversationId,
+            conversationKind: isGroup ? 'group' : 'dm',
+            href: `/messages/${encodeURIComponent(conversationId)}`,
+          }}
           onEditLast={() => messageActions.editLast(entries)}
           onSubmit={sender.send}
           placeholder={`Message ${title}`}

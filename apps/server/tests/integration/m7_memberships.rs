@@ -353,8 +353,7 @@ async fn human_memberships_are_reversible_idempotent_and_revoke_credentials() {
 
     drop(application);
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
-        .execute(&administrative_pool)
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("drop M7 membership schema");
 }

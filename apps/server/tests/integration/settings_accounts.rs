@@ -504,6 +504,11 @@ async fn with_two_factor_on_a_password_alone_never_signs_in() {
             .as_str()
             .is_some_and(|uri| uri.starts_with("otpauth://totp/"))
     );
+    assert!(
+        started["qrSvg"]
+            .as_str()
+            .is_some_and(|svg| svg.contains("<svg") && !svg.contains("<script"))
+    );
 
     // A wrong code doesn't turn it on.
     let (status, _) = send(

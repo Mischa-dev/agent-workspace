@@ -38,6 +38,7 @@ pub mod invitations;
 pub mod jobs;
 pub mod later;
 pub mod launch;
+pub mod layouts;
 pub mod link_previews;
 pub mod mail;
 pub mod mcp;
@@ -51,6 +52,7 @@ pub mod notification_email;
 pub mod notification_settings;
 pub mod notifications;
 pub mod onboarding;
+pub mod outbound;
 pub mod outbox;
 pub mod password_reset;
 pub mod policy;
@@ -80,6 +82,7 @@ pub mod server_status;
 pub mod settings;
 pub mod storage_admission;
 pub mod telemetry;
+pub mod test_support;
 pub mod usage;
 pub mod webhooks;
 pub mod whiteboards;
@@ -171,6 +174,7 @@ pub fn router(state: AppState) -> Router {
         .merge(onboarding::router())
         .merge(audit_log::router())
         .merge(work_items::router())
+        .merge(work_items::comments::router())
         .merge(ai::http::router())
         .merge(memory::router())
         .merge(whiteboards::router())
@@ -178,6 +182,7 @@ pub fn router(state: AppState) -> Router {
         .merge(connected_apps::router())
         .merge(agent_docs::router())
         .merge(settings::router())
+        .merge(layouts::router())
         .merge(secrets::router())
         .merge(metrics::router())
         .merge(mcp::oauth_router())

@@ -1,9 +1,20 @@
+/** The project's places with an address of their own and nothing to name. */
+export type PlainProjectPlace =
+  | 'project_overview'
+  | 'work_items'
+  | 'settings'
+  | 'milestones'
+  | 'timeline'
+  | 'planning'
+  | 'pages'
+  | 'decisions'
+  | 'runs'
+
 export type ProjectLocation =
-  | { kind: 'project_overview' }
+  | { kind: PlainProjectPlace }
   | { kind: 'channel'; conversationId: string }
   | { kind: 'thread'; conversationId: string }
-  | { kind: 'work_items' }
-  | { kind: 'settings' }
+  | { kind: 'page'; pageId: string }
 
 export type ProjectCapabilities = {
   view: boolean
@@ -16,6 +27,8 @@ export type ProjectNavigation = {
   location: ProjectLocation
   href: string
   pinned: boolean
+  /** Where this pinned project sits in your rail, from a drag; unplaced pins follow. */
+  railPosition?: number | null
   lastOpenedAt: string | null
   version: number
   contextDrawerOpen?: boolean

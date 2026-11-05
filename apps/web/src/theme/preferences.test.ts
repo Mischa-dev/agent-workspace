@@ -28,18 +28,29 @@ describe('appearance preferences', () => {
         textSize: 'huge',
         overrides: { 'sidebar-bg': 'url(https://attacker.invalid)', accent: '#AABBCC', 'not-a-slot': '#000000' },
       }),
-    ).toEqual({ theme: 'system', density: 'comfortable', textSize: 'default', overrides: { accent: '#aabbcc' } })
+    ).toEqual({ theme: 'system', density: 'comfortable', textSize: 'default', overrides: { accent: '#aabbcc' }, sidebarWidth: null, panelWidth: null })
+  })
+
+  it('keeps dragged widths inside their limits and drops anything that is not a width', () => {
+    expect(normalizeAppearancePreferences({ sidebarWidth: 4000, panelWidth: 12.4 })).toMatchObject({ sidebarWidth: 480, panelWidth: 320 })
+    expect(normalizeAppearancePreferences({ sidebarWidth: '300px', panelWidth: Number.NaN })).toMatchObject({ sidebarWidth: null, panelWidth: null })
+    expect(normalizeAppearancePreferences({ sidebarWidth: 301.6 })).toMatchObject({ sidebarWidth: 302 })
   })
 
   it('stores one versioned presentation record and no application state', () => {
     const storage = memoryStorage()
-    writeAppearancePreferences({ theme: 'evergreen', density: 'compact', textSize: 'large', overrides: { accent: '#224466' } }, storage)
+    writeAppearancePreferences(
+      { theme: 'evergreen', density: 'compact', textSize: 'large', overrides: { accent: '#224466' }, sidebarWidth: 300, panelWidth: null },
+      storage,
+    )
     expect([...storage.values.keys()]).toEqual([APPEARANCE_STORAGE_KEY])
     expect(readAppearancePreferences(storage)).toEqual({
       theme: 'evergreen',
       density: 'compact',
       textSize: 'large',
       overrides: { accent: '#224466' },
+      sidebarWidth: 300,
+      panelWidth: null,
     })
     expect(storage.values.get(APPEARANCE_STORAGE_KEY)).not.toMatch(/token|password|credential|actor|project/i)
   })
@@ -57,7 +68,7 @@ describe('appearance preferences', () => {
     expect(readAppearancePreferences(light)).toMatchObject({ theme: 'indigo' })
     expect(readAppearancePreferences({ getItem: () => { throw new Error('disabled') } })).toEqual(DEFAULT_APPEARANCE)
     expect(resolvePreset('system', true)).toBe('midnight')
-    expect(resolvePreset('system', false)).toBe('indigo')
+    expect(resolvePreset('system', false)).toBe('daylight')
   })
 
   it('round-trips theme codes and derives follower slots from changed bases', () => {

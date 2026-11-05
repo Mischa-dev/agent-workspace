@@ -53,6 +53,45 @@ export function writeLocal<T>(key: string, value: T | null) {
   }
 }
 
+/** Whose drafts are kept now: the signed-in person's actor, or null. */
+export function localDraftOwner() {
+  return owner
+}
+
+/** The keys starting with `prefix` kept for whoever is signed in, as `readLocal` takes them. */
+export function localKeys(prefix: string): string[] {
+  const store = storage()
+  if (!store || !owner) return []
+  const scope = `${PREFIX}${owner}:`
+  const keys: string[] = []
+  try {
+    for (let index = 0; index < store.length; index += 1) {
+      const key = store.key(index)
+      if (key?.startsWith(`${scope}${prefix}`)) keys.push(key.slice(scope.length))
+    }
+  } catch {
+    // Nothing to list when storage is unavailable.
+  }
+  return keys
+}
+
+// Unsent queues a composer on screen is sending itself, by draft key.
+const held = new Map<string, number>()
+
+/** A composer showing this queue sends it itself; the returned function lets go when it closes. */
+export function holdUnsent(draftKey: string) {
+  held.set(draftKey, (held.get(draftKey) ?? 0) + 1)
+  return () => {
+    const left = (held.get(draftKey) ?? 1) - 1
+    if (left > 0) held.set(draftKey, left)
+    else held.delete(draftKey)
+  }
+}
+
+export function unsentHeld(draftKey: string) {
+  return held.has(draftKey)
+}
+
 /**
  * Drafts from here on belong to `actorId` (null when signed out). When someone
  * else signs in on this device, what the last person left is forgotten, as if

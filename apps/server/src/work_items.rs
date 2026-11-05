@@ -84,6 +84,7 @@ const DEFAULT_TRANSITIONS: [(&str, &str); 17] = [
     ("Canceled", "Backlog"),
 ];
 
+pub(crate) mod comments;
 pub(crate) mod import_parse;
 pub(crate) mod imports;
 pub(crate) mod list;
@@ -630,6 +631,26 @@ struct WorkItemCommentView {
     /// Stored comment replays predate it, so it has a default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     via: Option<String>,
+    /// 1 until the comment is edited. Stored replays predate edits.
+    #[serde(default = "first_comment_revision")]
+    revision: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    edited_at: Option<String>,
+    /// Set once the comment is deleted; its text is then empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    removed: Option<CommentRemovalView>,
+}
+
+fn first_comment_revision() -> i32 {
+    1
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CommentRemovalView {
+    removed_at: String,
+    /// Null when whoever deleted it has left the project.
+    removed_by: Option<ActorView>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -662,6 +683,13 @@ pub(crate) struct WorkItemTimelineRow {
     pub(crate) comment_id: Option<Uuid>,
     pub(crate) comment_content: Option<serde_json::Value>,
     pub(crate) comment_plain_text: Option<String>,
+    pub(crate) comment_revision: Option<i32>,
+    pub(crate) comment_edited_at: Option<String>,
+    pub(crate) comment_removed_at: Option<String>,
+    pub(crate) comment_removed_by_id: Option<Uuid>,
+    pub(crate) comment_removed_by_kind: Option<String>,
+    pub(crate) comment_removed_by_name: Option<String>,
+    pub(crate) comment_removed_by_handle: Option<String>,
     pub(crate) actor_id: Uuid,
     pub(crate) actor_kind: String,
     pub(crate) actor_display_name: String,
@@ -2872,6 +2900,9 @@ async fn create_work_item_comment(
                 .collect(),
             created_at,
             via: None,
+            revision: 1,
+            edited_at: None,
+            removed: None,
         },
     };
     complete(&mut transaction, &reservation, StatusCode::CREATED, &body).await?;
@@ -2950,34 +2981,15 @@ pub(crate) async fn fetch_timeline_rows(
     limit: i64,
 ) -> Result<TimelinePage, AppError> {
     let limit = limit.clamp(1, 100);
-    let mut rows = sqlx::query_as::<_, WorkItemTimelineRow>(
+    let mut rows = sqlx::query_as::<_, WorkItemTimelineRow>(&format!(
         r#"
-        SELECT entry.sequence, entry.kind, entry.created_at::text AS created_at,
-               activity.id AS activity_id, activity.kind AS activity_kind,
-               activity.summary AS activity_summary,
-               activity.payload AS activity_payload,
-               comment.id AS comment_id, comment.content AS comment_content,
-               comment.plain_text AS comment_plain_text,
-               actor.id AS actor_id, actor.kind AS actor_kind,
-               membership.display_name AS actor_display_name,
-               membership.handle AS actor_handle,
-               via_client.client_name AS via
-        FROM work_item_timeline_entries entry
-        LEFT JOIN work_item_activity activity ON activity.id = entry.activity_id
-        LEFT JOIN work_item_comments comment ON comment.id = entry.comment_id
-        JOIN actors actor ON actor.id = COALESCE(activity.actor_id, comment.author_actor_id)
-        JOIN project_memberships membership
-          ON membership.project_id = entry.project_id AND membership.actor_id = actor.id
-        LEFT JOIN mcp_oauth_grants via_grant
-          ON via_grant.id = COALESCE(activity.via_oauth_grant_id, comment.via_oauth_grant_id)
-         AND via_grant.show_via
-        LEFT JOIN mcp_oauth_clients via_client ON via_client.id = via_grant.client_id
+        {TIMELINE_SELECT}
         WHERE entry.project_id = $1 AND entry.work_item_id = $2
           AND ($3::bigint IS NULL OR entry.sequence < $3)
         ORDER BY entry.sequence DESC
         LIMIT $4
-        "#,
-    )
+        "#
+    ))
     .bind(project_id)
     .bind(work_item_id)
     .bind(before_sequence)
@@ -2989,6 +3001,62 @@ pub(crate) async fn fetch_timeline_rows(
     rows.truncate(page);
     Ok(TimelinePage { rows, has_more })
 }
+
+/// One comment's timeline row, for showing it again after a change.
+pub(crate) async fn fetch_comment_timeline_row(
+    pool: &PgPool,
+    project_id: Uuid,
+    work_item_id: Uuid,
+    comment_id: Uuid,
+) -> Result<Option<WorkItemTimelineRow>, AppError> {
+    Ok(sqlx::query_as::<_, WorkItemTimelineRow>(&format!(
+        r#"
+        {TIMELINE_SELECT}
+        WHERE entry.project_id = $1 AND entry.work_item_id = $2
+          AND entry.comment_id = $3
+        "#
+    ))
+    .bind(project_id)
+    .bind(work_item_id)
+    .bind(comment_id)
+    .fetch_optional(pool)
+    .await?)
+}
+
+/// What `WorkItemTimelineRow` reads, up to the WHERE clause.
+const TIMELINE_SELECT: &str = r#"
+        SELECT entry.sequence, entry.kind, entry.created_at::text AS created_at,
+               activity.id AS activity_id, activity.kind AS activity_kind,
+               activity.summary AS activity_summary,
+               activity.payload AS activity_payload,
+               comment.id AS comment_id, comment.content AS comment_content,
+               comment.plain_text AS comment_plain_text,
+               comment.revision AS comment_revision,
+               comment.edited_at::text AS comment_edited_at,
+               comment.removed_at::text AS comment_removed_at,
+               remover_actor.id AS comment_removed_by_id,
+               remover_actor.kind AS comment_removed_by_kind,
+               remover.display_name AS comment_removed_by_name,
+               remover.handle AS comment_removed_by_handle,
+               actor.id AS actor_id, actor.kind AS actor_kind,
+               membership.display_name AS actor_display_name,
+               membership.handle AS actor_handle,
+               via_client.client_name AS via
+        FROM work_item_timeline_entries entry
+        LEFT JOIN work_item_activity activity ON activity.id = entry.activity_id
+        LEFT JOIN work_item_comments comment ON comment.id = entry.comment_id
+        LEFT JOIN project_memberships remover
+          ON remover.project_id = comment.project_id
+         AND remover.actor_id = comment.removed_by_actor_id
+        LEFT JOIN actors remover_actor ON remover_actor.id = remover.actor_id
+        JOIN actors actor ON actor.id = COALESCE(activity.actor_id, comment.author_actor_id)
+        JOIN project_memberships membership
+          ON membership.project_id = entry.project_id AND membership.actor_id = actor.id
+        LEFT JOIN mcp_oauth_grants via_grant
+          ON via_grant.id = COALESCE(activity.via_oauth_grant_id, comment.via_oauth_grant_id)
+         AND via_grant.show_via
+        LEFT JOIN mcp_oauth_clients via_client ON via_client.id = via_grant.client_id
+"#;
 
 async fn fetch_comment_actor_rows(
     transaction: &mut Transaction<'_, Postgres>,
@@ -3179,6 +3247,28 @@ async fn timeline_entry_view(
                     referenced_work_items,
                     created_at: row.created_at,
                     via: row.via,
+                    revision: row.comment_revision.unwrap_or(1),
+                    edited_at: row.comment_edited_at,
+                    removed: row.comment_removed_at.map(|removed_at| CommentRemovalView {
+                        removed_at,
+                        removed_by: match (
+                            row.comment_removed_by_id,
+                            row.comment_removed_by_kind,
+                            row.comment_removed_by_name,
+                            row.comment_removed_by_handle,
+                        ) {
+                            (Some(id), Some(kind), Some(display_name), Some(handle)) => {
+                                Some(ActorView {
+                                    id,
+                                    kind,
+                                    display_name,
+                                    handle,
+                                    avatar_url: None,
+                                })
+                            }
+                            _ => None,
+                        },
+                    }),
                 }),
             })
         }

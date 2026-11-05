@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 
+import { useProjectExperience } from '../experience/layout'
 import { Button, EmptyState, ErrorState, Icon, ListSkeleton, countLabel } from '../ui'
 import { Table, type TableRow } from '../ui/pickers'
 import { FieldPicker, type PickerField, type PickResult } from './FieldPicker'
+import { pickerShown, useCardFields, type CardFields } from './cardFields'
 import { AssigneeMark, DoneToggle, DueDate, GroupHeader, PickerCell, TaskBadges } from './ListCells'
 import { LIST_COLUMNS } from './taskDisplay'
 import { workItemHref } from './links'
 import { PriorityIcon, StatusIcon } from './WorkItemIcons'
-import { useCoarsePointer } from './useCoarsePointer'
+import { useCoarsePointer, usePhoneWidth } from './useCoarsePointer'
 import { tucksDone, withoutDone } from './doneModel'
 import { listQuery, type ListState } from './listModel'
 import { buildListRows, DONE_GROUP, DONE_LOADING, visibleTaskIds, withDoneRows, type ListRow } from './listRows'
@@ -16,7 +18,7 @@ import { useWorkItemGroups, useWorkItemPages } from './planningHooks'
 import { SelectionBar } from './SelectionBar'
 import { useDoneCount, useDoneItems } from './useDoneWork'
 import { emptySelection, keepLoaded, MAX_BULK, pick, pickerCurrent, pickerTargets, selectAll, toggleOne, type Selection } from './selectionModel'
-import { useTaskShortcuts } from './shortcutKeys'
+import { pageHasFocus, useOpenAsYouGo, useTaskShortcuts } from './shortcutKeys'
 import { editErrorMessage, useApplyPick, type EditTarget } from './taskEdits'
 import type { WorkItemCard, WorkItemWorkflow } from './types'
 import { useWindowedRows } from './useWindowedRows'
@@ -32,6 +34,8 @@ type PickerState = { field: PickerField; anchor: HTMLElement; targets: WorkItemC
 function taskCells({
   card,
   disabled,
+  fields,
+  twoLine = false,
   onOpen,
   onPick,
   onSelect,
@@ -39,6 +43,9 @@ function taskCells({
 }: {
   card: WorkItemCard
   disabled: boolean
+  fields: CardFields
+  /** Phones: the title on one line, the key and status under it. */
+  twoLine?: boolean
   onOpen: (card: WorkItemCard, event: MouseEvent<HTMLAnchorElement>) => void
   onPick: (card: WorkItemCard, field: PickerField, anchor: HTMLElement) => void
   onSelect: (card: WorkItemCard, event: MouseEvent<HTMLInputElement>) => void
@@ -82,14 +89,21 @@ function taskCells({
     ),
     title: (
       <>
-        <a className="aw-tasks__title" href={workItemHref(card.projectId, card.id)} onClick={(event) => onOpen(card, event)} tabIndex={-1}>
-          <span className="aw-tasks__phonekey">{card.key} </span>
-          {card.title}
-        </a>
+        {twoLine ? (
+          <a className="aw-tasks__title is-twoline" href={workItemHref(card.projectId, card.id)} onClick={(event) => onOpen(card, event)} tabIndex={-1}>
+            <span className="aw-tasks__titletext">{card.title}</span>
+            <span className="aw-tasks__subline">{[fields.keys ? card.key : null, card.status.name].filter(Boolean).join(' · ')}</span>
+          </a>
+        ) : (
+          <a className="aw-tasks__title" href={workItemHref(card.projectId, card.id)} onClick={(event) => onOpen(card, event)} tabIndex={-1}>
+            {fields.keys ? <span className="aw-tasks__phonekey">{card.key} </span> : null}
+            {card.title}
+          </a>
+        )}
         {card.archivedAt ? <span className="aw-worklist__tag">Archived</span> : null}
       </>
     ),
-    details: <TaskBadges card={card} />,
+    details: <TaskBadges card={card} fields={fields} />,
     due: <DueDate card={card} />,
     assignee: editable ? (
       <PickerCell field="assignee" label={card.assignee ? `Assigned to ${card.assignee.displayName}, change` : `Assign ${card.key}`} onPick={pick}>
@@ -141,6 +155,8 @@ export function WorkItemList({
   const queryKey = JSON.stringify(query)
   const pages = useWorkItemPages(projectId, query)
   const groups = useWorkItemGroups(projectId, query, Boolean(state.groupBy))
+  const fields = useCardFields(projectId)
+  const experience = useProjectExperience(projectId)
   const doneCount = useDoneCount(projectId, state.filters, workflow, tucked)
   const done = useDoneItems(projectId, query, tucked && state.showDone)
   const [collapsedState, setCollapsedState] = useState<{ groupBy: string | null; keys: Set<string> }>({ groupBy: null, keys: new Set() })
@@ -176,8 +192,11 @@ export function WorkItemList({
   const cardsById = useMemo(() => new Map(items.map((item) => [item.id, item])), [items])
   const order = useMemo(() => visibleTaskIds(rows), [rows])
   const selection = useMemo(() => keepLoaded(selectionState, new Set(cardsById.keys())), [cardsById, selectionState])
+  const phone = usePhoneWidth()
   const rowHeight = coarse ? 44 : 36
-  const heights = useMemo(() => rows.map(() => rowHeight), [rowHeight, rows])
+  // Tasks take two lines on phones; group and loading rows keep one.
+  const taskRowHeight = phone ? 56 : rowHeight
+  const heights = useMemo(() => rows.map((row) => (row.kind === 'task' ? taskRowHeight : rowHeight)), [rowHeight, rows, taskRowHeight])
   const windowed = useWindowedRows(bodyRef, heights)
   const statusCategories = useMemo(() => new Map(workflow.statuses.map((status) => [status.id, status.semanticCategory])), [workflow.statuses])
 
@@ -262,6 +281,19 @@ export function WorkItemList({
     )
   }
 
+  // The side panel follows the keyboard selection; a click or Enter opens at once.
+  const following = useOpenAsYouGo((id) => {
+    if (id !== openTaskId) onOpenTask(id)
+  })
+  const openNow = (id: string) => {
+    following.cancel()
+    onOpenTask(id)
+  }
+  const follow = (key: string) => {
+    const row = rowByKey(key)
+    if (row?.kind === 'task') following.follow(row.item.id)
+  }
+
   const onRowSelect = (card: WorkItemCard, event: { shiftKey: boolean; metaKey: boolean; ctrlKey: boolean }) => {
     if (disabled) return
     setSelection(pick(selection, card.id, order, { shift: event.shiftKey, toggle: event.metaKey || event.ctrlKey }))
@@ -276,19 +308,22 @@ export function WorkItemList({
     }
     if (event.metaKey || event.ctrlKey) return false
     if (key === 'escape') {
+      following.cancel()
       if (openTaskId) onClosePanel()
       else if (selection.ids.size) setSelection(emptySelection)
       else return false
       return true
     }
-    if (key === 'j' || key === 'k') {
+    // J and K work from anywhere but a field; the arrows, Home and End once
+    // focus is on a row (the table moves it) or nowhere in particular.
+    const step = key === 'j' || (key === 'arrowdown' && pageHasFocus()) ? 1 : key === 'k' || (key === 'arrowup' && pageHasFocus()) ? -1 : 0
+    const end = (key === 'home' || key === 'end') && pageHasFocus() ? key : null
+    if (step || end) {
       if (!focusable.length) return false
       const index = focusable.findIndex((row) => row.key === currentKey)
-      const next = index < 0 ? 0 : Math.max(0, Math.min(focusable.length - 1, index + (key === 'j' ? 1 : -1)))
+      const next = end === 'home' ? 0 : end === 'end' ? focusable.length - 1 : index < 0 ? 0 : Math.max(0, Math.min(focusable.length - 1, index + step))
       activate(focusable[next].key, true)
-      // With a task open beside the list, the panel follows, the way a peek does.
-      const target = focusable[next]
-      if (openTaskId && target.kind === 'task' && target.item.id !== openTaskId) onOpenTask(target.item.id)
+      follow(focusable[next].key)
       return true
     }
     const row = currentKey ? rowByKey(currentKey) : undefined
@@ -297,12 +332,12 @@ export function WorkItemList({
       return true
     }
     if (key === 'enter' && row) {
-      if (row.kind === 'task') onOpenTask(row.item.id)
+      if (row.kind === 'task') openNow(row.item.id)
       else if (row.kind === 'group') toggleGroup(row.groupKey)
       return true
     }
     const field = PICKER_KEYS[key]
-    if (field && !event.shiftKey) {
+    if (field && !event.shiftKey && pickerShown(field, fields)) {
       const element = currentKey ? bodyRef.current?.querySelector<HTMLElement>(`[data-row-key="${CSS.escape(currentKey)}"]`) : null
       const card = row?.kind === 'task' ? row.item : undefined
       if (!card && !selection.ids.size) return false
@@ -312,14 +347,14 @@ export function WorkItemList({
     return false
   })
 
-  if (pages.isPending) return <ListSkeleton label="Loading tasks" rows={6} />
-  if (pages.isError && !pages.data) return <ErrorState error={pages.error} onRetry={() => void pages.refetch()} title="Tasks didn’t load" />
+  if (pages.isPending) return <ListSkeleton label={`Loading ${experience.word('task', 'many')}`} rows={6} />
+  if (pages.isError && !pages.data) return <ErrorState error={pages.error} onRetry={() => void pages.refetch()} title={`${experience.label('task', 'many')} didn’t load`} />
   if (items.length === 0 && !pages.hasNextPage && !(tucked && doneCount > 0)) {
     return (
       <EmptyState
         action={hasFilters ? <Button onClick={onClearFilters}>Clear filters</Button> : emptyAction}
         icon="work"
-        title={hasFilters ? 'No matching tasks' : 'No tasks yet'}
+        title={hasFilters ? `No matching ${experience.word('task', 'many')}` : `No ${experience.word('task', 'many')} yet`}
       >
         {hasFilters ? 'Try a different search, or clear some filters.' : 'Write down what needs doing, then hand it to a person or an agent.'}
       </EmptyState>
@@ -382,19 +417,21 @@ export function WorkItemList({
     return {
       key: row.key,
       index,
-      height: rowHeight,
+      height: taskRowHeight,
       selected,
       className: card.id === openTaskId ? 'is-open' : undefined,
       label: `${card.key} ${card.title}`,
       cells: taskCells({
         card,
         disabled,
+        fields,
+        twoLine: phone,
         selected,
         onOpen: (target, event: MouseEvent<HTMLAnchorElement>) => {
           if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return
           event.preventDefault()
           setActiveKey(row.key)
-          onOpenTask(target.id)
+          openNow(target.id)
         },
         onPick: (target, field, anchor) => {
           setActiveKey(row.key)
@@ -411,7 +448,7 @@ export function WorkItemList({
   return (
     <div className="aw-tasks">
       <p aria-live="polite" className="aw-tasks__summary">
-        {countLabel(total, 'task')}
+        {countLabel(total, experience.word('task'), experience.word('task', 'many'))}
         {pages.isFetching && !pages.isFetchingNextPage ? <Icon className="aw-spin" name="loader" size={12} /> : null}
       </p>
       <Table
@@ -419,21 +456,29 @@ export function WorkItemList({
         ariaMultiselectable
         bodyRef={bodyRef}
         className="aw-tasks__table"
-        columns={state.fields ? LIST_COLUMNS.filter((column) => column.id === 'select' || column.id === 'title' || state.fields?.includes(column.id)) : LIST_COLUMNS}
+        columns={LIST_COLUMNS.filter(
+          (column) =>
+            (column.id === 'select' || column.id === 'title' || !state.fields || state.fields.includes(column.id)) &&
+            // The layout's hidden fields stay out whatever the view asks for.
+            !(column.id === 'priority' && !fields.priority) &&
+            !(column.id === 'key' && !fields.keys) &&
+            !(column.id === 'due' && !fields.dates),
+        )}
         label="Tasks"
         onActivate={(key) => {
           const row = rowByKey(key)
-          if (row?.kind === 'task') onOpenTask(row.item.id)
+          if (row?.kind === 'task') openNow(row.item.id)
           else if (row?.kind === 'group') toggleGroup(row.groupKey)
         }}
         onActiveKeyChange={(key) => activate(key, false)}
+        onMove={follow}
         onRowClick={(event, key) => {
           const row = rowByKey(key)
           setActiveKey(key)
           if (row?.kind === 'group') toggleGroup(row.groupKey)
           else if (row?.kind === 'task') {
             if (event.shiftKey || event.metaKey || event.ctrlKey) onRowSelect(row.item, event)
-            else onOpenTask(row.item.id)
+            else openNow(row.item.id)
           }
         }}
         rowCount={rows.length}

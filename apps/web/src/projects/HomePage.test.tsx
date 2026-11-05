@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -18,13 +19,14 @@ vi.mock('../shell/AppShell', () => ({
 vi.mock('./HomeSections', () => ({
   Capacity: () => null,
   NeedsYou: () => null,
+  QuietLine: () => null,
   SetupCard: () => null,
   WorkingNow: () => null,
   YourTasks: () => null,
 }))
 
-vi.mock('../shell/homeSpace', () => ({
-  useInboxUnread: () => 0,
+vi.mock('./homeQuiet', () => ({
+  useQuietSections: () => ({ needsYou: false, working: false, capacity: false, tasks: false }),
 }))
 
 vi.mock('./hooks', () => ({
@@ -73,6 +75,21 @@ function LocationProbe() {
   return <output aria-label="Current route">{useLocation().pathname}</output>
 }
 
+function renderHome() {
+  return render(
+    <QueryClientProvider client={new QueryClient()}>
+      <AuthenticatedSessionProvider session={session}>
+        <MemoryRouter initialEntries={['/home']}>
+          <Routes>
+            <Route element={<HomePage />} path="/home" />
+            <Route element={<LocationProbe />} path="*" />
+          </Routes>
+        </MemoryRouter>
+      </AuthenticatedSessionProvider>
+    </QueryClientProvider>,
+  )
+}
+
 describe('HomePage recent Projects', () => {
   const switchProject = vi.fn()
 
@@ -91,16 +108,7 @@ describe('HomePage recent Projects', () => {
   })
 
   it('opens a Viewer Project at its server-derived location without a switch write', async () => {
-    render(
-      <AuthenticatedSessionProvider session={session}>
-        <MemoryRouter initialEntries={['/home']}>
-          <Routes>
-            <Route element={<HomePage />} path="/home" />
-            <Route element={<LocationProbe />} path="*" />
-          </Routes>
-        </MemoryRouter>
-      </AuthenticatedSessionProvider>,
-    )
+    renderHome()
 
     const projectLink = screen.getByRole('link', { name: /Viewer Project/ })
     expect(projectLink).toHaveAttribute('href', viewerProject.navigation.href)
@@ -126,16 +134,7 @@ describe('HomePage recent Projects', () => {
       isPending: false,
       isSuccess: true,
     } as ReturnType<typeof useProjects>)
-    render(
-      <AuthenticatedSessionProvider session={session}>
-        <MemoryRouter initialEntries={['/home']}>
-          <Routes>
-            <Route element={<HomePage />} path="/home" />
-            <Route element={<LocationProbe />} path="*" />
-          </Routes>
-        </MemoryRouter>
-      </AuthenticatedSessionProvider>,
-    )
+    renderHome()
 
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(/^Good (morning|afternoon|evening), Project$/)
     fireEvent.click(screen.getByRole('link', { name: /Viewer Project/ }))

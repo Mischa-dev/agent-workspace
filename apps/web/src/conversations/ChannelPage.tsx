@@ -5,6 +5,7 @@ import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-
 import { isApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
 import { useAuthenticatedSession } from '../auth/session'
+import { useProjectExperience } from '../experience/layout'
 import { NavigationSyncAlert } from '../projects/NavigationSyncAlert'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
 import { useProject } from '../projects/hooks'
@@ -151,6 +152,9 @@ export function ChannelPage() {
   usePageTitle(validBoundary ? `#${name}` : null)
   const archived = Boolean(page?.conversation.archivedAt)
   const canPost = Boolean(validBoundary && page?.capabilities.sendMessage && !archived)
+  // A layout without threads keeps the threads already here reachable but doesn't offer new ones.
+  const threadsShown = useProjectExperience(projectId).shows('talk.threads')
+  const canStartThread = canPost && threadsShown
   const threadRoute = (threadId: string) => `/projects/${encodeURIComponent(projectId)}/threads/${encodeURIComponent(threadId)}`
   const searchActors = async (query: string) => (await searchMentionableActors(projectId, query)).actors
   const searchWorkItems = (query: string) => searchWorkItemReferences(projectId, query)
@@ -181,7 +185,7 @@ export function ChannelPage() {
       if (threads.length) {
         return <IconButton icon="messages" label="Open thread" onClick={() => openThread(threads[0].id)} size="sm" />
       }
-      if (!canPost) return null
+      if (!canStartThread) return null
       return (
         <IconButton
           icon="messages"
@@ -259,7 +263,7 @@ export function ChannelPage() {
             conversationId={channelId}
             onClose={() => setBoardOpen(false)}
             onOpen={(thread) => openThread(thread.id)}
-            onStart={canPost ? () => startThread(null) : undefined}
+            onStart={canStartThread ? () => startThread(null) : undefined}
             projectId={projectId}
           />
         ) : undefined
@@ -275,19 +279,21 @@ export function ChannelPage() {
       <ConversationHeader
         actions={
           <>
-            <IconButton
-              icon="list"
-              label={boardOpen ? 'Hide threads' : 'Threads'}
-              onClick={() => setBoardOpen(!boardOpen)}
-              pressed={boardOpen}
-              side="bottom"
-            />
-            {canPost ? <IconButton icon="messages" label="Start a thread" onClick={() => startThread(null)} side="bottom" /> : null}
+            {threadsShown || boardOpen ? (
+              <IconButton
+                icon="list"
+                label={boardOpen ? 'Hide threads' : 'Threads'}
+                onClick={() => setBoardOpen(!boardOpen)}
+                pressed={boardOpen}
+                side="bottom"
+              />
+            ) : null}
+            {canStartThread ? <IconButton icon="messages" label="Start a thread" onClick={() => startThread(null)} side="bottom" /> : null}
           </>
         }
         icon="hash"
         menu={[
-          ...(canPost ? [{ label: 'Start a thread', icon: 'messages' as const, onSelect: () => startThread(null) }] : []),
+          ...(canStartThread ? [{ label: 'Start a thread', icon: 'messages' as const, onSelect: () => startThread(null) }] : []),
           ...tools.levelMenu,
           { separator: true as const },
           {
@@ -332,7 +338,7 @@ export function ChannelPage() {
         {validBoundary && !olderCursor ? (
           <ConversationIntro
             actions={
-              canPost ? (
+              canStartThread ? (
                 <Button icon="messages" onClick={() => startThread(null)} size="sm">
                   Start a thread
                 </Button>
@@ -392,6 +398,12 @@ export function ChannelPage() {
           draftKey={channelId}
           focusOnOpen={!openThreadId}
           label={`Message #${name}`}
+          outbox={{
+            kind: 'message',
+            conversationId: channelId,
+            conversationKind: 'channel',
+            href: `/projects/${encodeURIComponent(projectId)}/channels/${encodeURIComponent(channelId)}`,
+          }}
           onEditLast={() => messageActions.editLast(entries)}
           onSubmit={sender.send}
           placeholder={`Message #${name}`}

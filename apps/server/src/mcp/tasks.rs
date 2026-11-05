@@ -2073,7 +2073,7 @@ pub(super) async fn task_open(
             LEFT JOIN mcp_oauth_grants via_grant
               ON via_grant.id = comment.via_oauth_grant_id AND via_grant.show_via
             LEFT JOIN mcp_oauth_clients via_client ON via_client.id = via_grant.client_id
-            WHERE comment.work_item_id = $1
+            WHERE comment.work_item_id = $1 AND comment.removed_at IS NULL
             ORDER BY comment.created_at DESC
             LIMIT 10
             "#,

@@ -1,7 +1,7 @@
 import type { MouseEvent } from 'react'
 import { Link } from 'react-router-dom'
 
-import { Icon, StatusChip, countLabel, formatFullDate, formatRelative } from '../ui'
+import { AvatarStack, Icon, StatusChip, actorKind, countLabel, formatFullDate, formatRelative } from '../ui'
 import { ThreadStatusChip } from './threadBoard'
 import type { ThreadChipFacts } from './threadChipModel'
 
@@ -51,9 +51,17 @@ export function ThreadChip({
   const replies = thread.messageCount === undefined ? null : thread.messageCount === 0 ? 'No replies yet' : countLabel(thread.messageCount, 'reply', 'replies')
   const when = thread.messageCount && thread.lastActivityAt ? formatRelative(thread.lastActivityAt) : ''
   const status = thread.status && thread.status.toLowerCase() !== 'open' ? thread.status : null
+  const repliers = thread.messageCount ? (thread.participants ?? []) : []
   const face = (
     <>
-      <Icon className="aw-threadchip__icon" name="messages" size={14} />
+      {repliers.length ? (
+        <AvatarStack
+          people={repliers.map((actor) => ({ id: actor.id, name: actor.displayName, kind: actorKind(actor.kind) }))}
+          size={18}
+        />
+      ) : (
+        <Icon className="aw-threadchip__icon" name="messages" size={14} />
+      )}
       <span className="aw-threadchip__name">{thread.name}</span>
       {replies ? <span className="aw-threadchip__count">{replies}</span> : null}
       {when ? (
@@ -69,6 +77,9 @@ export function ThreadChip({
       ) : null}
       {status ? <ThreadStatusChip status={status} /> : null}
       <Icon className="aw-threadchip__chev" name="chevron-right" size={14} />
+      {repliers.length ? (
+        <span className="visually-hidden">, replies from {repliers.map((actor) => actor.displayName).join(', ')}</span>
+      ) : null}
     </>
   )
   const title = thread.outcome ? `${thread.name}: ${thread.outcome}` : undefined

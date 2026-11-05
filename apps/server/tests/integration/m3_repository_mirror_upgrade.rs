@@ -162,8 +162,7 @@ async fn legacy_mirror_is_copied_to_canonical_layout_without_removing_history() 
     assert!(legacy.is_dir(), "legacy history must remain in place");
 
     pool.close().await;
-    administrative_pool
-        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("drop repository-upgrade schema");
 }

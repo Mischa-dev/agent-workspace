@@ -32,6 +32,26 @@ describe('structured Project locations', () => {
     expect(projectLocationFromPath(projectId, channelHref)).toEqual(channel)
   })
 
+  it('remembers each task tab, the pages, one page, the decisions and the runs', () => {
+    const projectId = 'project-a'
+    const page = { kind: 'page', pageId: 'page-a' } as const
+    expect(projectLocationHref(projectId, page)).toBe('/projects/project-a/pages/page-a')
+    expect(projectLocationFromPath(projectId, '/projects/project-a/pages/page-a')).toEqual(page)
+    expect(projectLocationFromPath(projectId, '/projects/project-a/pages')).toEqual({ kind: 'pages' })
+    // Every planning page is the Planning tab, which opens on Up next.
+    expect(projectLocationFromPath(projectId, '/projects/project-a/graph')).toEqual({ kind: 'planning' })
+    expect(projectLocationHref(projectId, { kind: 'planning' })).toBe('/projects/project-a/next')
+    expect(projectLocationFromPath(projectId, '/projects/project-a/launches')).toEqual({ kind: 'runs' })
+    expect(projectLocationHref(projectId, { kind: 'runs' })).toBe('/projects/project-a/launches')
+    for (const kind of ['milestones', 'timeline', 'decisions'] as const) {
+      expect(projectLocationFromPath(projectId, projectLocationHref(projectId, { kind }))).toEqual({ kind })
+    }
+    expect(normalizeLocation({ kind: 'page', pageId: 'page-a' })).toEqual(page)
+    // A page without its id isn't a place; the overview is.
+    expect(normalizeLocation({ kind: 'page' })).toEqual({ kind: 'project_overview' })
+    expect(normalizeLocation({ kind: 'toString' })).toEqual({ kind: 'project_overview' })
+  })
+
   it('rejects arbitrary and cross-Project hrefs', () => {
     const location = { kind: 'thread', conversationId: 'thread-a' } as const
     expect(

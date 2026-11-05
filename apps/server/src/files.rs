@@ -324,20 +324,19 @@ pub(crate) async fn store_upload(
     let organization_id = organization_of(&state.pool, project_id).await?;
     let name = clean_name(&upload.name);
     let declared = upload.declared_type;
-    let processed = {
+    let processed = if image::sniff(&upload.bytes).is_some() {
         let bytes = upload.bytes;
-        tokio::task::spawn_blocking(move || {
-            if image::sniff(&bytes).is_some() {
-                match image::process(bytes.clone()) {
-                    Some(processed) => Ok(processed),
-                    None => Err(bytes),
-                }
-            } else {
-                Err(bytes)
-            }
-        })
-        .await
-        .map_err(|_| AppError::Internal("process an uploaded image"))?
+        let processed = image::one_at_a_time(move || image::process(bytes))
+            .await
+            .ok_or(AppError::Internal("process an uploaded image"))?;
+        // A picture we can't read could still carry where it was taken, so
+        // it isn't kept at all rather than kept as it came.
+        Ok(processed.ok_or(AppError::Refused {
+            field: "file",
+            message: "This picture couldn't be read well enough to remove its location data, so it wasn't saved. Save it again as a PNG or JPEG and attach that.",
+        })?)
+    } else {
+        Err(upload.bytes)
     };
     let (bytes, content_type, dimensions, thumbnail) = match processed {
         Ok(image) => (
@@ -712,6 +711,26 @@ pub(crate) async fn forget_message_files(
         .bind(message_id)
         .execute(&mut **transaction)
         .await?;
+    Ok(())
+}
+
+/// A deleted task comment's files stop showing at once; their bytes are
+/// deleted by the next cleanup.
+pub(crate) async fn forget_comment_files(
+    transaction: &mut Transaction<'_, Postgres>,
+    comment_id: Uuid,
+    removed_by: Uuid,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        UPDATE files SET removed_at = now(), removed_by_actor_id = $2
+        WHERE comment_id = $1 AND removed_at IS NULL
+        "#,
+    )
+    .bind(comment_id)
+    .bind(removed_by)
+    .execute(&mut **transaction)
+    .await?;
     Ok(())
 }
 

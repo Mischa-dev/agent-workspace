@@ -972,8 +972,7 @@ mod tests {
                 .is_none()
         );
         pool.close().await;
-        admin
-            .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+        crate::test_support::drop_schema(&admin, &schema)
             .await
             .expect("WorkOS agent test operation");
         admin.close().await;
