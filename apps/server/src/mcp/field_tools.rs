@@ -97,14 +97,19 @@ pub(super) async fn field_list(
         .await?;
         // Defining fields is the workflow's permission (AWD-74 roles):
         // owners and admins, or a role that kept "Change the workflow".
-        let can_manage =
-            can_write_in(state, principal, principal.project_id, Action::WorkflowManage).await?
-                && sqlx::query_scalar::<_, bool>(
-                    "SELECT archived_at IS NULL FROM projects WHERE id = $1",
-                )
-                .bind(principal.project_id)
-                .fetch_one(&state.pool)
-                .await?;
+        let can_manage = can_write_in(
+            state,
+            principal,
+            principal.project_id,
+            Action::WorkflowManage,
+        )
+        .await?
+            && sqlx::query_scalar::<_, bool>(
+                "SELECT archived_at IS NULL FROM projects WHERE id = $1",
+            )
+            .bind(principal.project_id)
+            .fetch_one(&state.pool)
+            .await?;
         Ok::<_, AppError>(ToolResult::ok(FieldListValue {
             fields: definitions.iter().map(FieldView::from).collect(),
             can_manage,

@@ -544,7 +544,11 @@ async fn defining_fields_follows_the_workflow_permission_and_values_follow_task_
     )
     .await;
     assert!(status.is_success(), "{status}: {assigned}");
-    let (status, listed) = send(app, bea_browser.request("GET", &fields_path, None, Value::Null)).await;
+    let (status, listed) = send(
+        app,
+        bea_browser.request("GET", &fields_path, None, Value::Null),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{listed}");
     assert_eq!(listed["canManage"], false);
     assert_eq!(listed["fields"][0]["name"], "Risk");
@@ -589,7 +593,14 @@ async fn defining_fields_follows_the_workflow_permission_and_values_follow_task_
     assert_eq!(status, StatusCode::OK, "{limit}");
     let alex_app = connect_app(app, &alex_browser, "Alex's app", "full").await;
     let session = initialize(app, &alex_app).await.expect("Alex's app");
-    let listed = tool(app, &alex_app, &session, "field_list", json!({"projectId": "WORK"})).await;
+    let listed = tool(
+        app,
+        &alex_app,
+        &session,
+        "field_list",
+        json!({"projectId": "WORK"}),
+    )
+    .await;
     assert_eq!(listed["outcome"], "ok", "{listed}");
     assert_eq!(listed["value"]["canManage"], false, "{listed}");
     let refused = tool(
