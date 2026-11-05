@@ -287,6 +287,8 @@ function ComposerBox({
     setMentions((current) => [...mentioned, ...current.filter((actor) => !mentioned.some((m) => m.id === actor.id))])
     setWorkItems((current) => [...referenced, ...current.filter((work) => !referenced.some((w) => w.id === work.id))])
     if (item.attachments?.length) uploads.restore(item.attachments)
+    // It goes back as a reply too, unless the box is already replying to another.
+    if (item.replyTo && !replyTo) onReplyChange?.(item.replyTo)
   }
 
   // Send what's waiting, oldest first, each with the key it was first sent
@@ -297,7 +299,15 @@ function ComposerBox({
     try {
       for (const item of [...queuedRef.current]) {
         try {
-          await onSubmit({ content: item.content, idempotencyKey: item.idempotencyKey, text: item.text, attachments: item.attachments })
+          await onSubmit({
+            content: item.content,
+            idempotencyKey: item.idempotencyKey,
+            text: item.text,
+            attachments: item.attachments,
+            // Still a reply: the same key with the same request, so a send
+            // that did reach the server replays instead of conflicting.
+            replyTo: item.replyTo,
+          })
           queue((current) => current.filter((entry) => entry.idempotencyKey !== item.idempotencyKey))
         } catch (reason) {
           if (isConnectionError(reason)) break

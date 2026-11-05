@@ -198,7 +198,7 @@ export function ThreadPage() {
 
   const searchActors = async (query: string) => (await searchMentionableActors(projectId, query)).actors
   const searchWorkItems = (query: string) => searchWorkItemReferences(projectId, query)
-  const reply = useReplyTarget(threadId)
+  const reply = useReplyTarget(threadId, verifiedTimeline?.conversation.parentKind === 'channel' ? projectId : null)
   const messageActions = useMessageActions({
     projectId,
     onReply: reply.start,

@@ -114,7 +114,7 @@ export function ThreadPanel({
   const archived = Boolean(timeline?.conversation.archivedAt)
   const canPost = Boolean(timeline?.capabilities.sendMessage && !archived)
   const threadHref = `/projects/${encodeURIComponent(projectId)}/threads/${encodeURIComponent(threadId)}`
-  const reply = useReplyTarget(threadId)
+  const reply = useReplyTarget(threadId, searchWorkItems ? projectId : null)
   const messageActions = useMessageActions({
     projectId,
     onReply: reply.start,

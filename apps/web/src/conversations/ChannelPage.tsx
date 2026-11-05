@@ -167,7 +167,7 @@ export function ChannelPage() {
     queryKey: queryKeys.timeline(projectId, channelId, includeArchived),
   })
 
-  const reply = useReplyTarget(channelId)
+  const reply = useReplyTarget(channelId, projectId)
   const messageActions = useMessageActions({
     projectId,
     onReply: reply.start,

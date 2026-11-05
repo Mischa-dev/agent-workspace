@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react'
 
+import { useProjectExperience } from '../experience/layout'
 import type { ConversationMessage, ReplyTarget } from './types'
 
 /** How much of a message the box above the composer previews. */
@@ -18,14 +19,18 @@ export function replyTargetFor(message: ConversationMessage): ReplyTarget {
 /**
  * The message a conversation's composer is replying to (AWD-70). It belongs
  * to one conversation, so moving to another never carries a reply over.
+ * `projectId` is the project whose layout decides whether Reply shows
+ * (`talk.replies`); DMs and groups pass null and always have it. When the
+ * layout hides it, `start` is undefined and nothing is ever being replied to.
  */
-export function useReplyTarget(conversationId: string) {
+export function useReplyTarget(conversationId: string, projectId: string | null) {
+  const shown = useProjectExperience(projectId).shows('talk.replies')
   const [state, setState] = useState<{ conversationId: string; target: ReplyTarget | null }>({
     conversationId,
     target: null,
   })
-  const target = state.conversationId === conversationId ? state.target : null
+  const target = shown && state.conversationId === conversationId ? state.target : null
   const set = useCallback((next: ReplyTarget | null) => setState({ conversationId, target: next }), [conversationId])
   const start = useCallback((message: ConversationMessage) => set(replyTargetFor(message)), [set])
-  return { target, set, start }
+  return { target, set, start: shown ? start : undefined }
 }

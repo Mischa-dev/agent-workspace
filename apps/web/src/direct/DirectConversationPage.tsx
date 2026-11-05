@@ -152,7 +152,7 @@ export function DirectConversationPage() {
 
   const canPost = Boolean(valid && page?.capabilities.sendMessage)
   const startThread = (origin: { messageId: string; text: string; author: string }) => setThreadDialog({ conversationId, origin })
-  const reply = useReplyTarget(conversationId)
+  const reply = useReplyTarget(conversationId, null)
   const messageActions = useMessageActions({
     projectId,
     onReply: reply.start,
