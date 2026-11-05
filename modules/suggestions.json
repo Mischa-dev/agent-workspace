@@ -1,0 +1,46 @@
+{
+  "id": "suggestions",
+  "name": "Suggestions",
+  "description": "A model reads tasks and conversations to suggest dependencies, fields and criteria, and to summarise long threads.",
+  "version": 1,
+  "kind": "core",
+  "switchable": true,
+  "needs": [],
+  "worksWith": ["tasks", "channels"],
+  "permissions": [],
+  "tools": {
+    "ai_suggestions_list": "query",
+    "ai_suggestion_decide": "change",
+    "ai_analyze": "suggest",
+    "ai_summarize": "suggest"
+  },
+  "routes": [
+    "/api/v1/organizations/{organization_id}/ai*",
+    "/api/v1/projects/{project_id}/ai",
+    "/api/v1/projects/{project_id}/ai/analyze",
+    "/api/v1/projects/{project_id}/ai/test",
+    "/api/v1/projects/{project_id}/ai/suggestions*",
+    "/api/v1/projects/{project_id}/work-items/{work_item_id}/ai/*",
+    "/api/v1/conversations/{id}/ai/*"
+  ],
+  "events": { "emits": [], "listens": ["task.created", "task.updated", "message.created"] },
+  "notifications": ["ai_suggestions"],
+  "search": [],
+  "automations": { "triggers": [], "actions": [] },
+  "things": [],
+  "links": [],
+  "embeds": [],
+  "slots": {
+    "pages": ["/projects/:projectId/suggestions"],
+    "parts": ["task.suggestions"],
+    "sidebar": [],
+    "home": [],
+    "settings": [],
+    "palette": ["p:suggestions"],
+    "shortcuts": [],
+    "slash": [],
+    "setup": []
+  },
+  "settings": ["ai.*"],
+  "nouns": []
+}

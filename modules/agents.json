@@ -1,0 +1,45 @@
+{
+  "id": "agents",
+  "name": "Agents",
+  "description": "The workspace's agents: who they are, how they connect, their profiles, and @-mentioning them in conversations.",
+  "version": 1,
+  "kind": "core",
+  "switchable": true,
+  "needs": [],
+  "worksWith": ["messages", "runs"],
+  "permissions": ["agents.manage"],
+  "tools": {
+    "agent_list": "query",
+    "agent_profile_list": "query",
+    "session_bind": "change",
+    "external_event_poll": "query"
+  },
+  "routes": [
+    "/api/v1/agents/*",
+    "/api/v1/projects/{project_id}/agents",
+    "/api/v1/projects/{project_id}/agent-profiles*",
+    "/api/v1/projects/{project_id}/external-agents*",
+    "/api/v1/conversations/{conversation_id}/agent-sessions",
+    "/v1/*"
+  ],
+  "events": { "emits": [], "listens": ["message.created", "task.updated", "run.finished"] },
+  "notifications": [],
+  "search": [],
+  "automations": { "triggers": [], "actions": [] },
+  "things": [],
+  "links": [],
+  "embeds": [],
+  "slots": {
+    "pages": ["/messages/agents"],
+    "parts": ["area.agents", "talk.agent_mentions"],
+    "sidebar": [],
+    "home": [],
+    "settings": ["project/agents"],
+    "palette": ["g:agents"],
+    "shortcuts": [],
+    "slash": ["tag"],
+    "setup": ["agent"]
+  },
+  "settings": [],
+  "nouns": []
+}

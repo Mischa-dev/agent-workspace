@@ -1,0 +1,399 @@
+//! What exists today, as things (the shared contract's first wiring).
+//!
+//! Tasks, pages, decisions, whiteboards, threads, channels, conversations
+//! and projects are [`Thing`]s here, and the links already stored between
+//! them (subtasks, dependencies, related tasks, a task's pages and threads,
+//! a whiteboard's links) read as typed [`ThingLink`]s from both sides. This
+//! is what "Referenced in" (AWD-58) and the `thing_open` tool draw on; new
+//! kinds join by adding a resolver here until modules bring their own.
+//!
+//! Every read is the viewer's: tasks, pages and decisions only in projects
+//! they can open, conversations through `conversation_visible_to`,
+//! whiteboards through `whiteboard_visible_to`, and nothing from a module
+//! that's off for them.
+
+use std::collections::BTreeSet;
+
+use sqlx::{FromRow, PgConnection};
+use uuid::Uuid;
+
+use super::{
+    ModuleSet,
+    contract::{LinkDirection, LinkKind, Thing, ThingLink, ThingOwner},
+    manifest,
+};
+use crate::error::AppError;
+
+/// The most links one thing shows.
+const MAX_LINKS: usize = 200;
+
+/// Who's asking, and what they can reach.
+#[derive(Clone, Copy, Debug)]
+pub struct Viewer<'a> {
+    pub actor_id: Uuid,
+    /// Projects they can open right now.
+    pub projects: &'a [Uuid],
+    /// Modules on for them.
+    pub modules: ModuleSet,
+}
+
+/// The kinds this server can open as things.
+pub const KINDS: &[&str] = &[
+    "task",
+    "page",
+    "decision",
+    "whiteboard",
+    "thread",
+    "channel",
+    "conversation",
+    "project",
+];
+
+#[derive(Debug, FromRow)]
+struct ThingRow {
+    id: Uuid,
+    kind: String,
+    title: String,
+    status: Option<String>,
+    owner_id: Option<Uuid>,
+    owner_name: Option<String>,
+    project_id: Option<Uuid>,
+    /// For conversations: whether they're in the hidden direct project.
+    direct: bool,
+}
+
+fn href(kind: &str, id: Uuid, project_id: Option<Uuid>) -> String {
+    let template = manifest::thing_decl(kind).map_or("/", |decl| decl.href.as_str());
+    template
+        .replace("{id}", &id.to_string())
+        .replace(
+            "{projectId}",
+            &project_id.map(|id| id.to_string()).unwrap_or_default(),
+        )
+}
+
+impl ThingRow {
+    fn into_thing(self) -> Thing {
+        let module = manifest::of_thing(&self.kind).map_or_else(String::new, |m| m.id.clone());
+        Thing {
+            href: href(&self.kind, self.id, self.project_id),
+            id: self.id,
+            module,
+            kind: self.kind,
+            title: self.title,
+            status: self.status,
+            owner: self
+                .owner_id
+                .map(|id| ThingOwner {
+                    id,
+                    name: self.owner_name.unwrap_or_else(|| "Someone".to_owned()),
+                }),
+            project_id: self.project_id,
+        }
+    }
+}
+
+const TASKS_SQL: &str = r#"
+    SELECT item.id, 'task' AS kind,
+           project.project_key || '-' || item.number::text || ' ' || item.title AS title,
+           status.name AS status, item.assignee_actor_id AS owner_id,
+           owner.display_name AS owner_name, item.project_id, false AS direct
+    FROM work_items item
+    JOIN projects project ON project.id = item.project_id
+    JOIN work_item_statuses status
+      ON status.project_id = item.project_id AND status.id = item.status_id
+    LEFT JOIN project_memberships owner
+      ON owner.project_id = item.project_id AND owner.actor_id = item.assignee_actor_id
+    WHERE item.id = ANY($1) AND item.project_id = ANY($2) AND item.archived_at IS NULL
+"#;
+
+const PAGES_SQL: &str = r#"
+    SELECT page.id, 'page' AS kind, page.title, NULL::text AS status,
+           page.updated_by_actor_id AS owner_id, editor.display_name AS owner_name,
+           page.project_id, false AS direct
+    FROM project_pages page
+    LEFT JOIN project_memberships editor
+      ON editor.project_id = page.project_id AND editor.actor_id = page.updated_by_actor_id
+    WHERE page.id = ANY($1) AND page.project_id = ANY($2) AND page.archived_at IS NULL
+"#;
+
+const DECISIONS_SQL: &str = r#"
+    SELECT decision.id, 'decision' AS kind, decision.title, decision.status,
+           decision.decided_by_actor_id AS owner_id, decider.display_name AS owner_name,
+           decision.project_id, false AS direct
+    FROM project_decisions decision
+    LEFT JOIN project_memberships decider
+      ON decider.project_id = decision.project_id
+     AND decider.actor_id = decision.decided_by_actor_id
+    WHERE decision.id = ANY($1) AND decision.project_id = ANY($2)
+      AND (decision.source_conversation_id IS NULL
+           OR conversation_visible_to(decision.source_conversation_id, $3))
+"#;
+
+const WHITEBOARDS_SQL: &str = r#"
+    SELECT board.id, 'whiteboard' AS kind, board.title, NULL::text AS status,
+           board.created_by_actor_id AS owner_id, maker.display_name AS owner_name,
+           board.project_id, false AS direct
+    FROM whiteboards board
+    LEFT JOIN users maker ON maker.actor_id = board.created_by_actor_id
+    WHERE board.id = ANY($1) AND board.deleted_at IS NULL
+      AND (board.project_id IS NULL OR board.project_id = ANY($2))
+      AND whiteboard_visible_to(board.id, $3)
+"#;
+
+const CONVERSATIONS_SQL: &str = r#"
+    SELECT conversation.id,
+           CASE conversation.kind
+             WHEN 'thread' THEN 'thread'
+             WHEN 'channel' THEN 'channel'
+             ELSE 'conversation'
+           END AS kind,
+           CASE WHEN conversation.kind = 'channel' THEN '#' || conversation.name
+                ELSE conversation.name END AS title,
+           CASE WHEN conversation.kind = 'thread' THEN conversation.thread_status END AS status,
+           NULL::uuid AS owner_id, NULL::text AS owner_name,
+           conversation.project_id, project.kind = 'direct' AS direct
+    FROM conversations conversation
+    JOIN projects project ON project.id = conversation.project_id
+    WHERE conversation.id = ANY($1) AND conversation.project_id = ANY($2)
+      AND conversation.archived_at IS NULL
+      AND conversation_visible_to(conversation.id, $3)
+"#;
+
+const PROJECTS_SQL: &str = r#"
+    SELECT project.id, 'project' AS kind, project.name AS title, NULL::text AS status,
+           NULL::uuid AS owner_id, NULL::text AS owner_name, project.id AS project_id,
+           false AS direct
+    FROM projects project
+    WHERE project.id = ANY($1) AND project.id = ANY($2) AND project.kind = 'standard'
+"#;
+
+fn resolver(kind: &str) -> Option<&'static str> {
+    Some(match kind {
+        "task" => TASKS_SQL,
+        "page" => PAGES_SQL,
+        "decision" => DECISIONS_SQL,
+        "whiteboard" => WHITEBOARDS_SQL,
+        "thread" | "channel" | "conversation" => CONVERSATIONS_SQL,
+        "project" => PROJECTS_SQL,
+        _ => return None,
+    })
+}
+
+/// Whether the viewer's modules show this thing.
+fn shown(viewer: &Viewer<'_>, row: &ThingRow) -> bool {
+    match row.kind.as_str() {
+        "conversation" | "channel" | "thread" => viewer
+            .modules
+            .allows_conversations_in(if row.direct { "direct" } else { "standard" }),
+        kind => manifest::of_thing(kind).is_none_or(|module| viewer.modules.contains(&module.id)),
+    }
+}
+
+/// Things of one kind, by id, that the viewer can see. Unknown kinds and
+/// hidden things are left out.
+async fn resolve(
+    connection: &mut PgConnection,
+    viewer: &Viewer<'_>,
+    kind: &str,
+    ids: &[Uuid],
+) -> Result<Vec<Thing>, AppError> {
+    let Some(sql) = resolver(kind) else {
+        return Ok(Vec::new());
+    };
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query_as::<_, ThingRow>(sql)
+        .bind(ids)
+        .bind(viewer.projects)
+        .bind(viewer.actor_id)
+        .fetch_all(&mut *connection)
+        .await?;
+    Ok(rows
+        .into_iter()
+        // A conversation id can come back as any conversation kind; keep
+        // the kind asked for, except that "conversation" asks for any.
+        .filter(|row| kind == "conversation" || row.kind == kind)
+        .filter(|row| shown(viewer, row))
+        .map(ThingRow::into_thing)
+        .collect())
+}
+
+/// One thing, if the viewer can see it.
+pub async fn get(
+    connection: &mut PgConnection,
+    viewer: &Viewer<'_>,
+    kind: &str,
+    id: Uuid,
+) -> Result<Option<Thing>, AppError> {
+    Ok(resolve(connection, viewer, kind, &[id]).await?.pop())
+}
+
+#[derive(Debug, FromRow)]
+struct LinkRow {
+    link: String,
+    direction: String,
+    other_kind: String,
+    other_id: Uuid,
+}
+
+/// The links stored for each kind, as (link kind, direction, other kind,
+/// other id). `$1` is the thing.
+fn links_sql(kind: &str) -> Option<&'static str> {
+    Some(match kind {
+        "task" => {
+            r#"
+            SELECT 'part_of' AS link, 'outgoing' AS direction, 'task' AS other_kind,
+                   parent_work_item_id AS other_id
+            FROM work_items WHERE id = $1 AND parent_work_item_id IS NOT NULL
+            UNION ALL
+            SELECT 'part_of', 'incoming', 'task', id
+            FROM work_items WHERE parent_work_item_id = $1 AND archived_at IS NULL
+            UNION ALL
+            SELECT 'blocks', 'outgoing', 'task', blocked_work_item_id
+            FROM work_item_dependencies WHERE blocking_work_item_id = $1
+            UNION ALL
+            SELECT 'blocks', 'incoming', 'task', blocking_work_item_id
+            FROM work_item_dependencies WHERE blocked_work_item_id = $1
+            UNION ALL
+            SELECT kind, 'outgoing', 'task', other_work_item_id
+            FROM work_item_relations WHERE work_item_id = $1
+            UNION ALL
+            SELECT kind, 'incoming', 'task', work_item_id
+            FROM work_item_relations WHERE other_work_item_id = $1
+            UNION ALL
+            SELECT 'about', 'outgoing',
+                   CASE target_kind WHEN 'conversation' THEN 'conversation' ELSE target_kind END,
+                   target_id
+            FROM work_item_links
+            WHERE work_item_id = $1 AND target_kind IN ('page', 'decision', 'conversation')
+            UNION ALL
+            SELECT 'about', 'outgoing', 'conversation', conversation_id
+            FROM work_item_conversation_links WHERE work_item_id = $1
+            UNION ALL
+            SELECT 'about', 'incoming', 'whiteboard', whiteboard_id
+            FROM whiteboard_links WHERE target_kind = 'work_item' AND target_id = $1
+            "#
+        }
+        "page" | "decision" => {
+            r#"
+            SELECT 'about' AS link, 'incoming' AS direction, 'task' AS other_kind,
+                   work_item_id AS other_id
+            FROM work_item_links WHERE target_kind IN ('page', 'decision') AND target_id = $1
+            UNION ALL
+            SELECT 'about', 'incoming', 'whiteboard', whiteboard_id
+            FROM whiteboard_links WHERE target_kind = 'page' AND target_id = $1
+            "#
+        }
+        "whiteboard" => {
+            r#"
+            SELECT 'about' AS link, 'outgoing' AS direction,
+                   CASE target_kind WHEN 'work_item' THEN 'task' ELSE target_kind END AS other_kind,
+                   target_id AS other_id
+            FROM whiteboard_links WHERE whiteboard_id = $1
+            "#
+        }
+        "thread" | "channel" | "conversation" => {
+            r#"
+            SELECT 'about' AS link, 'incoming' AS direction, 'task' AS other_kind,
+                   work_item_id AS other_id
+            FROM work_item_conversation_links WHERE conversation_id = $1
+            UNION ALL
+            SELECT 'about', 'incoming', 'task', work_item_id
+            FROM work_item_links WHERE target_kind = 'conversation' AND target_id = $1
+            "#
+        }
+        "project" => {
+            r#"
+            SELECT 'about' AS link, 'incoming' AS direction, 'whiteboard' AS other_kind,
+                   whiteboard_id AS other_id
+            FROM whiteboard_links WHERE target_kind = 'project' AND target_id = $1
+            "#
+        }
+        _ => return None,
+    })
+}
+
+fn link_kind(key: &str) -> Option<LinkKind> {
+    LinkKind::ALL.into_iter().find(|kind| kind.key() == key)
+}
+
+/// A thing's links, both ways, to things the viewer can see. The caller has
+/// checked that the viewer can see the thing itself.
+pub async fn links(
+    connection: &mut PgConnection,
+    viewer: &Viewer<'_>,
+    thing: &Thing,
+) -> Result<Vec<ThingLink>, AppError> {
+    let Some(sql) = links_sql(&thing.kind) else {
+        return Ok(Vec::new());
+    };
+    let rows = sqlx::query_as::<_, LinkRow>(sql)
+        .bind(thing.id)
+        .fetch_all(&mut *connection)
+        .await?;
+    let mut seen = BTreeSet::new();
+    let rows = rows
+        .into_iter()
+        .filter(|row| seen.insert((row.link.clone(), row.direction.clone(), row.other_id)))
+        .take(MAX_LINKS)
+        .collect::<Vec<_>>();
+    let mut others = Vec::new();
+    for kind in KINDS {
+        let ids = rows
+            .iter()
+            .filter(|row| row.other_kind == *kind)
+            .map(|row| row.other_id)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        others.extend(resolve(connection, viewer, kind, &ids).await?);
+    }
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| {
+            let kind = link_kind(&row.link)?;
+            let direction = if row.direction == "incoming" {
+                LinkDirection::Incoming
+            } else {
+                LinkDirection::Outgoing
+            };
+            let other = others.iter().find(|other| other.id == row.other_id)?.clone();
+            let (outgoing, incoming) = kind.words();
+            Some(ThingLink {
+                kind,
+                direction,
+                label: match direction {
+                    LinkDirection::Outgoing => outgoing,
+                    LinkDirection::Incoming => incoming,
+                }
+                .to_owned(),
+                other,
+            })
+        })
+        .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn every_kind_this_server_opens_is_declared_by_a_module() {
+        for kind in super::KINDS {
+            assert!(super::manifest::thing_decl(kind).is_some(), "{kind}");
+            assert!(super::resolver(kind).is_some(), "{kind}");
+            assert!(super::links_sql(kind).is_some(), "{kind}");
+        }
+    }
+
+    #[test]
+    fn hrefs_fill_in_their_ids() {
+        let id = uuid::Uuid::nil();
+        let project = uuid::Uuid::max();
+        assert_eq!(
+            super::href("task", id, Some(project)),
+            format!("/projects/{project}/work-items/{id}")
+        );
+        assert_eq!(super::href("whiteboard", id, None), format!("/whiteboards/{id}"));
+    }
+}

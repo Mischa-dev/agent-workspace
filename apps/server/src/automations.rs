@@ -175,6 +175,21 @@ fn one() -> u32 {
     1
 }
 
+/// Every trigger kind, as [`Trigger::kind`] names them (AWD-75: each names
+/// its module in a manifest).
+pub const TRIGGER_KINDS: &[&str] = &[
+    "task_created",
+    "task_matches",
+    "run_finished",
+    "pull_request_checks_failed",
+    "message_posted",
+    "schedule",
+    "capacity_window",
+];
+
+/// Every action kind, as [`Action::kind`] names them.
+pub const ACTION_KINDS: &[&str] = &["launch", "set_field", "notify", "post_message"];
+
 impl Trigger {
     pub fn kind(&self) -> &'static str {
         match self {

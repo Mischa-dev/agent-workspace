@@ -1,0 +1,73 @@
+{
+  "id": "channels",
+  "name": "Channels",
+  "description": "A project's channels and their threads, for talking with people and agents about the work.",
+  "version": 1,
+  "kind": "core",
+  "switchable": true,
+  "needs": ["projects", "messages"],
+  "worksWith": ["tasks", "runs"],
+  "permissions": ["channels.post", "channels.create", "channels.moderate"],
+  "tools": {
+    "channel_create": "create",
+    "thread_start": "create",
+    "thread_update": "change"
+  },
+  "routes": [
+    "/api/v1/channels/*",
+    "/api/v1/threads/*",
+    "/api/v1/projects/{id}/channels",
+    "/api/v1/projects/{id}/conversation-sidebar",
+    "/api/v1/conversations/{id}/threads"
+  ],
+  "events": { "emits": [], "listens": ["message.created"] },
+  "notifications": [],
+  "search": ["threads"],
+  "automations": { "triggers": [], "actions": [] },
+  "things": [
+    {
+      "kind": "channel",
+      "one": "Channel",
+      "many": "Channels",
+      "href": "/projects/{projectId}/channels/{id}",
+      "fields": []
+    },
+    {
+      "kind": "thread",
+      "one": "Thread",
+      "many": "Threads",
+      "href": "/projects/{projectId}/threads/{id}",
+      "fields": [
+        { "id": "outcome", "label": "Outcome", "type": "text" },
+        { "id": "channel", "label": "Channel", "type": "text" }
+      ]
+    }
+  ],
+  "links": [],
+  "embeds": [
+    {
+      "id": "channels.thread_card",
+      "label": "Thread",
+      "description": "A thread with its status and outcome.",
+      "thing": "thread",
+      "piece": { "type": "card", "thing": "thread", "fields": ["status", "outcome", "owner"] }
+    }
+  ],
+  "slots": {
+    "pages": [
+      "/projects/:projectId/channels/:channelId",
+      "/projects/:projectId/conversations/archived",
+      "/projects/:projectId/threads/:threadId"
+    ],
+    "parts": ["area.chat", "talk.threads"],
+    "sidebar": [],
+    "home": [],
+    "settings": [],
+    "palette": ["p:archived", "c:*", "t:*"],
+    "shortcuts": [],
+    "slash": [],
+    "setup": []
+  },
+  "settings": [],
+  "nouns": ["channel"]
+}

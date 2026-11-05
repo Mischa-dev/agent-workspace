@@ -81,6 +81,7 @@ mod later_tools;
 mod launch_tools;
 mod memory_tools;
 mod message_edits;
+mod module_tools;
 mod notifications;
 mod oauth;
 mod planning;
@@ -267,6 +268,19 @@ impl McpServer {
     ) -> Json<common::ToolResult<settings_tools::SettingsValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(settings_tools::settings_get(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Which modules are on in a workspace (Messages, Projects, Channels, Tasks, Pages, Whiteboards, Runs, Code, Agents, Inbox, Automations, Suggestions) and what each does: its kinds of thing, its tools by what they do (describe, query, create, change, suggest), the live blocks it offers for pages, and why one is off. Pass module for one module's full declaration. Tools of a module that's off aren't listed and say so when called.",
+        annotations(title = "List modules", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn module_list(
+        &self,
+        Parameters(arguments): Parameters<module_tools::ModuleListArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<module_tools::ModuleListValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(module_tools::module_list(&self.state, principal, arguments).await)
     }
 
     #[tool(
@@ -1507,6 +1521,19 @@ impl McpServer {
     }
 
     // -- Search and memory ---------------------------------------------------
+
+    #[tool(
+        description = "Open any thing (a task, page, decision, whiteboard, thread, channel, conversation or project) with its title, status, owner and link, and its links read both ways: part of, blocks and blocked by, about and referenced in, related to, duplicates. Only things you can see, from modules that are on.",
+        annotations(title = "Open a thing", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn thing_open(
+        &self,
+        Parameters(arguments): Parameters<module_tools::ThingOpenArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<module_tools::ThingOpenValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(module_tools::thing_open(&self.state, principal, arguments).await)
+    }
 
     #[tool(
         description = "Search messages, threads, tasks, pages and decisions you can see. Settled things (decisions, pages, thread outcomes) rank first. Narrow by kind, project, conversation, author (from), or dates.",

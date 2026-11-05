@@ -489,6 +489,29 @@ pub struct Effective {
     pub lead: Vec<String>,
     /// Owners and admins who asked to see what the layout hides.
     pub showing_hidden: bool,
+    /// Modules that are off for this person (AWD-75). Their parts are in
+    /// `hidden` whatever the layout says, and "show hidden parts" doesn't
+    /// bring them back: off isn't a layout choice.
+    pub modules_off: Vec<String>,
+}
+
+impl Effective {
+    /// Hide the parts of every module that's off in `modules`.
+    pub fn with_modules(mut self, modules: crate::modules::ModuleSet) -> Self {
+        if modules.is_all() {
+            return self;
+        }
+        let hidden = self.hidden.iter().copied().collect::<BTreeSet<_>>();
+        self.hidden = registry()
+            .parts
+            .iter()
+            .map(|part| part.id.as_str())
+            .filter(|id| hidden.contains(id) || !modules.allows_part(id))
+            .collect();
+        self.lead.retain(|part| modules.allows_part(part));
+        self.modules_off = modules.off().map(|module| module.id.clone()).collect();
+        self
+    }
 }
 
 /// Everything that decides one person's layout.
@@ -553,6 +576,7 @@ fn effective(inputs: &Inputs<'_>) -> Effective {
             .collect(),
         preset: shape.preset,
         showing_hidden: inputs.show_hidden,
+        modules_off: Vec::new(),
     }
 }
 
@@ -886,7 +910,11 @@ async fn project_view(
         saved: &saved,
         my_view: &stored.my_view,
         show_hidden: manager && stored.show_hidden,
-    });
+    })
+    .with_modules(
+        crate::modules::state::for_member(connection, access.organization_id, principal.actor_id)
+            .await?,
+    );
     Ok(ProjectLayoutView {
         organization_id: access.organization_id,
         project_id,
@@ -947,7 +975,10 @@ async fn workspace_view(
         saved: &saved,
         my_view: &stored.my_view,
         show_hidden: manager && stored.show_hidden,
-    });
+    })
+    .with_modules(
+        crate::modules::state::for_member(connection, organization_id, principal.actor_id).await?,
+    );
     Ok(WorkspaceLayoutView {
         organization_id,
         effective,

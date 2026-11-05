@@ -1,0 +1,72 @@
+{
+  "id": "projects",
+  "name": "Projects",
+  "description": "Projects: where a team keeps its channels, tasks, pages and code, with their own members and settings.",
+  "version": 1,
+  "kind": "core",
+  "switchable": true,
+  "needs": [],
+  "worksWith": ["channels", "tasks", "pages"],
+  "permissions": ["projects.view", "projects.create", "projects.manage"],
+  "tools": {
+    "projects_list": "query",
+    "project_open": "describe",
+    "project_create": "create",
+    "project_update": "change",
+    "project_archive": "change",
+    "project_members": "query",
+    "project_member_set": "change",
+    "project_layout_set": "change",
+    "project_export": "query"
+  },
+  "routes": [
+    "/api/v1/projects",
+    "/api/v1/projects/rail-order",
+    "/api/v1/projects/{id}",
+    "/api/v1/projects/{id}/archive",
+    "/api/v1/projects/{id}/restore",
+    "/api/v1/projects/{id}/switch",
+    "/api/v1/projects/{id}/navigation",
+    "/api/v1/projects/{id}/mentionable-actors",
+    "/api/v1/projects/{project_id}/members*",
+    "/api/v1/projects/{project_id}/member-candidates",
+    "/api/v1/projects/{project_id}/invitations",
+    "/api/v1/projects/{project_id}/layout*",
+    "/api/v1/projects/{project_id}/secrets*",
+    "/api/v1/projects/{project_id}/save-as-template",
+    "/api/v1/projects/{project_id}/export",
+    "/api/v1/organizations/{organization_id}/project-templates*",
+    "/api/v1/project-invitations/*"
+  ],
+  "events": { "emits": [], "listens": [] },
+  "notifications": [],
+  "search": [],
+  "automations": { "triggers": [], "actions": [] },
+  "things": [
+    {
+      "kind": "project",
+      "one": "Project",
+      "many": "Projects",
+      "href": "/projects/{id}",
+      "fields": [
+        { "id": "key", "label": "Key", "type": "text" },
+        { "id": "members", "label": "Members", "type": "people" }
+      ]
+    }
+  ],
+  "links": [],
+  "embeds": [],
+  "slots": {
+    "pages": ["/projects", "/projects/new", "/projects/:projectId", "/projects/:projectId/settings"],
+    "parts": [],
+    "sidebar": ["rail.projects", "project.overview"],
+    "home": ["recent"],
+    "settings": ["workspace/project-templates", "project/general", "project/layout", "project/members"],
+    "palette": ["p:overview", "p:settings", "s:project", "a:pin", "a:create-project", "g:projects", "pr:*"],
+    "shortcuts": [],
+    "slash": [],
+    "setup": ["project"]
+  },
+  "settings": [],
+  "nouns": []
+}
