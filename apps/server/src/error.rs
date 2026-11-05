@@ -117,6 +117,11 @@ pub enum AppError {
     ProjectHasActiveRuns,
     #[error("the repository has an active run")]
     RepositoryHasActiveRuns,
+    /// The database's admission check refused to let a run go ahead, such
+    /// as when an approval is answered. `reason` says why in words the
+    /// person can act on; it never carries anything they sent.
+    #[error("the run can't go ahead: {reason}")]
+    RunNotAdmitted { reason: &'static str },
     #[error("the project is archived")]
     ProjectArchived,
     #[error("a repository selection is required")]
@@ -160,6 +165,7 @@ impl AppError {
             Self::ProjectKeyConflict => "project_key_conflict",
             Self::ProjectHasActiveRuns => "project_has_active_runs",
             Self::RepositoryHasActiveRuns => "repository_has_active_runs",
+            Self::RunNotAdmitted { .. } => "run_not_admitted",
             Self::ProjectArchived => "project_archived",
             Self::RepositoryChoiceRequired { .. } => "repository_choice_required",
             Self::RepositoryBindingConflict => "repository_binding_conflict",
@@ -322,6 +328,9 @@ impl IntoResponse for AppError {
                 "Stop or finish this repository's runs before archiving it.",
                 None,
             ),
+            Self::RunNotAdmitted { reason } => {
+                (StatusCode::CONFLICT, "run_not_admitted", reason, None)
+            }
             Self::ProjectArchived => (
                 StatusCode::CONFLICT,
                 "project_archived",

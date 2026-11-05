@@ -8,7 +8,7 @@ use super::McpPrincipal;
 use crate::{
     AppState,
     api::{insert_event_entry, insert_significant_event, retain_run_workspace},
-    domain::{RunState, transition_run},
+    domain::{RunState, resume_answered_run, transition_run},
     error::AppError,
     external_events::enqueue_external_approval_resolved,
     idempotency::{
@@ -69,6 +69,10 @@ pub enum ApprovalToolResult {
     },
     Conflict {
         current: ApprovalProjection,
+        /// Why the answer can't go through, when there's more to say than
+        /// that the approval changed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
         retry_category: String,
     },
     NotFound {
@@ -194,6 +198,24 @@ pub async fn respond(
             AppError::Forbidden | AppError::AuthenticationRequired | AppError::InvalidCredentials,
         ) => ApprovalToolResult::denied(),
         Err(AppError::Invalid(field)) => ApprovalToolResult::invalid(field),
+        Err(AppError::RunNotAdmitted { reason }) => {
+            // The answer was rolled back, so the approval is still pending.
+            match fetch_projection(state, principal, approval_id).await {
+                Ok(Some(current)) => ApprovalToolResult::Conflict {
+                    current,
+                    reason: Some(reason.to_owned()),
+                    retry_category: "do_not_retry".to_owned(),
+                },
+                Ok(None) => ApprovalToolResult::not_found(),
+                Err(error) => {
+                    tracing::error!(
+                        category = error.log_category(),
+                        "MCP approval_respond refetch failed"
+                    );
+                    ApprovalToolResult::unavailable()
+                }
+            }
+        }
         Err(error) => {
             tracing::error!(
                 category = error.log_category(),
@@ -253,12 +275,14 @@ async fn respond_inner(
     if context.version != arguments.expected_version || context.status != "pending" {
         return Ok(ApprovalToolResult::Conflict {
             current: projection(&context)?,
+            reason: None,
             retry_category: "refetch_before_retry".to_owned(),
         });
     }
     if context.run_state != "blocked" {
         return Ok(ApprovalToolResult::Conflict {
             current: projection(&context)?,
+            reason: None,
             retry_category: "do_not_retry".to_owned(),
         });
     }
@@ -305,7 +329,7 @@ async fn respond_inner(
     .await?;
     insert_event_entry(&mut transaction, context.conversation_id, event_id).await?;
     if approved {
-        transition_run(&mut transaction, context.run_id, RunState::Working, None).await?;
+        resume_answered_run(&mut transaction, context.run_id).await?;
     } else {
         transition_run(
             &mut transaction,
