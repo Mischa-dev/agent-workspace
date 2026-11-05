@@ -66,7 +66,7 @@ pub enum FieldType {
     Person,
     Url,
     Checkbox,
-    /// A link to a task or a page in the same project (`FieldConfig::target`).
+    // A link to a task or a page in the same project (`FieldConfig::target`).
     Link,
 }
 
@@ -283,7 +283,7 @@ impl TryFrom<DefinitionRow> for FieldDefinition {
 pub struct FieldView {
     pub id: String,
     pub name: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
     #[serde(rename = "type")]
     pub field_type: FieldType,
@@ -291,7 +291,7 @@ pub struct FieldView {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<OptionView>,
     /// Link fields: "task" or "page".
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<LinkTarget>,
     /// 1 is first.
     pub position: i32,
@@ -305,7 +305,7 @@ pub struct OptionView {
     pub id: String,
     pub name: String,
     pub color: String,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub archived: bool,
 }
 
@@ -801,18 +801,18 @@ pub fn referenced_id(field: &FieldDefinition, value: &Value) -> Option<Uuid> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum FieldOp {
-    /// Has any of the values (for a multiple choice, any of them is among its
-    /// choices).
+    // Has any of the values (for a multiple choice, any of them is among its
+    // choices).
     Is,
-    /// Has none of the values; records without a value count.
+    // Has none of the values; records without a value count.
     IsNot,
-    /// Has no value.
+    // Has no value.
     Empty,
-    /// Has a value.
+    // Has a value.
     NotEmpty,
-    /// The text has the value in it, ignoring case.
+    // The text has the value in it, ignoring case.
     Contains,
-    /// Greater than the value (a number or a YYYY-MM-DD date).
+    // Greater than the value (a number or a YYYY-MM-DD date).
     Gt,
     Gte,
     Lt,

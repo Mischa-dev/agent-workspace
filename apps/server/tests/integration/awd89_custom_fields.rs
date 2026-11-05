@@ -1,0 +1,418 @@
+//! AWD-89: custom fields on tasks. The silent, costly failures: someone who
+//! isn't an owner or admin changing a project's fields; a value of the wrong
+//! type, a person outside the project or a link to another project's task
+//! being stored; a change that leaves no before and after in history; a
+//! filter, sort or group that reads the wrong values; and an archived field
+//! losing its values.
+
+use axum::http::StatusCode;
+use serde_json::{Value, json};
+
+use super::{
+    agent_interface::{connect_app, create_agent, initialize, send, tool},
+    mcp_admin::{create_project, setup},
+    mcp_tasks::{add_member, space},
+    message_edits::add_person,
+};
+
+fn field_values(fields: &Value) -> Vec<(String, Value)> {
+    fields
+        .as_array()
+        .unwrap_or_else(|| panic!("no fields: {fields}"))
+        .iter()
+        .map(|field| {
+            (
+                field["name"].as_str().expect("name").to_owned(),
+                field["value"].clone(),
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn fields_are_typed_checked_recorded_and_filtered_the_same_for_agents_and_the_web() {
+    let Some(setup) = setup("awd89_fields").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let side = create_project(&setup, "SIDE", "Side").await;
+    // The owner's connected app acts as the owner.
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let owner = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+    // Mara is an agent and a member of WORK, not an admin.
+    let (mara, mara_token) =
+        create_agent(app, &setup.browser, &space(&setup).await, "Mara", "mara").await;
+    add_member(&setup, &work, mara, "member").await;
+    let mara_session = initialize(app, &mara_token).await.expect("Mara MCP");
+    let agent = |name: &'static str, arguments: Value| {
+        let token = mara_token.clone();
+        let session = mara_session.clone();
+        async move { tool(app, &token, &session, name, arguments).await }
+    };
+
+    // Owners and admins manage fields; members can't, over MCP or the web.
+    for (name, extra) in [
+        (
+            "Risk",
+            json!({"type": "single_choice", "options": [{"name": "Low"}, {"name": "High", "color": "red"}]}),
+        ),
+        ("Points", json!({"type": "number"})),
+        ("Owner", json!({"type": "person"})),
+        ("Shipped", json!({"type": "checkbox"})),
+        ("Follows", json!({"type": "link", "target": "task"})),
+        ("Launch", json!({"type": "date"})),
+    ] {
+        let mut arguments = json!({"projectId": "WORK", "name": name});
+        for (key, value) in extra.as_object().expect("extra") {
+            arguments[key] = value.clone();
+        }
+        let written = owner("field_write", arguments).await;
+        assert_eq!(written["outcome"], "ok", "{written}");
+        assert_eq!(written["value"]["created"], true, "{written}");
+    }
+    let refused = agent(
+        "field_write",
+        json!({"projectId": "WORK", "name": "Mine", "type": "text"}),
+    )
+    .await;
+    assert_ne!(refused["outcome"], "ok", "{refused}");
+    let listed = agent("field_list", json!({"projectId": "WORK"})).await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    assert_eq!(listed["value"]["canManage"], false);
+    let names = listed["value"]["fields"]
+        .as_array()
+        .expect("fields")
+        .iter()
+        .map(|field| field["name"].as_str().unwrap_or_default())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        ["Risk", "Points", "Owner", "Shipped", "Follows", "Launch"]
+    );
+    let risk = listed["value"]["fields"][0]["id"]
+        .as_str()
+        .expect("risk")
+        .to_owned();
+    let (_, member_browser) = add_person(&setup, &[&work], "pat").await;
+    let (status, body) = send(
+        app,
+        member_browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/fields"),
+            Some("member-field"),
+            json!({"name": "Mine", "type": "text"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let (status, body) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/fields"),
+            Some("owner-field"),
+            json!({"name": "Customer", "type": "text"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let customer = body["id"].as_str().expect("customer").to_owned();
+
+    // Values go in by field name, typed, as anyone in the project writes them.
+    let other = owner(
+        "task_create",
+        json!({"projectId": "SIDE", "title": "Elsewhere", "clientRequestId": "side-1"}),
+    )
+    .await;
+    assert_eq!(other["outcome"], "applied", "{other}");
+    let first = agent(
+        "task_create",
+        json!({"projectId": "WORK", "title": "First", "clientRequestId": "first"}),
+    )
+    .await;
+    assert_eq!(first["outcome"], "applied", "{first}");
+    let created = agent(
+        "task_create",
+        json!({
+            "projectId": "WORK",
+            "title": "Ship fields",
+            "fields": {"risk": "high", "Points": "3", "Owner": "me", "Shipped": true,
+                       "Follows": "WORK-1", "Launch": "2026-12-01"},
+            "clientRequestId": "fields-1",
+        }),
+    )
+    .await;
+    assert_eq!(created["outcome"], "applied", "{created}");
+    let opened = agent("task_open", json!({"taskId": "WORK-2"})).await;
+    assert_eq!(opened["outcome"], "ok", "{opened}");
+    assert_eq!(
+        field_values(&opened["value"]["fields"]),
+        [
+            ("Risk".to_owned(), json!("High")),
+            ("Points".to_owned(), json!(3)),
+            ("Owner".to_owned(), json!("@mara")),
+            ("Shipped".to_owned(), json!(true)),
+            ("Follows".to_owned(), json!("WORK-1")),
+            ("Launch".to_owned(), json!("2026-12-01")),
+            ("Customer".to_owned(), Value::Null),
+        ]
+    );
+    let version = opened["value"]["task"]["version"].as_i64().expect("version");
+
+    // Wrong types, unknown fields, people outside the project and links to
+    // another project's tasks are refused, and nothing changes.
+    let side_task = other["workItemId"].as_str().expect("side task").to_owned();
+    for (fields, at) in [
+        (json!({"Points": "lots"}), "fields.Points"),
+        (json!({"Risk": "Medium"}), "fields.Risk"),
+        (json!({"Launch": "next week"}), "fields.Launch"),
+        (json!({"Shipped": "maybe"}), "fields.Shipped"),
+        (json!({"Nope": 1}), "fields"),
+        (json!({"Owner": "@nobody"}), "fields.Owner"),
+        (json!({"Owner": uuid::Uuid::now_v7()}), "fields.Owner"),
+        (json!({"Follows": side_task}), "fields.Follows"),
+        (json!({"Follows": "SIDE-1"}), "fields.Follows"),
+    ] {
+        let refused = agent(
+            "task_update",
+            json!({"taskId": "WORK-2", "expectedVersion": version, "fields": fields}),
+        )
+        .await;
+        assert_eq!(refused["outcome"], "invalid_request", "{fields}: {refused}");
+        assert_eq!(refused["field"], at, "{refused}");
+    }
+    let (status, body) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            &format!("/api/v1/projects/{work}/work-items/{}", created["workItemId"].as_str().expect("id")),
+            Some("web-wrong"),
+            json!({"expectedVersion": version, "fieldValues": {risk.clone(): "Medium"}}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+
+    // A change records each field's before and after, in one version bump.
+    let updated = agent(
+        "task_update",
+        json!({"taskId": "WORK-2", "expectedVersion": version,
+               "fields": {"Risk": "Low", "Points": null}}),
+    )
+    .await;
+    assert_eq!(updated["outcome"], "applied", "{updated}");
+    assert_eq!(updated["version"], version + 1, "{updated}");
+    assert_eq!(updated["changedFields"], json!(["fields"]), "{updated}");
+    let history = agent(
+        "task_open",
+        json!({"taskId": "WORK-2", "include": ["history"]}),
+    )
+    .await;
+    let text = history["value"]["history"].to_string();
+    assert!(text.contains("Risk: High → Low"), "{text}");
+    assert!(text.contains("Points: 3 → none"), "{text}");
+
+    // The web reads and writes the same values, keyed by field ID.
+    let task_id = created["workItemId"].as_str().expect("id").to_owned();
+    let (status, body) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            &format!("/api/v1/projects/{work}/work-items/{task_id}"),
+            Some("web-customer"),
+            json!({"expectedVersion": version + 1, "fieldValues": {customer.clone(): "Acme"}}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["fieldValues"][&customer], "Acme", "{body}");
+    assert!(
+        body["fieldReferences"]
+            .as_array()
+            .expect("references")
+            .iter()
+            .any(|reference| reference["key"] == "@mara"),
+        "{body}"
+    );
+    let (_, timeline) = send(
+        app,
+        setup.browser.request(
+            "GET",
+            &format!("/api/v1/projects/{work}/work-items/{task_id}/timeline"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    let change = timeline.to_string();
+    assert!(change.contains(&format!("field:{customer}")), "{change}");
+    assert!(change.contains("\"Acme\""), "{change}");
+
+    // task_list filters on fields, by name, as stored values.
+    for (filters, expected) in [
+        (json!([{"field": "Risk", "op": "is", "values": ["low"]}]), vec!["WORK-2"]),
+        (json!([{"field": "Risk", "op": "is", "values": ["High"]}]), vec![]),
+        (json!([{"field": "Risk", "op": "empty"}]), vec!["WORK-1"]),
+        (json!([{"field": "Owner", "op": "is", "values": ["me"]}]), vec!["WORK-2"]),
+        (json!([{"field": "Shipped", "op": "is", "values": ["false"]}]), vec!["WORK-1"]),
+        (json!([{"field": "Launch", "op": "gt", "values": ["2026-11-30"]}]), vec!["WORK-2"]),
+        (json!([{"field": "Customer", "op": "contains", "values": ["acm"]}]), vec!["WORK-2"]),
+    ] {
+        let listed = agent(
+            "task_list",
+            json!({"projectId": "WORK", "fieldFilters": filters}),
+        )
+        .await;
+        assert_eq!(listed["outcome"], "ok", "{filters}: {listed}");
+        let keys = listed["value"]["tasks"]
+            .as_array()
+            .expect("tasks")
+            .iter()
+            .map(|task| task["key"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>();
+        assert_eq!(keys, expected, "{filters}");
+    }
+    let listed = agent("task_list", json!({"projectId": "WORK", "query": "WORK-2"})).await;
+    assert_eq!(listed["value"]["tasks"][0]["fields"]["Risk"], "Low", "{listed}");
+    let refused = agent(
+        "task_list",
+        json!({"projectId": "WORK", "fieldFilters": [{"field": "Risk", "op": "gt", "values": ["1"]}]}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "invalid_request", "{refused}");
+    // Fields belong to one project.
+    let refused = agent(
+        "task_list",
+        json!({"fieldFilters": [{"field": "Risk", "op": "empty"}]}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "invalid_request", "{refused}");
+
+    // The web list filters, sorts and groups by field ID; another project's
+    // field is refused.
+    let low = sqlx::query_scalar::<_, String>(
+        "SELECT option ->> 'id' FROM field_definitions, jsonb_array_elements(config -> 'options') option \
+         WHERE id = $1::uuid AND option ->> 'name' = 'Low'",
+    )
+    .bind(&risk)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("low option");
+    let filter = serde_urlencoded::to_string([(
+        "fieldFilters",
+        json!([{"field": risk, "op": "is", "values": [low]}]).to_string(),
+    )])
+    .expect("query");
+    let (status, page) = send(
+        app,
+        setup.browser.request(
+            "GET",
+            &format!("/api/v1/projects/{work}/work-items?{filter}"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["total"], 1, "{page}");
+    let (status, groups) = send(
+        app,
+        setup.browser.request(
+            "GET",
+            &format!("/api/v1/projects/{work}/work-items/groups?groupBy=field:{risk}"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{groups}");
+    let labels = groups["groups"]
+        .as_array()
+        .expect("groups")
+        .iter()
+        .map(|group| (group["label"].as_str().unwrap_or_default().to_owned(), group["count"].clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        labels,
+        [("Low".to_owned(), json!(1)), ("No value".to_owned(), json!(1))]
+    );
+    let (status, sorted) = send(
+        app,
+        setup.browser.request(
+            "GET",
+            &format!("/api/v1/projects/{work}/work-items?sort=field:{risk}"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{sorted}");
+    assert_eq!(sorted["items"][0]["key"], "WORK-2", "{sorted}");
+    let side_field = owner(
+        "field_write",
+        json!({"projectId": "SIDE", "name": "Size", "type": "number"}),
+    )
+    .await;
+    let side_field = side_field["value"]["field"]["id"].as_str().expect("side field");
+    for query in [
+        format!("sort=field:{side_field}"),
+        format!("groupBy=field:{side_field}"),
+        serde_urlencoded::to_string([(
+            "fieldFilters",
+            json!([{"field": side_field, "op": "notEmpty"}]).to_string(),
+        )])
+        .expect("query"),
+    ] {
+        let (status, body) = send(
+            app,
+            setup.browser.request(
+                "GET",
+                &format!("/api/v1/projects/{work}/work-items?{query}"),
+                None,
+                Value::Null,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{query}: {body}");
+    }
+
+    // Archiving hides a field and keeps its values; restoring brings them back.
+    let archived = owner(
+        "field_write",
+        json!({"projectId": "WORK", "field": "Risk", "archived": true}),
+    )
+    .await;
+    assert_eq!(archived["outcome"], "ok", "{archived}");
+    let opened = agent("task_open", json!({"taskId": "WORK-2"})).await;
+    assert!(
+        !field_values(&opened["value"]["fields"])
+            .iter()
+            .any(|(name, _)| name == "Risk"),
+        "{opened}"
+    );
+    let version = opened["value"]["task"]["version"].as_i64().expect("version");
+    let refused = agent(
+        "task_update",
+        json!({"taskId": "WORK-2", "expectedVersion": version, "fields": {"Risk": "High"}}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "invalid_request", "{refused}");
+    let restored = owner(
+        "field_write",
+        json!({"projectId": "WORK", "field": "Risk", "archived": false}),
+    )
+    .await;
+    assert_eq!(restored["outcome"], "ok", "{restored}");
+    let opened = agent("task_open", json!({"taskId": "WORK-2"})).await;
+    assert!(
+        field_values(&opened["value"]["fields"]).contains(&("Risk".to_owned(), json!("Low"))),
+        "{opened}"
+    );
+    let _ = side;
+}

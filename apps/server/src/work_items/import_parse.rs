@@ -52,7 +52,15 @@ pub(crate) struct ImportRow {
     /// rows are read.
     #[serde(skip)]
     pub parent_reference: Option<String>,
+    /// Columns no built-in field took, by header, for the project's custom
+    /// fields to pick up by name (AWD-89).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub fields: BTreeMap<String, String>,
 }
+
+/// Most extra columns a row keeps for custom fields, and the longest value.
+const MAX_EXTRA_COLUMNS: usize = 60;
+const MAX_EXTRA_CHARACTERS: usize = 5_000;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -283,8 +291,29 @@ pub(crate) fn csv_rows(
             .filter_map(|index| record.get(index))
             .find_map(|value| present(value))
     };
+    let mapped = FIELDS
+        .iter()
+        .flat_map(|field| columns(field))
+        .collect::<Vec<_>>();
+    let extra = headers
+        .iter()
+        .enumerate()
+        .filter(|(index, header)| !mapped.contains(index) && !header.trim().is_empty())
+        .take(MAX_EXTRA_COLUMNS)
+        .map(|(index, header)| (index, header.trim().to_owned()))
+        .collect::<Vec<_>>();
     let mut rows = Vec::with_capacity(body.len());
     for record in body {
+        let fields = extra
+            .iter()
+            .filter_map(|(index, header)| {
+                let value = present(record.get(*index)?)?;
+                Some((
+                    header.clone(),
+                    value.chars().take(MAX_EXTRA_CHARACTERS).collect(),
+                ))
+            })
+            .collect::<BTreeMap<_, _>>();
         let mut labels = Vec::<LabelValue>::new();
         for index in columns("labels") {
             let Some(value) = record.get(index) else {
@@ -320,6 +349,7 @@ pub(crate) fn csv_rows(
             estimate: first(record, "estimate"),
             parent: None,
             parent_reference: first(record, "parent"),
+            fields,
         });
     }
     link_parents(&mut rows);
@@ -588,6 +618,7 @@ pub(crate) fn github_rows(issues: Vec<GitHubIssue>) -> Vec<ImportRow> {
                 estimate: None,
                 parent: None,
                 parent_reference: None,
+                fields: BTreeMap::new(),
             }
         })
         .collect()

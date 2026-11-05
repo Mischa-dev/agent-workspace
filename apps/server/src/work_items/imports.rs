@@ -47,6 +47,8 @@ use crate::{
         CreateWorkItemOutcome, NewTaskFields, authorize_mutation, create_work_item,
         lock_membership, normalize_description, normalize_title, record_audit_for, valid_estimate,
     },
+    fields::{self, FieldDefinition, FieldType, FieldView},
+    work_item_fields::{self, FieldValueChanges, Writer},
     work_item_labels::{self, default_color},
     work_item_planning,
 };
@@ -179,6 +181,8 @@ struct ProjectContext {
     members: Vec<(Uuid, String, Option<String>)>,
     /// external ID to task key, for this import's source
     linked: HashMap<String, i64>,
+    /// The project's active custom fields, which columns match by name.
+    fields: Vec<FieldDefinition>,
 }
 
 async fn load_context(
@@ -242,6 +246,7 @@ async fn load_context(
     .await?
     .into_iter()
     .collect();
+    let fields = work_item_fields::definitions(&mut *connection, project_id, false).await?;
     Ok(ProjectContext {
         project_key,
         estimate_unit,
@@ -251,6 +256,7 @@ async fn load_context(
         milestones,
         members,
         linked,
+        fields,
     })
 }
 
@@ -274,6 +280,9 @@ struct Resolved {
     due_date: Option<NaiveDate>,
     estimate: Option<f64>,
     notes: Vec<String>,
+    /// Custom field values as written, by field name, that passed the type
+    /// check; people and links are looked up when the task is made.
+    field_inputs: Vec<(String, Value)>,
 }
 
 fn resolve(
@@ -469,7 +478,76 @@ fn resolve(
                 .push(format!("Couldn't read the estimate “{value}”")),
         }
     }
+    // Columns named after a custom field fill it; other columns are ignored.
+    for (header, raw) in &row.fields {
+        let Some(field) = fields::find(&context.fields, header) else {
+            continue;
+        };
+        let input = if field.field_type == FieldType::MultipleChoice {
+            Value::Array(
+                raw.split([',', ';', '|'])
+                    .map(str::trim)
+                    .filter(|part| !part.is_empty())
+                    .map(|part| Value::String(part.to_owned()))
+                    .collect(),
+            )
+        } else {
+            Value::String(raw.clone())
+        };
+        match fields::normalize_value(field, &input) {
+            Ok(fields::Normalized::Clear) => {}
+            Ok(_) => resolved.field_inputs.push((field.name.clone(), input)),
+            Err(message) => resolved
+                .notes
+                .push(format!("{message} “{raw}” is left out")),
+        }
+    }
     resolved
+}
+
+/// An imported row's custom field values. A person or link the project
+/// can't use is left out rather than losing the row.
+async fn import_field_values(
+    transaction: &mut Transaction<'_, Postgres>,
+    context: &ProjectContext,
+    actor: &CommandActor,
+    inputs: &[(String, Value)],
+) -> Result<Option<FieldValueChanges>, AppError> {
+    if inputs.is_empty() {
+        return Ok(None);
+    }
+    let writer = Writer {
+        actor_id: actor.actor_id,
+        project_key: &context.project_key,
+    };
+    if let Ok(values) = work_item_fields::resolve(
+        transaction,
+        actor.project_id,
+        writer,
+        &context.fields,
+        "fields",
+        inputs,
+    )
+    .await?
+    {
+        return Ok(Some(values));
+    }
+    let mut kept = FieldValueChanges::default();
+    for input in inputs {
+        if let Ok(values) = work_item_fields::resolve(
+            transaction,
+            actor.project_id,
+            writer,
+            &context.fields,
+            "fields",
+            std::slice::from_ref(input),
+        )
+        .await?
+        {
+            kept.entries.extend(values.entries);
+        }
+    }
+    Ok((!kept.is_empty()).then_some(kept))
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1586,6 +1664,8 @@ async fn create_chunk(
             due_date: resolved.due_date,
             estimate: resolved.estimate,
         };
+        let field_values =
+            import_field_values(transaction, &context, actor, &resolved.field_inputs).await?;
         // A value the project refuses is dropped rather than losing the row.
         let mut attempts = 0;
         let work_item_id = loop {
@@ -1594,7 +1674,7 @@ async fn create_chunk(
                 transaction,
                 actor,
                 CreateWorkItemCommand {
-                    field_values: None,
+                    field_values: field_values.as_ref(),
                     title: &title,
                     description: &description,
                     type_id: resolved.type_id,
@@ -1691,6 +1771,12 @@ struct ExportTask {
     archived: bool,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+    #[serde(skip)]
+    field_values: Value,
+    /// Custom field values by field name, as task_open reads them.
+    #[sqlx(skip)]
+    #[serde(skip_serializing_if = "serde_json::Map::is_empty")]
+    fields: serde_json::Map<String, Value>,
 }
 
 async fn export_tasks(
@@ -1698,7 +1784,7 @@ async fn export_tasks(
     project_id: Uuid,
     include_archived: bool,
 ) -> Result<Vec<ExportTask>, AppError> {
-    Ok(sqlx::query_as::<_, ExportTask>(
+    let tasks = sqlx::query_as::<_, ExportTask>(
         r#"
         SELECT project.project_key || '-' || item.number AS key, item.number, item.title,
                item.description, status.name AS status,
@@ -1728,7 +1814,8 @@ async fn export_tasks(
                    WHERE criterion.project_id = item.project_id
                      AND criterion.work_item_id = item.id
                ), ARRAY[]::text[]) AS acceptance_criteria,
-               item.archived_at IS NOT NULL AS archived, item.created_at, item.updated_at
+               item.archived_at IS NOT NULL AS archived, item.created_at, item.updated_at,
+               item.field_values
         FROM work_items item
         JOIN projects project ON project.id = item.project_id
         JOIN work_item_statuses status
@@ -1750,7 +1837,34 @@ async fn export_tasks(
     .bind(include_archived)
     .bind(MAX_EXPORT_TASKS)
     .fetch_all(&mut *connection)
-    .await?)
+    .await?;
+    Ok(tasks)
+}
+
+/// Each task's custom field values by name, for the export.
+async fn name_field_values(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    definitions: &[FieldDefinition],
+    tasks: &mut [ExportTask],
+) -> Result<(), AppError> {
+    if definitions.is_empty() {
+        return Ok(());
+    }
+    let references = work_item_fields::references(
+        connection,
+        project_id,
+        definitions,
+        tasks.iter().map(|task| &task.field_values),
+    )
+    .await?;
+    for task in tasks {
+        task.fields = work_item_fields::named_values(definitions, &task.field_values, &references)
+            .into_iter()
+            .map(|(field, value)| (field.name, value))
+            .collect();
+    }
+    Ok(())
 }
 
 fn csv_field(value: &str) -> String {
@@ -1786,9 +1900,16 @@ const CSV_HEADERS: [&str; 15] = [
     "Updated",
 ];
 
-fn tasks_csv(tasks: &[ExportTask]) -> String {
+/// The CSV: the built-in columns, then one per custom field, named after
+/// it, so importing it into a project with the same fields fills them.
+fn tasks_csv(tasks: &[ExportTask], definitions: &[FieldDefinition]) -> String {
     let mut out = String::from("\u{feff}");
-    out.push_str(&CSV_HEADERS.join(","));
+    let headers = CSV_HEADERS
+        .iter()
+        .map(|header| (*header).to_owned())
+        .chain(definitions.iter().map(|field| csv_field(&field.name)))
+        .collect::<Vec<_>>();
+    out.push_str(&headers.join(","));
     out.push_str("\r\n");
     for task in tasks {
         let date =
@@ -1812,10 +1933,17 @@ fn tasks_csv(tasks: &[ExportTask]) -> String {
             task.created_at.to_rfc3339(),
             task.updated_at.to_rfc3339(),
         ];
+        let custom = definitions.iter().map(|field| {
+            task.fields
+                .get(&field.name)
+                .map(fields::display_text)
+                .unwrap_or_default()
+        });
         out.push_str(
             &cells
-                .iter()
-                .map(|cell| csv_field(cell))
+                .into_iter()
+                .chain(custom)
+                .map(|cell| csv_field(&cell))
                 .collect::<Vec<_>>()
                 .join(","),
         );
@@ -1830,7 +1958,8 @@ pub(crate) async fn export_json(
     include_archived: bool,
 ) -> Result<Value, AppError> {
     let context = load_context(connection, project_id, "").await?;
-    let tasks = export_tasks(connection, project_id, include_archived).await?;
+    let mut tasks = export_tasks(connection, project_id, include_archived).await?;
+    name_field_values(connection, project_id, &context.fields, &mut tasks).await?;
     let truncated = tasks.len() as i64 >= MAX_EXPORT_TASKS;
     Ok(json!({
         "project": { "key": context.project_key },
@@ -1842,6 +1971,7 @@ pub(crate) async fn export_json(
         "types": context.types.iter().map(|kind| json!({ "name": kind.1, "isDefault": kind.2 })).collect::<Vec<_>>(),
         "labels": context.labels.iter().map(|label| label.1.clone()).collect::<Vec<_>>(),
         "milestones": context.milestones.iter().map(|milestone| milestone.1.clone()).collect::<Vec<_>>(),
+        "fields": context.fields.iter().map(FieldView::from).collect::<Vec<_>>(),
         "tasks": tasks,
         "truncated": truncated,
     }))
@@ -1871,11 +2001,18 @@ pub(super) async fn export_project(
             "application/json",
             "json",
         ),
-        "csv" => (
-            tasks_csv(&export_tasks(&mut connection, project_id, query.include_archived).await?),
-            "text/csv; charset=utf-8",
-            "csv",
-        ),
+        "csv" => {
+            let definitions =
+                work_item_fields::definitions(&mut *connection, project_id, false).await?;
+            let mut tasks =
+                export_tasks(&mut connection, project_id, query.include_archived).await?;
+            name_field_values(&mut connection, project_id, &definitions, &mut tasks).await?;
+            (
+                tasks_csv(&tasks, &definitions),
+                "text/csv; charset=utf-8",
+                "csv",
+            )
+        }
         _ => return Ok(invalid("format", "Use json or csv.")),
     };
     let disposition = format!(
@@ -1921,6 +2058,7 @@ mod tests {
             milestones: vec![],
             members: vec![(Uuid::now_v7(), "Ana".to_owned(), Some("ana".to_owned()))],
             linked: HashMap::from([("7".to_owned(), 12)]),
+            fields: Vec::new(),
         }
     }
 
@@ -2045,8 +2183,20 @@ mod tests {
             archived: false,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            field_values: Value::Null,
+            fields: serde_json::Map::from_iter([("Risk".to_owned(), json!("High"))]),
         };
-        let text = tasks_csv(&[task]);
+        let risk = FieldDefinition {
+            id: Uuid::now_v7(),
+            name: "Risk".to_owned(),
+            description: String::new(),
+            field_type: FieldType::Text,
+            config: fields::FieldConfig::default(),
+            position: 0,
+            archived: false,
+            version: 1,
+        };
+        let text = tasks_csv(&[task], std::slice::from_ref(&risk));
         let records = parse_csv(&text).expect("test input is valid");
         let mapping = auto_mapping(&records[0]);
         let rows = csv_rows(&records, &mapping).expect("test input is valid");
@@ -2058,6 +2208,15 @@ mod tests {
         assert_eq!(
             priority_of(rows[0].priority.as_deref().expect("test input is valid")),
             Some("no_priority")
+        );
+        // A custom field's column comes back by name and fills the field.
+        assert_eq!(rows[0].fields.get("Risk").map(String::as_str), Some("High"));
+        let mut project = context();
+        project.fields = vec![risk];
+        let resolved = resolve(&project, &ImportOptions::default(), 0, &rows[0]);
+        assert_eq!(
+            resolved.field_inputs,
+            vec![("Risk".to_owned(), json!("High"))]
         );
     }
 }

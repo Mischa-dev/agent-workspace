@@ -27,7 +27,7 @@ use super::{
 use crate::{
     AppState,
     error::AppError,
-    work_item_history::label_changes,
+    work_item_history::{CUSTOM_FIELD_PREFIX, label_changes},
     work_items::{WorkItemTimelineRow, encode_work_item_timeline_cursor, fetch_timeline_rows},
 };
 
@@ -784,11 +784,20 @@ fn updated_text(payload: &Value, lookups: &Lookups, entry: &mut HistoryEntry) ->
             changes.contains_key(field) && (change_label(field).is_some() || field == "description")
         })
     };
+    let custom_changes = changes
+        .map(|changes| {
+            changes
+                .iter()
+                .filter(|(key, _)| key.starts_with(CUSTOM_FIELD_PREFIX))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     // Fields with a clause of their own below.
     let others = fields
         .iter()
         .filter(|field| !matches!(field.as_str(), "status" | "labels" | "parent" | "position"))
         .filter(|field| !detailed(field))
+        .filter(|field| !(field.as_str() == "fields" && !custom_changes.is_empty()))
         .map(|field| field_words(field).to_owned())
         .collect::<Vec<_>>();
     let position = payload
@@ -830,6 +839,17 @@ fn updated_text(payload: &Value, lookups: &Lookups, entry: &mut HistoryEntry) ->
                 clauses.push(format!("{label}: {} → {}", side("from"), side("to")));
             }
         }
+    }
+    for (_, change) in &custom_changes {
+        let side = |side: &str| match change.get(side) {
+            None | Some(Value::Null) => "none".to_owned(),
+            Some(value) => crate::fields::display_text(value),
+        };
+        let name = change
+            .get("field")
+            .and_then(Value::as_str)
+            .unwrap_or("A field");
+        clauses.push(format!("{name}: {} → {}", side("from"), side("to")));
     }
     let added = label_names(payload, "labelsAdded", lookups);
     let removed = label_names(payload, "labelsRemoved", lookups);
