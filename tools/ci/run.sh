@@ -51,12 +51,14 @@ load_host() {
       # (checks.sh builds them one after the other under a cap). Agents build
       # here too, so CI starts with one Cargo job and takes turns with their
       # build-run jobs on one admission lock (tools/ci/admission.sh).
-      memory_max=8G cpu_weight=20 jobs=1 probe=yes
+      memory_max=5G cpu_weight=20 jobs=1 probe=yes
       build_lock=/run/build-admission.lock
       # Each checks.sh step makes this memory check (and the old CPU one) once
       # it holds that lock; the probe below no longer does. 7 is the probe's old
       # value, kept as is: provisional until a guarded CI run is measured here.
-      # memory_max=8G is the old per-job cap; it caps CI, it doesn't reserve
+      # memory_max=5G is a provisional per-job cap for the first guarded runs
+      # (down from 8G), not a measured server requirement: a step that needs
+      # more fails inside its own scope. It caps CI; it doesn't reserve
       # anything for the desktop.
       min_free_gb=7
       # Playwright's own Chromium builds don't run on NixOS; the system Chrome does.
