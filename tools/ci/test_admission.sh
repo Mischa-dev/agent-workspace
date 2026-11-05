@@ -66,7 +66,18 @@ ln -s "${lock}" "${tmp}/link.lock"
 out="$(admit "${tmp}/link.lock" touch "${tmp}/ran" 2>&1)"; expect "refuses: symlink, even to a sound lock" $? 125 "${out}" "is a symlink"
 # A file owned by someone else (root, outside the namespace) counts as nobody's in it.
 others="$(readlink -f "$(command -v flock)")"
-out="$(admit "${others}" touch "${tmp}/ran" 2>&1)"; expect "refuses: not owned by root" $? 125 "${out}" "isn't owned by root"
+# When the caller owns that file (real root does), it counts as root's in the
+# namespace and is rightly accepted: give a file to an unprivileged UID instead.
+if [ "$(stat -c %u -- "${others}")" = "$(id -u)" ]; then
+  others="${tmp}/others.lock"
+  : > "${others}" && chmod 0644 "${others}"
+  chown 65534:65534 "${others}" 2>/dev/null || others=""
+fi
+if [ -n "${others}" ]; then
+  out="$(admit "${others}" touch "${tmp}/ran" 2>&1)"; expect "refuses: not owned by root" $? 125 "${out}" "isn't owned by root"
+else
+  echo "SKIP refuses: not owned by root: no file here is owned by someone other than the caller"
+fi
 mkdir "${tmp}/dir.lock"
 out="$(admit "${tmp}/dir.lock" touch "${tmp}/ran" 2>&1)"; expect "refuses: directory" $? 125 "${out}" "isn't a regular file"
 : > "${tmp}/writable.lock"; chmod 0666 "${tmp}/writable.lock"
@@ -267,7 +278,11 @@ grep -q 'on battery' "${here}/probe.sh" && ! grep -qE 'SteamLaunch|gamescope|win
 # 8. run.sh. It can't run end to end here (it needs the hosts), so: its
 #    refusal inside build-run, its move-on decision, and the lines that route
 #    the laptop.
-out="$(cd "${here}" && BUILD_ADMISSION_HELD=/run/build-admission.lock timeout 10 ./run.sh --areas web 2>&1)"
+# run.sh starts at its repository's top level, and CI's synced copy has no
+# .git, so it runs from a private repository holding just this run.sh.
+mkdir -p "${tmp}/repo/tools/ci" && cp "${here}/run.sh" "${tmp}/repo/tools/ci/" &&
+  git -C "${tmp}/repo" init -q
+out="$(cd "${tmp}/repo/tools/ci" && BUILD_ADMISSION_HELD=/run/build-admission.lock timeout 10 ./run.sh --areas web 2>&1)"
 status=$?
 [ "${status}" -eq 2 ] && [[ "${out}" == *"outside build-run"* ]] && pass "run.sh won't wait on its own build-run lock" ||
   fail "run.sh won't wait on its own build-run lock" "status ${status}, output '${out}'"
