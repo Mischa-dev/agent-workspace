@@ -312,7 +312,8 @@ struct ProjectRow {
     kind: String,
     /// The modules the holder's role turns off here: the project role when
     /// they're in the project (the one that counts there), else the
-    /// workspace role.
+    /// workspace role. The hidden project DMs live in follows the workspace
+    /// role.
     role_off: Vec<String>,
 }
 
@@ -326,9 +327,10 @@ async fn project_rows(
         r#"
         SELECT project.id, project.organization_id, project.kind,
                COALESCE(
+                   -- The hidden project DMs live in follows the workspace role.
                    (SELECT {project_off} FROM project_memberships membership
                     WHERE membership.project_id = project.id AND membership.actor_id = $2
-                      AND membership.enabled),
+                      AND membership.enabled AND project.kind <> 'direct'),
                    (SELECT {workspace_off} FROM organization_memberships membership
                     WHERE membership.organization_id = project.organization_id
                       AND membership.actor_id = $2 AND membership.enabled),
@@ -407,6 +409,7 @@ pub async fn anywhere(
         SELECT membership.project_id FROM project_memberships membership
         JOIN projects project ON project.id = membership.project_id
         WHERE membership.actor_id = $1 AND membership.enabled AND project.archived_at IS NULL
+          AND project.kind <> 'direct'
         "#,
     )
     .bind(actor_id)
