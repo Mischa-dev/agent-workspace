@@ -66,6 +66,23 @@ impl FieldChanges {
         );
     }
 
+    /// A custom field (work_item_fields), keyed `field:<id>`, with how the
+    /// value read before and after and the field's name. `label_changes`
+    /// gives the field's current name.
+    pub fn custom_field(&mut self, field_id: Uuid, name: &str, from: Value, to: Value) {
+        if from == to {
+            return;
+        }
+        let cut = |value: Value| match value {
+            Value::String(text) => Value::String(cut_text(&text)),
+            other => other,
+        };
+        self.fields.insert(
+            format!("{CUSTOM_FIELD_PREFIX}{field_id}"),
+            json!({ "field": name, "from": cut(from), "to": cut(to) }),
+        );
+    }
+
     pub fn id(&mut self, field: &str, from: Option<Uuid>, to: Option<Uuid>) {
         if from != to {
             self.value(field, json!(from), json!(to));
@@ -200,6 +217,9 @@ fn middle_operations<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<(char, &'a str
     operations
 }
 
+/// How a custom field's change is keyed in `changes`.
+pub const CUSTOM_FIELD_PREFIX: &str = "field:";
+
 /// The fields whose `changes` hold IDs, and what each names.
 const ID_FIELDS: [(&str, IdKind); 5] = [
     ("assignee", IdKind::Member),
@@ -246,6 +266,7 @@ pub async fn label_changes(
             }
         }
     }
+    name_custom_fields(pool, project_id, payloads).await?;
     let mut wanted: HashMap<IdKind, BTreeSet<Uuid>> = HashMap::new();
     for payload in payloads.iter() {
         let Some(changes) = payload.get("changes") else {
@@ -306,6 +327,55 @@ pub async fn label_changes(
                         None => Value::Null,
                     };
                 }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Gives each custom field change its field's current name, so a renamed
+/// field reads the same through its whole history.
+async fn name_custom_fields(
+    pool: &PgPool,
+    project_id: Uuid,
+    payloads: &mut [&mut Value],
+) -> Result<(), AppError> {
+    let mut ids = BTreeSet::new();
+    for payload in payloads.iter() {
+        if let Some(changes) = payload.get("changes").and_then(Value::as_object) {
+            ids.extend(
+                changes
+                    .keys()
+                    .filter_map(|key| key.strip_prefix(CUSTOM_FIELD_PREFIX)?.parse::<Uuid>().ok()),
+            );
+        }
+    }
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let ids = ids.into_iter().collect::<Vec<_>>();
+    let names: HashMap<Uuid, String> = sqlx::query_as::<_, (Uuid, String)>(
+        "SELECT id, name FROM field_definitions WHERE project_id = $1 AND id = ANY($2)",
+    )
+    .bind(project_id)
+    .bind(&ids)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .collect();
+    for payload in payloads.iter_mut() {
+        let Some(changes) = payload.get_mut("changes").and_then(Value::as_object_mut) else {
+            continue;
+        };
+        for (key, change) in changes.iter_mut() {
+            let Some(id) = key
+                .strip_prefix(CUSTOM_FIELD_PREFIX)
+                .and_then(|id| id.parse::<Uuid>().ok())
+            else {
+                continue;
+            };
+            if let (Some(name), Some(change)) = (names.get(&id), change.as_object_mut()) {
+                change.insert("field".to_owned(), Value::String(name.clone()));
             }
         }
     }

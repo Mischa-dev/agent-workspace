@@ -560,7 +560,7 @@ impl From<LabelRow> for LabelView {
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct IncludeArchivedQuery {
-    include_archived: Option<bool>,
+    pub(super) include_archived: Option<bool>,
 }
 
 pub(super) async fn list_labels(
@@ -1319,6 +1319,7 @@ pub(super) async fn bulk_update(
             &actor,
             item.id,
             UpdateWorkItemCommand {
+                field_values: None,
                 expected_version: item.expected_version,
                 title: None,
                 description: None,

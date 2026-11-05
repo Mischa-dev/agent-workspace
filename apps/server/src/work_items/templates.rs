@@ -675,6 +675,7 @@ pub(crate) async fn apply_template(
         transaction,
         actor,
         CreateWorkItemCommand {
+            field_values: None,
             title: &title,
             description: &template.description,
             type_id,
@@ -739,6 +740,7 @@ pub(crate) async fn apply_template(
             transaction,
             actor,
             CreateWorkItemCommand {
+                field_values: None,
                 title: &subtask.title,
                 description: &subtask.description,
                 type_id,

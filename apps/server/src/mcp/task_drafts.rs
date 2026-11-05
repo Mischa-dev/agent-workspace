@@ -698,6 +698,7 @@ pub(super) async fn create(
             transaction,
             actor,
             CreateWorkItemCommand {
+                field_values: None,
                 title: &task.title,
                 description: &task.description,
                 type_id: Some(task.type_id),

@@ -139,6 +139,9 @@ pub struct UpdateWorkItemArguments {
     pub estimate: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clear_estimate: Option<bool>,
+    /// Custom field values by field name or ID; null clears one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fields: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 // The create arguments flatten NewTaskDetails, which serde can't combine
@@ -198,6 +201,9 @@ pub struct NewTaskDetails {
     pub due_date: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub estimate: Option<f64>,
+    /// Custom field values by field name or ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fields: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -621,6 +627,22 @@ async fn create_task(
         }
         None => None,
     };
+    let field_values = match details.fields.as_ref().filter(|fields| !fields.is_empty()) {
+        Some(written) => {
+            match super::field_tools::written_values(
+                &mut transaction,
+                principal,
+                principal.project_id,
+                written,
+            )
+            .await?
+            {
+                Ok(values) => Some(values),
+                Err(problem) => return Ok(WriteResult::invalid(&problem.field, problem.message)),
+            }
+        }
+        None => None,
+    };
     let (summary, audit_action, changed_field, metadata, number_metadata) = match parent_id {
         Some(parent_id) => (
             "Subtask created through MCP",
@@ -641,6 +663,7 @@ async fn create_task(
         &mut transaction,
         &mcp_actor(principal, key.as_str().to_owned()),
         CreateWorkItemCommand {
+            field_values: field_values.as_ref(),
             title: &title,
             description: &description,
             type_id,
@@ -797,6 +820,7 @@ async fn set_status_inner(
         &mcp_actor(principal, key.as_str().to_owned()),
         work_item_id,
         UpdateWorkItemCommand {
+            field_values: None,
             expected_version: arguments.expected_version,
             title: None,
             description: None,
@@ -903,6 +927,10 @@ async fn update_work_item_inner(
         && start_date.is_none()
         && due_date.is_none()
         && estimate.is_none()
+        && arguments
+            .fields
+            .as_ref()
+            .is_none_or(|fields| fields.is_empty())
     {
         return Ok(WriteResult::invalid("update", NOTHING_TO_CHANGE_MESSAGE));
     }
@@ -1091,12 +1119,33 @@ async fn update_work_item_inner(
         }
         None => None,
     };
+    let field_values = match arguments
+        .fields
+        .as_ref()
+        .filter(|fields| !fields.is_empty())
+    {
+        Some(written) => {
+            match super::field_tools::written_values(
+                &mut transaction,
+                principal,
+                principal.project_id,
+                written,
+            )
+            .await?
+            {
+                Ok(values) => Some(values),
+                Err(problem) => return Ok(WriteResult::invalid(&problem.field, problem.message)),
+            }
+        }
+        None => None,
+    };
     let labels_touched = !add.is_empty() || !remove.is_empty();
     let outcome = update_work_item_by_id(
         &mut transaction,
         &mcp_actor(principal, key.as_str().to_owned()),
         work_item_id,
         UpdateWorkItemCommand {
+            field_values: field_values.as_ref(),
             expected_version: arguments.expected_version,
             title: arguments.title.as_deref(),
             description: arguments.description.as_deref(),
@@ -2986,6 +3035,7 @@ mod tests {
             due_date: None,
             estimate: None,
             clear_estimate: None,
+            fields: None,
         };
         assert_eq!(
             serde_json::to_string(&update).expect("update"),

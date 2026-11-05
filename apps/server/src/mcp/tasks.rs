@@ -21,7 +21,7 @@ use super::{
         project_is_chosen, public_url, scope_projects, snippet, string_or_number,
         version_conflict_message,
     },
-    history, planning,
+    field_tools, history, planning,
     reads::{self, ReadResult, WorkItemProjection},
     talk::can_write_in,
     writes::{self, PullRequestLinkChange, WriteAccess, WriteResult},
@@ -177,6 +177,10 @@ pub(super) struct TaskListArguments {
     /// agents". Needs projectId. Its filters apply as on the task list; a
     /// field you pass replaces the view's filter on that field.
     pub view: Option<String>,
+    /// Filters on the project's custom fields (see field_list), all of
+    /// which must match, such as [{"field": "Risk", "op": "is", "values":
+    /// ["High"]}]. Needs projectId.
+    pub field_filters: Option<Vec<field_tools::FieldFilterArgument>>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema, FromRow)]
@@ -223,6 +227,11 @@ pub(super) struct TaskSummary {
     /// Its labels, by name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
+    /// Its custom field values by field name (only those it has), as
+    /// task_open reads them.
+    #[sqlx(skip)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fields: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 /// The planning columns of a task line: blocked (marked or by an unfinished
@@ -322,6 +331,8 @@ struct ListFilters {
     overdue: Option<bool>,
     /// A saved view's own filters, applied as the task list applies them.
     view: Option<ViewFilters>,
+    /// Custom field filters, as stored values (one project only).
+    fields: Vec<crate::fields::FieldClause>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -462,6 +473,7 @@ impl ListFilters {
         if let Some(view) = &self.view {
             view.push_where(builder);
         }
+        crate::fields::push_clauses(builder, "item.field_values", &self.fields);
     }
 }
 
@@ -1066,6 +1078,24 @@ async fn list_tasks(
         (Ok(any), Ok(not)) => (any, not),
         (Err(refusal), _) | (_, Err(refusal)) => return Ok(invalid(refusal)),
     };
+    let field_clauses = match arguments.field_filters.as_deref() {
+        None | Some([]) => Vec::new(),
+        Some(filters) => {
+            let [project] = projects.as_slice() else {
+                return Ok(Err(ToolResult::invalid(
+                    "fieldFilters",
+                    "Fields belong to one project: pass projectId with fieldFilters.",
+                )));
+            };
+            let mut connection = state.pool.acquire().await?;
+            match field_tools::filter_clauses(&mut connection, principal, *project, &place, filters)
+                .await?
+            {
+                Ok(clauses) => clauses,
+                Err(message) => return Ok(Err(ToolResult::invalid("fieldFilters", message))),
+            }
+        }
+    };
 
     // Cursors made before lists keep fitting: one value sits where it
     // always did, and anything newer goes in `more`.
@@ -1099,7 +1129,8 @@ async fn list_tasks(
         && not_milestone.is_empty()
         && parent != Some(Parent::TopLevel)
         && due_after.is_none()
-        && view.is_none();
+        && view.is_none()
+        && field_clauses.is_empty();
     let more = (!expressible).then(|| {
         format!(
             "{:?}",
@@ -1110,7 +1141,8 @@ async fn list_tasks(
                 (
                     parent,
                     due_after,
-                    view.as_ref().map(ViewFilters::fingerprint)
+                    view.as_ref().map(ViewFilters::fingerprint),
+                    crate::fields::clauses_param(&field_clauses),
                 ),
             )
         )
@@ -1203,6 +1235,7 @@ async fn list_tasks(
         due_after,
         overdue: arguments.overdue,
         view,
+        fields: field_clauses,
     };
 
     // One snapshot for both queries, so the total and the page agree.
@@ -1289,6 +1322,7 @@ async fn list_tasks(
         }
         _ => None,
     };
+    field_tools::fill_summary_fields(&mut transaction, &mut tasks).await?;
     transaction.commit().await?;
     Ok(Ok(TaskListValue {
         tasks,
@@ -1865,6 +1899,10 @@ pub(super) struct TaskDetail {
     /// Who hears about its changes (task_watch).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub watchers: Vec<planning::WatcherRef>,
+    /// The project's custom fields with this task's values (null when it
+    /// has none). Set them with task_update's fields, by name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<field_tools::TaskFieldValue>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -2137,9 +2175,13 @@ pub(super) async fn task_open(
         let planning_links =
             planning::visible_links(&mut connection, principal, project_id, task_id).await?;
         let watchers = planning::visible_watchers(&mut connection, project_id, task_id).await?;
+        let fields = field_tools::task_fields(&mut connection, project_id, task_id).await?;
+        let mut subtasks = subtasks;
+        field_tools::fill_summary_fields(&mut connection, &mut subtasks).await?;
         drop(connection);
         let handoffs = handoff_notes(state, task_id, 3).await?;
         Ok::<_, AppError>(ToolResult::ok(TaskDetail {
+            fields,
             handoffs,
             parent,
             milestone: planning_row.milestone_id.map(|id| MilestoneRef {
@@ -2226,6 +2268,9 @@ pub(super) struct TaskCreateArguments {
     /// How big it is, in the project's unit (points or hours; see
     /// workflow_get), from 0 to 100000.
     pub estimate: Option<f64>,
+    /// Custom field values by field name (see field_list), such as
+    /// {"Risk": "High", "Owner": "@ana", "Shipped": true}.
+    pub fields: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 pub(super) async fn task_create(
@@ -2252,6 +2297,7 @@ pub(super) async fn task_create(
         start_date: arguments.start_date.clone(),
         due_date: arguments.due_date.clone(),
         estimate: arguments.estimate,
+        fields: arguments.fields.clone().filter(|fields| !fields.is_empty()),
     };
     if arguments.parent_id.is_none() {
         // Tasks never go in the hidden Messages space, where nobody would
@@ -2401,6 +2447,9 @@ pub(super) struct TaskUpdateArguments {
     pub estimate: Option<f64>,
     /// true removes the estimate.
     pub clear_estimate: Option<bool>,
+    /// Custom field values to set, by field name (see field_list); null
+    /// clears one. Such as {"Risk": "High", "Due to customer": "2026-12-01"}.
+    pub fields: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 impl TaskUpdateArguments {
@@ -2433,6 +2482,10 @@ impl TaskUpdateArguments {
             || self.due_date.is_some()
             || self.estimate.is_some()
             || self.clear_estimate == Some(true)
+            || self
+                .fields
+                .as_ref()
+                .is_some_and(|fields| !fields.is_empty())
     }
 }
 
@@ -2517,6 +2570,7 @@ pub(super) async fn task_update(
         due_date: arguments.due_date,
         estimate: arguments.estimate,
         clear_estimate: arguments.clear_estimate.filter(|clear| *clear),
+        fields: arguments.fields.filter(|fields| !fields.is_empty()),
     };
     match status {
         Some(status) => writes::update_work_item_and_status(state, principal, update, status).await,

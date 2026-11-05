@@ -1005,6 +1005,7 @@ async fn close_as_duplicate(
         actor,
         current,
         UpdateWorkItemCommand {
+            field_values: None,
             expected_version,
             title: None,
             description: None,
@@ -1378,6 +1379,7 @@ pub async fn move_tasks_to_milestone(
             actor,
             current,
             UpdateWorkItemCommand {
+                field_values: None,
                 expected_version,
                 title: None,
                 description: None,

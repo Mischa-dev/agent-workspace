@@ -24,15 +24,18 @@ use sqlx::{FromRow, PgPool, Postgres, QueryBuilder};
 use uuid::Uuid;
 
 use super::{
-    AssigneeView, WORK_ITEM_LABELS_COLUMN, WorkItemCapabilities, WorkItemLabelView,
-    WorkItemStatusView, WorkItemTypeView, WorkflowStatusRow, authorize_work_item, capabilities,
-    normalize_search, project_membership, validate_priority, validate_semantic_category,
+    AssigneeView, FIELD_VALUES_COLUMNS, WORK_ITEM_LABELS_COLUMN, WorkItemCapabilities,
+    WorkItemLabelView, WorkItemStatusView, WorkItemTypeView, WorkflowStatusRow,
+    authorize_work_item, capabilities, normalize_search, project_membership, validate_priority,
+    validate_semantic_category,
 };
 use crate::{
     AppState,
     auth::AuthenticatedActor,
     error::{ApiPath, ApiQuery, AppError},
+    fields::{self, FieldClause, FieldDefinition, FieldType},
     policy::Action,
+    work_item_fields,
     work_item_planning::{HAS_OPEN_BLOCKER, OPEN_BLOCKER_COUNT},
 };
 
@@ -79,6 +82,9 @@ pub(super) struct TaskListQuery {
     due_after: Option<String>,
     overdue: Option<bool>,
     include_done: Option<bool>,
+    /// Custom field filters (AWD-89): a JSON array of
+    /// `{"field", "op", "values"}` (crate::fields::FieldClause).
+    field_filters: Option<String>,
     sort: Option<String>,
     group_by: Option<String>,
     columns_by: Option<String>,
@@ -262,6 +268,8 @@ pub(super) struct Filters {
     due_after: Option<NaiveDate>,
     overdue: bool,
     hide_done: bool,
+    /// Custom field filters, all of which must match.
+    fields: Vec<FieldClause>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -274,10 +282,24 @@ pub(super) enum Sort {
     Due,
     Title,
     Manual,
+    /// By a custom field (`field:<id>`, or `field:<id>:desc`): tasks without
+    /// a value last, then newest first.
+    Field {
+        id: Uuid,
+        desc: bool,
+    },
 }
 
 impl Sort {
     fn parse(value: Option<&str>) -> Result<Self, AppError> {
+        if let Some(rest) = value.and_then(|value| value.strip_prefix("field:")) {
+            let (id, desc) = match rest.strip_suffix(":desc") {
+                Some(id) => (id, true),
+                None => (rest.strip_suffix(":asc").unwrap_or(rest), false),
+            };
+            let id = Uuid::parse_str(id).map_err(|_| AppError::Validation("sort"))?;
+            return Ok(Self::Field { id, desc });
+        }
         Ok(match value.unwrap_or("newest") {
             "newest" => Self::Newest,
             "oldest" => Self::Oldest,
@@ -299,7 +321,35 @@ impl Sort {
             Self::Due => "due",
             Self::Title => "title",
             Self::Manual => "manual",
+            Self::Field { .. } => "field",
         }
+    }
+
+    /// The sort as a list request writes it.
+    fn param(self) -> String {
+        match self {
+            Self::Field { id, desc: true } => format!("field:{id}:desc"),
+            Self::Field { id, desc: false } => format!("field:{id}"),
+            other => other.as_str().to_owned(),
+        }
+    }
+
+    /// The keys of a field sort, given the field (`ListSpec::sort_field`).
+    fn field_keys(desc: bool, field: Option<&FieldDefinition>) -> Vec<Key> {
+        let mut keys = field
+            .map(|field| {
+                fields::sort_keys(field, "item.field_values", "item.project_id")
+                    .into_iter()
+                    .map(|key| Key {
+                        expr: key.expr,
+                        ty: key.ty,
+                        desc: desc && key.follows_direction,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        keys.push(Key::desc("item.number", "bigint"));
+        keys
     }
 
     fn keys(self) -> Vec<Key> {
@@ -322,6 +372,7 @@ impl Sort {
                 Key::asc("status.position", "integer"),
                 Key::asc("item.board_rank", "bigint"),
             ],
+            Self::Field { desc, .. } => Self::field_keys(desc, None),
         }
     }
 }
@@ -335,10 +386,17 @@ pub(super) enum Grouping {
     Milestone,
     Parent,
     Type,
+    /// By a custom field (`field:<id>`) that can group (choice, person,
+    /// checkbox); its type is filled in by `resolve_fields`. Lists only.
+    Field(Uuid, Option<FieldType>),
 }
 
 impl Grouping {
     fn parse(value: &str, board: bool) -> Result<Self, AppError> {
+        if !board && let Some(id) = value.strip_prefix("field:") {
+            let id = Uuid::parse_str(id).map_err(|_| AppError::Validation("groupBy"))?;
+            return Ok(Self::Field(id, None));
+        }
         Ok(match value {
             "status" => Self::Status,
             "assignee" => Self::Assignee,
@@ -361,11 +419,25 @@ impl Grouping {
             Self::Milestone => "milestone",
             Self::Parent => "parent",
             Self::Type => "type",
+            Self::Field(..) => "field",
+        }
+    }
+
+    /// A field grouping's SQL, once its type is known.
+    fn field_sql(self) -> Option<fields::GroupSql> {
+        match self {
+            Self::Field(id, Some(field_type)) => {
+                fields::group_sql(id, field_type, "item.field_values", "item.project_id")
+            }
+            _ => None,
         }
     }
 
     /// Joins the group needs beyond the base ones.
-    fn join(self) -> &'static str {
+    fn join(self) -> String {
+        if let Some(sql) = self.field_sql() {
+            return sql.join;
+        }
         match self {
             Self::Label => {
                 " LEFT JOIN work_item_active_labels group_label \
@@ -381,11 +453,22 @@ impl Grouping {
             }
             _ => "",
         }
+        .to_owned()
     }
 
     /// The group's ID (or "none"), its label and its colour, as SQL.
-    fn columns(self) -> (&'static str, String, &'static str) {
+    fn columns(self) -> (String, String, String) {
+        if let Some(sql) = self.field_sql() {
+            return (sql.key, sql.label, sql.color);
+        }
+        let (key, label, color) = self.fixed_columns();
+        (key.to_owned(), label, color.to_owned())
+    }
+
+    fn fixed_columns(self) -> (&'static str, String, &'static str) {
         match self {
+            // An unresolved field groups nothing; resolve_fields refuses it.
+            Self::Field(..) => ("'none'", "'No value'".into(), "NULL::text"),
             Self::Status => ("status.id::text", "status.name".into(), "NULL::text"),
             Self::Type => ("item_type.id::text", "item_type.name".into(), "NULL::text"),
             Self::Priority => ("item.priority", PRIORITY_LABEL.into(), "NULL::text"),
@@ -414,7 +497,19 @@ impl Grouping {
 
     /// The group's place in the order; "none" always comes last.
     fn keys(self) -> Vec<Key> {
+        if let Some(sql) = self.field_sql() {
+            return sql
+                .order
+                .into_iter()
+                .map(|key| Key {
+                    expr: key.expr,
+                    ty: key.ty,
+                    desc: false,
+                })
+                .collect();
+        }
         match self {
+            Self::Field(..) => Vec::new(),
             Self::Status => vec![
                 Key::asc("status.position", "integer"),
                 Key::asc("status.id::text", "text"),
@@ -454,7 +549,7 @@ impl Grouping {
     fn has_none(self) -> bool {
         matches!(
             self,
-            Self::Assignee | Self::Label | Self::Milestone | Self::Parent
+            Self::Assignee | Self::Label | Self::Milestone | Self::Parent | Self::Field(..)
         )
     }
 }
@@ -492,12 +587,19 @@ pub(super) struct ListSpec {
     pub(super) filters: Filters,
     pub(super) sort: Sort,
     pub(super) grouping: Option<Grouping>,
+    /// The field a `Sort::Field` sorts by, from `resolve_fields`.
+    pub(super) sort_field: Option<FieldDefinition>,
 }
 
 impl ListSpec {
     fn keys(&self) -> Vec<Key> {
         let mut keys = self.grouping.map(Grouping::keys).unwrap_or_default();
-        keys.extend(self.sort.keys());
+        match self.sort {
+            Sort::Field { desc, .. } => {
+                keys.extend(Sort::field_keys(desc, self.sort_field.as_ref()));
+            }
+            sort => keys.extend(sort.keys()),
+        }
         keys.push(Key::asc("item.id", "uuid"));
         keys
     }
@@ -508,9 +610,62 @@ impl ListSpec {
         hasher.update(project_id.as_bytes());
         hasher.update(format!("{:?}", self.filters.to_params()).as_bytes());
         hasher.update(self.sort.as_str());
+        if let Sort::Field { .. } = self.sort {
+            hasher.update(self.sort.param());
+            if let Some(field) = &self.sort_field {
+                hasher.update(format!("{:?}", field.config));
+            }
+        }
         hasher.update(self.grouping.map(Grouping::as_str).unwrap_or(""));
+        if let Some(Grouping::Field(id, _)) = self.grouping {
+            hasher.update(id.as_bytes());
+        }
         hex::encode(&hasher.finalize()[..12])
     }
+
+    /// Fills in the custom fields a sort or grouping names, from the
+    /// project's own fields: one in another project, archived, or unable to
+    /// group is refused.
+    pub(super) async fn resolve_fields(
+        &mut self,
+        pool: &PgPool,
+        project_id: Uuid,
+    ) -> Result<(), AppError> {
+        let sorts_by_field = matches!(self.sort, Sort::Field { .. });
+        let groups_by_field = matches!(self.grouping, Some(Grouping::Field(..)));
+        if !sorts_by_field && !groups_by_field {
+            return Ok(());
+        }
+        let definitions = work_item_fields::definitions(pool, project_id, false).await?;
+        if let Sort::Field { id, .. } = self.sort {
+            self.sort_field = Some(
+                definitions
+                    .iter()
+                    .find(|field| field.id == id)
+                    .cloned()
+                    .ok_or(AppError::Validation("sort"))?,
+            );
+        }
+        if let Some(grouping) = self.grouping {
+            self.grouping = Some(resolve_grouping(grouping, &definitions)?);
+        }
+        Ok(())
+    }
+}
+
+/// A field grouping with its field's type, which must be able to group.
+fn resolve_grouping(
+    grouping: Grouping,
+    definitions: &[FieldDefinition],
+) -> Result<Grouping, AppError> {
+    let Grouping::Field(id, _) = grouping else {
+        return Ok(grouping);
+    };
+    let field = definitions
+        .iter()
+        .find(|field| field.id == id && !field.archived && field.field_type.can_group())
+        .ok_or(AppError::Validation("groupBy"))?;
+    Ok(Grouping::Field(id, Some(field.field_type)))
 }
 
 /// Board swimlanes a saved view can keep beside the list query.
@@ -519,6 +674,20 @@ const LANES: [&str; 5] = ["none", "assignee", "priority", "milestone", "type"];
 /// A view's parameter with "me" (alone or among other assignees) replaced
 /// by `reader`, whoever opens the view.
 pub(super) fn resolve_me(key: &str, value: &str, reader: Uuid) -> String {
+    if key == "fieldFilters" {
+        // A person field's "me" is whoever opens the view, too.
+        let Some(mut clauses) = fields::parse_clauses(value) else {
+            return value.to_owned();
+        };
+        for clause in &mut clauses {
+            for value in &mut clause.values {
+                if value == "me" {
+                    *value = reader.to_string();
+                }
+            }
+        }
+        return fields::clauses_param(&clauses);
+    }
     if !matches!(key, "assigneeActorId" | "notAssigneeActorId") {
         return value.to_owned();
     }
@@ -567,6 +736,7 @@ pub(super) fn saved_query_spec(
             .as_deref()
             .map(|value| Grouping::parse(value, false))
             .transpose()?,
+        sort_field: None,
     })
 }
 
@@ -717,6 +887,12 @@ impl Filters {
             due_after: parse_date(query.due_after.as_deref(), "dueAfter")?,
             overdue: query.overdue.unwrap_or(false),
             hide_done: query.include_done == Some(false),
+            fields: match query.field_filters.as_deref() {
+                Some(param) => {
+                    fields::parse_clauses(param).ok_or(AppError::Validation("fieldFilters"))?
+                }
+                None => Vec::new(),
+            },
         })
     }
 
@@ -788,6 +964,9 @@ impl Filters {
         if self.hide_done {
             put("includeDone", "false".into());
         }
+        if !self.fields.is_empty() {
+            put("fieldFilters", fields::clauses_param(&self.fields));
+        }
         params
     }
 
@@ -811,7 +990,7 @@ impl Filters {
             Grouping::Milestone => {
                 value().is_ok_and(|value| self.milestones.allows(value.as_ref()))
             }
-            Grouping::Parent => true,
+            Grouping::Parent | Grouping::Field(..) => true,
             // Labels other than the ones a filter names can sit beside them,
             // so only "none of" rules a label out.
             Grouping::Label if key == "none" => {
@@ -852,6 +1031,12 @@ impl Filters {
             Grouping::Milestone => filters.milestones = FieldFilter::only(value()?),
             Grouping::Parent => {
                 filters.parent = Some(value()?.map_or(OneOrNone::None, OneOrNone::One));
+            }
+            Grouping::Field(field, _) => {
+                if filters.fields.len() >= fields::MAX_CLAUSES {
+                    return Err(AppError::Validation("fieldFilters"));
+                }
+                filters.fields.push(fields::group_clause(field, key));
             }
             Grouping::Label if key == "none" => {
                 filters.labels = Some(LabelFilter::None);
@@ -1006,6 +1191,7 @@ impl Filters {
         if self.hide_done {
             builder.push(format!(" AND NOT ({FINISHED})"));
         }
+        fields::push_clauses(builder, "item.field_values", &self.fields);
     }
 }
 
@@ -1152,9 +1338,9 @@ pub(super) async fn page(
         .map(|value| decode_cursor(value, &fingerprint, keys.len()))
         .transpose()?;
     let (group_key, group_label, _) = spec.grouping.map(Grouping::columns).unwrap_or((
-        "NULL::text",
         "NULL::text".into(),
-        "NULL::text",
+        "NULL::text".into(),
+        "NULL::text".into(),
     ));
     let key_array = keys
         .iter()
@@ -1164,7 +1350,7 @@ pub(super) async fn page(
     let mut builder = QueryBuilder::<Postgres>::new(format!(
         "SELECT item.id, {group_key} AS group_key, {group_label} AS group_label, \
          ARRAY[{key_array}] AS keys {BASE_FROM} {} WHERE item.project_id = ",
-        spec.grouping.map(Grouping::join).unwrap_or("")
+        spec.grouping.map(Grouping::join).unwrap_or_default()
     ));
     builder.push_bind(project_id);
     spec.filters.push_where(&mut builder);
@@ -1219,6 +1405,7 @@ async fn first_pages(
         filters: filters.clone(),
         sort: Sort::Manual,
         grouping: None,
+        sort_field: None,
     }
     .keys();
     let (group_key, _, _) = grouping.columns();
@@ -1263,6 +1450,7 @@ async fn first_pages(
             filters: filters.with_group(grouping, &key)?,
             sort: Sort::Manual,
             grouping: None,
+            sort_field: None,
         }
         .fingerprint(project_id);
         let next_cursor = match (has_more, rows.last()) {
@@ -1486,6 +1674,10 @@ pub(super) struct TaskCard {
     board_order: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     group: Option<GroupRef>,
+    /// Custom field values by field ID, and the people, tasks and pages
+    /// they name (AWD-89).
+    field_values: serde_json::Value,
+    field_references: serde_json::Value,
 }
 
 #[derive(Debug, FromRow)]
@@ -1523,6 +1715,8 @@ struct CardRow {
     claimed_by: Option<serde_json::Value>,
     status_position: i32,
     board_rank: i64,
+    field_values: serde_json::Value,
+    field_references: serde_json::Value,
 }
 
 /// The cards for `ids`, in that order (an ID may repeat when grouped by
@@ -1562,6 +1756,7 @@ pub(super) async fn cards(
             ) AS milestone,
             item.start_date::text AS start_date, item.due_date::text AS due_date,
             item.estimate, item.blocked_reason,
+            {FIELD_VALUES_COLUMNS},
             {OPEN_BLOCKER_COUNT} AS open_blocker_count,
             (SELECT count(*) FROM work_items child
               WHERE child.project_id = item.project_id
@@ -1649,6 +1844,8 @@ fn clone_row(row: &CardRow) -> CardRow {
         claimed_by: row.claimed_by.clone(),
         status_position: row.status_position,
         board_rank: row.board_rank,
+        field_values: row.field_values.clone(),
+        field_references: row.field_references.clone(),
     }
 }
 
@@ -1720,6 +1917,8 @@ fn card(
         claimed_by: row.claimed_by,
         board_order: board_order(row.status_position, row.board_rank),
         group,
+        field_values: row.field_values,
+        field_references: row.field_references,
     })
 }
 
@@ -1815,6 +2014,19 @@ pub(super) async fn validate_filter_ids(
     if let Some(OneOrNone::One(id)) = filters.parent {
         checks.push(("work_items", "id", "parentId", vec![id]));
     }
+    if !filters.fields.is_empty() {
+        // Every field filter names one of this project's fields, with
+        // values that suit it.
+        let definitions = work_item_fields::definitions(pool, project_id, true).await?;
+        for clause in &filters.fields {
+            let field = definitions
+                .iter()
+                .find(|field| field.id == clause.field)
+                .ok_or(AppError::Validation("fieldFilters"))?;
+            fields::check_clause(field, clause)
+                .map_err(|_| AppError::Validation("fieldFilters"))?;
+        }
+    }
     for (table, column, field, ids) in checks {
         let found = sqlx::query_scalar::<_, i64>(&format!(
             "SELECT count(*) FROM {table} WHERE project_id = $1 AND {column} = ANY($2)"
@@ -1854,7 +2066,7 @@ pub(super) async fn list_work_items(
     if query.columns_by.is_some() {
         return Err(AppError::Validation("columnsBy"));
     }
-    let spec = ListSpec {
+    let mut spec = ListSpec {
         filters: Filters::parse(&query)?,
         sort: Sort::parse(query.sort.as_deref())?,
         grouping: query
@@ -1862,8 +2074,10 @@ pub(super) async fn list_work_items(
             .as_deref()
             .map(|value| Grouping::parse(value, false))
             .transpose()?,
+        sort_field: None,
     };
     validate_filter_ids(&state.pool, project_id, &spec.filters).await?;
+    spec.resolve_fields(&state.pool, project_id).await?;
     let page = page(
         &state.pool,
         project_id,
@@ -1917,6 +2131,14 @@ pub(super) async fn list_work_item_groups(
     )?;
     let filters = Filters::parse(&query)?;
     validate_filter_ids(&state.pool, project_id, &filters).await?;
+    let grouping = if matches!(grouping, Grouping::Field(..)) {
+        resolve_grouping(
+            grouping,
+            &work_item_fields::definitions(&state.pool, project_id, false).await?,
+        )?
+    } else {
+        grouping
+    };
     let groups = group_counts(&state.pool, project_id, &filters, grouping).await?;
     Ok(Json(GroupsResponse { groups }))
 }
@@ -2071,6 +2293,7 @@ pub(super) async fn get_work_item_board(
             filters: filters.with_group(grouping, &group.key)?,
             sort: Sort::Manual,
             grouping: None,
+            sort_field: None,
         };
         let page = first.remove(&group.key).unwrap_or(Page {
             rows: Vec::new(),
@@ -2153,6 +2376,7 @@ mod tests {
             filters: Filters::default(),
             sort: Sort::Due,
             grouping: Some(Grouping::Assignee),
+            sort_field: None,
         };
         let cursor =
             encode_cursor(spec.fingerprint(project), vec!["1".into(); 7]).expect("test value");

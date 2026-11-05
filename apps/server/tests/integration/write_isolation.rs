@@ -200,6 +200,8 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{project_id}/invitations",
     "POST /api/v1/projects/{project_id}/labels",
     "PATCH /api/v1/projects/{project_id}/labels/{label_id}",
+    "POST /api/v1/projects/{project_id}/fields",
+    "PATCH /api/v1/projects/{project_id}/fields/{field_id}",
     "POST /api/v1/projects/{project_id}/launches",
     "POST /api/v1/projects/{project_id}/launches/{launch_id}/cancel",
     "PUT /api/v1/projects/{project_id}/layout",
@@ -397,6 +399,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "decision_record",
     "file_upload",
     "label_write",
+    "field_write",
     "later_save",
     "later_update",
     "mark_read",
@@ -881,6 +884,13 @@ fn empty() -> impl Fn(&[String]) -> Payload {
 
 /// `rest` with `expectedVersion` set to the version of the row the path's
 /// `index`th value names.
+/// `{key: value}` with a key made at run time, such as a field's ID.
+fn keyed(key: impl ToString, value: Value) -> Value {
+    let mut object = serde_json::Map::new();
+    object.insert(key.to_string(), value);
+    Value::Object(object)
+}
+
 fn versioned(table: &'static str, index: usize, rest: Value) -> impl Fn(&[String]) -> Payload {
     move |values| {
         let mut body = rest.clone();
@@ -1051,6 +1061,9 @@ struct Targets {
     agent: Uuid,
     wren: Uuid,
     label: Uuid,
+    /// The first task field (a single choice), and the person field.
+    field: Uuid,
+    person_field: Uuid,
     milestone: Uuid,
     view: Uuid,
     task_template: Uuid,
@@ -1437,6 +1450,14 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         agent,
         wren,
         label: in_project("SELECT id FROM project_labels WHERE project_id = $1").await,
+        field: in_project(
+            "SELECT id FROM field_definitions WHERE project_id = $1 AND field_type = 'single_choice'",
+        )
+        .await,
+        person_field: in_project(
+            "SELECT id FROM field_definitions WHERE project_id = $1 AND field_type = 'person'",
+        )
+        .await,
         milestone: in_project("SELECT id FROM project_milestones WHERE project_id = $1").await,
         view: in_project("SELECT id FROM saved_views WHERE project_id = $1 AND builtin IS NULL")
             .await,
@@ -3944,6 +3965,16 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             versioned("project_labels", 1, json!({"description": "Net"})),
         ),
         path_case(
+            "POST /api/v1/projects/{project_id}/fields",
+            &[project()],
+            json_body(json!({"name": "Net field", "type": "text"})),
+        ),
+        path_case(
+            "PATCH /api/v1/projects/{project_id}/fields/{field_id}",
+            &[project(), id(ax.field, bx.field)],
+            versioned("field_definitions", 1, json!({"description": "Net"})),
+        ),
+        path_case(
             "POST /api/v1/projects/{project_id}/launches",
             &[project()],
             |values| {
@@ -4288,6 +4319,8 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
                 json!({"parentWorkItemId": b.task}),
                 json!({"milestoneId": bx.milestone}),
                 json!({"addLabelIds": [bx.label]}),
+                json!({"fieldValues": keyed(bx.field, json!("Net"))}),
+                json!({"fieldValues": keyed(ax.person_field, json!(b.rook))}),
             ]
             .into_iter()
             .map(|change| with(&change, "expectedVersion", version("work_items", a.task)))
@@ -5171,6 +5204,8 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 ("type", json!(bx.task_type)),
                 // In Ready, as the task is.
                 ("beforeTaskId", json!(b.subtask)),
+                ("fields", keyed(bx.field, json!("Net"))),
+                ("fields", keyed(ax.person_field, json!(b.rook))),
             ]
             .into_iter()
             .map(|(key, value)| {
@@ -5346,6 +5381,17 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             .map(|(key, value)| with(&json!({"taskId": a.task}), key, value))
             .collect(),
         ),
+        mcp_case(
+            "field_write",
+            json!({"projectId": a.project, "name": "Net mcp field", "type": "number"}),
+            vec![json!({"projectId": b.project, "name": "Net mcp field", "type": "number"})],
+        )
+        .rejecting(vec![json!({
+            "projectId": a.project,
+            "field": bx.field,
+            "description": "Net",
+            "expectedVersion": version("field_definitions", bx.field),
+        })]),
         mcp_case(
             "label_write",
             json!({"projectId": a.project, "name": "Net mcp label"}),

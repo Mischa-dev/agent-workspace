@@ -111,6 +111,7 @@ async fn relabel(
         &actor,
         task,
         UpdateWorkItemCommand {
+            field_values: None,
             expected_version,
             title: None,
             description: None,

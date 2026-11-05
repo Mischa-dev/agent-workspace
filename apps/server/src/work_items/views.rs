@@ -406,8 +406,9 @@ pub(crate) async fn check_view_query(
     {
         return Err(AppError::Validation("query"));
     }
-    let spec = list::saved_query_spec(query, reader)?;
-    list::validate_filter_ids(pool, project_id, &spec.filters).await
+    let mut spec = list::saved_query_spec(query, reader)?;
+    list::validate_filter_ids(pool, project_id, &spec.filters).await?;
+    spec.resolve_fields(pool, project_id).await
 }
 
 fn check_layout(layout: &str) -> Result<(), AppError> {

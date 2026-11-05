@@ -1594,6 +1594,7 @@ async fn create_chunk(
                 transaction,
                 actor,
                 CreateWorkItemCommand {
+                    field_values: None,
                     title: &title,
                     description: &description,
                     type_id: resolved.type_id,

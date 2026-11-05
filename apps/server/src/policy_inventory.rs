@@ -1425,6 +1425,18 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     policy_route!(
         "work_items",
         Post,
+        "/api/v1/projects/{project_id}/fields",
+        ProjectManage
+    ),
+    policy_route!(
+        "work_items",
+        Patch,
+        "/api/v1/projects/{project_id}/fields/{field_id}",
+        ProjectManage
+    ),
+    policy_route!(
+        "work_items",
+        Post,
         "/api/v1/projects/{project_id}/milestones",
         WorkItemEdit
     ),

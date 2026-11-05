@@ -85,6 +85,7 @@ const DEFAULT_TRANSITIONS: [(&str, &str); 17] = [
 ];
 
 pub(crate) mod comments;
+mod custom_fields;
 pub(crate) mod import_parse;
 pub(crate) mod imports;
 pub(crate) mod list;
@@ -170,6 +171,14 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/projects/{project_id}/labels/{label_id}",
             axum::routing::patch(planning::update_label),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/fields",
+            get(custom_fields::list_fields).post(custom_fields::create_field),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/fields/{field_id}",
+            axum::routing::patch(custom_fields::update_field),
         )
         .route(
             "/api/v1/projects/{project_id}/milestones",
@@ -352,6 +361,8 @@ struct WorkItemRow {
     watching: bool,
     estimate_unit: String,
     ready: bool,
+    field_values: serde_json::Value,
+    field_references: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -378,6 +389,9 @@ struct CreateWorkItemRequest {
     /// in this project the creator can see).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     source_message_id: Option<Uuid>,
+    /// Custom field values by field ID or name (AWD-89).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    field_values: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -407,6 +421,9 @@ struct UpdateWorkItemRequest {
     add_label_ids: Vec<Uuid>,
     #[serde(default)]
     remove_label_ids: Vec<Uuid>,
+    /// Custom field values to set by field ID or name; null clears one.
+    #[serde(default)]
+    field_values: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -461,6 +478,13 @@ pub struct WorkItemView {
     /// Planning fields. Replays stored before they existed have none.
     #[serde(flatten)]
     planning: TaskPlanningView,
+    /// Custom field values by field ID (AWD-89). Replays stored before they
+    /// existed have none.
+    #[serde(default)]
+    field_values: serde_json::Value,
+    /// The people, tasks and pages those values name.
+    #[serde(default)]
+    field_references: Vec<serde_json::Value>,
 }
 
 /// A task's place in the plan: parent, milestone, dates, estimate,
@@ -1012,7 +1036,11 @@ async fn update_work_item(
             && request.assignee_actor_id.is_none()
             && request.parent_work_item_id.is_none()
             && fields.is_empty()
-            && !labels_change)
+            && !labels_change
+            && request
+                .field_values
+                .as_ref()
+                .is_none_or(|values| values.is_empty()))
     {
         return Err(AppError::Validation("Work Item update"));
     }
@@ -1035,7 +1063,7 @@ async fn update_work_item(
     }
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
     let scope = resource_bound_scope("work_items", work_item_id, "update")?;
-    let request_hash = RequestHash::for_value(&serde_json::json!({
+    let mut hashed = serde_json::json!({
         "expectedVersion": request.expected_version,
         "title": request.title,
         "description": request.description,
@@ -1052,7 +1080,14 @@ async fn update_work_item(
         "blockedReason": request.blocked_reason,
         "addLabelIds": request.add_label_ids,
         "removeLabelIds": request.remove_label_ids,
-    }))?;
+    });
+    if let (Some(values), Some(object)) = (&request.field_values, hashed.as_object_mut()) {
+        object.insert(
+            "fieldValues".to_owned(),
+            serde_json::Value::Object(values.clone()),
+        );
+    }
+    let request_hash = RequestHash::for_value(&hashed)?;
     let mut transaction = state.pool.begin().await?;
     let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
         .await?
@@ -1093,11 +1128,28 @@ async fn update_work_item(
             return Err(AppError::Validation("labelIds"));
         }
     }
+    let field_values = match &request.field_values {
+        Some(written) if !written.is_empty() => {
+            match custom_fields::web_field_values(
+                &mut transaction,
+                project_id,
+                principal.actor_id,
+                written,
+            )
+            .await?
+            {
+                Ok(values) => Some(values),
+                Err(refusal) => return Ok(refusal),
+            }
+        }
+        _ => None,
+    };
     let outcome = update_work_item_by_id(
         &mut transaction,
         &browser_actor(&headers, &principal, project_id)?,
         work_item_id,
         UpdateWorkItemCommand {
+            field_values: field_values.as_ref(),
             expected_version: request.expected_version,
             title: request.title.as_deref(),
             description: request.description.as_deref(),
@@ -2268,10 +2320,27 @@ async fn create_work_item(
             if !labels_are_active(&mut transaction, project_id, &request.label_ids).await? {
                 return Err(AppError::Validation("labelIds"));
             }
+            let field_values = match &request.field_values {
+                Some(written) if !written.is_empty() => {
+                    match custom_fields::web_field_values(
+                        &mut transaction,
+                        project_id,
+                        principal.actor_id,
+                        written,
+                    )
+                    .await?
+                    {
+                        Ok(values) => Some(values),
+                        Err(refusal) => return Ok(refusal),
+                    }
+                }
+                _ => None,
+            };
             let outcome = execute_create_work_item(
                 &mut transaction,
                 &browser_actor(&headers, &principal, project_id)?,
                 CreateWorkItemCommand {
+                    field_values: field_values.as_ref(),
                     title: &request.title,
                     description: &request.description,
                     type_id: request.type_id,
@@ -3552,6 +3621,52 @@ macro_rules! work_item_labels_column {
 }
 const WORK_ITEM_LABELS_COLUMN: &str = work_item_labels_column!();
 
+/// A task's custom field values (`field_values`, keyed by field ID) and
+/// `field_references`: the people, tasks and pages they name, as
+/// `[{id, kind, label, key}]`, so a page can show them without looking each
+/// up. Only things in the task's own project are named.
+macro_rules! field_values_columns {
+    () => {
+        r#"
+        item.field_values,
+        COALESCE((
+            SELECT jsonb_agg(DISTINCT reference.value)
+            FROM (
+                SELECT jsonb_build_object('id', member.actor_id, 'kind', 'person',
+                         'label', member.display_name, 'key', '@' || member.handle) AS value
+                FROM jsonb_each_text(item.field_values) AS stored(field_id, target)
+                JOIN field_definitions definition
+                  ON definition.project_id = item.project_id
+                 AND definition.id::text = stored.field_id AND definition.field_type = 'person'
+                JOIN project_memberships member
+                  ON member.project_id = item.project_id AND member.actor_id::text = stored.target
+                UNION ALL
+                SELECT jsonb_build_object('id', linked.id, 'kind', 'task', 'label', linked.title,
+                         'key', project.project_key || '-' || linked.number)
+                FROM jsonb_each_text(item.field_values) AS stored(field_id, target)
+                JOIN field_definitions definition
+                  ON definition.project_id = item.project_id
+                 AND definition.id::text = stored.field_id AND definition.field_type = 'link'
+                 AND definition.config ->> 'target' = 'task'
+                JOIN work_items linked
+                  ON linked.project_id = item.project_id AND linked.id::text = stored.target
+                UNION ALL
+                SELECT jsonb_build_object('id', page.id, 'kind', 'page', 'label', page.title)
+                FROM jsonb_each_text(item.field_values) AS stored(field_id, target)
+                JOIN field_definitions definition
+                  ON definition.project_id = item.project_id
+                 AND definition.id::text = stored.field_id AND definition.field_type = 'link'
+                 AND definition.config ->> 'target' = 'page'
+                JOIN project_pages page
+                  ON page.project_id = item.project_id AND page.id::text = stored.target
+                 AND page.archived_at IS NULL
+            ) reference
+        ), '[]'::jsonb) AS field_references
+        "#
+    };
+}
+const FIELD_VALUES_COLUMNS: &str = field_values_columns!();
+
 /// A task as `TaskRef` JSON; `$t` is the task, `$s` its status and `$p`
 /// its project.
 macro_rules! task_ref_json {
@@ -3881,6 +3996,9 @@ const WORK_ITEM_SELECT: &str = concat!(
                  WHERE watching.work_item_id = item.id AND watching.actor_id = $3) AS watching,
         COALESCE((SELECT settings.estimate_unit FROM project_task_settings settings
                    WHERE settings.project_id = item.project_id), 'points') AS estimate_unit,
+"#,
+    field_values_columns!(),
+    r#",
         item.blocked_reason IS NULL AND item.archived_at IS NULL
           AND status.semantic_category NOT IN ('completed', 'canceled')
           AND NOT EXISTS (
@@ -3992,6 +4110,8 @@ fn work_item_view(
             watching: row.watching,
             estimate_unit: row.estimate_unit,
         },
+        field_values: row.field_values,
+        field_references: json_list(row.field_references)?,
     })
 }
 
