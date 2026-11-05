@@ -69,11 +69,8 @@
 }
 
 .aw-piece__row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-1) var(--space-3);
+  display: grid;
+  gap: var(--space-1);
   padding: var(--space-2) var(--space-3);
   border-bottom: var(--border-width) solid var(--content-border);
   min-width: 0;

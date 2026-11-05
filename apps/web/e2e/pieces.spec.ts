@@ -1,8 +1,9 @@
 import { createRequire } from 'node:module'
+import path from 'node:path'
 
 import { expect, test, type Page } from '@playwright/test'
 
-import { storageStatePath } from './environment'
+import { screenshotDir, storageStatePath } from './environment'
 
 // AWD-75's pieces guard: every piece a module's manifest declares, drawn by
 // the app at 1440 px (desktop) and 390 px (phone), in light and dark, with
@@ -45,6 +46,16 @@ for (const scheme of ['light', 'dark'] as const) {
   test.describe(`${scheme} scheme`, () => {
     test.use({ colorScheme: scheme })
 
+    test.beforeEach(async ({ page }) => {
+      // "Match system", so the browser's scheme picks light or dark.
+      await page.addInitScript(() => {
+        window.localStorage.setItem(
+          'agent-workspace:appearance:v2',
+          JSON.stringify({ theme: 'system', overrides: {}, density: 'comfortable', textSize: 'default' }),
+        )
+      })
+    })
+
     for (const size of widths) {
       test(`every declared piece fits on ${size.name}`, async ({ page }) => {
         const errors: string[] = []
@@ -53,6 +64,25 @@ for (const scheme of ['light', 'dark'] as const) {
         await page.goto('/design-system/pieces')
         await expect(page.getByRole('heading', { name: 'Pieces', exact: true })).toBeVisible()
         await expect(page.locator('[data-sample]').first()).toBeVisible()
+        // The shell scrolls inside its main area, so make the window as tall as
+        // the content for the picture, then put it back for the checks.
+        const tall = await page.evaluate(() =>
+          Math.max(...[...document.querySelectorAll<HTMLElement>('main, main *')].map((element) => element.scrollHeight)),
+        )
+        await page.setViewportSize({ width: size.width, height: Math.min(Math.max(tall + 200, size.height), 16000) })
+        await page.screenshot({
+          path: path.join(screenshotDir, `pieces-${scheme}-${size.name}.png`),
+          fullPage: true,
+          animations: 'disabled',
+        })
+        await page.setViewportSize({ width: size.width, height: size.height })
+        if (size.name === 'phone') {
+          // Each kind of piece on its own, to look at its narrow form.
+          for (const sample of await page.locator('[data-sample^="piece."]').all()) {
+            const name = await sample.getAttribute('data-sample')
+            await sample.screenshot({ path: path.join(screenshotDir, `${name}-${scheme}-phone.png`), animations: 'disabled' })
+          }
+        }
 
         expect(await cutOff(page), 'content cut off sideways').toEqual([])
         const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
