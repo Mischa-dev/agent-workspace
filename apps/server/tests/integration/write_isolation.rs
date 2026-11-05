@@ -129,6 +129,8 @@ const WRITE_ROUTES: &[&str] = &[
     "PUT /api/v1/organizations/{organization_id}/mail",
     "POST /api/v1/organizations/{organization_id}/mail/test",
     "PATCH /api/v1/organizations/{organization_id}/members/{actor_id}",
+    "PUT /api/v1/organizations/{organization_id}/members/{actor_id}/agent-limit",
+    "PUT /api/v1/organizations/{organization_id}/members/{actor_id}/role",
     "DELETE /api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
     "PUT /api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
     "POST /api/v1/organizations/{organization_id}/model-catalog/{kind}/refresh",
@@ -136,6 +138,9 @@ const WRITE_ROUTES: &[&str] = &[
     "DELETE /api/v1/organizations/{organization_id}/personal-secrets/{name}",
     "PUT /api/v1/organizations/{organization_id}/personal-secrets/{name}",
     "PATCH /api/v1/organizations/{organization_id}/project-templates/{template_id}",
+    "POST /api/v1/organizations/{organization_id}/roles",
+    "DELETE /api/v1/organizations/{organization_id}/roles/{role_id}",
+    "PATCH /api/v1/organizations/{organization_id}/roles/{role_id}",
     "DELETE /api/v1/organizations/{organization_id}/secrets/{name}",
     "PUT /api/v1/organizations/{organization_id}/secrets/{name}",
     "POST /api/v1/organizations/{organization_id}/transfer-ownership",
@@ -421,6 +426,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "reply_release",
     "reply_send",
     "reply_stop",
+    "role_assign",
+    "role_write",
     "run_request",
     "run_start",
     "scheduled_message_update",
@@ -1078,6 +1085,9 @@ struct Targets {
     backlog_task: Uuid,
     /// The workspace's saved layout preset.
     layout_preset: Uuid,
+    /// A custom role with everything a member has (AWD-74), so whoever is
+    /// given it can still do what other cases need.
+    custom_role: Uuid,
     task_type: Uuid,
     suggestion: Uuid,
     /// The connected app's grant.
@@ -1430,9 +1440,26 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
     .expect("failure entry");
     transaction.commit().await.expect("commit failure");
 
+    let custom_role = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO workspace_roles (id, organization_id, key, base_role, name, permissions)
+        VALUES (gen_random_uuid(), $1, 'net-role', 'member', $2,
+                ARRAY['projects.view', 'tasks.view', 'tasks.create', 'tasks.edit', 'tasks.delete',
+                      'channels.post', 'channels.create', 'pages.edit', 'whiteboards.edit',
+                      'runs.launch', 'runs.approve', 'runs.interrupt', 'runs.accounts',
+                      'code.view', 'code.publish'])
+        RETURNING id
+        "#,
+    )
+    .bind(organization)
+    .bind(format!("Net role {tag}"))
+    .fetch_one(pool)
+    .await
+    .expect("custom role");
     let in_project = |sql: &'static str| scalar(pool, sql, project);
     let in_organization = |sql: &'static str| scalar(pool, sql, organization);
     Targets {
+        custom_role,
         sessions,
         owner,
         agent,
@@ -1608,6 +1635,8 @@ struct Spares {
     /// An agent and an account for runs, deleted.
     agent_profile: Uuid,
     provider_account: Uuid,
+    /// A custom role nobody holds, removed.
+    role: Uuid,
 }
 
 /// The redirect a hosted OAuth client registers.
@@ -2114,11 +2143,24 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
     .map(|(id, name, is_default)| json!({"id": id, "name": name, "isDefault": is_default}))
     .collect();
 
+    let role = scalar(
+        pool,
+        r#"
+        INSERT INTO workspace_roles (id, organization_id, key, base_role, name, permissions)
+        VALUES (gen_random_uuid(), $1, 'net-spare-role', 'viewer', 'Net spare role',
+                ARRAY['projects.view'])
+        RETURNING id
+        "#,
+        a.organization,
+    )
+    .await;
+
     // Last, so it's the newest of A's sessions: revoked by A's own request.
     login_as(app, "owner").await;
     let session = newest_session(pool, ax.owner).await;
 
     Spares {
+        role,
         channel,
         thread,
         task,
@@ -3412,6 +3454,48 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
                     "role": "member",
                 }))
             },
+        ),
+        path_case(
+            "PUT /api/v1/organizations/{organization_id}/members/{actor_id}/role",
+            &[organization(), id(a.rook, b.rook)],
+            |values| {
+                Payload::Json(json!({
+                    "roleId": ax.custom_role,
+                    "applyToProjects": false,
+                    "expectedVersion": current(
+                        "organization_memberships",
+                        "version",
+                        &[("organization_id", values[0].clone()), ("actor_id", values[1].clone())],
+                        1,
+                    ),
+                }))
+            },
+        )
+        .rejecting(vec![json!({"roleId": bx.custom_role, "applyToProjects": true, "expectedVersion": 1})]),
+        path_case(
+            "PUT /api/v1/organizations/{organization_id}/members/{actor_id}/agent-limit",
+            &[organization(), id(a.rook, b.rook)],
+            json_body(json!({"permissions": null})),
+        ),
+        path_case(
+            "POST /api/v1/organizations/{organization_id}/roles",
+            &[organization()],
+            json_body(json!({"name": "Net made role", "baseRole": "member", "permissions": ["tasks.view"]})),
+        ),
+        path_case(
+            "PATCH /api/v1/organizations/{organization_id}/roles/{role_id}",
+            &[organization(), id(ax.custom_role, bx.custom_role)],
+            |values| {
+                Payload::Json(json!({
+                    "expectedVersion": current("workspace_roles", "version", &[("id", values[1].clone())], 1),
+                    "description": "Net changed",
+                }))
+            },
+        ),
+        path_case(
+            "DELETE /api/v1/organizations/{organization_id}/roles/{role_id}",
+            &[organization(), id(sp.role, bx.custom_role)],
+            empty(),
         ),
         path_case(
             "PUT /api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
@@ -4931,6 +5015,21 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"projectId": b.project, "person": "@wren", "role": "viewer"})],
         )
         .rejecting(vec![json!({"projectId": a.project, "person": bx.wren, "role": "viewer"})]),
+        mcp_case(
+            "role_write",
+            json!({"projectId": a.project, "name": "Net tool role", "baseRole": "viewer", "permissions": ["tasks.view"]}),
+            vec![json!({"projectId": b.project, "name": "Net tool role b", "baseRole": "viewer", "permissions": ["tasks.view"]})],
+        )
+        .rejecting(vec![json!({"projectId": a.project, "role": bx.custom_role, "description": "Net"})]),
+        mcp_case(
+            "role_assign",
+            json!({"projectId": a.project, "person": "@wren", "role": ax.custom_role}),
+            vec![json!({"projectId": b.project, "person": "@wren", "role": "member"})],
+        )
+        .rejecting(vec![
+            json!({"projectId": a.project, "person": bx.wren, "role": "member"}),
+            json!({"projectId": a.project, "person": "@wren", "role": bx.custom_role}),
+        ]),
         mcp_case(
             "project_update",
             json!({"projectId": a.project, "name": "Work"}),

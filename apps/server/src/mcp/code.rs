@@ -23,8 +23,8 @@ use uuid::Uuid;
 use super::{
     McpPrincipal,
     common::{
-        ToolResult, accessible_project_ids, conversation_path, parse_id, public_url, role_allows,
-        scope_projects,
+        StoredRole, ToolResult, accessible_project_ids, conversation_path, parse_id, public_url,
+        role_allows, scope_projects,
     },
 };
 use crate::{AppState, error::AppError, policy::Action, runs::ACTIVE_RUN_STATES};
@@ -231,9 +231,10 @@ async fn repository_projects(
     principal: &McpPrincipal,
     projects: &[Uuid],
 ) -> Result<Vec<Uuid>, AppError> {
-    let roles = sqlx::query_as::<_, (Uuid, String)>(
+    let roles = sqlx::query_as::<_, (Uuid, String, Option<Vec<String>>)>(
         r#"
-        SELECT membership.project_id, membership.role
+        SELECT membership.project_id, membership.role,
+               workspace_role_permissions(membership.role_id)
         FROM project_memberships membership
         JOIN projects project ON project.id = membership.project_id
         WHERE membership.actor_id = $1 AND membership.enabled
@@ -246,10 +247,18 @@ async fn repository_projects(
     .await?;
     Ok(roles
         .into_iter()
-        .filter(|(project_id, role)| {
-            role_allows(principal, *project_id, role, Action::RepositoryView)
+        .filter(|(project_id, role, role_permissions)| {
+            role_allows(
+                principal,
+                *project_id,
+                &StoredRole {
+                    role: role.clone(),
+                    role_permissions: role_permissions.clone(),
+                },
+                Action::RepositoryView,
+            )
         })
-        .map(|(project_id, _)| project_id)
+        .map(|(project_id, _, _)| project_id)
         .collect())
 }
 

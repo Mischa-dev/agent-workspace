@@ -19,6 +19,11 @@
     "file_list": "query",
     "file_read": "describe",
     "module_list": "describe",
+    "role_list": "query",
+    "role_get": "describe",
+    "my_permissions": "describe",
+    "role_write": "change",
+    "role_assign": "change",
     "thing_open": "describe"
   },
   "routes": [
@@ -89,6 +94,7 @@
       "account/api-reference",
       "workspace/general",
       "workspace/members",
+      "workspace/roles",
       "workspace/modules",
       "workspace/keys",
       "workspace/email",

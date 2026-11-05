@@ -5,7 +5,8 @@ use uuid::Uuid;
 
 use super::McpPrincipal;
 use crate::policy::{
-    Action, Decision, Membership, MembershipRole, ProjectScope, Resource, Subject, authorize,
+    Action, Decision, Membership, MembershipRole, ProjectScope, Resource, RoleGrant, Subject,
+    authorize,
 };
 
 const MAX_DESCRIPTION_CHARACTERS: usize = 20_000;
@@ -258,7 +259,7 @@ pub async fn work_item_get(
     principal: &McpPrincipal,
     identifier: &str,
 ) -> ReadResult<WorkItemProjection> {
-    if !authorize_read(&state.pool, principal).await {
+    if !authorize_read(&state.pool, principal, Action::WorkItemView).await {
         return ReadResult::denied();
     }
     let Some(work_item_id) =
@@ -288,7 +289,7 @@ pub async fn repository_get(
     principal: &McpPrincipal,
     repository_id: &str,
 ) -> ReadResult<RepositoryProjection> {
-    if !authorize_read(&state.pool, principal).await {
+    if !authorize_read(&state.pool, principal, Action::RepositoryView).await {
         return ReadResult::denied();
     }
     let Ok(repository_id) = repository_id.parse::<Uuid>() else {
@@ -311,7 +312,7 @@ pub async fn pull_request_get(
     principal: &McpPrincipal,
     identifier: &str,
 ) -> ReadResult<PullRequestProjection> {
-    if !authorize_read(&state.pool, principal).await {
+    if !authorize_read(&state.pool, principal, Action::RepositoryView).await {
         return ReadResult::denied();
     }
     if identifier.is_empty() || identifier.len() > 2048 {
@@ -349,13 +350,15 @@ pub async fn pull_request_get(
     }
 }
 
-async fn authorize_read(pool: &sqlx::PgPool, principal: &McpPrincipal) -> bool {
+/// Whether the caller may read in their project, and do `action` there
+/// with the role they hold in it (custom roles and an app's limits included).
+async fn authorize_read(pool: &sqlx::PgPool, principal: &McpPrincipal, action: Action) -> bool {
     if !principal.can_read() {
         return false;
     }
-    let role = sqlx::query_scalar::<_, String>(
+    let role = sqlx::query_as::<_, (String, Option<Vec<String>>)>(
         r#"
-        SELECT pm.role
+        SELECT pm.role, workspace_role_permissions(pm.role_id)
         FROM project_memberships pm
         JOIN projects p ON p.id = pm.project_id
         JOIN organization_memberships om
@@ -377,23 +380,23 @@ async fn authorize_read(pool: &sqlx::PgPool, principal: &McpPrincipal) -> bool {
     .await
     .ok()
     .flatten();
-    let Some(role) = role.and_then(|role| parse_membership_role(&role)) else {
+    let Some(role) = role.and_then(|(role, permissions)| {
+        parse_membership_role(&role)?;
+        RoleGrant::stored(&role, permissions.as_deref()).ok()
+    }) else {
         return false;
     };
-    matches!(
-        authorize(
-            &Subject::new(
-                principal.actor_id,
-                principal.actor_kind,
-                true,
-                Some(Membership::project(principal.project_id, role, true)),
-                None,
-            ),
-            Action::McpRead,
-            Resource::Project(ProjectScope::project(principal.project_id)),
-        ),
-        Decision::Allow
-    )
+    let subject = Subject::new(
+        principal.actor_id,
+        principal.actor_kind,
+        true,
+        Some(Membership::project(principal.project_id, role, true)),
+        None,
+    );
+    let resource = Resource::Project(ProjectScope::project(principal.project_id));
+    [Action::McpRead, action]
+        .into_iter()
+        .all(|action| matches!(authorize(&subject, action, resource), Decision::Allow))
 }
 
 fn parse_membership_role(role: &str) -> Option<MembershipRole> {

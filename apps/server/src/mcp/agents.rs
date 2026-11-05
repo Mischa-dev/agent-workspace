@@ -25,8 +25,8 @@ use uuid::Uuid;
 use super::{
     McpPrincipal,
     common::{
-        SNIPPET_CHARACTERS, ToolResult, accessible_project_ids, public_url, role_allows,
-        scope_projects, snippet,
+        SNIPPET_CHARACTERS, StoredRole, ToolResult, accessible_project_ids, public_url,
+        role_allows, scope_projects, snippet,
     },
 };
 use crate::{
@@ -263,8 +263,8 @@ pub(super) async fn agent_list(
         let actor_ids = agents.iter().map(|agent| agent.actor_id).collect::<Vec<_>>();
 
         // Roles are shown where the caller may see the member list.
-        let my_roles = sqlx::query_as::<_, (Uuid, String)>(
-            "SELECT project_id, role FROM project_memberships WHERE actor_id = $1 AND enabled AND project_id = ANY($2)",
+        let my_roles = sqlx::query_as::<_, (Uuid, String, Option<Vec<String>>)>(
+            "SELECT project_id, role, workspace_role_permissions(role_id) FROM project_memberships WHERE actor_id = $1 AND enabled AND project_id = ANY($2)",
         )
         .bind(principal.actor_id)
         .bind(&projects)
@@ -272,10 +272,18 @@ pub(super) async fn agent_list(
         .await?;
         let sees_roles = my_roles
             .into_iter()
-            .filter(|(project_id, role)| {
-                role_allows(principal, *project_id, role, Action::MembershipView)
+            .filter(|(project_id, role, role_permissions)| {
+                role_allows(
+                    principal,
+                    *project_id,
+                    &StoredRole {
+                        role: role.clone(),
+                        role_permissions: role_permissions.clone(),
+                    },
+                    Action::MembershipView,
+                )
             })
-            .map(|(project_id, _)| project_id)
+            .map(|(project_id, _, _)| project_id)
             .collect::<HashSet<_>>();
         let memberships = sqlx::query_as::<_, MembershipRow>(
             r#"
@@ -303,6 +311,10 @@ pub(super) async fn agent_list(
             });
         }
 
+        // Claimed tasks only from projects where the caller sees tasks.
+        let task_projects =
+            crate::search::projects_showing_tasks(&state.pool, principal.actor_id, &projects)
+                .await?;
         let claim_rows = sqlx::query_as::<_, ClaimRow>(
             r#"
             SELECT claim.actor_id, item.id AS task_id,
@@ -319,7 +331,7 @@ pub(super) async fn agent_list(
             "#,
         )
         .bind(&actor_ids)
-        .bind(&projects)
+        .bind(&task_projects)
         .fetch_all(&state.pool)
         .await?;
         let mut claims: HashMap<Uuid, Vec<AgentClaim>> = HashMap::new();
@@ -433,9 +445,10 @@ async fn managed_projects(
         .into_iter()
         .collect::<Vec<_>>();
     let reach = accessible_project_ids(state, principal).await?;
-    let roles = sqlx::query_as::<_, (Uuid, String)>(
+    let roles = sqlx::query_as::<_, (Uuid, String, Option<Vec<String>>)>(
         r#"
-        SELECT project.id, membership.role
+        SELECT project.id, membership.role,
+               workspace_role_permissions(membership.role_id) AS role_permissions
         FROM projects project
         JOIN organization_memberships organization
           ON organization.organization_id = project.organization_id
@@ -457,10 +470,18 @@ async fn managed_projects(
     .await?;
     Ok(roles
         .into_iter()
-        .filter(|(project_id, role)| {
-            role_allows(principal, *project_id, role, Action::ExternalAgentManage)
+        .filter(|(project_id, role, role_permissions)| {
+            role_allows(
+                principal,
+                *project_id,
+                &StoredRole {
+                    role: role.clone(),
+                    role_permissions: role_permissions.clone(),
+                },
+                Action::ExternalAgentManage,
+            )
         })
-        .map(|(project_id, _)| project_id)
+        .map(|(project_id, _, _)| project_id)
         .collect())
 }
 

@@ -539,6 +539,7 @@ async fn message_mentions(
                     AND author.actor_id = message.author_actor_id
                     AND author.enabled
                    WHERE author.role IN ('owner', 'admin')
+                     AND custom_role_allows(author.role_id, 'channels.moderate')
                )
         )
         SELECT message.project_id, message.conversation_id, message.author_actor_id,
@@ -1011,6 +1012,7 @@ async fn run_notifications(
               ON membership.project_id = conversation.project_id
              AND membership.enabled
              AND membership.role IN ('owner', 'admin', 'member')
+             AND custom_role_allows(membership.role_id, 'runs.approve')
             WHERE approval.agent_run_id = $1
               AND approval.status = 'pending'
               AND (

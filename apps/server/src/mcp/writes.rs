@@ -549,7 +549,9 @@ async fn create_task(
         return Ok(WriteResult::invalid("clientRequestId", REQUEST_ID_MESSAGE));
     };
     let mut transaction = state.pool.begin().await?;
-    if let Some(result) = authorize_write(&mut transaction, principal).await? {
+    if let Some(result) =
+        authorize_write_for(&mut transaction, principal, Action::WorkItemCreate).await?
+    {
         return Ok(result);
     }
     let scope = match parent_id {
@@ -1827,7 +1829,10 @@ async fn set_archived_inner(
         return Ok(WriteResult::invalid("clientRequestId", REQUEST_ID_MESSAGE));
     };
     let mut transaction = state.pool.begin().await?;
-    if let Some(result) = authorize_write(&mut transaction, principal).await? {
+    // Archiving takes "Archive tasks", not "Edit tasks".
+    if let Some(result) =
+        authorize_write_for(&mut transaction, principal, Action::WorkItemArchive).await?
+    {
         return Ok(result);
     }
     let scope = resource_bound_scope(
@@ -2066,7 +2071,16 @@ async fn authorize_write(
     transaction: &mut Transaction<'_, Postgres>,
     principal: &McpPrincipal,
 ) -> Result<Option<WriteResult>, AppError> {
-    Ok(match check_write_access(transaction, principal).await? {
+    authorize_write_for(transaction, principal, Action::McpWrite).await
+}
+
+/// `authorize_write` with the role checked for `action`.
+async fn authorize_write_for(
+    transaction: &mut Transaction<'_, Postgres>,
+    principal: &McpPrincipal,
+    action: Action,
+) -> Result<Option<WriteResult>, AppError> {
+    Ok(match check_access_for(transaction, principal, action).await? {
         WriteAccess::Allowed => None,
         WriteAccess::ReadOnly => Some(WriteResult::PermissionDenied {
             retry_category: "request_write_scope".to_owned(),

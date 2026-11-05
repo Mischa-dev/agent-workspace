@@ -52,7 +52,7 @@ use crate::{
     launch::{self, LaunchCaller, LaunchRequest},
     mcp::{self, McpPrincipal},
     notifications::{self, NewNotification},
-    policy::{Action as PolicyAction, ActorKind},
+    policy::{Action as PolicyAction, ActorKind, AgentLimits, with_agent_limits},
     work_items::{
         templates::{Frequency, Schedule},
         views,
@@ -501,6 +501,8 @@ struct RuleRow {
     owner_actor_id: Uuid,
     owner_name: Option<String>,
     via_oauth_grant_id: Option<Uuid>,
+    /// Made through MCP or the public API by a person's app or script.
+    made_through_app: bool,
     external_agent_connection_id: Option<Uuid>,
     name: String,
     enabled: bool,
@@ -526,7 +528,7 @@ const RULE_SELECT: &str = r#"
                 WHERE membership.project_id = rule.project_id
                   AND membership.actor_id = rule.owner_actor_id)
            ) AS owner_name,
-           rule.via_oauth_grant_id, rule.external_agent_connection_id, rule.name,
+           rule.via_oauth_grant_id, rule.made_through_app, rule.external_agent_connection_id, rule.name,
            rule.enabled, rule.trigger, rule.view_id, view.name AS view_name,
            rule.conditions, rule.actions, rule.next_run_at, rule.disabled_reason,
            rule.last_fired_at, rule.fire_count, rule.version, rule.created_at, rule.updated_at
@@ -937,10 +939,10 @@ pub(crate) async fn create(
     sqlx::query(
         r#"
         INSERT INTO automation_rules (
-            id, organization_id, project_id, owner_actor_id, via_oauth_grant_id,
+            id, organization_id, project_id, owner_actor_id, via_oauth_grant_id, made_through_app,
             external_agent_connection_id, name, enabled, trigger_kind, trigger,
             view_id, conditions, actions, next_run_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        ) VALUES ($1, $2, $3, $4, $5, $15, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         "#,
     )
     .bind(id)
@@ -957,6 +959,7 @@ pub(crate) async fn create(
     .bind(json!(request.conditions.filters))
     .bind(serde_json::to_value(&request.actions).map_err(|_| AppError::Validation("actions"))?)
     .bind(next_run_at)
+    .bind(through_app(caller))
     .execute(&mut *transaction)
     .await?;
     events::audit(
@@ -1049,6 +1052,7 @@ pub(crate) async fn update(
             actions = $8, enabled = $9, next_run_at = $10,
             disabled_reason = CASE WHEN $9 THEN NULL ELSE disabled_reason END,
             via_oauth_grant_id = CASE WHEN $12 THEN $13 ELSE via_oauth_grant_id END,
+            made_through_app = CASE WHEN $12 THEN $14 ELSE made_through_app END,
             version = version + 1, updated_at = now()
         WHERE project_id = $1 AND id = $2 AND version = $11
         "#,
@@ -1067,6 +1071,7 @@ pub(crate) async fn update(
     // The maker editing it through another app moves it onto that app.
     .bind(mine && !only_turning_off)
     .bind(caller.via_grant_id)
+    .bind(through_app(caller))
     .execute(&mut *transaction)
     .await?
     .rows_affected();
@@ -1925,7 +1930,10 @@ async fn fire(state: &AppState, run_id: Uuid) -> Result<(), AppError> {
     let context = Context::load(state, &rule, &subject, &due.trigger_summary).await?;
     let mut results = Vec::new();
     for (index, action) in actions.iter().enumerate() {
-        let acting = match acting_access(pool, &rule).await? {
+        // A rule made through an app acts within that app's limits when it
+        // fires, as the tool call that made it did.
+        let limits = app_limits(pool, &rule).await?;
+        let acting = match with_limits(limits.clone(), acting_access(pool, &rule)).await? {
             Ok(acting) => acting,
             Err(reason) => {
                 disable(state, &rule, &reason).await?;
@@ -1937,16 +1945,19 @@ async fn fire(state: &AppState, run_id: Uuid) -> Result<(), AppError> {
                 return finish(pool, run_id, state_name, Some(&reason), &results).await;
             }
         };
-        let outcome = run_action(
-            state,
-            &rule,
-            &trigger,
-            &acting,
-            &context,
-            provider_account_id,
-            run_id,
-            index,
-            action,
+        let outcome = with_limits(
+            limits,
+            run_action(
+                state,
+                &rule,
+                &trigger,
+                &acting,
+                &context,
+                provider_account_id,
+                run_id,
+                index,
+                action,
+            ),
         )
         .await;
         results.push(match outcome {
@@ -2518,6 +2529,44 @@ async fn runs_route(
 ) -> Result<Json<RunPage>, AppError> {
     let caller = Caller::browser(&principal)?;
     Ok(Json(runs(&state, &caller, project_id, rule_id).await?))
+}
+
+/// The limits of the app a rule was made through, for a person's rule made
+/// through one: the person's role there cut down by the role's and their own
+/// agent limit, read again each time so a narrowed limit applies at once.
+/// None for a rule made in the browser or by an agent acting as itself.
+async fn app_limits(pool: &PgPool, rule: &RuleRow) -> Result<Option<AgentLimits>, AppError> {
+    if !rule.made_through_app {
+        return Ok(None);
+    }
+    let mut connection = pool.acquire().await?;
+    let is_human = sqlx::query_scalar::<_, bool>("SELECT kind = 'human' FROM actors WHERE id = $1")
+        .bind(rule.owner_actor_id)
+        .fetch_optional(&mut *connection)
+        .await?
+        .unwrap_or(false);
+    if !is_human {
+        return Ok(None);
+    }
+    Ok(Some(
+        crate::roles::app_access(&mut connection, rule.owner_actor_id)
+            .await?
+            .limits,
+    ))
+}
+
+/// Runs `call` within `limits`, if there are any.
+async fn with_limits<F: std::future::Future>(limits: Option<AgentLimits>, call: F) -> F::Output {
+    match limits {
+        Some(limits) => with_agent_limits(limits, call).await,
+        None => call.await,
+    }
+}
+
+/// Whether a person is making or changing a rule through an app or script
+/// (MCP or the public API), whose agent limit the rule then keeps.
+fn through_app(caller: &Caller) -> bool {
+    caller.actor_kind == ActorKind::Human && caller.channel == "mcp"
 }
 
 #[cfg(test)]

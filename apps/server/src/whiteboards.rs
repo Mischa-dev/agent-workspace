@@ -226,7 +226,7 @@ pub async fn access(
             caller.actor_id,
             caller.actor_kind,
             project_id,
-            Action::WorkItemEdit,
+            Action::WhiteboardEdit,
         )
         .await
         .is_ok(),
@@ -293,7 +293,7 @@ async fn project_for_board(
         caller.actor_id,
         caller.actor_kind,
         project_id,
-        Action::WorkItemEdit,
+        Action::WhiteboardEdit,
     )
     .await?;
     let (organization_id, reachable) = sqlx::query_as::<_, (Uuid, bool)>(
@@ -638,7 +638,7 @@ pub async fn empty_trash(
             caller.actor_id,
             caller.actor_kind,
             project,
-            Action::WorkItemEdit,
+            Action::WhiteboardEdit,
         )
         .await
         .is_ok()
@@ -750,7 +750,7 @@ pub async fn set_link(
         caller.actor_id,
         caller.actor_kind,
         project_id,
-        Action::WorkItemEdit,
+        Action::WhiteboardEdit,
     )
     .await
     .map_err(|_| AppError::NotFound("link target"))?;

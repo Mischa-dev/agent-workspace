@@ -656,6 +656,68 @@ async fn api_webhooks_and_automations_act_for_their_maker_only() {
     assert_eq!(launches, 1);
 
     // ---------------------------------------------------------------------
+    // A rule made by a script keeps the script's agent limit when it fires
+    // later (AWD-74): narrowing what the owner's apps may do turns it off
+    // rather than letting it act with the owner's full role.
+    let limited_rule = bearer(
+        &application,
+        Some(&token),
+        "POST",
+        "/api/public/v1/automation_write",
+        json!({
+            "projectId": seed.project_id,
+            "operation": "create",
+            "name": "Raise everything",
+            "trigger": {"kind": "task_created"},
+            "actions": [{"kind": "set_field", "field": "priority", "value": "urgent"}],
+        }),
+    )
+    .await;
+    assert_eq!(limited_rule.2["outcome"], "ok", "{}", limited_rule.1);
+    let limited_rule_id = uuid_field(&limited_rule.2["value"], "id");
+    sqlx::query(
+        "UPDATE organization_memberships SET agent_limit = ARRAY['tasks.view'] WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.organization_id)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("narrow the owner's apps");
+    let watched = send(
+        &application,
+        owner,
+        "POST",
+        &format!("{project}/work-items"),
+        "limited-task",
+        json!({"title": "Made in the browser"}),
+    )
+    .await;
+    assert_eq!(watched.0, StatusCode::CREATED, "{}", watched.1);
+    pump(&state).await;
+    let priority = sqlx::query_scalar::<_, String>("SELECT priority FROM work_items WHERE id = $1")
+        .bind(uuid_field(&watched.2, "id"))
+        .fetch_one(&pool)
+        .await
+        .expect("watched task");
+    assert_ne!(priority, "urgent", "the rule acted beyond its app's limit");
+    let (enabled, reason) = sqlx::query_as::<_, (bool, Option<String>)>(
+        "SELECT enabled, disabled_reason FROM automation_rules WHERE id = $1",
+    )
+    .bind(limited_rule_id)
+    .fetch_one(&pool)
+    .await
+    .expect("limited rule");
+    assert!(!enabled, "{reason:?}");
+    sqlx::query(
+        "UPDATE organization_memberships SET agent_limit = NULL WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.organization_id)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("lift the limit");
+
+    // ---------------------------------------------------------------------
     // A rule whose maker lost the project turns off instead of acting.
     let members_rule = send(
         &application,
