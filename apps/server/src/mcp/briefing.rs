@@ -20,9 +20,8 @@ use super::{
     talk::{ConversationSummary, ListFilter, list_rows, summary},
 };
 use crate::{
-    AppState, error::AppError, layouts, memory, policy::ActorKind, work_item_labels,
-    work_item_planning::HAS_OPEN_BLOCKER,
-    modules::state::ProjectModules,
+    AppState, error::AppError, layouts, memory, modules::state::ProjectModules, policy::ActorKind,
+    work_item_labels, work_item_planning::HAS_OPEN_BLOCKER,
 };
 
 const GUIDE_CHARACTERS: usize = 20_000;

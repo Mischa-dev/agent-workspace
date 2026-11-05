@@ -73,9 +73,16 @@ mod tests {
         assert!(twice.is_empty(), "{what} claimed twice: {twice:#?}");
         let stale = claimed
             .keys()
-            .filter(|pattern| !values.iter().any(|value| pattern_match(pattern, value).is_some()))
+            .filter(|pattern| {
+                !values
+                    .iter()
+                    .any(|value| pattern_match(pattern, value).is_some())
+            })
             .collect::<Vec<_>>();
-        assert!(stale.is_empty(), "{what} in manifests that don't exist: {stale:#?}");
+        assert!(
+            stale.is_empty(),
+            "{what} in manifests that don't exist: {stale:#?}"
+        );
     }
 
     #[test]
@@ -93,7 +100,10 @@ mod tests {
             .iter()
             .map(|module| module.id.clone())
             .collect::<BTreeSet<_>>();
-        assert_eq!(parsed, files, "every manifest in modules/ parses and is in CORE_SOURCES");
+        assert_eq!(
+            parsed, files,
+            "every manifest in modules/ parses and is in CORE_SOURCES"
+        );
         assert!(core().len() <= manifest::MAX_CORE);
     }
 
@@ -115,7 +125,10 @@ mod tests {
         let mut embeds = BTreeSet::new();
         for module in core() {
             assert!(
-                module.id.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+                module
+                    .id
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c == '_'),
                 "{}",
                 module.id
             );
@@ -127,8 +140,18 @@ mod tests {
                 assert_ne!(need, &module.id);
             }
             for link in &module.links {
-                assert!(things.contains(&link.from.as_str()), "{}: {}", module.id, link.from);
-                assert!(things.contains(&link.to.as_str()), "{}: {}", module.id, link.to);
+                assert!(
+                    things.contains(&link.from.as_str()),
+                    "{}: {}",
+                    module.id,
+                    link.from
+                );
+                assert!(
+                    things.contains(&link.to.as_str()),
+                    "{}: {}",
+                    module.id,
+                    link.to
+                );
             }
             for embed in &module.embeds {
                 assert!(
@@ -203,7 +226,10 @@ mod tests {
             .keys()
             .filter(|tool| !tools.contains(**tool))
             .collect::<Vec<_>>();
-        assert!(gone.is_empty(), "manifests name tools that don't exist: {gone:#?}");
+        assert!(
+            gone.is_empty(),
+            "manifests name tools that don't exist: {gone:#?}"
+        );
     }
 
     #[test]
@@ -215,10 +241,9 @@ mod tests {
 
     #[test]
     fn every_layout_part_names_its_module() {
-        let registry: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../web/src/experience/registry.json"
-        ))
-        .expect("layout registry");
+        let registry: serde_json::Value =
+            serde_json::from_str(include_str!("../../../web/src/experience/registry.json"))
+                .expect("layout registry");
         let parts = registry["parts"]
             .as_array()
             .expect("parts")
@@ -305,7 +330,11 @@ mod tests {
         .into_iter()
         .map(str::to_owned)
         .collect::<BTreeSet<_>>();
-        kinds.extend(crate::usage::alerts::kind::ALL.iter().map(|kind| (*kind).to_owned()));
+        kinds.extend(
+            crate::usage::alerts::kind::ALL
+                .iter()
+                .map(|kind| (*kind).to_owned()),
+        );
         each_named("notification kinds", &kinds, |module| &module.notifications);
     }
 

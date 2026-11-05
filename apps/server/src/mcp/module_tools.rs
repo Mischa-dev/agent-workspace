@@ -16,8 +16,7 @@ use crate::{
     modules::{
         self,
         contract::{EmbedDecl, Thing, ThingDecl, ThingLink},
-        manifest,
-        state,
+        manifest, state,
     },
 };
 
@@ -104,7 +103,10 @@ pub(super) async fn module_list(
                     .map(|module| module.id.as_str())
                     .collect::<Vec<_>>()
                     .join(", ");
-                return ToolResult::invalid("module", format!("There's no module {id}. Use one of {known}."));
+                return ToolResult::invalid(
+                    "module",
+                    format!("There's no module {id}. Use one of {known}."),
+                );
             }
         },
         None => None,

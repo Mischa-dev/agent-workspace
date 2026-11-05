@@ -302,7 +302,10 @@ pub async fn by_workspace(
 
 /// Modules on for someone in at least one of their workspaces: what an
 /// agent's tool list follows.
-pub async fn anywhere(connection: &mut PgConnection, actor_id: Uuid) -> Result<ModuleSet, AppError> {
+pub async fn anywhere(
+    connection: &mut PgConnection,
+    actor_id: Uuid,
+) -> Result<ModuleSet, AppError> {
     let sets = by_workspace(connection, actor_id).await?;
     if sets.is_empty() {
         return Ok(ModuleSet::all());
@@ -506,7 +509,9 @@ mod tests {
     #[test]
     fn module_switch_sql_names_every_notification_kind() {
         let sql = super::notification_switches_sql();
-        assert!(sql.contains("WHEN 'assigned' THEN ARRAY['modules.projects', 'modules.tasks']::text[]"));
+        assert!(
+            sql.contains("WHEN 'assigned' THEN ARRAY['modules.projects', 'modules.tasks']::text[]")
+        );
         assert!(sql.contains("WHEN 'mention' THEN CASE WHEN module_project.kind = 'direct'"));
         assert_eq!(
             super::required_switches("runs"),
@@ -524,8 +529,19 @@ mod tests {
     #[test]
     fn needs_carry_switches_down() {
         let set = ModuleSet::from_switches(|module| module == "projects");
-        for module in ["channels", "tasks", "pages", "whiteboards", "runs", "code", "automations"] {
-            assert!(!set.contains(module), "{module} should be off with projects");
+        for module in [
+            "channels",
+            "tasks",
+            "pages",
+            "whiteboards",
+            "runs",
+            "code",
+            "automations",
+        ] {
+            assert!(
+                !set.contains(module),
+                "{module} should be off with projects"
+            );
         }
         for module in ["workspace", "messages", "agents", "inbox", "suggestions"] {
             assert!(set.contains(module), "{module} should stay on");

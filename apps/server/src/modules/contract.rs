@@ -33,7 +33,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// What a tool does, in the one pattern every module's tools follow.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolVerb {
     /// Open one thing (or the module itself) with what it links to.
@@ -51,7 +53,9 @@ pub enum ToolVerb {
 
 /// How one thing relates to another. Every link reads both ways: a task
 /// that `blocks` another is, from the other side, blocked by it.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum LinkKind {
     /// A subtask of a task, a task in a milestone, a record in a project.
@@ -112,7 +116,9 @@ pub enum LinkDirection {
 }
 
 /// A field's type, shared by tasks, collections and every module's records.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum FieldType {
     Text,
@@ -133,7 +139,9 @@ pub enum FieldType {
 }
 
 /// A way to look at many things at once.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ViewType {
     List,
@@ -147,7 +155,9 @@ pub enum ViewType {
 /// A piece of screen the app draws for a module. Modules never draw their
 /// own layout: they say which piece, of which kind of thing, with which
 /// fields, and the kit draws it for every width.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum PieceType {
     /// Rows, optionally grouped by a field.

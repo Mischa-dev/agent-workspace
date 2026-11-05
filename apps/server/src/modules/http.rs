@@ -4,12 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use axum::{
-    Json, Router,
-    extract::State,
-    http::HeaderMap,
-    routing::get,
-};
+use axum::{Json, Router, extract::State, http::HeaderMap, routing::get};
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -86,7 +81,11 @@ impl ModuleView {
             off_because: set.why_off(module, switched_off),
             needs: module.needs.clone(),
             works_with: module.works_with.clone(),
-            things: module.things.iter().map(|thing| thing.kind.clone()).collect(),
+            things: module
+                .things
+                .iter()
+                .map(|thing| thing.kind.clone())
+                .collect(),
             tools,
             embeds: module.embeds.iter().map(|embed| embed.id.clone()).collect(),
             events: module.events.emits.clone(),
@@ -168,7 +167,9 @@ async fn read_modules(
     ApiPath(organization_id): ApiPath<Uuid>,
 ) -> Result<Json<ModulesResponse>, AppError> {
     let mut connection = state.pool.acquire().await?;
-    Ok(Json(view(&mut connection, &principal, organization_id).await?))
+    Ok(Json(
+        view(&mut connection, &principal, organization_id).await?,
+    ))
 }
 
 #[derive(Debug, Deserialize)]
@@ -307,4 +308,3 @@ async fn open_thing(
     let links = things::links(&mut connection, &viewer, &thing).await?;
     Ok(Json(ThingResponse { thing, links }))
 }
-

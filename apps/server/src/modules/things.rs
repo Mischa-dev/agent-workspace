@@ -64,12 +64,10 @@ struct ThingRow {
 
 fn href(kind: &str, id: Uuid, project_id: Option<Uuid>) -> String {
     let template = manifest::thing_decl(kind).map_or("/", |decl| decl.href.as_str());
-    template
-        .replace("{id}", &id.to_string())
-        .replace(
-            "{projectId}",
-            &project_id.map(|id| id.to_string()).unwrap_or_default(),
-        )
+    template.replace("{id}", &id.to_string()).replace(
+        "{projectId}",
+        &project_id.map(|id| id.to_string()).unwrap_or_default(),
+    )
 }
 
 impl ThingRow {
@@ -82,12 +80,10 @@ impl ThingRow {
             kind: self.kind,
             title: self.title,
             status: self.status,
-            owner: self
-                .owner_id
-                .map(|id| ThingOwner {
-                    id,
-                    name: self.owner_name.unwrap_or_else(|| "Someone".to_owned()),
-                }),
+            owner: self.owner_id.map(|id| ThingOwner {
+                id,
+                name: self.owner_name.unwrap_or_else(|| "Someone".to_owned()),
+            }),
             project_id: self.project_id,
         }
     }
@@ -359,7 +355,10 @@ pub async fn links(
             } else {
                 LinkDirection::Outgoing
             };
-            let other = others.iter().find(|other| other.id == row.other_id)?.clone();
+            let other = others
+                .iter()
+                .find(|other| other.id == row.other_id)?
+                .clone();
             let (outgoing, incoming) = kind.words();
             Some(ThingLink {
                 kind,
@@ -394,6 +393,9 @@ mod tests {
             super::href("task", id, Some(project)),
             format!("/projects/{project}/work-items/{id}")
         );
-        assert_eq!(super::href("whiteboard", id, None), format!("/whiteboards/{id}"));
+        assert_eq!(
+            super::href("whiteboard", id, None),
+            format!("/whiteboards/{id}")
+        );
     }
 }

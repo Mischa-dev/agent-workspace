@@ -127,19 +127,40 @@ pub struct Manifest {
 /// The core manifests, in the order screens list them. Add a module by
 /// adding its file here (a test checks every file in `modules/` is listed).
 const CORE_SOURCES: &[(&str, &str)] = &[
-    ("workspace", include_str!("../../../../modules/workspace.json")),
-    ("messages", include_str!("../../../../modules/messages.json")),
-    ("projects", include_str!("../../../../modules/projects.json")),
-    ("channels", include_str!("../../../../modules/channels.json")),
+    (
+        "workspace",
+        include_str!("../../../../modules/workspace.json"),
+    ),
+    (
+        "messages",
+        include_str!("../../../../modules/messages.json"),
+    ),
+    (
+        "projects",
+        include_str!("../../../../modules/projects.json"),
+    ),
+    (
+        "channels",
+        include_str!("../../../../modules/channels.json"),
+    ),
     ("tasks", include_str!("../../../../modules/tasks.json")),
     ("pages", include_str!("../../../../modules/pages.json")),
-    ("whiteboards", include_str!("../../../../modules/whiteboards.json")),
+    (
+        "whiteboards",
+        include_str!("../../../../modules/whiteboards.json"),
+    ),
     ("code", include_str!("../../../../modules/code.json")),
     ("runs", include_str!("../../../../modules/runs.json")),
     ("agents", include_str!("../../../../modules/agents.json")),
     ("inbox", include_str!("../../../../modules/inbox.json")),
-    ("automations", include_str!("../../../../modules/automations.json")),
-    ("suggestions", include_str!("../../../../modules/suggestions.json")),
+    (
+        "automations",
+        include_str!("../../../../modules/automations.json"),
+    ),
+    (
+        "suggestions",
+        include_str!("../../../../modules/suggestions.json"),
+    ),
 ];
 
 /// The most core modules there can be: they're switched as bits of a `u32`.
@@ -152,13 +173,15 @@ pub fn core() -> &'static [Manifest] {
     CORE.get_or_init(|| {
         CORE_SOURCES
             .iter()
-            .filter_map(|(id, source)| match serde_json::from_str::<Manifest>(source) {
-                Ok(manifest) if manifest.id == *id => Some(manifest),
-                _ => {
-                    tracing::error!(module = id, "a core module manifest doesn't parse");
-                    None
-                }
-            })
+            .filter_map(
+                |(id, source)| match serde_json::from_str::<Manifest>(source) {
+                    Ok(manifest) if manifest.id == *id => Some(manifest),
+                    _ => {
+                        tracing::error!(module = id, "a core module manifest doesn't parse");
+                        None
+                    }
+                },
+            )
             .take(MAX_CORE)
             .collect()
     })
