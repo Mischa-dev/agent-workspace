@@ -26,7 +26,8 @@ import {
   type FilterOperator,
   type ListField,
 } from './filterModel'
-import { FieldFilterChips, FieldFilterEditor, fieldClauses, withClauses } from './FieldFilters'
+import { fieldClauses, withClauses } from './fieldFilterModel'
+import { FieldFilterChips, FieldFilterEditor } from './FieldFilters'
 import { useAssignableActors, useNamedActors, useWorkItem } from './hooks'
 import {
   COLUMN_FIELDS,

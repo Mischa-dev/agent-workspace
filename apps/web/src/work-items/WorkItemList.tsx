@@ -252,7 +252,7 @@ export function WorkItemList({
       if (index >= 0) windowed.scrollToIndex(index)
       focusWanted.current = focus
     },
-    [rows, windowed],
+    [rows, setActiveKey, windowed],
   )
 
   const toggleGroup = (groupKey: string) => {
@@ -429,39 +429,43 @@ export function WorkItemList({
     }
     const card = row.item
     const selected = selection.ids.has(card.id)
-    const taskRow: TableRow = {
+    return {
       key: row.key,
       index,
       height: taskRowHeight,
       selected,
       className: card.id === openTaskId ? 'is-open' : undefined,
       label: `${card.key} ${card.title}`,
-      cells: taskCells({
-        card,
-        disabled,
-        fields,
-        twoLine: phone,
-        selected,
-        onOpen: (target, event: MouseEvent<HTMLAnchorElement>) => {
-          if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return
-          event.preventDefault()
-          setActiveKey(row.key)
-          openNow(target.id)
-        },
-        onPick: (target, field, anchor) => {
-          setActiveKey(row.key)
-          openPicker(field, anchor, target)
-        },
-        onSelect: (target, event) => {
-          setActiveKey(row.key)
-          onRowSelect(target, { shiftKey: event.shiftKey, metaKey: true, ctrlKey: false })
-        },
-      }),
+      cells: {
+        ...taskCells({
+          card,
+          disabled,
+          fields,
+          twoLine: phone,
+          selected,
+          onOpen: (target, event: MouseEvent<HTMLAnchorElement>) => {
+            if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return
+            event.preventDefault()
+            setActiveKey(row.key)
+            openNow(target.id)
+          },
+          onPick: (target, field, anchor) => {
+            setActiveKey(row.key)
+            openPicker(field, anchor, target)
+          },
+          onSelect: (target, event) => {
+            setActiveKey(row.key)
+            onRowSelect(target, { shiftKey: event.shiftKey, metaKey: true, ctrlKey: false })
+          },
+        }),
+        ...Object.fromEntries(
+          customColumns.map(({ key, field }) => [
+            key,
+            <FieldValueView field={field} key={key} references={card.fieldReferences} value={card.fieldValues[field.id]} />,
+          ]),
+        ),
+      },
     }
-    for (const { key, field } of customColumns) {
-      taskRow.cells = { ...taskRow.cells, [key]: <FieldValueView field={field} references={card.fieldReferences} value={card.fieldValues[field.id]} /> }
-    }
-    return taskRow
   }
 
   return (

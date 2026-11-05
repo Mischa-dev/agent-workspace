@@ -3,7 +3,7 @@ import { priorityLabel } from './constants'
 import { formatEstimate, formatIsoDate } from './historyFormat'
 import { TaskNotice } from './TaskNotice'
 import type { WorkItem } from './types'
-import { FIELD_NAMES, fieldValue, type TaskField, type TaskSave } from './useTaskSave'
+import { fieldName, fieldValue, type TaskField, type TaskSave } from './useTaskSave'
 
 /**
  * Saves that stopped, under the title: someone else changed the same thing
@@ -76,7 +76,7 @@ function FieldNotice({
   state: 'conflict' | 'failed'
   theirs: WorkItem
 }) {
-  const name = FIELD_NAMES[field]
+  const name = fieldName(field)
   if (state === 'failed') {
     return (
       <TaskNotice

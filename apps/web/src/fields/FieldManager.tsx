@@ -48,7 +48,7 @@ export function FieldManager({ scope }: { scope: FieldScope }) {
       { fieldId: field.id, expectedVersion: field.version, idempotencyKey: crypto.randomUUID(), ...patch },
       {
         onSuccess: () => showToast({ title: done, tone: 'success' }),
-        onError: (error) => showToast({ title: 'That didn’t save', description: describeError(error), tone: 'danger' }),
+        onError: (error) => showToast({ title: 'That didn’t save', description: describeError(error).message, tone: 'danger' }),
       },
     )
   const row = (field: FieldDefinition, index: number) => (
@@ -162,7 +162,7 @@ function FieldDialog({ field, onClose, scope }: { field: FieldDefinition | null;
     const optionInputs = choices
       ? options.filter((option) => option.name.trim()).map(({ id, name: optionName, color }) => ({ id, name: optionName.trim(), color }))
       : undefined
-    const done = { onSuccess: () => onClose(), onError: (error: unknown) => setProblem(describeError(error)) }
+    const done = { onSuccess: () => onClose(), onError: (error: unknown) => setProblem(describeError(error).message) }
     if (field) {
       update.mutate(
         {

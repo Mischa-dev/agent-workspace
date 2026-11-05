@@ -22,6 +22,7 @@ export const PART_IDS = [
   'task.type',
   'task.priority',
   'task.estimate',
+  'task.custom_fields',
   'task.labels',
   'task.milestone',
   'task.dates',

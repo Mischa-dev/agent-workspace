@@ -32,6 +32,8 @@ export function toCard(item: WorkItem, base?: WorkItemCard): WorkItemCard {
     dueDate: item.dueDate,
     estimate: item.estimate,
     ready: item.ready,
+    fieldValues: item.fieldValues,
+    fieldReferences: item.fieldReferences,
     parentId: item.parent?.id ?? null,
     blockedReason: item.blocked?.reason ?? null,
     openBlockerCount: item.blockedBy.filter((blocker) => !blocker.finished && !blocker.archived).length,

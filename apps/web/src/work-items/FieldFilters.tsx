@@ -2,11 +2,9 @@ import { useState } from 'react'
 
 import {
   clauseText,
-  clausesParam,
   opLabel,
   opTakesValues,
   opsFor,
-  parseClauses,
   type FieldClause,
   type FieldDefinition,
   type FieldOp,
@@ -14,17 +12,9 @@ import {
 import { Button, Checkbox, Icon, SelectField, TextField } from '../ui'
 import { Popover } from '../ui/pickers'
 import { useAssignableActors } from './hooks'
-import { withFilter, type ListState } from './listModel'
+import { fieldClauses, withClauses } from './fieldFilterModel'
+import type { ListState } from './listModel'
 import type { UpdateListState } from './useListState'
-
-/** The list's custom field filters, read from and written to its URL. */
-export function fieldClauses(state: ListState): FieldClause[] {
-  return parseClauses(state.filters.fieldFilters)
-}
-
-export function withClauses(state: ListState, clauses: readonly FieldClause[]): ListState {
-  return withFilter(state, 'fieldFilters', clausesParam(clauses))
-}
 
 /**
  * Chips for the list's custom field filters (AWD-89), beside the built-in
