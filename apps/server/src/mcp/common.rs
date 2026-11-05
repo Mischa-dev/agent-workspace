@@ -194,15 +194,33 @@ pub(super) fn project_is_chosen(principal: &McpPrincipal) -> bool {
     principal.project_explicit || !principal.account_wide
 }
 
+/// A stored membership role: the plain role, and the custom role's
+/// permissions when it holds one.
+#[derive(Clone, Debug, sqlx::FromRow)]
+pub(super) struct StoredRole {
+    pub role: String,
+    pub role_permissions: Option<Vec<String>>,
+}
+
+impl StoredRole {
+    pub fn of(role: &str, role_permissions: Option<&[String]>) -> Self {
+        Self {
+            role: role.to_owned(),
+            role_permissions: role_permissions.map(<[String]>::to_vec),
+        }
+    }
+}
+
 /// The caller's membership role in a Project, if they can act there.
 pub(super) async fn project_role(
     state: &AppState,
     principal: &McpPrincipal,
     project_id: Uuid,
-) -> Result<Option<String>, AppError> {
-    Ok(sqlx::query_scalar::<_, String>(
+) -> Result<Option<StoredRole>, AppError> {
+    Ok(sqlx::query_as::<_, StoredRole>(
         r#"
-        SELECT membership.role
+        SELECT membership.role,
+               workspace_role_permissions(membership.role_id) AS role_permissions
         FROM project_memberships membership
         WHERE membership.project_id = $2 AND membership.actor_id = $1 AND membership.enabled
           AND actor_can_access_project($1, $3, $2)
@@ -219,14 +237,15 @@ pub(super) async fn project_role(
 pub(super) fn role_allows(
     principal: &McpPrincipal,
     project_id: Uuid,
-    role: &str,
+    role: &StoredRole,
     action: crate::policy::Action,
 ) -> bool {
     super::mcp_policy_allows(
         principal.actor_id,
         principal.actor_kind,
         project_id,
-        role,
+        &role.role,
+        role.role_permissions.as_deref(),
         action,
     )
 }

@@ -1285,6 +1285,7 @@ async fn agent_choices(state: &AppState, actor_id: Uuid) -> Result<Vec<AgentChoi
          AND manager.actor_id = $1
          AND manager.enabled
          AND manager.role IN ('owner', 'admin')
+         AND custom_role_allows(manager.role_id, 'agents.manage')
         WHERE connection.status = 'active' AND project.archived_at IS NULL
         ORDER BY lower(agent_membership.display_name), connection.id
         LIMIT 100
@@ -1318,6 +1319,7 @@ async fn managed_agent(
          AND manager.actor_id = $2
          AND manager.enabled
          AND manager.role IN ('owner', 'admin')
+         AND custom_role_allows(manager.role_id, 'agents.manage')
         JOIN organization_memberships organization_membership
           ON organization_membership.organization_id = project.organization_id
          AND organization_membership.actor_id = $2

@@ -29,7 +29,7 @@ use crate::{
     conversations::ActorView,
     error::{ApiJson, ApiPath, AppError},
     message_content::{MessageContent, MessageNode},
-    policy::{Action, ActorKind},
+    policy::{Action, ActorKind, Permission},
     work_item_commands::{CommandActor, enqueue_update, record_audit},
 };
 
@@ -643,7 +643,7 @@ async fn lock_for_change(
         .await?
         .ok_or(AppError::NotFound("comment"))?;
     let moderator =
-        principal.actor_kind == "human" && matches!(membership.role.as_str(), "owner" | "admin");
+        principal.actor_kind == "human" && membership.may(Permission::ChannelsModerate)?;
     Ok((locked, moderator))
 }
 
@@ -748,6 +748,7 @@ pub(crate) async fn is_comment_moderator(
             SELECT 1 FROM project_memberships
             WHERE project_id = $1 AND actor_id = $2 AND enabled
               AND role IN ('owner', 'admin')
+              AND custom_role_allows(role_id, 'channels.moderate')
         )
         "#,
     )

@@ -19,7 +19,10 @@ use uuid::Uuid;
 
 use super::{
     McpPrincipal,
-    common::{ARCHIVED_PROJECT_MESSAGE, ToolResult, insert_audit, mark_via, parse_id},
+    common::{
+        ARCHIVED_PROJECT_MESSAGE, StoredRole, ToolResult, insert_audit, mark_via, parse_id,
+        role_allows,
+    },
     talk::can_write_in,
     tasks::TaskSummary,
 };
@@ -39,7 +42,7 @@ use crate::{
 
 const MESSAGES_SPACE_MESSAGE: &str =
     "The Messages space has no tasks, so it has no fields. Pick a project with projects_list.";
-const MANAGERS_MESSAGE: &str = "Only the project's owners and admins can change its fields. Anyone in the project can set their values with task_update.";
+const MANAGERS_MESSAGE: &str = "Only people whose role can change the workflow (owners and admins, unless a custom role says otherwise) can change the project's fields. Anyone who can edit tasks sets their values with task_update.";
 
 // ---------------------------------------------------------------------------
 // field_list
@@ -92,22 +95,16 @@ pub(super) async fn field_list(
             arguments.include_archived.unwrap_or(false),
         )
         .await?;
-        let can_manage = principal.can_write()
-            && sqlx::query_scalar::<_, bool>(
-                r#"
-                SELECT EXISTS (
-                    SELECT 1 FROM project_memberships membership
-                    JOIN projects project ON project.id = membership.project_id
-                    WHERE membership.project_id = $1 AND membership.actor_id = $2
-                      AND membership.enabled AND membership.role IN ('owner', 'admin')
-                      AND project.archived_at IS NULL
+        // Defining fields is the workflow's permission (AWD-74 roles):
+        // owners and admins, or a role that kept "Change the workflow".
+        let can_manage =
+            can_write_in(state, principal, principal.project_id, Action::WorkflowManage).await?
+                && sqlx::query_scalar::<_, bool>(
+                    "SELECT archived_at IS NULL FROM projects WHERE id = $1",
                 )
-                "#,
-            )
-            .bind(principal.project_id)
-            .bind(principal.actor_id)
-            .fetch_one(&state.pool)
-            .await?;
+                .bind(principal.project_id)
+                .fetch_one(&state.pool)
+                .await?;
         Ok::<_, AppError>(ToolResult::ok(FieldListValue {
             fields: definitions.iter().map(FieldView::from).collect(),
             can_manage,
@@ -206,7 +203,7 @@ pub(super) async fn field_write(
     }
     let project_id = principal.project_id;
     let result = async {
-        if !can_write_in(state, principal, project_id, Action::WorkItemEdit).await? {
+        if !can_write_in(state, principal, project_id, Action::WorkflowManage).await? {
             return Ok(ToolResult::denied(MANAGERS_MESSAGE));
         }
         let mut transaction = state.pool.begin().await?;
@@ -222,7 +219,14 @@ pub(super) async fn field_write(
         if membership.project_archived_at.is_some() {
             return Ok(ToolResult::conflict(ARCHIVED_PROJECT_MESSAGE));
         }
-        if !matches!(membership.role.as_str(), "owner" | "admin") {
+        // Checked again under the project lock, with the role as it is now
+        // and any agent limit.
+        if !role_allows(
+            principal,
+            project_id,
+            &StoredRole::of(&membership.role, membership.role_permissions.as_deref()),
+            Action::WorkflowManage,
+        ) {
             return Ok(ToolResult::denied(MANAGERS_MESSAGE));
         }
         let (kind, key) = sqlx::query_as::<_, (String, String)>(

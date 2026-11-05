@@ -1,6 +1,7 @@
 //! HTTP routes for a project's task fields (AWD-89). Everyone in the
-//! project reads them; owners and admins add, rename, reorder, archive and
-//! restore them, and change a choice field's options. The rules live in
+//! project who can see tasks reads them; whoever may change the workflow
+//! (owners and admins by default, AWD-74 roles) adds, renames, reorders,
+//! archives and restores them, and changes a choice field's options. The rules live in
 //! `crate::fields`, which MCP's field tools call too.
 
 use axum::{
@@ -15,7 +16,9 @@ use uuid::Uuid;
 
 use super::{
     authorize_work_item, capabilities,
-    planning::{IncludeArchivedQuery, Started, begin, invalid, is_manager, refusal, start_write},
+    planning::{
+        IncludeArchivedQuery, Started, begin, invalid, may_change_workflow, refusal, start_write,
+    },
     project_membership,
 };
 use crate::{
@@ -48,7 +51,8 @@ pub(super) async fn list_fields(
         query.include_archived.unwrap_or(false),
     )
     .await?;
-    let can_manage = is_manager(&membership)?
+    // Defining fields is the workflow's permission (AWD-74 roles).
+    let can_manage = may_change_workflow(&membership)?
         && capabilities(&membership)?.edit
         && membership.project_archived_at.is_none();
     Ok(Json(json!({
@@ -74,7 +78,7 @@ fn managers_only() -> Response {
     refusal(
         StatusCode::FORBIDDEN,
         "forbidden",
-        "Only the project's owners and admins can change its fields.".to_owned(),
+        "Only people whose role can change the workflow (owners and admins, unless a custom role says otherwise) can change the project's fields.".to_owned(),
         Value::Null,
     )
 }
@@ -133,14 +137,14 @@ pub(super) async fn create_field(
             &headers,
             &principal,
             project_id,
-            Action::WorkItemEdit,
+            Action::WorkItemView,
             None,
             resource_bound_scope("projects", project_id, "fields_create")?,
             &request,
         )
         .await
     );
-    if !is_manager(&write.membership)? {
+    if !may_change_workflow(&write.membership)? {
         return Ok(managers_only());
     }
     let outcome = fields::create(
@@ -241,14 +245,14 @@ pub(super) async fn update_field(
             &headers,
             &principal,
             project_id,
-            Action::WorkItemEdit,
+            Action::WorkItemView,
             None,
             resource_bound_scope("field_definitions", field_id, "update")?,
             &request,
         )
         .await
     );
-    if !is_manager(&write.membership)? {
+    if !may_change_workflow(&write.membership)? {
         return Ok(managers_only());
     }
     let definitions =

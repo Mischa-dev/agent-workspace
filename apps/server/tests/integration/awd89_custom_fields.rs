@@ -454,3 +454,173 @@ async fn fields_are_typed_checked_recorded_and_filtered_the_same_for_agents_and_
     );
     let _ = side;
 }
+
+async fn task_version(pool: &sqlx::PgPool, task_id: &str) -> i64 {
+    sqlx::query_scalar::<_, i64>("SELECT version FROM work_items WHERE id = $1::uuid")
+        .bind(task_id)
+        .fetch_one(pool)
+        .await
+        .expect("version")
+}
+
+/// AWD-74's roles decide who defines fields and who sets values: defining
+/// is "Change the workflow" (owners and admins), setting values is "Edit
+/// tasks", and an app or agent never goes past its person's agent limit.
+#[tokio::test]
+async fn defining_fields_follows_the_workflow_permission_and_values_follow_task_edits() {
+    let Some(setup) = setup("awd89_roles").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (status, task) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/work-items"),
+            Some("roles-task"),
+            json!({"title": "Roles"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{task}");
+    let task_id = task["id"].as_str().expect("task").to_owned();
+    let task_path = format!("/api/v1/projects/{work}/work-items/{task_id}");
+    let fields_path = format!("/api/v1/projects/{work}/fields");
+
+    // Alex is an admin of WORK: Alex defines fields.
+    let (alex, alex_browser) = add_person(&setup, &[&work], "alex").await;
+    sqlx::query("UPDATE project_memberships SET role = 'admin' WHERE actor_id = $1")
+        .bind(alex)
+        .execute(&setup.pool)
+        .await
+        .expect("make Alex a project admin");
+    let (status, risk) = send(
+        app,
+        alex_browser.request(
+            "POST",
+            &fields_path,
+            Some("alex-risk"),
+            json!({"name": "Risk", "type": "single_choice", "options": [{"name": "Low"}, {"name": "High"}]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{risk}");
+    let risk_id = risk["id"].as_str().expect("risk").to_owned();
+
+    // Bea holds a narrowed role that sees tasks but doesn't edit them: she
+    // reads the fields, and can neither define them nor set a value.
+    let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
+    let (status, reader) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/organizations/{}/roles", setup.organization_id),
+            None,
+            json!({"name": "Reader", "baseRole": "member", "permissions": ["tasks.view"]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{reader}");
+    let membership_version = sqlx::query_scalar::<_, i64>(
+        "SELECT version FROM organization_memberships WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(setup.organization_id)
+    .bind(bea)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("membership version");
+    let (status, assigned) = send(
+        app,
+        setup.browser.request(
+            "PUT",
+            &format!(
+                "/api/v1/organizations/{}/members/{bea}/role",
+                setup.organization_id
+            ),
+            None,
+            json!({"roleId": reader["id"], "applyToProjects": true, "expectedVersion": membership_version}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {assigned}");
+    let (status, listed) = send(app, bea_browser.request("GET", &fields_path, None, Value::Null)).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_eq!(listed["canManage"], false);
+    assert_eq!(listed["fields"][0]["name"], "Risk");
+    let (status, refused) = send(
+        app,
+        bea_browser.request(
+            "POST",
+            &fields_path,
+            Some("bea-field"),
+            json!({"name": "Mine", "type": "text"}),
+        ),
+    )
+    .await;
+    assert!(status.is_client_error(), "{status}: {refused}");
+    let (status, refused) = send(
+        app,
+        bea_browser.request(
+            "PATCH",
+            &task_path,
+            Some("bea-value"),
+            json!({"expectedVersion": task_version(&setup.pool, &task_id).await, "fieldValues": {risk_id.clone(): "High"}}),
+        ),
+    )
+    .await;
+    assert!(status.is_client_error(), "{status}: {refused}");
+
+    // Alex's app may only see and edit tasks: it sets values, but field
+    // definitions are neither offered nor accepted through it.
+    let (status, limit) = send(
+        app,
+        setup.browser.request(
+            "PUT",
+            &format!(
+                "/api/v1/organizations/{}/members/{alex}/agent-limit",
+                setup.organization_id
+            ),
+            None,
+            json!({"permissions": ["tasks.view", "tasks.edit"]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{limit}");
+    let alex_app = connect_app(app, &alex_browser, "Alex's app", "full").await;
+    let session = initialize(app, &alex_app).await.expect("Alex's app");
+    let listed = tool(app, &alex_app, &session, "field_list", json!({"projectId": "WORK"})).await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    assert_eq!(listed["value"]["canManage"], false, "{listed}");
+    let refused = tool(
+        app,
+        &alex_app,
+        &session,
+        "field_write",
+        json!({"projectId": "WORK", "name": "Through the app", "type": "text"}),
+    )
+    .await;
+    assert_ne!(refused["outcome"], "ok", "{refused}");
+    let set = tool(
+        app,
+        &alex_app,
+        &session,
+        "task_update",
+        json!({"taskId": "WORK-1", "expectedVersion": task_version(&setup.pool, &task_id).await, "fields": {"Risk": "High"}}),
+    )
+    .await;
+    assert_eq!(set["outcome"], "applied", "{set}");
+
+    // Only Alex's value landed, and nothing Bea or the app tried defined a field.
+    let (values, count) = sqlx::query_as::<_, (Value, i64)>(
+        "SELECT item.field_values, (SELECT count(*) FROM field_definitions WHERE project_id = item.project_id) \
+         FROM work_items item WHERE item.id = $1::uuid",
+    )
+    .bind(&task_id)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("values");
+    assert_eq!(count, 1);
+    let high = risk["options"][1]["id"].as_str().expect("High");
+    assert_eq!(values[&risk_id], high);
+}

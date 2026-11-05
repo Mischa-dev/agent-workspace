@@ -38,14 +38,15 @@ use super::{
     workflow::Workflow,
     writes::{
         LABEL_COUNT_MESSAGE, PRIORITY_MESSAGE, REQUEST_ID_MESSAGE, STATUS_MESSAGE, TYPE_MESSAGE,
-        WriteAccess, check_write_access, join_and, mcp_actor, moved_away_message, parse_request_id,
-        valid_priority,
+        WriteAccess, check_access_for, check_write_access, join_and, mcp_actor, moved_away_message,
+        parse_request_id, valid_priority,
     },
 };
 use crate::{
     AppState,
     error::AppError,
     idempotency::{IdempotencyOutcome, RequestHash, complete, reserve, resource_bound_scope},
+    policy::Action,
     work_item_commands::{
         ArchiveCommand, ArchiveOutcome, AuditVersionMetadata, CommandActor, LockedWorkItem,
         TaskFieldChanges, UpdateWorkItemCommand, UpdateWorkItemOutcome, lock_work_items,
@@ -528,7 +529,7 @@ async fn create_many(
 
     let mut transaction = state.pool.begin().await?;
     if let Some(refused) = BatchResult::refused_access(
-        check_write_access(&mut transaction, principal).await?,
+        check_access_for(&mut transaction, principal, Action::WorkItemCreate).await?,
         &project_key,
         "creating",
     ) {
@@ -1292,11 +1293,13 @@ async fn update_many(
             |(prefix, _)| prefix.to_owned(),
         );
     let mut transaction = state.pool.begin().await?;
-    if let Some(refused) = BatchResult::refused_access(
-        check_write_access(&mut transaction, &scoped).await?,
-        &project_key,
-        "changing",
-    ) {
+    // Archiving is its own permission.
+    let access = if change.archived.is_some() {
+        check_access_for(&mut transaction, &scoped, Action::WorkItemArchive).await?
+    } else {
+        check_write_access(&mut transaction, &scoped).await?
+    };
+    if let Some(refused) = BatchResult::refused_access(access, &project_key, "changing") {
         return Ok(refused);
     }
     let reservation = match &key {

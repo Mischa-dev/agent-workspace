@@ -110,7 +110,8 @@ async fn list(
                         AND organization_membership.enabled
                        WHERE manager.project_id = connection.project_id
                          AND manager.actor_id = $1 AND manager.enabled
-                         AND manager.role IN ('owner', 'admin'))))
+                         AND manager.role IN ('owner', 'admin')
+                         AND custom_role_allows(manager.role_id, 'agents.manage'))))
         ORDER BY grant_row.created_at DESC
         LIMIT 100
         "#
@@ -150,7 +151,8 @@ async fn owned_grant(
                         AND organization_membership.enabled
                        WHERE manager.project_id = connection.project_id
                          AND manager.actor_id = $2 AND manager.enabled
-                         AND manager.role IN ('owner', 'admin')))
+                         AND manager.role IN ('owner', 'admin')
+                         AND custom_role_allows(manager.role_id, 'agents.manage')))
             FOR UPDATE OF grant_row
         )
         "#,

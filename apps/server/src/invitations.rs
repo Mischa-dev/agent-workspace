@@ -23,7 +23,7 @@ use crate::{
     },
     error::{ApiJson, ApiPath, AppError},
     policy::{
-        Action, ActorKind, Decision, Membership, MembershipRole, ProjectScope, Resource, Subject,
+        Action, ActorKind, Decision, Membership, ProjectScope, Resource, RoleGrant, Subject,
         authorize,
     },
 };
@@ -73,6 +73,9 @@ pub fn router() -> Router<AppState> {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct IssueInvitationRequest {
     role: String,
+    /// A custom role of the workspace, instead of `role` (AWD-74).
+    #[serde(default)]
+    role_id: Option<Uuid>,
     expires_in_hours: i32,
 }
 
@@ -119,6 +122,7 @@ struct InvitationAccess {
     organization_role: String,
     organization_membership_enabled: bool,
     project_role: String,
+    project_role_permissions: Option<Vec<String>>,
     project_membership_enabled: bool,
 }
 
@@ -127,6 +131,7 @@ struct InvitationRow {
     id: Uuid,
     project_id: Uuid,
     role: String,
+    role_id: Option<Uuid>,
     token_prefix: String,
     status: String,
     version: i64,
@@ -143,6 +148,7 @@ struct InvitationRow {
 struct InvitationMutationRow {
     project_id: Uuid,
     role: String,
+    role_id: Option<Uuid>,
     status: String,
     version: i64,
     organization_id: Uuid,
@@ -150,6 +156,7 @@ struct InvitationMutationRow {
     organization_role: String,
     organization_membership_enabled: bool,
     project_role: String,
+    project_role_permissions: Option<Vec<String>>,
     project_membership_enabled: bool,
 }
 
@@ -161,6 +168,7 @@ struct InvitationAcceptanceRow {
     project_id: Uuid,
     project_name: String,
     role: String,
+    role_id: Option<Uuid>,
     token_digest: Vec<u8>,
     issued_by_actor_id: Uuid,
     expires_at: String,
@@ -172,6 +180,7 @@ struct InvitationView {
     id: Uuid,
     project_id: Uuid,
     role: String,
+    role_id: Option<Uuid>,
     token_prefix: String,
     status: String,
     version: i64,
@@ -210,7 +219,7 @@ async fn list_invitations(
     authorize_manage(principal.actor_id, project_id, &access, None)?;
     let rows = sqlx::query_as::<_, InvitationRow>(
         r#"
-        SELECT invitation.id, invitation.project_id, invitation.role,
+        SELECT invitation.id, invitation.project_id, invitation.role, invitation.role_id,
                invitation.token_prefix,
                CASE WHEN invitation.status = 'active' AND invitation.expires_at <= now()
                     THEN 'expired' ELSE invitation.status END AS status,
@@ -255,24 +264,39 @@ async fn issue_invitation(
     let access = lock_invitation_access(&mut transaction, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("project"))?;
-    authorize_manage(principal.actor_id, project_id, &access, Some(&request.role))?;
+    let (role, role_id) = match request.role_id {
+        None => (request.role.clone(), None),
+        Some(role_id) => {
+            crate::memberships::pick_custom_role(&mut transaction, project_id, role_id).await?
+        }
+    };
+    authorize_manage(principal.actor_id, project_id, &access, Some(&role))?;
+    crate::memberships::require_grantable(
+        &mut transaction,
+        principal.actor_id,
+        project_id,
+        &role,
+        role_id,
+    )
+    .await?;
     sqlx::query(
         r#"
         INSERT INTO project_invitations (
             id, organization_id, project_id, role, token_prefix, token_digest,
-            issued_by_actor_id, expires_at
+            issued_by_actor_id, expires_at, role_id
         ) VALUES ($1, $2, $3, $4, $5, $6, $7,
-                  now() + make_interval(hours => $8))
+                  now() + make_interval(hours => $8), $9)
         "#,
     )
     .bind(invitation_id)
     .bind(access.organization_id)
     .bind(project_id)
-    .bind(&request.role)
+    .bind(&role)
     .bind(&token_prefix)
     .bind(token_digest.to_vec())
     .bind(principal.actor_id)
     .bind(request.expires_in_hours)
+    .bind(role_id)
     .execute(&mut *transaction)
     .await?;
     insert_audit(
@@ -282,7 +306,8 @@ async fn issue_invitation(
         invitation_id,
         "project.invitation.issue",
         serde_json::json!({
-            "role": request.role,
+            "role": role,
+            "roleId": role_id,
             "expiresInHours": request.expires_in_hours,
         }),
     )
@@ -321,6 +346,7 @@ async fn revoke_invitation(
         organization_role: row.organization_role,
         organization_membership_enabled: row.organization_membership_enabled,
         project_role: row.project_role,
+        project_role_permissions: row.project_role_permissions,
         project_membership_enabled: row.project_membership_enabled,
     };
     authorize_manage(principal.actor_id, row.project_id, &access, Some(&row.role))?;
@@ -395,6 +421,7 @@ async fn replace_invitation(
         organization_role: row.organization_role,
         organization_membership_enabled: row.organization_membership_enabled,
         project_role: row.project_role,
+        project_role_permissions: row.project_role_permissions,
         project_membership_enabled: row.project_membership_enabled,
     };
     authorize_manage(principal.actor_id, row.project_id, &access, Some(&row.role))?;
@@ -415,9 +442,9 @@ async fn replace_invitation(
         r#"
         INSERT INTO project_invitations (
             id, organization_id, project_id, role, token_prefix, token_digest,
-            issued_by_actor_id, expires_at
+            issued_by_actor_id, expires_at, role_id
         ) VALUES ($1, $2, $3, $4, $5, $6, $7,
-                  now() + make_interval(hours => $8))
+                  now() + make_interval(hours => $8), $9)
         "#,
     )
     .bind(replacement_id)
@@ -428,6 +455,7 @@ async fn replace_invitation(
     .bind(token_digest.to_vec())
     .bind(principal.actor_id)
     .bind(request.expires_in_hours)
+    .bind(row.role_id)
     .execute(&mut *transaction)
     .await?;
     sqlx::query(
@@ -476,12 +504,13 @@ async fn lock_invitation_for_mutation(
 ) -> Result<Option<InvitationMutationRow>, AppError> {
     Ok(sqlx::query_as::<_, InvitationMutationRow>(
         r#"
-        SELECT invitation.project_id, invitation.role, invitation.status,
+        SELECT invitation.project_id, invitation.role, invitation.role_id, invitation.status,
                invitation.version, project.organization_id,
                project.archived_at IS NOT NULL AS project_archived,
                organization_membership.role AS organization_role,
                organization_membership.enabled AS organization_membership_enabled,
                project_membership.role AS project_role,
+               workspace_role_permissions(project_membership.role_id) AS project_role_permissions,
                project_membership.enabled AS project_membership_enabled
         FROM project_invitations invitation
         JOIN projects project ON project.id = invitation.project_id
@@ -616,8 +645,8 @@ async fn accept_new_user(
         r#"
         INSERT INTO project_memberships (
             id, project_id, actor_id, role, display_name, handle,
-            invited_by_actor_id, accepted_invitation_id, accepted_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+            invited_by_actor_id, accepted_invitation_id, accepted_at, role_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), $9)
         "#,
     )
     .bind(Uuid::now_v7())
@@ -628,9 +657,17 @@ async fn accept_new_user(
     .bind(&handle)
     .bind(invitation.issued_by_actor_id)
     .bind(invitation.id)
+    .bind(invitation.role_id)
     .execute(&mut *transaction)
     .await
     .map_err(map_join_database_error)?;
+    crate::roles::apply_arrival_defaults(
+        &mut transaction,
+        invitation.project_id,
+        actor_id,
+        invitation.issued_by_actor_id,
+    )
+    .await?;
     mark_invitation_accepted(&mut transaction, invitation.id, actor_id).await?;
     let established = establish_session_in_transaction(
         &state.config,
@@ -743,8 +780,8 @@ async fn accept_existing_user(
         r#"
         INSERT INTO project_memberships (
             id, project_id, actor_id, role, display_name, handle,
-            invited_by_actor_id, accepted_invitation_id, accepted_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+            invited_by_actor_id, accepted_invitation_id, accepted_at, role_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), $9)
         "#,
     )
     .bind(Uuid::now_v7())
@@ -755,9 +792,17 @@ async fn accept_existing_user(
     .bind(&handle)
     .bind(invitation.issued_by_actor_id)
     .bind(invitation.id)
+    .bind(invitation.role_id)
     .execute(&mut *transaction)
     .await
     .map_err(map_join_database_error)?;
+    crate::roles::apply_arrival_defaults(
+        &mut transaction,
+        invitation.project_id,
+        principal.actor_id,
+        invitation.issued_by_actor_id,
+    )
+    .await?;
     mark_invitation_accepted(&mut transaction, invitation.id, principal.actor_id).await?;
     let established = establish_session_in_transaction(
         &state.config,
@@ -815,7 +860,7 @@ fn valid_invitation_sql(lock: bool) -> &'static str {
         SELECT invitation.id, invitation.organization_id,
                organization.name AS organization_name,
                invitation.project_id, project.name AS project_name,
-               invitation.role, invitation.token_digest,
+               invitation.role, invitation.role_id, invitation.token_digest,
                invitation.issued_by_actor_id,
                invitation.expires_at::text AS expires_at
         FROM project_invitations invitation
@@ -844,7 +889,7 @@ fn valid_invitation_sql(lock: bool) -> &'static str {
         SELECT invitation.id, invitation.organization_id,
                organization.name AS organization_name,
                invitation.project_id, project.name AS project_name,
-               invitation.role, invitation.token_digest,
+               invitation.role, invitation.role_id, invitation.token_digest,
                invitation.issued_by_actor_id,
                invitation.expires_at::text AS expires_at
         FROM project_invitations invitation
@@ -1001,6 +1046,7 @@ async fn invitation_access(
                organization_membership.role AS organization_role,
                organization_membership.enabled AS organization_membership_enabled,
                project_membership.role AS project_role,
+               workspace_role_permissions(project_membership.role_id) AS project_role_permissions,
                project_membership.enabled AS project_membership_enabled
         FROM projects project
         JOIN organization_memberships organization_membership
@@ -1031,6 +1077,7 @@ async fn lock_invitation_access(
                organization_membership.role AS organization_role,
                organization_membership.enabled AS organization_membership_enabled,
                project_membership.role AS project_role,
+               workspace_role_permissions(project_membership.role_id) AS project_role_permissions,
                project_membership.enabled AS project_membership_enabled
         FROM projects project
         JOIN organization_memberships organization_membership
@@ -1070,7 +1117,10 @@ fn authorize_manage(
                     true,
                     Some(Membership::project(
                         project_id,
-                        parse_membership_role(&access.project_role)?,
+                        RoleGrant::stored(
+                            &access.project_role,
+                            access.project_role_permissions.as_deref(),
+                        )?,
                         access.project_membership_enabled,
                     )),
                     None,
@@ -1086,17 +1136,6 @@ fn authorize_manage(
         return Err(AppError::Forbidden);
     }
     Ok(())
-}
-
-fn parse_membership_role(role: &str) -> Result<MembershipRole, AppError> {
-    match role {
-        "owner" => Ok(MembershipRole::Owner),
-        "admin" => Ok(MembershipRole::Admin),
-        "member" => Ok(MembershipRole::Member),
-        "viewer" => Ok(MembershipRole::Viewer),
-        "worker" => Ok(MembershipRole::Worker),
-        _ => Err(AppError::Internal("invalid membership role")),
-    }
 }
 
 fn validate_invitation_role(role: &str) -> Result<(), AppError> {
@@ -1121,7 +1160,7 @@ async fn fetch_invitation(
 ) -> Result<InvitationView, AppError> {
     let row = sqlx::query_as::<_, InvitationRow>(
         r#"
-        SELECT invitation.id, invitation.project_id, invitation.role,
+        SELECT invitation.id, invitation.project_id, invitation.role, invitation.role_id,
                invitation.token_prefix,
                CASE WHEN invitation.status = 'active' AND invitation.expires_at <= now()
                     THEN 'expired' ELSE invitation.status END AS status,
@@ -1182,6 +1221,7 @@ impl From<InvitationRow> for InvitationView {
             id: row.id,
             project_id: row.project_id,
             role: row.role,
+            role_id: row.role_id,
             token_prefix: row.token_prefix,
             status: row.status,
             version: row.version,
@@ -1226,6 +1266,7 @@ mod tests {
             organization_role: "owner".to_owned(),
             organization_membership_enabled: true,
             project_role: "owner".to_owned(),
+            project_role_permissions: None,
             project_membership_enabled: true,
         };
         let actor_id = Uuid::now_v7();

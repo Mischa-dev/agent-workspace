@@ -25,7 +25,7 @@ use crate::{
     outbox::{
         ConversationCreatedPayload, OutboxConversationKind, OutboxEventPayload, enqueue_typed,
     },
-    policy::{Action, ActorKind, Decision, MembershipRole},
+    policy::{Action, ActorKind, Decision, Permission, RoleGrant},
     work_item_commands::{
         AllocatedNumberMetadata, ArchiveCommand, ArchiveOutcome, AuditAttribution,
         AuditVersionMetadata, BoardPlacement, ChangeFinalization, CommandActor, ConflictKind,
@@ -307,7 +307,18 @@ struct ProjectMembershipRow {
     project_id: Uuid,
     project_archived_at: Option<String>,
     role: String,
+    role_permissions: Option<Vec<String>>,
     membership_enabled: bool,
+}
+
+impl ProjectMembershipRow {
+    /// What their role lets them do here, if they're still a member.
+    pub(super) fn may(&self, permission: Permission) -> Result<bool, AppError> {
+        Ok(self.membership_enabled
+            && RoleGrant::stored(&self.role, self.role_permissions.as_deref())?
+                .permissions()
+                .contains(permission))
+    }
 }
 
 #[derive(Clone, Debug, FromRow)]
@@ -1284,7 +1295,7 @@ async fn set_work_item_archived(
     authorize_work_item(
         principal,
         &membership,
-        Action::WorkItemEdit,
+        Action::WorkItemArchive,
         Some(work_item_id),
     )?;
     if membership.project_archived_at.is_some() {
@@ -3354,7 +3365,9 @@ async fn project_membership(
         r#"
         SELECT project.id AS project_id,
                project.archived_at::text AS project_archived_at,
-               membership.role, membership.enabled AS membership_enabled
+               membership.role,
+               workspace_role_permissions(membership.role_id) AS role_permissions,
+               membership.enabled AS membership_enabled
         FROM projects project
         JOIN project_memberships membership ON membership.project_id = project.id
         JOIN organization_memberships organization_membership
@@ -3381,6 +3394,7 @@ async fn lock_project_membership(
             project_id: membership.project_id,
             project_archived_at: membership.project_archived_at,
             role: membership.role,
+            role_permissions: membership.role_permissions,
             membership_enabled: membership.enabled,
         }))
 }
@@ -3404,6 +3418,7 @@ fn authorize_work_item(
         project_id: membership.project_id,
         project_archived_at: membership.project_archived_at.clone(),
         role: membership.role.clone(),
+        role_permissions: membership.role_permissions.clone(),
         enabled: membership.membership_enabled,
     };
     match authorize_mutation(&command_actor, &command_membership, action, work_item_id)? {
@@ -3508,19 +3523,10 @@ pub(crate) async fn authorize_task_change(
 }
 
 fn capabilities(membership: &ProjectMembershipRow) -> Result<WorkItemCapabilities, AppError> {
-    let role = membership_role(&membership.role)?;
     Ok(WorkItemCapabilities {
         view: membership.membership_enabled,
-        edit: membership.membership_enabled
-            && matches!(
-                role,
-                MembershipRole::Owner | MembershipRole::Admin | MembershipRole::Member
-            ),
-        archive: membership.membership_enabled
-            && matches!(
-                role,
-                MembershipRole::Owner | MembershipRole::Admin | MembershipRole::Member
-            ),
+        edit: membership.may(Permission::TasksEdit)?,
+        archive: membership.may(Permission::TasksDelete)?,
     })
 }
 
@@ -4421,17 +4427,6 @@ fn browser_actor(
             request_id,
         },
     })
-}
-
-fn membership_role(value: &str) -> Result<MembershipRole, AppError> {
-    match value {
-        "owner" => Ok(MembershipRole::Owner),
-        "admin" => Ok(MembershipRole::Admin),
-        "member" => Ok(MembershipRole::Member),
-        "viewer" => Ok(MembershipRole::Viewer),
-        "worker" => Ok(MembershipRole::Worker),
-        _ => Err(AppError::Internal("invalid membership role")),
-    }
 }
 
 fn actor_kind(value: &str) -> Result<ActorKind, AppError> {

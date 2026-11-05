@@ -127,8 +127,10 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/organizations/{organization_id}/members",
     "/api/v1/organizations/{organization_id}/model-catalog",
     "/api/v1/organizations/{organization_id}/onboarding",
+    "/api/v1/organizations/{organization_id}/permissions",
     "/api/v1/organizations/{organization_id}/personal-secrets",
     "/api/v1/organizations/{organization_id}/project-templates",
+    "/api/v1/organizations/{organization_id}/roles",
     "/api/v1/organizations/{organization_id}/secrets",
     "/api/v1/organizations/{organization_id}/server",
     "/api/v1/pages/{id}",
@@ -2767,6 +2769,34 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             vec![],
         ),
         case(
+            "/api/v1/organizations/{organization_id}/roles",
+            vec![format!("/api/v1/organizations/{}/roles", a.organization)],
+            vec![format!("/api/v1/organizations/{}/roles", b.organization)],
+            vec![],
+        ),
+        case(
+            "/api/v1/organizations/{organization_id}/permissions",
+            vec![
+                format!("/api/v1/organizations/{}/permissions", a.organization),
+                format!(
+                    "/api/v1/organizations/{}/permissions?projectId={}&actorId={}",
+                    a.organization, a.project, a.rook
+                ),
+            ],
+            vec![
+                format!("/api/v1/organizations/{}/permissions", b.organization),
+                format!(
+                    "/api/v1/organizations/{}/permissions?projectId={}",
+                    a.organization, b.project
+                ),
+                format!(
+                    "/api/v1/organizations/{}/permissions?actorId={}",
+                    a.organization, b.rook
+                ),
+            ],
+            vec![],
+        ),
+        case(
             "/api/v1/organizations/{organization_id}/project-templates",
             vec![format!(
                 "/api/v1/organizations/{}/project-templates?includeArchived=true",
@@ -3222,6 +3252,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "launch_list",
     "message_history",
     "milestone_list",
+    "my_permissions",
     "my_work",
     "notification_list",
     "page_get",
@@ -3235,6 +3266,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "pull_request_list",
     "repository_get",
     "repository_list",
+    "role_get",
+    "role_list",
     "run_get",
     "run_list",
     "run_steps",
@@ -3312,6 +3345,17 @@ fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         by_project("project_open"),
         by_project("workflow_get"),
         by_project("project_members"),
+        by_project("role_list"),
+        by_project("my_permissions"),
+        case(
+            "role_get",
+            vec![
+                json!({"projectId": "WORK", "role": "member"}),
+                json!({"projectId": a.project, "role": "Viewer"}),
+            ],
+            vec![json!({"projectId": b.project, "role": "member"})],
+            vec![],
+        ),
         by_project("label_list"),
         by_project("field_list"),
         by_project("launch_list"),

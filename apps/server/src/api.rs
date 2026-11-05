@@ -21,7 +21,7 @@ use crate::{
     outbox,
     policy::{
         Action, ActorKind, ApprovalEligibility, ApprovalRequirements, Decision, Membership,
-        MembershipRole, ProjectScope, Resource, Subject, authorize,
+        MembershipRole, ProjectScope, Resource, RoleGrant, Subject, authorize,
     },
     provider::run_config::RunConfig,
 };
@@ -74,6 +74,7 @@ async fn development_bootstrap(
         channel_id: Uuid,
         thread_id: Uuid,
         membership_role: String,
+        membership_role_permissions: Option<Vec<String>>,
         membership_enabled: bool,
     }
 
@@ -84,6 +85,7 @@ async fn development_bootstrap(
             parent.id AS channel_id,
             thread.id AS thread_id,
             pm.role AS membership_role,
+            workspace_role_permissions(pm.role_id) AS membership_role_permissions,
             pm.enabled AS membership_enabled
         FROM conversations thread
         JOIN conversations parent ON parent.id = thread.parent_channel_id
@@ -111,6 +113,7 @@ async fn development_bootstrap(
         &principal,
         bootstrap.project_id,
         &bootstrap.membership_role,
+        bootstrap.membership_role_permissions.as_deref(),
         bootstrap.membership_enabled,
         Action::ProjectView,
         Resource::Project(ProjectScope::thread(
@@ -141,6 +144,7 @@ struct ConversationRow {
     conversation_archived: bool,
     project_archived: bool,
     membership_role: String,
+    membership_role_permissions: Option<Vec<String>>,
     membership_enabled: bool,
 }
 
@@ -1607,6 +1611,7 @@ pub(crate) async fn answer_approval(
         human_required: bool,
         kind: String,
         membership_role: String,
+        membership_role_permissions: Option<Vec<String>>,
         membership_enabled: bool,
         status: String,
         responded_by_actor_id: Option<Uuid>,
@@ -1626,6 +1631,7 @@ pub(crate) async fn answer_approval(
             aa.human_required,
             aa.kind,
             pm.role AS membership_role,
+            workspace_role_permissions(pm.role_id) AS membership_role_permissions,
             pm.enabled AS membership_enabled,
             aa.status,
             aa.responded_by_actor_id,
@@ -1655,12 +1661,16 @@ pub(crate) async fn answer_approval(
     let approval_eligibility = if context.eligible_role == ANY_AUTHORIZED_APPROVER {
         ApprovalEligibility::AnyAuthorizedMember
     } else {
-        ApprovalEligibility::Role(parse_membership_role(&context.eligible_role)?)
+        ApprovalEligibility::Role(
+            MembershipRole::parse(&context.eligible_role)
+                .ok_or(AppError::Internal("unknown Project membership role"))?,
+        )
     };
     authorize_project_action(
         principal,
         context.project_id,
         &context.membership_role,
+        context.membership_role_permissions.as_deref(),
         context.membership_enabled,
         Action::ApprovalRespond,
         Resource::Approval {
@@ -1859,6 +1869,7 @@ async fn interrupt_agent_run(
         project_id: Uuid,
         repository_id: Uuid,
         membership_role: String,
+        membership_role_permissions: Option<Vec<String>>,
         membership_enabled: bool,
         state: String,
     }
@@ -1871,6 +1882,7 @@ async fn interrupt_agent_run(
             c.project_id,
             ar.repository_id,
             pm.role AS membership_role,
+            workspace_role_permissions(pm.role_id) AS membership_role_permissions,
             pm.enabled AS membership_enabled,
             ar.state
         FROM agent_runs ar
@@ -1898,6 +1910,7 @@ async fn interrupt_agent_run(
         &principal,
         context.project_id,
         &context.membership_role,
+        context.membership_role_permissions.as_deref(),
         context.membership_enabled,
         Action::RunInterrupt,
         Resource::Project(ProjectScope::run(
@@ -2195,6 +2208,7 @@ async fn guard_conversation_mutation(
         conversation_archived: bool,
         project_archived: bool,
         membership_role: String,
+        membership_role_permissions: Option<Vec<String>>,
         membership_enabled: bool,
     }
 
@@ -2237,6 +2251,7 @@ async fn guard_conversation_mutation(
             c.archived_at IS NOT NULL AS conversation_archived,
             p.archived_at IS NOT NULL AS project_archived,
             pm.role AS membership_role,
+            workspace_role_permissions(pm.role_id) AS membership_role_permissions,
             pm.enabled AS membership_enabled
         FROM conversations c
         JOIN projects p
@@ -2272,6 +2287,7 @@ async fn guard_conversation_mutation(
         principal,
         project_id,
         &guard.membership_role,
+        guard.membership_role_permissions.as_deref(),
         guard.membership_enabled,
         action,
         Resource::Project(scope),
@@ -2313,6 +2329,7 @@ async fn authorized_conversation(
                 AS conversation_archived,
             p.archived_at IS NOT NULL AS project_archived,
             pm.role AS membership_role,
+            workspace_role_permissions(pm.role_id) AS membership_role_permissions,
             pm.enabled AS membership_enabled
         FROM conversations c
         LEFT JOIN conversations parent
@@ -2345,6 +2362,7 @@ async fn authorized_conversation(
         principal,
         conversation.project_id,
         &conversation.membership_role,
+        conversation.membership_role_permissions.as_deref(),
         conversation.membership_enabled,
         action,
         Resource::Project(scope),
@@ -2356,6 +2374,7 @@ fn authorize_project_action(
     principal: &impl RunActor,
     project_id: Uuid,
     membership_role: &str,
+    membership_role_permissions: Option<&[String]>,
     membership_enabled: bool,
     action: Action,
     resource: Resource,
@@ -2366,7 +2385,7 @@ fn authorize_project_action(
         true,
         Some(Membership::project(
             project_id,
-            parse_membership_role(membership_role)?,
+            RoleGrant::stored(membership_role, membership_role_permissions)?,
             membership_enabled,
         )),
         None,
@@ -2415,17 +2434,6 @@ fn parse_actor_kind(value: &str) -> Result<ActorKind, AppError> {
         "integration" => Ok(ActorKind::Integration),
         "system" => Ok(ActorKind::System),
         _ => Err(AppError::Internal("unknown Actor kind")),
-    }
-}
-
-fn parse_membership_role(value: &str) -> Result<MembershipRole, AppError> {
-    match value {
-        "owner" => Ok(MembershipRole::Owner),
-        "admin" => Ok(MembershipRole::Admin),
-        "member" => Ok(MembershipRole::Member),
-        "viewer" => Ok(MembershipRole::Viewer),
-        "worker" => Ok(MembershipRole::Worker),
-        _ => Err(AppError::Internal("unknown Project membership role")),
     }
 }
 
