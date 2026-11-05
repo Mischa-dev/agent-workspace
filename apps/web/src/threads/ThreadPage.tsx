@@ -31,6 +31,7 @@ import { ConversationHeader } from '../conversations/ConversationHeader'
 import { ThreadStatusButton, ThreadStatusDialog } from '../conversations/threadBoard'
 import { useProjectConversationSidebar } from '../conversations/hooks'
 import { useMessageActions } from '../conversations/MessageActions'
+import { useReplyTarget } from '../conversations/replyTarget'
 import { OriginMessage } from '../conversations/OriginMessage'
 import { useConversationTools } from '../later/useConversationTools'
 import { PinnedBar } from '../memory/ConversationMemory'
@@ -197,8 +198,10 @@ export function ThreadPage() {
 
   const searchActors = async (query: string) => (await searchMentionableActors(projectId, query)).actors
   const searchWorkItems = (query: string) => searchWorkItemReferences(projectId, query)
+  const reply = useReplyTarget(threadId)
   const messageActions = useMessageActions({
     projectId,
+    onReply: reply.start,
     conversationId: threadId,
     viewerId: session.user.actorId,
     capabilities: verifiedTimeline?.capabilities,
@@ -500,7 +503,9 @@ export function ThreadPage() {
             href: `/projects/${encodeURIComponent(projectId)}/threads/${encodeURIComponent(threadId)}`,
           }}
           onEditLast={() => messageActions.editLast(entries)}
+          onReplyChange={reply.set}
           onSubmit={sender.send}
+          replyTo={reply.target}
           placeholder={`Reply in ${threadName}`}
           searchActors={searchActors}
           searchWorkItems={searchWorkItems}

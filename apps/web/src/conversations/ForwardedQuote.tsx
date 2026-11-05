@@ -2,32 +2,8 @@ import { Forward } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
 import { Markdown } from '../ui/markdown/Markdown'
-import { isSafeMessageText } from './messageContentModel'
+import { readForwarded } from './quotedMessage'
 import { formatDateTime, formatFullDate } from '../ui/time'
-import type { ForwardedMessage } from './types'
-
-function text(value: unknown) {
-  return typeof value === 'string' ? value : null
-}
-
-/** The wire's forward, checked: only what's available is kept, and only in-app links. */
-function readForwarded(value: unknown): ForwardedMessage | null {
-  const forwarded = value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
-  if (typeof forwarded.messageId !== 'string') return null
-  const available = forwarded.available === true
-  const href = text(forwarded.href)
-  const quote = text(forwarded.text)
-  return {
-    messageId: forwarded.messageId,
-    available,
-    removed: available && forwarded.removed === true,
-    authorName: available ? text(forwarded.authorName) : null,
-    place: available ? text(forwarded.place) : null,
-    text: available && quote !== null && isSafeMessageText(quote) ? quote.slice(0, 2_000) : null,
-    createdAt: available ? text(forwarded.createdAt) : null,
-    href: available && href?.startsWith('/') && !href.startsWith('//') ? href : null,
-  }
-}
 
 /**
  * The message a forward quotes, read live for you: its author, where it was

@@ -24,6 +24,7 @@ import { groupReplyRequests } from './replyStatusModel'
 import { PinnedBar } from '../memory/ConversationMemory'
 import { useConversationTools } from '../later/useConversationTools'
 import { useMessageActions } from './MessageActions'
+import { useReplyTarget } from './replyTarget'
 import { StructuredComposer } from './StructuredComposer'
 import { ThreadBoard } from './threadBoard'
 import { ThreadChip } from './ThreadChip'
@@ -166,8 +167,10 @@ export function ChannelPage() {
     queryKey: queryKeys.timeline(projectId, channelId, includeArchived),
   })
 
+  const reply = useReplyTarget(channelId)
   const messageActions = useMessageActions({
     projectId,
+    onReply: reply.start,
     conversationId: channelId,
     viewerId: viewer.actorId,
     capabilities: validBoundary ? page?.capabilities : null,
@@ -405,7 +408,9 @@ export function ChannelPage() {
             href: `/projects/${encodeURIComponent(projectId)}/channels/${encodeURIComponent(channelId)}`,
           }}
           onEditLast={() => messageActions.editLast(entries)}
+          onReplyChange={reply.set}
           onSubmit={sender.send}
+          replyTo={reply.target}
           placeholder={`Message #${name}`}
           searchActors={searchActors}
           searchWorkItems={searchWorkItems}

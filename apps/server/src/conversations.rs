@@ -201,6 +201,9 @@ struct SendMessageRequest {
     /// Files uploaded to this conversation for this message, in order.
     #[serde(default)]
     attachments: Vec<Uuid>,
+    /// The message in this conversation it replies to, quoted above it (AWD-70).
+    #[serde(default)]
+    reply_to_message_id: Option<Uuid>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -342,6 +345,10 @@ pub struct MessageView {
     /// The message this one forwards, as the viewer may see it (W21).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forwarded: Option<crate::forwarding::ForwardedView>,
+    /// The message in this conversation it replies to, as the viewer may
+    /// see it now (AWD-70).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<crate::forwarding::ForwardedView>,
     /// Set when the viewer saved this message for later and hasn't marked
     /// it done (W21).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -603,6 +610,7 @@ struct TimelineEntryRow {
     remover_handle: Option<String>,
     removed_via: Option<String>,
     forwarded_message_id: Option<Uuid>,
+    reply_to_message_id: Option<Uuid>,
     agent_run_event_id: Option<Uuid>,
     agent_run_id: Option<Uuid>,
     event_kind: Option<String>,
@@ -1564,7 +1572,10 @@ async fn send_direct_message(
         request.content,
         &request.attachments,
         None,
-        AppendExtras::default(),
+        AppendExtras {
+            reply_to_message_id: request.reply_to_message_id,
+            ..AppendExtras::default()
+        },
     )
     .await?;
     created_message_response(outcome.status, &outcome.body)
@@ -1594,7 +1605,10 @@ async fn send_message(
         request.content,
         &request.attachments,
         None,
-        AppendExtras::default(),
+        AppendExtras {
+            reply_to_message_id: request.reply_to_message_id,
+            ..AppendExtras::default()
+        },
     )
     .await?;
     created_message_response(outcome.status, &outcome.body)
@@ -1659,6 +1673,9 @@ pub(crate) async fn append_message_command(
 pub(crate) struct AppendExtras {
     /// The message it forwards (W21). The caller checked the sender can see it.
     pub(crate) forwarded_message_id: Option<Uuid>,
+    /// The message in the same conversation it replies to (AWD-70). Checked
+    /// here, inside the send, against the conversation the sender may post in.
+    pub(crate) reply_to_message_id: Option<Uuid>,
 }
 
 /// `append_message_command` with files the sender uploaded to this
@@ -1681,14 +1698,21 @@ pub(crate) async fn append_message_command_with(
     // replays stored before files existed still match.
     // A forward hashes what it forwards too, so the same key and words for
     // a different message are a mismatch, not a replay of the first.
-    let request_hash = match extras.forwarded_message_id {
-        Some(forwarded) => RequestHash::for_value(&serde_json::json!({
+    // A reply hashes what it replies to the same way.
+    let request_hash = match (extras.forwarded_message_id, extras.reply_to_message_id) {
+        (Some(forwarded), None) => RequestHash::for_value(&serde_json::json!({
             "content": &content,
             "attachments": attachments,
             "forwards": forwarded,
         }))?,
-        None if attachments.is_empty() => RequestHash::for_value(&content)?,
-        None => RequestHash::for_value(&serde_json::json!({
+        (forwarded, Some(replies_to)) => RequestHash::for_value(&serde_json::json!({
+            "content": &content,
+            "attachments": attachments,
+            "forwards": forwarded,
+            "repliesTo": replies_to,
+        }))?,
+        (None, None) if attachments.is_empty() => RequestHash::for_value(&content)?,
+        (None, None) => RequestHash::for_value(&serde_json::json!({
             "content": &content,
             "attachments": attachments,
         }))?,
@@ -1740,15 +1764,28 @@ pub(crate) async fn append_message_command_with(
         !attachments.is_empty(),
     )
     .await?;
+    let reply_to = match extras.reply_to_message_id {
+        Some(reply_to_message_id) => Some(
+            crate::forwarding::quote_for_reply(
+                &mut transaction,
+                conversation.id,
+                reply_to_message_id,
+                actor.actor_id,
+            )
+            .await?,
+        ),
+        None => None,
+    };
 
     let message_id = Uuid::now_v7();
     sqlx::query(
         r#"
         INSERT INTO messages (
             id, project_id, conversation_id, author_actor_id,
-            content_version, content, plain_text, via_oauth_grant_id, forwarded_message_id
+            content_version, content, plain_text, via_oauth_grant_id, forwarded_message_id,
+            reply_to_message_id
         )
-        VALUES ($1, $2, $3, $4, 1, $5, $6, $7, $8)
+        VALUES ($1, $2, $3, $4, 1, $5, $6, $7, $8, $9)
         "#,
     )
     .bind(message_id)
@@ -1759,6 +1796,7 @@ pub(crate) async fn append_message_command_with(
     .bind(&plain_text)
     .bind(actor.via_grant_id)
     .bind(extras.forwarded_message_id)
+    .bind(extras.reply_to_message_id)
     .execute(&mut *transaction)
     .await?;
     insert_message_projections(
@@ -1888,6 +1926,7 @@ pub(crate) async fn append_message_command_with(
         attachments: attached,
         link_previews: Vec::new(),
         forwarded: None,
+        reply_to,
         saved: None,
     };
     let body = MessageAppendResponse {
@@ -2352,6 +2391,7 @@ const TIMELINE_ENTRY_SELECT: &str = r#"
             remover.handle AS remover_handle,
             removed_via_client.client_name AS removed_via,
             message.forwarded_message_id,
+            message.reply_to_message_id,
             event.id AS agent_run_event_id,
             event.agent_run_id,
             event.kind AS event_kind,
@@ -4137,6 +4177,9 @@ fn timeline_entry_view(row: TimelineEntryRow) -> Result<TimelineEntryView, AppEr
                 link_previews,
                 forwarded: row
                     .forwarded_message_id
+                    .map(crate::forwarding::ForwardedView::unread),
+                reply_to: row
+                    .reply_to_message_id
                     .map(crate::forwarding::ForwardedView::unread),
                 saved: None,
             })

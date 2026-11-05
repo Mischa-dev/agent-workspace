@@ -151,8 +151,10 @@ fn available(row: SourceRow) -> ForwardedView {
     }
 }
 
-/// Fill in the quotes of forwarded messages among these entries, as
-/// `viewer` may see them.
+/// Fill in the quotes of forwarded messages, and of the messages replies
+/// answer (AWD-70), among these entries, as `viewer` may see them. Both are
+/// read through `conversation_visible_to` for the viewer every time, so a
+/// quote never shows to someone who can't see the original now.
 pub(crate) async fn attach_forwards<'e, E>(
     executor: E,
     entries: &mut [TimelineEntryView],
@@ -165,8 +167,9 @@ where
         .iter()
         .filter_map(|entry| entry.message.as_ref())
         .filter(|message| message.removed.is_none())
-        .filter_map(|message| message.forwarded.as_ref())
-        .map(|forwarded| forwarded.message_id)
+        .flat_map(|message| [message.forwarded.as_ref(), message.reply_to.as_ref()])
+        .flatten()
+        .map(|quoted| quoted.message_id)
         .collect::<Vec<_>>();
     if sources.is_empty() {
         return Ok(());
@@ -187,16 +190,69 @@ where
     {
         if message.removed.is_some() {
             message.forwarded = None;
+            message.reply_to = None;
             continue;
         }
-        if let Some(forwarded) = message.forwarded.as_mut() {
-            *forwarded = found
-                .get(&forwarded.message_id)
+        for quoted in [message.forwarded.as_mut(), message.reply_to.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            *quoted = found
+                .get(&quoted.message_id)
                 .cloned()
-                .unwrap_or_else(|| ForwardedView::unread(forwarded.message_id));
+                .unwrap_or_else(|| ForwardedView::unread(quoted.message_id));
         }
     }
     Ok(())
+}
+
+/// The messages among `ids` that `viewer` can see now, quoted. One the
+/// viewer can't see is simply missing.
+pub(crate) async fn quotes<'e, E>(
+    executor: E,
+    ids: &[Uuid],
+    viewer: Uuid,
+) -> Result<std::collections::HashMap<Uuid, ForwardedView>, AppError>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    if ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    Ok(sqlx::query_as::<_, SourceRow>(SOURCE_SQL)
+        .bind(ids)
+        .bind(viewer)
+        .bind(QUOTE_CHARACTERS)
+        .fetch_all(executor)
+        .await?
+        .into_iter()
+        .map(|row| (row.id, available(row)))
+        .collect())
+}
+
+/// The message a new reply answers, as its sender sees it (AWD-70). It must
+/// be in `conversation_id`, the conversation the sender was just allowed to
+/// post in, and not removed. Anything else, including a message elsewhere
+/// that the sender can't see, gets the same refusal, so it says nothing
+/// about what's there.
+pub(crate) async fn quote_for_reply(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    conversation_id: Uuid,
+    message_id: Uuid,
+    sender: Uuid,
+) -> Result<ForwardedView, AppError> {
+    sqlx::query_as::<_, SourceRow>(SOURCE_SQL)
+        .bind(vec![message_id])
+        .bind(sender)
+        .bind(QUOTE_CHARACTERS)
+        .fetch_optional(&mut **transaction)
+        .await?
+        .filter(|row| row.conversation_id == conversation_id && !row.removed)
+        .map(available)
+        .ok_or(AppError::Refused {
+            field: "replyToMessageId",
+            message: "Reply to a message in this conversation that hasn't been removed.",
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -281,6 +337,7 @@ pub(crate) async fn forward(
         None,
         AppendExtras {
             forwarded_message_id: Some(source.id),
+            ..AppendExtras::default()
         },
     )
     .await?;

@@ -49,7 +49,8 @@ import {
   type QueuedSend,
   type Trigger,
 } from './composerModel'
-import type { ConversationActor, ConversationWorkItemReference, MessageContentV1 } from './types'
+import type { ConversationActor, ConversationWorkItemReference, MessageContentV1, ReplyTarget } from './types'
+import { ReplyingTo } from './ReplyQuote'
 import { Bold, Code, Italic, Paperclip, SquareCode, TextQuote, Type } from '../files/icons'
 import { useToastOffset } from './toastOffset'
 
@@ -65,6 +66,10 @@ type StructuredComposerProps = {
   submitLabel?: string
   /** Controls above the text box, such as the thread's Message/Run switch. */
   toolbar?: ReactNode
+  /** The message this one replies to, shown above the box and sent with it. */
+  replyTo?: ReplyTarget | null
+  /** Start or stop replying: cleared as the reply sends, and Esc or the close button stops it. */
+  onReplyChange?: (target: ReplyTarget | null) => void
   /** Start from this text, for example the message being edited. */
   initialDraft?: ComposerDraft
   /** Shows a Cancel button, and Escape cancels too. */
@@ -185,6 +190,8 @@ function ComposerBox({
   searchWorkItems,
   submitLabel = 'Send message',
   toolbar,
+  replyTo = null,
+  onReplyChange,
   initialDraft,
   onCancel,
   note,
@@ -203,6 +210,11 @@ function ComposerBox({
   focusOnOpen = false,
 }: StructuredComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  // Choosing Reply on a message puts the cursor here, ready to answer it.
+  const replyingToId = replyTo?.messageId
+  useEffect(() => {
+    if (replyingToId) textareaRef.current?.focus()
+  }, [replyingToId])
   const wrapRef = useRef<HTMLDivElement & HTMLFormElement>(null)
   // A conversation's own composer (it keeps a draft) lifts the toasts above it.
   useToastOffset(wrapRef, Boolean(draftKey), Boolean(disabledReason))
@@ -538,6 +550,9 @@ function ComposerBox({
     if (!message) return
     const attachments = uploads.ready.length ? uploads.ready : undefined
     const key = idempotencyKeyRef.current
+    // The reply goes with this message; the box stops replying at once.
+    const replying = replyTo ?? undefined
+    if (replying) onReplyChange?.(null)
     idempotencyKeyRef.current = createIdempotencyKey()
     setBusy(true)
     setError(null)
@@ -552,13 +567,13 @@ function ComposerBox({
       uploads.clear()
     }
     const sentText = draft.text.trim()
-    void onSubmit({ content: message, idempotencyKey: key, text: sentText, attachments, mentions: draft.mentions, workItems: draft.workItems })
+    void onSubmit({ content: message, idempotencyKey: key, text: sentText, attachments, mentions: draft.mentions, workItems: draft.workItems, replyTo: replying })
       .catch((reason: unknown) => {
         if (draftKey && !keepDraftWhileSaving && isConnectionError(reason)) {
           // Kept and sent again when the connection is back; never dropped.
           queue((current) => [
             ...current,
-            { content: message, idempotencyKey: key, text: sentText, attachments, mentions: draft.mentions, workItems: draft.workItems, target: outbox },
+            { content: message, idempotencyKey: key, text: sentText, attachments, mentions: draft.mentions, workItems: draft.workItems, replyTo: replying, target: outbox },
           ])
           return
         }
@@ -577,6 +592,7 @@ function ComposerBox({
         }
         idempotencyKeyRef.current = key
         if (attachments && !keepDraftWhileSaving) uploads.restore(attachments)
+        if (replying) onReplyChange?.(replying)
         setText((current) => (current.trim() ? current : draft.text))
         setMentions((current) => [...draft.mentions, ...current.filter((actor) => !draft.mentions.some((m) => m.id === actor.id))])
         setWorkItems((current) => [...draft.workItems, ...current.filter((item) => !draft.workItems.some((w) => w.id === item.id))])
@@ -697,6 +713,12 @@ function ComposerBox({
       closeSuggestions()
       return
     }
+    if (replyTo && onReplyChange && event.key === 'Escape') {
+      event.preventDefault()
+      event.stopPropagation()
+      onReplyChange(null)
+      return
+    }
     if (onCancel && event.key === 'Escape') {
       event.preventDefault()
       event.stopPropagation()
@@ -763,6 +785,7 @@ function ComposerBox({
         </div>
       ) : null}
       {toolbar ? <div className="aw-composer__toolbar">{toolbar}</div> : null}
+      {replyTo && onReplyChange ? <ReplyingTo onCancel={() => onReplyChange(null)} target={replyTo} /> : null}
       <div className={`aw-composer${busy ? ' is-busy' : ''}${dragging ? ' is-dropping' : ''}`}>
         {dragging ? (
           <div aria-hidden="true" className="aw-composer__drop">

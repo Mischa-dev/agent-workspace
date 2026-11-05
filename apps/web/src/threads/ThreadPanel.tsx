@@ -6,6 +6,7 @@ import { queryKeys } from '../api/queryKeys'
 import { retryReplyRequest, stopReplyRequest } from '../conversations/api'
 import { useAutoMarkSeen } from '../conversations/useAutoMarkSeen'
 import { useMessageActions } from '../conversations/MessageActions'
+import { useReplyTarget } from '../conversations/replyTarget'
 import { OriginMessage } from '../conversations/OriginMessage'
 import { ReplyStatusList } from '../conversations/ReplyStatus'
 import { groupReplyRequests } from '../conversations/replyStatusModel'
@@ -113,8 +114,10 @@ export function ThreadPanel({
   const archived = Boolean(timeline?.conversation.archivedAt)
   const canPost = Boolean(timeline?.capabilities.sendMessage && !archived)
   const threadHref = `/projects/${encodeURIComponent(projectId)}/threads/${encodeURIComponent(threadId)}`
+  const reply = useReplyTarget(threadId)
   const messageActions = useMessageActions({
     projectId,
+    onReply: reply.start,
     conversationId: threadId,
     direct: !searchWorkItems,
     viewerId: viewer.actorId,
@@ -272,7 +275,9 @@ export function ThreadPanel({
           label="Reply in thread"
           outbox={{ kind: 'message', conversationId: threadId, conversationKind: 'thread', href: threadHref }}
           onEditLast={() => messageActions.editLast(entries)}
+          onReplyChange={reply.set}
           onSubmit={sender.send}
+          replyTo={reply.target}
           placeholder="Reply in thread"
           searchActors={searchMembers}
           searchWorkItems={searchWorkItems}

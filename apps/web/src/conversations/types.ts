@@ -54,8 +54,18 @@ export type ConversationMessage = {
   linkPreviews?: unknown[]
   /** A forward: the message it quotes, as you may see it now (a ForwardedMessage, read by ForwardedQuote). */
   forwarded?: unknown
+  /** A reply: the message in this conversation it answers, as you may see it now (read by ReplyQuote). */
+  replyTo?: unknown
   /** You saved this for later. */
   saved?: SavedMark | null
+}
+
+/** The message a reply you're writing answers, shown above the message box. */
+export type ReplyTarget = {
+  messageId: string
+  authorName: string
+  /** Its text, for the preview above the box. */
+  text: string
 }
 
 /** The original of a forwarded message. Only `available` is set when you can't see it. */

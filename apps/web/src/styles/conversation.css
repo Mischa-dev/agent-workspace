@@ -1551,6 +1551,134 @@ a.aw-forward__meta:hover .aw-forward__author {
   font-style: italic;
 }
 
+
+/* AWD-70: a reply's quote of the message it answers, and the "Replying to"
+   line above the message box. One line each, cut with an ellipsis, so they
+   fit a phone too. */
+.aw-replyquote {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: var(--size-measure);
+  min-width: 0;
+  margin: 0 0 var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border-left: 3px solid var(--content-border);
+  border-radius: var(--radius-sm);
+  background: var(--content-hover);
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+  text-decoration: none;
+}
+
+/* Inside a message body, where links are coloured: keep the quote quiet. */
+.aw-msg__body a.aw-replyquote,
+.aw-msg__body a.aw-replyquote:hover {
+  color: var(--content-fg-muted);
+  text-decoration: none;
+}
+
+a.aw-replyquote:hover {
+  border-left-color: var(--accent);
+}
+
+a.aw-replyquote:hover .aw-replyquote__author {
+  text-decoration: underline;
+}
+
+.aw-replyquote .aw-icon {
+  flex: none;
+}
+
+.aw-replyquote__author {
+  flex: none;
+  font-weight: var(--weight-semibold);
+  color: var(--content-fg);
+}
+
+.aw-replyquote__text {
+  min-width: 0;
+  color: var(--content-fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-replyquote__text.is-removed {
+  font-style: italic;
+}
+
+.aw-replyingto {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2);
+  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-2);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--content-hover);
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-replyingto__quote {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.aw-replyingto__quote .aw-icon,
+.aw-replyingto__label {
+  flex: none;
+}
+
+.aw-replyingto__label strong {
+  font-weight: var(--weight-semibold);
+  color: var(--content-fg);
+}
+
+.aw-replyingto__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-replyingto__close {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--content-fg-muted);
+  cursor: pointer;
+}
+
+.aw-replyingto__close:hover {
+  background: var(--content-border);
+  color: var(--content-fg);
+}
+
+@media (pointer: coarse) {
+  .aw-replyingto__close {
+    width: 44px;
+    height: 44px;
+  }
+}
+
 /* Messages sidebar while it loads */
 .aw-sidebar__skeleton {
   padding: 0 var(--space-2);
