@@ -7,10 +7,11 @@
 # the working tree as it is, uncommitted changes included).
 #
 # Machines, best first:
-#   nixos   Mischa's laptop (16 threads). Used only when tools/ci/probe.sh says
-#           it's idle: on mains power, no game, GPU and CPU quiet, memory free.
-#           Jobs run as the unprivileged aw-ci user (modules/nixos/ci.nix in
-#           /etc/nixos) at low priority with capped memory.
+#   nixos   Mischa's laptop (16 threads). Used when tools/ci/probe.sh says it's
+#           on mains power with the GPU quiet; each step then waits its turn on
+#           the build admission lock and checks CPU and memory once it has it
+#           (see checks.sh). Jobs run as the unprivileged aw-ci user
+#           (modules/services/ci.nix in /etc/nixos) at low priority with capped memory.
 #   redhat  The always-on Red Hat host (4 threads), as aw-runner.
 # Each machine keeps its checkout and build cache between runs, so a run only
 # rebuilds what changed, and runs one CI job at a time (a lock in its work
@@ -47,9 +48,17 @@ load_host() {
       transport=ssh target=aw-ci@100.84.251.51 work=/var/lib/aw-ci/agent-workspace
       database_base=postgres://aw_test@127.0.0.1:55433
       # Compiling the server's library or its unit tests takes about 5 GB
-      # (checks.sh builds them one after the other under a cap), so more than
-      # 4 jobs overrun the memory cap.
-      memory_max=8G cpu_weight=20 jobs=4 probe=yes
+      # (checks.sh builds them one after the other under a cap). Agents build
+      # here too, so CI starts with one Cargo job and takes turns with their
+      # build-run jobs on one admission lock (tools/ci/admission.sh).
+      memory_max=8G cpu_weight=20 jobs=1 probe=yes
+      build_lock=/run/build-admission.lock
+      # Each checks.sh step makes this memory check (and the old CPU one) once
+      # it holds that lock; the probe below no longer does. 7 is the probe's old
+      # value, kept as is: provisional until a guarded CI run is measured here.
+      # memory_max=8G is the old per-job cap; it caps CI, it doesn't reserve
+      # anything for the desktop.
+      min_free_gb=7
       # Playwright's own Chromium builds don't run on NixOS; the system Chrome does.
       browser=/run/current-system/sw/bin/google-chrome-stable
       ;;
@@ -62,6 +71,8 @@ load_host() {
       work=/opt/aw-runner/ci
       database_base=postgres://aw_test:aw_test@127.0.0.1:55433
       memory_max=10G cpu_weight=100 jobs=4 probe=no
+      build_lock=""  # nothing else builds there
+      min_free_gb=""
       browser=""  # aw-runner has `playwright install chromium` in ~/.cache
       ;;
     *) echo "ci: unknown host $1" >&2; return 1 ;;
@@ -155,59 +166,102 @@ trap 'release; exit 130' INT TERM
 
 hosts=(nixos redhat)
 [ -n "${only_host}" ] && hosts=("${only_host}")
+# A build-run job holds the laptop's admission lock until it ends, and CI on
+# the laptop waits for that lock: started from inside one, it would wait on
+# itself. Red Hat has no lock, so --host redhat still works from there.
+if [ -n "${BUILD_ADMISSION_HELD:-}" ] && [[ " ${hosts[*]} " == *" nixos "* ]]; then
+  echo "ci: run tools/ci/run.sh outside build-run (it holds the laptop's build lock" \
+    "that CI there waits for), or pass --host redhat" >&2
+  exit 2
+fi
 deadline=$(($(date +%s) + ${CI_WAIT_MINUTES:-45} * 60))
-waited=""
 
-while [ -z "${held_host}" ]; do
-  for host in "${hosts[@]}"; do
-    load_host "${host}"
-    # An unreachable host makes ssh fail; that means "try the next one", so
-    # it must not end the run under set -e.
-    lock="$(acquire)" || lock=""
-    if [ -z "${lock}" ]; then
-      [ -z "${waited}" ] && echo "ci: ${host} is off or unreachable"
-      continue
+# ci_moves_on <status>: should a finished remote run move to the next machine?
+# Only for 75 from a host with a build lock: checks.sh's refusal, once it held
+# the lock, before any step ran. checks.sh reports any other 75 as 1, and a
+# refusal after work began as 76, which ends the job here.
+ci_moves_on() {
+  [ "$1" -eq 75 ] && [ -n "${build_lock}" ]
+}
+
+# Pick a machine, run the checks there. On the laptop each step waits for the
+# build admission lock and only then looks at CPU and memory. Too busy at the
+# first step, before anything ran: checks.sh exits 75 and the job moves to the
+# next machine, saying so. Too busy later: it stops with 76 and isn't moved.
+while :; do
+  waited=""
+  while [ -z "${held_host}" ]; do
+    for host in "${hosts[@]}"; do
+      load_host "${host}"
+      # An unreachable host makes ssh fail; that means "try the next one", so
+      # it must not end the run under set -e.
+      lock="$(acquire)" || lock=""
+      if [ -z "${lock}" ]; then
+        [ -z "${waited}" ] && echo "ci: ${host} is off or unreachable"
+        continue
+      fi
+      if [ "${lock}" = busy ]; then
+        [ -z "${waited}" ] && echo "ci: ${host} is running another CI job"
+        # The laptop is so much faster that waiting for it beats the next host.
+        [ "${probe}" = yes ] && break
+        continue
+      fi
+      if [ "${probe}" = yes ] &&
+        status="$(remote "export CI_MIN_FREE_GB=7${build_lock:+ CI_PROBE_RESOURCES=0}; [ \$((\$(date +%s) - \$(cat ${work}/last_done 2>/dev/null || echo 0))) -lt 180 ] && export CI_RECENT_RUN=1; bash -s" < "${here}/probe.sh" 2>/dev/null)" &&
+        [ "${status}" != ok ]; then
+        [ -z "${waited}" ] && echo "ci: ${host} skipped (${status#busy: })"
+        remote "cd ${work} && grep -qs '^${run_id} ' lock/owner && rm -rf lock" 2>/dev/null || true
+        continue
+      fi
+      held_host="${host}"
+      break
+    done
+    if [ -z "${held_host}" ]; then
+      if [ "$(date +%s)" -gt "${deadline}" ]; then
+        echo "ci: no machine free after ${CI_WAIT_MINUTES:-45} minutes" >&2
+        exit 1
+      fi
+      [ -z "${waited}" ] && echo "ci: waiting for a machine..."
+      waited=1
+      sleep 20 & wait $!
     fi
-    if [ "${lock}" = busy ]; then
-      [ -z "${waited}" ] && echo "ci: ${host} is running another CI job"
-      # The laptop is so much faster that waiting for it beats the next host.
-      [ "${probe}" = yes ] && break
-      continue
-    fi
-    if [ "${probe}" = yes ] &&
-      status="$(remote "export CI_MIN_FREE_GB=7; [ \$((\$(date +%s) - \$(cat ${work}/last_done 2>/dev/null || echo 0))) -lt 180 ] && export CI_RECENT_RUN=1; bash -s" < "${here}/probe.sh" 2>/dev/null)" &&
-      [ "${status}" != ok ]; then
-      [ -z "${waited}" ] && echo "ci: ${host} skipped (${status#busy: })"
-      remote "cd ${work} && grep -qs '^${run_id} ' lock/owner && rm -rf lock" 2>/dev/null || true
-      continue
-    fi
-    held_host="${host}"
-    break
   done
-  if [ -z "${held_host}" ]; then
-    if [ "$(date +%s)" -gt "${deadline}" ]; then
-      echo "ci: no machine free after ${CI_WAIT_MINUTES:-45} minutes" >&2
-      exit 1
-    fi
-    [ -z "${waited}" ] && echo "ci: waiting for a machine..."
-    waited=1
-    sleep 20 & wait $!
-  fi
-done
 
-load_host "${held_host}"
-heartbeat & heartbeat_pid=$!
-echo "ci: running ${areas} checks on ${held_host}"
-sync_source
-set +e
-remote "cd ${work}/src && CI_RUN_ID='${run_id}' CI_DATABASE_BASE='${database_base}' \
-  CI_TARGET_DIR='${work}/target' CI_LOCK_DIR='${work}/lock' \
-  CI_MEMORY_MAX='${memory_max}' CI_CPU_WEIGHT='${cpu_weight}' CARGO_BUILD_JOBS='${jobs}' \
-  ${browser:+PLAYWRIGHT_CHROMIUM_EXECUTABLE='${browser}'} \
-  exec setsid -w tools/ci/checks.sh '${areas}'" < /dev/null &
-# Wait in the background so a cancelled job runs the traps (and frees the
-# lock) straight away instead of after the checks finish.
-wait $!
-status=$?
-set -e
-exit "${status}"
+  load_host "${held_host}"
+  heartbeat & heartbeat_pid=$!
+  echo "ci: running ${areas} checks on ${held_host}"
+  sync_source
+  set +e
+  # CI_RECENT_RUN as the probe sets it: a CI run finished here in the last 3
+  # minutes, so the load average still counts it.
+  remote "cd ${work}/src || exit 1
+    if [ \$((\$(date +%s) - \$(cat ${work}/last_done 2>/dev/null || echo 0))) -lt 180 ]; then export CI_RECENT_RUN=1; fi
+    unset CI_SCOPED  # never inherited: checks.sh sets it itself inside its capped scope
+    CI_RUN_ID='${run_id}' CI_DATABASE_BASE='${database_base}' \
+    CI_TARGET_DIR='${work}/target' CI_LOCK_DIR='${work}/lock' \
+    CI_MEMORY_MAX='${memory_max}' CI_CPU_WEIGHT='${cpu_weight}' CARGO_BUILD_JOBS='${jobs}' \
+    ${build_lock:+CI_BUILD_LOCK='${build_lock}' CI_MIN_FREE_GB='${min_free_gb}'} \
+    ${browser:+PLAYWRIGHT_CHROMIUM_EXECUTABLE='${browser}'} \
+    exec setsid -w tools/ci/checks.sh '${areas}'" < /dev/null &
+  # Wait in the background so a cancelled job runs the traps (and frees the
+  # lock) straight away instead of after the checks finish.
+  wait $!
+  status=$?
+  set -e
+  if ci_moves_on "${status}"; then
+    busy_host="${held_host}"
+    release
+    remaining=()
+    for host in "${hosts[@]}"; do
+      [ "${host}" = "${busy_host}" ] || remaining+=("${host}")
+    done
+    hosts=("${remaining[@]}")
+    if [ "${#hosts[@]}" -eq 0 ]; then
+      echo "ci: ${busy_host} was too busy once it had the build lock, and there's no other machine to try" >&2
+      exit 75
+    fi
+    echo "ci: ${busy_host} was too busy once it had the build lock; moving to ${hosts[*]}"
+    continue
+  fi
+  exit "${status}"
+done
