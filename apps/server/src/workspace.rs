@@ -145,6 +145,22 @@ async fn member_manager_role(
     )
 }
 
+/// Whether the caller's workspace role, custom role included, keeps
+/// `permission`: an owner or admin narrowed by a custom role is held to it.
+async fn caller_may(
+    connection: &mut sqlx::PgConnection,
+    principal: &AuthenticatedActor,
+    organization_id: Uuid,
+    permission: crate::policy::Permission,
+) -> Result<bool, AppError> {
+    Ok(
+        crate::roles::standing(connection, organization_id, principal.actor_id)
+            .await?
+            .permissions
+            .contains(permission),
+    )
+}
+
 /// The caller's role in the workspace, if they're an active person in it.
 /// `lock` holds the row until the transaction ends.
 pub(crate) async fn caller_role(
@@ -377,7 +393,15 @@ async fn rename_workspace(
     let name = normalize_workspace_name(&request.name)?;
     let mut transaction = state.pool.begin().await?;
     let role = caller_role(&mut transaction, &principal, organization_id, true).await?;
-    if !role.manages() {
+    if !role.manages()
+        || !caller_may(
+            &mut transaction,
+            &principal,
+            organization_id,
+            crate::policy::Permission::SettingsManage,
+        )
+        .await?
+    {
         return Err(AppError::Forbidden);
     }
     let previous = sqlx::query_as::<_, (String, i64)>(
@@ -1024,7 +1048,15 @@ async fn list_invitations(
 ) -> Result<Json<InvitationsResponse>, AppError> {
     let mut connection = state.pool.acquire().await?;
     let role = caller_role(&mut connection, &principal, organization_id, false).await?;
-    if !role.manages() {
+    if !role.manages()
+        || !caller_may(
+            &mut connection,
+            &principal,
+            organization_id,
+            crate::policy::Permission::MembersInvite,
+        )
+        .await?
+    {
         return Err(AppError::Forbidden);
     }
     let invitations = sqlx::query_as::<_, InvitationView>(&format!(
@@ -1242,7 +1274,15 @@ async fn revoke_invitation(
     let caller = caller_role(&mut transaction, &principal, organization_id, true)
         .await
         .map_err(|_| AppError::NotFound("workspace_invitation"))?;
-    if !may_invite(caller, &role) {
+    if !may_invite(caller, &role)
+        || !caller_may(
+            &mut transaction,
+            &principal,
+            organization_id,
+            crate::policy::Permission::MembersInvite,
+        )
+        .await?
+    {
         return Err(AppError::Forbidden);
     }
     if version != request.expected_version {

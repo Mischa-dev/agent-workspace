@@ -1428,22 +1428,26 @@ async fn apply_to_their_projects(
         JOIN projects project ON project.id = membership.project_id
         WHERE project.organization_id = $1 AND membership.actor_id = $2
           AND membership.enabled AND project.kind <> 'direct' AND project.archived_at IS NULL
+          -- Only projects the caller is in: never one they can't open.
+          AND actor_can_access_project($3, NULL, project.id)
         ORDER BY membership.project_id
         "#,
     )
     .bind(organization_id)
     .bind(actor_id)
+    .bind(caller.actor_id)
     .fetch_all(&mut **transaction)
     .await?;
     let mut changed = Vec::new();
     let mut skipped = 0;
     for (project_id, role, role_id) in memberships {
-        // Project owners stay owners, and only owners change an admin's role.
-        if role == "owner" || (role == "admin" && !caller.is_owner()) {
-            skipped += 1;
+        if role == base.key() && role_id == custom {
             continue;
         }
-        if role == base.key() && role_id == custom {
+        // Project owners stay owners, only owners change an admin's role,
+        // and workers stay workers.
+        if role == "owner" || role == "worker" || (role == "admin" && !caller.is_owner()) {
+            skipped += 1;
             continue;
         }
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")

@@ -745,7 +745,9 @@ async fn lock_and_require_other_owners(
 /// members requires an Organization admin, so a Project owner or admin anywhere
 /// in the Organization is one, and someone who is neither anywhere is not.
 /// Owners are never changed here, nor a role an owner set on the
-/// workspace's Members page (`role_explicit`).
+/// workspace's Members page (`role_explicit`), nor a custom workspace role.
+/// A custom project role based on Admin counts only if it keeps "manage
+/// members": a narrowed one mustn't widen into the full workspace Admin.
 async fn sync_organization_role(
     transaction: &mut Transaction<'_, Postgres>,
     organization_id: Uuid,
@@ -760,6 +762,7 @@ async fn sync_organization_role(
                 WHERE project.organization_id = $1 AND project.archived_at IS NULL
                   AND membership.actor_id = $2 AND membership.enabled
                   AND membership.role IN ('owner', 'admin')
+                  AND custom_role_allows(membership.role_id, 'members.manage')
             ) THEN 'admin' ELSE 'member' END AS role
         )
         UPDATE organization_memberships
@@ -768,6 +771,7 @@ async fn sync_organization_role(
         WHERE organization_id = $1 AND actor_id = $2
           AND organization_memberships.role IN ('admin', 'member')
           AND NOT organization_memberships.role_explicit
+          AND organization_memberships.role_id IS NULL
           AND organization_memberships.role <> next.role
         "#,
     )

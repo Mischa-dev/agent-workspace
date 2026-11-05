@@ -950,3 +950,137 @@ async fn people_arrive_where_their_role_says() {
             .expect("pinned views");
     assert_eq!(pinned, Some(vec!["blocked".to_owned()]));
 }
+
+#[tokio::test]
+async fn creating_from_a_template_needs_create_tasks_in_that_project() {
+    let Some(setup) = setup("awd74_templates").await else {
+        return;
+    };
+    let app = &setup.app;
+    let alpha = create_project(&setup, "ALPHA", "Alpha").await;
+    let beta = create_project(&setup, "BETA", "Beta").await;
+    let (tom, tom_token) =
+        create_agent(app, &setup.browser, &space(&setup).await, "Tom", "tom").await;
+    add_member(&setup, &alpha, tom, "member").await;
+    add_member(&setup, &beta, tom, "member").await;
+
+    // In Beta, Tom may edit tasks but not create them.
+    let (status, editors) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Editors", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{editors}");
+    let version = sqlx::query_scalar::<_, i64>(
+        "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(beta.parse::<Uuid>().expect("project"))
+    .bind(tom)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("version");
+    let (status, changed) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            &format!("/api/v1/projects/{beta}/members/{tom}"),
+            Some("tom-editors"),
+            json!({"expectedVersion": version, "roleId": editors["id"]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+
+    for project in [&alpha, &beta] {
+        let (status, template) = send(
+            app,
+            setup.browser.request(
+                "POST",
+                &format!("/api/v1/projects/{project}/task-templates"),
+                None,
+                json!({"name": "Weekly", "title": "From the template"}),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{template}");
+    }
+
+    let session = initialize(app, &tom_token).await.expect("Tom");
+    // Creating tasks in Alpha lets the tool through the gate, and it works
+    // there; in Beta the tool itself refuses.
+    let made = tool(
+        app,
+        &tom_token,
+        &session,
+        "task_from_template",
+        json!({"projectId": alpha, "template": "Weekly"}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let refused = tool(
+        app,
+        &tom_token,
+        &session,
+        "task_from_template",
+        json!({"projectId": beta, "template": "Weekly"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    let in_beta = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM work_items WHERE project_id = $1 AND title = 'From the template'",
+    )
+    .bind(beta.parse::<Uuid>().expect("project"))
+    .fetch_one(&setup.pool)
+    .await
+    .expect("count");
+    assert_eq!(in_beta, 0, "nothing was created in Beta");
+}
+
+#[tokio::test]
+async fn a_narrowed_project_admin_role_does_not_make_a_workspace_admin() {
+    let Some(setup) = setup("awd74_promotion").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (bea, _) = add_person(&setup, &[&work], "bea").await;
+    let (status, lead) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Project lead", "baseRole": "admin", "permissions": ["tasks.view", "tasks.edit"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{lead}");
+    let version = sqlx::query_scalar::<_, i64>(
+        "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(work.parse::<Uuid>().expect("project"))
+    .bind(bea)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("version");
+    let (status, changed) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            &format!("/api/v1/projects/{work}/members/{bea}"),
+            Some("bea-lead"),
+            json!({"expectedVersion": version, "roleId": lead["id"]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    assert_eq!(changed["role"], "admin");
+    // A plain project admin still becomes a workspace admin, as before; one
+    // narrowed below "manage members" stays a workspace member.
+    let workspace_role = sqlx::query_scalar::<_, String>(
+        "SELECT role FROM organization_memberships WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(setup.organization_id)
+    .bind(bea)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("workspace role");
+    assert_eq!(workspace_role, "member");
+}
