@@ -1725,6 +1725,14 @@ async fn a_runs_pull_request_needs_see_code() {
     let pool = &setup.pool;
     let aw = seed.project_id.to_string();
     let thread = thread(pool, &seed, seed.channel_id, "Offline work").await;
+    // A run needs its repository prepared and available, as the other run
+    // tests here set up.
+    execute(
+        pool,
+        "UPDATE repositories SET preparation_state = 'ready', prepared_at = now(), trusted = true WHERE id = $1",
+        &[seed.repository_id],
+    )
+    .await;
     let (run_id, workspace) = run(pool, &seed, thread, "feature").await;
     let (pull_request, _) = seed_pull_request(&setup, &aw, seed.repository_id, 41).await;
     sqlx::query(
