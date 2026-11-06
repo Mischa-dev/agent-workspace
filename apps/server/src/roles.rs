@@ -429,6 +429,11 @@ pub(crate) struct RoleCapabilities {
     pub remove: bool,
     /// Give it to someone.
     pub assign: bool,
+    /// Invite someone to it, to the workspace or a project: what the
+    /// invitation endpoints allow (an owner or admin holding "invite
+    /// members", a role within what they hold, admin-based ones by owners).
+    /// A project's own "invite members" decides whether its form shows.
+    pub invite: bool,
 }
 
 /// What `caller` may do to a role.
@@ -449,6 +454,12 @@ fn role_capabilities(caller: Standing, row: &RoleRow) -> RoleCapabilities {
             && row.workspace_holders + row.project_holders == 0,
         assign: caller.kind == ActorKind::Human
             && caller.may(Permission::MembersManage)
+            && row.key != "owner"
+            && (!base_is_high || caller.is_owner())
+            && within_caller,
+        invite: caller.kind == ActorKind::Human
+            && matches!(caller.role, MembershipRole::Owner | MembershipRole::Admin)
+            && caller.may(Permission::MembersInvite)
             && row.key != "owner"
             && (!base_is_high || caller.is_owner())
             && within_caller,

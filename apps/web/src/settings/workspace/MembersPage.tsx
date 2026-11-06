@@ -376,13 +376,23 @@ function InviteSection({ organizationId, role, roles }: { organizationId: string
     queryKey: workspaceKeys.invitations(organizationId),
     queryFn: () => listWorkspaceInvitations(organizationId),
   })
-  // A built-in role's key, or a custom role's ID. Starts with the workspace's default role.
+  // Roles you may invite someone to (the server works it out as the
+  // invitation endpoint does): inviting needs "invite members", not
+  // "manage members". Until the roles load, Member is offered.
+  const invitable = (roles?.roles ?? []).filter((entry) => entry.capabilities.invite)
+  const offersMember = !roles || invitable.some((entry) => entry.builtIn && entry.key === 'member')
+  const offersAdmin = role === 'owner' && invitable.some((entry) => entry.builtIn && entry.key === 'admin')
+  const customRoles = invitable.filter((entry) => !entry.builtIn && (entry.baseRole !== 'admin' || role === 'owner'))
+  // A built-in role's key, or a custom role's ID. Starts with the workspace's
+  // default role when you may invite to it, else the first role you may.
   const defaultRole = roles?.roles.find((entry) => entry.isDefault)
   const [picked, setInviteRole] = useState<string | null>(null)
-  const inviteRole = picked ?? (defaultRole && !defaultRole.builtIn ? defaultRole.id : 'member')
-  const customRoles = (roles?.roles ?? []).filter(
-    (entry) => !entry.builtIn && entry.capabilities.assign && (entry.baseRole !== 'admin' || role === 'owner'),
-  )
+  const firstInvitable = offersMember ? 'member' : (customRoles[0]?.id ?? (offersAdmin ? 'admin' : 'member'))
+  const inviteRole =
+    picked ??
+    (defaultRole && !defaultRole.builtIn && customRoles.some((entry) => entry.id === defaultRole.id)
+      ? defaultRole.id
+      : firstInvitable)
   const [hours, setHours] = useState(DEFAULT_INVITATION_HOURS)
   const [revoking, setRevoking] = useState<WorkspaceInvitation | null>(null)
   const [note, setNote] = useState('')
@@ -433,8 +443,8 @@ function InviteSection({ organizationId, role, roles }: { organizationId: string
       <form className="aw-card aw-formcard aw-form" onSubmit={submit}>
         <div className="aw-form__grid">
           <SelectField id="workspace-invite-role" label="Role" onChange={(event) => setInviteRole(event.target.value)} value={inviteRole}>
-            <option value="member">Member</option>
-            {role === 'owner' && <option value="admin">Admin</option>}
+            {offersMember && <option value="member">Member</option>}
+            {offersAdmin && <option value="admin">Admin</option>}
             {customRoles.map((entry) => (
               <option key={entry.id} value={entry.id}>
                 {entry.name}

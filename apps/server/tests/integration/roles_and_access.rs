@@ -3381,6 +3381,61 @@ async fn cancelling_a_launch_without_see_tasks_reveals_no_task() {
     );
 }
 
+/// Inviting takes "invite members", not "manage members": an admin whose
+/// custom role may invite but not manage members is shown, per role,
+/// which ones they may invite someone to (those within what they hold),
+/// while giving roles to members stays off.
+#[tokio::test]
+async fn an_invite_only_admin_sees_which_roles_they_may_invite_to() {
+    let Some(setup) = setup("awd74_invite_roles").await else {
+        return;
+    };
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (alex, alex_browser) = add_person(&setup, &[&work], "alex").await;
+    let mut created = Vec::new();
+    for body in [
+        json!({"name": "Inviters", "baseRole": "admin", "permissions": ["members.invite", "members.view", "tasks.view"]}),
+        json!({"name": "Readers", "baseRole": "member", "permissions": ["tasks.view"]}),
+        json!({"name": "Editors", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
+    ] {
+        let (status, role) = create_role(&setup, &setup.browser, body).await;
+        assert_eq!(status, StatusCode::CREATED, "{role}");
+        created.push(role);
+    }
+    let (status, assigned) = assign(&setup, &setup.browser, alex, &created[0]["id"], false).await;
+    assert_eq!(status, StatusCode::OK, "{assigned}");
+
+    let listed = roles(&setup, &alex_browser).await;
+    let capabilities =
+        |key: &Value| role(&listed, key.as_str().expect("key"))["capabilities"].clone();
+    // Within what Alex holds: may invite to it, not give it.
+    let readers = capabilities(&created[1]["key"]);
+    assert_eq!(readers["invite"], true, "{listed}");
+    assert_eq!(readers["assign"], false, "{listed}");
+    // Beyond it ("edit tasks", and built-in Member's wider set): neither.
+    assert_eq!(
+        capabilities(&created[2]["key"])["invite"],
+        false,
+        "{listed}"
+    );
+    assert_eq!(
+        role(&listed, "member")["capabilities"]["invite"],
+        false,
+        "{listed}"
+    );
+    // Admin-based roles take an owner.
+    assert_eq!(
+        role(&listed, "admin")["capabilities"]["invite"],
+        false,
+        "{listed}"
+    );
+    assert_eq!(
+        capabilities(&created[0]["key"])["invite"],
+        false,
+        "{listed}"
+    );
+}
+
 /// The custom role `actor` holds in `project`, if any.
 async fn project_role_id(setup: &Setup, project: &str, actor: Uuid) -> Option<Uuid> {
     sqlx::query_scalar::<_, Option<Uuid>>(

@@ -60,7 +60,8 @@ export type WorkspaceRoleView = {
   updatedAt: string
   workspaceHolders: number
   projectHolders: number
-  capabilities: { edit: boolean; editPermissions: boolean; remove: boolean; assign: boolean }
+  /** What you may do with it. `assign` gives it to a member; `invite` invites someone to it. */
+  capabilities: { edit: boolean; editPermissions: boolean; remove: boolean; assign: boolean; invite: boolean }
 }
 
 export type PermissionInfo = {
