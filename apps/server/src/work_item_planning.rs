@@ -215,14 +215,19 @@ pub async fn task_links(
     .fetch_optional(&mut *connection)
     .await?
     .unwrap_or((false, false, 0));
+    // A reader who may change this task but not see tasks here (a write's
+    // response) gets no linked tasks at all.
+    let sees_here =
+        crate::conversations::sees_tasks_in(&mut *connection, reader.actor_id, project_id).await?;
     // An app's agent limit hides tasks in projects it leaves "see tasks" out of.
     let shown = |task: &TaskRef| {
-        task.project_id == project_id
-            || !crate::policy::agent_limit_hides(
-                reader.actor_id,
-                task.project_id,
-                crate::policy::Permission::TasksView,
-            )
+        sees_here
+            && (task.project_id == project_id
+                || !crate::policy::agent_limit_hides(
+                    reader.actor_id,
+                    task.project_id,
+                    crate::policy::Permission::TasksView,
+                ))
     };
     Ok(TaskLinks {
         blocked_by: blocked_by

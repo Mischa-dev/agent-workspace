@@ -212,8 +212,22 @@ pub(super) async fn task_move(
             return Ok(ToolResult::not_found("That task"));
         };
         if archived {
-            let moved = already_moved(&mut transaction, state, principal, task_id).await?;
+            let mut moved = already_moved(&mut transaction, state, principal, task_id).await?;
             transaction.commit().await?;
+            // As on a fresh move: by key only without "see tasks" here.
+            if let Some(moved) = moved.as_mut()
+                && crate::search::projects_showing_tasks(
+                    &state.pool,
+                    principal.actor_id,
+                    &[source_project_id],
+                )
+                .await?
+                .is_empty()
+            {
+                for task in moved.iter_mut() {
+                    task.title = String::new();
+                }
+            }
             return Ok(match moved {
                 Some(moved) => ToolResult::ok(TaskMoveValue {
                     moved,
@@ -578,6 +592,17 @@ pub(super) async fn task_move(
             });
         }
         transaction.commit().await?;
+        // Moving takes archive and create, not "see tasks": without it, the
+        // result names the tasks by key only.
+        let mut moved = moved;
+        if crate::search::projects_showing_tasks(&state.pool, principal.actor_id, &[source_project_id])
+            .await?
+            .is_empty()
+        {
+            for task in &mut moved {
+                task.title = String::new();
+            }
+        }
         Ok::<_, AppError>(ToolResult::ok(TaskMoveValue {
             moved,
             notes,

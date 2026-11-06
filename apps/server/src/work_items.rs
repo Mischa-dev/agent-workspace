@@ -804,6 +804,10 @@ struct WorkItemCapabilities {
     /// with it. Not sent; the view leaves those sections empty without it.
     #[serde(skip)]
     code: bool,
+    /// "See tasks": without it a write's response carries the task's id, key,
+    /// version, type and status, not its contents. Not sent.
+    #[serde(skip)]
+    tasks: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -3463,6 +3467,7 @@ fn capabilities(membership: &ProjectMembershipRow) -> Result<WorkItemCapabilitie
         edit: membership.may(Permission::TasksEdit)?,
         archive: membership.may(Permission::TasksDelete)?,
         code: membership.may(Permission::CodeView)?,
+        tasks: membership.may(Permission::TasksView)?,
     })
 }
 
@@ -3978,7 +3983,7 @@ fn work_item_view(
     } else {
         Vec::new()
     };
-    Ok(WorkItemView {
+    let mut view = WorkItemView {
         id: row.id,
         project_id: row.project_id,
         key: format!("{}-{}", row.project_key, row.number),
@@ -4024,7 +4029,21 @@ fn work_item_view(
             watching: row.watching,
             estimate_unit: row.estimate_unit,
         },
-    })
+    };
+    // Someone who may change a task but not see it (a role with "archive
+    // tasks" only, say) gets the outcome, not the task's contents.
+    if !view.capabilities.tasks {
+        view.title = String::new();
+        view.description = String::new();
+        view.assignee = None;
+        view.labels = Vec::new();
+        view.acceptance_criteria = Vec::new();
+        view.linked_threads = Vec::new();
+        view.linked_repositories = Vec::new();
+        view.linked_pull_requests = Vec::new();
+        view.planning = TaskPlanningView::default();
+    }
+    Ok(view)
 }
 
 fn json_list(value: serde_json::Value) -> Result<Vec<serde_json::Value>, AppError> {

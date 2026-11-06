@@ -1687,7 +1687,22 @@ async fn owner_task(setup: &Setup, project: &str, title: &str) -> Uuid {
         setup.browser.request(
             "POST",
             &format!("/api/v1/projects/{project}/work-items"),
-            Some(&format!("task-{}", title.replace(' ', "-"))),
+            // Idempotency keys take letters, digits, - _ and . only; a space was
+            // always -, so existing keys stay the same.
+            Some(&format!(
+                "task-{}",
+                title
+                    .chars()
+                    .map(|character| {
+                        if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+                        {
+                            character
+                        } else {
+                            '-'
+                        }
+                    })
+                    .collect::<String>()
+            )),
             json!({"title": title}),
         ),
     )
@@ -2832,4 +2847,121 @@ async fn a_write_token_follows_any_write_permission() {
         !status.is_success(),
         "a read-only role got a write token: {refused}"
     );
+}
+
+/// Changing a task doesn't reveal it: someone who may archive tasks but not
+/// see them gets the outcome, id and version from archive and restore
+/// (including an unchanged restore and a version conflict), never the
+/// title. Someone who sees tasks still gets the whole task.
+#[tokio::test]
+async fn archiving_without_see_tasks_reveals_no_task() {
+    let Some(setup) = setup("awd74_archive_view").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let project = work.parse::<Uuid>().expect("project");
+    let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
+    let task = owner_task(&setup, &work, "Secret archive plan").await;
+    let (status, archivers) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Archivers", "baseRole": "member", "permissions": ["tasks.delete"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{archivers}");
+    let (status, changed) = set_project_role(
+        &setup,
+        &work,
+        bea,
+        "bea-archivers",
+        json!({"roleId": archivers["id"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let act = |browser: &Browser, action: &str, key: &str, expected: i64| {
+        browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/work-items/{task}/{action}"),
+            Some(key),
+            json!({"expectedVersion": expected}),
+        )
+    };
+
+    let (status, archived) = send(
+        app,
+        act(
+            &bea_browser,
+            "archive",
+            "bea-archive",
+            task_version(&setup, project, task).await,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{archived}");
+    assert!(
+        !archived.to_string().contains("Secret archive plan"),
+        "{archived}"
+    );
+    let stale = task_version(&setup, project, task).await - 1;
+    let (status, conflict) = send(app, act(&bea_browser, "restore", "bea-stale", stale)).await;
+    assert!(!status.is_success(), "{status}: {conflict}");
+    assert!(
+        !conflict.to_string().contains("Secret archive plan"),
+        "{conflict}"
+    );
+    let (status, restored) = send(
+        app,
+        act(
+            &bea_browser,
+            "restore",
+            "bea-restore",
+            task_version(&setup, project, task).await,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{restored}");
+    assert!(
+        !restored.to_string().contains("Secret archive plan"),
+        "{restored}"
+    );
+    let (status, unchanged) = send(
+        app,
+        act(
+            &bea_browser,
+            "restore",
+            "bea-again",
+            task_version(&setup, project, task).await,
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {unchanged}");
+    assert!(
+        !unchanged.to_string().contains("Secret archive plan"),
+        "{unchanged}"
+    );
+
+    // The owner sees tasks: the whole task comes back.
+    let (status, archived) = send(
+        app,
+        act(
+            &setup.browser,
+            "archive",
+            "owner-archive",
+            task_version(&setup, project, task).await,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{archived}");
+    assert_eq!(archived["title"], "Secret archive plan", "{archived}");
+}
+
+/// A task's current version.
+async fn task_version(setup: &Setup, project: Uuid, task: Uuid) -> i64 {
+    sqlx::query_scalar::<_, i64>("SELECT version FROM work_items WHERE project_id = $1 AND id = $2")
+        .bind(project)
+        .bind(task)
+        .fetch_one(&setup.pool)
+        .await
+        .expect("version")
 }
