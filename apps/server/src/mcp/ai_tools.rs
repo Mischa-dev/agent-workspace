@@ -12,7 +12,7 @@ use super::{
     common::{ToolResult, parse_id},
     planning::reader,
     tasks::command_actor,
-    writes::{WriteAccess, check_write_access},
+    writes::{WriteAccess, check_access_for, check_write_access},
 };
 use crate::{
     AppState,
@@ -588,7 +588,7 @@ pub(super) async fn plan_import(
                 };
                 let mut transaction = state.pool.begin().await?;
                 if let Some(refusal) =
-                    access_refusal(check_write_access(&mut transaction, principal).await?)
+                    access_refusal(check_access_for(&mut transaction, principal, Action::WorkItemCreate).await?)
                 {
                     return Ok(refusal);
                 }
@@ -628,7 +628,7 @@ pub(super) async fn plan_import(
             _ => return Ok(ToolResult::invalid("plan", "Pass plan or pageId, one of them.")),
         };
         let mut transaction = state.pool.begin().await?;
-        if let Some(refusal) = access_refusal(check_write_access(&mut transaction, principal).await?)
+        if let Some(refusal) = access_refusal(check_access_for(&mut transaction, principal, Action::WorkItemCreate).await?)
         {
             return Ok(refusal);
         }
