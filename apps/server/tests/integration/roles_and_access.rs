@@ -3949,6 +3949,85 @@ async fn a_repeated_move_shows_the_title_only_where_tasks_are_seen() {
     );
 }
 
+/// A board's link to a task shows the task's title only to someone who
+/// sees tasks in its project; without "see tasks" the link keeps its key
+/// and the board stays readable.
+#[tokio::test]
+async fn board_links_show_task_titles_only_where_tasks_are_seen() {
+    let Some(setup) = setup("awd74_board_links").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
+    let task = owner_task(&setup, &work, "Secret linked plan").await;
+    let owner_app = connect_app(app, &setup.browser, "Owner's app", "full").await;
+    let owner_session = initialize(app, &owner_app).await.expect("owner app");
+    let created = tool(
+        app,
+        &owner_app,
+        &owner_session,
+        "whiteboard_create",
+        json!({
+            "title": "Plan board",
+            "projectId": work,
+            "linkTo": {"targetKind": "task", "targetId": task.to_string()},
+        }),
+    )
+    .await;
+    assert_eq!(created["outcome"], "ok", "{created}");
+    let board = created["value"]["whiteboard"]["id"]
+        .as_str()
+        .expect("board")
+        .to_owned();
+    let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
+    let session = initialize(app, &bea_app).await.expect("Bea's app");
+    let read = tool(
+        app,
+        &bea_app,
+        &session,
+        "whiteboard_read",
+        json!({"whiteboardId": board}),
+    )
+    .await;
+    assert_eq!(read["outcome"], "ok", "{read}");
+    assert_eq!(
+        read["value"]["links"][0]["title"], "Secret linked plan",
+        "{read}"
+    );
+
+    let (status, blind) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "No tasks", "baseRole": "viewer", "permissions": []}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{blind}");
+    let (status, changed) = set_project_role(
+        &setup,
+        &work,
+        bea,
+        "bea-no-tasks-board",
+        json!({"roleId": blind["id"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let read = tool(
+        app,
+        &bea_app,
+        &session,
+        "whiteboard_read",
+        json!({"whiteboardId": board}),
+    )
+    .await;
+    assert_eq!(read["outcome"], "ok", "{read}");
+    let link = &read["value"]["links"][0];
+    assert_eq!(link["targetId"], task.to_string(), "{read}");
+    assert!(link["key"].is_string(), "{read}");
+    assert_eq!(link["title"], "Task", "{read}");
+    assert!(!read.to_string().contains("Secret linked plan"), "{read}");
+}
+
 /// The custom role `actor` holds in `project`, if any.
 async fn project_role_id(setup: &Setup, project: &str, actor: Uuid) -> Option<Uuid> {
     sqlx::query_scalar::<_, Option<Uuid>>(
