@@ -197,6 +197,19 @@ pub(super) async fn task_move(
                     "You can't change tasks in {what}."
                 )));
             }
+            // A move copies the task's description, criteria, comments and
+            // notes into the target: only for someone who sees tasks where it
+            // is now (their role, and an app's agent limit).
+            if project == source_project_id
+                && !matches!(
+                    authorize_mutation(actor, &membership, Action::WorkItemView, None)?,
+                    Decision::Allow
+                )
+            {
+                return Ok(ToolResult::denied(
+                    "You can't see tasks in this task's project, so you can't move them.",
+                ));
+            }
         }
 
         // Moving a task that was already moved returns where it went, so a
@@ -240,6 +253,14 @@ pub(super) async fn task_move(
             });
         }
 
+        let sees_code = !crate::search::projects_allowing(
+            &state.pool,
+            principal.actor_id,
+            &[source_project_id],
+            crate::policy::Permission::CodeView,
+        )
+        .await?
+        .is_empty();
         let tasks = sqlx::query_as::<_, SourceTask>(
             r#"
             WITH RECURSIVE tree AS (
@@ -463,7 +484,7 @@ pub(super) async fn task_move(
 
             carry_criteria(&mut transaction, principal, source_project_id, target_project_id, task.id, new_id)
                 .await?;
-            let links = links_left_behind(&mut transaction, source_project_id, task.id, principal.actor_id)
+            let links = links_left_behind(&mut transaction, source_project_id, task.id, principal.actor_id, sees_code)
                 .await?;
             let mut provenance = format!(
                 "Moved from {} by {}. The original is archived with its full history.",
@@ -756,6 +777,9 @@ async fn links_left_behind(
     project_id: Uuid,
     work_item_id: Uuid,
     viewer: Uuid,
+    // Repositories and pull requests are named only for a mover who sees
+    // code in the source project (role, and an app's agent limit).
+    sees_code: bool,
 ) -> Result<Vec<LinkLine>, AppError> {
     Ok(sqlx::query_as::<_, LinkLine>(
         r#"
@@ -770,7 +794,7 @@ async fn links_left_behind(
         SELECT 'Repository', repository.owner || '/' || repository.name, TRUE
         FROM work_item_repository_links link
         JOIN repositories repository ON repository.id = link.repository_id
-        WHERE link.project_id = $1 AND link.work_item_id = $2
+        WHERE link.project_id = $1 AND link.work_item_id = $2 AND $4
         UNION ALL
         -- Same rule as pull_request_visible_to, for a reader who belongs to
         -- no private conversation: no run_artifact link, or one whose
@@ -790,12 +814,13 @@ async fn links_left_behind(
         FROM github_pull_request_work_item_links link
         JOIN github_pull_requests pull_request ON pull_request.id = link.github_pull_request_id
         WHERE link.project_id = $1 AND link.work_item_id = $2
-          AND pull_request_visible_to(pull_request.id, $3)
+          AND pull_request_visible_to(pull_request.id, $3) AND $4
         "#,
     )
     .bind(project_id)
     .bind(work_item_id)
     .bind(viewer)
+    .bind(sees_code)
     .fetch_all(&mut **transaction)
     .await?)
 }

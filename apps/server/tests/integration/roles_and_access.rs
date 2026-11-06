@@ -4516,6 +4516,163 @@ async fn redelivering_through_an_app_keeps_to_its_limit() {
     );
 }
 
+/// A move copies a task's contents into the target, so it needs "see
+/// tasks" where the task is: without it nothing moves. And the move's note
+/// on the new task names linked repositories and pull requests only for a
+/// mover who sees code there.
+#[tokio::test]
+async fn moving_a_task_needs_its_contents_and_code_to_be_seen() {
+    let Some(setup) = setup("awd74_move_reads").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let dest = create_project(&setup, "DEST", "Dest").await;
+    let project = work.parse::<Uuid>().expect("project");
+    let target = dest.parse::<Uuid>().expect("target");
+    let (bea, bea_browser) = add_person(&setup, &[&work, &dest], "bea").await;
+    let repository = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO repositories (
+            id, project_id, github_repository_id, owner, name, clone_url,
+            default_branch, mirror_path, trusted, preparation_state, prepared_at
+        ) VALUES ($1, $2, 464646, 'Mischa-dev', 'move-repo',
+                  'https://github.com/Mischa-dev/move-repo.git',
+                  'main', $3, true, 'ready', now())
+        "#,
+    )
+    .bind(repository)
+    .bind(project)
+    .bind(format!("/tmp/agent-workspace-test-{repository}.git"))
+    .execute(&setup.pool)
+    .await
+    .expect("repository");
+    let linked_task = |title: &'static str| {
+        let setup = &setup;
+        let work = work.clone();
+        async move {
+            let task = owner_task(setup, &work, title).await;
+            sqlx::query("UPDATE work_items SET description = 'Secret description' WHERE id = $1")
+                .bind(task)
+                .execute(&setup.pool)
+                .await
+                .expect("description");
+            sqlx::query(
+                r#"
+                INSERT INTO work_item_repository_links
+                    (project_id, work_item_id, repository_id, role, created_by_actor_id)
+                VALUES ($1, $2, $3, 'primary', $4)
+                "#,
+            )
+            .bind(project)
+            .bind(task)
+            .bind(repository)
+            .bind(bea)
+            .execute(&setup.pool)
+            .await
+            .expect("link the repository");
+            task
+        }
+    };
+    let in_target = |text: &'static str| {
+        let pool = setup.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(
+                r#"
+                SELECT count(*) FROM work_items item
+                LEFT JOIN work_item_comments comment ON comment.work_item_id = item.id
+                WHERE item.project_id = $1
+                  AND (strpos(item.description, $2) > 0 OR strpos(comment.content::text, $2) > 0)
+                "#,
+            )
+            .bind(target)
+            .bind(text)
+            .fetch_one(&pool)
+            .await
+            .expect("target contents")
+        }
+    };
+    let set_work_role = |name: &'static str, permissions: Value, key: &'static str| {
+        let setup = &setup;
+        let work = work.clone();
+        async move {
+            let (status, role) = create_role(
+                setup,
+                &setup.browser,
+                json!({"name": name, "baseRole": "member", "permissions": permissions}),
+            )
+            .await;
+            assert_eq!(status, StatusCode::CREATED, "{role}");
+            let (status, changed) =
+                set_project_role(setup, &work, bea, key, json!({"roleId": role["id"]})).await;
+            assert_eq!(status, StatusCode::OK, "{changed}");
+        }
+    };
+    let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
+    let session = initialize(app, &bea_app).await.expect("Bea's app");
+
+    // Without "see tasks" in Work, nothing moves.
+    let hidden = linked_task("Hidden move source").await;
+    set_work_role(
+        "Blind movers",
+        json!(["tasks.edit", "tasks.delete"]),
+        "bea-blind-movers",
+    )
+    .await;
+    let refused = tool(
+        app,
+        &bea_app,
+        &session,
+        "task_move",
+        json!({"taskId": hidden.to_string(), "toProjectId": dest}),
+    )
+    .await;
+    assert_ne!(refused["outcome"], "ok", "{refused}");
+    assert_eq!(in_target("Secret description").await, 0, "nothing copied");
+
+    // Seeing tasks but not code: it moves, and its note names no repository.
+    let moved = linked_task("Moved without code").await;
+    set_work_role(
+        "Movers",
+        json!(["tasks.view", "tasks.edit", "tasks.delete"]),
+        "bea-movers",
+    )
+    .await;
+    let done = tool(
+        app,
+        &bea_app,
+        &session,
+        "task_move",
+        json!({"taskId": moved.to_string(), "toProjectId": dest}),
+    )
+    .await;
+    assert_eq!(done["outcome"], "ok", "{done}");
+    assert!(
+        in_target("Moved from").await > 0,
+        "the move's note is there"
+    );
+    assert_eq!(in_target("move-repo").await, 0, "no repository named");
+
+    // The owner sees code: their move's note names it.
+    let owner_app = connect_app(app, &setup.browser, "Owner's app", "full").await;
+    let owner_session = initialize(app, &owner_app).await.expect("owner app");
+    let named = linked_task("Moved with code").await;
+    let done = tool(
+        app,
+        &owner_app,
+        &owner_session,
+        "task_move",
+        json!({"taskId": named.to_string(), "toProjectId": dest}),
+    )
+    .await;
+    assert_eq!(done["outcome"], "ok", "{done}");
+    assert!(
+        in_target("move-repo").await > 0,
+        "the owner's note names it"
+    );
+}
+
 /// The custom role `actor` holds in `project`, if any.
 async fn project_role_id(setup: &Setup, project: &str, actor: Uuid) -> Option<Uuid> {
     sqlx::query_scalar::<_, Option<Uuid>>(
