@@ -268,7 +268,7 @@
 
 .aw-table__head {
   position: sticky;
-  top: 0;
+  top: var(--aw-sticky-top, 0);
   z-index: var(--layer-sticky);
   border-bottom: 1px solid var(--content-border);
   border-radius: var(--radius-md) var(--radius-md) 0 0;
