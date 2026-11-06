@@ -1030,8 +1030,9 @@ async fn a_queued_run_is_cancelled_when_its_requester_loses_start_runs() {
 /// AWD-74: claiming a queued run never waits on its thread while holding
 /// the run. Removing a message holds the thread and then redacts the run's
 /// prompt; starting a run holds the run and then (the admission trigger)
-/// takes the thread. With the thread held, a claim pass skips the run and
-/// returns; once the thread is free, the next pass claims it.
+/// takes the thread. With the thread held, a claim pass waits only briefly
+/// (holding no run), leaves the run and returns; once the thread is free,
+/// the next pass claims it.
 #[tokio::test]
 async fn a_claim_skips_a_run_whose_thread_is_locked() {
     let Some(fixture) = admission_fixture("admission_lock_order").await else {

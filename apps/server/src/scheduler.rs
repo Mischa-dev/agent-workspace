@@ -21,6 +21,9 @@ use crate::{
 };
 
 const SCHEDULER_LEASE: Duration = Duration::from_secs(30);
+/// How long a claim waits for a run's thread before leaving the run for the
+/// next pass.
+const THREAD_LOCK_TIMEOUT: &str = "1s";
 const WORKTREE_START_FAILURE_REASON: &str =
     "Worktree creation failed; inspect the retained repository workspace.";
 const PROVIDER_START_FAILURE_REASON: &str =
@@ -228,11 +231,13 @@ async fn claim_next(state: &AppState) -> Result<Option<ClaimedRun>, AppError> {
     }
 }
 
+/// Lock order, against removing a message (which locks its thread and then
+/// redacts the prompt on the run it started): a claim never holds a run
+/// while it waits on a thread. Lapsed claims are cleared in a statement of
+/// their own, the candidate is chosen without row locks (the advisory lock
+/// keeps claims one at a time), then the thread is taken, waiting briefly
+/// (`THREAD_LOCK_TIMEOUT`), and only then the run.
 async fn claim_one(state: &AppState) -> Result<Claim, AppError> {
-    let mut transaction = state.pool.begin().await?;
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('agent_workspace_scheduler', 0))")
-        .execute(&mut *transaction)
-        .await?;
     sqlx::query(
         r#"
         UPDATE agent_runs
@@ -244,8 +249,12 @@ async fn claim_one(state: &AppState) -> Result<Claim, AppError> {
           AND scheduler_lease_expires_at <= now()
         "#,
     )
-    .execute(&mut *transaction)
+    .execute(&state.pool)
     .await?;
+    let mut transaction = state.pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('agent_workspace_scheduler', 0))")
+        .execute(&mut *transaction)
+        .await?;
     // The host-wide cap only counts runs on this server; cloud harnesses
     // never wait on it (H8).
     let cloud_kinds = state.supervisors.cloud_kinds();
@@ -303,7 +312,6 @@ async fn claim_one(state: &AppState) -> Result<Claim, AppError> {
         JOIN projects project ON project.id = run.project_id
         JOIN execution_profiles profile ON profile.id = run.execution_profile_id
         JOIN provider_accounts account ON account.id = profile.provider_account_id
-        JOIN conversations conversation ON conversation.id = run.conversation_id
         WHERE run.state = 'queued'
           AND run.scheduler_claim_id IS NULL
           AND (account.adapter_kind = ANY($2) OR NOT $1)
@@ -320,13 +328,6 @@ async fn claim_one(state: &AppState) -> Result<Claim, AppError> {
                 AND active.state IN {ACTIVE_TURN_STATES}
           )
         ORDER BY run.created_at, run.id
-        -- The thread too, without waiting: starting the run (the admission
-        -- trigger) takes it after the run, while removing a message in it
-        -- takes the thread and then redacts the run's prompt. A run whose
-        -- thread is busy that way waits for the next pass instead of the two
-        -- deadlocking.
-        FOR UPDATE OF run SKIP LOCKED
-        FOR SHARE OF conversation SKIP LOCKED
         LIMIT 1
         "#
     ))
@@ -338,6 +339,42 @@ async fn claim_one(state: &AppState) -> Result<Claim, AppError> {
         transaction.commit().await?;
         return Ok(Claim::Nothing);
     };
+    // The thread first (starting the run, the admission trigger takes it
+    // too), waiting briefly for whoever holds it, such as a start request
+    // or a message removal; held longer, the run waits for the next pass.
+    sqlx::query(&format!("SET LOCAL lock_timeout = '{THREAD_LOCK_TIMEOUT}'"))
+        .execute(&mut *transaction)
+        .await?;
+    match sqlx::query("SELECT id FROM conversations WHERE id = $1 FOR SHARE")
+        .bind(candidate.conversation_id)
+        .execute(&mut *transaction)
+        .await
+    {
+        Ok(_) => {}
+        Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some("55P03") => {
+            transaction.rollback().await?;
+            return Ok(Claim::Nothing);
+        }
+        Err(error) => return Err(error.into()),
+    }
+    sqlx::query("SET LOCAL lock_timeout = 0")
+        .execute(&mut *transaction)
+        .await?;
+    // Then the run, if it's still waiting and nobody else holds it.
+    let still_queued = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT id FROM agent_runs
+        WHERE id = $1 AND state = 'queued' AND scheduler_claim_id IS NULL
+        FOR UPDATE SKIP LOCKED
+        "#,
+    )
+    .bind(candidate.run_id)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    if still_queued.is_none() {
+        transaction.commit().await?;
+        return Ok(Claim::Nothing);
+    }
     // Whoever started it (and, for a sponsored run, whoever approved it)
     // must still be able to start runs here now (`admission_refusal`).
     // Otherwise it's cancelled, saying why, and the next one is looked at.
