@@ -1175,7 +1175,7 @@ async fn api_webhooks_and_automations_act_for_their_maker_only() {
         Some(&token),
         "POST",
         "/api/public/v1/task_launch",
-        json!({"projectId": seed.project_id, "taskIds": queued_tasks}),
+        json!({"taskIds": queued_tasks}),
     )
     .await;
     assert_eq!(queued.2["outcome"], "ok", "{}", queued.1);
