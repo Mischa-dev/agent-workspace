@@ -59,6 +59,26 @@ export function tombstoneEntry(entry: ConversationTimelineEntry): ConversationTi
   return entry.message ? { ...entry, message: tombstoneMessage(entry.message) } : entry
 }
 
+/** The message a reply quotes (AWD-70), or null. */
+export function quotedMessageId(message: ConversationMessage): string | null {
+  const replyTo = asRecord(message.replyTo)
+  return typeof replyTo?.messageId === 'string' ? replyTo.messageId : null
+}
+
+/** A reply whose quoted message was removed: the quote says so and keeps none of its text. */
+export function withRemovedQuote(message: ConversationMessage): ConversationMessage {
+  const replyTo = asRecord(message.replyTo)
+  if (!replyTo || (replyTo.removed === true && replyTo.text === null)) return message
+  return { ...message, replyTo: { ...replyTo, removed: true, text: null } }
+}
+
+/** True when a live update says the message `message` quotes was removed, and its quote still shows it. */
+export function quotesRemovedLive(message: ConversationMessage, updates: MessageUpdates, conversationId: string) {
+  const quoted = message.removed ? null : quotedMessageId(message)
+  const update = quoted ? updates[quoted] : undefined
+  return Boolean(update?.removed && update.conversationId === conversationId && withRemovedQuote(message) !== message)
+}
+
 /** A message whose reactions changed live, and how many changes were seen. */
 export type ReactionUpdate = { conversationId: string; messageId: string; seen: number }
 
@@ -127,8 +147,8 @@ export function mergeTimelineEntries(...lists: ConversationTimelineEntry[][]) {
 
 /**
  * Patch entries with fetched replacements, then blank every message a live
- * update says was removed. This runs during render, so removed text is gone
- * from the screen before any refetch finishes.
+ * update says was removed, and every reply's quote of one. This runs during
+ * render, so removed text is gone from the screen before any refetch finishes.
  */
 export function applyLiveMessages(
   entries: ConversationTimelineEntry[],
@@ -149,6 +169,10 @@ export function applyLiveMessages(
     if (update?.removed && update.conversationId === conversationId && !current.message?.removed) {
       current = tombstoneEntry(current)
     }
+    // A reply quoting a removed message stops showing its text at once too.
+    if (current.message && quotesRemovedLive(current.message, updates, conversationId)) {
+      current = { ...current, message: withRemovedQuote(current.message) }
+    }
     if (current !== entry) changed = true
     return current
   })
@@ -161,15 +185,26 @@ function asRecord(value: unknown): WireRecord | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as WireRecord) : null
 }
 
-/** A cached timeline page (or a thread's, which has the same entries) with one message blanked. */
+/**
+ * A cached timeline page (or a thread's, which has the same entries) with one
+ * message blanked, and every reply's quote of it.
+ */
 export function tombstoneInTimelinePage(data: unknown, messageId: string): unknown {
   const page = asRecord(data)
   if (!page || !Array.isArray(page.entries)) return data
   let changed = false
   const entries = (page.entries as ConversationTimelineEntry[]).map((entry) => {
-    if (entry?.message?.id !== messageId || entry.message.removed) return entry
+    const message = entry?.message
+    if (!message || message.removed) return entry
+    if (message.id === messageId) {
+      changed = true
+      return tombstoneEntry(entry)
+    }
+    if (quotedMessageId(message) !== messageId) return entry
+    const blanked = withRemovedQuote(message)
+    if (blanked === message) return entry
     changed = true
-    return tombstoneEntry(entry)
+    return { ...entry, message: blanked }
   })
   return changed ? { ...page, entries } : data
 }

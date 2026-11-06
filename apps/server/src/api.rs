@@ -14,7 +14,7 @@ use crate::{
     conversations::{
         ApprovalCapabilities, ApprovalRow, ApprovalView, RunCapabilities, RunRow, RunView,
     },
-    domain::{RunState, allocate_conversation_sequence, transition_run},
+    domain::{RunState, allocate_conversation_sequence, resume_answered_run, transition_run},
     error::{ApiJson, ApiPath, AppError},
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     message_content::MessageContent,
@@ -1823,7 +1823,7 @@ pub(crate) async fn answer_approval(
     insert_event_entry(&mut transaction, context.conversation_id, resolved_event).await?;
 
     if approved {
-        transition_run(&mut transaction, context.run_id, RunState::Working, None).await?;
+        resume_answered_run(&mut transaction, context.run_id).await?;
     } else {
         transition_run(
             &mut transaction,

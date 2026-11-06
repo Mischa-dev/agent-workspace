@@ -5,6 +5,7 @@ import type {
   ConversationWorkItemChip,
   MessageContentV1,
   MessageNode,
+  ReplyTarget,
 } from './types'
 
 export type ComposerSubmission = {
@@ -17,6 +18,8 @@ export type ComposerSubmission = {
   /** The people and tasks it names, for showing it formatted while it sends. */
   mentions?: ConversationActor[]
   workItems?: ConversationWorkItemChip[]
+  /** The message it replies to, quoted above it. */
+  replyTo?: ReplyTarget
 }
 
 /** The content of a message that is only files. */

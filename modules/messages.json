@@ -60,7 +60,7 @@
   "embeds": [],
   "slots": {
     "pages": ["/messages", "/messages/:conversationId"],
-    "parts": ["talk.slash_commands", "talk.scheduling"],
+    "parts": ["talk.slash_commands", "talk.scheduling", "talk.replies"],
     "sidebar": ["rail.messages"],
     "home": [],
     "settings": [],
