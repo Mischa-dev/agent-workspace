@@ -106,7 +106,10 @@ pub async fn search(
     } else {
         kinds
     };
-    let task_projects = if kinds.contains(&SearchKind::Tasks) {
+    // Tasks, and files attached to tasks, come only from projects where the
+    // viewer (and an app's limit) still sees tasks.
+    let task_projects = if kinds.contains(&SearchKind::Tasks) || kinds.contains(&SearchKind::Files)
+    {
         projects_showing_tasks(pool, viewer, projects).await?
     } else {
         Vec::new()
@@ -121,7 +124,7 @@ pub async fn search(
             SearchKind::Decisions => DECISIONS_SQL,
             SearchKind::Files => FILES_SQL,
         };
-        let rows = sqlx::query_as::<_, SearchHit>(sql)
+        let mut query = sqlx::query_as::<_, SearchHit>(sql)
             .bind(viewer)
             .bind(if *kind == SearchKind::Tasks {
                 &task_projects[..]
@@ -133,9 +136,11 @@ pub async fn search(
             .bind(filter.author_id)
             .bind(filter.since)
             .bind(filter.until)
-            .bind(limit)
-            .fetch_all(pool)
-            .await?;
+            .bind(limit);
+        if *kind == SearchKind::Files {
+            query = query.bind(&task_projects[..]);
+        }
+        let rows = query.fetch_all(pool).await?;
         hits.extend(rows);
     }
     hits.sort_by(|left, right| {
@@ -152,7 +157,8 @@ pub async fn search(
 // Every query takes the same parameters:
 // $1 viewer, $2 projects, $3 text, $4 conversation, $5 author, $6 since,
 // $7 until, $8 limit. Unused ones are compared against NULL so the planner
-// drops them.
+// drops them. The files query also takes $9, the projects where the viewer
+// still sees tasks (`projects_showing_tasks`), for files attached to tasks.
 
 const MESSAGES_SQL: &str = r#"
     WITH query AS (SELECT websearch_to_tsquery('english', $3) AS q)
@@ -352,6 +358,9 @@ const FILES_SQL: &str = r#"
           AND conversation_visible_to(conversation.id, $1)
       ))
       AND (file.work_item_id IS NULL OR item.archived_at IS NULL)
+      -- $9 (files only): projects where the viewer still sees tasks, so a
+      -- task's file never names a task they can't open.
+      AND (file.work_item_id IS NULL OR file.project_id = ANY($9))
       AND ($4::uuid IS NULL OR conversation.id = $4 OR conversation.parent_channel_id = $4)
       AND ($5::uuid IS NULL OR file.uploaded_by_actor_id = $5)
       AND ($6::timestamptz IS NULL OR file.created_at >= $6)

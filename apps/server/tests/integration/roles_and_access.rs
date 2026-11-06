@@ -1263,3 +1263,417 @@ async fn task_files_follow_who_can_see_tasks() {
         Err(StatusCode::NOT_FOUND)
     );
 }
+
+/// Bringing back a disabled member hands their role out again, so a
+/// narrowed admin can do it only within what they hold, as with a role
+/// change.
+#[tokio::test]
+async fn a_narrowed_admin_cannot_bring_back_more_than_they_hold() {
+    let Some(setup) = setup("awd74_reenable").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let project = work.parse::<Uuid>().expect("project");
+    let (alex, alex_browser) = add_person(&setup, &[&work], "alex").await;
+    let (bea, _) = add_person(&setup, &[&work], "bea").await;
+    make_admin(&setup, alex).await;
+
+    // Alex manages members as Ops, which leaves out editing tasks; Bea is a
+    // plain Member, who edits tasks.
+    let (status, narrowed) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Ops", "baseRole": "admin", "permissions": ["members.manage", "members.view", "tasks.view"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{narrowed}");
+    let narrowed_id = narrowed["id"]
+        .as_str()
+        .expect("id")
+        .parse::<Uuid>()
+        .expect("UUID");
+    let (status, assigned) = assign(&setup, &setup.browser, alex, &narrowed["id"], false).await;
+    assert_eq!(status, StatusCode::OK, "{assigned}");
+    sqlx::query("UPDATE project_memberships SET role = 'admin', role_id = $3 WHERE project_id = $1 AND actor_id = $2")
+        .bind(project)
+        .bind(alex)
+        .bind(narrowed_id)
+        .execute(&setup.pool)
+        .await
+        .expect("alex is Ops in the project too");
+    sqlx::query(
+        "UPDATE project_memberships SET enabled = false WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project)
+    .bind(bea)
+    .execute(&setup.pool)
+    .await
+    .expect("bea was removed");
+
+    // Alex can't bring Bea back without a role change: Member holds more
+    // than Ops.
+    let (version, _) = project_membership(&setup, project, bea).await;
+    let (status, refused) = send(
+        app,
+        alex_browser.request(
+            "PATCH",
+            &format!("/api/v1/projects/{work}/members/{bea}"),
+            Some("ops-brings-bea-back"),
+            json!({"expectedVersion": version, "enabled": true}),
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "plain Member holds more than Ops: {refused}"
+    );
+    assert!(
+        !project_membership(&setup, project, bea).await.1,
+        "Bea stayed out"
+    );
+
+    // The owner, who holds everything, can.
+    let (status, back) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            &format!("/api/v1/projects/{work}/members/{bea}"),
+            Some("owner-brings-bea-back"),
+            json!({"expectedVersion": version, "enabled": true}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{back}");
+    assert!(
+        project_membership(&setup, project, bea).await.1,
+        "Bea is back"
+    );
+}
+
+/// File search leaves out a task's files where the viewer (or an app's
+/// limit) can't see tasks, and keeps files posted in messages.
+#[tokio::test]
+async fn file_search_leaves_out_task_files_where_tasks_are_hidden() {
+    let Some((setup, _root)) = with_data_root("awd74_file_search").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
+    let (status, made) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/work-items"),
+            Some("file-search-task"),
+            json!({"title": "Quarterly plan"}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {made}");
+    let task = made["id"].as_str().expect("task").to_owned();
+    let channel = create_channel(&setup, &work, "general").await;
+
+    // Tom attaches one file to the task and posts another in a channel.
+    let (tom, tom_token) =
+        create_agent(app, &setup.browser, &space(&setup).await, "Tom", "tom").await;
+    add_member(&setup, &work, tom, "member").await;
+    let session = initialize(app, &tom_token).await.expect("Tom");
+    let on_task = tool(
+        app,
+        &tom_token,
+        &session,
+        "file_upload",
+        json!({"taskId": task, "name": "budget-task.txt", "text": "task budget"}),
+    )
+    .await;
+    assert_eq!(on_task["outcome"], "ok", "{on_task}");
+    let in_channel = tool(
+        app,
+        &tom_token,
+        &session,
+        "file_upload",
+        json!({"conversationId": channel, "name": "budget-channel.txt", "text": "channel budget"}),
+    )
+    .await;
+    assert_eq!(in_channel["outcome"], "ok", "{in_channel}");
+    let posted = tool(
+        app,
+        &tom_token,
+        &session,
+        "message_send",
+        json!({"conversationId": channel, "attachmentIds": [in_channel["value"]["fileId"]]}),
+    )
+    .await;
+    assert_eq!(posted["outcome"], "ok", "{posted}");
+    let names = |found: &Value| {
+        let mut names = found["value"]["results"]
+            .as_array()
+            .unwrap_or_else(|| panic!("results: {found}"))
+            .iter()
+            .map(|hit| hit["title"].as_str().expect("title").to_owned())
+            .collect::<Vec<_>>();
+        names.sort();
+        names
+    };
+    let search = json!({"query": "budget", "kinds": ["files"], "projectId": work});
+
+    // Bea's app finds both until her agent limit leaves out "see tasks".
+    let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
+    let bea_session = initialize(app, &bea_app).await.expect("Bea's app");
+    let found = tool(app, &bea_app, &bea_session, "search", search.clone()).await;
+    assert_eq!(
+        names(&found),
+        ["budget-channel.txt", "budget-task.txt"],
+        "{found}"
+    );
+    let (status, limit) = send(
+        app,
+        setup.browser.request(
+            "PUT",
+            &format!(
+                "/api/v1/organizations/{}/members/{bea}/agent-limit",
+                setup.organization_id
+            ),
+            None,
+            json!({"permissions": ["channels.post"]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{limit}");
+    let found = tool(app, &bea_app, &bea_session, "search", search.clone()).await;
+    assert_eq!(names(&found), ["budget-channel.txt"], "{found}");
+    assert!(!found.to_string().contains("Quarterly plan"), "{found}");
+
+    // An agent whose role leaves out "see tasks" finds only the channel's.
+    let (status, posters) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Posters", "baseRole": "member", "permissions": ["channels.post"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{posters}");
+    let version = sqlx::query_scalar::<_, i64>(
+        "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(work.parse::<Uuid>().expect("project"))
+    .bind(tom)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("version");
+    let (status, changed) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            &format!("/api/v1/projects/{work}/members/{tom}"),
+            Some("tom-posters"),
+            json!({"expectedVersion": version, "roleId": posters["id"]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let found = tool(app, &tom_token, &session, "search", search).await;
+    assert_eq!(names(&found), ["budget-channel.txt"], "{found}");
+    assert!(!found.to_string().contains("Quarterly plan"), "{found}");
+}
+
+/// A project membership's version and whether it's enabled.
+async fn project_membership(setup: &Setup, project: Uuid, actor: Uuid) -> (i64, bool) {
+    sqlx::query_as::<_, (i64, bool)>(
+        "SELECT version, enabled FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project)
+    .bind(actor)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("project membership")
+}
+
+/// The token in an issued invitation's URL.
+fn invitation_token(issued: &Value) -> String {
+    issued["invitationUrl"]
+        .as_str()
+        .unwrap_or_else(|| panic!("invitation URL: {issued}"))
+        .split_once("#token=")
+        .expect("token fragment")
+        .1
+        .to_owned()
+}
+
+/// Every way of handing access out again stays within what the giver holds
+/// now: an invitation stops working once its issuer's role narrows below
+/// what it gives, a narrowed admin can't resend an invitation for more than
+/// they hold, and they can't switch back on an agent holding more.
+#[tokio::test]
+async fn invitations_and_agents_stay_within_what_the_giver_holds_now() {
+    let Some(setup) = setup("awd74_regrant").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let project = work.parse::<Uuid>().expect("project");
+    let (alex, alex_browser) = add_person(&setup, &[&work], "alex").await;
+    make_admin(&setup, alex).await;
+    sqlx::query(
+        "UPDATE project_memberships SET role = 'admin' WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project)
+    .bind(alex)
+    .execute(&setup.pool)
+    .await
+    .expect("alex is a project admin");
+
+    // As a plain admin, Alex invites a Member to the workspace and the project.
+    let mut tokens = Vec::new();
+    for (path, resolve) in [
+        (
+            format!(
+                "/api/v1/organizations/{}/invitations",
+                setup.organization_id
+            ),
+            "/api/v1/workspace-invitations/resolve",
+        ),
+        (
+            format!("/api/v1/projects/{work}/invitations"),
+            "/api/v1/project-invitations/resolve",
+        ),
+    ] {
+        let (status, issued) = send(
+            app,
+            alex_browser.request(
+                "POST",
+                &path,
+                None,
+                json!({"role": "member", "expiresInHours": 24}),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{path}: {issued}");
+        let token = invitation_token(&issued);
+        let (status, resolved) = send(
+            app,
+            setup
+                .browser
+                .request("POST", resolve, None, json!({"token": token})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{resolve}: {resolved}");
+        tokens.push((resolve, token));
+    }
+    // The owner invites a Member to the project too, and adds an agent.
+    let (status, owners) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/invitations"),
+            None,
+            json!({"role": "member", "expiresInHours": 24}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{owners}");
+    let owners_invitation = owners["id"].as_str().expect("invitation").to_owned();
+    let (mara, _) = create_agent(app, &setup.browser, &work, "Mara", "mara").await;
+    let (connection_id, version, _) = agent_connection(&setup, mara).await;
+    let (status, disabled) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            &format!("/api/v1/projects/{work}/external-agents/{connection_id}"),
+            None,
+            json!({"expectedVersion": version, "enabled": false}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{disabled}");
+
+    // Then the owner narrows Alex to Ops, which leaves out editing tasks.
+    let (status, ops) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Ops", "baseRole": "admin", "permissions": ["agents.manage", "members.invite", "members.manage", "members.view", "tasks.view"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{ops}");
+    let (status, assigned) = assign(&setup, &setup.browser, alex, &ops["id"], false).await;
+    assert_eq!(status, StatusCode::OK, "{assigned}");
+    sqlx::query(
+        "UPDATE project_memberships SET role_id = $3 WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project)
+    .bind(alex)
+    .bind(
+        ops["id"]
+            .as_str()
+            .expect("id")
+            .parse::<Uuid>()
+            .expect("UUID"),
+    )
+    .execute(&setup.pool)
+    .await
+    .expect("alex is Ops in the project too");
+
+    // Alex's invitations no longer open: Member holds more than Ops.
+    for (resolve, token) in &tokens {
+        let (status, refused) = send(
+            app,
+            setup
+                .browser
+                .request("POST", resolve, None, json!({"token": token})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{resolve}: {refused}");
+    }
+    // Nor can Alex resend the owner's Member invitation as their own.
+    let (status, refused) = send(
+        app,
+        alex_browser.request(
+            "POST",
+            &format!("/api/v1/project-invitations/{owners_invitation}/replace"),
+            None,
+            json!({"expectedVersion": 1, "expiresInHours": 48}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    // Nor switch Mara, a Member, back on.
+    let (_, version, _) = agent_connection(&setup, mara).await;
+    let (status, refused) = send(
+        app,
+        alex_browser.request(
+            "PATCH",
+            &format!("/api/v1/projects/{work}/external-agents/{connection_id}"),
+            None,
+            json!({"expectedVersion": version, "enabled": true}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    let (_, _, status_now) = agent_connection(&setup, mara).await;
+    assert_ne!(status_now, "active", "Mara stayed off");
+    // The owner, who holds everything, can.
+    let (status, enabled) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            &format!("/api/v1/projects/{work}/external-agents/{connection_id}"),
+            None,
+            json!({"expectedVersion": version, "enabled": true}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{enabled}");
+}
+
+/// An agent's connection: its ID, version and status.
+async fn agent_connection(setup: &Setup, agent: Uuid) -> (Uuid, i64, String) {
+    sqlx::query_as::<_, (Uuid, i64, String)>(
+        "SELECT id, version, status FROM external_agent_connections WHERE actor_id = $1",
+    )
+    .bind(agent)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("agent connection")
+}

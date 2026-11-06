@@ -9,7 +9,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use sqlx::{FromRow, Postgres, Transaction};
+use sqlx::{FromRow, PgConnection, Postgres, Transaction};
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
 use zeroize::{Zeroize, Zeroizing};
@@ -425,6 +425,16 @@ async fn replace_invitation(
         project_membership_enabled: row.project_membership_enabled,
     };
     authorize_manage(principal.actor_id, row.project_id, &access, Some(&row.role))?;
+    // The replacement is issued by the caller, so its role must be within
+    // what the caller holds, as for a new invitation.
+    crate::memberships::require_grantable(
+        &mut transaction,
+        principal.actor_id,
+        row.project_id,
+        &row.role,
+        row.role_id,
+    )
+    .await?;
     if row.status != "active" {
         return Err(AppError::Conflict(
             "project_invitation",
@@ -543,6 +553,8 @@ async fn resolve_invitation(
         .await?
         .filter(|row| digest_matches(&row.token_digest, &digest))
         .ok_or(AppError::NotFound("project_invitation"))?;
+    let mut connection = state.pool.acquire().await?;
+    require_issuer_still_grants(&mut connection, &row).await?;
     Ok(Json(ResolvedInvitation {
         organization_name: row.organization_name,
         project_name: row.project_name,
@@ -581,6 +593,7 @@ async fn accept_new_user(
         .await?
         .filter(|row| digest_matches(&row.token_digest, &digest))
         .ok_or(AppError::NotFound("project_invitation"))?;
+    require_issuer_still_grants(&mut transaction, &invitation).await?;
     if sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS (SELECT 1 FROM users WHERE lower(login_name) = $1)",
     )
@@ -716,6 +729,7 @@ async fn accept_existing_user(
         .await?
         .filter(|row| digest_matches(&row.token_digest, &digest))
         .ok_or(AppError::NotFound("project_invitation"))?;
+    require_issuer_still_grants(&mut transaction, &invitation).await?;
     #[derive(FromRow)]
     struct ExistingIdentity {
         authentication_epoch: i64,
@@ -1292,5 +1306,28 @@ mod tests {
         access.project_membership_enabled = true;
         access.project_archived = true;
         assert!(authorize_manage(actor_id, project_id, &access, Some("viewer")).is_err());
+    }
+}
+
+/// Refuses an invitation whose issuer may no longer send it: their role
+/// narrowed after they sent it, so it lost "invite people" or no longer
+/// holds everything the invited role does. It reads as an invitation that
+/// isn't valid any more.
+async fn require_issuer_still_grants(
+    connection: &mut PgConnection,
+    invitation: &InvitationAcceptanceRow,
+) -> Result<(), AppError> {
+    if crate::roles::issuer_still_grants(
+        connection,
+        invitation.organization_id,
+        invitation.issued_by_actor_id,
+        &invitation.role,
+        invitation.role_id,
+    )
+    .await?
+    {
+        Ok(())
+    } else {
+        Err(AppError::NotFound("project_invitation"))
     }
 }
