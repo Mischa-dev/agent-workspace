@@ -2467,7 +2467,9 @@ async fn a_custom_admin_invitation_does_not_make_a_workspace_admin() {
     };
     let app = &setup.app;
     let work = create_project(&setup, "WORK", "Work").await;
-    let (bea, bea_browser) = add_person(&setup, &[], "bea").await;
+    // In the workspace through another project (an account needs one), not in Work.
+    let elsewhere = create_project(&setup, "ELSE", "Elsewhere").await;
+    let (bea, bea_browser) = add_person(&setup, &[&elsewhere], "bea").await;
     let (status, manager) = create_role(
         &setup,
         &setup.browser,
@@ -2554,7 +2556,9 @@ async fn a_project_invitation_lapses_when_its_issuer_loses_invite_in_the_project
     let work = create_project(&setup, "WORK", "Work").await;
     let project = work.parse::<Uuid>().expect("project");
     let (alex, alex_browser) = add_person(&setup, &[&work], "alex").await;
-    let (_, bea_browser) = add_person(&setup, &[], "bea").await;
+    // In the workspace through another project (an account needs one), not in Work.
+    let elsewhere = create_project(&setup, "ELSE", "Elsewhere").await;
+    let (_, bea_browser) = add_person(&setup, &[&elsewhere], "bea").await;
     make_admin(&setup, alex).await;
     sqlx::query(
         "UPDATE project_memberships SET role = 'admin' WHERE project_id = $1 AND actor_id = $2",
