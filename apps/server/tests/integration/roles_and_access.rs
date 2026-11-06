@@ -337,6 +337,16 @@ async fn built_in_roles_stay_as_they_were_and_nobody_grants_more_than_they_hold(
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{assigned}");
+    // And a plain Admin in Work again: applying a role there is held to
+    // Alex's role in the project too, which was still Ops.
+    sqlx::query(
+        "UPDATE project_memberships SET role = 'admin', role_id = NULL WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project)
+    .bind(alex)
+    .execute(&setup.pool)
+    .await
+    .expect("alex is a plain admin in Work again");
 
     // Admins assign member-based roles to members, and nothing else.
     let (status, assigned) = assign(&setup, &alex_browser, bea, &contractor["id"], true).await;
