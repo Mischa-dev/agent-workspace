@@ -116,15 +116,26 @@ async fn drain(state: &AppState) -> Result<(), AppError> {
 ///
 /// Whether memberships, actors and workspace memberships are still active
 /// stays with the admission trigger (validate_agent_run_scope_and_admission).
+///
+/// Read on the claim's own connection: the claim holds the run's row, so it
+/// waits on nothing else while it decides.
 async fn admission_refusal(
-    state: &AppState,
+    transaction: &mut Transaction<'_, Postgres>,
     requester: Uuid,
     requester_kind: &str,
     sponsor: Option<Uuid>,
     project_id: Uuid,
     through_app: bool,
 ) -> Result<Option<&'static str>, AppError> {
-    if !may_start_runs(state, requester, requester_kind, project_id, through_app).await? {
+    if !may_start_runs(
+        transaction,
+        requester,
+        requester_kind,
+        project_id,
+        through_app,
+    )
+    .await?
+    {
         return Ok(Some(match (sponsor.is_some(), through_app) {
             (true, _) => SPONSORED_REQUESTER_REFUSED_REASON,
             (false, true) => REQUESTER_APP_REFUSED_REASON,
@@ -132,7 +143,7 @@ async fn admission_refusal(
         }));
     }
     if let Some(sponsor) = sponsor
-        && !may_start_runs(state, sponsor, "human", project_id, false).await?
+        && !may_start_runs(transaction, sponsor, "human", project_id, false).await?
     {
         return Ok(Some(SPONSOR_REFUSED_REASON));
     }
@@ -143,7 +154,7 @@ async fn admission_refusal(
 /// for a run their app started (`through_app`), within the app's limit.
 /// Actors other than people and agents aren't checked here.
 async fn may_start_runs(
-    state: &AppState,
+    transaction: &mut Transaction<'_, Postgres>,
     actor_id: Uuid,
     kind: &str,
     project_id: Uuid,
@@ -155,9 +166,8 @@ async fn may_start_runs(
         _ => return Ok(true),
     };
     let limits = if through_app && actor_kind == ActorKind::Human {
-        let mut connection = state.pool.acquire().await?;
         Some(
-            crate::roles::app_access(&mut connection, actor_id)
+            crate::roles::app_access(transaction, actor_id)
                 .await?
                 .limits,
         )
@@ -173,7 +183,7 @@ async fn may_start_runs(
     )
     .bind(project_id)
     .bind(actor_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&mut **transaction)
     .await?;
     let Some((role, permissions, enabled)) = membership else {
         return Ok(false);
@@ -293,6 +303,7 @@ async fn claim_one(state: &AppState) -> Result<Claim, AppError> {
         JOIN projects project ON project.id = run.project_id
         JOIN execution_profiles profile ON profile.id = run.execution_profile_id
         JOIN provider_accounts account ON account.id = profile.provider_account_id
+        JOIN conversations conversation ON conversation.id = run.conversation_id
         WHERE run.state = 'queued'
           AND run.scheduler_claim_id IS NULL
           AND (account.adapter_kind = ANY($2) OR NOT $1)
@@ -309,7 +320,13 @@ async fn claim_one(state: &AppState) -> Result<Claim, AppError> {
                 AND active.state IN {ACTIVE_TURN_STATES}
           )
         ORDER BY run.created_at, run.id
+        -- The thread too, without waiting: starting the run (the admission
+        -- trigger) takes it after the run, while removing a message in it
+        -- takes the thread and then redacts the run's prompt. A run whose
+        -- thread is busy that way waits for the next pass instead of the two
+        -- deadlocking.
         FOR UPDATE OF run SKIP LOCKED
+        FOR SHARE OF conversation SKIP LOCKED
         LIMIT 1
         "#
     ))
@@ -325,7 +342,7 @@ async fn claim_one(state: &AppState) -> Result<Claim, AppError> {
     // must still be able to start runs here now (`admission_refusal`).
     // Otherwise it's cancelled, saying why, and the next one is looked at.
     if let Some(reason) = admission_refusal(
-        state,
+        &mut transaction,
         candidate.requesting_actor_id,
         &candidate.requester_kind,
         candidate.sponsoring_actor_id,
