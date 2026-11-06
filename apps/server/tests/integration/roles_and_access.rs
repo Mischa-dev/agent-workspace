@@ -3614,6 +3614,82 @@ async fn agents_are_given_only_what_the_giver_holds_in_the_project() {
     assert_eq!(status, StatusCode::OK, "{rotated}");
 }
 
+/// Changing someone's project role is held to what the caller holds in the
+/// project, not only in the workspace: a workspace Admin whose role here
+/// keeps "manage members" but leaves out editing tasks and seeing code can't
+/// give Bea a role with more than that here, and may give her one within it.
+#[tokio::test]
+async fn project_roles_are_given_only_within_the_givers_project_role() {
+    let Some(setup) = setup("awd74_member_project_grant").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let project = work.parse::<Uuid>().expect("project");
+    let (alex, alex_browser) = add_person(&setup, &[&work], "alex").await;
+    let (bea, _) = add_person(&setup, &[&work], "bea").await;
+    make_admin(&setup, alex).await;
+    let role_id = |role: &Value| {
+        role["id"]
+            .as_str()
+            .expect("id")
+            .parse::<Uuid>()
+            .expect("UUID")
+    };
+    let (status, keepers) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Member keepers here", "baseRole": "admin", "permissions": ["members.manage", "members.view", "tasks.view"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{keepers}");
+    sqlx::query(
+        "UPDATE project_memberships SET role = 'admin', role_id = $3 WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project)
+    .bind(alex)
+    .bind(role_id(&keepers))
+    .execute(&setup.pool)
+    .await
+    .expect("alex keeps only members and tasks in the project");
+    let (status, workers) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Workers", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit", "code.view"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{workers}");
+    let (status, readers) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Readers", "baseRole": "member", "permissions": ["tasks.view"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{readers}");
+    let give = |role: &Value, version: i64, key: &str| {
+        alex_browser.request(
+            "PATCH",
+            &format!("/api/v1/projects/{work}/members/{bea}"),
+            Some(key),
+            json!({"roleId": role["id"], "expectedVersion": version}),
+        )
+    };
+
+    // More than Alex holds here: refused, and Bea's role stays.
+    let (version, _) = project_membership(&setup, project, bea).await;
+    let (status, refused) = send(app, give(&workers, version, "alex-gives-workers")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    assert_eq!(project_role_id(&setup, &work, bea).await, None);
+
+    // Within it: given.
+    let (status, given) = send(app, give(&readers, version, "alex-gives-readers")).await;
+    assert_eq!(status, StatusCode::OK, "{given}");
+    assert_eq!(
+        project_role_id(&setup, &work, bea).await,
+        Some(role_id(&readers))
+    );
+}
+
 /// A comment that references another task shows that task's title and
 /// status only to someone who may see tasks: posting or editing it with a
 /// role that may edit but not see tasks returns the reference by id and

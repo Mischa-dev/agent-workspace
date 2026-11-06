@@ -267,6 +267,56 @@ impl Standing {
     }
 }
 
+/// What `actor_id` may do in `project_id` as checked there: their role in
+/// the project (custom role included), cut down in an app's call by its
+/// agent limit for the project, and only the permissions a project checks
+/// (workspace-only ones, such as the member directory, are the workspace
+/// role's). None when they aren't an enabled member of it.
+pub(crate) async fn project_holding(
+    connection: &mut PgConnection,
+    actor_id: Uuid,
+    project_id: Uuid,
+) -> Result<Option<PermissionSet>, AppError> {
+    let Some((kind, role, role_permissions)) =
+        sqlx::query_as::<_, (String, String, Option<Vec<String>>)>(
+            r#"
+            SELECT actor.kind, membership.role, workspace_role_permissions(membership.role_id)
+            FROM project_memberships membership
+            JOIN actors actor ON actor.id = membership.actor_id
+            WHERE membership.project_id = $1 AND membership.actor_id = $2
+              AND membership.enabled AND actor.status = 'active'
+            "#,
+        )
+        .bind(project_id)
+        .bind(actor_id)
+        .fetch_optional(&mut *connection)
+        .await?
+    else {
+        return Ok(None);
+    };
+    let kind = if kind == "human" {
+        ActorKind::Human
+    } else {
+        ActorKind::ExternalAgent
+    };
+    let grant = RoleGrant::stored(&role, role_permissions.as_deref())?;
+    let limit = current_agent_limit(actor_id, MembershipScope::Project(project_id));
+    Ok(Some(project_checked(effective(grant, limit, kind))))
+}
+
+/// The permissions of `set` that a project checks, leaving out the
+/// workspace-only ones.
+pub(crate) fn project_checked(set: PermissionSet) -> PermissionSet {
+    crate::policy::PERMISSIONS
+        .iter()
+        .filter(|info| {
+            info.scope != crate::policy::PermissionScope::Workspace && set.contains(info.permission)
+        })
+        .fold(PermissionSet::EMPTY, |kept, info| {
+            kept.with(info.permission)
+        })
+}
+
 pub(crate) async fn standing(
     connection: &mut PgConnection,
     organization_id: Uuid,

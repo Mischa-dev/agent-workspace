@@ -407,8 +407,10 @@ pub(crate) async fn change_member(
 }
 
 /// Refuses a project role that would give someone a permission the caller
-/// doesn't hold themselves in the workspace (a narrowed admin can't hand out
-/// a plain Member, say).
+/// doesn't hold themselves: in the workspace (a narrowed admin can't hand
+/// out a plain Member, say), and in this project, where the role is used (a
+/// project role narrowed below the workspace one can't be won back by
+/// giving more to someone else, such as an agent of theirs).
 pub(crate) async fn require_grantable(
     transaction: &mut Transaction<'_, Postgres>,
     caller_actor_id: Uuid,
@@ -427,6 +429,12 @@ pub(crate) async fn require_grantable(
     let grant = crate::policy::RoleGrant::stored(role, permissions.as_deref())?;
     let caller = crate::roles::standing(transaction, organization_id, caller_actor_id).await?;
     if !grant.permissions().is_subset_of(caller.permissions) {
+        return Err(AppError::Forbidden);
+    }
+    let held = crate::roles::project_holding(&mut **transaction, caller_actor_id, project_id)
+        .await?
+        .ok_or(AppError::Forbidden)?;
+    if !crate::roles::project_checked(grant.permissions()).is_subset_of(held) {
         return Err(AppError::Forbidden);
     }
     Ok(())
