@@ -1631,6 +1631,20 @@ async fn apply_to_their_projects(
     .bind(caller.actor_id)
     .fetch_all(&mut **transaction)
     .await?;
+    // What the role gives in a project, held to what the caller holds in
+    // each one, as giving it there one project at a time is.
+    let custom_permissions = match custom {
+        Some(role_id) => {
+            sqlx::query_scalar::<_, Option<Vec<String>>>("SELECT workspace_role_permissions($1)")
+                .bind(role_id)
+                .fetch_one(&mut **transaction)
+                .await?
+        }
+        None => None,
+    };
+    let given = project_checked(
+        RoleGrant::stored(base.key(), custom_permissions.as_deref())?.permissions(),
+    );
     let mut changed = Vec::new();
     let mut skipped = Vec::new();
     for TheirProject {
@@ -1668,6 +1682,16 @@ async fn apply_to_their_projects(
             caller_enabled,
         )? {
             skipped.push(SkippedProject { project_id, reason });
+            continue;
+        }
+        if !project_holding(transaction, caller.actor_id, project_id)
+            .await?
+            .is_some_and(|held| given.is_subset_of(held))
+        {
+            skipped.push(SkippedProject {
+                project_id,
+                reason: "This role gives more than your role in this project holds.",
+            });
             continue;
         }
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")

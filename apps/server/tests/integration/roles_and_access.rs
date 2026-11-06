@@ -3690,6 +3690,169 @@ async fn project_roles_are_given_only_within_the_givers_project_role() {
     );
 }
 
+/// Applying a workspace role to someone's projects is held, in each
+/// project, to the caller's role there: a workspace Admin whose role in
+/// Work keeps "manage members" but leaves out editing tasks and seeing code
+/// gives Bea a fuller role in the workspace, but Work is skipped; a role
+/// within theirs is applied there.
+#[tokio::test]
+async fn applying_a_role_to_projects_stays_within_the_callers_project_role() {
+    let Some(setup) = setup("awd74_apply_project_grant").await else {
+        return;
+    };
+    let work = create_project(&setup, "WORK", "Work").await;
+    let project = work.parse::<Uuid>().expect("project");
+    let (alex, alex_browser) = add_person(&setup, &[&work], "alex").await;
+    let (bea, _) = add_person(&setup, &[&work], "bea").await;
+    make_admin(&setup, alex).await;
+    let role_id = |role: &Value| {
+        role["id"]
+            .as_str()
+            .expect("id")
+            .parse::<Uuid>()
+            .expect("UUID")
+    };
+    let (status, keepers) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Member keepers in Work", "baseRole": "admin", "permissions": ["members.manage", "members.view", "tasks.view"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{keepers}");
+    sqlx::query(
+        "UPDATE project_memberships SET role = 'admin', role_id = $3 WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project)
+    .bind(alex)
+    .bind(role_id(&keepers))
+    .execute(&setup.pool)
+    .await
+    .expect("alex keeps only members and tasks in Work");
+    let (status, workers) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Workers", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit", "code.view"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{workers}");
+    let (status, readers) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Readers", "baseRole": "member", "permissions": ["tasks.view"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{readers}");
+
+    // More than Alex holds in Work: the workspace role changes, Work doesn't.
+    let (status, assigned) = assign(&setup, &alex_browser, bea, &workers["id"], true).await;
+    assert_eq!(status, StatusCode::OK, "{assigned}");
+    assert_eq!(assigned["projectsChanged"], 0, "{assigned}");
+    assert_eq!(assigned["projectsSkipped"], 1, "{assigned}");
+    assert!(
+        assigned
+            .to_string()
+            .contains("more than your role in this project"),
+        "{assigned}"
+    );
+    assert_eq!(project_role_id(&setup, &work, bea).await, None);
+
+    // Within it: applied in Work too.
+    let (status, assigned) = assign(&setup, &alex_browser, bea, &readers["id"], true).await;
+    assert_eq!(status, StatusCode::OK, "{assigned}");
+    assert_eq!(assigned["projectsChanged"], 1, "{assigned}");
+    assert_eq!(
+        project_role_id(&setup, &work, bea).await,
+        Some(role_id(&readers))
+    );
+}
+
+/// An outstanding project invitation is rechecked against its issuer's role
+/// in the project when it's opened or accepted: once the issuer's role there
+/// narrows below the invited role (while they may still invite), the token
+/// no longer opens.
+#[tokio::test]
+async fn a_project_invitation_lapses_when_its_issuers_project_role_narrows_below_it() {
+    let Some(setup) = setup("awd74_invite_project_grant").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let project = work.parse::<Uuid>().expect("project");
+    let (alex, alex_browser) = add_person(&setup, &[&work], "alex").await;
+    let elsewhere = create_project(&setup, "ELSE", "Elsewhere").await;
+    let (_, bea_browser) = add_person(&setup, &[&elsewhere], "bea").await;
+    make_admin(&setup, alex).await;
+    sqlx::query(
+        "UPDATE project_memberships SET role = 'admin' WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project)
+    .bind(alex)
+    .execute(&setup.pool)
+    .await
+    .expect("alex is a project admin");
+    let (status, issued) = send(
+        app,
+        alex_browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/invitations"),
+            None,
+            json!({"role": "member", "expiresInHours": 24}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{issued}");
+    let token = invitation_token(&issued);
+    let resolve = |token: &str| {
+        setup.browser.request(
+            "POST",
+            "/api/v1/project-invitations/resolve",
+            None,
+            json!({"token": token}),
+        )
+    };
+    let (status, resolved) = send(app, resolve(&token)).await;
+    assert_eq!(status, StatusCode::OK, "{resolved}");
+
+    // Alex may still invite in Work, but no longer edit tasks or see code.
+    let (status, narrowed) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Inviters only", "baseRole": "admin", "permissions": ["members.invite", "members.manage", "members.view", "tasks.view"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{narrowed}");
+    sqlx::query(
+        "UPDATE project_memberships SET role_id = $3 WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project)
+    .bind(alex)
+    .bind(
+        narrowed["id"]
+            .as_str()
+            .expect("id")
+            .parse::<Uuid>()
+            .expect("UUID"),
+    )
+    .execute(&setup.pool)
+    .await
+    .expect("narrow alex in the project");
+    assert_eq!(workspace_role(&setup, alex).await, "admin");
+
+    let (status, refused) = send(app, resolve(&token)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{refused}");
+    let (status, refused) = send(
+        app,
+        bea_browser.request(
+            "POST",
+            "/api/v1/project-invitations/accept-existing",
+            None,
+            json!({"token": token, "handle": "bea"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{refused}");
+}
+
 /// A comment that references another task shows that task's title and
 /// status only to someone who may see tasks: posting or editing it with a
 /// role that may edit but not see tasks returns the reference by id and

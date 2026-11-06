@@ -1314,7 +1314,28 @@ async fn require_issuer_still_grants(
         &access,
         Some(&invitation.role),
     )
-    .map_err(|_| AppError::NotFound("project_invitation"))
+    .map_err(|_| AppError::NotFound("project_invitation"))?;
+    // And the invited role is still within the issuer's role in this
+    // project, as issuing it was (memberships::require_grantable): a
+    // project role narrowed after sending can't be bypassed with the token.
+    let invited =
+        sqlx::query_scalar::<_, Option<Vec<String>>>("SELECT workspace_role_permissions($1)")
+            .bind(invitation.role_id)
+            .fetch_one(&mut *connection)
+            .await?;
+    let invited = crate::roles::project_checked(
+        crate::policy::RoleGrant::stored(&invitation.role, invited.as_deref())?.permissions(),
+    );
+    let held = crate::roles::project_holding(
+        &mut *connection,
+        invitation.issued_by_actor_id,
+        invitation.project_id,
+    )
+    .await?;
+    if !held.is_some_and(|held| invited.is_subset_of(held)) {
+        return Err(AppError::NotFound("project_invitation"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
