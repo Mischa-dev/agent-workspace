@@ -1906,7 +1906,8 @@ async fn an_app_moderates_only_within_its_agent_limit() {
     )
     .await;
     assert_eq!(commented["outcome"], "applied", "{commented}");
-    let comment = commented["resultId"]
+    // The comment's ID is the write's activityId; resultId is its audit record.
+    let comment = commented["activityId"]
         .as_str()
         .unwrap_or_else(|| panic!("comment id: {commented}"))
         .parse::<Uuid>()
@@ -2238,4 +2239,101 @@ async fn a_tasks_linked_code_needs_see_code() {
     assert_eq!(status, StatusCode::OK, "{item}");
     assert_eq!(item["title"], "Linked to code", "{item}");
     assert_eq!(count(&item["linkedRepositories"]), 0, "{item}");
+}
+
+/// Sets `actor`'s role in `project` as the owner, with `body` (a role or a
+/// roleId) and the membership's current version.
+async fn set_project_role(
+    setup: &Setup,
+    project: &str,
+    actor: Uuid,
+    key: &str,
+    mut body: Value,
+) -> (StatusCode, Value) {
+    let version = sqlx::query_scalar::<_, i64>(
+        "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project.parse::<Uuid>().expect("project"))
+    .bind(actor)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("version");
+    body["expectedVersion"] = json!(version);
+    send(
+        &setup.app,
+        setup.browser.request(
+            "PATCH",
+            &format!("/api/v1/projects/{project}/members/{actor}"),
+            Some(key),
+            body,
+        ),
+    )
+    .await
+}
+
+/// `actor`'s plain workspace role.
+async fn workspace_role(setup: &Setup, actor: Uuid) -> String {
+    sqlx::query_scalar::<_, String>(
+        "SELECT role FROM organization_memberships WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(setup.organization_id)
+    .bind(actor)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("workspace role")
+}
+
+/// A custom project role based on Admin never widens into the full
+/// workspace Admin, even when it keeps "manage members": its holder can't
+/// send workspace invitations it leaves out. The built-in project Admin
+/// still makes a workspace admin, as before.
+#[tokio::test]
+async fn only_the_built_in_project_admin_makes_a_workspace_admin() {
+    let Some(setup) = setup("awd74_custom_admin").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
+    let (cal, cal_browser) = add_person(&setup, &[&work], "cal").await;
+    let (status, manager) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Project manager", "baseRole": "admin", "permissions": ["members.manage", "members.view", "tasks.view"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{manager}");
+    let invitations = format!(
+        "/api/v1/organizations/{}/invitations",
+        setup.organization_id
+    );
+    let invite = json!({"role": "member", "expiresInHours": 24});
+
+    let (status, changed) = set_project_role(
+        &setup,
+        &work,
+        bea,
+        "bea-manager",
+        json!({"roleId": manager["id"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    assert_eq!(workspace_role(&setup, bea).await, "member");
+    let (status, refused) = send(
+        app,
+        bea_browser.request("POST", &invitations, None, invite.clone()),
+    )
+    .await;
+    assert!(
+        !status.is_success(),
+        "a custom project admin invited to the workspace: {refused}"
+    );
+
+    let (status, changed) =
+        set_project_role(&setup, &work, cal, "cal-admin", json!({"role": "admin"})).await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    assert_eq!(workspace_role(&setup, cal).await, "admin");
+    let (status, invited) =
+        send(app, cal_browser.request("POST", &invitations, None, invite)).await;
+    assert_eq!(status, StatusCode::CREATED, "{invited}");
 }

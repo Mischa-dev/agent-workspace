@@ -943,6 +943,17 @@ async fn api_webhooks_and_automations_act_for_their_maker_only() {
             .execute(&pool)
             .await
             .expect("crowd actor");
+        // A person needs an active user account to be reached at all
+        // (actor_can_access_project).
+        sqlx::query(
+            "INSERT INTO users (id, actor_id, login_name, display_name) VALUES ($1, $2, $3, $3)",
+        )
+        .bind(Uuid::now_v7())
+        .bind(person)
+        .bind(&handle)
+        .execute(&pool)
+        .await
+        .expect("crowd user");
         sqlx::query(
             "INSERT INTO organization_memberships (organization_id, actor_id, role) VALUES ($1, $2, 'member')",
         )
