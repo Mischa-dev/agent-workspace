@@ -943,13 +943,24 @@ async fn already_moved(
     if rows.is_empty() {
         return Ok(None);
     }
+    // Each title is the task's current one, where it is now; it is shown
+    // only with "see tasks" in that project, as task_open would.
+    let mut projects = rows.iter().map(|row| row.3).collect::<Vec<_>>();
+    projects.sort_unstable();
+    projects.dedup();
+    let showing =
+        crate::search::projects_showing_tasks(&state.pool, principal.actor_id, &projects).await?;
     Ok(Some(
         rows.into_iter()
             .map(|(from, to, id, project_id, title)| MovedTask {
                 from,
                 to,
                 id: id.to_string(),
-                title,
+                title: if showing.contains(&project_id) {
+                    title
+                } else {
+                    String::new()
+                },
                 url: public_url(state, &format!("/projects/{project_id}/work-items/{id}")),
             })
             .collect(),

@@ -3862,6 +3862,93 @@ async fn bulk_changes_without_see_tasks_reveal_no_task() {
     assert!(restored["items"][0]["assignee"].is_object(), "{restored}");
 }
 
+/// Moving a task again returns where it went, under its current title
+/// there: someone who may create tasks in that project but not see them
+/// gets its key, not a title changed after the move; with "see tasks"
+/// there, the title comes back.
+#[tokio::test]
+async fn a_repeated_move_shows_the_title_only_where_tasks_are_seen() {
+    let Some(setup) = setup("awd74_move_replay").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let dest = create_project(&setup, "DEST", "Dest").await;
+    let (bea, bea_browser) = add_person(&setup, &[&work, &dest], "bea").await;
+    let task = owner_task(&setup, &work, "Move me").await;
+    let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
+    let session = initialize(app, &bea_app).await.expect("Bea's app");
+    let arguments = json!({"taskId": task.to_string(), "toProjectId": dest});
+    let moved = tool(app, &bea_app, &session, "task_move", arguments.clone()).await;
+    assert_eq!(moved["outcome"], "ok", "{moved}");
+    assert_eq!(moved["value"]["moved"][0]["title"], "Move me", "{moved}");
+    let destination = moved["value"]["moved"][0]["id"]
+        .as_str()
+        .expect("destination")
+        .parse::<Uuid>()
+        .expect("destination id");
+    sqlx::query("UPDATE work_items SET title = 'Renamed where it went' WHERE id = $1")
+        .bind(destination)
+        .execute(&setup.pool)
+        .await
+        .expect("rename the moved task");
+
+    // In Dest, Bea may create and change tasks but not see them.
+    let (status, blind) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Blind creators", "baseRole": "member", "permissions": ["tasks.edit", "tasks.create"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{blind}");
+    let (status, changed) = set_project_role(
+        &setup,
+        &dest,
+        bea,
+        "bea-blind-creators",
+        json!({"roleId": blind["id"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let again = tool(app, &bea_app, &session, "task_move", arguments.clone()).await;
+    assert_eq!(again["outcome"], "ok", "{again}");
+    assert_eq!(again["value"]["created"], false, "{again}");
+    assert_eq!(
+        again["value"]["moved"][0]["id"],
+        destination.to_string(),
+        "{again}"
+    );
+    assert_eq!(again["value"]["moved"][0]["title"], "", "{again}");
+    assert!(
+        !again.to_string().contains("Renamed where it went"),
+        "{again}"
+    );
+
+    // With "see tasks" in Dest, the current title.
+    let (status, seeing) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Seeing creators", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit", "tasks.create"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{seeing}");
+    let (status, changed) = set_project_role(
+        &setup,
+        &dest,
+        bea,
+        "bea-seeing-creators",
+        json!({"roleId": seeing["id"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let seen = tool(app, &bea_app, &session, "task_move", arguments).await;
+    assert_eq!(seen["outcome"], "ok", "{seen}");
+    assert_eq!(
+        seen["value"]["moved"][0]["title"], "Renamed where it went",
+        "{seen}"
+    );
+}
+
 /// The custom role `actor` holds in `project`, if any.
 async fn project_role_id(setup: &Setup, project: &str, actor: Uuid) -> Option<Uuid> {
     sqlx::query_scalar::<_, Option<Uuid>>(
