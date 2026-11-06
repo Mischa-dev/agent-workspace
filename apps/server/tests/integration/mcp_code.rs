@@ -1925,12 +1925,17 @@ async fn a_threads_run_shows_its_branch_only_to_those_who_see_code() {
     }
     let base = "b".repeat(40);
     let published = "c".repeat(40);
-    sqlx::query("UPDATE repository_workspaces SET published_commit = $2 WHERE id = $1")
-        .bind(workspace)
-        .bind(&published)
-        .execute(pool)
-        .await
-        .expect("published commit");
+    // Published as the workspace's publication shape wants: commit, time and
+    // who, together.
+    sqlx::query(
+        "UPDATE repository_workspaces SET published_commit = $2, published_at = now(), published_by_actor_id = $3 WHERE id = $1",
+    )
+    .bind(workspace)
+    .bind(&published)
+    .bind(seed.human_actor_id)
+    .execute(pool)
+    .await
+    .expect("published commit");
     let (bea, bea_browser) = add_person(&setup, &[&aw], "bea").await;
     let timeline = format!("/api/v1/conversations/{thread}/timeline");
     let open = |browser: &Browser| browser.request("GET", &timeline, None, Value::Null);
