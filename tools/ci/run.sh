@@ -2,6 +2,7 @@
 # Run CI for this checkout on the best machine that's free.
 #
 #   tools/ci/run.sh [--areas rust,web|rust|web] [--host nixos|redhat]
+#   tools/ci/run.sh --host redhat [--areas ...] --ui-tour channel
 #
 # Used by .github/workflows/ci.yml and by agents before they push (it checks
 # the working tree as it is, uncommitted changes included).
@@ -17,17 +18,35 @@
 # rebuilds what changed, and runs one CI job at a time (a lock in its work
 # directory). While the laptop is up and idle, a job waits for it rather than
 # falling back to the Red Hat host; if all are busy, run.sh waits.
+#
+# --ui-tour channel (never the default, and only with --host redhat): after
+# the browser smoke tests, the UI tour's whole seed and its channel screens, in
+# the same capped step (checks.sh run_ui_tour). The four screenshots, their
+# contact sheet and a summary are copied back to apps/web/e2e-output/ci-tour/;
+# nothing else from the run is.
 set -euo pipefail
 
 areas="rust,web"
 only_host=""
+ui_tour="" ui_tour_given=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --areas) areas="$2"; shift 2 ;;
     --host) only_host="$2"; shift 2 ;;
-    *) echo "usage: tools/ci/run.sh [--areas rust,web|rust|web] [--host nixos|redhat]" >&2; exit 2 ;;
+    --ui-tour) ui_tour_given=1 ui_tour="${2-}"; shift $(($# > 1 ? 2 : 1)) ;;
+    *) echo "usage: tools/ci/run.sh [--areas rust,web|rust|web] [--host nixos|redhat] [--ui-tour channel]" >&2; exit 2 ;;
   esac
 done
+
+if [ -n "${ui_tour_given}" ] && [ "${ui_tour}" != channel ]; then
+  echo "ci: invalid --ui-tour '${ui_tour}' (expected channel)" >&2
+  exit 2
+fi
+# The tour runs on Red Hat only, asked for by name, never on the laptop.
+if [ -n "${ui_tour}" ] && [ "${only_host}" != redhat ]; then
+  echo "ci: --ui-tour runs only with --host redhat" >&2
+  exit 2
+fi
 
 case "${areas}" in
   rust,web|rust|web) ;;
@@ -135,6 +154,37 @@ sync_source() (
       touch synced-without-times; fi"
 )
 
+# `checks_command`: what runs checks.sh on the current host, with this run's
+# settings. CI_RECENT_RUN as the probe sets it: a CI run finished here in the
+# last 3 minutes, so the load average still counts it. CI_UI_TOUR only when
+# --ui-tour asked for it.
+checks_command() {
+  echo "cd ${work}/src || exit 1
+    if [ \$((\$(date +%s) - \$(cat ${work}/last_done 2>/dev/null || echo 0))) -lt 180 ]; then export CI_RECENT_RUN=1; fi
+    unset CI_SCOPED  # never inherited: checks.sh sets it itself inside its capped scope
+    CI_RUN_ID='${run_id}' CI_DATABASE_BASE='${database_base}' \
+    CI_TARGET_DIR='${work}/target' CI_LOCK_DIR='${work}/lock' \
+    CI_MEMORY_MAX='${memory_max}' CI_CPU_WEIGHT='${cpu_weight}' CARGO_BUILD_JOBS='${jobs}' \
+    ${build_lock:+CI_BUILD_LOCK='${build_lock}' CI_MIN_FREE_GB='${min_free_gb}'} \
+    ${browser:+PLAYWRIGHT_CHROMIUM_EXECUTABLE='${browser}'} \
+    ${ui_tour:+CI_UI_TOUR='${ui_tour}'} \
+    exec setsid -w tools/ci/checks.sh '${areas}'"
+}
+
+# `fetch_ui_tour`: copy what the opt-in tour made back here: the four channel
+# screenshots, their contact sheet and the summary, and nothing else (not the
+# signed-in browser state next to them).
+fetch_ui_tour() {
+  local into="${root}/apps/web/e2e-output/ci-tour"
+  rm -rf "${into}"
+  mkdir -p "${into}"
+  remote "cd ${work}/src/apps/web/e2e-output/tour 2>/dev/null &&
+    tar -cf - --ignore-failed-read 02-channel-desktop-light.png 02-channel-desktop-dark.png \
+      02-channel-phone-light.png 02-channel-phone-dark.png index.html summary.txt 2>/dev/null" |
+    tar -xf - -C "${into}" 2>/dev/null || true
+  echo "ci: UI tour output copied to ${into}: $(cd "${into}" && ls | tr '\n' ' ')"
+}
+
 # One CI job per machine: mkdir is atomic. The holder touches lock/alive every
 # minute (heartbeat below); a lock with no heartbeat for 5 minutes is from a
 # run that died without cleaning up, e.g. a cancelled job the runner killed
@@ -237,22 +287,13 @@ while :; do
   echo "ci: running ${areas} checks on ${held_host}"
   sync_source
   set +e
-  # CI_RECENT_RUN as the probe sets it: a CI run finished here in the last 3
-  # minutes, so the load average still counts it.
-  remote "cd ${work}/src || exit 1
-    if [ \$((\$(date +%s) - \$(cat ${work}/last_done 2>/dev/null || echo 0))) -lt 180 ]; then export CI_RECENT_RUN=1; fi
-    unset CI_SCOPED  # never inherited: checks.sh sets it itself inside its capped scope
-    CI_RUN_ID='${run_id}' CI_DATABASE_BASE='${database_base}' \
-    CI_TARGET_DIR='${work}/target' CI_LOCK_DIR='${work}/lock' \
-    CI_MEMORY_MAX='${memory_max}' CI_CPU_WEIGHT='${cpu_weight}' CARGO_BUILD_JOBS='${jobs}' \
-    ${build_lock:+CI_BUILD_LOCK='${build_lock}' CI_MIN_FREE_GB='${min_free_gb}'} \
-    ${browser:+PLAYWRIGHT_CHROMIUM_EXECUTABLE='${browser}'} \
-    exec setsid -w tools/ci/checks.sh '${areas}'" < /dev/null &
+  remote "$(checks_command)" < /dev/null &
   # Wait in the background so a cancelled job runs the traps (and frees the
   # lock) straight away instead of after the checks finish.
   wait $!
   status=$?
   set -e
+  if [ -n "${ui_tour}" ]; then fetch_ui_tour; fi
   if ci_moves_on "${status}"; then
     busy_host="${held_host}"
     release

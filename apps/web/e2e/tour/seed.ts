@@ -106,6 +106,14 @@ const agentHandle = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, 
 
 export async function seedTour(context: SeedContext): Promise<TourState> {
   const { serverOrigin, webOrigin } = context
+  // What the seed couldn't do but went on without. The CI tour fails on any
+  // (tools/ci/check_ui_tour.py); run by hand, they're printed.
+  const warnings: string[] = []
+  const warn = (what: string, error: unknown) => {
+    const message = `${what} (${error instanceof Error ? error.message : String(error)})`
+    warnings.push(message)
+    console.warn(`tour: ${message}`)
+  }
   const me = new Session(context.admin, webOrigin)
   const session = (await me.get('/api/v1/auth/session')) as { user?: { actorId?: string } }
   me.actorId = session.user?.actorId ?? ''
@@ -357,7 +365,8 @@ export async function seedTour(context: SeedContext): Promise<TourState> {
   })) as { conversation?: { id?: string } }
   const threadId = String(thread.conversation?.id)
   await post(threadId, releasesThread.replies, () => `/api/v1/threads/${threadId}/messages`)
-  await me.write('PATCH', `/api/v1/threads/${threadId}`, { status: 'Done', outcome: 'Index added; CI now checks every partition has its parent\'s indexes.' }).catch(() => undefined)
+  await me.write('PATCH', `/api/v1/threads/${threadId}`, { status: 'Done', outcome: 'Index added; CI now checks every partition has its parent\'s indexes.' })
+    .catch((error: unknown) => warn('thread status not set', error))
 
   // A DM with Amara (every message reaches the inbox), and a group DM.
   const dm = (await team[0].write('POST', '/api/v1/direct/dms', { actorId: me.actorId })) as { conversation?: { id?: string } }
@@ -391,7 +400,7 @@ export async function seedTour(context: SeedContext): Promise<TourState> {
     detail: 'The panel answers what support keeps asking; alerts follow in 2026.12.',
     sourceMessageId: releaseIds[5],
     sourceConversationId: releases,
-  }).catch(() => undefined)
+  }).catch((error: unknown) => warn('no decision recorded', error))
 
   // A whiteboard: the ingest pipeline.
   const board = (await team[7].write('POST', '/api/v1/whiteboards', {
@@ -419,13 +428,13 @@ export async function seedTour(context: SeedContext): Promise<TourState> {
   })
 
   const runId = await seedRuns(context, me, projectId, channelIds.get('agents-at-work')!).catch((error: unknown) => {
-    console.warn(`tour: no runs seeded (${error instanceof Error ? error.message : String(error)})`)
+    warn('no runs seeded', error)
     return null
   })
   try {
     spreadTimestamps(context.databaseUrl, projectId)
   } catch (error) {
-    console.warn(`tour: timestamps left as they are (${error instanceof Error ? error.message : String(error)})`)
+    warn('timestamps left as they are', error)
   }
 
   const state: TourState = {
@@ -442,6 +451,7 @@ export async function seedTour(context: SeedContext): Promise<TourState> {
     pageId: String(planPage.id),
     pageTitle: plan.title,
     whiteboardId,
+    warnings,
   }
   mkdirSync(path.dirname(tourStatePath), { recursive: true })
   writeFileSync(tourStatePath, JSON.stringify(state, null, 2))
