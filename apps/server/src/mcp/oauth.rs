@@ -1348,6 +1348,15 @@ async fn managed_agent(
     if !grant.permissions().is_subset_of(manager.permissions) {
         return Ok(None);
     }
+    // And within the manager's role in the agent's project, where it works,
+    // as giving an agent its role or credentials is
+    // (external_agents::require_grantable).
+    let held = crate::roles::project_holding(&mut connection, manager_actor_id, project_id).await?;
+    if !held
+        .is_some_and(|held| crate::roles::project_checked(grant.permissions()).is_subset_of(held))
+    {
+        return Ok(None);
+    }
     Ok(Some((project_id, agent_actor_id)))
 }
 

@@ -2483,6 +2483,62 @@ async fn a_narrowed_admin_cannot_connect_an_app_as_a_stronger_agent() {
     );
 }
 
+/// The same holds for the agent's project: a workspace Admin whose role in
+/// Work keeps "manage agents" but leaves out editing tasks and seeing code
+/// can't connect an app as a Member agent working there; as a plain Admin
+/// in Work, they can.
+#[tokio::test]
+async fn connecting_an_app_as_an_agent_stays_within_the_project_role() {
+    let Some(setup) = setup("awd74_oauth_agent_project").await else {
+        return;
+    };
+    let work = create_project(&setup, "WORK", "Work").await;
+    let project = work.parse::<Uuid>().expect("project");
+    let (alex, alex_browser) = add_person(&setup, &[&work], "alex").await;
+    make_admin(&setup, alex).await;
+    let (status, keepers) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Agent keepers in Work", "baseRole": "admin", "permissions": ["agents.manage", "tasks.view"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{keepers}");
+    let set_alex = |role_id: Option<Uuid>| {
+        let pool = setup.pool.clone();
+        async move {
+            sqlx::query(
+                "UPDATE project_memberships SET role = 'admin', role_id = $3 WHERE project_id = $1 AND actor_id = $2",
+            )
+            .bind(project)
+            .bind(alex)
+            .bind(role_id)
+            .execute(&pool)
+            .await
+            .expect("alex's role in Work");
+        }
+    };
+    let (mara, _) = create_agent(&setup.app, &setup.browser, &work, "Mara", "mara").await;
+    let (connection, _, _) = agent_connection(&setup, mara).await;
+
+    set_alex(Some(
+        keepers["id"]
+            .as_str()
+            .expect("id")
+            .parse::<Uuid>()
+            .expect("UUID"),
+    ))
+    .await;
+    assert!(
+        !authorizes_as_agent(&setup, &alex_browser, connection).await,
+        "an admin narrowed in the project connected an app as a Member agent there"
+    );
+    set_alex(None).await;
+    assert!(
+        authorizes_as_agent(&setup, &alex_browser, connection).await,
+        "a plain admin in the project connects an app as the agent"
+    );
+}
+
 /// A project invitation with a custom role based on Admin never makes a
 /// workspace admin, whether the invitee is new or already in the workspace.
 #[tokio::test]
