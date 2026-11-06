@@ -558,11 +558,23 @@ async fn list_members(
 ) -> Result<Json<MembersResponse>, AppError> {
     let mut connection = state.pool.acquire().await?;
     let caller = member_manager_role(&mut connection, &principal, organization_id, false).await?;
+    // "See the workspace member directory", by the caller's workspace role:
+    // every built-in role holds it; a custom role only when an owner or an
+    // admin who manages roles gives it (Settings, Roles). Without it the
+    // list is only the caller themselves.
+    let sees_members = caller_may(
+        &mut connection,
+        &principal,
+        organization_id,
+        crate::policy::Permission::DirectoryView,
+    )
+    .await?;
     // Removed members are listed only for those who manage the workspace.
     let rows = sqlx::query_as::<_, MemberRow>(&format!(
         r#"
         SELECT {MEMBER_COLUMNS} {MEMBER_FROM}
         WHERE membership.organization_id = $1 AND (membership.enabled OR $2)
+          AND ($3 OR membership.actor_id = $4)
         ORDER BY membership.enabled DESC,
                  CASE membership.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,
                  lower(COALESCE(profile.display_name, user_account.display_name, '')),
@@ -572,6 +584,8 @@ async fn list_members(
     ))
     .bind(organization_id)
     .bind(caller.manages())
+    .bind(sees_members)
+    .bind(principal.actor_id)
     .fetch_all(&mut *connection)
     .await?;
     Ok(Json(MembersResponse {

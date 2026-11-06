@@ -4088,6 +4088,7 @@ async fn validate_issue_command(
                             | Permission::TasksView
                             | Permission::CodeView
                             | Permission::MembersView
+                            | Permission::DirectoryView
                     )
                 })
             }))

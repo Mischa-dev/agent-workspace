@@ -199,6 +199,7 @@ pub enum Permission {
     CodeManage,
     AgentsManage,
     MembersView,
+    DirectoryView,
     MembersInvite,
     MembersManage,
     RolesManage,
@@ -285,7 +286,7 @@ const WORKERS: [bool; 4] = [true, true, true, false];
 const MANAGERS: [bool; 4] = [true, true, false, false];
 
 /// Every permission, in the order the Roles page shows them.
-pub const PERMISSIONS: [PermissionInfo; 26] = [
+pub const PERMISSIONS: [PermissionInfo; 27] = [
     required(permission(
         Permission::ProjectsView,
         "projects.view",
@@ -483,6 +484,19 @@ pub const PERMISSIONS: [PermissionInfo; 26] = [
         "See who's in a project and their roles.",
         PermissionScope::Both,
         MANAGERS,
+    ),
+    // Every built-in role holds it, so the workspace's member list stays as
+    // it was for them. A custom role holds it only when given it: without
+    // it, that list shows its holders only themselves. Projects' member
+    // lists follow "See the member list" (members.view) instead.
+    permission(
+        Permission::DirectoryView,
+        "directory.view",
+        "members",
+        "See the workspace member directory",
+        "See who's in the workspace on its Members page. Without it, only yourself.",
+        PermissionScope::Workspace,
+        ALL_ROLES,
     ),
     permission(
         Permission::MembersInvite,
@@ -1982,6 +1996,22 @@ mod tests {
                     .any(|info| info.permission == action.permission())
             );
         }
+    }
+
+    #[test]
+    fn the_workspace_directory_is_its_own_workspace_permission() {
+        // Every built-in role keeps the workspace's member directory, which
+        // anyone in a workspace saw before; a role can still leave it out.
+        let directory = Permission::DirectoryView.info();
+        assert_eq!(directory.key, "directory.view");
+        assert_eq!(directory.scope, PermissionScope::Workspace);
+        assert_eq!(directory.built_in, [true; 4]);
+        assert!(!directory.required && !directory.people_only);
+        // Projects' member lists stay with "See the member list", which
+        // only owners and admins hold.
+        let members = Permission::MembersView.info();
+        assert_eq!(members.scope, PermissionScope::Both);
+        assert_eq!(members.built_in, [true, true, false, false]);
     }
 
     #[test]

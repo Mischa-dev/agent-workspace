@@ -19,6 +19,14 @@
 //! - Agent limits: an app or agent acting for a person may do only what the
 //!   person may, cut down by their role's agent limit and their own. An agent
 //!   with its own identity holds a role like anyone else.
+//! - The workspace's member directory (its Members page) follows "See the
+//!   workspace member directory" (`directory.view`, workspace only). Every
+//!   built-in role holds it, so it's as before for them, and the starting
+//!   points include it. A custom role holds it only when given it: without
+//!   it, holders see only themselves there. An owner, or an admin who manages
+//!   roles and holds it, gives it by ticking it on the role (Settings, Roles).
+//!   Projects' member lists follow "See the member list" (`members.view`),
+//!   which only owners and admins hold by default.
 //!
 //! Every change is audited with what it was before and after.
 
@@ -674,6 +682,7 @@ pub(crate) fn starting_points() -> Vec<StartingPoint> {
                 "runs.interrupt",
                 "code.view",
                 "code.publish",
+                "directory.view",
             ],
             agent_limit: None,
             defaults: RoleDefaults::default(),
@@ -683,7 +692,7 @@ pub(crate) fn starting_points() -> Vec<StartingPoint> {
             name: "Read only",
             description: "Reads everything they're given and changes nothing, across the whole workspace.",
             base_role: "viewer",
-            permissions: vec!["projects.view", "tasks.view", "code.view"],
+            permissions: vec!["projects.view", "tasks.view", "code.view", "directory.view"],
             agent_limit: None,
             defaults: RoleDefaults::default(),
         },
@@ -702,6 +711,7 @@ pub(crate) fn starting_points() -> Vec<StartingPoint> {
                 "channels.create",
                 "pages.edit",
                 "whiteboards.edit",
+                "directory.view",
             ],
             agent_limit: Some(vec![
                 "projects.view",

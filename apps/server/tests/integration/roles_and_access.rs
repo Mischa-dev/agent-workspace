@@ -4313,6 +4313,108 @@ async fn github_imports_follow_see_code() {
     );
 }
 
+/// The workspace member directory follows "See the workspace member
+/// directory" (directory.view). Built-in roles hold it, so a plain Admin
+/// and a plain Member see everyone, as before, while a plain Member still
+/// can't open a project's member list (members.view). A custom role isn't
+/// widened to it: without it, its holders see only themselves, whether it's
+/// based on Member or on an Admin who kept "manage members", until someone
+/// who manages roles gives it.
+#[tokio::test]
+async fn the_workspace_member_directory_follows_directory_view() {
+    let Some(setup) = setup("awd74_workspace_directory").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (alex, alex_browser) = add_person(&setup, &[&work], "alex").await;
+    let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
+    let (cal, cal_browser) = add_person(&setup, &[&work], "cal").await;
+    make_admin(&setup, alex).await;
+    let path = format!("/api/v1/organizations/{}/members", setup.organization_id);
+    let directory = |browser: &Browser| browser.request("GET", &path, None, Value::Null);
+    let ids = |body: &Value| -> Vec<String> {
+        body["members"]
+            .as_array()
+            .expect("members")
+            .iter()
+            .map(|member| member["actorId"].as_str().expect("actor").to_owned())
+            .collect()
+    };
+
+    // Built-in roles: everyone, as before.
+    for browser in [&alex_browser, &bea_browser] {
+        let (status, everyone) = send(app, directory(browser)).await;
+        assert_eq!(status, StatusCode::OK, "{everyone}");
+        for actor in [alex, bea, cal] {
+            assert!(ids(&everyone).contains(&actor.to_string()), "{everyone}");
+        }
+    }
+    // A plain Member still can't open a project's member list.
+    let (status, project_members) = send(
+        app,
+        bea_browser.request(
+            "GET",
+            &format!("/api/v1/projects/{work}/members"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert!(!status.is_success(), "{status}: {project_members}");
+
+    // A custom role based on Member, made without it, isn't given it.
+    let (status, helpers) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Helpers", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{helpers}");
+    assert!(
+        !keys(&helpers["permissions"]).contains(&"directory.view".to_owned()),
+        "{helpers}"
+    );
+    let (status, assigned) = assign(&setup, &setup.browser, cal, &helpers["id"], false).await;
+    assert_eq!(status, StatusCode::OK, "{assigned}");
+    let (status, own) = send(app, directory(&cal_browser)).await;
+    assert_eq!(status, StatusCode::OK, "{own}");
+    assert_eq!(ids(&own), [cal.to_string()], "{own}");
+
+    // So with an Admin's custom role that keeps "manage members" only.
+    let (status, managers) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Managers", "baseRole": "admin", "permissions": ["members.manage"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{managers}");
+    let (status, assigned) = assign(&setup, &setup.browser, alex, &managers["id"], false).await;
+    assert_eq!(status, StatusCode::OK, "{assigned}");
+    let (status, narrowed) = send(app, directory(&alex_browser)).await;
+    assert_eq!(status, StatusCode::OK, "{narrowed}");
+    assert_eq!(ids(&narrowed), [alex.to_string()], "{narrowed}");
+    assert!(!narrowed.to_string().contains("\"bea\""), "{narrowed}");
+
+    // The owner gives Helpers the directory: Cal sees everyone again.
+    let (status, given) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            &format!("{}/{}", roles_path(&setup), helpers["id"].as_str().expect("id")),
+            None,
+            json!({"expectedVersion": helpers["version"], "permissions": ["tasks.view", "tasks.edit", "directory.view"]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{given}");
+    let (status, everyone) = send(app, directory(&cal_browser)).await;
+    assert_eq!(status, StatusCode::OK, "{everyone}");
+    for actor in [alex, bea, cal] {
+        assert!(ids(&everyone).contains(&actor.to_string()), "{everyone}");
+    }
+}
+
 /// The custom role `actor` holds in `project`, if any.
 async fn project_role_id(setup: &Setup, project: &str, actor: Uuid) -> Option<Uuid> {
     sqlx::query_scalar::<_, Option<Uuid>>(

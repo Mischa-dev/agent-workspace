@@ -28,6 +28,7 @@ export const PERMISSION_KEYS = [
   'code.manage',
   'agents.manage',
   'members.view',
+  'directory.view',
   'members.invite',
   'members.manage',
   'roles.manage',

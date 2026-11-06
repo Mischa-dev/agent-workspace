@@ -1254,7 +1254,7 @@ async fn list_api_tokens(
                (membership.role IN ('owner', 'admin', 'member')
                 AND (membership.role_id IS NULL OR EXISTS (
                     SELECT 1 FROM unnest(workspace_role_permissions(membership.role_id)) granted
-                    WHERE granted NOT IN ('projects.view', 'tasks.view', 'code.view', 'members.view')
+                    WHERE granted NOT IN ('projects.view', 'tasks.view', 'code.view', 'members.view', 'directory.view')
                 ))) AS can_write
         FROM project_memberships membership
         JOIN projects project ON project.id = membership.project_id
