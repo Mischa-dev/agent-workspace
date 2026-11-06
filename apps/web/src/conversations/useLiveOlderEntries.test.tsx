@@ -250,4 +250,77 @@ describe('live older timeline pages', () => {
     await waitFor(() => expect(result.current.entries).toHaveLength(1))
     expect(result.current.cursor).toBe('cursor-a')
   })
+
+  it('keeps an older reply’s quote blank once its original is removed, after the event expires too', async () => {
+    const quote = { messageId: messageId(1), available: true, removed: false, authorName: 'Bob', text: 'ghp_secret', href: null }
+    const loadPage = vi.fn(async () => ({
+      entries: entries(wireEntry(1, 'ghp_secret'), wireEntry(2, 'Answer', { replyTo: quote })),
+      nextCursor: null,
+    }))
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 503 })))
+    const { result, rerender } = renderHook(
+      () => useLiveOlderEntries({ conversationId, loadPage, newestCursor: 'cursor-a', newestEntries: newest }),
+      { wrapper },
+    )
+    await act(() => result.current.loadOlder())
+    setRealtime({ messageUpdates: {
+      [messageId(1)]: { conversationId, messageId: messageId(1), revision: 1, removed: true },
+    } })
+    rerender()
+    expect(JSON.stringify(result.current.entries)).not.toContain('ghp_secret')
+    expect(result.current.entries[1].message?.replyTo).toMatchObject({ removed: true, text: null })
+    setRealtime({ messageUpdates: {} })
+    rerender()
+    expect(JSON.stringify(result.current.entries)).not.toContain('ghp_secret')
+  })
+
+  it('refreshes an older reply’s quote when its original is edited live, once', async () => {
+    const quote = (text: string) => ({ messageId: messageId(1), available: true, removed: false, authorName: 'Bob', text, href: null })
+    const loadPage = vi.fn(async () => ({
+      entries: entries(wireEntry(2, 'Answer', { replyTo: quote('Ship Friday?') })),
+      nextCursor: null,
+    }))
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ entry: wireEntry(2, 'Answer', { replyTo: quote('Ship Monday?') }) }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { result, rerender } = renderHook(
+      () => useLiveOlderEntries({ conversationId, loadPage, newestCursor: 'cursor-a', newestEntries: newest }),
+      { wrapper },
+    )
+    await act(() => result.current.loadOlder())
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    setRealtime({ messageUpdates: {
+      [messageId(1)]: { conversationId, messageId: messageId(1), revision: 2, removed: false },
+    } })
+    rerender()
+    await waitFor(() => expect(result.current.entries[0].message?.replyTo).toMatchObject({ text: 'Ship Monday?' }))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(String((fetchMock.mock.calls[0] as unknown[])[0])).toBe(
+      `/api/v1/conversations/${conversationId}/messages/${messageId(2)}`,
+    )
+    rerender()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('doesn’t refetch a quote its page already had fresh', async () => {
+    setRealtime({ messageUpdates: {
+      [messageId(1)]: { conversationId, messageId: messageId(1), revision: 2, removed: false },
+    } })
+    const quote = { messageId: messageId(1), available: true, removed: false, authorName: 'Bob', text: 'Ship Monday?', href: null }
+    const loadPage = vi.fn(async () => ({ entries: entries(wireEntry(2, 'Answer', { replyTo: quote })), nextCursor: null }))
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 503 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { result, rerender } = renderHook(
+      () => useLiveOlderEntries({ conversationId, loadPage, newestCursor: 'cursor-a', newestEntries: newest }),
+      { wrapper },
+    )
+    await act(() => result.current.loadOlder())
+    rerender()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
 })

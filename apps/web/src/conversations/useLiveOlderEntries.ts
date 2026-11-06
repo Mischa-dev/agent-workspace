@@ -10,8 +10,12 @@ import {
   needsRefresh,
   NO_MESSAGE_UPDATES,
   NO_REACTION_UPDATES,
+  quotedMessageId,
+  quotesRemovedLive,
   tombstoneEntry,
   withMessageReactions,
+  withRemovedQuote,
+  type MessageUpdates,
   type ReactionUpdates,
 } from './liveMessages'
 import type { ConversationTimelineEntry, MessageReaction } from './types'
@@ -68,8 +72,11 @@ export function useLiveOlderEntries({
   const olderRef = useRef(older)
   const attempted = useRef(new Set<string>())
   const reactionUpdatesRef = useRef<ReactionUpdates>(reactionUpdates)
+  const updatesRef = useRef<MessageUpdates>(updates)
   // The latest reaction fetch per message, so a late answer never wins.
   const reactionFetches = useRef(new Map<string, number>())
+  // The latest quote fetch per reply, likewise.
+  const quoteFetches = useRef(new Map<string, number>())
   const seenGeneration = useRef(resyncGeneration)
   // Goes up with each conversation shown, so a page load answered after
   // leaving is never kept.
@@ -78,6 +85,7 @@ export function useLiveOlderEntries({
     loadPageRef.current = loadPage
     olderRef.current = older
     reactionUpdatesRef.current = reactionUpdates
+    updatesRef.current = updates
   })
 
   // Another conversation: forget everything loaded for the last one, so a
@@ -108,7 +116,9 @@ export function useLiveOlderEntries({
     const update = message && updates[message.id]
     return message && !message.removed && update?.removed && update.conversationId === conversationId
   })
-  if (removedEntries.length > 0) {
+  // The same for replies quoting a removed message: their quotes stay blank.
+  const quotingRemoved = olderEntries.filter((entry) => entry.message && quotesRemovedLive(entry.message, updates, conversationId))
+  if (removedEntries.length > 0 || quotingRemoved.length > 0) {
     setOlder({
       ...older,
       pages: pages.map((page) => ({
@@ -120,6 +130,10 @@ export function useLiveOlderEntries({
     for (const entry of removedEntries) {
       const message = entry.message!
       kept[message.id] = tombstoneEntry(kept[message.id] ?? entry)
+    }
+    for (const entry of quotingRemoved) {
+      const replacement = kept[entry.message!.id]
+      if (replacement?.message) kept[entry.message!.id] = { ...replacement, message: withRemovedQuote(replacement.message) }
     }
     setReplacements({ conversationId, byMessageId: kept })
   }
@@ -167,13 +181,53 @@ export function useLiveOlderEntries({
     [conversationId],
   )
 
-  // A page fetched now already has the reactions of every change seen so far.
-  const markReactionsFresh = useCallback(
+  // A reply's quote is read live (AWD-70), so an edit of the message it
+  // quotes changes the quote without a new revision of the reply: it's
+  // patched into the older pages (and any fetched replacement) in place.
+  const patchQuote = useCallback(
+    (messageId: string, replyTo: unknown) => {
+      const patch = (entries: ConversationTimelineEntry[]) => {
+        let changed = false
+        const next = entries.map((entry) => {
+          const message = entry.message
+          if (message?.id !== messageId || message.removed) return entry
+          changed = true
+          return { ...entry, message: { ...message, replyTo } }
+        })
+        return changed ? next : entries
+      }
+      setOlder((current) => {
+        if (current.conversationId !== conversationId) return current
+        let changed = false
+        const pages = current.pages.map((page) => {
+          const entries = patch(page.entries)
+          if (entries === page.entries) return page
+          changed = true
+          return { ...page, entries }
+        })
+        return changed ? { ...current, pages } : current
+      })
+      setReplacements((current) => {
+        const entry = current.byMessageId[messageId]
+        if (current.conversationId !== conversationId || !entry) return current
+        const [patched] = patch([entry])
+        return patched === entry ? current : { conversationId, byMessageId: { ...current.byMessageId, [messageId]: patched } }
+      })
+    },
+    [conversationId],
+  )
+
+  // A page fetched now already has the reactions, and the quotes, of every
+  // change seen so far.
+  const markFresh = useCallback(
     (entries: ConversationTimelineEntry[]) => {
       for (const entry of entries) {
         const id = entry.message?.id
         const update = id ? reactionUpdatesRef.current[id] : undefined
         if (update?.conversationId === conversationId) attempted.current.add(`reactions:${id}:${update.seen}`)
+        const quoted = entry.message ? quotedMessageId(entry.message) : null
+        const edit = quoted ? updatesRef.current[quoted] : undefined
+        if (edit?.conversationId === conversationId) attempted.current.add(`quote:${id}:${edit.revision}`)
       }
     },
     [conversationId],
@@ -202,6 +256,31 @@ export function useLiveOlderEntries({
         .catch(() => undefined)
     }
   }, [conversationId, newestEntries, olderEntries, patchReactions, reactionUpdates])
+
+  // Refetch older replies whose quoted message was edited live, taking only
+  // their quote from the answer. (A removal blanks the quote at once above.)
+  useEffect(() => {
+    const newestIds = new Set(newestEntries.map((entry) => entry.message?.id))
+    for (const entry of olderEntries) {
+      const message = entry.message
+      if (!message || message.removed || newestIds.has(message.id)) continue
+      const quoted = quotedMessageId(message)
+      const update = quoted ? updates[quoted] : undefined
+      if (!update || update.removed || update.conversationId !== conversationId) continue
+      const key = `quote:${message.id}:${update.revision}`
+      if (attempted.current.has(key)) continue
+      attempted.current.add(key)
+      const request = (quoteFetches.current.get(message.id) ?? 0) + 1
+      quoteFetches.current.set(message.id, request)
+      void getConversationMessage(conversationId, message.id)
+        .then((fresh) => {
+          if (quoteFetches.current.get(message.id) !== request) return
+          if (fresh.message && !fresh.message.removed) patchQuote(message.id, fresh.message.replyTo ?? null)
+        })
+        // A missed quote edit comes back with the next reconnect's refetch.
+        .catch(() => undefined)
+    }
+  }, [conversationId, newestEntries, olderEntries, patchQuote, updates])
 
   // Refetch older messages that live updates say changed. The newest page is
   // refetched by the project refresh, so only older ones need this.
@@ -245,7 +324,7 @@ export function useLiveOlderEntries({
         if (cancelled) return
         const fresh = new Map(results.map((result) => [result.cursor, result]))
         attempted.current.clear()
-        for (const result of results) markReactionsFresh(result.entries)
+        for (const result of results) markFresh(result.entries)
         setOlder((current) => {
           if (current.conversationId !== conversationId) return current
           const last = current.pages.at(-1)
@@ -266,7 +345,7 @@ export function useLiveOlderEntries({
     return () => {
       cancelled = true
     }
-  }, [conversationId, markReactionsFresh, resyncGeneration])
+  }, [conversationId, markFresh, resyncGeneration])
 
   const loadOlder = useCallback(async () => {
     if (!cursor || loading) return
@@ -276,7 +355,7 @@ export function useLiveOlderEntries({
     try {
       const result = await loadPageRef.current(cursor)
       if (visit.current !== started) return
-      markReactionsFresh(result.entries)
+      markFresh(result.entries)
       setOlder((current) => ({
         conversationId,
         pages: [...(current.conversationId === conversationId ? current.pages : []), { cursor, entries: result.entries }],
@@ -288,7 +367,7 @@ export function useLiveOlderEntries({
     } finally {
       if (visit.current === started) setLoading(false)
     }
-  }, [conversationId, cursor, loading, markReactionsFresh])
+  }, [conversationId, cursor, loading, markFresh])
 
   return {
     /** Every loaded entry, oldest first, with live edits and removals applied. */
