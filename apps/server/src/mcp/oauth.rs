@@ -1304,9 +1304,11 @@ async fn managed_agent(
     manager_actor_id: Uuid,
     connection_id: Uuid,
 ) -> Result<Option<(Uuid, Uuid)>, OAuthError> {
-    sqlx::query_as::<_, (Uuid, Uuid)>(
+    let found = sqlx::query_as::<_, (Uuid, Uuid, Uuid, String, Option<Vec<String>>)>(
         r#"
-        SELECT connection.project_id, connection.actor_id
+        SELECT connection.project_id, connection.actor_id, project.organization_id,
+               agent_membership.role,
+               workspace_role_permissions(agent_membership.role_id)
         FROM external_agent_connections connection
         JOIN projects project ON project.id = connection.project_id
         JOIN actors agent ON agent.id = connection.actor_id AND agent.status = 'active'
@@ -1332,8 +1334,20 @@ async fn managed_agent(
     .bind(manager_actor_id)
     .fetch_optional(&state.pool)
     .await
-    .map_err(AppError::from)
-    .map_err(Into::into)
+    .map_err(AppError::from)?;
+    let Some((project_id, agent_actor_id, organization_id, role, role_permissions)) = found else {
+        return Ok(None);
+    };
+    // Connecting as the agent hands its role to the app: only within what the
+    // manager holds, as creating or re-enabling the agent requires.
+    let grant = crate::policy::RoleGrant::stored(&role, role_permissions.as_deref())?;
+    let mut connection = state.pool.acquire().await.map_err(AppError::from)?;
+    let manager =
+        crate::roles::standing(&mut connection, organization_id, manager_actor_id).await?;
+    if !grant.permissions().is_subset_of(manager.permissions) {
+        return Ok(None);
+    }
+    Ok(Some((project_id, agent_actor_id)))
 }
 
 fn parse_scopes(scope: Option<&str>) -> Result<Vec<String>, OAuthError> {

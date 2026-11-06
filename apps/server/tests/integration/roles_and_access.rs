@@ -8,7 +8,9 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode, header},
 };
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -2336,4 +2338,205 @@ async fn only_the_built_in_project_admin_makes_a_workspace_admin() {
     let (status, invited) =
         send(app, cal_browser.request("POST", &invitations, None, invite)).await;
     assert_eq!(status, StatusCode::CREATED, "{invited}");
+}
+
+const OAUTH_REDIRECT: &str = "http://127.0.0.1:49152/callback";
+
+/// Whether `browser`'s person can complete OAuth consent connecting a new
+/// app as the agent behind `connection`: true when an authorization code is
+/// issued.
+async fn authorizes_as_agent(setup: &Setup, browser: &Browser, connection: Uuid) -> bool {
+    let (status, registration) = send(
+        &setup.app,
+        Request::builder()
+            .method("POST")
+            .uri("/oauth/register")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&json!({
+                    "client_name": "Agent client",
+                    "redirect_uris": [OAUTH_REDIRECT],
+                    "token_endpoint_auth_method": "none",
+                    "grant_types": ["authorization_code", "refresh_token"],
+                    "response_types": ["code"]
+                }))
+                .expect("registration"),
+            ))
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{registration}");
+    let client_id = registration["client_id"]
+        .as_str()
+        .expect("client")
+        .to_owned();
+    let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest("v".repeat(43).as_bytes()));
+    let agent = format!("agent:{connection}");
+    let form = serde_urlencoded::to_string([
+        ("response_type", "code"),
+        ("client_id", client_id.as_str()),
+        ("redirect_uri", OAUTH_REDIRECT),
+        ("scope", "read write"),
+        ("state", "state"),
+        ("code_challenge", challenge.as_str()),
+        ("code_challenge_method", "S256"),
+        ("connect_as", agent.as_str()),
+        ("access", "full"),
+        ("csrf_token", browser.csrf.as_str()),
+        ("decision", "approve"),
+    ])
+    .expect("consent");
+    let response = setup
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/connect/confirm")
+                .header(header::COOKIE, &browser.cookie)
+                .header(header::ORIGIN, "http://127.0.0.1:3100")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(form))
+                .expect("consent request"),
+        )
+        .await
+        .expect("consent response");
+    let location = response
+        .headers()
+        .get(header::LOCATION)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    let page = String::from_utf8(
+        to_bytes(response.into_body(), 100_000)
+            .await
+            .expect("consent page")
+            .to_vec(),
+    )
+    .unwrap_or_default();
+    location.contains("code=aw_code_") || page.contains("code=aw_code_")
+}
+
+/// Connecting an app as an agent hands it the agent's role, so it's held to
+/// what the person connecting holds: a narrowed admin can't connect as a
+/// plain Member agent; the owner can.
+#[tokio::test]
+async fn a_narrowed_admin_cannot_connect_an_app_as_a_stronger_agent() {
+    let Some(setup) = setup("awd74_oauth_agent").await else {
+        return;
+    };
+    let work = create_project(&setup, "WORK", "Work").await;
+    let project = work.parse::<Uuid>().expect("project");
+    let (alex, alex_browser) = add_person(&setup, &[&work], "alex").await;
+    make_admin(&setup, alex).await;
+    let (status, ops) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Ops", "baseRole": "admin", "permissions": ["agents.manage", "members.manage", "members.view", "tasks.view"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{ops}");
+    let (status, assigned) = assign(&setup, &setup.browser, alex, &ops["id"], false).await;
+    assert_eq!(status, StatusCode::OK, "{assigned}");
+    sqlx::query("UPDATE project_memberships SET role = 'admin', role_id = $3 WHERE project_id = $1 AND actor_id = $2")
+        .bind(project)
+        .bind(alex)
+        .bind(ops["id"].as_str().expect("id").parse::<Uuid>().expect("UUID"))
+        .execute(&setup.pool)
+        .await
+        .expect("alex is Ops in the project too");
+    let (mara, _) = create_agent(&setup.app, &setup.browser, &work, "Mara", "mara").await;
+    let (connection, _, _) = agent_connection(&setup, mara).await;
+
+    assert!(
+        !authorizes_as_agent(&setup, &alex_browser, connection).await,
+        "a narrowed admin connected an app as a Member agent"
+    );
+    assert!(
+        authorizes_as_agent(&setup, &setup.browser, connection).await,
+        "the owner connects an app as the agent"
+    );
+}
+
+/// A project invitation with a custom role based on Admin never makes a
+/// workspace admin, whether the invitee is new or already in the workspace.
+#[tokio::test]
+async fn a_custom_admin_invitation_does_not_make_a_workspace_admin() {
+    let Some(setup) = setup("awd74_invite_admin").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (bea, bea_browser) = add_person(&setup, &[], "bea").await;
+    let (status, manager) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Project manager", "baseRole": "admin", "permissions": ["members.manage", "members.view", "tasks.view"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{manager}");
+    let mut tokens = Vec::new();
+    for _ in 0..2 {
+        let (status, issued) = send(
+            app,
+            setup.browser.request(
+                "POST",
+                &format!("/api/v1/projects/{work}/invitations"),
+                None,
+                json!({"role": "admin", "roleId": manager["id"], "expiresInHours": 24}),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{issued}");
+        tokens.push(invitation_token(&issued));
+    }
+
+    // Someone new joins with it.
+    let (status, joined) = send(
+        app,
+        Request::builder()
+            .method("POST")
+            .uri("/api/v1/project-invitations/accept-new")
+            .header(header::ORIGIN, "http://127.0.0.1:3100")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&json!({
+                    "token": tokens[0],
+                    "loginName": "newcomer",
+                    "displayName": "Newcomer",
+                    "handle": "newcomer",
+                    "password": "newcomer correct horse battery staple",
+                }))
+                .expect("body"),
+            ))
+            .expect("request"),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {joined}");
+    let newcomer_role = sqlx::query_scalar::<_, String>(
+        r#"
+        SELECT membership.role FROM organization_memberships membership
+        JOIN users account ON account.actor_id = membership.actor_id
+        WHERE membership.organization_id = $1 AND account.login_name = 'newcomer'
+        "#,
+    )
+    .bind(setup.organization_id)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("newcomer's workspace role");
+    assert_eq!(newcomer_role, "member");
+
+    // Bea, already in the workspace, accepts the other.
+    let (status, accepted) = send(
+        app,
+        bea_browser.request(
+            "POST",
+            "/api/v1/project-invitations/accept-existing",
+            None,
+            json!({"token": tokens[1], "handle": "bea"}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {accepted}");
+    assert_eq!(workspace_role(&setup, bea).await, "member");
 }

@@ -860,14 +860,21 @@ async fn mutate_connection(
     if !next_scopes.iter().any(|scope| scope == "read") {
         return Err(AppError::Validation("external_agent_scopes"));
     }
-    // Changing the role, bringing a disabled connection back or giving it a
-    // scope it didn't have all hand the agent's role out again, so the role
-    // must be within what the caller holds.
     let restores = next_enabled && current.status != "active";
     let widens_scopes = next_scopes
         .iter()
         .any(|scope| !current.scopes.contains(scope));
-    if next_role != current.role || restores || widens_scopes {
+    let role_changed = next_role != current.role;
+    let scopes_changed = next_scopes != current.scopes;
+    let contract_changed = role_changed || scopes_changed;
+    let enabled_changed = next_enabled != (current.status == "active");
+    let should_issue =
+        !remove && next_enabled && (force_rotate || contract_changed || enabled_changed);
+    // Changing the role, bringing a disabled connection back, giving it a
+    // scope it didn't have, or issuing a new credential (a rotation hands
+    // the caller a token for the agent) all hand the agent's role out again,
+    // so the role must be within what the caller holds.
+    if role_changed || restores || widens_scopes || should_issue {
         require_grantable(
             &mut transaction,
             access.organization_id,
@@ -876,12 +883,6 @@ async fn mutate_connection(
         )
         .await?;
     }
-    let role_changed = next_role != current.role;
-    let scopes_changed = next_scopes != current.scopes;
-    let contract_changed = role_changed || scopes_changed;
-    let enabled_changed = next_enabled != (current.status == "active");
-    let should_issue =
-        !remove && next_enabled && (force_rotate || contract_changed || enabled_changed);
     if force_rotate && !next_enabled {
         return Err(AppError::Conflict("external_agent_connection", "disabled"));
     }
@@ -1529,6 +1530,26 @@ pub(crate) async fn authorize_identity_binding(
         return Err(AppError::Forbidden);
     }
     Ok(access.organization_id)
+}
+
+/// Refuses handing an agent's identity to someone else (binding an outside
+/// identity to the connection) when the agent's role is more than `caller`
+/// holds, as creating or re-enabling the agent would be refused.
+pub(crate) async fn require_connection_grantable(
+    transaction: &mut Transaction<'_, Postgres>,
+    organization_id: Uuid,
+    caller_actor_id: Uuid,
+    project_id: Uuid,
+    connection_id: Uuid,
+) -> Result<(), AppError> {
+    let connection = load_connection_tx(transaction, project_id, connection_id).await?;
+    require_grantable(
+        transaction,
+        organization_id,
+        caller_actor_id,
+        &connection.role,
+    )
+    .await
 }
 
 #[cfg(test)]

@@ -640,7 +640,9 @@ async fn accept_new_user(
         .execute(&mut *transaction)
         .await
         .map_err(map_join_database_error)?;
-    let organization_role = if invitation.role == "admin" {
+    // Only the built-in project Admin makes a workspace admin: a custom
+    // Admin-based role is narrower, so it never widens into it.
+    let organization_role = if invitation.role == "admin" && invitation.role_id.is_none() {
         "admin"
     } else {
         "member"
@@ -781,9 +783,20 @@ async fn accept_existing_user(
             "handle already exists",
         ));
     }
-    if invitation.role == "admin" && identity.organization_role != "owner" {
+    // Only the built-in project Admin makes a workspace admin, as the sync on
+    // a role change does: never a custom Admin-based role, and never over a
+    // custom workspace role, which would widen it.
+    if invitation.role == "admin"
+        && invitation.role_id.is_none()
+        && identity.organization_role != "owner"
+    {
         sqlx::query(
-            "UPDATE organization_memberships SET role = 'admin', version = version + 1, updated_at = now() WHERE organization_id = $1 AND actor_id = $2",
+            r#"
+            UPDATE organization_memberships
+            SET role = 'admin', version = version + 1, updated_at = now()
+            WHERE organization_id = $1 AND actor_id = $2
+              AND role_id IS NULL
+            "#,
         )
         .bind(invitation.organization_id)
         .bind(principal.actor_id)
