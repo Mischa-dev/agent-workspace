@@ -11,6 +11,9 @@
 -- brought in line once. A custom role is carried by role_id (the project
 -- trigger memberships_sync_custom_role sets `role` to its base); a
 -- built-in one by `role`.
+--
+-- People only: an agent keeps the direct-space role it was given (Viewer,
+-- when it's joined to a direct message), whatever its workspace role.
 
 CREATE FUNCTION direct_space_follows_workspace_role()
 RETURNS trigger
@@ -27,8 +30,9 @@ BEGIN
       AND project.organization_id = NEW.organization_id
       AND project.kind = 'direct'
       AND membership.actor_id = NEW.actor_id
-      -- Execution workers keep the worker role.
+      -- Execution workers keep the worker role, and agents theirs.
       AND membership.role <> 'worker'
+      AND EXISTS (SELECT 1 FROM actors person WHERE person.id = NEW.actor_id AND person.kind = 'human')
       AND (
           membership.role_id IS DISTINCT FROM NEW.role_id
           OR (
@@ -59,6 +63,7 @@ WHERE project.id = membership.project_id
   AND project.kind = 'direct'
   AND organization_membership.actor_id = membership.actor_id
   AND membership.role <> 'worker'
+  AND EXISTS (SELECT 1 FROM actors person WHERE person.id = membership.actor_id AND person.kind = 'human')
   AND (
       membership.role_id IS DISTINCT FROM organization_membership.role_id
       OR (

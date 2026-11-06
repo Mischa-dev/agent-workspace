@@ -2207,9 +2207,14 @@ pub(crate) async fn lock_message_conversation(
                -- The Messages (direct) space follows the workspace role as it is
             -- now: its base and its permissions together, never the base stored
             -- when they first opened Messages with today's permissions.
-            CASE WHEN project.kind = 'direct' THEN organization_membership.role
+            -- That's a person's: an agent keeps the role it was given there (Viewer,
+            -- for one joined to a direct message), as before.
+            CASE WHEN project.kind = 'direct' AND EXISTS (SELECT 1 FROM actors direct_person
+                     WHERE direct_person.id = membership.actor_id AND direct_person.kind = 'human')
+                 THEN organization_membership.role
                  ELSE membership.role END AS membership_role,
-            workspace_role_permissions(CASE WHEN project.kind = 'direct'
+            workspace_role_permissions(CASE WHEN project.kind = 'direct' AND EXISTS (SELECT 1 FROM actors direct_person
+                     WHERE direct_person.id = membership.actor_id AND direct_person.kind = 'human')
                 THEN organization_membership.role_id ELSE membership.role_id END) AS membership_role_permissions,
                membership.enabled AS membership_enabled
         FROM conversations conversation
@@ -3610,9 +3615,14 @@ async fn authorized_project(
             -- The Messages (direct) space follows the workspace role as it is
             -- now: its base and its permissions together, never the base stored
             -- when they first opened Messages with today's permissions.
-            CASE WHEN project.kind = 'direct' THEN organization_membership.role
+            -- That's a person's: an agent keeps the role it was given there (Viewer,
+            -- for one joined to a direct message), as before.
+            CASE WHEN project.kind = 'direct' AND EXISTS (SELECT 1 FROM actors direct_person
+                     WHERE direct_person.id = membership.actor_id AND direct_person.kind = 'human')
+                 THEN organization_membership.role
                  ELSE membership.role END AS membership_role,
-            workspace_role_permissions(CASE WHEN project.kind = 'direct'
+            workspace_role_permissions(CASE WHEN project.kind = 'direct' AND EXISTS (SELECT 1 FROM actors direct_person
+                     WHERE direct_person.id = membership.actor_id AND direct_person.kind = 'human')
                 THEN organization_membership.role_id ELSE membership.role_id END) AS membership_role_permissions,
             membership.enabled AS membership_enabled
         FROM projects project
@@ -3657,9 +3667,14 @@ async fn lock_project_access(
             -- The Messages (direct) space follows the workspace role as it is
             -- now: its base and its permissions together, never the base stored
             -- when they first opened Messages with today's permissions.
-            CASE WHEN project.kind = 'direct' THEN organization_membership.role
+            -- That's a person's: an agent keeps the role it was given there (Viewer,
+            -- for one joined to a direct message), as before.
+            CASE WHEN project.kind = 'direct' AND EXISTS (SELECT 1 FROM actors direct_person
+                     WHERE direct_person.id = membership.actor_id AND direct_person.kind = 'human')
+                 THEN organization_membership.role
                  ELSE membership.role END AS membership_role,
-            workspace_role_permissions(CASE WHEN project.kind = 'direct'
+            workspace_role_permissions(CASE WHEN project.kind = 'direct' AND EXISTS (SELECT 1 FROM actors direct_person
+                     WHERE direct_person.id = membership.actor_id AND direct_person.kind = 'human')
                 THEN organization_membership.role_id ELSE membership.role_id END) AS membership_role_permissions,
             membership.enabled AS membership_enabled
         FROM projects project
@@ -3730,9 +3745,14 @@ pub(crate) async fn fetch_conversation_access(
             -- The Messages (direct) space follows the workspace role as it is
             -- now: its base and its permissions together, never the base stored
             -- when they first opened Messages with today's permissions.
-            CASE WHEN project.kind = 'direct' THEN organization_membership.role
+            -- That's a person's: an agent keeps the role it was given there (Viewer,
+            -- for one joined to a direct message), as before.
+            CASE WHEN project.kind = 'direct' AND EXISTS (SELECT 1 FROM actors direct_person
+                     WHERE direct_person.id = membership.actor_id AND direct_person.kind = 'human')
+                 THEN organization_membership.role
                  ELSE membership.role END AS membership_role,
-            workspace_role_permissions(CASE WHEN project.kind = 'direct'
+            workspace_role_permissions(CASE WHEN project.kind = 'direct' AND EXISTS (SELECT 1 FROM actors direct_person
+                     WHERE direct_person.id = membership.actor_id AND direct_person.kind = 'human')
                 THEN organization_membership.role_id ELSE membership.role_id END) AS membership_role_permissions,
             membership.enabled AS membership_enabled
         FROM conversations conversation
@@ -3845,9 +3865,14 @@ pub(crate) async fn lock_conversation_for(
             -- The Messages (direct) space follows the workspace role as it is
             -- now: its base and its permissions together, never the base stored
             -- when they first opened Messages with today's permissions.
-            CASE WHEN project.kind = 'direct' THEN organization_membership.role
+            -- That's a person's: an agent keeps the role it was given there (Viewer,
+            -- for one joined to a direct message), as before.
+            CASE WHEN project.kind = 'direct' AND EXISTS (SELECT 1 FROM actors direct_person
+                     WHERE direct_person.id = membership.actor_id AND direct_person.kind = 'human')
+                 THEN organization_membership.role
                  ELSE membership.role END AS membership_role,
-            workspace_role_permissions(CASE WHEN project.kind = 'direct'
+            workspace_role_permissions(CASE WHEN project.kind = 'direct' AND EXISTS (SELECT 1 FROM actors direct_person
+                     WHERE direct_person.id = membership.actor_id AND direct_person.kind = 'human')
                 THEN organization_membership.role_id ELSE membership.role_id END) AS membership_role_permissions,
             membership.enabled AS membership_enabled
         FROM conversations conversation
