@@ -950,6 +950,23 @@ impl AdmissionFixture {
     /// follows the claim), drains the queue, and returns the run's state and
     /// workspace.
     async fn release_and_drain(&self, run_id: Uuid) -> (String, Option<Uuid>) {
+        self.lapse_claim(run_id).await;
+        agent_workspace_server::scheduler::drain_now(&self.state)
+            .await
+            .expect("drain the queue");
+        sqlx::query_as::<_, (String, Option<Uuid>)>(
+            "SELECT state, repository_workspace_id FROM agent_runs WHERE id = $1",
+        )
+        .bind(run_id)
+        .fetch_one(&self.pool)
+        .await
+        .expect("read the queued run")
+    }
+
+    /// Lets the held run's claim lapse: claimed two minutes ago, lease over a
+    /// minute ago, so the lease still follows the claim. Only the claim
+    /// columns change, which the admission trigger doesn't watch.
+    async fn lapse_claim(&self, run_id: Uuid) {
         sqlx::query(
             r#"
             UPDATE agent_runs
@@ -962,16 +979,6 @@ impl AdmissionFixture {
         .execute(&self.pool)
         .await
         .expect("let the held claim lapse");
-        agent_workspace_server::scheduler::drain_now(&self.state)
-            .await
-            .expect("drain the queue");
-        sqlx::query_as::<_, (String, Option<Uuid>)>(
-            "SELECT state, repository_workspace_id FROM agent_runs WHERE id = $1",
-        )
-        .bind(run_id)
-        .fetch_one(&self.pool)
-        .await
-        .expect("read the queued run")
     }
 
     async fn close(self) {
@@ -1017,6 +1024,67 @@ async fn a_queued_run_is_cancelled_when_its_requester_loses_start_runs() {
     let (state, workspace) = fixture.release_and_drain(run_id).await;
     assert_eq!(state, "canceled");
     assert!(workspace.is_none());
+    fixture.close().await;
+}
+
+/// AWD-74: claiming a queued run never waits on its thread while holding
+/// the run. Removing a message holds the thread and then redacts the run's
+/// prompt; starting a run holds the run and then (the admission trigger)
+/// takes the thread. With the thread held, a claim pass skips the run and
+/// returns; once the thread is free, the next pass claims it.
+#[tokio::test]
+async fn a_claim_skips_a_run_whose_thread_is_locked() {
+    let Some(fixture) = admission_fixture("admission_lock_order").await else {
+        return;
+    };
+    let run_id = fixture.run_waiting_for_a_slot().await;
+    fixture.lapse_claim(run_id).await;
+
+    // Stands in for a message removal holding the run's thread.
+    let mut holder = fixture
+        .pool
+        .begin()
+        .await
+        .expect("begin holding the thread");
+    sqlx::query("SELECT id FROM conversations WHERE id = $1 FOR UPDATE")
+        .bind(fixture.second_thread_id)
+        .fetch_one(&mut *holder)
+        .await
+        .expect("hold the thread");
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        agent_workspace_server::scheduler::drain_now(&fixture.state),
+    )
+    .await
+    .expect("the claim waited on the locked thread")
+    .expect("drain the queue");
+    let (state, claim) = sqlx::query_as::<_, (String, Option<Uuid>)>(
+        "SELECT state, scheduler_claim_id FROM agent_runs WHERE id = $1",
+    )
+    .bind(run_id)
+    .fetch_one(&fixture.pool)
+    .await
+    .expect("read the waiting run");
+    assert_eq!(state, "queued");
+    assert!(
+        claim.is_none(),
+        "the run was claimed with its thread locked"
+    );
+
+    // The thread free again: the next pass claims and starts it.
+    holder.rollback().await.expect("free the thread");
+    agent_workspace_server::scheduler::drain_now(&fixture.state)
+        .await
+        .expect("drain the queue");
+    let state = sqlx::query_scalar::<_, String>("SELECT state FROM agent_runs WHERE id = $1")
+        .bind(run_id)
+        .fetch_one(&fixture.pool)
+        .await
+        .expect("read the started run");
+    assert!(
+        !matches!(state.as_str(), "queued" | "canceled"),
+        "the run didn't start once its thread was free: {state}"
+    );
     fixture.close().await;
 }
 
