@@ -2204,8 +2204,13 @@ pub(crate) async fn lock_message_conversation(
                conversation.thread_status,
                conversation.thread_outcome,
                conversation.next_entry_sequence,
-               membership.role AS membership_role,
-            workspace_role_permissions(COALESCE(membership.role_id, CASE WHEN project.kind = 'direct' THEN organization_membership.role_id END)) AS membership_role_permissions,
+               -- The Messages (direct) space follows the workspace role as it is
+            -- now: its base and its permissions together, never the base stored
+            -- when they first opened Messages with today's permissions.
+            CASE WHEN project.kind = 'direct' THEN organization_membership.role
+                 ELSE membership.role END AS membership_role,
+            workspace_role_permissions(CASE WHEN project.kind = 'direct'
+                THEN organization_membership.role_id ELSE membership.role_id END) AS membership_role_permissions,
                membership.enabled AS membership_enabled
         FROM conversations conversation
         JOIN projects project ON project.id = conversation.project_id
@@ -3602,8 +3607,13 @@ async fn authorized_project(
         SELECT
             project.id AS project_id,
             project.archived_at IS NOT NULL AS project_archived,
-            membership.role AS membership_role,
-            workspace_role_permissions(COALESCE(membership.role_id, CASE WHEN project.kind = 'direct' THEN organization_membership.role_id END)) AS membership_role_permissions,
+            -- The Messages (direct) space follows the workspace role as it is
+            -- now: its base and its permissions together, never the base stored
+            -- when they first opened Messages with today's permissions.
+            CASE WHEN project.kind = 'direct' THEN organization_membership.role
+                 ELSE membership.role END AS membership_role,
+            workspace_role_permissions(CASE WHEN project.kind = 'direct'
+                THEN organization_membership.role_id ELSE membership.role_id END) AS membership_role_permissions,
             membership.enabled AS membership_enabled
         FROM projects project
         JOIN organization_memberships organization_membership
@@ -3644,8 +3654,13 @@ async fn lock_project_access(
         SELECT
             project.id AS project_id,
             project.archived_at IS NOT NULL AS project_archived,
-            membership.role AS membership_role,
-            workspace_role_permissions(COALESCE(membership.role_id, CASE WHEN project.kind = 'direct' THEN organization_membership.role_id END)) AS membership_role_permissions,
+            -- The Messages (direct) space follows the workspace role as it is
+            -- now: its base and its permissions together, never the base stored
+            -- when they first opened Messages with today's permissions.
+            CASE WHEN project.kind = 'direct' THEN organization_membership.role
+                 ELSE membership.role END AS membership_role,
+            workspace_role_permissions(CASE WHEN project.kind = 'direct'
+                THEN organization_membership.role_id ELSE membership.role_id END) AS membership_role_permissions,
             membership.enabled AS membership_enabled
         FROM projects project
         JOIN organization_memberships organization_membership
@@ -3712,8 +3727,13 @@ pub(crate) async fn fetch_conversation_access(
             conversation.thread_status,
             conversation.thread_outcome,
             conversation.next_entry_sequence,
-            membership.role AS membership_role,
-            workspace_role_permissions(COALESCE(membership.role_id, CASE WHEN project.kind = 'direct' THEN organization_membership.role_id END)) AS membership_role_permissions,
+            -- The Messages (direct) space follows the workspace role as it is
+            -- now: its base and its permissions together, never the base stored
+            -- when they first opened Messages with today's permissions.
+            CASE WHEN project.kind = 'direct' THEN organization_membership.role
+                 ELSE membership.role END AS membership_role,
+            workspace_role_permissions(CASE WHEN project.kind = 'direct'
+                THEN organization_membership.role_id ELSE membership.role_id END) AS membership_role_permissions,
             membership.enabled AS membership_enabled
         FROM conversations conversation
         JOIN projects project ON project.id = conversation.project_id
@@ -3822,8 +3842,13 @@ pub(crate) async fn lock_conversation_for(
             conversation.thread_status,
             conversation.thread_outcome,
             conversation.next_entry_sequence,
-            membership.role AS membership_role,
-            workspace_role_permissions(COALESCE(membership.role_id, CASE WHEN project.kind = 'direct' THEN organization_membership.role_id END)) AS membership_role_permissions,
+            -- The Messages (direct) space follows the workspace role as it is
+            -- now: its base and its permissions together, never the base stored
+            -- when they first opened Messages with today's permissions.
+            CASE WHEN project.kind = 'direct' THEN organization_membership.role
+                 ELSE membership.role END AS membership_role,
+            workspace_role_permissions(CASE WHEN project.kind = 'direct'
+                THEN organization_membership.role_id ELSE membership.role_id END) AS membership_role_permissions,
             membership.enabled AS membership_enabled
         FROM conversations conversation
         JOIN projects project ON project.id = conversation.project_id

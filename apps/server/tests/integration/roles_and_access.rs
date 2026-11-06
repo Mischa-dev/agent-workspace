@@ -18,7 +18,7 @@ use super::{
     agent_interface::{Browser, connect_app, create_agent, initialize, send, tool},
     mcp_admin::{Setup, create_project, setup},
     mcp_tasks::{add_member, space},
-    message_edits::{add_person, create_channel},
+    message_edits::{add_person, create_channel, direct_space, owner_id, say, text},
     w20_files::{read, with_data_root},
 };
 
@@ -3190,6 +3190,89 @@ async fn applying_a_role_to_projects_skips_those_the_caller_cant_manage() {
             .map(|id| id.to_string()),
         helpers["id"].as_str().map(str::to_owned)
     );
+}
+
+/// Messages follow the workspace role as it is now: someone who opened
+/// Messages as the owner, then handed ownership on and was given a custom
+/// role without "post messages", can't send a direct message; the person
+/// they talk with, who may post, still can.
+#[tokio::test]
+async fn a_former_owner_without_post_messages_cant_send_direct_messages() {
+    let Some(setup) = setup("awd74_former_owner_dm").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
+    let (cal, cal_browser) = add_person(&setup, &[&work], "cal").await;
+    let owner = owner_id(&setup.pool).await;
+    let (status, quiet) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Quiet", "baseRole": "member", "permissions": ["tasks.view"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{quiet}");
+
+    // The owner opens Messages and a DM with Bea while still the owner.
+    direct_space(&setup).await;
+    let (status, _) = send(
+        app,
+        bea_browser.request("GET", "/api/v1/direct", None, Value::Null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, dm) = send(
+        app,
+        setup
+            .browser
+            .request("POST", "/api/v1/direct/dms", None, json!({"actorId": bea})),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {dm}");
+    let dm = dm["conversation"]["id"].as_str().expect("DM").to_owned();
+
+    // Ownership goes to Cal, who gives the former owner a role without
+    // "post messages".
+    let (status, transferred) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!(
+                "/api/v1/organizations/{}/transfer-ownership",
+                setup.organization_id
+            ),
+            Some("transfer-to-cal"),
+            json!({"actorId": cal}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{transferred}");
+    let (status, assigned) = assign(&setup, &cal_browser, owner, &quiet["id"], false).await;
+    assert_eq!(status, StatusCode::OK, "{assigned}");
+
+    let (status, refused) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/conversations/{dm}/messages"),
+            Some("former-owner-dm"),
+            json!({"content": text("Still the owner here?")}),
+        ),
+    )
+    .await;
+    assert!(!status.is_success(), "{status}: {refused}");
+    let sent = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM messages WHERE conversation_id = $1::uuid AND plain_text = 'Still the owner here?'",
+    )
+    .bind(&dm)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("count messages");
+    assert_eq!(sent, 0, "the former owner posted: {refused}");
+
+    // Bea may post, and still can.
+    say(&setup, &bea_browser, &dm, "bea-dm", text("Hello from Bea")).await;
 }
 
 /// The custom role `actor` holds in `project`, if any.
