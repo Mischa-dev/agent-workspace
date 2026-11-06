@@ -594,7 +594,6 @@ pub(super) async fn task_move(
         transaction.commit().await?;
         // Moving takes archive and create, not "see tasks": without it, the
         // result names the tasks by key only.
-        let mut moved = moved;
         if crate::search::projects_showing_tasks(&state.pool, principal.actor_id, &[source_project_id])
             .await?
             .is_empty()
