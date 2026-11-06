@@ -1361,6 +1361,14 @@ async fn work_with_worker(
     let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("work_item"))?;
+    // The thread it makes is named after the task, and anyone in its channel
+    // reads it: only for someone who sees tasks here.
+    authorize_work_item(
+        &principal,
+        &membership,
+        Action::WorkItemView,
+        Some(work_item_id),
+    )?;
     authorize_work_item(
         &principal,
         &membership,

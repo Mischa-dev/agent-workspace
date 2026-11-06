@@ -3853,6 +3853,65 @@ async fn a_project_invitation_lapses_when_its_issuers_project_role_narrows_below
     assert_eq!(status, StatusCode::NOT_FOUND, "{refused}");
 }
 
+/// Working on a task with a worker makes a thread named after the task, so
+/// it needs "see tasks": a role that may edit tasks and start runs but not
+/// see tasks is refused before any thread is made.
+#[tokio::test]
+async fn working_with_a_worker_needs_see_tasks() {
+    let Some(setup) = setup("awd74_work_with_worker").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let project = work.parse::<Uuid>().expect("project");
+    let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
+    let channel = create_channel(&setup, &work, "build").await;
+    let task = owner_task(&setup, &work, "Secret worker task").await;
+    let (status, doers) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Blind doers", "baseRole": "member", "permissions": ["tasks.edit", "runs.launch", "channels.post"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{doers}");
+    let (status, changed) = set_project_role(
+        &setup,
+        &work,
+        bea,
+        "bea-blind-doers",
+        json!({"roleId": doers["id"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let version = task_version(&setup, project, task).await;
+    let (status, refused) = send(
+        app,
+        bea_browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/work-items/{task}/work-with-worker"),
+            Some("bea-work-with-worker"),
+            json!({"expectedVersion": version, "channelId": channel, "prompt": "Do it."}),
+        ),
+    )
+    .await;
+    assert!(
+        matches!(status, StatusCode::FORBIDDEN | StatusCode::NOT_FOUND),
+        "{status}: {refused}"
+    );
+    assert!(
+        !refused.to_string().contains("Secret worker task"),
+        "{refused}"
+    );
+    let threads: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM conversations WHERE project_id = $1 AND strpos(name, 'Secret worker task') > 0",
+    )
+    .bind(project)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("threads");
+    assert_eq!(threads, 0, "no thread named after the task");
+}
+
 /// A comment that references another task shows that task's title and
 /// status only to someone who may see tasks: posting or editing it with a
 /// role that may edit but not see tasks returns the reference by id and
