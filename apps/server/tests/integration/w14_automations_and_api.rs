@@ -1127,6 +1127,101 @@ async fn api_webhooks_and_automations_act_for_their_maker_only() {
         .await
         .expect("turn the rule off");
 
+    // Several tasks a script launches go through the queue (source "queue")
+    // and still keep the script's limit when the queue drains (AWD-74).
+    let blocker = send(
+        &application,
+        owner,
+        "POST",
+        &format!("{project}/work-items"),
+        "queue-blocker",
+        json!({"title": "Blocks the batch"}),
+    )
+    .await;
+    assert_eq!(blocker.0, StatusCode::CREATED, "{}", blocker.1);
+    let mut queued_tasks = Vec::new();
+    for title in ["Queued one", "Queued two"] {
+        let made = send(
+            &application,
+            owner,
+            "POST",
+            &format!("{project}/work-items"),
+            &format!("queue-{}", title.replace(' ', "-")),
+            json!({"title": title}),
+        )
+        .await;
+        assert_eq!(made.0, StatusCode::CREATED, "{}", made.1);
+        let task = uuid_field(&made.2, "id");
+        // An open blocker keeps it waiting in the queue after a drain.
+        sqlx::query(
+            r#"
+            INSERT INTO work_item_dependencies (
+                project_id, blocked_work_item_id, blocking_project_id, blocking_work_item_id,
+                created_by_actor_id
+            ) VALUES ($1, $2, $1, $3, $4)
+            "#,
+        )
+        .bind(seed.project_id)
+        .bind(task)
+        .bind(uuid_field(&blocker.2, "id"))
+        .bind(seed.human_actor_id)
+        .execute(&pool)
+        .await
+        .expect("blocked by the blocker");
+        queued_tasks.push(task);
+    }
+    let queued = bearer(
+        &application,
+        Some(&token),
+        "POST",
+        "/api/public/v1/task_launch",
+        json!({"projectId": seed.project_id, "taskIds": queued_tasks}),
+    )
+    .await;
+    assert_eq!(queued.2["outcome"], "ok", "{}", queued.1);
+    pump(&state).await;
+    let launches = sqlx::query_as::<_, (String, String, bool)>(
+        "SELECT source, state, made_through_app FROM launches WHERE work_item_id = ANY($1)",
+    )
+    .bind(&queued_tasks)
+    .fetch_all(&pool)
+    .await
+    .expect("queued launches");
+    assert_eq!(launches.len(), 2, "{launches:?}");
+    assert!(
+        launches
+            .iter()
+            .all(|(_, state, marked)| state == "queued" && *marked),
+        "{launches:?}"
+    );
+    sqlx::query(
+        "UPDATE organization_memberships SET agent_limit = ARRAY['tasks.view', 'tasks.edit'] WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.organization_id)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("the owner's apps no longer launch runs");
+    launch::drain(&state).await.expect("drain");
+    let states =
+        sqlx::query_scalar::<_, String>("SELECT state FROM launches WHERE work_item_id = ANY($1)")
+            .bind(&queued_tasks)
+            .fetch_all(&pool)
+            .await
+            .expect("drained launches");
+    assert!(
+        states.iter().all(|state| state == "cancelled"),
+        "they started beyond the script's limit: {states:?}"
+    );
+    sqlx::query(
+        "UPDATE organization_memberships SET agent_limit = NULL WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.organization_id)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("lift the limit a sixth time");
+
     // ---------------------------------------------------------------------
     // A rule whose maker lost the project turns off instead of acting.
     let members_rule = send(

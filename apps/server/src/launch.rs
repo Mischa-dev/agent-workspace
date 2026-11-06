@@ -1529,12 +1529,12 @@ pub(crate) async fn launch_tasks(
                 id, organization_id, project_id, work_item_id, requested_by_actor_id,
                 via_oauth_grant_id, source, environment_id, overrides, prompt,
                 start_when, start_at, provider_account_id, status_reason, position,
-                agent_profile_id
+                agent_profile_id, made_through_app
             )
             VALUES (
                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
                 (SELECT COALESCE(max(position), 0) + 1 FROM launches WHERE project_id = $3),
-                $15
+                $15, $16
             )
             "#,
         )
@@ -1560,6 +1560,9 @@ pub(crate) async fn launch_tasks(
         .bind(request.provider_account_id)
         .bind(reason)
         .bind(request.agent_profile_id)
+        // A person's app or script queued it (whatever the display source):
+        // it starts only within that app's limit when the queue drains.
+        .bind(caller.mcp && caller.actor_kind == ActorKind::Human)
         .execute(&mut *transaction)
         .await?;
         audit(
@@ -2186,9 +2189,10 @@ pub async fn drain(state: &AppState) -> Result<usize, AppError> {
             continue;
         };
         // Principle 9: the person who queued it must still be able to start
-        // runs here, and a launch their app or script queued (source mcp), or
-        // an automation an app made queued, must still be within that app's
-        // agent limit as it is now.
+        // runs here, and a launch their app or script queued (made_through_app:
+        // directly, in a batch or through an app-made automation) must still
+        // be within that app's agent limit as it is now. Source mcp covers
+        // rows queued before the flag was set on every insert.
         let limits =
             if (queued.source == "mcp" || queued.made_through_app) && kind == ActorKind::Human {
                 let mut connection = state.pool.acquire().await?;
@@ -2581,6 +2585,17 @@ pub(crate) async fn queue_tag_launches(
     let Some(worker_actor_id) = workers.first() else {
         return Ok(());
     };
+    // This runs inside the call that sent the message: an author's app whose
+    // agent limit leaves out "start runs" doesn't launch one by tagging, as
+    // the launch job later runs without that limit.
+    let author =
+        sqlx::query_scalar::<_, Uuid>("SELECT author_actor_id FROM messages WHERE id = $1")
+            .bind(message_id)
+            .fetch_one(&mut **transaction)
+            .await?;
+    if crate::policy::agent_limit_hides(author, project_id, crate::policy::Permission::RunsLaunch) {
+        return Ok(());
+    }
     let organization_id =
         sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
             .bind(project_id)
