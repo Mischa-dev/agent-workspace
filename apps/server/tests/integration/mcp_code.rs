@@ -1786,3 +1786,88 @@ async fn a_runs_pull_request_needs_see_code() {
     assert_eq!(listed["outcome"], "ok", "{listed}");
     assert!(!listed.to_string().contains("Offline mode"), "{listed}");
 }
+
+/// A run's page (run_steps, and the browser's run list and page, which
+/// share it) names its task only for a caller who sees tasks in the run's
+/// project, and its branch, commits, changed files and diff only for one who
+/// sees code; the run itself stays (AWD-74).
+#[tokio::test]
+async fn a_runs_task_and_code_follow_see_tasks_and_see_code() {
+    let Some((setup, seed, _temporary)) = seeded("mcp_code_run_task").await else {
+        return;
+    };
+    let app = &setup.app;
+    let pool = &setup.pool;
+    let thread = thread(pool, &seed, seed.channel_id, "Task work").await;
+    execute(
+        pool,
+        "UPDATE repositories SET preparation_state = 'ready', prepared_at = now(), trusted = true WHERE id = $1",
+        &[seed.repository_id],
+    )
+    .await;
+    let (run_id, _) = run(pool, &seed, thread, "secret-branch").await;
+    let owner_app = connect_app(app, &setup.browser, "Owner's app", "full").await;
+    let session = initialize(app, &owner_app).await.expect("owner's app");
+    let created = tool(
+        app,
+        &owner_app,
+        &session,
+        "task_create",
+        json!({"projectId": seed.project_id.to_string(), "title": "Secret run task"}),
+    )
+    .await;
+    let task = created["workItemId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("task: {created}"))
+        .parse::<Uuid>()
+        .expect("task id");
+    sqlx::query(
+        r#"
+        INSERT INTO work_item_conversation_links
+            (project_id, work_item_id, conversation_id, created_by_actor_id)
+        VALUES ($1, $2, $3, $4)
+        "#,
+    )
+    .bind(seed.project_id)
+    .bind(task)
+    .bind(thread)
+    .bind(seed.human_actor_id)
+    .execute(pool)
+    .await
+    .expect("the task's thread");
+    let steps = json!({"runId": run_id, "includeDiff": true});
+
+    let seen = tool(app, &owner_app, &session, "run_steps", steps.clone()).await;
+    assert_eq!(seen["outcome"], "ok", "{seen}");
+    assert_eq!(
+        seen["value"]["run"]["taskTitle"], "Secret run task",
+        "{seen}"
+    );
+    assert_eq!(seen["value"]["run"]["branch"], "secret-branch", "{seen}");
+
+    // The owner's apps see neither tasks nor code now.
+    sqlx::query(
+        "UPDATE organization_memberships SET agent_limit = ARRAY['runs.launch'] WHERE actor_id = $1",
+    )
+    .bind(seed.human_actor_id)
+    .execute(pool)
+    .await
+    .expect("the owner's apps see neither");
+    let limited = tool(app, &owner_app, &session, "run_steps", steps).await;
+    assert_eq!(limited["outcome"], "ok", "{limited}");
+    let run = &limited["value"]["run"];
+    assert_eq!(run["id"], run_id.to_string(), "{limited}");
+    assert!(run["taskKey"].is_string(), "{limited}");
+    assert!(run["taskTitle"].is_null(), "{limited}");
+    assert!(run["branch"].is_null(), "{limited}");
+    assert!(run["files"].is_null(), "{limited}");
+    assert_eq!(
+        limited["value"]["diff"]["state"], "unavailable",
+        "{limited}"
+    );
+    assert!(
+        !limited.to_string().contains("Secret run task"),
+        "{limited}"
+    );
+    assert!(!limited.to_string().contains("secret-branch"), "{limited}");
+}
