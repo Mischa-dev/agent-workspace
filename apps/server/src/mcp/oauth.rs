@@ -1340,7 +1340,8 @@ async fn managed_agent(
     };
     // Connecting as the agent hands its role to the app: only within what the
     // manager holds, as creating or re-enabling the agent requires.
-    let grant = crate::policy::RoleGrant::stored(&role, role_permissions.as_deref())?;
+    let grant = crate::policy::RoleGrant::stored(&role, role_permissions.as_deref())
+        .map_err(AppError::from)?;
     let mut connection = state.pool.acquire().await.map_err(AppError::from)?;
     let manager =
         crate::roles::standing(&mut connection, organization_id, manager_actor_id).await?;
