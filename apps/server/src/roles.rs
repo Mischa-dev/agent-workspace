@@ -294,6 +294,32 @@ pub(crate) async fn standing(
     })
 }
 
+/// Whether an invitation `issuer` sent still holds: they may still invite,
+/// and the role it gives (`role`, or the custom `role_id`) is within what
+/// they hold now. Checked when an invitation is opened or accepted, since
+/// the issuer's role may have narrowed since they sent it.
+pub(crate) async fn issuer_still_grants(
+    connection: &mut PgConnection,
+    organization_id: Uuid,
+    issuer: Uuid,
+    role: &str,
+    role_id: Option<Uuid>,
+) -> Result<bool, AppError> {
+    let issuer = match standing(connection, organization_id, issuer).await {
+        Ok(issuer) => issuer,
+        Err(AppError::NotFound(_)) => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    let invited =
+        sqlx::query_scalar::<_, Option<Vec<String>>>("SELECT workspace_role_permissions($1)")
+            .bind(role_id)
+            .fetch_one(&mut *connection)
+            .await?;
+    let invited = RoleGrant::stored(role, invited.as_deref())?;
+    Ok(issuer.may(Permission::MembersInvite)
+        && invited.permissions().is_subset_of(issuer.permissions))
+}
+
 // ---------------------------------------------------------------------------
 // Roles: reading
 

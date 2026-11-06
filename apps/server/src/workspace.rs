@@ -1407,12 +1407,25 @@ async fn find_invitation(
     digest: &[u8; 32],
     lock: bool,
 ) -> Result<ValidInvitation, AppError> {
-    sqlx::query_as::<_, ValidInvitation>(&valid_invitation_sql(lock))
+    let row = sqlx::query_as::<_, ValidInvitation>(&valid_invitation_sql(lock))
         .bind(prefix)
         .fetch_optional(&mut *connection)
         .await?
         .filter(|row| digest_matches(&row.token_digest, digest))
-        .ok_or(AppError::NotFound("workspace_invitation"))
+        .ok_or(AppError::NotFound("workspace_invitation"))?;
+    // The issuer's role may have narrowed since they sent it.
+    if !crate::roles::issuer_still_grants(
+        connection,
+        row.organization_id,
+        row.issued_by_actor_id,
+        &row.role,
+        row.role_id,
+    )
+    .await?
+    {
+        return Err(AppError::NotFound("workspace_invitation"));
+    }
+    Ok(row)
 }
 
 async fn resolve_invitation(

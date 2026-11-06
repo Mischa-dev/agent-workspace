@@ -1490,3 +1490,190 @@ async fn project_membership(setup: &Setup, project: Uuid, actor: Uuid) -> (i64, 
     .await
     .expect("project membership")
 }
+
+/// The token in an issued invitation's URL.
+fn invitation_token(issued: &Value) -> String {
+    issued["invitationUrl"]
+        .as_str()
+        .unwrap_or_else(|| panic!("invitation URL: {issued}"))
+        .split_once("#token=")
+        .expect("token fragment")
+        .1
+        .to_owned()
+}
+
+/// Every way of handing access out again stays within what the giver holds
+/// now: an invitation stops working once its issuer's role narrows below
+/// what it gives, a narrowed admin can't resend an invitation for more than
+/// they hold, and they can't switch back on an agent holding more.
+#[tokio::test]
+async fn invitations_and_agents_stay_within_what_the_giver_holds_now() {
+    let Some(setup) = setup("awd74_regrant").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let project = work.parse::<Uuid>().expect("project");
+    let (alex, alex_browser) = add_person(&setup, &[&work], "alex").await;
+    make_admin(&setup, alex).await;
+    sqlx::query(
+        "UPDATE project_memberships SET role = 'admin' WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project)
+    .bind(alex)
+    .execute(&setup.pool)
+    .await
+    .expect("alex is a project admin");
+
+    // As a plain admin, Alex invites a Member to the workspace and the project.
+    let mut tokens = Vec::new();
+    for (path, resolve) in [
+        (
+            format!(
+                "/api/v1/organizations/{}/invitations",
+                setup.organization_id
+            ),
+            "/api/v1/workspace-invitations/resolve",
+        ),
+        (
+            format!("/api/v1/projects/{work}/invitations"),
+            "/api/v1/project-invitations/resolve",
+        ),
+    ] {
+        let (status, issued) = send(
+            app,
+            alex_browser.request(
+                "POST",
+                &path,
+                None,
+                json!({"role": "member", "expiresInHours": 24}),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{path}: {issued}");
+        let token = invitation_token(&issued);
+        let (status, resolved) = send(
+            app,
+            setup
+                .browser
+                .request("POST", resolve, None, json!({"token": token})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{resolve}: {resolved}");
+        tokens.push((resolve, token));
+    }
+    // The owner invites a Member to the project too, and adds an agent.
+    let (status, owners) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/invitations"),
+            None,
+            json!({"role": "member", "expiresInHours": 24}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{owners}");
+    let owners_invitation = owners["id"].as_str().expect("invitation").to_owned();
+    let (mara, _) = create_agent(app, &setup.browser, &work, "Mara", "mara").await;
+    let (connection_id, version, _) = agent_connection(&setup, mara).await;
+    let (status, disabled) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            &format!("/api/v1/projects/{work}/external-agents/{connection_id}"),
+            None,
+            json!({"expectedVersion": version, "enabled": false}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{disabled}");
+
+    // Then the owner narrows Alex to Ops, which leaves out editing tasks.
+    let (status, ops) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Ops", "baseRole": "admin", "permissions": ["agents.manage", "members.invite", "members.manage", "members.view", "tasks.view"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{ops}");
+    let (status, assigned) = assign(&setup, &setup.browser, alex, &ops["id"], false).await;
+    assert_eq!(status, StatusCode::OK, "{assigned}");
+    sqlx::query(
+        "UPDATE project_memberships SET role_id = $3 WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project)
+    .bind(alex)
+    .bind(
+        ops["id"]
+            .as_str()
+            .expect("id")
+            .parse::<Uuid>()
+            .expect("UUID"),
+    )
+    .execute(&setup.pool)
+    .await
+    .expect("alex is Ops in the project too");
+
+    // Alex's invitations no longer open: Member holds more than Ops.
+    for (resolve, token) in &tokens {
+        let (status, refused) = send(
+            app,
+            setup
+                .browser
+                .request("POST", resolve, None, json!({"token": token})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{resolve}: {refused}");
+    }
+    // Nor can Alex resend the owner's Member invitation as their own.
+    let (status, refused) = send(
+        app,
+        alex_browser.request(
+            "POST",
+            &format!("/api/v1/project-invitations/{owners_invitation}/replace"),
+            None,
+            json!({"expectedVersion": 1, "expiresInHours": 48}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    // Nor switch Mara, a Member, back on.
+    let (_, version, _) = agent_connection(&setup, mara).await;
+    let (status, refused) = send(
+        app,
+        alex_browser.request(
+            "PATCH",
+            &format!("/api/v1/projects/{work}/external-agents/{connection_id}"),
+            None,
+            json!({"expectedVersion": version, "enabled": true}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    let (_, _, status_now) = agent_connection(&setup, mara).await;
+    assert_ne!(status_now, "active", "Mara stayed off");
+    // The owner, who holds everything, can.
+    let (status, enabled) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            &format!("/api/v1/projects/{work}/external-agents/{connection_id}"),
+            None,
+            json!({"expectedVersion": version, "enabled": true}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{enabled}");
+}
+
+/// An agent's connection: its ID, version and status.
+async fn agent_connection(setup: &Setup, agent: Uuid) -> (Uuid, i64, String) {
+    sqlx::query_as::<_, (Uuid, i64, String)>(
+        "SELECT id, version, status FROM external_agent_connections WHERE actor_id = $1",
+    )
+    .bind(agent)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("agent connection")
+}

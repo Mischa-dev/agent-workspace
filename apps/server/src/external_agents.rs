@@ -833,15 +833,6 @@ async fn mutate_connection(
         });
     }
     let next_role = requested_role.as_deref().unwrap_or(&current.role);
-    if next_role != current.role {
-        require_grantable(
-            &mut transaction,
-            access.organization_id,
-            principal.actor_id,
-            next_role,
-        )
-        .await?;
-    }
     let next_enabled = if remove {
         false
     } else {
@@ -868,6 +859,22 @@ async fn mutate_connection(
     };
     if !next_scopes.iter().any(|scope| scope == "read") {
         return Err(AppError::Validation("external_agent_scopes"));
+    }
+    // Changing the role, bringing a disabled connection back or giving it a
+    // scope it didn't have all hand the agent's role out again, so the role
+    // must be within what the caller holds.
+    let restores = next_enabled && current.status != "active";
+    let widens_scopes = next_scopes
+        .iter()
+        .any(|scope| !current.scopes.contains(scope));
+    if next_role != current.role || restores || widens_scopes {
+        require_grantable(
+            &mut transaction,
+            access.organization_id,
+            principal.actor_id,
+            next_role,
+        )
+        .await?;
     }
     let role_changed = next_role != current.role;
     let scopes_changed = next_scopes != current.scopes;
