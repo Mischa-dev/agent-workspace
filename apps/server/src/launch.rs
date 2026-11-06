@@ -2129,6 +2129,7 @@ struct QueuedLaunch {
     environment_id: Option<Uuid>,
     overrides: Value,
     provider_account_id: Option<Uuid>,
+    source: String,
 }
 
 fn actor_kind(value: &str) -> Option<ActorKind> {
@@ -2163,7 +2164,7 @@ pub async fn drain(state: &AppState) -> Result<usize, AppError> {
         SELECT launch.id, launch.project_id, launch.work_item_id, launch.conversation_id,
                launch.requested_by_actor_id, actor.kind AS actor_kind,
                COALESCE(membership.display_name, 'The person who queued it') AS actor_name,
-               launch.environment_id, launch.overrides, launch.provider_account_id
+               launch.environment_id, launch.overrides, launch.provider_account_id, launch.source
         FROM launches launch
         JOIN actors actor ON actor.id = launch.requested_by_actor_id
         LEFT JOIN project_memberships membership
@@ -2183,17 +2184,30 @@ pub async fn drain(state: &AppState) -> Result<usize, AppError> {
             continue;
         };
         // Principle 9: the person who queued it must still be able to start
-        // runs here.
-        if memory::project_access(
+        // runs here, and a launch their app or script queued (source mcp)
+        // must still be within that app's agent limit as it is now.
+        let limits = if queued.source == "mcp" && kind == ActorKind::Human {
+            let mut connection = state.pool.acquire().await?;
+            Some(
+                crate::roles::app_access(&mut connection, queued.requested_by_actor_id)
+                    .await?
+                    .limits,
+            )
+        } else {
+            None
+        };
+        let access = memory::project_access(
             &state.pool,
             queued.requested_by_actor_id,
             kind,
             queued.project_id,
             Action::WorkerInvoke,
-        )
-        .await
-        .is_err()
-        {
+        );
+        let access = match limits {
+            Some(limits) => crate::policy::with_agent_limits(limits, access).await,
+            None => access.await,
+        };
+        if access.is_err() {
             cancel_from_queue(
                 state,
                 &launch,
@@ -2419,7 +2433,19 @@ pub(crate) async fn list_for(
     .bind(caller.actor_id)
     .fetch_all(&state.pool)
     .await?;
-    let view = |row| launch_view(state, row, caller.actor_id, manage);
+    // The launched task's key and title only for someone whose role (and an
+    // app's limit) lets them see tasks here; the launch itself stays listed.
+    let sees_tasks =
+        !crate::search::projects_showing_tasks(&state.pool, caller.actor_id, &[project_id])
+            .await?
+            .is_empty();
+    let view = |row| {
+        let mut view = launch_view(state, row, caller.actor_id, manage);
+        if !sees_tasks {
+            view.work_item = None;
+        }
+        view
+    };
     Ok(LaunchList {
         queued: queued.into_iter().map(view).collect(),
         recent: recent.into_iter().map(view).collect(),

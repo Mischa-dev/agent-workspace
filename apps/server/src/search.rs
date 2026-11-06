@@ -377,25 +377,31 @@ pub async fn projects_showing_tasks(
     viewer: Uuid,
     projects: &[Uuid],
 ) -> Result<Vec<Uuid>, AppError> {
+    projects_allowing(pool, viewer, projects, crate::policy::Permission::TasksView).await
+}
+
+/// Of `projects`, those where the viewer's role (and, for an app acting for
+/// them, its limit) keeps `permission`.
+pub async fn projects_allowing(
+    pool: &PgPool,
+    viewer: Uuid,
+    projects: &[Uuid],
+    permission: crate::policy::Permission,
+) -> Result<Vec<Uuid>, AppError> {
     Ok(sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT project_id FROM project_memberships
         WHERE actor_id = $1 AND project_id = ANY($2) AND enabled
-          AND custom_role_allows(role_id, 'tasks.view')
+          AND custom_role_allows(role_id, $3)
         "#,
     )
     .bind(viewer)
     .bind(projects)
+    .bind(permission.info().key)
     .fetch_all(pool)
     .await?
     .into_iter()
-    .filter(|project| {
-        crate::policy::current_agent_limit(
-            viewer,
-            crate::policy::MembershipScope::Project(*project),
-        )
-        .is_none_or(|limit| limit.contains(crate::policy::Permission::TasksView))
-    })
+    .filter(|project| !crate::policy::agent_limit_hides(viewer, *project, permission))
     .collect())
 }
 

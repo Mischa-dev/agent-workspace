@@ -1677,3 +1677,196 @@ async fn agent_connection(setup: &Setup, agent: Uuid) -> (Uuid, i64, String) {
     .await
     .expect("agent connection")
 }
+
+/// A task made by the owner in `project`, by its title; returns its ID.
+async fn owner_task(setup: &Setup, project: &str, title: &str) -> Uuid {
+    let (status, made) = send(
+        &setup.app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{project}/work-items"),
+            Some(&format!("task-{}", title.replace(' ', "-"))),
+            json!({"title": title}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {made}");
+    made["id"]
+        .as_str()
+        .expect("task")
+        .parse::<Uuid>()
+        .expect("UUID")
+}
+
+/// The array at `field` in a tool's value, panicking with the result.
+fn listed<'a>(result: &'a Value, field: &str) -> &'a Vec<Value> {
+    result["value"][field]
+        .as_array()
+        .unwrap_or_else(|| panic!("{field}: {result}"))
+}
+
+/// Reads that name a task or a repository follow "see tasks" and "see
+/// code" in each project, for the role and for an app's agent limit: the
+/// task list across projects, saved items, notifications and the project
+/// overview's repositories.
+#[tokio::test]
+async fn reads_naming_tasks_or_repositories_follow_the_role_and_limit() {
+    let Some(setup) = setup("awd74_named_reads").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let other = create_project(&setup, "OTHER", "Other").await;
+    let (bea, bea_browser) = add_person(&setup, &[&work, &other], "bea").await;
+    let in_work = owner_task(&setup, &work, "Visible plan").await;
+    let in_other = owner_task(&setup, &other, "Hidden plan").await;
+    let repository = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO repositories (
+            id, project_id, github_repository_id, owner, name, clone_url,
+            default_branch, mirror_path, trusted, preparation_state, prepared_at
+        ) VALUES ($1, $2, 424242, 'Mischa-dev', 'roles-repo',
+                  'https://github.com/Mischa-dev/roles-repo.git',
+                  'main', $3, true, 'ready', now())
+        "#,
+    )
+    .bind(repository)
+    .bind(work.parse::<Uuid>().expect("project"))
+    .bind(format!("/tmp/agent-workspace-test-{repository}.git"))
+    .execute(&setup.pool)
+    .await
+    .expect("repository");
+    for (project, task) in [(&work, in_work), (&other, in_other)] {
+        sqlx::query(
+            r#"
+            INSERT INTO notifications (
+                id, project_id, recipient_actor_id, kind, subject_kind, subject_id,
+                work_item_id, group_key
+            ) VALUES ($1, $2, $3, 'task_assigned', 'work_item', $4, $4, $5)
+            "#,
+        )
+        .bind(Uuid::now_v7())
+        .bind(project.parse::<Uuid>().expect("project"))
+        .bind(bea)
+        .bind(task)
+        .bind(format!("assigned:{task}"))
+        .execute(&setup.pool)
+        .await
+        .expect("notification");
+    }
+
+    let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
+    let session = initialize(app, &bea_app).await.expect("Bea's app");
+    for task in [in_work, in_other] {
+        let saved = tool(app, &bea_app, &session, "later_save", json!({"task": task})).await;
+        assert_eq!(saved["outcome"], "ok", "{saved}");
+    }
+    let titles = |result: &Value| {
+        let mut titles = listed(result, "tasks")
+            .iter()
+            .map(|task| task["title"].as_str().expect("title").to_owned())
+            .collect::<Vec<_>>();
+        titles.sort();
+        titles
+    };
+    let both = json!({"projectIds": [work, other]});
+    let found = tool(app, &bea_app, &session, "task_list", both.clone()).await;
+    assert_eq!(titles(&found), ["Hidden plan", "Visible plan"], "{found}");
+    let later = tool(app, &bea_app, &session, "later_list", json!({})).await;
+    assert_eq!(listed(&later, "items").len(), 2, "{later}");
+    let inbox = tool(app, &bea_app, &session, "notification_list", json!({})).await;
+    assert_eq!(listed(&inbox, "notifications").len(), 2, "{inbox}");
+    let overview = tool(
+        app,
+        &bea_app,
+        &session,
+        "project_open",
+        json!({"projectId": work}),
+    )
+    .await;
+    assert_eq!(listed(&overview, "repositories").len(), 1, "{overview}");
+
+    // In Other, Bea's role no longer sees tasks: its task leaves the task
+    // list (though the gate opens on Work), saved items and notifications.
+    let (status, blind) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "No tasks", "baseRole": "viewer", "permissions": []}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{blind}");
+    let other_id = other.parse::<Uuid>().expect("project");
+    let version = sqlx::query_scalar::<_, i64>(
+        "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(other_id)
+    .bind(bea)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("version");
+    let (status, changed) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            &format!("/api/v1/projects/{other}/members/{bea}"),
+            Some("bea-other-no-tasks"),
+            json!({"expectedVersion": version, "roleId": blind["id"]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let found = tool(app, &bea_app, &session, "task_list", both).await;
+    assert_eq!(titles(&found), ["Visible plan"], "{found}");
+    let later = tool(app, &bea_app, &session, "later_list", json!({})).await;
+    assert_eq!(listed(&later, "items").len(), 1, "{later}");
+    assert!(!later.to_string().contains("Hidden plan"), "{later}");
+    let inbox = tool(app, &bea_app, &session, "notification_list", json!({})).await;
+    assert_eq!(listed(&inbox, "notifications").len(), 1, "{inbox}");
+    assert!(!inbox.to_string().contains("Hidden plan"), "{inbox}");
+    let (status, page) = send(
+        app,
+        bea_browser.request("GET", "/api/v1/later", None, Value::Null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["items"].as_array().map(Vec::len), Some(1), "{page}");
+
+    // Her app's limit leaves out "see tasks" and "see code": Work's task,
+    // its notification and the repository go too.
+    let (status, limit) = send(
+        app,
+        setup.browser.request(
+            "PUT",
+            &format!(
+                "/api/v1/organizations/{}/members/{bea}/agent-limit",
+                setup.organization_id
+            ),
+            None,
+            json!({"permissions": ["channels.post"]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{limit}");
+    let later = tool(app, &bea_app, &session, "later_list", json!({})).await;
+    assert_eq!(listed(&later, "items").len(), 0, "{later}");
+    let inbox = tool(app, &bea_app, &session, "notification_list", json!({})).await;
+    assert_eq!(listed(&inbox, "notifications").len(), 0, "{inbox}");
+    let overview = tool(
+        app,
+        &bea_app,
+        &session,
+        "project_open",
+        json!({"projectId": work}),
+    )
+    .await;
+    assert_eq!(overview["outcome"], "ok", "{overview}");
+    assert_eq!(listed(&overview, "repositories").len(), 0, "{overview}");
+    // Bea herself still has Work's in the browser.
+    let (_, page) = send(
+        app,
+        bea_browser.request("GET", "/api/v1/later", None, Value::Null),
+    )
+    .await;
+    assert_eq!(page["items"].as_array().map(Vec::len), Some(1), "{page}");
+}

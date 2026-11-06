@@ -697,18 +697,31 @@ pub(super) async fn project_open(
                 open_threads.push(item);
             }
         }
-        let repositories = sqlx::query_as::<_, RepositoryLine>(
-            r#"
-            SELECT id::text AS id, owner || '/' || name AS name, default_branch
-            FROM repositories
-            WHERE project_id = $1 AND archived_at IS NULL
-            ORDER BY owner, name
-            LIMIT 20
-            "#,
+        // Repositories only for those whose role (and limit) lets them see code.
+        let sees_code = !crate::search::projects_allowing(
+            &state.pool,
+            principal.actor_id,
+            &[project_id],
+            crate::policy::Permission::CodeView,
         )
-        .bind(project_id)
-        .fetch_all(&state.pool)
-        .await?;
+        .await?
+        .is_empty();
+        let repositories = if sees_code {
+            sqlx::query_as::<_, RepositoryLine>(
+                r#"
+                SELECT id::text AS id, owner || '/' || name AS name, default_branch
+                FROM repositories
+                WHERE project_id = $1 AND archived_at IS NULL
+                ORDER BY owner, name
+                LIMIT 20
+                "#,
+            )
+            .bind(project_id)
+            .fetch_all(&state.pool)
+            .await?
+        } else {
+            Vec::new()
+        };
         let labels = work_item_labels::project_names(&state.pool, project_id, PROJECT_LABELS).await?;
         let layout = {
             let mut connection = state.pool.acquire().await?;

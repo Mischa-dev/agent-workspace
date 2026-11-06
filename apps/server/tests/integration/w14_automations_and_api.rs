@@ -718,6 +718,122 @@ async fn api_webhooks_and_automations_act_for_their_maker_only() {
     .expect("lift the limit");
 
     // ---------------------------------------------------------------------
+    // A webhook made by a script delivers only what the script's agent
+    // limit lets it see when the event happens, and a message it scheduled
+    // goes out only if the limit still lets it post (AWD-74).
+    let limited_hook = bearer(
+        &application,
+        Some(&token),
+        "POST",
+        "/api/public/v1/webhook_write",
+        json!({
+            "operation": "create",
+            "name": "Script's task hook",
+            "url": format!("{receiver_origin}/script-hook"),
+            "eventTypes": ["task.created"],
+            "projectId": seed.project_id,
+        }),
+    )
+    .await;
+    assert_eq!(limited_hook.2["outcome"], "ok", "{}", limited_hook.1);
+    let limited_hook_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM webhook_subscriptions WHERE name = 'Script''s task hook'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("script's hook");
+    let hook_deliveries = move |pool: PgPool| async move {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM webhook_deliveries WHERE subscription_id = $1",
+        )
+        .bind(limited_hook_id)
+        .fetch_one(&pool)
+        .await
+        .expect("count deliveries")
+    };
+    let seen = send(
+        &application,
+        owner,
+        "POST",
+        &format!("{project}/work-items"),
+        "hook-seen-task",
+        json!({"title": "Seen by the script"}),
+    )
+    .await;
+    assert_eq!(seen.0, StatusCode::CREATED, "{}", seen.1);
+    pump(&state).await;
+    let before = hook_deliveries(pool.clone()).await;
+    assert!(before >= 1, "the script's hook heard a task it may see");
+    let scheduled = bearer(
+        &application,
+        Some(&token),
+        "POST",
+        "/api/public/v1/message_schedule",
+        json!({
+            "conversationId": seed.channel_id,
+            "text": "Posted by the script later",
+            "sendAt": (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339(),
+        }),
+    )
+    .await;
+    assert_eq!(scheduled.2["outcome"], "ok", "{}", scheduled.1);
+    let scheduled_id = scheduled.2["value"]["scheduled"]["id"]
+        .as_str()
+        .expect("scheduled id")
+        .to_owned();
+    sqlx::query(
+        "UPDATE organization_memberships SET agent_limit = ARRAY['runs.launch'] WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.organization_id)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("the owner's apps no longer see tasks or post");
+    let hidden = send(
+        &application,
+        owner,
+        "POST",
+        &format!("{project}/work-items"),
+        "hook-hidden-task",
+        json!({"title": "Hidden from the script"}),
+    )
+    .await;
+    assert_eq!(hidden.0, StatusCode::CREATED, "{}", hidden.1);
+    pump(&state).await;
+    assert_eq!(
+        hook_deliveries(pool.clone()).await,
+        before,
+        "the script's hook heard a task its limit hides"
+    );
+    let sent = send(
+        &application,
+        owner,
+        "POST",
+        &format!("/api/v1/scheduled-messages/{scheduled_id}/send-now"),
+        "script-message-now",
+        json!({}),
+    )
+    .await;
+    assert!(sent.0.is_success(), "{}", sent.1);
+    let (status, message) = sqlx::query_as::<_, (String, Option<Uuid>)>(
+        "SELECT status, message_id FROM scheduled_messages WHERE id = $1::uuid",
+    )
+    .bind(&scheduled_id)
+    .fetch_one(&pool)
+    .await
+    .expect("scheduled message");
+    assert_eq!(status, "failed", "it went out beyond its app's limit");
+    assert!(message.is_none());
+    sqlx::query(
+        "UPDATE organization_memberships SET agent_limit = NULL WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.organization_id)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("lift the limit again");
+
+    // ---------------------------------------------------------------------
     // A rule whose maker lost the project turns off instead of acting.
     let members_rule = send(
         &application,

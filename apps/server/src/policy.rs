@@ -756,6 +756,33 @@ pub fn current_agent_limit(actor_id: Uuid, scope: MembershipScope) -> Option<Per
         .flatten()
 }
 
+/// Whether an app acting for `actor_id` is kept from `permission` in
+/// `project_id` by its agent limit. False outside such a call.
+pub fn agent_limit_hides(actor_id: Uuid, project_id: Uuid, permission: Permission) -> bool {
+    current_agent_limit(actor_id, MembershipScope::Project(project_id))
+        .is_some_and(|limit| !limit.contains(permission))
+}
+
+/// While an app acts for `actor_id`: the projects its agent limit allows
+/// `permission` in (every other project allows nothing). None outside such
+/// a call, meaning no limit applies. For queries that can't filter rows in
+/// Rust, such as counts.
+pub fn agent_limit_projects_allowing(actor_id: Uuid, permission: Permission) -> Option<Vec<Uuid>> {
+    AGENT_LIMITS
+        .try_with(|limits| {
+            (limits.actor_id == actor_id).then(|| {
+                limits
+                    .projects
+                    .iter()
+                    .filter(|(_, allowed)| allowed.contains(permission))
+                    .map(|(project, _)| *project)
+                    .collect()
+            })
+        })
+        .ok()
+        .flatten()
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MembershipScope {
     Organization(Uuid),

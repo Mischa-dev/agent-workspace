@@ -1250,6 +1250,29 @@ impl From<InvitationRow> for InvitationView {
     }
 }
 
+/// Refuses an invitation whose issuer may no longer send it: their role
+/// narrowed after they sent it, so it lost "invite people" or no longer
+/// holds everything the invited role does. It reads as an invitation that
+/// isn't valid any more.
+async fn require_issuer_still_grants(
+    connection: &mut PgConnection,
+    invitation: &InvitationAcceptanceRow,
+) -> Result<(), AppError> {
+    if crate::roles::issuer_still_grants(
+        connection,
+        invitation.organization_id,
+        invitation.issued_by_actor_id,
+        &invitation.role,
+        invitation.role_id,
+    )
+    .await?
+    {
+        Ok(())
+    } else {
+        Err(AppError::NotFound("project_invitation"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use uuid::Uuid;
@@ -1306,28 +1329,5 @@ mod tests {
         access.project_membership_enabled = true;
         access.project_archived = true;
         assert!(authorize_manage(actor_id, project_id, &access, Some("viewer")).is_err());
-    }
-}
-
-/// Refuses an invitation whose issuer may no longer send it: their role
-/// narrowed after they sent it, so it lost "invite people" or no longer
-/// holds everything the invited role does. It reads as an invitation that
-/// isn't valid any more.
-async fn require_issuer_still_grants(
-    connection: &mut PgConnection,
-    invitation: &InvitationAcceptanceRow,
-) -> Result<(), AppError> {
-    if crate::roles::issuer_still_grants(
-        connection,
-        invitation.organization_id,
-        invitation.issued_by_actor_id,
-        &invitation.role,
-        invitation.role_id,
-    )
-    .await?
-    {
-        Ok(())
-    } else {
-        Err(AppError::NotFound("project_invitation"))
     }
 }

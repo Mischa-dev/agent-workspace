@@ -320,6 +320,23 @@ pub(crate) async fn issuer_still_grants(
         && invited.permissions().is_subset_of(issuer.permissions))
 }
 
+/// SQL that is true when `actor`'s role in `project` (both SQL expressions,
+/// written by us, never user input) keeps `permission`, a catalogue key such
+/// as `tasks.view`. An app's agent limit is applied separately, in Rust
+/// (`policy::agent_limit_hides`) or as a bound project list
+/// (`policy::agent_limit_projects_allowing`).
+pub(crate) fn role_allows_sql(actor: &str, project: &str, permission: &str) -> String {
+    debug_assert!(
+        PERMISSIONS.iter().any(|info| info.key == permission),
+        "unknown permission {permission}"
+    );
+    format!(
+        "EXISTS (SELECT 1 FROM project_memberships role_check \
+         WHERE role_check.project_id = {project} AND role_check.actor_id = {actor} \
+         AND role_check.enabled AND custom_role_allows(role_check.role_id, '{permission}'))"
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Roles: reading
 
