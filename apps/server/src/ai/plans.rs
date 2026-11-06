@@ -30,7 +30,7 @@ use crate::{
     error::AppError,
     jobs::{self, JobContext, JobError, JobRegistry, NewJob},
     mcp::{ImportTask, create_for_import},
-    policy::Action,
+    policy::{Action, Decision, DenyReason},
     work_item_commands::{CommandActor, authorize_mutation, lock_membership},
     work_item_planning::{self as planning, Direction},
 };
@@ -828,13 +828,22 @@ pub async fn commit(
     sqlx::query(
         r#"
         UPDATE ai_plan_imports
-        SET state = 'committing', committed_by_actor_id = $2, error = NULL,
-            version = version + 1, updated_at = now()
+        SET state = 'committing', committed_by_actor_id = $2, made_through_app = $3,
+            error = NULL, version = version + 1, updated_at = now()
         WHERE id = $1
         "#,
     )
     .bind(id)
     .bind(actor_id)
+    // A person's app or script is in this call when its agent limit is set:
+    // the steps then stay within that limit as it is when each one runs.
+    .bind(
+        crate::policy::current_agent_limit(
+            actor_id,
+            crate::policy::MembershipScope::Project(project_id),
+        )
+        .is_some(),
+    )
     .execute(&mut *transaction)
     .await?;
     jobs::enqueue(
@@ -1054,7 +1063,38 @@ struct Committing {
 
 /// Does the next step of committing an import in one transaction, and says
 /// whether there's more. Public for the tests, which stop and resume.
+///
+/// A plan a person's app committed takes each step within that app's agent
+/// limit as it is now, so narrowing the app stops the rest of the plan;
+/// tasks earlier steps made are kept.
 pub async fn commit_next_step(pool: &PgPool, import_id: Uuid) -> Result<Step, AppError> {
+    let through_app = sqlx::query_as::<_, (Uuid, bool)>(
+        r#"
+        SELECT plan.committed_by_actor_id, plan.made_through_app
+        FROM ai_plan_imports plan
+        JOIN actors actor ON actor.id = plan.committed_by_actor_id AND actor.kind = 'human'
+        WHERE plan.id = $1
+        "#,
+    )
+    .bind(import_id)
+    .fetch_optional(pool)
+    .await?
+    .filter(|(_, through_app)| *through_app);
+    let limits = match through_app {
+        Some((actor_id, _)) => {
+            let mut connection = pool.acquire().await?;
+            Some(
+                crate::roles::app_access(&mut connection, actor_id)
+                    .await?
+                    .limits,
+            )
+        }
+        None => None,
+    };
+    crate::policy::within_agent_limits(limits, commit_step(pool, import_id)).await
+}
+
+async fn commit_step(pool: &PgPool, import_id: Uuid) -> Result<Step, AppError> {
     let project_id =
         sqlx::query_scalar::<_, Uuid>("SELECT project_id FROM ai_plan_imports WHERE id = $1")
             .bind(import_id)
@@ -1088,12 +1128,33 @@ pub async fn commit_next_step(pool: &PgPool, import_id: Uuid) -> Result<Step, Ap
             "The person who committed the plan can no longer change tasks here.".to_owned(),
         ));
     };
-    if membership.project_archived_at.is_some()
-        || !authorize_mutation(&actor, &membership, Action::WorkItemEdit, None)?.is_allowed()
-    {
+    if membership.project_archived_at.is_some() {
         return Ok(Step::Failed(
             "The person who committed the plan can no longer change tasks here.".to_owned(),
         ));
+    }
+    // Each step needs what its changes need: creating tasks, and changing
+    // them (milestones, moving tasks into them, dependencies). Checked
+    // again every step against the committer's role as it is now, and for a
+    // plan their app committed, within the app's limit as it is now
+    // (`commit_next_step`). Tasks earlier steps made are kept.
+    for (action, verb) in [
+        (Action::WorkItemCreate, "create"),
+        (Action::WorkItemEdit, "change"),
+    ] {
+        match authorize_mutation(&actor, &membership, action, None)? {
+            Decision::Allow => {}
+            Decision::Deny(DenyReason::AgentLimit) => {
+                return Ok(Step::Failed(format!(
+                    "Stopped because the app the plan was committed from may no longer {verb} tasks here. Tasks already made are kept."
+                )));
+            }
+            Decision::Deny(_) => {
+                return Ok(Step::Failed(format!(
+                    "Stopped because the person who committed the plan can no longer {verb} tasks here. Tasks already made are kept."
+                )));
+            }
+        }
     }
     let Some((state, _)) = lock_import(&mut transaction, project_id, import_id).await? else {
         return Ok(Step::Done);

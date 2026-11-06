@@ -41,7 +41,9 @@ use crate::{
     error::{ApiJson, ApiPath, ApiQuery, AppError},
     idempotency::resource_bound_scope,
     jobs::{JobContext, JobError, JobRegistry, NewJob, enqueue},
-    policy::{Action, ActorKind, Decision},
+    policy::{
+        Action, ActorKind, AgentLimits, Decision, DenyReason, MembershipScope, within_agent_limits,
+    },
     work_item_commands::{
         AllocatedNumberMetadata, AuditAttribution, CommandActor, CreateWorkItemCommand,
         CreateWorkItemOutcome, NewTaskFields, authorize_mutation, create_work_item,
@@ -106,6 +108,9 @@ struct ImportRecord {
     version: i64,
     created_at: DateTime<Utc>,
     finished_at: Option<DateTime<Utc>>,
+    /// Committed (or, for a GitHub fetch, started) by a person's app or
+    /// script: the jobs act within that app's agent limit as it is now.
+    made_through_app: bool,
 }
 
 const IMPORT_SELECT: &str = r#"
@@ -116,7 +121,7 @@ const IMPORT_SELECT: &str = r#"
                 ELSE repository.owner || '/' || repository.name END AS repository_name,
            import.mapping, import.options, import.rows, import.status, import.row_count,
            import.processed_count, import.created_count, import.skipped_count, import.error,
-           import.version, import.created_at, import.finished_at
+           import.version, import.created_at, import.finished_at, import.made_through_app
     FROM task_imports import
     LEFT JOIN project_memberships creator
       ON creator.project_id = import.project_id AND creator.actor_id = import.created_by_actor_id
@@ -925,8 +930,8 @@ pub(crate) async fn insert_import(
         r#"
         INSERT INTO task_imports (
             id, project_id, created_by_actor_id, source, source_name, repository_id,
-            raw_text, mapping, options, rows, status, row_count
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            raw_text, mapping, options, rows, status, row_count, made_through_app
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         "#,
     )
     .bind(id)
@@ -941,6 +946,7 @@ pub(crate) async fn insert_import(
     .bind(json!(prepared.rows))
     .bind(status)
     .bind(prepared.rows.len() as i32)
+    .bind(through_app(actor))
     .execute(&mut **transaction)
     .await?;
     if status == "fetching" {
@@ -1189,16 +1195,19 @@ pub(crate) async fn queue_commit(
     if record.row_count == 0 {
         return Ok(Err(CommitRefusal::Empty));
     }
-    // Whoever commits is who the tasks are made by.
+    // Whoever commits is who the tasks are made by, and through what: an
+    // app's commit stays within the app's limit while the chunks run.
     sqlx::query(
         r#"
         UPDATE task_imports
-        SET status = 'queued', created_by_actor_id = $2, version = version + 1, updated_at = now()
+        SET status = 'queued', created_by_actor_id = $2, made_through_app = $3,
+            version = version + 1, updated_at = now()
         WHERE id = $1
         "#,
     )
     .bind(import_id)
     .bind(actor.actor_id)
+    .bind(through_app(actor))
     .execute(&mut **transaction)
     .await?;
     let organization_id = organization_of(transaction, project_id).await?;
@@ -1341,8 +1350,48 @@ async fn acting_actor(
     };
     match authorize_mutation(&actor, &membership, Action::WorkItemCreate, None)? {
         Decision::Allow => Ok(Ok(actor)),
+        Decision::Deny(DenyReason::AgentLimit) => Ok(Err(
+            "Stopped because the app it was started from may no longer create tasks in this project. Tasks already made are kept."
+                .to_owned(),
+        )),
         Decision::Deny(_) => Ok(Err(stopped())),
     }
+}
+
+/// Whether `actor` is a person's app or script in this call: the MCP layer
+/// (and so the public API) sets the app's agent limit for the call.
+fn through_app(actor: &CommandActor) -> bool {
+    actor.actor_kind == ActorKind::Human
+        && crate::policy::current_agent_limit(
+            actor.actor_id,
+            MembershipScope::Project(actor.project_id),
+        )
+        .is_some()
+}
+
+/// For an import a person's app made: that app's agent limits as they are
+/// now, for the job to act within. None otherwise.
+async fn app_limits(
+    transaction: &mut Transaction<'_, Postgres>,
+    record: &ImportRecord,
+) -> Result<Option<AgentLimits>, AppError> {
+    if !record.made_through_app {
+        return Ok(None);
+    }
+    let human = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM actors WHERE id = $1 AND kind = 'human')",
+    )
+    .bind(record.created_by_actor_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if !human {
+        return Ok(None);
+    }
+    Ok(Some(
+        crate::roles::app_access(transaction, record.created_by_actor_id)
+            .await?
+            .limits,
+    ))
 }
 
 async fn job_record(
@@ -1365,7 +1414,13 @@ async fn fetch_issues(context: &JobContext) -> Result<(), JobError> {
     if record.status != "fetching" {
         return Ok(());
     }
-    if let Err(reason) = acting_actor(&mut transaction, &record, context.job.id).await? {
+    let limits = app_limits(&mut transaction, &record).await?;
+    if let Err(reason) = within_agent_limits(
+        limits,
+        acting_actor(&mut transaction, &record, context.job.id),
+    )
+    .await?
+    {
         fail(&mut transaction, record.id, &reason).await?;
         transaction.commit().await?;
         return Ok(());
@@ -1430,7 +1485,16 @@ async fn commit_rows(context: &JobContext) -> Result<(), JobError> {
         if !matches!(record.status.as_str(), "queued" | "running") {
             return Ok(());
         }
-        let actor = match acting_actor(&mut transaction, &record, context.job.id).await? {
+        // Each chunk checks again: the person's role, and for an import their
+        // app committed, the app's agent limit as it is now. Tasks earlier
+        // chunks made are kept.
+        let limits = app_limits(&mut transaction, &record).await?;
+        let actor = match within_agent_limits(
+            limits.clone(),
+            acting_actor(&mut transaction, &record, context.job.id),
+        )
+        .await?
+        {
             Ok(actor) => actor,
             Err(reason) => {
                 fail(&mut transaction, record.id, &reason).await?;
@@ -1441,8 +1505,11 @@ async fn commit_rows(context: &JobContext) -> Result<(), JobError> {
         let rows = record.rows();
         let start = usize::try_from(record.processed_count).unwrap_or(0);
         let end = (start + CHUNK).min(rows.len());
-        let (created, skipped) =
-            create_chunk(&mut transaction, &actor, &record, &rows, start..end).await?;
+        let (created, skipped) = within_agent_limits(
+            limits,
+            create_chunk(&mut transaction, &actor, &record, &rows, start..end),
+        )
+        .await?;
         let finished = end >= rows.len();
         sqlx::query(
             r#"

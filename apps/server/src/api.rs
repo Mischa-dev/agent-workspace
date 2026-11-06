@@ -428,9 +428,9 @@ pub(crate) async fn start_run_in(
         INSERT INTO agent_runs (
             id, conversation_id, execution_worker_id, requesting_actor_id,
             execution_profile_id, repository_id, state, prompt,
-            authorization_snapshot, prompt_message_id, config
+            authorization_snapshot, prompt_message_id, config, made_through_app
         )
-        VALUES ($1, $2, $3, $4, $5, $6, 'created', $7, $8, $9, $10)
+        VALUES ($1, $2, $3, $4, $5, $6, 'created', $7, $8, $9, $10, $11)
         "#,
     )
     .bind(run_id)
@@ -447,6 +447,17 @@ pub(crate) async fn start_run_in(
     }))
     .bind(prompt_message_id)
     .bind(serde_json::to_value(&config).map_err(|_| AppError::Internal("serialize run settings"))?)
+    // A person's app or script is in this call when its agent limit is set:
+    // if the run waits in the queue, it starts only within that limit as it
+    // is then (`scheduler::requester_refusal`).
+    .bind(
+        matches!(principal.actor_kind(), Ok(ActorKind::Human))
+            && crate::policy::current_agent_limit(
+                principal.actor_id(),
+                crate::policy::MembershipScope::Project(conversation.project_id),
+            )
+            .is_some(),
+    )
     .execute(&mut *transaction)
     .await?;
     transition_run(&mut transaction, run_id, RunState::Queued, None).await?;

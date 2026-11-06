@@ -748,6 +748,19 @@ pub async fn with_agent_limits<F: std::future::Future>(limits: AgentLimits, call
     AGENT_LIMITS.scope(limits, call).await
 }
 
+/// `with_agent_limits` when there are limits; otherwise just `call`. For
+/// deferred work a person's app set going, which carries the app's limits
+/// as they are when it runs.
+pub async fn within_agent_limits<F: std::future::Future>(
+    limits: Option<AgentLimits>,
+    call: F,
+) -> F::Output {
+    match limits {
+        Some(limits) => with_agent_limits(limits, call).await,
+        None => call.await,
+    }
+}
+
 /// The limit on `actor_id` in `scope` while a call acting for them runs.
 pub fn current_agent_limit(actor_id: Uuid, scope: MembershipScope) -> Option<PermissionSet> {
     AGENT_LIMITS

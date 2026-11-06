@@ -587,10 +587,14 @@ pub(super) async fn plan_import(
                     ));
                 };
                 let mut transaction = state.pool.begin().await?;
-                if let Some(refusal) =
-                    access_refusal(check_access_for(&mut transaction, principal, Action::WorkItemCreate).await?)
-                {
-                    return Ok(refusal);
+                // Creating a plan makes tasks and also changes them (milestones,
+                // dependencies): it needs both, within an app's limit too.
+                for action in [Action::WorkItemCreate, Action::WorkItemEdit] {
+                    if let Some(refusal) =
+                        access_refusal(check_access_for(&mut transaction, principal, action).await?)
+                    {
+                        return Ok(refusal);
+                    }
                 }
                 transaction.commit().await?;
                 if let Err(refusal) = plans::commit(

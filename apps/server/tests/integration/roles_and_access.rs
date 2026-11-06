@@ -2956,6 +2956,103 @@ async fn archiving_without_see_tasks_reveals_no_task() {
     assert_eq!(archived["title"], "Secret archive plan", "{archived}");
 }
 
+/// A rule run by hand loads a task only if its maker may see tasks there
+/// now: "run now" goes through the same check as an event. A role that may
+/// edit tasks but not see them gets a skipped run, never the task's title;
+/// with "see tasks" the title reaches the notification.
+#[tokio::test]
+async fn a_rule_run_by_hand_shows_only_tasks_its_maker_sees() {
+    let Some(setup) = setup("awd74_rule_run").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
+    let task = owner_task(&setup, &work, "Secret rule plan").await;
+    let (status, blind) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Blind editors", "baseRole": "member", "permissions": ["tasks.edit"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{blind}");
+    let (status, changed) = set_project_role(
+        &setup,
+        &work,
+        bea,
+        "bea-blind",
+        json!({"roleId": blind["id"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let (status, rule) = send(
+        app,
+        bea_browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/automations"),
+            None,
+            json!({
+                "name": "Tell me",
+                "trigger": {"kind": "task_created"},
+                "actions": [{"kind": "notify", "recipients": "owner", "message": "Task: {{task.title}}"}],
+            }),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {rule}");
+    let rule_id = rule["id"].as_str().expect("rule").to_owned();
+    let run_path = format!("/api/v1/projects/{work}/automations/{rule_id}/run");
+
+    // Without "see tasks": skipped, and the title goes nowhere.
+    let (status, run) = send(
+        app,
+        bea_browser.request("POST", &run_path, None, json!({"workItemId": task})),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {run}");
+    assert_eq!(run["state"], "skipped", "{run}");
+    assert!(!run.to_string().contains("Secret rule plan"), "{run}");
+    assert_eq!(notified_of(&setup, bea, "Secret rule plan").await, 0);
+
+    // With it, the same run tells her the title.
+    let (status, seeing) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Seeing editors", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{seeing}");
+    let (status, changed) = set_project_role(
+        &setup,
+        &work,
+        bea,
+        "bea-seeing",
+        json!({"roleId": seeing["id"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let (status, run) = send(
+        app,
+        bea_browser.request("POST", &run_path, None, json!({"workItemId": task})),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {run}");
+    assert_eq!(run["state"], "succeeded", "{run}");
+    assert_eq!(notified_of(&setup, bea, "Secret rule plan").await, 1);
+}
+
+/// How many of `actor`'s notifications have `text` in their title.
+async fn notified_of(setup: &Setup, actor: Uuid, text: &str) -> i64 {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM notifications WHERE recipient_actor_id = $1 AND strpos(detail->>'title', $2) > 0",
+    )
+    .bind(actor)
+    .bind(text)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("count notifications")
+}
+
 /// A task's current version.
 async fn task_version(setup: &Setup, project: Uuid, task: Uuid) -> i64 {
     sqlx::query_scalar::<_, i64>("SELECT version FROM work_items WHERE project_id = $1 AND id = $2")

@@ -745,6 +745,225 @@ async fn queued_runs_are_idempotent_and_create_no_workspace_before_admission() {
         .expect("drop scheduler schema");
 }
 
+/// AWD-74: a run waiting in the admission queue starts only if whoever
+/// started it may still start runs there when a slot frees up. Someone
+/// whose role lost "start runs" while it waited has it cancelled, with no
+/// workspace made for it.
+#[tokio::test]
+async fn a_queued_run_is_cancelled_when_its_requester_loses_start_runs() {
+    let Some((database_url, administrative_pool)) = integration_pool().await else {
+        return;
+    };
+    let schema = format!("m3_admission_role_{}", Uuid::now_v7().simple());
+    administrative_pool
+        .execute(format!("CREATE SCHEMA {schema}").as_str())
+        .await
+        .expect("create admission schema");
+    let pool = schema_pool(&database_url, &schema).await;
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .expect("run admission migrations");
+    let temporary = tempfile::tempdir().expect("temporary admission root");
+    let data_root = temporary.path().join("data");
+    let mut config = AppConfig::from_values(&BTreeMap::from([
+        ("AGENT_WORKSPACE_DATABASE_URL".to_owned(), database_url),
+        (
+            "AGENT_WORKSPACE_DATA_ROOT".to_owned(),
+            data_root.to_string_lossy().into_owned(),
+        ),
+        (
+            "AGENT_WORKSPACE_CODEX_HOME_ROOT".to_owned(),
+            data_root
+                .join("codex/profiles")
+                .to_string_lossy()
+                .into_owned(),
+        ),
+        (
+            "AGENT_WORKSPACE_WEB_ROOT".to_owned(),
+            temporary.path().to_string_lossy().into_owned(),
+        ),
+        (
+            "AGENT_WORKSPACE_DEMO_EXECUTOR".to_owned(),
+            "true".to_owned(),
+        ),
+        (
+            "AGENT_WORKSPACE_CODEX_HOST_CONCURRENCY_LIMIT".to_owned(),
+            "1".to_owned(),
+        ),
+    ]))
+    .expect("admission configuration");
+    config.data_quota_bytes = u64::MAX;
+    config.minimum_free_bytes = 0;
+    let seed = dev_seed(&pool, &config)
+        .await
+        .expect("seed admission fixture");
+    sqlx::query("UPDATE execution_profiles SET account_state = 'authenticated' WHERE id = $1")
+        .bind(seed.execution_profile_id)
+        .execute(&pool)
+        .await
+        .expect("authenticate admission Profile");
+    sqlx::query(
+        "UPDATE repositories SET preparation_state = 'ready', prepared_at = now() WHERE id = $1",
+    )
+    .bind(seed.repository_id)
+    .execute(&pool)
+    .await
+    .expect("prepare admission Repository");
+    let mirror = expected_repository_mirror_path(&data_root, seed.repository_id)
+        .expect("canonical admission mirror");
+    create_test_mirror(temporary.path(), &mirror);
+    bootstrap_admin(
+        &pool,
+        BootstrapCommand {
+            login_name: LOGIN_NAME.to_owned(),
+            display_name: "M3 Scheduler Owner".to_owned(),
+            organization_name: None,
+            organization_slug: None,
+            adopt_actor_id: Some(seed.human_actor_id),
+            organization_id: Some(seed.organization_id),
+        },
+        PASSWORD.to_owned(),
+    )
+    .await
+    .expect("bootstrap admission owner");
+    let second_thread_id = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO conversations (
+            id, project_id, kind, parent_channel_id, repository_id, name
+        )
+        VALUES ($1, $2, 'thread', $3, $4, 'Queued admission proof')
+        "#,
+    )
+    .bind(second_thread_id)
+    .bind(seed.project_id)
+    .bind(seed.channel_id)
+    .bind(seed.repository_id)
+    .execute(&pool)
+    .await
+    .expect("insert second admission Thread");
+    let supervisors = SupervisorRegistry::new(&config).expect("admission supervisor registry");
+    let state = AppState {
+        config: Arc::new(config),
+        pool: pool.clone(),
+        rate_limits: RateLimiters::default(),
+        realtime: RealtimeHub::new(32),
+        supervisors: supervisors.clone(),
+    };
+    let application = router(state.clone());
+    let (cookie, csrf) = login(&application).await;
+
+    // The first run holds the only slot; the second waits in the queue.
+    let first = start_run(
+        &application,
+        &cookie,
+        &csrf,
+        seed.thread_id,
+        "admission-first-run",
+        "hold the only host slot",
+    )
+    .await;
+    assert_eq!(first.0, StatusCode::ACCEPTED, "{}", first.1);
+    let first_run_id = uuid_field(&first.2, "runId");
+    wait_for_state(&pool, first_run_id, "blocked").await;
+    let second = start_run(
+        &application,
+        &cookie,
+        &csrf,
+        second_thread_id,
+        "admission-second-run",
+        "wait for a slot",
+    )
+    .await;
+    assert_eq!(second.0, StatusCode::ACCEPTED, "{}", second.1);
+    let second_run_id = uuid_field(&second.2, "runId");
+    sleep(Duration::from_millis(250)).await;
+    wait_for_state(&pool, second_run_id, "queued").await;
+
+    // Hold the queued run while the slot frees, so nothing claims it before
+    // the role changes.
+    sqlx::query(
+        r#"
+        UPDATE agent_runs
+        SET scheduler_claim_id = $2,
+            scheduler_claimed_at = now(),
+            scheduler_lease_expires_at = now() + interval '1 hour'
+        WHERE id = $1 AND state = 'queued'
+        "#,
+    )
+    .bind(second_run_id)
+    .bind(Uuid::now_v7())
+    .execute(&pool)
+    .await
+    .expect("hold the queued run");
+    let interrupted = interrupt(&application, &cookie, &csrf, first_run_id).await;
+    assert_eq!(interrupted.0, StatusCode::OK, "{}", interrupted.1);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let active = sqlx::query_scalar::<_, bool>(
+            "SELECT state IN ('starting', 'working', 'blocked', 'recovering') FROM agent_runs WHERE id = $1",
+        )
+        .bind(first_run_id)
+        .fetch_one(&pool)
+        .await
+        .expect("read first run");
+        if !active {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the first run kept its slot");
+        sleep(Duration::from_millis(25)).await;
+    }
+
+    // The requester's role in the project loses "start runs".
+    let no_runs = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO workspace_roles (id, organization_id, key, base_role, name, permissions)
+        VALUES (gen_random_uuid(), $1, 'no-runs', 'member', 'No runs',
+                ARRAY['projects.view', 'tasks.view', 'channels.post'])
+        RETURNING id
+        "#,
+    )
+    .bind(seed.organization_id)
+    .fetch_one(&pool)
+    .await
+    .expect("role without start runs");
+    sqlx::query(
+        "UPDATE project_memberships SET role_id = $3 WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.project_id)
+    .bind(seed.human_actor_id)
+    .bind(no_runs)
+    .execute(&pool)
+    .await
+    .expect("narrow the requester's role");
+    sqlx::query(
+        "UPDATE agent_runs SET scheduler_lease_expires_at = now() - interval '1 minute' WHERE id = $1",
+    )
+    .bind(second_run_id)
+    .execute(&pool)
+    .await
+    .expect("release the held run");
+    agent_workspace_server::scheduler::drain_now(&state)
+        .await
+        .expect("drain the queue");
+    let (second_state, second_workspace) = sqlx::query_as::<_, (String, Option<Uuid>)>(
+        "SELECT state, repository_workspace_id FROM agent_runs WHERE id = $1",
+    )
+    .bind(second_run_id)
+    .fetch_one(&pool)
+    .await
+    .expect("read the queued run");
+    assert_eq!(second_state, "canceled");
+    assert!(second_workspace.is_none());
+
+    supervisors.shutdown_all().await;
+    pool.close().await;
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
+        .await
+        .expect("drop admission schema");
+}
+
 async fn start_run(
     application: &axum::Router,
     cookie: &str,

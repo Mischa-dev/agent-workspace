@@ -12,7 +12,12 @@ use crate::{
     git_runtime::{
         self, RegisteredRepository, expected_repository_mirror_path, managed_worktree_path,
     },
-    outbox, provider,
+    outbox,
+    policy::{
+        Action, ActorKind, Decision, Membership, ProjectScope, Resource, RoleGrant, Subject,
+        authorize, within_agent_limits,
+    },
+    provider,
 };
 
 const SCHEDULER_LEASE: Duration = Duration::from_secs(30);
@@ -22,6 +27,9 @@ const PROVIDER_START_FAILURE_REASON: &str =
     "The agent harness could not start. The worktree was preserved.";
 const UNKNOWN_HARNESS_REASON: &str =
     "This run's harness is not installed on the server. Nothing was started.";
+const REQUESTER_REFUSED_REASON: &str =
+    "Cancelled before it started: whoever started it can no longer start runs in this project.";
+const REQUESTER_APP_REFUSED_REASON: &str = "Cancelled before it started: whoever started it, or the app it was started from, can no longer start runs in this project.";
 const CLEANED_RETRY_REASON: &str = "The previous worktree was removed by retention cleanup before the retry could use it. Start a new Thread to continue.";
 /// Run states that hold a harness turn (and count against limits).
 const ACTIVE_TURN_STATES: &str = "('starting', 'working', 'blocked', 'recovering')";
@@ -93,7 +101,98 @@ async fn drain(state: &AppState) -> Result<(), AppError> {
     Ok(())
 }
 
+/// Why a queued run's requester may no longer start it, if they may not:
+/// their role here no longer lets them start runs (or they left), or the
+/// run was started through their app and the app's agent limit, as it is
+/// now, no longer does.
+async fn requester_refusal(
+    state: &AppState,
+    actor_id: Uuid,
+    kind: &str,
+    project_id: Uuid,
+    through_app: bool,
+) -> Result<Option<&'static str>, AppError> {
+    let actor_kind = match kind {
+        "human" => ActorKind::Human,
+        "external_agent" => ActorKind::ExternalAgent,
+        _ => return Ok(None),
+    };
+    let limits = if through_app && actor_kind == ActorKind::Human {
+        let mut connection = state.pool.acquire().await?;
+        Some(
+            crate::roles::app_access(&mut connection, actor_id)
+                .await?
+                .limits,
+        )
+    } else {
+        None
+    };
+    // The role only: whether the membership, the actor and the workspace
+    // membership are still active is the admission trigger's
+    // (validate_agent_run_scope_and_admission), which keeps its own rules.
+    let membership = sqlx::query_as::<_, (String, Option<Vec<String>>, bool)>(
+        r#"
+        SELECT role, workspace_role_permissions(role_id), enabled
+        FROM project_memberships
+        WHERE project_id = $1 AND actor_id = $2
+        "#,
+    )
+    .bind(project_id)
+    .bind(actor_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let refused = Some(if through_app {
+        REQUESTER_APP_REFUSED_REASON
+    } else {
+        REQUESTER_REFUSED_REASON
+    });
+    let Some((role, permissions, enabled)) = membership else {
+        return Ok(refused);
+    };
+    let subject = Subject::new(
+        actor_id,
+        actor_kind,
+        true,
+        Some(Membership::project(
+            project_id,
+            RoleGrant::stored(&role, permissions.as_deref())?,
+            enabled,
+        )),
+        None,
+    );
+    let decision = within_agent_limits(limits, async {
+        authorize(
+            &subject,
+            Action::WorkerInvoke,
+            Resource::Project(ProjectScope::project(project_id)),
+        )
+    })
+    .await;
+    Ok(match decision {
+        Decision::Allow => None,
+        Decision::Deny(_) => refused,
+    })
+}
+
+/// What one look at the queue found.
+enum Claim {
+    Run(Box<ClaimedRun>),
+    /// The oldest eligible run was cancelled (`requester_refusal`): look again.
+    Cancelled,
+    Nothing,
+}
+
 async fn claim_next(state: &AppState) -> Result<Option<ClaimedRun>, AppError> {
+    loop {
+        match claim_one(state).await? {
+            Claim::Run(run) => return Ok(Some(*run)),
+            Claim::Cancelled => {}
+            Claim::Nothing => return Ok(None),
+        }
+    }
+}
+
+async fn claim_one(state: &AppState) -> Result<Claim, AppError> {
     let mut transaction = state.pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('agent_workspace_scheduler', 0))")
         .execute(&mut *transaction)
@@ -143,6 +242,10 @@ async fn claim_next(state: &AppState) -> Result<Option<ClaimedRun>, AppError> {
         adapter_kind: String,
         prompt: String,
         predecessor_run_id: Option<Uuid>,
+        requesting_actor_id: Uuid,
+        requester_kind: String,
+        sponsored: bool,
+        made_through_app: bool,
     }
     // Oldest first among runs whose account has a free slot (up to its
     // `max_concurrent_runs`), whose thread has no turn running, and, for
@@ -153,8 +256,11 @@ async fn claim_next(state: &AppState) -> Result<Option<ClaimedRun>, AppError> {
                run.repository_id, repository.mirror_path, repository.clone_url,
                repository.default_branch, project.project_key,
                run.execution_profile_id, account.adapter_kind, run.prompt,
-               run.predecessor_run_id
+               run.predecessor_run_id, run.requesting_actor_id,
+               requester.kind AS requester_kind,
+               run.sponsoring_actor_id IS NOT NULL AS sponsored, run.made_through_app
         FROM agent_runs run
+        JOIN actors requester ON requester.id = run.requesting_actor_id
         JOIN repositories repository
           ON repository.id = run.repository_id
          AND repository.project_id = run.project_id
@@ -187,8 +293,40 @@ async fn claim_next(state: &AppState) -> Result<Option<ClaimedRun>, AppError> {
     .await?;
     let Some(candidate) = candidate else {
         transaction.commit().await?;
-        return Ok(None);
+        return Ok(Claim::Nothing);
     };
+    // Principle 9: the person (or agent) who started it must still be able
+    // to start runs here now, and a run their app or script started must
+    // still be within that app's agent limit as it is now. Otherwise it's
+    // cancelled, saying why, and the next one is looked at. Sponsored runs
+    // are admitted by their own request's checks.
+    if !candidate.sponsored
+        && let Some(reason) = requester_refusal(
+            state,
+            candidate.requesting_actor_id,
+            &candidate.requester_kind,
+            candidate.project_id,
+            candidate.made_through_app,
+        )
+        .await?
+    {
+        transition_run(
+            &mut transaction,
+            candidate.run_id,
+            RunState::Canceled,
+            Some(reason),
+        )
+        .await?;
+        outbox::enqueue_agent_run_updated(
+            &mut transaction,
+            candidate.project_id,
+            candidate.conversation_id,
+            candidate.run_id,
+        )
+        .await?;
+        transaction.commit().await?;
+        return Ok(Claim::Cancelled);
+    }
     let claim_id = Uuid::now_v7();
     let lease_seconds = i64::try_from(SCHEDULER_LEASE.as_secs()).unwrap_or(30);
     sqlx::query(
@@ -215,7 +353,7 @@ async fn claim_next(state: &AppState) -> Result<Option<ClaimedRun>, AppError> {
     )
     .await?;
     transaction.commit().await?;
-    Ok(Some(ClaimedRun {
+    Ok(Claim::Run(Box::new(ClaimedRun {
         run_id: candidate.run_id,
         project_id: candidate.project_id,
         conversation_id: candidate.conversation_id,
@@ -229,7 +367,7 @@ async fn claim_next(state: &AppState) -> Result<Option<ClaimedRun>, AppError> {
         prompt: candidate.prompt,
         predecessor_run_id: candidate.predecessor_run_id,
         claim_id,
-    }))
+    })))
 }
 
 async fn admit(state: &AppState, run: ClaimedRun) -> Result<(), AppError> {

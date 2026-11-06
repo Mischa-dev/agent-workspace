@@ -1885,7 +1885,23 @@ async fn fire(state: &AppState, run_id: Uuid) -> Result<(), AppError> {
         .get("providerAccountId")
         .and_then(Value::as_str)
         .and_then(|value| value.parse::<Uuid>().ok());
-    let context = Context::load(state, &rule, &subject, &due.trigger_summary).await?;
+    // A maker who lost access turns the rule off, as each action checks
+    // below; checked first so the visibility check that follows doesn't
+    // just skip it.
+    if let Err(reason) = acting_access(pool, &rule).await? {
+        disable(state, &rule, &reason).await?;
+        return finish(pool, run_id, "skipped", Some(&reason), &[]).await;
+    }
+    let Some(context) = Context::load(state, &rule, &subject, &due.trigger_summary).await? else {
+        return finish(
+            pool,
+            run_id,
+            "skipped",
+            Some("Skipped: whoever made it can't see what this is about."),
+            &[],
+        )
+        .await;
+    };
     // A rule made through an app skips what that app's current limit hides:
     // the task or pull request the context loaded (a run's task, say) would
     // otherwise reach its messages through placeholders. Nothing is sent
@@ -1988,24 +2004,60 @@ impl Context {
         rule: &RuleRow,
         subject: &Subject,
         summary: &str,
-    ) -> Result<Self, AppError> {
+    ) -> Result<Option<Self>, AppError> {
         let origin = events::public_origin(state);
         let mut variables = vec![
             ("rule.name", rule.name.clone()),
             ("event", summary.to_owned()),
         ];
         let mut assignee = None;
+        // Every way a rule fires (an event, a schedule, a capacity window,
+        // "run now" in the browser or through automation_write) comes through
+        // here: nothing about a task, pull request or thread is loaded unless
+        // the rule's maker may see it now, by their role ("see tasks", "see
+        // code") and the thread's members. What the firing is about, when
+        // they can't, skips it (None). A rule made through an app is also
+        // held to the app's limit (`fire`, `limit_hides`).
+        let about = Subject {
+            work_item_id: subject.work_item_id,
+            pull_request_id: subject.pull_request_id,
+            conversation_id: subject.conversation_id,
+            ..Subject::default()
+        };
+        if !crate::webhooks::visible_to(&state.pool, rule.owner_actor_id, rule.project_id, &about)
+            .await?
+        {
+            return Ok(None);
+        }
         let mut work_item_id = subject.work_item_id;
         if work_item_id.is_none()
             && let Some(run_id) = subject.agent_run_id
         {
-            work_item_id = sqlx::query_scalar::<_, Uuid>(
+            let run_task = sqlx::query_scalar::<_, Uuid>(
                 "SELECT work_item_id FROM launches WHERE agent_run_id = $1 AND project_id = $2 LIMIT 1",
             )
             .bind(run_id)
             .bind(rule.project_id)
             .fetch_optional(&state.pool)
             .await?;
+            // A run's task only while the maker may see tasks here; without
+            // it the run still fires the rule, without the task.
+            if let Some(id) = run_task {
+                let task = Subject {
+                    work_item_id: Some(id),
+                    ..Subject::default()
+                };
+                if crate::webhooks::visible_to(
+                    &state.pool,
+                    rule.owner_actor_id,
+                    rule.project_id,
+                    &task,
+                )
+                .await?
+                {
+                    work_item_id = Some(id);
+                }
+            }
         }
         if let Some(id) = work_item_id
             && let Some(task) = crate::webhooks::task_data(state, rule.project_id, id).await?
@@ -2053,14 +2105,14 @@ impl Context {
             variables.push(("pr.title", pr.title.clone()));
             variables.push(("pr.url", pr.html_url.clone()));
         }
-        Ok(Self {
+        Ok(Some(Self {
             work_item_id,
             agent_run_id: subject.agent_run_id,
             pull_request_id: subject.pull_request_id,
             variables,
             assignee,
             pull_request,
-        })
+        }))
     }
 
     /// Fills in {{variables}}; unknown ones become empty.
