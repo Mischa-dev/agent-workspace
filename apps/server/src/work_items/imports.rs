@@ -42,7 +42,8 @@ use crate::{
     idempotency::resource_bound_scope,
     jobs::{JobContext, JobError, JobRegistry, NewJob, enqueue},
     policy::{
-        Action, ActorKind, AgentLimits, Decision, DenyReason, MembershipScope, within_agent_limits,
+        Action, ActorKind, AgentLimits, Decision, DenyReason, MembershipScope, Permission,
+        within_agent_limits,
     },
     work_item_commands::{
         AllocatedNumberMetadata, AuditAttribution, CommandActor, CreateWorkItemCommand,
@@ -165,6 +166,32 @@ async fn import_row(
     .bind(import_id)
     .fetch_optional(&mut *connection)
     .await?)
+}
+
+/// Whether `actor_id` sees code in `project_id`: their role there, and an
+/// app's agent limit in this call. A GitHub import is a repository's
+/// issues, so starting, changing, committing or reading one in full follows
+/// "see code" as the repository does.
+async fn sees_code(
+    connection: &mut PgConnection,
+    actor_id: Uuid,
+    project_id: Uuid,
+) -> Result<bool, AppError> {
+    let allowed = sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM project_memberships
+            WHERE actor_id = $1 AND project_id = $2 AND enabled
+              AND custom_role_allows(role_id, $3)
+        )
+        "#,
+    )
+    .bind(actor_id)
+    .bind(project_id)
+    .bind(Permission::CodeView.info().key)
+    .fetch_one(&mut *connection)
+    .await?;
+    Ok(allowed && !crate::policy::agent_limit_hides(actor_id, project_id, Permission::CodeView))
 }
 
 // ---------------------------------------------------------------------------
@@ -647,8 +674,16 @@ async fn import_view(
     connection: &mut PgConnection,
     record: ImportRecord,
     with_preview: bool,
+    sees_code: bool,
 ) -> Result<ImportView, AppError> {
-    let preview = if with_preview && record.status == "draft" {
+    // Without "see code", a GitHub import shows no repository, issues or
+    // fetch error: only that it exists and how far it got. Only a GitHub
+    // import names a repository (older Markdown or CSV ones may have stored
+    // one they were passed).
+    let github = record.source == "github";
+    let hidden = github && !sees_code;
+    let repository = github && sees_code;
+    let preview = if with_preview && !hidden && record.status == "draft" {
         let context = load_context(connection, record.project_id, &record.source_key()).await?;
         Some(preview(&context, &record.options(), &record.rows()))
     } else {
@@ -673,14 +708,14 @@ async fn import_view(
         id: record.id,
         source: record.source,
         source_name: record.source_name,
-        repository_id: record.repository_id,
-        repository_name: record.repository_name,
+        repository_id: record.repository_id.filter(|_| repository),
+        repository_name: record.repository_name.filter(|_| repository),
         status: record.status,
         row_count: record.row_count,
         processed_count: record.processed_count,
         created_count: record.created_count,
         skipped_count: record.skipped_count,
-        error: record.error,
+        error: if hidden { None } else { record.error },
         created_by_name: record.created_by_name,
         version: record.version,
         created_at: record.created_at,
@@ -714,9 +749,10 @@ pub(super) async fn list_imports(
     .bind(project_id)
     .fetch_all(&mut *connection)
     .await?;
+    let code = sees_code(&mut connection, principal.actor_id, project_id).await?;
     let mut imports = Vec::with_capacity(records.len());
     for record in records {
-        imports.push(import_view(&mut connection, record, false).await?);
+        imports.push(import_view(&mut connection, record, false, code).await?);
     }
     Ok(Json(ImportsResponse {
         imports,
@@ -737,7 +773,10 @@ pub(super) async fn get_import(
     let record = import_row(&mut connection, project_id, import_id, false)
         .await?
         .ok_or(AppError::NotFound("import"))?;
-    Ok(Json(import_view(&mut connection, record, true).await?))
+    let code = sees_code(&mut connection, principal.actor_id, project_id).await?;
+    Ok(Json(
+        import_view(&mut connection, record, true, code).await?,
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -908,6 +947,12 @@ pub(crate) async fn insert_import(
 ) -> Result<Result<Uuid, Refusal>, AppError> {
     let project_id = actor.project_id;
     let status = if request.source == "github" {
+        if !sees_code(transaction, actor.actor_id, project_id).await? {
+            return Ok(refuse(
+                "repositoryId",
+                "You can't see this project's code, so you can't import its GitHub issues.",
+            ));
+        }
         let usable = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS (SELECT 1 FROM repositories WHERE project_id = $1 AND id = $2 AND enabled AND archived_at IS NULL)",
         )
@@ -939,7 +984,9 @@ pub(crate) async fn insert_import(
     .bind(actor.actor_id)
     .bind(&request.source)
     .bind(&prepared.source_name)
-    .bind(request.repository_id)
+    // Only a GitHub import has a repository; one passed with Markdown or CSV
+    // is dropped.
+    .bind(request.repository_id.filter(|_| request.source == "github"))
     .bind(&prepared.text)
     .bind(json!(prepared.mapping))
     .bind(json!(prepared.options))
@@ -978,9 +1025,15 @@ pub(crate) async fn import_by_id(
     project_id: Uuid,
     import_id: Uuid,
     with_preview: bool,
+    viewer: Uuid,
 ) -> Result<Option<ImportView>, AppError> {
     match import_row(connection, project_id, import_id, false).await? {
-        Some(record) => Ok(Some(import_view(connection, record, with_preview).await?)),
+        Some(record) => {
+            let code = sees_code(connection, viewer, project_id).await?;
+            Ok(Some(
+                import_view(connection, record, with_preview, code).await?,
+            ))
+        }
         None => Ok(None),
     }
 }
@@ -1014,7 +1067,7 @@ pub(super) async fn create_import(
         Ok(id) => id,
         Err((field, message)) => return Ok(invalid(field, message)),
     };
-    let view = import_by_id(&mut write.transaction, project_id, id, true)
+    let view = import_by_id(&mut write.transaction, project_id, id, true, actor.actor_id)
         .await?
         .ok_or(AppError::Internal("import vanished"))?;
     write.finish(StatusCode::CREATED, &view).await
@@ -1066,6 +1119,10 @@ pub(super) async fn update_import(
     let record = import_row(&mut write.transaction, project_id, import_id, true)
         .await?
         .ok_or(AppError::NotFound("import"))?;
+    let code = sees_code(&mut write.transaction, write.actor.actor_id, project_id).await?;
+    if record.source == "github" && !code {
+        return Err(AppError::NotFound("import"));
+    }
     if record.version != request.expected_version {
         return Ok(version_conflict(record.version));
     }
@@ -1150,7 +1207,7 @@ pub(super) async fn update_import(
     let record = import_row(&mut write.transaction, project_id, import_id, false)
         .await?
         .ok_or(AppError::Internal("import vanished"))?;
-    let view = import_view(&mut write.transaction, record, true).await?;
+    let view = import_view(&mut write.transaction, record, true, code).await?;
     write.finish(StatusCode::OK, &view).await
 }
 
@@ -1186,6 +1243,10 @@ pub(crate) async fn queue_commit(
     let Some(record) = import_row(transaction, project_id, import_id, true).await? else {
         return Ok(Err(CommitRefusal::NotFound));
     };
+    // Committing turns the issues into tasks: only for whoever sees code.
+    if record.source == "github" && !sees_code(transaction, actor.actor_id, project_id).await? {
+        return Ok(Err(CommitRefusal::NotFound));
+    }
     if expected_version.is_some_and(|expected| expected != record.version) {
         return Ok(Err(CommitRefusal::VersionConflict(record.version)));
     }
@@ -1273,9 +1334,15 @@ pub(super) async fn commit_import(
         }
         Err(CommitRefusal::Empty) => return Ok(invalid("rows", "There's nothing to import.")),
     }
-    let view = import_by_id(&mut write.transaction, project_id, import_id, false)
-        .await?
-        .ok_or(AppError::Internal("import vanished"))?;
+    let view = import_by_id(
+        &mut write.transaction,
+        project_id,
+        import_id,
+        false,
+        actor.actor_id,
+    )
+    .await?
+    .ok_or(AppError::Internal("import vanished"))?;
     write.finish(StatusCode::OK, &view).await
 }
 
@@ -1348,7 +1415,19 @@ async fn acting_actor(
             source: "task_import",
         },
     };
-    match authorize_mutation(&actor, &membership, Action::WorkItemCreate, None)? {
+    let decision = authorize_mutation(&actor, &membership, Action::WorkItemCreate, None)?;
+    // A GitHub import reads the repository's issues: the fetch and each
+    // chunk also need "see code", by role and (inside within_agent_limits)
+    // by the app's limit as it is now.
+    if matches!(decision, Decision::Allow)
+        && record.source == "github"
+        && !sees_code(transaction, actor.actor_id, actor.project_id).await?
+    {
+        return Ok(Err(format!(
+            "Stopped because {who}, or the app it was started from, can no longer see this project's code. Tasks already made are kept."
+        )));
+    }
+    match decision {
         Decision::Allow => Ok(Ok(actor)),
         Decision::Deny(DenyReason::AgentLimit) => Ok(Err(
             "Stopped because the app it was started from may no longer create tasks in this project. Tasks already made are kept."
@@ -1449,6 +1528,19 @@ async fn fetch_issues(context: &JobContext) -> Result<(), JobError> {
         return Ok(());
     };
     if current.status != "fetching" {
+        return Ok(());
+    }
+    // Access may have gone while GitHub answered: check again before
+    // keeping the issues.
+    let limits = app_limits(&mut transaction, &current).await?;
+    if let Err(reason) = within_agent_limits(
+        limits,
+        acting_actor(&mut transaction, &current, context.job.id),
+    )
+    .await?
+    {
+        fail(&mut transaction, record.id, &reason).await?;
+        transaction.commit().await?;
         return Ok(());
     }
     match fetched {

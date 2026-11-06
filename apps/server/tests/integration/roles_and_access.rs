@@ -4028,6 +4028,291 @@ async fn board_links_show_task_titles_only_where_tasks_are_seen() {
     assert!(!read.to_string().contains("Secret linked plan"), "{read}");
 }
 
+/// A GitHub import is the repository's issues, so it follows "see code":
+/// someone who may create tasks but not see code can't start one, sees an
+/// existing one without its repository (by MCP and in the browser's list),
+/// and can't commit it.
+#[tokio::test]
+async fn github_imports_follow_see_code() {
+    let Some(setup) = setup("awd74_github_imports").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let project = work.parse::<Uuid>().expect("project");
+    let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
+    let repository = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO repositories (
+            id, project_id, github_repository_id, owner, name, clone_url,
+            default_branch, mirror_path, trusted, preparation_state, prepared_at
+        ) VALUES ($1, $2, 434343, 'Mischa-dev', 'import-repo',
+                  'https://github.com/Mischa-dev/import-repo.git',
+                  'main', $3, true, 'ready', now())
+        "#,
+    )
+    .bind(repository)
+    .bind(project)
+    .bind(format!("/tmp/agent-workspace-test-{repository}.git"))
+    .execute(&setup.pool)
+    .await
+    .expect("repository");
+    let start =
+        json!({"projectId": work, "source": "github", "repositoryId": repository.to_string()});
+
+    // The owner sees code: the import names its repository.
+    let owner_app = connect_app(app, &setup.browser, "Owner's app", "full").await;
+    let owner_session = initialize(app, &owner_app).await.expect("owner app");
+    let started = tool(
+        app,
+        &owner_app,
+        &owner_session,
+        "task_import",
+        start.clone(),
+    )
+    .await;
+    assert_eq!(started["outcome"], "ok", "{started}");
+    assert_eq!(
+        started["value"]["import"]["repositoryName"], "Mischa-dev/import-repo",
+        "{started}"
+    );
+    let import = started["value"]["import"]["id"].clone();
+    let import_id = import
+        .as_str()
+        .expect("import")
+        .parse::<Uuid>()
+        .expect("import id");
+    // As if the fetch had read one issue: a draft with its preview.
+    sqlx::query(
+        "UPDATE task_imports SET status = 'draft', rows = $2, row_count = 1, version = version + 1 WHERE id = $1",
+    )
+    .bind(import_id)
+    .bind(json!([{"externalId": "7", "title": "Secret issue seven"}]))
+    .execute(&setup.pool)
+    .await
+    .expect("fetched");
+    let owner_read = tool(
+        app,
+        &owner_app,
+        &owner_session,
+        "task_import",
+        json!({"projectId": work, "importId": import}),
+    )
+    .await;
+    assert!(
+        owner_read.to_string().contains("Secret issue seven"),
+        "{owner_read}"
+    );
+
+    // Bea may see and create tasks here, but not see code.
+    let (status, importers) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Importers", "baseRole": "member", "permissions": ["tasks.view", "tasks.create", "tasks.edit"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{importers}");
+    let (status, changed) = set_project_role(
+        &setup,
+        &work,
+        bea,
+        "bea-importers",
+        json!({"roleId": importers["id"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
+    let session = initialize(app, &bea_app).await.expect("Bea's app");
+
+    let refused = tool(app, &bea_app, &session, "task_import", start).await;
+    assert_ne!(refused["outcome"], "ok", "{refused}");
+    assert!(!refused.to_string().contains("import-repo"), "{refused}");
+    let imports: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM task_imports WHERE project_id = $1")
+            .bind(project)
+            .fetch_one(&setup.pool)
+            .await
+            .expect("imports");
+    assert_eq!(imports, 1, "Bea's GitHub import was not started");
+
+    let read = tool(
+        app,
+        &bea_app,
+        &session,
+        "task_import",
+        json!({"projectId": work, "importId": import}),
+    )
+    .await;
+    assert_eq!(read["outcome"], "ok", "{read}");
+    assert!(
+        read["value"]["import"]["repositoryName"].is_null(),
+        "{read}"
+    );
+    assert!(read["value"]["import"]["repositoryId"].is_null(), "{read}");
+    assert!(!read.to_string().contains("import-repo"), "{read}");
+    assert!(!read.to_string().contains("Secret issue seven"), "{read}");
+    assert!(
+        !read.to_string().contains(&repository.to_string()),
+        "{read}"
+    );
+
+    let commit = tool(
+        app,
+        &bea_app,
+        &session,
+        "task_import",
+        json!({"projectId": work, "importId": import, "commit": true}),
+    )
+    .await;
+    assert_eq!(commit["outcome"], "not_found", "{commit}");
+
+    let (status, listed) = send(
+        app,
+        bea_browser.request(
+            "GET",
+            &format!("/api/v1/projects/{work}/imports"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_eq!(
+        listed["imports"].as_array().map(Vec::len),
+        Some(1),
+        "{listed}"
+    );
+    assert!(!listed.to_string().contains("import-repo"), "{listed}");
+
+    // The browser's single read, change and commit of the same draft.
+    let path = format!("/api/v1/projects/{work}/imports/{import_id}");
+    let (status, one) = send(app, bea_browser.request("GET", &path, None, Value::Null)).await;
+    assert_eq!(status, StatusCode::OK, "{one}");
+    assert!(!one.to_string().contains("import-repo"), "{one}");
+    assert!(!one.to_string().contains("Secret issue seven"), "{one}");
+    let version = one["version"].clone();
+    let (status, changed) = send(
+        app,
+        bea_browser.request(
+            "PATCH",
+            &path,
+            Some("bea-import-cancel"),
+            json!({"expectedVersion": version, "cancel": true}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{changed}");
+    let (status, committed) = send(
+        app,
+        bea_browser.request(
+            "POST",
+            &format!("{path}/commit"),
+            Some("bea-import-commit"),
+            json!({"expectedVersion": version}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{committed}");
+    let state: String = sqlx::query_scalar("SELECT status FROM task_imports WHERE id = $1")
+        .bind(import_id)
+        .fetch_one(&setup.pool)
+        .await
+        .expect("import status");
+    assert_eq!(state, "draft", "Bea neither canceled nor committed it");
+
+    // Markdown and CSV need no code, and keep no repository they're passed,
+    // nor show one an older import stored.
+    let (status, markdown) = send(
+        app,
+        bea_browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/imports"),
+            Some("bea-markdown-import"),
+            json!({"source": "markdown", "text": "- Plain task", "repositoryId": repository}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{markdown}");
+    let markdown_id = markdown["id"]
+        .as_str()
+        .expect("markdown import")
+        .parse::<Uuid>()
+        .expect("markdown import id");
+    let stored: Option<Uuid> =
+        sqlx::query_scalar("SELECT repository_id FROM task_imports WHERE id = $1")
+            .bind(markdown_id)
+            .fetch_one(&setup.pool)
+            .await
+            .expect("markdown repository");
+    assert_eq!(stored, None, "a Markdown import keeps no repository");
+    sqlx::query("UPDATE task_imports SET repository_id = $2 WHERE id = $1")
+        .bind(markdown_id)
+        .bind(repository)
+        .execute(&setup.pool)
+        .await
+        .expect("an older Markdown import with a repository");
+    let (status, older) = send(
+        app,
+        setup.browser.request(
+            "GET",
+            &format!("/api/v1/projects/{work}/imports/{markdown_id}"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{older}");
+    assert!(older["repositoryName"].is_null(), "{older}");
+
+    // Cal sees code as a person, but their app's limit leaves it out.
+    let (cal, cal_browser) = add_person(&setup, &[&work], "cal").await;
+    let (status, limit) = send(
+        app,
+        setup.browser.request(
+            "PUT",
+            &format!(
+                "/api/v1/organizations/{}/members/{cal}/agent-limit",
+                setup.organization_id
+            ),
+            None,
+            json!({"permissions": ["tasks.view", "tasks.create", "tasks.edit"]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{limit}");
+    let cal_app = connect_app(app, &cal_browser, "Cal's app", "full").await;
+    let cal_session = initialize(app, &cal_app).await.expect("Cal's app");
+    let refused = tool(
+        app,
+        &cal_app,
+        &cal_session,
+        "task_import",
+        json!({"projectId": work, "source": "github", "repositoryId": repository.to_string()}),
+    )
+    .await;
+    assert_ne!(refused["outcome"], "ok", "{refused}");
+    let through_app = tool(
+        app,
+        &cal_app,
+        &cal_session,
+        "task_import",
+        json!({"projectId": work, "importId": import}),
+    )
+    .await;
+    assert_eq!(through_app["outcome"], "ok", "{through_app}");
+    assert!(
+        !through_app.to_string().contains("import-repo"),
+        "{through_app}"
+    );
+    let (status, as_person) = send(app, cal_browser.request("GET", &path, None, Value::Null)).await;
+    assert_eq!(status, StatusCode::OK, "{as_person}");
+    assert_eq!(
+        as_person["repositoryName"], "Mischa-dev/import-repo",
+        "{as_person}"
+    );
+}
+
 /// The custom role `actor` holds in `project`, if any.
 async fn project_role_id(setup: &Setup, project: &str, actor: Uuid) -> Option<Uuid> {
     sqlx::query_scalar::<_, Option<Uuid>>(
