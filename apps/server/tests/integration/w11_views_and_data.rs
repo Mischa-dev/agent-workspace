@@ -631,6 +631,123 @@ async fn export_text(fixture: &Fixture, uri: &str) -> String {
     .expect("utf-8")
 }
 
+/// Committing a GitHub import makes its tasks from the repository's issues,
+/// so the job checks "see code" again: someone who loses it after the commit
+/// is queued gets a stopped import and no tasks.
+#[tokio::test]
+async fn a_github_import_stops_when_its_committer_loses_see_code() {
+    let Some(fixture) = fixture("github_import_code").await else {
+        return;
+    };
+    let project = fixture.project_id;
+    let base = format!("/api/v1/projects/{project}");
+    let member: Uuid = sqlx::query_scalar("SELECT actor_id FROM users WHERE login_name = $1")
+        .bind(MEMBER)
+        .fetch_one(&fixture.pool)
+        .await
+        .expect("member");
+    let repository = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO repositories (
+            id, project_id, github_repository_id, owner, name, clone_url,
+            default_branch, mirror_path, trusted, preparation_state, prepared_at
+        ) VALUES ($1, $2, 454545, 'Mischa-dev', 'w11-import',
+                  'https://github.com/Mischa-dev/w11-import.git',
+                  'main', $3, true, 'ready', now())
+        "#,
+    )
+    .bind(repository)
+    .bind(project)
+    .bind(format!("/tmp/agent-workspace-test-{repository}.git"))
+    .execute(&fixture.pool)
+    .await
+    .expect("repository");
+    // A GitHub import the member started, already fetched.
+    let import = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO task_imports (
+            id, project_id, created_by_actor_id, source, source_name, repository_id,
+            mapping, options, rows, status, row_count, made_through_app
+        ) VALUES ($1, $2, $3, 'github', 'GitHub issues', $4, '{}'::jsonb, '{}'::jsonb,
+                  $5, 'draft', 1, false)
+        "#,
+    )
+    .bind(import)
+    .bind(project)
+    .bind(member)
+    .bind(repository)
+    .bind(json!([{"externalId": "7", "title": "Issue seven from GitHub"}]))
+    .execute(&fixture.pool)
+    .await
+    .expect("import");
+    let (status, draft) = fixture
+        .member
+        .get(&format!("{base}/imports/{import}"))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{draft}");
+    assert_eq!(draft["repositoryName"], "Mischa-dev/w11-import", "{draft}");
+    let (status, committed) = fixture
+        .member
+        .post(
+            &format!("{base}/imports/{import}/commit"),
+            json!({"expectedVersion": draft["version"]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{committed}");
+    assert_eq!(committed["status"], "queued", "{committed}");
+
+    // Before the job runs, the member's role here loses "see code".
+    let (status, role) = fixture
+        .owner
+        .post(
+            &format!("/api/v1/organizations/{}/roles", fixture.organization_id),
+            json!({"name": "Task makers", "baseRole": "member", "permissions": ["tasks.view", "tasks.create", "tasks.edit"]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{role}");
+    let version: i64 = sqlx::query_scalar(
+        "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project)
+    .bind(member)
+    .fetch_one(&fixture.pool)
+    .await
+    .expect("membership version");
+    let (status, changed) = fixture
+        .owner
+        .patch(
+            &format!("{base}/members/{member}"),
+            json!({"roleId": role["id"], "expectedVersion": version}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+
+    run_jobs(&fixture).await;
+    let (state, error): (String, Option<String>) =
+        sqlx::query_as("SELECT status, error FROM task_imports WHERE id = $1")
+            .bind(import)
+            .fetch_one(&fixture.pool)
+            .await
+            .expect("import after the job");
+    assert_eq!(state, "failed", "{error:?}");
+    assert!(
+        error
+            .as_deref()
+            .is_some_and(|error| error.contains("see this project's code")),
+        "{error:?}"
+    );
+    let made: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM work_items WHERE project_id = $1 AND title = 'Issue seven from GitHub'",
+    )
+    .bind(project)
+    .fetch_one(&fixture.pool)
+    .await
+    .expect("tasks");
+    assert_eq!(made, 0, "no task was made from the issue");
+}
+
 #[tokio::test]
 async fn a_new_project_starts_from_a_saved_setup() {
     let Some(fixture) = fixture("project_templates").await else {

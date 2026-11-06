@@ -24,7 +24,7 @@ use crate::{
     conversations::{authorize_conversation_row_for, fetch_conversation_access, parse_actor_kind},
     error::{ApiJson, ApiPath, ApiQuery, AppError},
     policy::{
-        Action, ActorKind, Decision, Membership, MembershipRole, ProjectScope, Resource, Subject,
+        Action, ActorKind, Decision, Membership, ProjectScope, Resource, RoleGrant, Subject,
         authorize,
     },
 };
@@ -172,6 +172,7 @@ pub struct PinView {
 #[derive(Debug, FromRow)]
 struct ProjectAccessRow {
     role: String,
+    role_permissions: Option<Vec<String>>,
     enabled: bool,
     archived: bool,
     kind: String,
@@ -188,7 +189,8 @@ pub async fn project_access(
 ) -> Result<bool, AppError> {
     let row = sqlx::query_as::<_, ProjectAccessRow>(
         r#"
-        SELECT membership.role, membership.enabled,
+        SELECT membership.role, workspace_role_permissions(membership.role_id) AS role_permissions,
+               membership.enabled,
                project.archived_at IS NOT NULL AS archived, project.kind
         FROM projects project
         JOIN project_memberships membership
@@ -215,7 +217,7 @@ pub async fn project_access(
         true,
         Some(Membership::project(
             project_id,
-            role(&row.role)?,
+            RoleGrant::stored(&row.role, row.role_permissions.as_deref())?,
             row.enabled,
         )),
         None,
@@ -231,17 +233,6 @@ pub async fn project_access(
         return Err(AppError::NotFound("project"));
     }
     Ok(row.kind == "direct")
-}
-
-fn role(value: &str) -> Result<MembershipRole, AppError> {
-    match value {
-        "owner" => Ok(MembershipRole::Owner),
-        "admin" => Ok(MembershipRole::Admin),
-        "member" => Ok(MembershipRole::Member),
-        "viewer" => Ok(MembershipRole::Viewer),
-        "worker" => Ok(MembershipRole::Worker),
-        _ => Err(AppError::Internal("stored membership role")),
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1077,7 +1068,7 @@ async fn list_pages_http(
         principal.actor_id,
         kind,
         project_id,
-        Action::WorkItemEdit,
+        Action::PageEdit,
     )
     .await
     .is_ok();
@@ -1107,7 +1098,7 @@ async fn create_page_http(
         writer.actor_id,
         writer.actor_kind,
         project_id,
-        Action::WorkItemEdit,
+        Action::PageEdit,
     )
     .await?;
     if direct {
@@ -1175,7 +1166,7 @@ async fn update_page_http(
         writer.actor_id,
         writer.actor_kind,
         project_id,
-        Action::WorkItemEdit,
+        Action::PageEdit,
     )
     .await
     .map_err(|_| AppError::NotFound("page"))?;
@@ -1250,7 +1241,7 @@ async fn list_decisions_http(
         principal.actor_id,
         kind,
         project_id,
-        Action::MessageSend,
+        Action::PageEdit,
     )
     .await
     .is_ok();
@@ -1282,7 +1273,7 @@ async fn record_decision_http(
         writer.actor_id,
         writer.actor_kind,
         project_id,
-        Action::MessageSend,
+        Action::PageEdit,
     )
     .await?;
     let decision_id = record_decision(&mut transaction, writer, project_id, &input).await?;

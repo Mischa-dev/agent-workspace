@@ -102,6 +102,7 @@ struct SubscriptionRow {
     project_name: Option<String>,
     owner_actor_id: Uuid,
     via_oauth_grant_id: Option<Uuid>,
+    made_through_app: bool,
     name: String,
     url: String,
     event_types: Vec<String>,
@@ -118,7 +119,8 @@ struct SubscriptionRow {
 const SUBSCRIPTION_SELECT: &str = r#"
     SELECT subscription.id, subscription.organization_id, subscription.project_id,
            project.name AS project_name, subscription.owner_actor_id,
-           subscription.via_oauth_grant_id, subscription.name, subscription.url,
+           subscription.via_oauth_grant_id, subscription.made_through_app,
+           subscription.name, subscription.url,
            subscription.event_types, subscription.secret_id, subscription.state,
            subscription.disabled_reason, subscription.consecutive_failures,
            subscription.last_delivery_at, subscription.version,
@@ -507,8 +509,8 @@ pub(crate) async fn create(
         r#"
         INSERT INTO webhook_subscriptions (
             id, organization_id, project_id, owner_actor_id, via_oauth_grant_id,
-            name, url, event_types, secret_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            name, url, event_types, secret_id, made_through_app
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         "#,
     )
     .bind(id)
@@ -520,6 +522,7 @@ pub(crate) async fn create(
     .bind(&url)
     .bind(&event_types)
     .bind(secret_id)
+    .bind(through_app(caller))
     .execute(&mut *transaction)
     .await?;
     events::audit(
@@ -591,6 +594,7 @@ pub(crate) async fn update(
             state = COALESCE($5, state),
             disabled_reason = CASE WHEN $5 IS NULL THEN disabled_reason ELSE NULL END,
             consecutive_failures = CASE WHEN $5 = 'active' THEN 0 ELSE consecutive_failures END,
+            made_through_app = made_through_app OR $6,
             version = version + 1, updated_at = now()
         WHERE id = $1
         "#,
@@ -600,6 +604,7 @@ pub(crate) async fn update(
     .bind(&url)
     .bind(&event_types)
     .bind(&new_state)
+    .bind(through_app(caller))
     .execute(&mut *transaction)
     .await?;
     events::audit(
@@ -727,15 +732,40 @@ pub(crate) async fn redeliver(
     require_person(caller)?;
     let mut transaction = state.pool.begin().await?;
     let current = owned(&mut *transaction, caller, webhook_id).await?;
+    // Through an app, the app's limit decides as well, whatever the webhook
+    // was made through: it may not resend a task without "see tasks", or a
+    // pull request without "see code", and the delivery remembers that an
+    // app asked, so sending it checks that limit again.
+    let app = through_app(caller);
+    if app {
+        let Some((project_id, subject)) = sqlx::query_as::<_, (Option<Uuid>, Value)>(
+            "SELECT project_id, subject FROM webhook_deliveries WHERE id = $1 AND subscription_id = $2",
+        )
+        .bind(delivery_id)
+        .bind(webhook_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        else {
+            return Err(AppError::NotFound("delivery"));
+        };
+        let subject: Subject = serde_json::from_value(subject).unwrap_or_default();
+        if let Some(project_id) = project_id
+            && app_limit_hides(&state.pool, &current, project_id, &subject, true).await?
+        {
+            return Err(AppError::NotFound("delivery"));
+        }
+    }
     let updated = sqlx::query(
         r#"
         UPDATE webhook_deliveries
-        SET state = 'pending', last_error = NULL, updated_at = now()
+        SET state = 'pending', last_error = NULL, updated_at = now(),
+            made_through_app = made_through_app OR $3
         WHERE id = $1 AND subscription_id = $2 AND state <> 'pending'
         "#,
     )
     .bind(delivery_id)
     .bind(webhook_id)
+    .bind(app)
     .execute(&mut *transaction)
     .await?;
     if updated.rows_affected() == 1 {
@@ -844,7 +874,16 @@ pub(crate) async fn fan_out(state: &AppState, event: &Event) -> Result<usize, Ap
             turn_off(&state.pool, subscription_id, reason).await?;
             continue;
         }
-        if !visible_to(&state.pool, owner, event.project_id, &event.subject).await? {
+        if !visible_to(&state.pool, owner, event.project_id, &event.subject).await?
+            || app_limit_hides(
+                &state.pool,
+                &subscription,
+                event.project_id,
+                &event.subject,
+                false,
+            )
+            .await?
+        {
             continue;
         }
         let mut transaction = state.pool.begin().await?;
@@ -877,6 +916,44 @@ pub(crate) async fn fan_out(state: &AppState, event: &Event) -> Result<usize, Ap
     Ok(queued)
 }
 
+/// Whether a person is making or changing a webhook through an app or script
+/// (MCP or the public API), whose agent limit its deliveries then keep.
+fn through_app(caller: &Caller) -> bool {
+    caller.actor_kind == ActorKind::Human && caller.channel == "mcp"
+}
+
+/// Whether the agent limit of the app a webhook was made through (or, with
+/// `through_app`, an app that asked for this delivery), as it is now, keeps
+/// it from what the event is about: a task without "see tasks", or a pull
+/// request without "see code", in the event's project.
+async fn app_limit_hides(
+    pool: &PgPool,
+    subscription: &SubscriptionRow,
+    project_id: Uuid,
+    subject: &Subject,
+    through_app: bool,
+) -> Result<bool, AppError> {
+    use crate::policy::{Permission, PermissionSet};
+    if !(subscription.made_through_app || through_app)
+        || (subject.work_item_id.is_none() && subject.pull_request_id.is_none())
+    {
+        return Ok(false);
+    }
+    let mut connection = pool.acquire().await?;
+    let limits = crate::roles::app_access(&mut connection, subscription.owner_actor_id)
+        .await?
+        .limits;
+    let allowed = limits
+        .projects
+        .get(&project_id)
+        .copied()
+        .unwrap_or(PermissionSet::EMPTY);
+    Ok(
+        (subject.work_item_id.is_some() && !allowed.contains(Permission::TasksView))
+            || (subject.pull_request_id.is_some() && !allowed.contains(Permission::CodeView)),
+    )
+}
+
 /// Whether `owner` can see what the event is about right now.
 pub(crate) async fn visible_to(
     executor: impl PgExecutor<'_>,
@@ -891,6 +968,18 @@ pub(crate) async fn visible_to(
            AND ($4::uuid IS NULL OR pull_request_visible_to($4, $1))
            AND ($5::uuid IS NULL OR EXISTS (
                SELECT 1 FROM work_items item WHERE item.id = $5 AND item.project_id = $2
+           ))
+           -- A task's or pull request's events only while the owner's role
+           -- there still lets them see tasks, or code.
+           AND ($5::uuid IS NULL OR EXISTS (
+               SELECT 1 FROM project_memberships sees_task
+               WHERE sees_task.project_id = $2 AND sees_task.actor_id = $1
+                 AND sees_task.enabled AND custom_role_allows(sees_task.role_id, 'tasks.view')
+           ))
+           AND ($4::uuid IS NULL OR EXISTS (
+               SELECT 1 FROM project_memberships sees_code
+               WHERE sees_code.project_id = $2 AND sees_code.actor_id = $1
+                 AND sees_code.enabled AND custom_role_allows(sees_code.role_id, 'code.view')
            ))
         "#,
     )
@@ -917,6 +1006,8 @@ struct DueDelivery {
     occurred_at: DateTime<Utc>,
     state: String,
     attempts: i32,
+    /// An app asked to send it again: its limit is checked as well.
+    made_through_app: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1009,7 +1100,7 @@ async fn deliver(context: &JobContext) -> Result<(), JobError> {
     let Some(due) = sqlx::query_as::<_, DueDelivery>(
         r#"
         SELECT id, subscription_id, organization_id, project_id, event_type, subject,
-               occurred_at, state, attempts
+               occurred_at, state, attempts, made_through_app
         FROM webhook_deliveries WHERE id = $1
         "#,
     )
@@ -1042,7 +1133,15 @@ async fn deliver(context: &JobContext) -> Result<(), JobError> {
     let subject: Subject = serde_json::from_value(due.subject.clone()).unwrap_or_default();
     if let Some(project_id) = due.project_id
         && due.event_type != "ping"
-        && !visible_to(pool, subscription.owner_actor_id, project_id, &subject).await?
+        && (!visible_to(pool, subscription.owner_actor_id, project_id, &subject).await?
+            || app_limit_hides(
+                pool,
+                &subscription,
+                project_id,
+                &subject,
+                due.made_through_app,
+            )
+            .await?)
     {
         finish_delivery(
             pool,

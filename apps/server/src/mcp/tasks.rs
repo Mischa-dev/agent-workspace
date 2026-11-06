@@ -975,7 +975,10 @@ async fn list_tasks(
         }
         None => scope_projects(state, principal).await?,
     };
-    let mut projects = projects;
+    // The tool gate takes "see tasks" in any project; list only those where
+    // the caller's role (and an app's limit) keeps it.
+    let mut projects =
+        crate::search::projects_showing_tasks(&state.pool, principal.actor_id, &projects).await?;
     projects.sort_unstable();
     projects.dedup();
     let place = if let [only] = projects.as_slice() {
@@ -1574,7 +1577,7 @@ pub(super) async fn resolve_task(
     principal: &McpPrincipal,
     identifier: &str,
 ) -> Result<Option<(Uuid, Uuid)>, AppError> {
-    let projects = accessible_project_ids(state, principal).await?;
+    let projects = task_project_ids(state, principal).await?;
     resolve_among(state, principal, &projects, identifier).await
 }
 
@@ -1585,12 +1588,22 @@ pub(super) async fn resolve_tasks(
     principal: &McpPrincipal,
     references: &[String],
 ) -> Result<Vec<Option<(Uuid, Uuid)>>, AppError> {
-    let projects = accessible_project_ids(state, principal).await?;
+    let projects = task_project_ids(state, principal).await?;
     let mut found = Vec::with_capacity(references.len());
     for reference in references {
         found.push(resolve_among(state, principal, &projects, reference).await?);
     }
     Ok(found)
+}
+
+/// The caller's projects where their role (and an app's limit) lets them
+/// see tasks: a task elsewhere doesn't resolve, for any task tool.
+async fn task_project_ids(
+    state: &AppState,
+    principal: &McpPrincipal,
+) -> Result<Vec<Uuid>, AppError> {
+    let projects = accessible_project_ids(state, principal).await?;
+    crate::search::projects_showing_tasks(&state.pool, principal.actor_id, &projects).await
 }
 
 async fn resolve_among(

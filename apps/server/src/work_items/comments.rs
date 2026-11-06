@@ -29,7 +29,7 @@ use crate::{
     conversations::ActorView,
     error::{ApiJson, ApiPath, AppError},
     message_content::{MessageContent, MessageNode},
-    policy::{Action, ActorKind},
+    policy::{Action, ActorKind, Permission},
     work_item_commands::{CommandActor, enqueue_update, record_audit},
 };
 
@@ -563,9 +563,12 @@ pub(crate) async fn comment_revisions(
     }))
 }
 
-/// The comment as the task's timeline shows it now.
+/// The comment as the task's timeline shows it now, to `viewer`: the tasks
+/// it references without their titles and statuses unless they may see
+/// tasks here (commenting takes only "edit tasks").
 async fn comment_view(
     pool: &PgPool,
+    viewer: Uuid,
     project_id: Uuid,
     work_item_id: Uuid,
     comment_id: Uuid,
@@ -573,10 +576,14 @@ async fn comment_view(
     let row = super::fetch_comment_timeline_row(pool, project_id, work_item_id, comment_id)
         .await?
         .ok_or(AppError::NotFound("comment"))?;
-    timeline_entry_view(pool, project_id, work_item_id, row)
+    let mut comment = timeline_entry_view(pool, project_id, work_item_id, row)
         .await?
         .comment
-        .ok_or(AppError::Internal("comment view"))
+        .ok_or(AppError::Internal("comment view"))?;
+    if !crate::conversations::sees_tasks_in(pool, viewer, project_id).await? {
+        super::hide_reference_details(&mut comment);
+    }
+    Ok(comment)
 }
 
 // ---------------------------------------------------------------------------
@@ -643,7 +650,7 @@ async fn lock_for_change(
         .await?
         .ok_or(AppError::NotFound("comment"))?;
     let moderator =
-        principal.actor_kind == "human" && matches!(membership.role.as_str(), "owner" | "admin");
+        principal.actor_kind == "human" && membership.may(Permission::ChannelsModerate)?;
     Ok((locked, moderator))
 }
 
@@ -678,7 +685,14 @@ async fn edit_comment_http(
     .map_err(http_refusal)?;
     transaction.commit().await?;
     Ok(Json(EditCommentResponse {
-        comment: comment_view(&state.pool, project_id, work_item_id, comment_id).await?,
+        comment: comment_view(
+            &state.pool,
+            principal.actor_id,
+            project_id,
+            work_item_id,
+            comment_id,
+        )
+        .await?,
         changed: edit.changed,
     }))
 }
@@ -705,7 +719,14 @@ async fn remove_comment_http(
         .map_err(http_refusal)?;
     transaction.commit().await?;
     Ok(Json(RemoveCommentResponse {
-        comment: comment_view(&state.pool, project_id, work_item_id, comment_id).await?,
+        comment: comment_view(
+            &state.pool,
+            principal.actor_id,
+            project_id,
+            work_item_id,
+            comment_id,
+        )
+        .await?,
         already_removed,
     }))
 }
@@ -742,12 +763,22 @@ pub(crate) async fn is_comment_moderator(
     if actor_kind != ActorKind::Human {
         return Ok(false);
     }
+    // An app acting for them moderates only while its agent limit keeps
+    // "moderate channels" too.
+    if crate::policy::agent_limit_hides(
+        actor_id,
+        project_id,
+        crate::policy::Permission::ChannelsModerate,
+    ) {
+        return Ok(false);
+    }
     Ok(sqlx::query_scalar::<_, bool>(
         r#"
         SELECT EXISTS (
             SELECT 1 FROM project_memberships
             WHERE project_id = $1 AND actor_id = $2 AND enabled
               AND role IN ('owner', 'admin')
+              AND custom_role_allows(role_id, 'channels.moderate')
         )
         "#,
     )

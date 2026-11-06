@@ -42,7 +42,7 @@ use crate::{
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, ApiQuery, AppError},
     policy::{
-        Action, ActorKind, Membership, MembershipRole, ProjectScope, Resource, Subject, authorize,
+        Action, ActorKind, Membership, ProjectScope, Resource, RoleGrant, Subject, authorize,
     },
 };
 
@@ -902,15 +902,13 @@ pub(crate) fn actor_kind(value: &str) -> Result<ActorKind, AppError> {
     }
 }
 
-pub(crate) fn membership_role(value: &str) -> Result<MembershipRole, AppError> {
-    match value {
-        "owner" => Ok(MembershipRole::Owner),
-        "admin" => Ok(MembershipRole::Admin),
-        "member" => Ok(MembershipRole::Member),
-        "viewer" => Ok(MembershipRole::Viewer),
-        "worker" => Ok(MembershipRole::Worker),
-        _ => Err(AppError::Internal("stored membership role")),
-    }
+/// A stored membership's role: its plain role, and the custom role's
+/// permissions when it holds one.
+pub(crate) fn membership_grant(
+    role: &str,
+    permissions: Option<&[String]>,
+) -> Result<RoleGrant, AppError> {
+    Ok(RoleGrant::stored(role, permissions)?)
 }
 
 /// The caller's role in the workspace, if they're an active member. The
@@ -920,10 +918,10 @@ async fn workspace_role<'e, E: PgExecutor<'e>>(
     executor: E,
     actor_id: Uuid,
     organization_id: Uuid,
-) -> Result<Option<String>, AppError> {
-    Ok(sqlx::query_scalar::<_, String>(
+) -> Result<Option<(String, Option<Vec<String>>)>, AppError> {
+    Ok(sqlx::query_as::<_, (String, Option<Vec<String>>)>(
         r#"
-        SELECT membership.role
+        SELECT membership.role, workspace_role_permissions(membership.role_id)
         FROM organization_memberships membership
         JOIN actors actor ON actor.id = membership.actor_id
         WHERE membership.organization_id = $1 AND membership.actor_id = $2
@@ -944,10 +942,11 @@ async fn project_role<'e, E: PgExecutor<'e>>(
     executor: E,
     actor_id: Uuid,
     project_id: Uuid,
-) -> Result<Option<(Uuid, String)>, AppError> {
-    Ok(sqlx::query_as::<_, (Uuid, String)>(
+) -> Result<Option<(Uuid, String, Option<Vec<String>>)>, AppError> {
+    Ok(sqlx::query_as::<_, (Uuid, String, Option<Vec<String>>)>(
         r#"
-        SELECT project.organization_id, membership.role
+        SELECT project.organization_id, membership.role,
+               workspace_role_permissions(membership.role_id)
         FROM projects project
         JOIN project_memberships membership
           ON membership.project_id = project.id AND membership.actor_id = $2
@@ -973,7 +972,7 @@ pub async fn authorize_workspace_manage<'e, E: PgExecutor<'e>>(
     principal: &AuthenticatedActor,
     organization_id: Uuid,
 ) -> Result<(), AppError> {
-    let role = workspace_role(executor, principal.actor_id, organization_id)
+    let (role, permissions) = workspace_role(executor, principal.actor_id, organization_id)
         .await?
         .ok_or(AppError::NotFound("workspace"))?;
     let subject = Subject::new(
@@ -982,7 +981,7 @@ pub async fn authorize_workspace_manage<'e, E: PgExecutor<'e>>(
         true,
         Some(Membership::organization(
             organization_id,
-            membership_role(&role)?,
+            membership_grant(&role, permissions.as_deref())?,
             true,
         )),
         None,
@@ -1007,16 +1006,17 @@ pub async fn authorize_project_manage<'e, E: PgExecutor<'e>>(
     principal: &AuthenticatedActor,
     project_id: Uuid,
 ) -> Result<Uuid, AppError> {
-    let (organization_id, role) = project_role(executor, principal.actor_id, project_id)
-        .await?
-        .ok_or(AppError::NotFound("project"))?;
+    let (organization_id, role, permissions) =
+        project_role(executor, principal.actor_id, project_id)
+            .await?
+            .ok_or(AppError::NotFound("project"))?;
     let subject = Subject::new(
         principal.actor_id,
         actor_kind(&principal.actor_kind)?,
         true,
         Some(Membership::project(
             project_id,
-            membership_role(&role)?,
+            membership_grant(&role, permissions.as_deref())?,
             true,
         )),
         None,
@@ -1160,7 +1160,7 @@ async fn effective(
 ) -> Result<Json<EffectiveResponse>, AppError> {
     let (organization_id, project_id) = match (query.organization_id, query.project_id) {
         (_, Some(project_id)) => {
-            let (organization_id, _) = project_role(&state.pool, principal.actor_id, project_id)
+            let (organization_id, _, _) = project_role(&state.pool, principal.actor_id, project_id)
                 .await?
                 .ok_or(AppError::NotFound("project"))?;
             if query

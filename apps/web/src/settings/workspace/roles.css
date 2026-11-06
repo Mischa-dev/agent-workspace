@@ -1,0 +1,98 @@
+.aw-roles__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.aw-roles__starts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 14rem), 1fr));
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-roles__start {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+}
+
+.aw-roles__starttitle,
+.aw-roles__previewmodule {
+  font: var(--t-ui-strong);
+}
+
+.aw-roles__editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.aw-roles__group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.aw-roles__legend {
+  padding: 0;
+  font: var(--t-title);
+  color: var(--content-fg);
+}
+
+.aw-roles__module {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.aw-roles__moduletitle {
+  margin: 0;
+  font: var(--t-ui-strong);
+  color: var(--content-fg);
+}
+
+.aw-roles__limit {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 12rem), 1fr));
+  gap: var(--space-2);
+}
+
+.aw-roles__preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+}
+
+.aw-roles__previewlist {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font: var(--t-small);
+}
+
+.aw-roles__previewlist li {
+  display: grid;
+  grid-template-columns: minmax(7rem, 10rem) 1fr;
+  gap: var(--space-2);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 480px) {
+  .aw-roles__previewlist li {
+    grid-template-columns: 1fr;
+    gap: var(--space-half);
+  }
+}

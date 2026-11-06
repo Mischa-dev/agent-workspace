@@ -241,9 +241,18 @@ lock_free && pass "  and the lock is left free" || fail "  and the lock is left 
 out="$(CI_BUILD_LOCK="${lock}" CI_MIN_FREE_GB=0 CI_RECENT_RUN=1 in_checks 'step one true; step two echo second-ran' 2>&1)"
 [ $? -eq 0 ] && [[ "${out}" == *second-ran* ]] && pass "later steps take the lock and check again, then run" ||
   fail "later steps take the lock and check again, then run" "${out}"
+# The CPU tests give the real admission_resources_ok a fixed 1-minute load: a
+# cut() defined only in the test's own subshell answers its one read of
+# /proc/loadavg and passes every other call to the real cut, so the host's
+# load can't decide them. It ends with that subshell.
+load_fixture='cut() { if [ "$#" -eq 3 ] && [ "$1" = "-d " ] && [ "$2" = "-f1" ] && [ "$3" = /proc/loadavg ]; then printf "%s\n" "${fixture_load}"; else command cut "$@"; fi; }'
 # After the first step the load average counts this run's own work (CI_RECENT_RUN).
-out="$(CI_BUILD_LOCK="${lock}" CI_MIN_FREE_GB=0 CI_RECENT_RUN=1 in_checks 'unset CI_RECENT_RUN; step one true; echo "recent=${CI_RECENT_RUN:-}"' 2>&1)"
-[[ "${out}" == *"recent=1"* ]] && pass "after the first step, CI_RECENT_RUN is set" || fail "after the first step, CI_RECENT_RUN is set" "${out}"
+# The first step's check runs without it, on a quiet load.
+out="$(CI_BUILD_LOCK="${lock}" CI_MIN_FREE_GB=0 CI_RECENT_RUN=1 in_checks "${load_fixture}"'
+  fixture_load=0.00; unset CI_RECENT_RUN; step one true; echo "recent=${CI_RECENT_RUN:-}"' 2>&1)"
+status=$?
+[ "${status}" -eq 0 ] && [[ "${out}" == *"recent=1"* ]] && pass "after the first step, CI_RECENT_RUN is set" ||
+  fail "after the first step, CI_RECENT_RUN is set" "status ${status}, '${out}'"
 # Local first: another admitted build holds the lock; CI waits for it, then checks, then runs.
 hold 2
 start=$(date +%s.%N)
@@ -255,13 +264,23 @@ wait "${holder}"
   pass "local first: CI waits for an admitted build instead of leaving (${waited}s)" ||
   fail "local first: CI waits for an admitted build instead of leaving" "status ${status} after ${waited}s, '${out}'"
 # The CPU rule is the probe's old one: 1-minute load over 0.4 per thread, skipped when recent.
-cpu_says() { (. "${admit_src}"; unset CI_RECENT_RUN; admission_resources_ok 0 >/dev/null && echo ok || echo busy); }
-load="$(cut -d' ' -f1 /proc/loadavg)"; cores="$(nproc)"
-want="$(awk -v l="${load}" -v c="${cores}" 'BEGIN { print (l > c * 0.4) ? "busy" : "ok" }')"
-got="$(cpu_says)"
-[ "${got}" = "${want}" ] && pass "CPU check uses the old load-average rule (load ${load}, ${cores} threads: ${got})" ||
-  fail "CPU check uses the old load-average rule" "load ${load} on ${cores}: wanted ${want}, got ${got}"
-got="$(. "${admit_src}"; CI_RECENT_RUN=1 admission_resources_ok 0 && echo ok)"
+cpu_says() { # cpu_says <load> [recent]: what the real check says at that load
+  (
+    . "${admit_src}"
+    eval "${load_fixture}"
+    fixture_load="$1"
+    unset CI_RECENT_RUN
+    [ -z "${2:-}" ] || export CI_RECENT_RUN=1
+    admission_resources_ok 0 >/dev/null && echo ok || echo busy
+  )
+}
+cores="$(nproc)"
+quiet="$(awk -v c="${cores}" 'BEGIN { printf "%.2f", c * 0.4 }')"
+busy="$(awk -v c="${cores}" 'BEGIN { printf "%.2f", c * 0.4 + 0.01 }')"
+got="$(cpu_says 0.00) $(cpu_says "${quiet}") $(cpu_says "${busy}")"
+[ "${got}" = "ok ok busy" ] && pass "CPU check uses the old load-average rule (${cores} threads: 0.00 and ${quiet} ok, ${busy} busy)" ||
+  fail "CPU check uses the old load-average rule" "${cores} threads: 0.00, ${quiet}, ${busy} gave '${got}'"
+got="$(cpu_says "${busy}" recent)"
 [ "${got}" = ok ] && pass "  and skips it when CI_RECENT_RUN is set" || fail "  and skips it when CI_RECENT_RUN is set" "${got}"
 
 # 7. probe.sh: power and measured GPU use only on the laptop; no app detection.

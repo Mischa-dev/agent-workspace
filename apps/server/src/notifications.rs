@@ -494,7 +494,8 @@ async fn message_mentions(
     let rows = sqlx::query_as::<_, MentionRow>(
         r#"
         WITH message AS (
-            SELECT id, project_id, conversation_id, author_actor_id, content
+            SELECT id, project_id, conversation_id, author_actor_id, content,
+                   may_notify_everyone
             FROM messages
             WHERE id = $1 AND removed_at IS NULL
         ),
@@ -521,7 +522,10 @@ async fn message_mentions(
         everyone_allowed AS (
             SELECT actor_id FROM everyone
             WHERE (SELECT count(*) FROM everyone) <= $3
-               OR EXISTS (
+               -- Decided when it was sent or last edited, with the app's agent
+               -- limit then in force (messages.may_notify_everyone); older and
+               -- system messages fall back to the author's role.
+               OR COALESCE((SELECT may_notify_everyone FROM message), EXISTS (
                    SELECT 1
                    FROM message
                    JOIN project_memberships author
@@ -529,7 +533,8 @@ async fn message_mentions(
                     AND author.actor_id = message.author_actor_id
                     AND author.enabled
                    WHERE author.role IN ('owner', 'admin')
-               )
+                     AND custom_role_allows(author.role_id, 'channels.moderate')
+               ))
         )
         SELECT message.project_id, message.conversation_id, message.author_actor_id,
                recipient.actor_id AS recipient_actor_id
@@ -1001,6 +1006,7 @@ async fn run_notifications(
               ON membership.project_id = conversation.project_id
              AND membership.enabled
              AND membership.role IN ('owner', 'admin', 'member')
+             AND custom_role_allows(membership.role_id, 'runs.approve')
             WHERE approval.agent_run_id = $1
               AND approval.status = 'pending'
               AND (
@@ -1195,6 +1201,19 @@ const VISIBLE: &str = r#"
     actor_can_access_project($1, NULL, n.project_id)
     AND (n.conversation_id IS NULL OR conversation_visible_to(n.conversation_id, $1))
     AND (n.pull_request_id IS NULL OR pull_request_visible_to(n.pull_request_id, $1))
+    -- A task's or pull request's notification only while the recipient's
+    -- role there still lets them see tasks, or code. An app's agent limit
+    -- is applied to the listed rows (`hidden_by_limit`).
+    AND (n.work_item_id IS NULL OR EXISTS (
+        SELECT 1 FROM project_memberships sees_task
+        WHERE sees_task.project_id = n.project_id AND sees_task.actor_id = $1
+          AND sees_task.enabled AND custom_role_allows(sees_task.role_id, 'tasks.view')
+    ))
+    AND (n.pull_request_id IS NULL OR EXISTS (
+        SELECT 1 FROM project_memberships sees_code
+        WHERE sees_code.project_id = n.project_id AND sees_code.actor_id = $1
+          AND sees_code.enabled AND custom_role_allows(sees_code.role_id, 'code.view')
+    ))
     AND (n.subject_kind <> 'provider_account' OR EXISTS (
         SELECT 1 FROM provider_accounts account
         WHERE account.id = n.subject_id AND account.owner_actor_id = $1
@@ -1452,10 +1471,23 @@ pub async fn list(
     };
     let unread_count = unread_count(pool, viewer, filter.within.as_deref()).await?;
     Ok(NotificationPage {
-        notifications: rows.into_iter().map(view).collect(),
+        notifications: rows
+            .into_iter()
+            .filter(|row| !hidden_by_limit(viewer, row))
+            .map(view)
+            .collect(),
         next_cursor,
         unread_count,
     })
+}
+
+/// A task's or pull request's notification an app acting for `viewer` may
+/// not see: its agent limit leaves out "see tasks", or "see code", there.
+fn hidden_by_limit(viewer: Uuid, row: &NotificationRow) -> bool {
+    use crate::policy::{Permission, agent_limit_hides};
+    (row.work_item_id.is_some() && agent_limit_hides(viewer, row.project_id, Permission::TasksView))
+        || (row.pull_request_number.is_some()
+            && agent_limit_hides(viewer, row.project_id, Permission::CodeView))
 }
 
 /// The given notifications, if they are the viewer's and still visible.
@@ -1477,7 +1509,11 @@ pub async fn get_many(
         .bind(ids)
         .fetch_all(pool)
         .await?;
-    Ok(rows.into_iter().map(view).collect())
+    Ok(rows
+        .into_iter()
+        .filter(|row| !hidden_by_limit(viewer, row))
+        .map(view)
+        .collect())
 }
 
 fn parse_cursor(value: &str) -> Result<(i64, Uuid), AppError> {

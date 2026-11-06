@@ -318,6 +318,7 @@ pub(crate) async fn schedule(
     conversation_id: Uuid,
     content: serde_json::Value,
     send_at: &str,
+    through_app: bool,
 ) -> Result<ScheduledMessageView, AppError> {
     let send_at = parse_send_at(send_at)?;
     let mut transaction = state.pool.begin().await?;
@@ -340,8 +341,8 @@ pub(crate) async fn schedule(
         INSERT INTO scheduled_messages (
             id, organization_id, project_id, conversation_id, author_actor_id,
             external_agent_connection_id, via_oauth_grant_id, content, plain_text,
-            mentioned_actors, referenced_work_items, send_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            mentioned_actors, referenced_work_items, send_at, made_through_app
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         "#,
     )
     .bind(id)
@@ -359,6 +360,7 @@ pub(crate) async fn schedule(
     )
     .bind(&checked.referenced_work_items)
     .bind(send_at)
+    .bind(through_app)
     .execute(&mut *transaction)
     .await?;
     enqueue(&mut *transaction, checked.organization_id, id, send_at).await?;
@@ -402,6 +404,7 @@ pub(crate) async fn update(
     id: Uuid,
     content: Option<serde_json::Value>,
     send_at: Option<&str>,
+    through_app: bool,
 ) -> Result<ScheduledMessageView, AppError> {
     get_scheduled(&state.pool, actor.actor_id, id).await?;
     let send_at = send_at.map(parse_send_at).transpose()?;
@@ -433,7 +436,7 @@ pub(crate) async fn update(
             r#"
             UPDATE scheduled_messages
             SET content = $2, plain_text = $3, mentioned_actors = $4, referenced_work_items = $5,
-                updated_at = now()
+                made_through_app = made_through_app OR $6, updated_at = now()
             WHERE id = $1
             "#,
         )
@@ -445,6 +448,7 @@ pub(crate) async fn update(
                 .map_err(|_| AppError::Internal("mentions"))?,
         )
         .bind(&checked.referenced_work_items)
+        .bind(through_app)
         .execute(&mut *transaction)
         .await?;
         transaction.commit().await?;
@@ -455,7 +459,8 @@ pub(crate) async fn update(
         r#"
         UPDATE scheduled_messages
         SET content = $2, plain_text = $3, mentioned_actors = $4, referenced_work_items = $5,
-            send_at = $6, status = 'scheduled', failure = NULL, updated_at = now()
+            send_at = $6, status = 'scheduled', failure = NULL,
+            made_through_app = made_through_app OR $7, updated_at = now()
         WHERE id = $1
         "#,
     )
@@ -468,6 +473,7 @@ pub(crate) async fn update(
     )
     .bind(&checked.referenced_work_items)
     .bind(next)
+    .bind(through_app)
     .execute(&mut *transaction)
     .await?;
     if next != locked.send_at || locked.status != "scheduled" {
@@ -591,6 +597,7 @@ struct DueRow {
     author_kind: String,
     external_agent_connection_id: Option<Uuid>,
     via_oauth_grant_id: Option<Uuid>,
+    made_through_app: bool,
     content: serde_json::Value,
     send_at: DateTime<Utc>,
     status: String,
@@ -620,6 +627,7 @@ async fn send_due(state: &AppState, job: &SendJob, last_attempt: bool) -> Result
         SELECT scheduled.id, scheduled.organization_id, scheduled.conversation_id,
                scheduled.author_actor_id, actor.kind AS author_kind,
                scheduled.external_agent_connection_id, scheduled.via_oauth_grant_id,
+               scheduled.made_through_app,
                scheduled.content, scheduled.send_at, scheduled.status
         FROM scheduled_messages scheduled
         JOIN actors actor ON actor.id = scheduled.author_actor_id
@@ -646,9 +654,21 @@ async fn send_due(state: &AppState, job: &SendJob, last_attempt: bool) -> Result
         }
     };
     let key = IdempotencyKey::parse(&format!("scheduled-message-{}", row.id))?;
+    // A person's app or script scheduled it: it goes out within that app's
+    // agent limit as it is now, as the tool call that scheduled it did.
+    let limits = if row.made_through_app && row.author_kind == "human" {
+        let mut connection = state.pool.acquire().await?;
+        Some(
+            crate::roles::app_access(&mut connection, row.author_actor_id)
+                .await?
+                .limits,
+        )
+    } else {
+        None
+    };
     // The ordinary send, as the author now. The row stays locked meanwhile,
     // so a cancel or edit waits for the outcome.
-    match append_message_command(
+    let send = append_message_command(
         state,
         actor,
         row.conversation_id,
@@ -656,9 +676,12 @@ async fn send_due(state: &AppState, job: &SendJob, last_attempt: bool) -> Result
         key,
         row.content.clone(),
         None,
-    )
-    .await
-    {
+    );
+    let sent = match limits {
+        Some(limits) => crate::policy::with_agent_limits(limits, send).await,
+        None => send.await,
+    };
+    match sent {
         Ok(outcome) => {
             sqlx::query(
                 r#"
@@ -895,6 +918,7 @@ async fn schedule_http(
         conversation_id,
         request.content,
         &request.send_at,
+        false,
     )
     .await?;
     Ok((
@@ -924,6 +948,7 @@ async fn update_http(
         id,
         request.content,
         request.send_at.as_deref(),
+        false,
     )
     .await?;
     Ok(Json(ItemResponse { scheduled_message }))
