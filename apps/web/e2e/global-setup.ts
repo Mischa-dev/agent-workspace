@@ -79,6 +79,8 @@ export default async function globalSetup() {
     AGENT_WORKSPACE_WORKOS_CLIENT_ID: workOsStandIn.clientId,
     AGENT_WORKSPACE_WORKOS_API_KEY_PATH: workOsKeyPath,
     AGENT_WORKSPACE_WORKOS_API_BASE: workOs.origin,
+    // The UI tour seeds runs on the development-only demo harness.
+    ...(process.env.E2E_SEED === 'tour' ? { AGENT_WORKSPACE_DEMO_EXECUTOR: 'true' } : {}),
   }
 
   // A fresh throwaway password per run, handed over on stdin only.
@@ -103,7 +105,8 @@ export default async function globalSetup() {
   if (bootstrap.status !== 0) {
     await workOs.close()
     dropDatabase()
-    throw new Error(`bootstrap-admin failed (${bootstrap.status}):\n${bootstrap.stdout}\n${bootstrap.stderr}`)
+    // bootstrap.error says when python3 itself is missing.
+    throw new Error(`bootstrap-admin failed (${bootstrap.status}): ${bootstrap.error?.message ?? ''}\n${bootstrap.stdout}\n${bootstrap.stderr}`)
   }
 
   const log = createWriteStream(path.join(outputRoot, 'server.log'))
@@ -121,7 +124,7 @@ export default async function globalSetup() {
 
   try {
     await waitForHealth(server)
-    const seededIds = await seed(password)
+    const seededIds = await seed(password, `${databaseBase}/${databaseName}`)
     process.env.E2E_PASSWORD = password
     process.env.E2E_PROJECT_ID = seededIds.projectId
     process.env.E2E_CHANNEL_ID = seededIds.channelId
@@ -175,7 +178,7 @@ async function stop(server: ChildProcess) {
 }
 
 /** Signs in through the API, saves that session for the screenshot spec, and creates the Project. */
-async function seed(password: string) {
+async function seed(password: string, databaseUrl: string) {
   const api = await request.newContext({ baseURL: serverOrigin, extraHTTPHeaders: { origin: webOrigin } })
   try {
     await expectOk(api.post('/api/v1/auth/login', { data: { loginName: seeded.loginName, password } }), 'sign in')
@@ -210,6 +213,11 @@ async function seed(password: string) {
       { title: 'Seeded work item', description: '', priority: 'medium' },
       'create a work item',
     )
+    // The UI tour (playwright.tour.config.ts) adds a busy workspace on top.
+    if (process.env.E2E_SEED === 'tour') {
+      const { seedTour } = await import('./tour/seed')
+      await seedTour({ admin: api, organizationId, serverOrigin, webOrigin, databaseUrl })
+    }
 
     mkdirSync(path.dirname(storageStatePath), { recursive: true })
     await api.storageState({ path: storageStatePath })
