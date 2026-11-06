@@ -3625,6 +3625,143 @@ async fn comment_references_show_titles_only_with_see_tasks() {
     assert_ne!(reference["statusCategory"], "", "{posted}");
 }
 
+/// AI suggestions are about tasks, so seeing one takes "see tasks" in its
+/// project: someone whose role there keeps "edit tasks" but not "see
+/// tasks" can't list them there, and deciding a known one is refused as
+/// not found, without its task, value or reason. With "see tasks" both work.
+#[tokio::test]
+async fn ai_suggestions_need_see_tasks() {
+    let Some(setup) = setup("awd74_ai_suggestions").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let other = create_project(&setup, "ELSE", "Elsewhere").await;
+    let project = work.parse::<Uuid>().expect("project");
+    // Bea sees tasks in Elsewhere, so her app may use the suggestion tools.
+    let (bea, bea_browser) = add_person(&setup, &[&work, &other], "bea").await;
+    let first = owner_task(&setup, &work, "Suggested task").await;
+    let second = owner_task(&setup, &work, "Related task").await;
+    let suggestion = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO ai_suggestions (
+            id, organization_id, project_id, work_item_id, kind,
+            other_project_id, other_work_item_id, confidence, reason, sources,
+            pair_key, origin, provider, model, prompt_id, prompt_version
+        )
+        VALUES ($1, $2, $3, $4, 'relates_to', $3, $5, 0.7, 'Secret suggestion reason',
+                '[]'::jsonb, $6, 'analyze', 'fake', 'rules', 'dependency_judge', 1)
+        "#,
+    )
+    .bind(suggestion)
+    .bind(setup.organization_id)
+    .bind(project)
+    .bind(first)
+    .bind(second)
+    .bind(format!("awd74:{suggestion}"))
+    .execute(&setup.pool)
+    .await
+    .expect("suggestion");
+    let (status, editors) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Blind editors", "baseRole": "member", "permissions": ["tasks.edit"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{editors}");
+    let (status, changed) = set_project_role(
+        &setup,
+        &work,
+        bea,
+        "bea-blind",
+        json!({"roleId": editors["id"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
+    let session = initialize(app, &bea_app).await.expect("Bea's app");
+
+    // Without "see tasks" in Work: listing there is refused (it reads tasks),
+    // and deciding is refused as not found.
+    let listed = tool(
+        app,
+        &bea_app,
+        &session,
+        "ai_suggestions_list",
+        json!({"projectId": work}),
+    )
+    .await;
+    assert_ne!(listed["outcome"], "ok", "{listed}");
+    assert!(
+        !listed.to_string().contains("Secret suggestion reason"),
+        "{listed}"
+    );
+    let decided = tool(
+        app,
+        &bea_app,
+        &session,
+        "ai_suggestion_decide",
+        json!({"projectId": work, "suggestionId": suggestion, "decision": "dismiss"}),
+    )
+    .await;
+    assert_eq!(decided["outcome"], "not_found", "{decided}");
+    assert!(
+        !decided.to_string().contains("Secret suggestion reason")
+            && !decided.to_string().contains("Suggested task"),
+        "{decided}"
+    );
+    let still = sqlx::query_scalar::<_, String>("SELECT status FROM ai_suggestions WHERE id = $1")
+        .bind(suggestion)
+        .fetch_one(&setup.pool)
+        .await
+        .expect("suggestion status");
+    assert_eq!(still, "pending");
+
+    // With it: listed, and deciding returns the whole suggestion.
+    let (status, seeing) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Seeing editors", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{seeing}");
+    let (status, changed) = set_project_role(
+        &setup,
+        &work,
+        bea,
+        "bea-seeing",
+        json!({"roleId": seeing["id"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let listed = tool(
+        app,
+        &bea_app,
+        &session,
+        "ai_suggestions_list",
+        json!({"projectId": work}),
+    )
+    .await;
+    assert_eq!(
+        listed["value"]["suggestions"][0]["reason"], "Secret suggestion reason",
+        "{listed}"
+    );
+    let decided = tool(
+        app,
+        &bea_app,
+        &session,
+        "ai_suggestion_decide",
+        json!({"projectId": work, "suggestionId": suggestion, "decision": "dismiss"}),
+    )
+    .await;
+    assert_eq!(decided["outcome"], "ok", "{decided}");
+    assert_eq!(
+        decided["value"]["suggestion"]["reason"], "Secret suggestion reason",
+        "{decided}"
+    );
+}
+
 /// The custom role `actor` holds in `project`, if any.
 async fn project_role_id(setup: &Setup, project: &str, actor: Uuid) -> Option<Uuid> {
     sqlx::query_scalar::<_, Option<Uuid>>(
