@@ -1893,3 +1893,136 @@ async fn a_runs_task_and_code_follow_see_tasks_and_see_code() {
     assert_eq!(listed["outcome"], "ok", "{listed}");
     assert!(!listed.to_string().contains("secret-branch"), "{listed}");
 }
+
+/// A thread's run (opening the thread, and the run an interrupt answers
+/// with, which share conversations::hide_pull_request) shows its branch and
+/// its base and published commits only to someone who sees code in the
+/// project, with no pull request involved; the run itself stays (AWD-74).
+#[tokio::test]
+async fn a_threads_run_shows_its_branch_only_to_those_who_see_code() {
+    let Some((setup, seed, _temporary)) = seeded("mcp_code_thread_run").await else {
+        return;
+    };
+    let app = &setup.app;
+    let pool = &setup.pool;
+    let aw = seed.project_id.to_string();
+    let thread = thread(pool, &seed, seed.channel_id, "Branch work").await;
+    execute(
+        pool,
+        "UPDATE repositories SET preparation_state = 'ready', prepared_at = now(), trusted = true WHERE id = $1",
+        &[seed.repository_id],
+    )
+    .await;
+    let (run_id, workspace) = run(pool, &seed, thread, "hidden-branch").await;
+    // Working, so that an interrupt stops it.
+    for next in ["starting", "working"] {
+        sqlx::query("UPDATE agent_runs SET state = $2 WHERE id = $1")
+            .bind(run_id)
+            .bind(next)
+            .execute(pool)
+            .await
+            .unwrap_or_else(|error| panic!("run to {next}: {error}"));
+    }
+    let base = "b".repeat(40);
+    let published = "c".repeat(40);
+    sqlx::query("UPDATE repository_workspaces SET published_commit = $2 WHERE id = $1")
+        .bind(workspace)
+        .bind(&published)
+        .execute(pool)
+        .await
+        .expect("published commit");
+    let (bea, bea_browser) = add_person(&setup, &[&aw], "bea").await;
+    let timeline = format!("/api/v1/conversations/{thread}/timeline");
+    let open = |browser: &Browser| browser.request("GET", &timeline, None, Value::Null);
+    let interrupt = |browser: &Browser, key: &str| {
+        browser.request(
+            "POST",
+            &format!("/api/v1/agent-runs/{run_id}/interrupt"),
+            Some(key),
+            Value::Null,
+        )
+    };
+    let shows_code = |body: &Value| {
+        let text = body.to_string();
+        (
+            text.contains("hidden-branch"),
+            text.contains(&base),
+            text.contains(&published),
+        )
+    };
+
+    // As a plain Member, Bea sees the run's branch and commits.
+    let (status, seen) = send(app, open(&bea_browser)).await;
+    assert_eq!(status, StatusCode::OK, "{seen}");
+    assert!(seen.to_string().contains(&run_id.to_string()), "{seen}");
+    assert_eq!(shows_code(&seen), (true, true, true), "{seen}");
+
+    // A role that may stop runs but not see code.
+    let (status, role) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/organizations/{}/roles", setup.organization_id),
+            None,
+            json!({"name": "No code", "baseRole": "member", "permissions": ["tasks.view", "channels.post", "runs.interrupt"]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{role}");
+    let version: i64 = sqlx::query_scalar(
+        "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.project_id)
+    .bind(bea)
+    .fetch_one(pool)
+    .await
+    .expect("membership version");
+    let (status, changed) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            &format!("/api/v1/projects/{aw}/members/{bea}"),
+            Some("bea-no-code"),
+            json!({"roleId": role["id"], "expectedVersion": version}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+
+    // The thread's active run, the run her interrupt answers with, and the
+    // thread's latest finished run: no branch or commits.
+    let (status, active) = send(app, open(&bea_browser)).await;
+    assert_eq!(status, StatusCode::OK, "{active}");
+    assert!(active.to_string().contains(&run_id.to_string()), "{active}");
+    assert_eq!(shows_code(&active), (false, false, false), "{active}");
+    let (status, stopped) = send(app, interrupt(&bea_browser, "bea-interrupt")).await;
+    assert_eq!(status, StatusCode::OK, "{stopped}");
+    assert!(
+        stopped.to_string().contains(&run_id.to_string()),
+        "{stopped}"
+    );
+    assert_eq!(shows_code(&stopped), (false, false, false), "{stopped}");
+    let (status, finished) = send(app, open(&bea_browser)).await;
+    assert_eq!(status, StatusCode::OK, "{finished}");
+    assert!(
+        finished.to_string().contains(&run_id.to_string()),
+        "{finished}"
+    );
+    assert_eq!(shows_code(&finished), (false, false, false), "{finished}");
+
+    // The owner sees code: the same answers carry the branch and commits.
+    let (status, owner_stopped) = send(app, interrupt(&setup.browser, "owner-interrupt")).await;
+    assert_eq!(status, StatusCode::OK, "{owner_stopped}");
+    assert_eq!(
+        shows_code(&owner_stopped),
+        (true, true, true),
+        "{owner_stopped}"
+    );
+    let (status, owner_finished) = send(app, open(&setup.browser)).await;
+    assert_eq!(status, StatusCode::OK, "{owner_finished}");
+    assert_eq!(
+        shows_code(&owner_finished),
+        (true, true, true),
+        "{owner_finished}"
+    );
+}

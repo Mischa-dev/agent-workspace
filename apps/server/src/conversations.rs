@@ -4315,9 +4315,14 @@ fn timeline_entry_view(row: TimelineEntryRow) -> Result<TimelineEntryView, AppEr
     })
 }
 
-/// Leaves out a run's linked pull request, for a reader without "see code".
-/// The request to open one (its state) stays: it names no code.
+/// Leaves out a run's code, for a reader without "see code": its branch,
+/// base and published commits, and its linked pull request, as the run pages
+/// do (run_views::redact). The request to open one (its state) stays: it
+/// names no code.
 pub(crate) fn hide_pull_request(run: &mut RunRow) {
+    run.branch = None;
+    run.base_commit = None;
+    run.published_commit = None;
     run.pull_request_number = None;
     run.pull_request_id = None;
     run.pull_request_url = None;
@@ -4437,7 +4442,13 @@ async fn fetch_run_projection(
     .bind(conversation.id)
     .fetch_optional(&state.pool)
     .await?;
-    // The runs' linked pull requests only for a reader who sees code here.
+    // Whether the latest run published, for what may be done next, read
+    // before its code is left out below.
+    let latest_published = latest_terminal_run
+        .as_ref()
+        .is_some_and(|run| run.published_commit.is_some());
+    // The runs' code (branch, commits, linked pull request) only for a reader
+    // who sees code here.
     let (mut active_run, mut latest_terminal_run) = (active_run, latest_terminal_run);
     if crate::search::projects_allowing(
         &state.pool,
@@ -4561,7 +4572,7 @@ async fn fetch_run_projection(
             )
             .unwrap_or(false);
         let create_pull_request = active_run.is_none()
-            && run.published_commit.is_some()
+            && latest_published
             && run.pull_request_request_state.is_none()
             && state.config.github.is_some()
             && policy_allows(
