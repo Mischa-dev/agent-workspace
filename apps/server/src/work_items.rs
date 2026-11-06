@@ -800,6 +800,10 @@ struct WorkItemCapabilities {
     view: bool,
     edit: bool,
     archive: bool,
+    /// "See code": linked repositories and pull requests are shown only
+    /// with it. Not sent; the view leaves those sections empty without it.
+    #[serde(skip)]
+    code: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -3458,6 +3462,7 @@ fn capabilities(membership: &ProjectMembershipRow) -> Result<WorkItemCapabilitie
         view: membership.membership_enabled,
         edit: membership.may(Permission::TasksEdit)?,
         archive: membership.may(Permission::TasksDelete)?,
+        code: membership.may(Permission::CodeView)?,
     })
 }
 
@@ -3948,10 +3953,19 @@ fn work_item_view(
         .map_err(|_| AppError::Internal("invalid Work Item criteria projection"))?;
     let linked_threads = serde_json::from_value(row.linked_threads)
         .map_err(|_| AppError::Internal("invalid linked Thread projection"))?;
-    let linked_repositories = serde_json::from_value(row.linked_repositories)
-        .map_err(|_| AppError::Internal("invalid linked Repository projection"))?;
-    let linked_pull_requests = serde_json::from_value(row.linked_pull_requests)
-        .map_err(|_| AppError::Internal("invalid linked pull-request projection"))?;
+    // Linked code only for those whose role lets them see code here.
+    let linked_repositories = if capabilities.code {
+        serde_json::from_value(row.linked_repositories)
+            .map_err(|_| AppError::Internal("invalid linked Repository projection"))?
+    } else {
+        Vec::new()
+    };
+    let linked_pull_requests = if capabilities.code {
+        serde_json::from_value(row.linked_pull_requests)
+            .map_err(|_| AppError::Internal("invalid linked pull-request projection"))?
+    } else {
+        Vec::new()
+    };
     Ok(WorkItemView {
         id: row.id,
         project_id: row.project_id,

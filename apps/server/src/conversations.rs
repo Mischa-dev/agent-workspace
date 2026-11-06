@@ -1752,13 +1752,16 @@ pub(crate) async fn append_message_command_with(
     .await?;
 
     let message_id = Uuid::now_v7();
+    let notify_everyone =
+        may_notify_everyone(&mut *transaction, actor.actor_id, conversation.project_id).await?;
     sqlx::query(
         r#"
         INSERT INTO messages (
             id, project_id, conversation_id, author_actor_id,
-            content_version, content, plain_text, via_oauth_grant_id, forwarded_message_id
+            content_version, content, plain_text, via_oauth_grant_id, forwarded_message_id,
+            may_notify_everyone
         )
-        VALUES ($1, $2, $3, $4, 1, $5, $6, $7, $8)
+        VALUES ($1, $2, $3, $4, 1, $5, $6, $7, $8, $9)
         "#,
     )
     .bind(message_id)
@@ -1769,6 +1772,7 @@ pub(crate) async fn append_message_command_with(
     .bind(&plain_text)
     .bind(actor.via_grant_id)
     .bind(extras.forwarded_message_id)
+    .bind(notify_everyone)
     .execute(&mut *transaction)
     .await?;
     insert_message_projections(
@@ -4096,6 +4100,42 @@ where
     )
     .bind(project_id)
     .bind(viewer)
+    .fetch_one(executor)
+    .await?)
+}
+
+/// Whether a message `author` sends or edits now may notify everyone in a
+/// large conversation (`@everyone` past the small-audience allowance): an
+/// owner or admin whose role keeps "moderate channels", and, while an app
+/// acts for them, whose agent limit keeps it too. Stored on the message
+/// (`may_notify_everyone`), since the notifications are worked out later.
+pub(crate) async fn may_notify_everyone<'e, E>(
+    executor: E,
+    author: Uuid,
+    project_id: Uuid,
+) -> Result<bool, AppError>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    if crate::policy::agent_limit_hides(
+        author,
+        project_id,
+        crate::policy::Permission::ChannelsModerate,
+    ) {
+        return Ok(false);
+    }
+    Ok(sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM project_memberships
+            WHERE project_id = $1 AND actor_id = $2 AND enabled
+              AND role IN ('owner', 'admin')
+              AND custom_role_allows(role_id, 'channels.moderate')
+        )
+        "#,
+    )
+    .bind(project_id)
+    .bind(author)
     .fetch_one(executor)
     .await?)
 }

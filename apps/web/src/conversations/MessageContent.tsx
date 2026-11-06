@@ -3,14 +3,14 @@ import { Link } from 'react-router-dom'
 
 import { Markdown } from '../ui/markdown/Markdown'
 import { parseMessageContent } from './messageContentModel'
-import type { ConversationActor, ConversationWorkItemReference } from './types'
+import type { ConversationActor, ConversationWorkItemChip } from './types'
 import './messageMarkdown.css'
 
 type MessageContentProps = {
   actors: ConversationActor[]
   content: unknown
   fallbackPlainText: string
-  workItems?: ConversationWorkItemReference[]
+  workItems?: ConversationWorkItemChip[]
   /** Mentions of this actor are marked as mentions of you. */
   viewerId?: string
 }

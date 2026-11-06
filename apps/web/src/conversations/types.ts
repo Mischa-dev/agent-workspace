@@ -37,7 +37,7 @@ export type ConversationMessage = {
   content: MessageContentV1
   plainText: string
   mentionedActors: ConversationActor[]
-  referencedWorkItems: ConversationWorkItemReference[]
+  referencedWorkItems: ConversationWorkItemChip[]
   createdAt: string
   /** The connected app a person sent this through, such as Claude Code. */
   via: string | null
@@ -114,11 +114,19 @@ export type MessageRevisions = {
 export type ConversationWorkItemReference = {
   id: string
   key: string
-  /** Left out when the reader can't see tasks in its project; show the key. */
-  title?: string
-  statusCategory?: string
+  title: string
+  statusCategory: string
   archivedAt: string | null
   href: string
+}
+
+/**
+ * A task chip in a message or thread. The server leaves out the title and
+ * status for a reader who can't see tasks in its project; show the key then.
+ */
+export type ConversationWorkItemChip = Omit<ConversationWorkItemReference, 'title' | 'statusCategory'> & {
+  title?: string
+  statusCategory?: string
 }
 
 export type ConversationWorkerEvent = {
@@ -156,7 +164,7 @@ export type ConversationTimelinePage = {
     /** Threads: the kind of conversation it lives under. */
     parentKind: ConversationKind | null
   }
-  linkedWorkItems: ConversationWorkItemReference[]
+  linkedWorkItems: ConversationWorkItemChip[]
   entries: ConversationTimelineEntry[]
   nextCursor: string | null
   highestSequence: number

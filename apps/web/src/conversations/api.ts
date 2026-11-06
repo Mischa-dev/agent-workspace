@@ -13,7 +13,7 @@ import type {
   ConversationMessage,
   ConversationTimelineEntry,
   ConversationTimelinePage,
-  ConversationWorkItemReference,
+  ConversationWorkItemChip,
   MentionSearchPage,
   MessageContentV1,
   MessageReaction,
@@ -34,7 +34,7 @@ export {
 
 function normalizeWorkItemReference(
   value: unknown,
-): ConversationWorkItemReference | null {
+): ConversationWorkItemChip | null {
   const item = asRecord(value)
   if (
     typeof item.id !== 'string' ||
@@ -113,7 +113,7 @@ export function normalizeMessage(value: unknown): ConversationMessage | null {
       ? message.referencedWorkItems
           .map(normalizeWorkItemReference)
           .filter(
-            (item): item is ConversationWorkItemReference => item !== null,
+            (item): item is ConversationWorkItemChip => item !== null,
           )
       : [],
     reactions: normalizeReactions(message.reactions),
@@ -254,7 +254,7 @@ export function normalizeTimelinePage(value: unknown): ConversationTimelinePage 
     linkedWorkItems: Array.isArray(root.linkedWorkItems)
       ? root.linkedWorkItems
           .map(normalizeWorkItemReference)
-          .filter((item): item is ConversationWorkItemReference => item !== null)
+          .filter((item): item is ConversationWorkItemChip => item !== null)
       : [],
     entries,
     nextCursor: nullableString(root.nextCursor),

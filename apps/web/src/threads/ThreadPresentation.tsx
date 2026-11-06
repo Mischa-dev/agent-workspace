@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 
-import type { ConversationWorkItemReference } from '../conversations/types'
+import type { ConversationWorkItemChip } from '../conversations/types'
 import { runSettingsFrom } from '../execution/api'
 import { Avatar, Button, Icon, IconButton, StatusChip, TextArea, formatFullDate, formatRelative, type ChipTone, type IconName } from '../ui'
 import { RUN_STATUS } from '../runs/runModel'
@@ -250,7 +250,7 @@ export function ThreadDetails({
   projectName: string
   run: Run | null
   unlinking: boolean
-  workItems: ConversationWorkItemReference[]
+  workItems: ConversationWorkItemChip[]
 }) {
   const rows: [string, ReactNode][] = [
     ['Project', projectName],

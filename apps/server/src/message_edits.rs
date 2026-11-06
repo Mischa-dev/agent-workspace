@@ -491,10 +491,19 @@ pub(crate) async fn apply_edit(
     .bind(actor.via_grant_id)
     .execute(&mut **transaction)
     .await?;
+    // An edit can add @everyone: whether it may reach everyone is decided
+    // again, as the editor now (their app's agent limit included).
+    let notify_everyone = crate::conversations::may_notify_everyone(
+        &mut **transaction,
+        actor.actor_id,
+        locked.project_id,
+    )
+    .await?;
     let updated = sqlx::query(
         r#"
         UPDATE messages
-        SET content = $3, plain_text = $4, revision = revision + 1, edited_at = now()
+        SET content = $3, plain_text = $4, revision = revision + 1, edited_at = now(),
+            may_notify_everyone = $5
         WHERE id = $1 AND revision = $2 AND removed_at IS NULL
         "#,
     )
@@ -502,6 +511,7 @@ pub(crate) async fn apply_edit(
     .bind(locked.revision)
     .bind(&content_json)
     .bind(&plain_text)
+    .bind(notify_everyone)
     .execute(&mut **transaction)
     .await?;
     if updated.rows_affected() != 1 {

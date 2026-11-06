@@ -2097,3 +2097,145 @@ async fn task_chips_name_the_task_only_for_readers_who_see_tasks() {
     let chips = timeline_chips(&setup, &cal_browser, &channel).await;
     assert_eq!(chips[0]["title"], "Secret roadmap", "{chips:?}");
 }
+
+/// A task's linked repositories and pull requests come with it only for a
+/// reader whose role (and app limit) keeps "see code"; the task itself
+/// stays, in the browser and over MCP.
+#[tokio::test]
+async fn a_tasks_linked_code_needs_see_code() {
+    let Some(setup) = setup("awd74_task_code").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let project = work.parse::<Uuid>().expect("project");
+    let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
+    let task = owner_task(&setup, &work, "Linked to code").await;
+    let repository = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO repositories (
+            id, project_id, github_repository_id, owner, name, clone_url,
+            default_branch, mirror_path, trusted, preparation_state, prepared_at
+        ) VALUES ($1, $2, 434343, 'Mischa-dev', 'task-code',
+                  'https://github.com/Mischa-dev/task-code.git',
+                  'main', $3, true, 'ready', now())
+        "#,
+    )
+    .bind(repository)
+    .bind(project)
+    .bind(format!("/tmp/agent-workspace-test-{repository}.git"))
+    .execute(&setup.pool)
+    .await
+    .expect("repository");
+    sqlx::query(
+        r#"
+        INSERT INTO work_item_repository_links
+            (project_id, work_item_id, repository_id, role, created_by_actor_id)
+        VALUES ($1, $2, $3, 'primary', $4)
+        "#,
+    )
+    .bind(project)
+    .bind(task)
+    .bind(repository)
+    .bind(bea)
+    .execute(&setup.pool)
+    .await
+    .expect("link the repository");
+    let count = |value: &Value| value.as_array().map_or(0, Vec::len);
+    let browser_task = |browser: &Browser| {
+        browser.request(
+            "GET",
+            &format!("/api/v1/projects/{work}/work-items/{task}"),
+            None,
+            Value::Null,
+        )
+    };
+
+    let (status, item) = send(app, browser_task(&bea_browser)).await;
+    assert_eq!(status, StatusCode::OK, "{item}");
+    assert_eq!(count(&item["linkedRepositories"]), 1, "{item}");
+    let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
+    let session = initialize(app, &bea_app).await.expect("Bea's app");
+    let opened = tool(
+        app,
+        &bea_app,
+        &session,
+        "task_open",
+        json!({"taskId": task}),
+    )
+    .await;
+    assert_eq!(opened["outcome"], "ok", "{opened}");
+    assert_eq!(
+        count(&opened["value"]["task"]["linkedRepositories"]),
+        1,
+        "{opened}"
+    );
+
+    // Her app's limit leaves out "see code": the task, without its code.
+    let (status, limit) = send(
+        app,
+        setup.browser.request(
+            "PUT",
+            &format!(
+                "/api/v1/organizations/{}/members/{bea}/agent-limit",
+                setup.organization_id
+            ),
+            None,
+            json!({"permissions": ["tasks.view"]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{limit}");
+    let opened = tool(
+        app,
+        &bea_app,
+        &session,
+        "task_open",
+        json!({"taskId": task}),
+    )
+    .await;
+    assert_eq!(opened["outcome"], "ok", "{opened}");
+    assert_eq!(
+        opened["value"]["task"]["title"], "Linked to code",
+        "{opened}"
+    );
+    assert_eq!(
+        count(&opened["value"]["task"]["linkedRepositories"]),
+        0,
+        "{opened}"
+    );
+    assert!(!opened.to_string().contains("task-code.git"), "{opened}");
+
+    // A role without "see code" gets the same in the browser.
+    let (status, tasks_only) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Tasks only", "baseRole": "viewer", "permissions": ["tasks.view"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{tasks_only}");
+    let version = sqlx::query_scalar::<_, i64>(
+        "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project)
+    .bind(bea)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("version");
+    let (status, changed) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            &format!("/api/v1/projects/{work}/members/{bea}"),
+            Some("bea-tasks-only"),
+            json!({"expectedVersion": version, "roleId": tasks_only["id"]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let (status, item) = send(app, browser_task(&bea_browser)).await;
+    assert_eq!(status, StatusCode::OK, "{item}");
+    assert_eq!(item["title"], "Linked to code", "{item}");
+    assert_eq!(count(&item["linkedRepositories"]), 0, "{item}");
+}

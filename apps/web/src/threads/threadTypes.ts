@@ -2,7 +2,7 @@ import type {
   ConversationCapabilities,
   ConversationTimelineEntry,
   ConversationTimelinePage,
-  ConversationWorkItemReference,
+  ConversationWorkItemChip,
 } from '../conversations/types'
 
 export type RunState =
@@ -75,7 +75,7 @@ export type Approval = {
 
 export type Timeline = {
   conversation: ConversationTimelinePage['conversation']
-  linkedWorkItems: ConversationWorkItemReference[]
+  linkedWorkItems: ConversationWorkItemChip[]
   entries: ConversationTimelineEntry[]
   nextCursor: string | null
   highestSequence: number

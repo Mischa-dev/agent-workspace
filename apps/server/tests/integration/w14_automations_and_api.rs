@@ -932,6 +932,108 @@ async fn api_webhooks_and_automations_act_for_their_maker_only() {
     .await
     .expect("lift the limit a third time");
 
+    // @everyone in a channel of more than 50 people reaches everyone only
+    // if its author may moderate, the script's agent limit included, as it
+    // stood when the message was sent (AWD-74).
+    for index in 0..52 {
+        let person = Uuid::now_v7();
+        let handle = format!("crowd-{index}");
+        sqlx::query("INSERT INTO actors (id, kind, status) VALUES ($1, 'human', 'active')")
+            .bind(person)
+            .execute(&pool)
+            .await
+            .expect("crowd actor");
+        sqlx::query(
+            "INSERT INTO organization_memberships (organization_id, actor_id, role) VALUES ($1, $2, 'member')",
+        )
+        .bind(seed.organization_id)
+        .bind(person)
+        .execute(&pool)
+        .await
+        .expect("crowd workspace membership");
+        sqlx::query(
+            r#"
+            INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle)
+            VALUES ($1, $2, $3, 'member', $4, $4)
+            "#,
+        )
+        .bind(Uuid::now_v7())
+        .bind(seed.project_id)
+        .bind(person)
+        .bind(&handle)
+        .execute(&pool)
+        .await
+        .expect("crowd project membership");
+    }
+    let notified = |pool: PgPool, message: String| async move {
+        sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT count(*) FROM notifications
+            WHERE message_id = $1::uuid AND recipient_actor_id IN (
+                SELECT actor_id FROM project_memberships WHERE handle LIKE 'crowd-%'
+            )
+            "#,
+        )
+        .bind(message)
+        .fetch_one(&pool)
+        .await
+        .expect("count notifications")
+    };
+    sqlx::query(
+        "UPDATE organization_memberships SET agent_limit = ARRAY['channels.post', 'tasks.view'] WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.organization_id)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("the owner's apps no longer moderate");
+    let limited = bearer(
+        &application,
+        Some(&token),
+        "POST",
+        "/api/public/v1/message_send",
+        json!({"conversationId": seed.channel_id, "text": "@everyone from the script, limited", "clientRequestId": "shout-limited"}),
+    )
+    .await;
+    assert_eq!(limited.2["outcome"], "ok", "{}", limited.1);
+    let limited_id = limited.2["value"]["messageId"]
+        .as_str()
+        .expect("message id")
+        .to_owned();
+    sqlx::query(
+        "UPDATE organization_memberships SET agent_limit = NULL WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.organization_id)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("lift the limit a fourth time");
+    // Lifting the limit afterwards doesn't widen a message already sent.
+    pump(&state).await;
+    assert_eq!(
+        notified(pool.clone(), limited_id).await,
+        0,
+        "@everyone reached everyone beyond the script's limit"
+    );
+    let open = bearer(
+        &application,
+        Some(&token),
+        "POST",
+        "/api/public/v1/message_send",
+        json!({"conversationId": seed.channel_id, "text": "@everyone from the script, unlimited", "clientRequestId": "shout-open"}),
+    )
+    .await;
+    assert_eq!(open.2["outcome"], "ok", "{}", open.1);
+    let open_id = open.2["value"]["messageId"]
+        .as_str()
+        .expect("message id")
+        .to_owned();
+    pump(&state).await;
+    assert!(
+        notified(pool.clone(), open_id).await == 52,
+        "the owner's @everyone reaches everyone"
+    );
+
     // ---------------------------------------------------------------------
     // A rule whose maker lost the project turns off instead of acting.
     let members_rule = send(

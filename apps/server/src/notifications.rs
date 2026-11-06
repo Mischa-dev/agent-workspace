@@ -494,7 +494,8 @@ async fn message_mentions(
     let rows = sqlx::query_as::<_, MentionRow>(
         r#"
         WITH message AS (
-            SELECT id, project_id, conversation_id, author_actor_id, content
+            SELECT id, project_id, conversation_id, author_actor_id, content,
+                   may_notify_everyone
             FROM messages
             WHERE id = $1 AND removed_at IS NULL
         ),
@@ -521,7 +522,10 @@ async fn message_mentions(
         everyone_allowed AS (
             SELECT actor_id FROM everyone
             WHERE (SELECT count(*) FROM everyone) <= $3
-               OR EXISTS (
+               -- Decided when it was sent or last edited, with the app's agent
+               -- limit then in force (messages.may_notify_everyone); older and
+               -- system messages fall back to the author's role.
+               OR COALESCE((SELECT may_notify_everyone FROM message), EXISTS (
                    SELECT 1
                    FROM message
                    JOIN project_memberships author
@@ -530,7 +534,7 @@ async fn message_mentions(
                     AND author.enabled
                    WHERE author.role IN ('owner', 'admin')
                      AND custom_role_allows(author.role_id, 'channels.moderate')
-               )
+               ))
         )
         SELECT message.project_id, message.conversation_id, message.author_actor_id,
                recipient.actor_id AS recipient_actor_id
