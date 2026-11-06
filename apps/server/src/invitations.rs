@@ -1271,8 +1271,8 @@ async fn require_issuer_still_grants(
     connection: &mut PgConnection,
     invitation: &InvitationAcceptanceRow,
 ) -> Result<(), AppError> {
-    if crate::roles::issuer_still_grants(
-        connection,
+    if !crate::roles::issuer_still_grants(
+        &mut *connection,
         invitation.organization_id,
         invitation.issued_by_actor_id,
         &invitation.role,
@@ -1280,10 +1280,41 @@ async fn require_issuer_still_grants(
     )
     .await?
     {
-        Ok(())
-    } else {
-        Err(AppError::NotFound("project_invitation"))
+        return Err(AppError::NotFound("project_invitation"));
     }
+    // And they may still manage invitations in this project: their project
+    // role may have narrowed while their workspace role didn't.
+    let access = sqlx::query_as::<_, InvitationAccess>(
+        r#"
+        SELECT project.organization_id,
+               project.archived_at IS NOT NULL AS project_archived,
+               organization_membership.role AS organization_role,
+               organization_membership.enabled AS organization_membership_enabled,
+               project_membership.role AS project_role,
+               workspace_role_permissions(project_membership.role_id) AS project_role_permissions,
+               project_membership.enabled AS project_membership_enabled
+        FROM projects project
+        JOIN organization_memberships organization_membership
+          ON organization_membership.organization_id = project.organization_id
+         AND organization_membership.actor_id = $2
+        JOIN project_memberships project_membership
+          ON project_membership.project_id = project.id
+         AND project_membership.actor_id = $2
+        WHERE project.id = $1
+        "#,
+    )
+    .bind(invitation.project_id)
+    .bind(invitation.issued_by_actor_id)
+    .fetch_optional(&mut *connection)
+    .await?
+    .ok_or(AppError::NotFound("project_invitation"))?;
+    authorize_manage(
+        invitation.issued_by_actor_id,
+        invitation.project_id,
+        &access,
+        Some(&invitation.role),
+    )
+    .map_err(|_| AppError::NotFound("project_invitation"))
 }
 
 #[cfg(test)]

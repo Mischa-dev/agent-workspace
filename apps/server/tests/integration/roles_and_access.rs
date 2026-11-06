@@ -2540,3 +2540,89 @@ async fn a_custom_admin_invitation_does_not_make_a_workspace_admin() {
     assert!(status.is_success(), "{status}: {accepted}");
     assert_eq!(workspace_role(&setup, bea).await, "member");
 }
+
+/// A project invitation holds only while its issuer may still manage
+/// invitations in that project: an issuer who stays a workspace admin but
+/// whose project role loses "invite people" can't have their pending
+/// invitation opened or accepted.
+#[tokio::test]
+async fn a_project_invitation_lapses_when_its_issuer_loses_invite_in_the_project() {
+    let Some(setup) = setup("awd74_issuer_project").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let project = work.parse::<Uuid>().expect("project");
+    let (alex, alex_browser) = add_person(&setup, &[&work], "alex").await;
+    let (_, bea_browser) = add_person(&setup, &[], "bea").await;
+    make_admin(&setup, alex).await;
+    sqlx::query(
+        "UPDATE project_memberships SET role = 'admin' WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project)
+    .bind(alex)
+    .execute(&setup.pool)
+    .await
+    .expect("alex is a project admin");
+    let (status, issued) = send(
+        app,
+        alex_browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/invitations"),
+            None,
+            json!({"role": "member", "expiresInHours": 24}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{issued}");
+    let token = invitation_token(&issued);
+    let resolve = |token: &str| {
+        setup.browser.request(
+            "POST",
+            "/api/v1/project-invitations/resolve",
+            None,
+            json!({"token": token}),
+        )
+    };
+    let (status, resolved) = send(app, resolve(&token)).await;
+    assert_eq!(status, StatusCode::OK, "{resolved}");
+
+    // Alex stays a workspace admin, but in the project loses "invite people".
+    let (status, narrowed) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "No inviting", "baseRole": "admin", "permissions": ["members.manage", "members.view", "tasks.view"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{narrowed}");
+    sqlx::query(
+        "UPDATE project_memberships SET role_id = $3 WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project)
+    .bind(alex)
+    .bind(
+        narrowed["id"]
+            .as_str()
+            .expect("id")
+            .parse::<Uuid>()
+            .expect("UUID"),
+    )
+    .execute(&setup.pool)
+    .await
+    .expect("narrow alex in the project");
+    assert_eq!(workspace_role(&setup, alex).await, "admin");
+
+    let (status, refused) = send(app, resolve(&token)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{refused}");
+    let (status, refused) = send(
+        app,
+        bea_browser.request(
+            "POST",
+            "/api/v1/project-invitations/accept-existing",
+            None,
+            json!({"token": token, "handle": "bea"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{refused}");
+}
