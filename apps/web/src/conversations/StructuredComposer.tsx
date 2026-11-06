@@ -545,6 +545,9 @@ function ComposerBox({
 
   const schedule = async (at: Date) => {
     if (!content || !onSchedule || scheduling) return
+    // A scheduled message can't carry a reply yet: say so rather than drop
+    // the quote (and leave the reply waiting for the next message).
+    if (replyTo) throw new Error('Replies can’t be scheduled yet.')
     if (isPast(at)) throw new Error('That time has passed.')
     // Busy while it schedules, so Enter can't send the same text as well.
     setScheduling(true)
@@ -984,9 +987,15 @@ function ComposerBox({
                 placement="bottom-end"
                 trigger={
                   <IconButton
-                    disabled={!canSend || busy || uploads.items.length > 0 || Boolean(matchSlashCommand(text, commands))}
+                    disabled={!canSend || busy || uploads.items.length > 0 || Boolean(replyTo) || Boolean(matchSlashCommand(text, commands))}
                     icon="clock"
-                    label={uploads.items.length > 0 ? 'Files can’t be scheduled yet' : 'Schedule message'}
+                    label={
+                      uploads.items.length > 0
+                        ? 'Files can’t be scheduled yet'
+                        : replyTo
+                          ? 'Replies can’t be scheduled yet'
+                          : 'Schedule message'
+                    }
                     size="sm"
                   />
                 }

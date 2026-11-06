@@ -123,6 +123,23 @@ describe('StructuredComposer', () => {
     expect(screen.queryByRole('button', { name: /Replying to/ })).not.toBeInTheDocument()
   })
 
+  it('doesn’t schedule a reply, which would drop its quote', () => {
+    const onSchedule = vi.fn().mockResolvedValue(undefined)
+    const target = { messageId: '019fb8b0-0000-7000-8000-0000000000a1', authorName: 'Wren', text: 'Can we ship Friday?' }
+    const view = (replyTo: typeof target | null) => (
+      <StructuredComposer onReplyChange={vi.fn()} onSchedule={onSchedule} onSubmit={vi.fn()} replyTo={replyTo} searchActors={vi.fn()} />
+    )
+    const { rerender } = render(view(target))
+    type('Yes')
+    expect(screen.getByRole('button', { name: 'Replies can’t be scheduled yet' })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Schedule message' })).not.toBeInTheDocument()
+
+    // Not replying any more: scheduling is back.
+    rerender(view(null))
+    expect(screen.getByRole('button', { name: 'Schedule message' })).toBeEnabled()
+    expect(onSchedule).not.toHaveBeenCalled()
+  })
+
   it('keeps the draft through a reload and sends what failed offline once the connection is back', async () => {
     // The composer retries a queued send straight away, so every send fails
     // until the connection is back; otherwise the queue can empty before the

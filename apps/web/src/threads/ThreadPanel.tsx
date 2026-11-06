@@ -8,6 +8,7 @@ import { useAutoMarkSeen } from '../conversations/useAutoMarkSeen'
 import { useMessageActions } from '../conversations/MessageActions'
 import { useReplyTarget } from '../conversations/replyTarget'
 import { OriginMessage } from '../conversations/OriginMessage'
+import { RevealInThread } from '../conversations/quotedMessage'
 import { ReplyStatusList } from '../conversations/ReplyStatus'
 import { groupReplyRequests } from '../conversations/replyStatusModel'
 import { StructuredComposer } from '../conversations/StructuredComposer'
@@ -32,6 +33,7 @@ import { ApprovalCard, RunBadge } from './ThreadPresentation'
 import { runAgent } from './runAgent'
 import { normalizeTimeline, useThread } from './threadTimeline'
 import { useThreadRunActions } from './useThreadRunActions'
+import { useRevealInThread } from './useRevealInThread'
 
 const NO_ENTRIES: ConversationTimelineEntry[] = []
 
@@ -93,6 +95,15 @@ export function ThreadPanel({
     },
   })
   const entries = older.entries
+  // A reply's quote whose original is further up the thread (`RevealInThread`).
+  const revealInThread = useRevealInThread({
+    threadId,
+    cursor: older.cursor,
+    error: older.error,
+    loading: older.loading,
+    loadOlder: older.loadOlder,
+    olderCount: older.olderCount,
+  })
   const unread = useFirstUnread({
     conversationId: threadId,
     entries,
@@ -236,22 +247,24 @@ export function ThreadPanel({
             {older.error}
           </Banner>
         ) : null}
-        <TimelineEntries
-          agentName={(runId) => runAgent([activeRun, latestTerminalRun].find((run) => run?.id === runId)).name}
-          conversationId={threadId}
-          entries={entries}
-          firstUnreadSequence={unread.firstUnreadSequence}
-          onOpenHistory={messageActions.openHistory}
-          renderEditor={messageActions.editorFor}
-          renderExtras={(entry) =>
-            entry.message && !entry.message.removed ? (
-              <ReplyStatusList onRetry={retryAgent} onStop={stopAgent} requests={requestsByMessage.get(entry.message.id) ?? []} />
-            ) : null
-          }
-          renderReactions={messageActions.reactionsFor}
-          renderToolbar={messageActions.toolbarFor}
-          viewerId={viewer.actorId}
-        />
+        <RevealInThread.Provider value={revealInThread}>
+          <TimelineEntries
+            agentName={(runId) => runAgent([activeRun, latestTerminalRun].find((run) => run?.id === runId)).name}
+            conversationId={threadId}
+            entries={entries}
+            firstUnreadSequence={unread.firstUnreadSequence}
+            onOpenHistory={messageActions.openHistory}
+            renderEditor={messageActions.editorFor}
+            renderExtras={(entry) =>
+              entry.message && !entry.message.removed ? (
+                <ReplyStatusList onRetry={retryAgent} onStop={stopAgent} requests={requestsByMessage.get(entry.message.id) ?? []} />
+              ) : null
+            }
+            renderReactions={messageActions.reactionsFor}
+            renderToolbar={messageActions.toolbarFor}
+            viewerId={viewer.actorId}
+          />
+        </RevealInThread.Provider>
         <PendingMessages entries={entries} items={sender.pending} viewer={viewer} />
         {streaming.map(([messageId, text]) => (
           <StreamingMessageRow key={messageId} name={writer.name} seed={writer.seed} text={text} />

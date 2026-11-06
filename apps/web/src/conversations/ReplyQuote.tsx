@@ -1,8 +1,8 @@
-import type { MouseEvent } from 'react'
+import { useContext, type MouseEvent } from 'react'
 import { Reply } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
-import { readForwarded, revealMessage } from './quotedMessage'
+import { RevealInThread, readForwarded, revealMessage } from './quotedMessage'
 import type { ReplyTarget } from './types'
 import { Icon } from '../ui'
 
@@ -10,10 +10,12 @@ import { Icon } from '../ui'
  * The message a reply answers, read live for you: its author and its first
  * lines, above the reply. Choosing it jumps to the original: it scrolls there
  * when it's on the page, and otherwise follows the original's link, which
- * loads earlier messages until it's found. Replies only quote their own
+ * loads earlier messages until it's found (in a thread open beside its
+ * conversation, earlier messages of the thread). Replies only quote their own
  * conversation, and the server still leaves out anything you can't see.
  */
 export function ReplyQuote({ value }: { value: unknown }) {
+  const revealInThread = useContext(RevealInThread)
   const quoted = readForwarded(value)
   if (!quoted) return null
   if (!quoted.available) {
@@ -26,7 +28,12 @@ export function ReplyQuote({ value }: { value: unknown }) {
   }
   const author = quoted.authorName ?? 'someone'
   const jump = (event: MouseEvent) => {
-    if (revealMessage(quoted.messageId)) event.preventDefault()
+    if (revealMessage(quoted.messageId)) {
+      event.preventDefault()
+    } else if (revealInThread) {
+      event.preventDefault()
+      revealInThread(quoted.messageId)
+    }
   }
   const body = (
     <>

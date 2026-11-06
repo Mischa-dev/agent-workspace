@@ -1,3 +1,5 @@
+import { createContext } from 'react'
+
 import { isSafeMessageText } from './messageContentModel'
 import type { ForwardedMessage } from './types'
 
@@ -33,3 +35,10 @@ export function revealMessage(messageId: string) {
   window.setTimeout(() => element.classList.remove('is-linked'), 2600)
   return true
 }
+
+/**
+ * Set by a thread open beside its conversation: finds a message in the
+ * thread, loading earlier pages until it's there, instead of following the
+ * original's link, which would close the thread.
+ */
+export const RevealInThread = createContext<((messageId: string) => void) | null>(null)
