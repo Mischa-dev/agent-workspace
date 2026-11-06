@@ -2704,3 +2704,34 @@ async fn linked_tasks_in_another_project_follow_see_tasks_there() {
     assert_eq!(opened["outcome"], "ok", "{opened}");
     assert!(!opened.to_string().contains("Hidden blocker"), "{opened}");
 }
+
+/// The built-in Viewer can't become the workspace's default role: a
+/// workspace has no plain Viewer, and invitations couldn't honour it. The
+/// previous default stays.
+#[tokio::test]
+async fn the_built_in_viewer_cannot_be_the_workspace_default() {
+    let Some(setup) = setup("awd74_viewer_default").await else {
+        return;
+    };
+    let listed = roles(&setup, &setup.browser).await;
+    assert_eq!(role(&listed, "member")["isDefault"], true);
+    let viewer = role(&listed, "viewer");
+    let (status, refused) = send(
+        &setup.app,
+        setup.browser.request(
+            "PATCH",
+            &format!(
+                "{}/{}",
+                roles_path(&setup),
+                viewer["id"].as_str().expect("id")
+            ),
+            None,
+            json!({"expectedVersion": viewer["version"], "isDefault": true}),
+        ),
+    )
+    .await;
+    assert!(!status.is_success(), "{status}: {refused}");
+    let listed = roles(&setup, &setup.browser).await;
+    assert_eq!(role(&listed, "member")["isDefault"], true, "{listed}");
+    assert_eq!(role(&listed, "viewer")["isDefault"], false, "{listed}");
+}

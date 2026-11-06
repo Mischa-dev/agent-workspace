@@ -1170,6 +1170,14 @@ pub(crate) async fn change(
                 message: "New members can't start as an owner or admin.",
             });
         }
+        // A workspace has no plain Viewer role (assign refuses it there too),
+        // and invitations couldn't honour it.
+        if before.built_in && base == MembershipRole::Viewer {
+            return Err(AppError::Refused {
+                field: "isDefault",
+                message: "Viewer is for projects. For new members of the workspace, use a role based on Viewer, such as Read only.",
+            });
+        }
         clear_default(transaction, organization_id).await?;
     } else if !is_default && before.is_default {
         return Err(AppError::Refused {
