@@ -123,7 +123,11 @@ out="$(run 'fetch_pinned_node; echo "status=$?"' 2>&1)"
 # An archive that doesn't match its checksum is refused.
 rm -rf "${cache}"
 cp "${fixtures}/SHASUMS256.txt" "${tmp}/SHASUMS256.good"
-sed -i 's/^./0/' "${fixtures}/SHASUMS256.txt"
+# Always another first hex digit: 0 becomes 1, anything else 0.
+sed -i -E 's/^0/x/; s/^[1-9a-f]/0/; s/^x/1/' "${fixtures}/SHASUMS256.txt"
+if cmp -s "${tmp}/SHASUMS256.good" "${fixtures}/SHASUMS256.txt"; then
+  fail "checksum" "the fixture's SHA-256 list didn't change"
+fi
 out="$(run 'fetch_pinned_node; echo "status=$?"' 2>&1)"
 cp "${tmp}/SHASUMS256.good" "${fixtures}/SHASUMS256.txt"
 [[ "${out}" == *"status=1"* ]] && [ ! -e "${pin_dir}" ] &&
