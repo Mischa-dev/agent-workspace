@@ -1941,7 +1941,7 @@ async fn interrupt_agent_run(
                 ));
             }
             transaction.commit().await?;
-            return fetch_run(&state, run_id, context.project_id)
+            return fetch_run(&state, run_id, context.project_id, principal.actor_id)
                 .await
                 .map(Json);
         }
@@ -1967,7 +1967,7 @@ async fn interrupt_agent_run(
         )
         .await?;
         transaction.commit().await?;
-        return fetch_run(&state, run_id, context.project_id)
+        return fetch_run(&state, run_id, context.project_id, principal.actor_id)
             .await
             .map(Json);
     }
@@ -2013,7 +2013,7 @@ async fn interrupt_agent_run(
     )
     .await?;
     transaction.commit().await?;
-    fetch_run(&state, run_id, context.project_id)
+    fetch_run(&state, run_id, context.project_id, principal.actor_id)
         .await
         .map(Json)
 }
@@ -2086,8 +2086,13 @@ pub(crate) async fn insert_event_entry(
     Ok(())
 }
 
-async fn fetch_run(state: &AppState, run_id: Uuid, project_id: Uuid) -> Result<RunView, AppError> {
-    let run = sqlx::query_as::<_, RunRow>(
+async fn fetch_run(
+    state: &AppState,
+    run_id: Uuid,
+    project_id: Uuid,
+    viewer: Uuid,
+) -> Result<RunView, AppError> {
+    let mut run = sqlx::query_as::<_, RunRow>(
         r#"
         SELECT
             ar.id,
@@ -2143,6 +2148,18 @@ async fn fetch_run(state: &AppState, run_id: Uuid, project_id: Uuid) -> Result<R
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound("agent_run"))?;
+    // The linked pull request only for someone who sees code here.
+    if crate::search::projects_allowing(
+        &state.pool,
+        viewer,
+        &[project_id],
+        crate::policy::Permission::CodeView,
+    )
+    .await?
+    .is_empty()
+    {
+        crate::conversations::hide_pull_request(&mut run);
+    }
     Ok(RunView {
         run,
         failure_acknowledged: false,

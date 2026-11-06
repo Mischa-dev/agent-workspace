@@ -303,7 +303,47 @@ async fn load_run(
         .bind(run_id)
         .fetch_optional(&state.pool)
         .await?;
-    Ok(row.map(|row| run_value(state, row)))
+    let rows =
+        without_hidden_pull_requests(state, principal.actor_id, row.into_iter().collect()).await?;
+    Ok(rows.into_iter().next().map(|row| run_value(state, row)))
+}
+
+/// Leaves out a run's linked pull request (number, link, title, state,
+/// checks, review) where the viewer's role, or an app's agent limit,
+/// leaves out "see code" in the run's project. The rest of the run stays.
+async fn without_hidden_pull_requests(
+    state: &AppState,
+    viewer: Uuid,
+    mut rows: Vec<RunRow>,
+) -> Result<Vec<RunRow>, AppError> {
+    let mut projects = rows
+        .iter()
+        .filter(|row| row.pr_number.is_some())
+        .map(|row| row.project_id)
+        .collect::<Vec<_>>();
+    projects.sort_unstable();
+    projects.dedup();
+    if projects.is_empty() {
+        return Ok(rows);
+    }
+    let sees_code = crate::search::projects_allowing(
+        &state.pool,
+        viewer,
+        &projects,
+        crate::policy::Permission::CodeView,
+    )
+    .await?;
+    for row in &mut rows {
+        if !sees_code.contains(&row.project_id) {
+            row.pr_number = None;
+            row.pr_url = None;
+            row.pr_title = None;
+            row.pr_state = None;
+            row.pr_checks = None;
+            row.pr_review = None;
+        }
+    }
+    Ok(rows)
 }
 
 pub(super) async fn run_start(
@@ -443,10 +483,14 @@ pub(super) async fn run_list(
     .bind(limit)
     .fetch_all(&state.pool)
     .await;
-    match result {
+    let rows = match result {
+        Ok(rows) => rows,
+        Err(error) => return ToolResult::from_error(error.into(), "run_list"),
+    };
+    match without_hidden_pull_requests(state, principal.actor_id, rows).await {
         Ok(rows) => ToolResult::ok(RunListValue {
             runs: rows.into_iter().map(|row| run_value(state, row)).collect(),
         }),
-        Err(error) => ToolResult::from_error(error.into(), "run_list"),
+        Err(error) => ToolResult::from_error(error, "run_list"),
     }
 }

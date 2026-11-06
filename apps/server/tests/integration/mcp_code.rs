@@ -1712,3 +1712,69 @@ async fn prompt_redaction_migration_backfills_edited_messages_and_retry_chains()
         assert!(matches!(state.as_str(), "failed" | "canceled"), "{state}");
     }
 }
+
+/// A run's linked pull request (title, link, number, state, checks) comes
+/// with it only for a caller whose role, or app limit, keeps "see code" in
+/// the run's project; the run itself stays (AWD-74).
+#[tokio::test]
+async fn a_runs_pull_request_needs_see_code() {
+    let Some((setup, seed, _temporary)) = seeded("mcp_code_run_pr").await else {
+        return;
+    };
+    let app = &setup.app;
+    let pool = &setup.pool;
+    let aw = seed.project_id.to_string();
+    let thread = thread(pool, &seed, seed.channel_id, "Offline work").await;
+    let (run_id, workspace) = run(pool, &seed, thread, "feature").await;
+    let (pull_request, _) = seed_pull_request(&setup, &aw, seed.repository_id, 41).await;
+    sqlx::query(
+        r#"
+        INSERT INTO github_pull_request_requests (
+            id, project_id, github_installation_id, repository_id, repository_workspace_id,
+            agent_run_id, requesting_actor_id, head_ref, head_sha, base_ref, title, body,
+            state, completed_at, github_pull_request_id
+        )
+        SELECT $1, pr.project_id, pr.github_installation_id, pr.repository_id, $2, $3, $4,
+               pr.head_ref, pr.head_sha, pr.base_ref, pr.title, '', 'completed', now(), pr.id
+        FROM github_pull_requests pr WHERE pr.id = $5
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(workspace)
+    .bind(run_id)
+    .bind(seed.human_actor_id)
+    .bind(pull_request)
+    .execute(pool)
+    .await
+    .expect("the run opened the pull request");
+    let owner_app = connect_app(app, &setup.browser, "Owner's app", "full").await;
+    let session = initialize(app, &owner_app).await.expect("owner's app");
+    let get = json!({"runId": run_id});
+
+    let opened = tool(app, &owner_app, &session, "run_get", get.clone()).await;
+    assert_eq!(opened["outcome"], "ok", "{opened}");
+    assert!(opened.to_string().contains("Offline mode"), "{opened}");
+
+    // The owner's apps no longer see code: the run, without its pull request.
+    sqlx::query(
+        "UPDATE organization_memberships SET agent_limit = ARRAY['tasks.view', 'runs.launch'] WHERE actor_id = $1",
+    )
+    .bind(seed.human_actor_id)
+    .execute(pool)
+    .await
+    .expect("the owner's apps no longer see code");
+    let opened = tool(app, &owner_app, &session, "run_get", get).await;
+    assert_eq!(opened["outcome"], "ok", "{opened}");
+    assert!(opened["value"]["id"].is_string(), "{opened}");
+    assert!(!opened.to_string().contains("Offline mode"), "{opened}");
+    let listed = tool(
+        app,
+        &owner_app,
+        &session,
+        "run_list",
+        json!({"projectId": aw, "state": "all"}),
+    )
+    .await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    assert!(!listed.to_string().contains("Offline mode"), "{listed}");
+}

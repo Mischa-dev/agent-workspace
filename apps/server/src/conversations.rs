@@ -4290,6 +4290,24 @@ fn timeline_entry_view(row: TimelineEntryRow) -> Result<TimelineEntryView, AppEr
     })
 }
 
+/// Leaves out a run's linked pull request, for a reader without "see code".
+/// The request to open one (its state) stays: it names no code.
+pub(crate) fn hide_pull_request(run: &mut RunRow) {
+    run.pull_request_number = None;
+    run.pull_request_id = None;
+    run.pull_request_url = None;
+    run.pull_request_title = None;
+    run.pull_request_state = None;
+    run.pull_request_draft = None;
+    run.pull_request_checks_state = None;
+    run.pull_request_review_state = None;
+    run.pull_request_mergeability_state = None;
+    run.pull_request_sync_state = None;
+    run.pull_request_sync_failure_category = None;
+    run.pull_request_automation_state = None;
+    run.pull_request_automation_reason = None;
+}
+
 async fn fetch_run_projection(
     state: &AppState,
     principal: &AuthenticatedActor,
@@ -4394,6 +4412,21 @@ async fn fetch_run_projection(
     .bind(conversation.id)
     .fetch_optional(&state.pool)
     .await?;
+    // The runs' linked pull requests only for a reader who sees code here.
+    let (mut active_run, mut latest_terminal_run) = (active_run, latest_terminal_run);
+    if crate::search::projects_allowing(
+        &state.pool,
+        principal.actor_id,
+        &[conversation.project_id],
+        crate::policy::Permission::CodeView,
+    )
+    .await?
+    .is_empty()
+    {
+        for run in active_run.iter_mut().chain(latest_terminal_run.iter_mut()) {
+            hide_pull_request(run);
+        }
+    }
     let latest_failure_acknowledged = match latest_terminal_run.as_ref() {
         Some(run) if run.state == "failed" => {
             sqlx::query_scalar::<_, bool>(
