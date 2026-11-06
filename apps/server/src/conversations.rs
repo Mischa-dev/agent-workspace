@@ -1750,7 +1750,15 @@ pub(crate) async fn append_message_command_with(
     .await?
     {
         IdempotencyOutcome::Replay(replay) => {
-            let body: MessageAppendResponse = replay.decode()?;
+            let mut body: MessageAppendResponse = replay.decode()?;
+            // Kept without quote text: read the quote again, as it is now.
+            crate::forwarding::refresh_reply_quote(
+                &mut *transaction,
+                &mut body.message,
+                &mut body.entry,
+                actor.actor_id,
+            )
+            .await?;
             transaction.commit().await?;
             return Ok(MessageAppendOutcome {
                 status: replay.status(),
@@ -2026,7 +2034,14 @@ pub(crate) async fn append_message_command_with(
         .execute(&mut *transaction)
         .await?;
     }
-    finish_idempotent_command(&mut transaction, &reservation, StatusCode::CREATED, &body).await?;
+    // The stored copy keeps which message it replies to, not that message's
+    // text, so a replay after the original is removed can't show it.
+    let mut stored = body.clone();
+    crate::forwarding::without_reply_quote_text(&mut stored.message);
+    if let Some(message) = stored.entry.message.as_mut() {
+        crate::forwarding::without_reply_quote_text(message);
+    }
+    finish_idempotent_command(&mut transaction, &reservation, StatusCode::CREATED, &stored).await?;
     transaction.commit().await?;
     Ok(MessageAppendOutcome {
         status: StatusCode::CREATED,

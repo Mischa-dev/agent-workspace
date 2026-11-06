@@ -10,7 +10,7 @@ use uuid::Uuid;
 use super::{
     agent_interface::{Browser, connect_app, initialize, tool},
     mcp_admin::create_project,
-    message_edits::{add_person, create_channel, direct_space, get, say, text},
+    message_edits::{add_person, create_channel, direct_space, edit, get, remove, say, text},
     w9_capacity_and_push::{call, fixture},
 };
 
@@ -239,4 +239,108 @@ async fn a_reply_quotes_only_its_own_conversation_and_never_leaks_a_private_one(
         reply_item["replyTo"]["text"], "Lunch at noon",
         "{reply_item}"
     );
+}
+
+#[tokio::test]
+async fn a_retried_reply_never_brings_back_a_removed_original() {
+    let Some(fixture) = fixture("message_reply_replays").await else {
+        return;
+    };
+    let setup = &fixture.setup;
+    let pool = &setup.pool;
+    let project = create_project(setup, "RRP", "Reply replays").await;
+    let channel = create_channel(setup, &project, "general").await;
+    let original = say(
+        setup,
+        &setup.browser,
+        &channel,
+        "o1",
+        text("ghp_secret token"),
+    )
+    .await;
+    let send_uri = format!("/api/v1/channels/{channel}/messages");
+    let (status, sent) = call(
+        setup,
+        &setup.browser,
+        "POST",
+        &send_uri,
+        Some("reply-1"),
+        reply("Rotated it", &original),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{sent}");
+    // The sender sees the quote, but the stored response keeps only which
+    // message it quotes.
+    assert_eq!(
+        sent["message"]["replyTo"]["text"], "ghp_secret token",
+        "{sent}"
+    );
+    let reply_id = sent["message"]["id"].as_str().expect("reply").to_owned();
+    let (status, edited) = edit(
+        setup,
+        &setup.browser,
+        &channel,
+        &reply_id,
+        "reply-edit-1",
+        json!({ "content": text("Rotated it already"), "expectedRevision": 1 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    assert_eq!(
+        edited["message"]["replyTo"]["text"], "ghp_secret token",
+        "{edited}"
+    );
+    let stored = sqlx::query_scalar::<_, String>(
+        "SELECT response_body::text FROM idempotency_keys WHERE response_body::text LIKE '%' || $1 || '%'",
+    )
+    .bind(&reply_id)
+    .fetch_all(pool)
+    .await
+    .expect("stored responses");
+    assert_eq!(stored.len(), 2, "{stored:?}");
+    assert!(
+        stored.iter().all(|body| !body.contains("ghp_secret")),
+        "{stored:?}"
+    );
+
+    // Once the original is removed, retrying the send or the edit with the
+    // same key replays without its text, as the timeline shows it.
+    let (status, removed) = remove(setup, &setup.browser, &channel, &original).await;
+    assert_eq!(status, StatusCode::OK, "{removed}");
+    let (status, again) = call(
+        setup,
+        &setup.browser,
+        "POST",
+        &send_uri,
+        Some("reply-1"),
+        reply("Rotated it", &original),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {again}");
+    assert_eq!(again["message"]["id"], reply_id.as_str(), "{again}");
+    assert!(!again.to_string().contains("ghp_secret"), "{again}");
+    assert_eq!(again["message"]["replyTo"]["removed"], true, "{again}");
+    assert_eq!(
+        again["entry"]["message"]["replyTo"]["removed"], true,
+        "{again}"
+    );
+    let (status, again) = edit(
+        setup,
+        &setup.browser,
+        &channel,
+        &reply_id,
+        "reply-edit-1",
+        json!({ "content": text("Rotated it already"), "expectedRevision": 1 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert!(!again.to_string().contains("ghp_secret"), "{again}");
+    assert_eq!(again["message"]["replyTo"]["removed"], true, "{again}");
+    let (_, timeline) = get(
+        setup,
+        &setup.browser,
+        &format!("/api/v1/conversations/{channel}/timeline"),
+    )
+    .await;
+    assert!(!timeline.to_string().contains("ghp_secret"), "{timeline}");
 }

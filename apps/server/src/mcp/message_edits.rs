@@ -29,7 +29,7 @@ use crate::{
     message_edits::{
         Change, ChangeError, MessageEditResponse, Refused, apply_edit, apply_removal,
         edit_request_hash, edit_scope, lock_message_for_change, message_revisions_in,
-        removal_audit_metadata,
+        removal_audit_metadata, stored_edit,
     },
     policy::Action,
 };
@@ -346,7 +346,13 @@ pub(super) async fn message_edit(
             changed: edit.changed,
         };
         // The web route stores the same body under the same scope.
-        finish_idempotent_command(&mut transaction, &reservation, StatusCode::OK, &body).await?;
+        finish_idempotent_command(
+            &mut transaction,
+            &reservation,
+            StatusCode::OK,
+            &stored_edit(&body),
+        )
+        .await?;
         let newly_mentioned = sqlx::query_scalar::<_, String>(
             r#"
             SELECT display_name || ' (@' || handle || ')'

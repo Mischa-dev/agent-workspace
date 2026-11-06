@@ -23,7 +23,7 @@ use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
     conversations::{
-        AppendExtras, MessageAppendResponse, MessageCommandActor, TimelineEntryView,
+        AppendExtras, MessageAppendResponse, MessageCommandActor, MessageView, TimelineEntryView,
         append_message_command_with,
     },
     error::{ApiJson, ApiPath, AppError},
@@ -203,6 +203,41 @@ where
                 .unwrap_or_else(|| ForwardedView::unread(quoted.message_id));
         }
     }
+    Ok(())
+}
+
+/// A reply as a stored command response keeps it (an idempotent send or
+/// edit, AWD-70): which message it replies to, never that message's text. A
+/// replay reads the quote again (`refresh_reply_quote`), so it never shows a
+/// message removed since, or one the caller can no longer see.
+pub(crate) fn without_reply_quote_text(message: &mut MessageView) {
+    if let Some(quoted) = message.reply_to.as_mut() {
+        *quoted = ForwardedView::unread(quoted.message_id);
+    }
+}
+
+/// A replayed command response's message and entry with the reply's quote
+/// read for `viewer` now, as a timeline read shows it. Only the reply's
+/// quote changes.
+pub(crate) async fn refresh_reply_quote<'e, E>(
+    executor: E,
+    message: &mut MessageView,
+    entry: &mut TimelineEntryView,
+    viewer: Uuid,
+) -> Result<(), AppError>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    if message.reply_to.is_none() {
+        return Ok(());
+    }
+    let mut fresh = entry.clone();
+    attach_forwards(executor, std::slice::from_mut(&mut fresh), viewer).await?;
+    let reply_to = fresh.message.and_then(|refreshed| refreshed.reply_to);
+    if let Some(shown) = entry.message.as_mut() {
+        shown.reply_to = reply_to.clone();
+    }
+    message.reply_to = reply_to;
     Ok(())
 }
 
