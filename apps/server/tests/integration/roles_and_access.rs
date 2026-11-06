@@ -4673,10 +4673,11 @@ async fn moving_a_task_needs_its_contents_and_code_to_be_seen() {
     );
 }
 
-/// Changing a task's links (task_relate, task_depend) answers with the task.
-/// Someone who may change tasks here but not see them gets only its id and
-/// key, with no title, status or readiness, even for a change that changes
-/// nothing; with "see tasks", all of it.
+/// Changing a task's links (task_relate, task_depend) answers with the task
+/// and its links. Someone who may change tasks here but not see them gets
+/// only its id and key, with no title, status or readiness, and none of its
+/// links in this project, even for a change that changes nothing; with "see
+/// tasks", all of it.
 #[tokio::test]
 async fn link_changes_name_the_task_only_where_tasks_are_seen() {
     let Some(setup) = setup("awd74_link_changes").await else {
@@ -4687,6 +4688,23 @@ async fn link_changes_name_the_task_only_where_tasks_are_seen() {
     let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
     let task = owner_task(&setup, &work, "Secret linked task").await;
     let other = owner_task(&setup, &work, "Other linked task").await;
+    // A task in the same project, already related to it and blocking it.
+    let third = owner_task(&setup, &work, "Third linked secret").await;
+    let owner_app = connect_app(app, &setup.browser, "Owner's app", "full").await;
+    let owner_session = initialize(app, &owner_app).await.expect("owner app");
+    for (name, arguments) in [
+        (
+            "task_relate",
+            json!({"taskId": task.to_string(), "otherTaskId": third.to_string()}),
+        ),
+        (
+            "task_depend",
+            json!({"taskId": task.to_string(), "blockedBy": [third.to_string()]}),
+        ),
+    ] {
+        let linked = tool(app, &owner_app, &owner_session, name, arguments).await;
+        assert_eq!(linked["outcome"], "ok", "{name}: {linked}");
+    }
     let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
     let session = initialize(app, &bea_app).await.expect("Bea's app");
     let calls = [
@@ -4712,6 +4730,10 @@ async fn link_changes_name_the_task_only_where_tasks_are_seen() {
         if name == "task_depend" {
             assert!(seen["value"]["ready"].is_boolean(), "{name}: {seen}");
         }
+        assert!(
+            seen.to_string().contains("Third linked secret"),
+            "{name}: {seen}"
+        );
     }
 
     // Changing tasks without seeing them: its id and key only.
@@ -4743,6 +4765,14 @@ async fn link_changes_name_the_task_only_where_tasks_are_seen() {
         assert!(blind["value"].get("ready").is_none(), "{name}: {blind}");
         assert!(
             !blind.to_string().contains("Secret linked task"),
+            "{name}: {blind}"
+        );
+        assert!(
+            !blind.to_string().contains("Third linked secret"),
+            "{name}: {blind}"
+        );
+        assert!(
+            !blind.to_string().contains(&third.to_string()),
             "{name}: {blind}"
         );
     }
@@ -4824,8 +4854,7 @@ async fn link_changes_list_linked_tasks_only_where_the_app_sees_them() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
-    for (name, arguments) in calls {
-        let listed = tool(app, &bea_app, &session, name, arguments).await;
+    let left_out = |listed: &Value, name: &str| {
         assert_eq!(listed["outcome"], "ok", "{name}: {listed}");
         assert_eq!(
             listed["value"]["task"]["title"], "Changed task",
@@ -4839,6 +4868,33 @@ async fn link_changes_list_linked_tasks_only_where_the_app_sees_them() {
             !listed.to_string().contains(&elsewhere.to_string()),
             "{name}: {listed}"
         );
+    };
+    for (name, arguments) in calls.clone() {
+        let listed = tool(app, &bea_app, &session, name, arguments).await;
+        left_out(&listed, name);
+    }
+
+    // Her role in Other itself leaves out "see tasks" (no app limit): the
+    // linked task there is left out too.
+    let (status, blind) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Blind elsewhere", "baseRole": "member", "permissions": ["tasks.edit"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{blind}");
+    let (status, changed) = set_project_role(
+        &setup,
+        &other_project,
+        bea,
+        "bea-blind-elsewhere",
+        json!({"roleId": blind["id"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    for (name, arguments) in calls {
+        let listed = tool(app, &bea_app, &session, name, arguments).await;
+        left_out(&listed, name);
     }
 }
 

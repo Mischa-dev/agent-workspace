@@ -118,13 +118,15 @@ pub async fn task_links(
     project_id: Uuid,
     task_id: Uuid,
 ) -> Result<TaskLinks, AppError> {
-    // A linked task in another project only where the reader can reach it
-    // and their role there keeps "see tasks"; an app's agent limit is applied
-    // to the rows below.
-    let visible = "(item.project_id = $3 OR (actor_can_access_project($4, $5, item.project_id) \
+    // A linked task only where the reader's role in its project keeps "see
+    // tasks", this task's project included (someone who may change tasks
+    // here without seeing them sees none of its links), and, in another
+    // project, where they can reach it. An app's agent limit is applied to
+    // the rows by the caller (mcp::planning::visible_links).
+    let visible = "((item.project_id = $3 OR actor_can_access_project($4, $5, item.project_id)) \
          AND EXISTS (SELECT 1 FROM project_memberships sees_task \
              WHERE sees_task.project_id = item.project_id AND sees_task.actor_id = $4 \
-               AND sees_task.enabled AND custom_role_allows(sees_task.role_id, 'tasks.view'))))";
+               AND sees_task.enabled AND custom_role_allows(sees_task.role_id, 'tasks.view')))";
     let blocked_by = sqlx::query_as::<_, TaskRef>(&format!(
         r#"SELECT {TASK_REF_COLUMNS}
         FROM work_item_dependencies dependency
