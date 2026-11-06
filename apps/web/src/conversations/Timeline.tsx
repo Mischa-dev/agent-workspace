@@ -9,6 +9,7 @@ import { normalizeFiles, normalizeLinkPreviews } from '../files/model'
 import './chat.css'
 import type { ComposerSubmission } from './composerModel'
 import { ForwardedQuote } from './ForwardedQuote'
+import { ReplyQuote } from './ReplyQuote'
 import { MessageContent } from './MessageContent'
 import { dayKey, dayLabel, eventLabel, formatFullDate, formatTime } from './timeFormat'
 import { formatDateTime } from '../ui/time'
@@ -19,6 +20,7 @@ import type {
   ConversationWorkItemChip,
   ConversationWorkerEvent,
   MessageContentV1,
+  ReplyTarget,
 } from './types'
 
 const GROUP_WINDOW_MS = 5 * 60 * 1000
@@ -369,6 +371,7 @@ export function MessageRow({
           editor
         ) : (
           <div className="aw-msg__body">
+            {message.replyTo ? <ReplyQuote value={message.replyTo} /> : null}
             <MessageContent
               actors={message.mentionedActors ?? []}
               content={message.content}
@@ -570,6 +573,7 @@ export function PendingMessageRow({
   content,
   continued = false,
   name,
+  replyTo,
   seed,
   text,
   workItems = [],
@@ -579,6 +583,7 @@ export function PendingMessageRow({
   content?: MessageContentV1
   continued?: boolean
   name: string
+  replyTo?: ReplyTarget
   seed?: string
   text?: string
   workItems?: ConversationWorkItemChip[]
@@ -595,6 +600,9 @@ export function PendingMessageRow({
           </div>
         )}
         <div className="aw-msg__body">
+          {replyTo ? (
+            <ReplyQuote value={{ messageId: replyTo.messageId, available: true, authorName: replyTo.authorName, text: replyTo.text }} />
+          ) : null}
           {hasText ? (
             <MessageContent actors={actors} content={content} fallbackPlainText={text ?? ''} workItems={workItems} />
           ) : null}
@@ -639,6 +647,7 @@ export function PendingMessages({
           continued={index > 0 || joins}
           key={item.idempotencyKey}
           name={viewer.displayName}
+          replyTo={item.replyTo}
           seed={viewer.actorId}
           text={item.text}
           workItems={item.workItems}

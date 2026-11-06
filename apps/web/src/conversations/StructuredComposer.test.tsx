@@ -96,6 +96,50 @@ describe('StructuredComposer', () => {
     await waitFor(() => expect(screen.getByLabelText('Message')).toHaveValue(''))
   })
 
+  it('sends a reply with the message it answers, and keeps it when the send fails', async () => {
+    const onSubmit = vi.fn().mockRejectedValueOnce(new Error('Temporary failure')).mockResolvedValueOnce(undefined)
+    const target = { messageId: '019fb8b0-0000-7000-8000-0000000000a1', authorName: 'Wren', text: 'Can we ship Friday?' }
+    let replyTo: typeof target | null = target
+    const onReplyChange = vi.fn((next: typeof target | null) => {
+      replyTo = next
+    })
+    const view = () => <StructuredComposer onReplyChange={onReplyChange} onSubmit={onSubmit} replyTo={replyTo} searchActors={vi.fn()} />
+    const { rerender } = render(view())
+    expect(screen.getByRole('button', { name: 'Replying to Wren. Go to their message' })).toHaveTextContent('Can we ship Friday?')
+
+    type('Yes')
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+    expect(onSubmit.mock.calls[0][0].replyTo).toEqual(target)
+    expect(onReplyChange).toHaveBeenNthCalledWith(1, null)
+    // The send failed: the reply comes back with the draft.
+    expect(await screen.findByRole('alert')).toHaveTextContent('Temporary failure')
+    expect(onReplyChange).toHaveBeenLastCalledWith(target)
+    rerender(view())
+
+    // Esc stops replying.
+    fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Escape' })
+    expect(onReplyChange).toHaveBeenLastCalledWith(null)
+    rerender(view())
+    expect(screen.queryByRole('button', { name: /Replying to/ })).not.toBeInTheDocument()
+  })
+
+  it('doesn’t schedule a reply, which would drop its quote', () => {
+    const onSchedule = vi.fn().mockResolvedValue(undefined)
+    const target = { messageId: '019fb8b0-0000-7000-8000-0000000000a1', authorName: 'Wren', text: 'Can we ship Friday?' }
+    const view = (replyTo: typeof target | null) => (
+      <StructuredComposer onReplyChange={vi.fn()} onSchedule={onSchedule} onSubmit={vi.fn()} replyTo={replyTo} searchActors={vi.fn()} />
+    )
+    const { rerender } = render(view(target))
+    type('Yes')
+    expect(screen.getByRole('button', { name: 'Replies can’t be scheduled yet' })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Schedule message' })).not.toBeInTheDocument()
+
+    // Not replying any more: scheduling is back.
+    rerender(view(null))
+    expect(screen.getByRole('button', { name: 'Schedule message' })).toBeEnabled()
+    expect(onSchedule).not.toHaveBeenCalled()
+  })
+
   it('keeps the draft through a reload and sends what failed offline once the connection is back', async () => {
     // The composer retries a queued send straight away, so every send fails
     // until the connection is back; otherwise the queue can empty before the

@@ -123,6 +123,7 @@ export function normalizeMessage(value: unknown): ConversationMessage | null {
     linkPreviews: message.linkPreviews as unknown[] | undefined,
     // Checked where it's shown (ForwardedQuote), off the first load.
     forwarded: message.forwarded ?? null,
+    replyTo: message.replyTo ?? null,
     saved: normalizeSavedMark(message.saved),
   }
 }
@@ -368,6 +369,8 @@ export async function sendConversationMessage(input: {
   content: MessageContentV1
   idempotencyKey: string
   attachments?: FileAttachment[]
+  /** The message in this conversation it replies to. */
+  replyTo?: { messageId: string }
 }) {
   const collection =
     input.kind === 'channel'
@@ -380,8 +383,12 @@ export async function sendConversationMessage(input: {
     {
       method: 'POST',
       idempotencyKey: input.idempotencyKey,
-      // JSON leaves out `attachments` when there are none.
-      json: { content: input.content, attachments: input.attachments?.map((file) => file.id) },
+      // JSON leaves out `attachments` and `replyToMessageId` when there are none.
+      json: {
+        content: input.content,
+        attachments: input.attachments?.map((file) => file.id),
+        replyToMessageId: input.replyTo?.messageId,
+      },
     },
   )
 }

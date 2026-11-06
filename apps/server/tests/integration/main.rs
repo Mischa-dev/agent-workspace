@@ -48,6 +48,7 @@ mod mcp_task_criteria;
 mod mcp_tasks;
 mod message_edits;
 mod message_reactions;
+mod message_replies;
 mod notifications;
 mod oauth_agent;
 mod phase3_takedown;
