@@ -308,9 +308,10 @@ async fn load_run(
     Ok(rows.into_iter().next().map(|row| run_value(state, row)))
 }
 
-/// Leaves out a run's linked pull request (number, link, title, state,
-/// checks, review) where the viewer's role, or an app's agent limit,
-/// leaves out "see code" in the run's project. The rest of the run stays.
+/// Leaves out a run's code (its branch, and its pull request and request:
+/// number, link, title, state, checks, review) where the viewer's role, or an
+/// app's agent limit, leaves out "see code" in the run's project, as the
+/// run pages do (run_views::redact). The rest of the run stays.
 async fn without_hidden_pull_requests(
     state: &AppState,
     viewer: Uuid,
@@ -318,7 +319,11 @@ async fn without_hidden_pull_requests(
 ) -> Result<Vec<RunRow>, AppError> {
     let mut projects = rows
         .iter()
-        .filter(|row| row.pr_number.is_some())
+        .filter(|row| {
+            row.pr_number.is_some()
+                || row.branch.is_some()
+                || row.pull_request_request_state.is_some()
+        })
         .map(|row| row.project_id)
         .collect::<Vec<_>>();
     projects.sort_unstable();
@@ -335,6 +340,8 @@ async fn without_hidden_pull_requests(
     .await?;
     for row in &mut rows {
         if !sees_code.contains(&row.project_id) {
+            row.branch = None;
+            row.pull_request_request_state = None;
             row.pr_number = None;
             row.pr_url = None;
             row.pr_title = None;

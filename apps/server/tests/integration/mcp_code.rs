@@ -1870,4 +1870,26 @@ async fn a_runs_task_and_code_follow_see_tasks_and_see_code() {
         "{limited}"
     );
     assert!(!limited.to_string().contains("secret-branch"), "{limited}");
+    // run_get and run_list leave out the branch too, with no pull request.
+    let opened = tool(
+        app,
+        &owner_app,
+        &session,
+        "run_get",
+        json!({"runId": run_id}),
+    )
+    .await;
+    assert_eq!(opened["outcome"], "ok", "{opened}");
+    assert!(opened["value"]["branch"].is_null(), "{opened}");
+    assert!(!opened.to_string().contains("secret-branch"), "{opened}");
+    let listed = tool(
+        app,
+        &owner_app,
+        &session,
+        "run_list",
+        json!({"projectId": seed.project_id.to_string(), "state": "all"}),
+    )
+    .await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    assert!(!listed.to_string().contains("secret-branch"), "{listed}");
 }
