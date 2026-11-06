@@ -580,7 +580,7 @@ pub(super) async fn task_import(
                 }
             }
         }
-        let Some(view) = imports::import_by_id(&mut transaction, project_id, import_id, !committed).await? else {
+        let Some(view) = imports::import_by_id(&mut transaction, project_id, import_id, !committed, principal.actor_id).await? else {
             return Ok(ToolResult::not_found("That import"));
         };
         transaction.commit().await?;

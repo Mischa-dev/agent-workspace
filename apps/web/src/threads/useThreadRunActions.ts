@@ -170,7 +170,9 @@ export function useThreadRunActions({
     }
     const firstWorkItem = verifiedTimeline?.linkedWorkItems[0]
     const rawTitle = firstWorkItem
-      ? `${firstWorkItem.key}: ${firstWorkItem.title}`
+      ? firstWorkItem.title
+        ? `${firstWorkItem.key}: ${firstWorkItem.title}`
+        : firstWorkItem.key
       : verifiedTimeline?.conversation.name || 'Agent Workspace change'
     const title = Array.from(rawTitle).slice(0, 256).join('')
     const commandKey = pullRequestIdempotencyKey ?? crypto.randomUUID()

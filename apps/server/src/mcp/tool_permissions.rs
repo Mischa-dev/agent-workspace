@@ -166,10 +166,12 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
 
 /// Tools another permission also opens, for the use the handler then
 /// checks itself: archiving through the task update tools needs only
-/// "archive tasks".
+/// "archive tasks", and uploading to a task needs only "edit tasks" (the
+/// handler checks "post messages" for a conversation upload).
 const ALSO_OPENED_BY: &[(&str, Permission)] = &[
     ("task_update", TasksDelete),
     ("task_update_many", TasksDelete),
+    ("file_upload", TasksEdit),
 ];
 
 /// Whether a caller holding `reach` may use a tool at all. A tool missing
@@ -229,6 +231,14 @@ mod tests {
         assert!(super::reachable("task_update", archive_only));
         assert!(super::reachable("task_update_many", archive_only));
         assert!(!super::reachable("task_comment", archive_only));
+    }
+
+    #[test]
+    fn editing_tasks_alone_opens_file_upload() {
+        let task_editor = PermissionSet::from_keys(&["tasks.view", "tasks.edit"]);
+        assert!(super::reachable("file_upload", task_editor));
+        let reader = PermissionSet::from_keys(&["tasks.view"]);
+        assert!(!super::reachable("file_upload", reader));
     }
 
     #[test]

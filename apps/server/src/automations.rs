@@ -1193,6 +1193,15 @@ pub(crate) async fn run_now(
         &format!("manual:{}", Uuid::now_v7()),
         "Run by hand",
         &subject,
+        // Through the maker's app or script (MCP or the public API set its
+        // agent limit for this call): the run keeps to that limit, inline
+        // here and from the job alike, even for a rule made in the browser.
+        caller.actor_kind == ActorKind::Human
+            && crate::policy::current_agent_limit(
+                caller.actor_id,
+                crate::policy::MembershipScope::Project(project_id),
+            )
+            .is_some(),
     )
     .await?
     .ok_or(AppError::Internal("manual automation run collided"))?;
@@ -1251,11 +1260,16 @@ async fn queue_fire(
     dedupe_key: &str,
     summary: &str,
     subject: &Subject,
+    // Run by hand through the maker's app or script: the firing keeps to
+    // that app's limit (`app_limits`). False for events and schedules.
+    through_app: bool,
 ) -> Result<Option<Uuid>, AppError> {
     let run_id = sqlx::query_scalar::<_, Uuid>(
         r#"
-        INSERT INTO automation_runs (id, rule_id, project_id, dedupe_key, trigger_summary, subject)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        INSERT INTO automation_runs (
+            id, rule_id, project_id, dedupe_key, trigger_summary, subject, made_through_app
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         ON CONFLICT (rule_id, dedupe_key) DO NOTHING
         RETURNING id
         "#,
@@ -1266,6 +1280,7 @@ async fn queue_fire(
     .bind(dedupe_key.chars().take(300).collect::<String>())
     .bind(summary.chars().take(300).collect::<String>())
     .bind(serde_json::to_value(subject).unwrap_or_else(|_| json!({})))
+    .bind(through_app)
     .fetch_optional(&mut **transaction)
     .await?;
     if let Some(run_id) = run_id {
@@ -1395,11 +1410,23 @@ pub async fn on_event(state: &AppState, event: &Event) -> Result<usize, AppError
             disable(state, &rule, &reason).await?;
             continue;
         }
-        // Only what its maker could see fires it.
+        // A rule that needs a module that's off waits until it's back on.
         if module_off(pool, &rule).await?.is_some() {
             continue;
         }
+        // Only what its maker could see fires it, and for a rule made through
+        // an app, only what that app's current limit lets it see.
         if !crate::webhooks::visible_to(pool, rule.owner_actor_id, rule.project_id, subject).await?
+        {
+            continue;
+        }
+        if let Some(limits) = app_limits(pool, &rule, false).await?
+            && limit_hides(
+                &limits,
+                rule.project_id,
+                subject.work_item_id.is_some(),
+                subject.pull_request_id.is_some(),
+            )
         {
             continue;
         }
@@ -1481,6 +1508,7 @@ pub async fn on_event(state: &AppState, event: &Event) -> Result<usize, AppError
             &dedupe,
             &summary_for(event),
             subject,
+            false,
         )
         .await?
         .is_some()
@@ -1551,6 +1579,7 @@ async fn sweep_schedules(state: &AppState) -> Result<usize, AppError> {
             &format!("schedule:{}", slot.to_rfc3339()),
             "On its schedule",
             &Subject::default(),
+            false,
         )
         .await?
         .is_some()
@@ -1858,6 +1887,7 @@ struct DueRun {
     state: String,
     subject: Value,
     trigger_summary: String,
+    made_through_app: bool,
 }
 
 async fn finish(
@@ -1888,7 +1918,7 @@ async fn finish(
 async fn fire(state: &AppState, run_id: Uuid) -> Result<(), AppError> {
     let pool = &state.pool;
     let Some(due) = sqlx::query_as::<_, DueRun>(
-        "SELECT rule_id, project_id, state, subject, trigger_summary FROM automation_runs WHERE id = $1",
+        "SELECT rule_id, project_id, state, subject, trigger_summary, made_through_app FROM automation_runs WHERE id = $1",
     )
     .bind(run_id)
     .fetch_optional(pool)
@@ -1939,12 +1969,49 @@ async fn fire(state: &AppState, run_id: Uuid) -> Result<(), AppError> {
         .get("providerAccountId")
         .and_then(Value::as_str)
         .and_then(|value| value.parse::<Uuid>().ok());
-    let context = Context::load(state, &rule, &subject, &due.trigger_summary).await?;
+    // A maker who lost access turns the rule off, as each action checks
+    // below; checked first so the visibility check that follows doesn't
+    // just skip it.
+    if let Err(reason) = acting_access(pool, &rule).await? {
+        disable(state, &rule, &reason).await?;
+        return finish(pool, run_id, "skipped", Some(&reason), &[]).await;
+    }
+    let Some(context) = Context::load(state, &rule, &subject, &due.trigger_summary).await? else {
+        return finish(
+            pool,
+            run_id,
+            "skipped",
+            Some("Skipped: whoever made it can't see what this is about."),
+            &[],
+        )
+        .await;
+    };
+    // A rule made through an app skips what that app's current limit hides:
+    // the task or pull request the context loaded (a run's task, say) would
+    // otherwise reach its messages through placeholders. Nothing is sent
+    // before this.
+    if let Some(limits) = app_limits(pool, &rule, due.made_through_app).await?
+        && limit_hides(
+            &limits,
+            rule.project_id,
+            context.work_item_id.is_some(),
+            context.pull_request_id.is_some() || context.pull_request.is_some(),
+        )
+    {
+        return finish(
+            pool,
+            run_id,
+            "skipped",
+            Some("Skipped: the app it was made or run through can't see what this is about."),
+            &[],
+        )
+        .await;
+    }
     let mut results = Vec::new();
     for (index, action) in actions.iter().enumerate() {
         // A rule made through an app acts within that app's limits when it
         // fires, as the tool call that made it did.
-        let limits = app_limits(pool, &rule).await?;
+        let limits = app_limits(pool, &rule, due.made_through_app).await?;
         let acting = match with_limits(limits.clone(), acting_access(pool, &rule)).await? {
             Ok(acting) => acting,
             Err(reason) => {
@@ -2021,24 +2088,60 @@ impl Context {
         rule: &RuleRow,
         subject: &Subject,
         summary: &str,
-    ) -> Result<Self, AppError> {
+    ) -> Result<Option<Self>, AppError> {
         let origin = events::public_origin(state);
         let mut variables = vec![
             ("rule.name", rule.name.clone()),
             ("event", summary.to_owned()),
         ];
         let mut assignee = None;
+        // Every way a rule fires (an event, a schedule, a capacity window,
+        // "run now" in the browser or through automation_write) comes through
+        // here: nothing about a task, pull request or thread is loaded unless
+        // the rule's maker may see it now, by their role ("see tasks", "see
+        // code") and the thread's members. What the firing is about, when
+        // they can't, skips it (None). A rule made through an app is also
+        // held to the app's limit (`fire`, `limit_hides`).
+        let about = Subject {
+            work_item_id: subject.work_item_id,
+            pull_request_id: subject.pull_request_id,
+            conversation_id: subject.conversation_id,
+            ..Subject::default()
+        };
+        if !crate::webhooks::visible_to(&state.pool, rule.owner_actor_id, rule.project_id, &about)
+            .await?
+        {
+            return Ok(None);
+        }
         let mut work_item_id = subject.work_item_id;
         if work_item_id.is_none()
             && let Some(run_id) = subject.agent_run_id
         {
-            work_item_id = sqlx::query_scalar::<_, Uuid>(
+            let run_task = sqlx::query_scalar::<_, Uuid>(
                 "SELECT work_item_id FROM launches WHERE agent_run_id = $1 AND project_id = $2 LIMIT 1",
             )
             .bind(run_id)
             .bind(rule.project_id)
             .fetch_optional(&state.pool)
             .await?;
+            // A run's task only while the maker may see tasks here; without
+            // it the run still fires the rule, without the task.
+            if let Some(id) = run_task {
+                let task = Subject {
+                    work_item_id: Some(id),
+                    ..Subject::default()
+                };
+                if crate::webhooks::visible_to(
+                    &state.pool,
+                    rule.owner_actor_id,
+                    rule.project_id,
+                    &task,
+                )
+                .await?
+                {
+                    work_item_id = Some(id);
+                }
+            }
         }
         if let Some(id) = work_item_id
             && let Some(task) = crate::webhooks::task_data(state, rule.project_id, id).await?
@@ -2086,14 +2189,14 @@ impl Context {
             variables.push(("pr.title", pr.title.clone()));
             variables.push(("pr.url", pr.html_url.clone()));
         }
-        Ok(Self {
+        Ok(Some(Self {
             work_item_id,
             agent_run_id: subject.agent_run_id,
             pull_request_id: subject.pull_request_id,
             variables,
             assignee,
             pull_request,
-        })
+        }))
     }
 
     /// Fills in {{variables}}; unknown ones become empty.
@@ -2299,6 +2402,20 @@ async fn run_action(
             )
             .await
             .map_err(database)?;
+            // A rule a person's app or script made: its launches start only
+            // within that app's limit when the queue drains.
+            if rule.made_through_app && acting.actor_kind == ActorKind::Human {
+                let ids = result
+                    .launches
+                    .iter()
+                    .map(|view| view.id)
+                    .collect::<Vec<_>>();
+                sqlx::query("UPDATE launches SET made_through_app = true WHERE id = ANY($1)")
+                    .bind(&ids)
+                    .execute(&state.pool)
+                    .await
+                    .map_err(|error| database(error.into()))?;
+            }
             Ok(format!(
                 "Launched {} task{}.",
                 result.launches.len(),
@@ -2552,9 +2669,15 @@ async fn runs_route(
 /// The limits of the app a rule was made through, for a person's rule made
 /// through one: the person's role there cut down by the role's and their own
 /// agent limit, read again each time so a narrowed limit applies at once.
-/// None for a rule made in the browser or by an agent acting as itself.
-async fn app_limits(pool: &PgPool, rule: &RuleRow) -> Result<Option<AgentLimits>, AppError> {
-    if !rule.made_through_app {
+/// None for a rule made in the browser or by an agent acting as itself,
+/// unless this firing was run by hand through the person's app
+/// (`invoked_through_app`, automation_runs.made_through_app).
+async fn app_limits(
+    pool: &PgPool,
+    rule: &RuleRow,
+    invoked_through_app: bool,
+) -> Result<Option<AgentLimits>, AppError> {
+    if !rule.made_through_app && !invoked_through_app {
         return Ok(None);
     }
     let mut connection = pool.acquire().await?;
@@ -2571,6 +2694,20 @@ async fn app_limits(pool: &PgPool, rule: &RuleRow) -> Result<Option<AgentLimits>
             .await?
             .limits,
     ))
+}
+
+/// Whether an app's limits keep it from what a rule is about in
+/// `project_id`: a task without "see tasks", or a pull request without "see
+/// code".
+fn limit_hides(limits: &AgentLimits, project_id: Uuid, task: bool, pull_request: bool) -> bool {
+    use crate::policy::{Permission, PermissionSet};
+    let allowed = limits
+        .projects
+        .get(&project_id)
+        .copied()
+        .unwrap_or(PermissionSet::EMPTY);
+    (task && !allowed.contains(Permission::TasksView))
+        || (pull_request && !allowed.contains(Permission::CodeView))
 }
 
 /// Runs `call` within `limits`, if there are any.

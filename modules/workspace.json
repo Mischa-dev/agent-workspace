@@ -7,7 +7,7 @@
   "switchable": false,
   "needs": [],
   "worksWith": [],
-  "permissions": ["members.view", "members.invite", "members.manage", "roles.manage", "settings.manage"],
+  "permissions": ["members.view", "directory.view", "members.invite", "members.manage", "roles.manage", "settings.manage"],
   "tools": {
     "briefing": "query",
     "settings_get": "describe",

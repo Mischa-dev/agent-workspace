@@ -1117,12 +1117,20 @@ async fn ensure_space_in(
         .execute(&mut **transaction)
         .await?;
     }
-    // The Messages space follows the person's workspace role: a custom one
-    // narrows what they may do there as everywhere else.
-    let (role, role_permissions, enabled) = sqlx::query_as::<_, (String, Option<Vec<String>>, bool)>(
-        r#"
-        SELECT membership.role,
-               workspace_role_permissions(COALESCE(membership.role_id, organization_membership.role_id)),
+    // The Messages space follows the person's workspace role as it is now:
+    // its base role and its permissions are read together from the
+    // workspace membership, never the base from the space's membership
+    // (written when they first opened Messages) with today's permissions.
+    // A trigger keeps the stored membership in step for other readers
+    // (direct_space_follows_workspace_role).
+    let (role, role_permissions, enabled) =
+        sqlx::query_as::<_, (String, Option<Vec<String>>, bool)>(
+            r#"
+        SELECT COALESCE(organization_membership.role, membership.role),
+               CASE WHEN organization_membership.actor_id IS NULL
+                    THEN workspace_role_permissions(membership.role_id)
+                    ELSE workspace_role_permissions(organization_membership.role_id)
+               END,
                membership.enabled
         FROM project_memberships membership
         JOIN projects project ON project.id = membership.project_id
@@ -1131,12 +1139,12 @@ async fn ensure_space_in(
          AND organization_membership.actor_id = membership.actor_id
         WHERE membership.project_id = $1 AND membership.actor_id = $2
         "#,
-    )
-    .bind(project_id)
-    .bind(principal.actor_id)
-    .fetch_optional(&mut **transaction)
-    .await?
-    .ok_or(AppError::Internal("direct space membership"))?;
+        )
+        .bind(project_id)
+        .bind(principal.actor_id)
+        .fetch_optional(&mut **transaction)
+        .await?
+        .ok_or(AppError::Internal("direct space membership"))?;
     Ok(DirectSpace {
         project_id,
         role: RoleGrant::stored(&role, role_permissions.as_deref())?,

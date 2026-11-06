@@ -558,11 +558,23 @@ async fn list_members(
 ) -> Result<Json<MembersResponse>, AppError> {
     let mut connection = state.pool.acquire().await?;
     let caller = member_manager_role(&mut connection, &principal, organization_id, false).await?;
+    // "See the workspace member directory", by the caller's workspace role:
+    // every built-in role holds it; a custom role only when an owner or an
+    // admin who manages roles gives it (Settings, Roles). Without it the
+    // list is only the caller themselves.
+    let sees_members = caller_may(
+        &mut connection,
+        &principal,
+        organization_id,
+        crate::policy::Permission::DirectoryView,
+    )
+    .await?;
     // Removed members are listed only for those who manage the workspace.
     let rows = sqlx::query_as::<_, MemberRow>(&format!(
         r#"
         SELECT {MEMBER_COLUMNS} {MEMBER_FROM}
         WHERE membership.organization_id = $1 AND (membership.enabled OR $2)
+          AND ($3 OR membership.actor_id = $4)
         ORDER BY membership.enabled DESC,
                  CASE membership.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,
                  lower(COALESCE(profile.display_name, user_account.display_name, '')),
@@ -572,6 +584,8 @@ async fn list_members(
     ))
     .bind(organization_id)
     .bind(caller.manages())
+    .bind(sees_members)
+    .bind(principal.actor_id)
     .fetch_all(&mut *connection)
     .await?;
     Ok(Json(MembersResponse {
@@ -1407,12 +1421,25 @@ async fn find_invitation(
     digest: &[u8; 32],
     lock: bool,
 ) -> Result<ValidInvitation, AppError> {
-    sqlx::query_as::<_, ValidInvitation>(&valid_invitation_sql(lock))
+    let row = sqlx::query_as::<_, ValidInvitation>(&valid_invitation_sql(lock))
         .bind(prefix)
         .fetch_optional(&mut *connection)
         .await?
         .filter(|row| digest_matches(&row.token_digest, digest))
-        .ok_or(AppError::NotFound("workspace_invitation"))
+        .ok_or(AppError::NotFound("workspace_invitation"))?;
+    // The issuer's role may have narrowed since they sent it.
+    if !crate::roles::issuer_still_grants(
+        connection,
+        row.organization_id,
+        row.issued_by_actor_id,
+        &row.role,
+        row.role_id,
+    )
+    .await?
+    {
+        return Err(AppError::NotFound("workspace_invitation"));
+    }
+    Ok(row)
 }
 
 async fn resolve_invitation(

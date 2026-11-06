@@ -229,7 +229,7 @@
 }
 
 .aw-tasks__table .aw-table__head {
-  top: 0;
+  top: var(--aw-sticky-top, 0);
 }
 
 .aw-tasks__table .aw-table__row {
@@ -595,7 +595,7 @@
 
 .aw-task__bar {
   position: sticky;
-  top: 0;
+  top: var(--aw-sticky-top, 0);
   z-index: var(--layer-sticky);
   display: flex;
   align-items: center;
@@ -669,7 +669,7 @@
 
 .aw-task__rail {
   position: sticky;
-  top: var(--aw-task-bar);
+  top: calc(var(--aw-sticky-top, 0px) + var(--aw-task-bar));
   display: grid;
   align-content: start;
   gap: var(--space-5);

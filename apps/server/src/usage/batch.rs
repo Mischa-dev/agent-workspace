@@ -174,6 +174,17 @@ async fn places(
                 .push(skip("You can't launch runs in this project.".to_owned()));
             continue;
         }
+        // The batch names and ranks tasks: only where the role (and an app's
+        // limit) still lets them see tasks.
+        if crate::search::projects_showing_tasks(&state.pool, viewer, &[project_id])
+            .await?
+            .is_empty()
+        {
+            result
+                .skipped
+                .push(skip("You can't see tasks in this project.".to_owned()));
+            continue;
+        }
         if launch::launch_account(&state.pool, project_id, viewer, None, Some(account.id))
             .await?
             .is_none()

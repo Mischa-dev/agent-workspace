@@ -987,7 +987,10 @@ async fn list_tasks(
         }
         None => scope_projects(state, principal).await?,
     };
-    let mut projects = projects;
+    // The tool gate takes "see tasks" in any project; list only those where
+    // the caller's role (and an app's limit) keeps it.
+    let mut projects =
+        crate::search::projects_showing_tasks(&state.pool, principal.actor_id, &projects).await?;
     projects.sort_unstable();
     projects.dedup();
     let place = if let [only] = projects.as_slice() {

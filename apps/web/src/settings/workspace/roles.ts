@@ -28,6 +28,7 @@ export const PERMISSION_KEYS = [
   'code.manage',
   'agents.manage',
   'members.view',
+  'directory.view',
   'members.invite',
   'members.manage',
   'roles.manage',
@@ -62,7 +63,8 @@ export type WorkspaceRoleView = {
   updatedAt: string
   workspaceHolders: number
   projectHolders: number
-  capabilities: { edit: boolean; editPermissions: boolean; remove: boolean; assign: boolean }
+  /** What you may do with it. `assign` gives it to a member; `invite` invites someone to it. */
+  capabilities: { edit: boolean; editPermissions: boolean; remove: boolean; assign: boolean; invite: boolean }
 }
 
 export type PermissionInfo = {
@@ -154,6 +156,8 @@ export type Assignment = {
   roleName: string
   projectsChanged: number
   projectsSkipped: number
+  // Each project left as it was, and why.
+  skippedProjects: { projectId: string; reason: string }[]
 }
 
 export const assignRole = (

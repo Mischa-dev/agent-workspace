@@ -267,11 +267,15 @@ pub async fn work_item_get(
     else {
         return ReadResult::not_found();
     };
+    // Linked repositories and pull requests only for those whose role (and an
+    // app's limit) lets them see code here; the task itself stays.
+    let sees_code = authorize_read(&state.pool, principal, Action::RepositoryView).await;
     match load_work_item(
         state,
         principal.project_id,
         work_item_id,
         principal.actor_id,
+        sees_code,
     )
     .await
     {
@@ -471,6 +475,7 @@ async fn load_work_item(
     project_id: Uuid,
     work_item_id: Uuid,
     viewer: Uuid,
+    sees_code: bool,
 ) -> Result<Option<WorkItemProjection>, sqlx::Error> {
     let row = sqlx::query_as::<_, WorkItemRow>(WORK_ITEM_BY_ID_SELECT)
         .bind(project_id)
@@ -483,8 +488,20 @@ async fn load_work_item(
     let (labels, criteria, repositories, pull_requests) = tokio::try_join!(
         crate::work_item_labels::active_names(&state.pool, project_id, work_item_id),
         load_acceptance_criteria(&state.pool, project_id, work_item_id),
-        load_linked_repositories(&state.pool, project_id, work_item_id),
-        load_linked_pull_requests(&state.pool, project_id, work_item_id, viewer),
+        async {
+            if sees_code {
+                load_linked_repositories(&state.pool, project_id, work_item_id).await
+            } else {
+                Ok(Vec::new())
+            }
+        },
+        async {
+            if sees_code {
+                load_linked_pull_requests(&state.pool, project_id, work_item_id, viewer).await
+            } else {
+                Ok(Vec::new())
+            }
+        },
     )?;
     Ok(Some(work_item_projection(
         state,

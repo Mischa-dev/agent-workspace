@@ -89,6 +89,10 @@ export function TeamSettings({
   const customRoles = (roles.data?.roles ?? []).filter(
     (role) => !role.builtIn && role.capabilities.assign && (role.baseRole !== 'admin' || organizationRole === 'owner'),
   )
+  // Roles you may invite someone to, built-in ones included: inviting needs
+  // "invite members", not "manage members" (the server works it out as the
+  // invitation endpoint does).
+  const inviteRoles = (roles.data?.roles ?? []).filter((role) => role.capabilities.invite)
   const members = useQuery({
     queryKey: queryKeys.members(projectId),
     queryFn: () => listMembers(projectId),
@@ -197,7 +201,8 @@ export function TeamSettings({
         )}
         <InviteForm
           canInviteAdmin={organizationRole === 'owner'}
-          customRoles={customRoles}
+          inviteRoles={inviteRoles}
+          rolesLoaded={Boolean(roles.data)}
           disabled={issueMutation.isPending}
           onSubmit={(choice, hours) => {
             setError(null)
@@ -289,16 +294,31 @@ export function TeamSettings({
 
 function InviteForm({
   canInviteAdmin,
-  customRoles,
+  inviteRoles,
+  rolesLoaded,
   disabled,
   onSubmit,
 }: {
   canInviteAdmin: boolean
-  customRoles: WorkspaceRoleView[]
+  inviteRoles: WorkspaceRoleView[]
+  rolesLoaded: boolean
   disabled: boolean
   onSubmit: (choice: RoleChoice, hours: number) => void
 }) {
-  const [role, setRole] = useState<string>('member')
+  // Only roles you may invite to are offered; until the roles load, the
+  // plain ones are. It starts on the first one offered.
+  const offers = (key: string) => !rolesLoaded || inviteRoles.some((entry) => entry.builtIn && entry.key === key)
+  const offersMember = offers('member')
+  const offersViewer = offers('viewer')
+  const offersAdmin = canInviteAdmin && inviteRoles.some((entry) => entry.builtIn && entry.key === 'admin')
+  const customRoles = inviteRoles.filter((entry) => !entry.builtIn && (entry.baseRole !== 'admin' || canInviteAdmin))
+  const firstOffered = offersMember
+    ? 'member'
+    : offersViewer
+      ? 'viewer'
+      : (customRoles[0]?.id ?? (offersAdmin ? 'admin' : 'member'))
+  const [picked, setRole] = useState<string | null>(null)
+  const role = picked ?? firstOffered
   const [hours, setHours] = useState(DEFAULT_INVITATION_HOURS)
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -313,9 +333,9 @@ function InviteForm({
         onChange={(event) => setRole(event.target.value)}
         value={role}
       >
-        <option value="member">Member</option>
-        <option value="viewer">Viewer</option>
-        {canInviteAdmin && <option value="admin">Admin</option>}
+        {offersMember && <option value="member">Member</option>}
+        {offersViewer && <option value="viewer">Viewer</option>}
+        {offersAdmin && <option value="admin">Admin</option>}
         <CustomRoleOptions roles={customRoles} />
       </SelectField>
       <SelectField

@@ -119,6 +119,12 @@ pub async fn home_for(state: &AppState, viewer: Uuid) -> Result<Home, AppError> 
             JOIN work_items work_item
               ON work_item.project_id = launch.project_id AND work_item.id = launch.work_item_id
             WHERE launch.agent_run_id = run.id AND work_item.archived_at IS NULL
+              -- The task's key and title only where the reader sees tasks.
+              AND EXISTS (
+                  SELECT 1 FROM project_memberships sees_task
+                  WHERE sees_task.project_id = launch.project_id AND sees_task.actor_id = $1
+                    AND sees_task.enabled
+                    AND custom_role_allows(sees_task.role_id, 'tasks.view'))
             LIMIT 1
         ) item ON true
         LEFT JOIN execution_profiles profile ON profile.id = run.execution_profile_id

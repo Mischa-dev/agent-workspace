@@ -9,7 +9,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use sqlx::{FromRow, Postgres, Transaction};
+use sqlx::{FromRow, PgConnection, Postgres, Transaction};
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
 use zeroize::{Zeroize, Zeroizing};
@@ -425,6 +425,16 @@ async fn replace_invitation(
         project_membership_enabled: row.project_membership_enabled,
     };
     authorize_manage(principal.actor_id, row.project_id, &access, Some(&row.role))?;
+    // The replacement is issued by the caller, so its role must be within
+    // what the caller holds, as for a new invitation.
+    crate::memberships::require_grantable(
+        &mut transaction,
+        principal.actor_id,
+        row.project_id,
+        &row.role,
+        row.role_id,
+    )
+    .await?;
     if row.status != "active" {
         return Err(AppError::Conflict(
             "project_invitation",
@@ -543,6 +553,8 @@ async fn resolve_invitation(
         .await?
         .filter(|row| digest_matches(&row.token_digest, &digest))
         .ok_or(AppError::NotFound("project_invitation"))?;
+    let mut connection = state.pool.acquire().await?;
+    require_issuer_still_grants(&mut connection, &row).await?;
     Ok(Json(ResolvedInvitation {
         organization_name: row.organization_name,
         project_name: row.project_name,
@@ -581,6 +593,7 @@ async fn accept_new_user(
         .await?
         .filter(|row| digest_matches(&row.token_digest, &digest))
         .ok_or(AppError::NotFound("project_invitation"))?;
+    require_issuer_still_grants(&mut transaction, &invitation).await?;
     if sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS (SELECT 1 FROM users WHERE lower(login_name) = $1)",
     )
@@ -627,7 +640,9 @@ async fn accept_new_user(
         .execute(&mut *transaction)
         .await
         .map_err(map_join_database_error)?;
-    let organization_role = if invitation.role == "admin" {
+    // Only the built-in project Admin makes a workspace admin: a custom
+    // Admin-based role is narrower, so it never widens into it.
+    let organization_role = if invitation.role == "admin" && invitation.role_id.is_none() {
         "admin"
     } else {
         "member"
@@ -716,6 +731,7 @@ async fn accept_existing_user(
         .await?
         .filter(|row| digest_matches(&row.token_digest, &digest))
         .ok_or(AppError::NotFound("project_invitation"))?;
+    require_issuer_still_grants(&mut transaction, &invitation).await?;
     #[derive(FromRow)]
     struct ExistingIdentity {
         authentication_epoch: i64,
@@ -767,9 +783,20 @@ async fn accept_existing_user(
             "handle already exists",
         ));
     }
-    if invitation.role == "admin" && identity.organization_role != "owner" {
+    // Only the built-in project Admin makes a workspace admin, as the sync on
+    // a role change does: never a custom Admin-based role, and never over a
+    // custom workspace role, which would widen it.
+    if invitation.role == "admin"
+        && invitation.role_id.is_none()
+        && identity.organization_role != "owner"
+    {
         sqlx::query(
-            "UPDATE organization_memberships SET role = 'admin', version = version + 1, updated_at = now() WHERE organization_id = $1 AND actor_id = $2",
+            r#"
+            UPDATE organization_memberships
+            SET role = 'admin', version = version + 1, updated_at = now()
+            WHERE organization_id = $1 AND actor_id = $2
+              AND role_id IS NULL
+            "#,
         )
         .bind(invitation.organization_id)
         .bind(principal.actor_id)
@@ -1234,6 +1261,81 @@ impl From<InvitationRow> for InvitationView {
             created_at: row.created_at,
         }
     }
+}
+
+/// Refuses an invitation whose issuer may no longer send it: their role
+/// narrowed after they sent it, so it lost "invite people" or no longer
+/// holds everything the invited role does. It reads as an invitation that
+/// isn't valid any more.
+async fn require_issuer_still_grants(
+    connection: &mut PgConnection,
+    invitation: &InvitationAcceptanceRow,
+) -> Result<(), AppError> {
+    if !crate::roles::issuer_still_grants(
+        &mut *connection,
+        invitation.organization_id,
+        invitation.issued_by_actor_id,
+        &invitation.role,
+        invitation.role_id,
+    )
+    .await?
+    {
+        return Err(AppError::NotFound("project_invitation"));
+    }
+    // And they may still manage invitations in this project: their project
+    // role may have narrowed while their workspace role didn't.
+    let access = sqlx::query_as::<_, InvitationAccess>(
+        r#"
+        SELECT project.organization_id,
+               project.archived_at IS NOT NULL AS project_archived,
+               organization_membership.role AS organization_role,
+               organization_membership.enabled AS organization_membership_enabled,
+               project_membership.role AS project_role,
+               workspace_role_permissions(project_membership.role_id) AS project_role_permissions,
+               project_membership.enabled AS project_membership_enabled
+        FROM projects project
+        JOIN organization_memberships organization_membership
+          ON organization_membership.organization_id = project.organization_id
+         AND organization_membership.actor_id = $2
+        JOIN project_memberships project_membership
+          ON project_membership.project_id = project.id
+         AND project_membership.actor_id = $2
+        WHERE project.id = $1
+        "#,
+    )
+    .bind(invitation.project_id)
+    .bind(invitation.issued_by_actor_id)
+    .fetch_optional(&mut *connection)
+    .await?
+    .ok_or(AppError::NotFound("project_invitation"))?;
+    authorize_manage(
+        invitation.issued_by_actor_id,
+        invitation.project_id,
+        &access,
+        Some(&invitation.role),
+    )
+    .map_err(|_| AppError::NotFound("project_invitation"))?;
+    // And the invited role is still within the issuer's role in this
+    // project, as issuing it was (memberships::require_grantable): a
+    // project role narrowed after sending can't be bypassed with the token.
+    let invited =
+        sqlx::query_scalar::<_, Option<Vec<String>>>("SELECT workspace_role_permissions($1)")
+            .bind(invitation.role_id)
+            .fetch_one(&mut *connection)
+            .await?;
+    let invited = crate::roles::project_checked(
+        crate::policy::RoleGrant::stored(&invitation.role, invited.as_deref())?.permissions(),
+    );
+    let held = crate::roles::project_holding(
+        &mut *connection,
+        invitation.issued_by_actor_id,
+        invitation.project_id,
+    )
+    .await?;
+    if !held.is_some_and(|held| invited.is_subset_of(held)) {
+        return Err(AppError::NotFound("project_invitation"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

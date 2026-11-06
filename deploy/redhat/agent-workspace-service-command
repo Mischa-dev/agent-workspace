@@ -31,7 +31,7 @@ set -a
 source "${service_environment}"
 set +a
 export HOME="/var/lib/agent-workspace"
-export PATH="/opt/agent-workspace/toolchains/node-v24.18.1-linux-arm64/bin:/usr/local/bin:/usr/bin"
+export PATH="/opt/agent-workspace/toolchains/node-v24.22.1-linux-arm64/bin:/usr/local/bin:/usr/bin"
 export AGENT_WORKSPACE_WEB_ROOT="${release_root}/web"
 
 exec /usr/sbin/runuser --user "${service_user}" --preserve-environment -- "${service_binary}" "$@"

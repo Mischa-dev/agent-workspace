@@ -228,8 +228,10 @@ async fn create_connection(
     require_grantable(
         &mut transaction,
         access.organization_id,
+        project_id,
         principal.actor_id,
         &normalized.role,
+        None,
     )
     .await?;
     let created = insert_agent(
@@ -516,8 +518,10 @@ pub async fn provision(
     require_grantable(
         &mut transaction,
         organization_id,
+        project_id,
         owner_actor_id,
         &normalized.role,
+        None,
     )
     .await?;
     let created = insert_agent(
@@ -833,15 +837,6 @@ async fn mutate_connection(
         });
     }
     let next_role = requested_role.as_deref().unwrap_or(&current.role);
-    if next_role != current.role {
-        require_grantable(
-            &mut transaction,
-            access.organization_id,
-            principal.actor_id,
-            next_role,
-        )
-        .await?;
-    }
     let next_enabled = if remove {
         false
     } else {
@@ -869,12 +864,38 @@ async fn mutate_connection(
     if !next_scopes.iter().any(|scope| scope == "read") {
         return Err(AppError::Validation("external_agent_scopes"));
     }
+    let restores = next_enabled && current.status != "active";
+    let widens_scopes = next_scopes
+        .iter()
+        .any(|scope| !current.scopes.contains(scope));
     let role_changed = next_role != current.role;
     let scopes_changed = next_scopes != current.scopes;
     let contract_changed = role_changed || scopes_changed;
     let enabled_changed = next_enabled != (current.status == "active");
     let should_issue =
         !remove && next_enabled && (force_rotate || contract_changed || enabled_changed);
+    // Changing the role, bringing a disabled connection back, giving it a
+    // scope it didn't have, or issuing a new credential (a rotation hands
+    // the caller a token for the agent) all hand the agent's role out again,
+    // so the role must be within what the caller holds.
+    if role_changed || restores || widens_scopes || should_issue {
+        // A new built-in role is checked as asked; otherwise the agent keeps
+        // the role it holds, custom ones included.
+        let role_id = if role_changed {
+            None
+        } else {
+            agent_role_id(&mut transaction, current.project_id, current.actor_id).await?
+        };
+        require_grantable(
+            &mut transaction,
+            access.organization_id,
+            current.project_id,
+            principal.actor_id,
+            next_role,
+            role_id,
+        )
+        .await?;
+    }
     if force_rotate && !next_enabled {
         return Err(AppError::Conflict("external_agent_connection", "disabled"));
     }
@@ -1118,17 +1139,39 @@ fn normalize_scopes(mut scopes: Vec<String>) -> Result<Vec<String>, AppError> {
 
 /// Refuses giving an agent a role that holds a permission the person
 /// giving it doesn't, so a narrowed admin can't win back what their role
-/// leaves out through an agent of their own.
+/// leaves out through an agent of their own. `role_id` is the custom role
+/// the agent holds (or is given), whose permissions are what's handed out,
+/// not its base role's; None for a built-in role. The agent works in
+/// `project_id`, so what it's given there must also be within the giver's
+/// role in that project, not only their workspace role: a project role that
+/// leaves out "see code" or "edit tasks" can't be won back through an agent.
 async fn require_grantable(
     transaction: &mut Transaction<'_, Postgres>,
     organization_id: Uuid,
+    project_id: Uuid,
     caller_actor_id: Uuid,
     role: &str,
+    role_id: Option<Uuid>,
 ) -> Result<(), AppError> {
-    let grant = RoleGrant::stored(role, None::<&[String]>)
+    let permissions = match role_id {
+        Some(role_id) => {
+            sqlx::query_scalar::<_, Option<Vec<String>>>("SELECT workspace_role_permissions($1)")
+                .bind(role_id)
+                .fetch_one(&mut **transaction)
+                .await?
+        }
+        None => None,
+    };
+    let grant = RoleGrant::stored(role, permissions.as_deref())
         .map_err(|_| AppError::Validation("agent role"))?;
     let caller = crate::roles::standing(transaction, organization_id, caller_actor_id).await?;
     if !grant.permissions().is_subset_of(caller.permissions) {
+        return Err(AppError::Forbidden);
+    }
+    let held = crate::roles::project_holding(transaction, caller_actor_id, project_id)
+        .await?
+        .ok_or(AppError::Forbidden)?;
+    if !crate::roles::project_checked(grant.permissions()).is_subset_of(held) {
         return Err(AppError::Forbidden);
     }
     Ok(())
@@ -1522,6 +1565,45 @@ pub(crate) async fn authorize_identity_binding(
         return Err(AppError::Forbidden);
     }
     Ok(access.organization_id)
+}
+
+/// Refuses handing an agent's identity to someone else (binding an outside
+/// identity to the connection) when the agent's role is more than `caller`
+/// holds, as creating or re-enabling the agent would be refused.
+pub(crate) async fn require_connection_grantable(
+    transaction: &mut Transaction<'_, Postgres>,
+    organization_id: Uuid,
+    caller_actor_id: Uuid,
+    project_id: Uuid,
+    connection_id: Uuid,
+) -> Result<(), AppError> {
+    let connection = load_connection_tx(transaction, project_id, connection_id).await?;
+    let role_id = agent_role_id(transaction, project_id, connection.actor_id).await?;
+    require_grantable(
+        transaction,
+        organization_id,
+        project_id,
+        caller_actor_id,
+        &connection.role,
+        role_id,
+    )
+    .await
+}
+
+/// The custom role an agent holds in the project, if any.
+async fn agent_role_id(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    actor_id: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT role_id FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project_id)
+    .bind(actor_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .flatten())
 }
 
 #[cfg(test)]

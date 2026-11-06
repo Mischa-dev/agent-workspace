@@ -55,8 +55,8 @@ use crate::{
     AppState,
     error::AppError,
     policy::{
-        Action, ActorKind, AgentLimits, Decision, Membership, MembershipRole, PermissionSet,
-        ProjectScope, Resource, RoleGrant, Subject, authorize, with_agent_limits,
+        Action, ActorKind, AgentLimits, Decision, Membership, MembershipRole, Permission,
+        PermissionSet, ProjectScope, Resource, RoleGrant, Subject, authorize, with_agent_limits,
     },
 };
 
@@ -4204,11 +4204,9 @@ async fn validate_issue_command(
     .bind(command.actor_id)
     .fetch_optional(pool)
     .await?;
-    let action = if command.scopes.iter().any(|scope| scope == "write") {
-        Action::McpWrite
-    } else {
-        Action::McpRead
-    };
+    let wants_write = command.scopes.iter().any(|scope| scope == "write");
+    // Write scope for anyone whose role may write anything here (any
+    // permission beyond seeing): each tool still checks its own action.
     if !role.is_some_and(|(role, role_permissions)| {
         mcp_policy_allows(
             command.actor_id,
@@ -4216,8 +4214,20 @@ async fn validate_issue_command(
             command.project_id,
             &role,
             role_permissions.as_deref(),
-            action,
-        )
+            Action::McpRead,
+        ) && (!wants_write
+            || RoleGrant::stored(&role, role_permissions.as_deref()).is_ok_and(|grant| {
+                grant.permissions().iter().any(|permission| {
+                    !matches!(
+                        permission,
+                        Permission::ProjectsView
+                            | Permission::TasksView
+                            | Permission::CodeView
+                            | Permission::MembersView
+                            | Permission::DirectoryView
+                    )
+                })
+            }))
     }) {
         return Err(AppError::NotFound("project_membership"));
     }
