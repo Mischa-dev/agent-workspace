@@ -6,8 +6,10 @@
 use super::{
     agent_interface::{Browser, connect_app, initialize, send, tool},
     mcp_admin::{Setup, create_project, setup},
+    mcp_tasks::space,
     message_edits::add_person,
     roles_and_access::{listed_tools, public_call},
+    w20_files::{send_with, upload, upload_to, with_data_root},
 };
 use axum::http::StatusCode;
 use serde_json::{Value, json};
@@ -395,4 +397,119 @@ async fn roles_narrow_modules_and_never_widen_them() {
         off.contains(&"pages".to_owned()) && off.contains(&"runs".to_owned()),
         "{off:?}"
     );
+}
+
+/// The ids of the files a search for `text` finds for `browser`.
+async fn found_files(setup: &Setup, browser: &Browser, text: &str) -> Vec<String> {
+    let (status, body) = send(
+        &setup.app,
+        browser.request(
+            "GET",
+            &format!("/api/v1/search?q={text}&kinds=files"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    body["hits"]
+        .as_array()
+        .expect("hits")
+        .iter()
+        .filter_map(|hit| hit["id"].as_str().map(str::to_owned))
+        .collect()
+}
+
+#[tokio::test]
+async fn file_search_follows_the_module_each_file_came_from() {
+    let Some((setup, _root)) = with_data_root("awd75_file_search").await else {
+        return;
+    };
+    let owner = &setup.browser;
+    let space = space(&setup).await;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (rook, _rook_browser) = add_person(&setup, &[&space, &work], "rook").await;
+
+    // One file in a channel, one in a DM, one on a task, all named alike.
+    let channel = super::message_edits::create_channel(&setup, &work, "general").await;
+    let in_channel = upload_to(&setup, owner, &channel, "ledger-channel.txt").await;
+    let (status, sent) = send_with(
+        &setup,
+        owner,
+        &channel,
+        "ledger-channel",
+        "",
+        &[&in_channel],
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{sent}");
+    let (status, dm) = send(
+        &setup.app,
+        owner.request("POST", "/api/v1/direct/dms", None, json!({"actorId": rook})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{dm}");
+    let dm = dm["conversation"]["id"].as_str().expect("dm").to_owned();
+    let in_dm = upload_to(&setup, owner, &dm, "ledger-dm.txt").await;
+    let (status, sent) = send_with(&setup, owner, &dm, "ledger-dm", "", &[&in_dm]).await;
+    assert_eq!(status, StatusCode::CREATED, "{sent}");
+    let (status, task) = send(
+        &setup.app,
+        owner.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/work-items"),
+            Some("awd75-ledger-task"),
+            json!({"title": "Close the books"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{task}");
+    let task = task["id"].as_str().expect("task").to_owned();
+    let (status, on_task) = upload(
+        &setup,
+        owner,
+        &format!("/api/v1/projects/{work}/work-items/{task}/files?name=ledger-task.txt"),
+        "text/plain",
+        b"ledger",
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{on_task}");
+    let on_task = on_task["id"].as_str().expect("file").to_owned();
+    let mut all = vec![in_channel.clone(), in_dm.clone(), on_task.clone()];
+    all.sort();
+    let mut found = found_files(&setup, owner, "ledger").await;
+    found.sort();
+    assert_eq!(found, all);
+
+    // Channels off: the channel's file goes, the DM's and the task's stay.
+    let (status, changed) = switch(&setup, owner, json!({"switches": {"channels": false}})).await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let found = found_files(&setup, owner, "ledger").await;
+    assert!(!found.contains(&in_channel), "{found:?}");
+    assert!(
+        found.contains(&in_dm) && found.contains(&on_task),
+        "{found:?}"
+    );
+
+    // Tasks off instead: the task's file goes, the channel's comes back.
+    let (status, changed) = switch(
+        &setup,
+        owner,
+        json!({"switches": {"channels": true, "tasks": false}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let found = found_files(&setup, owner, "ledger").await;
+    assert!(!found.contains(&on_task), "{found:?}");
+    assert!(
+        found.contains(&in_channel) && found.contains(&in_dm),
+        "{found:?}"
+    );
+
+    // Off means hidden, never deleted: all on, all three are found again.
+    let (status, changed) = switch(&setup, owner, json!({"switches": {"tasks": true}})).await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let mut found = found_files(&setup, owner, "ledger").await;
+    found.sort();
+    assert_eq!(found, all);
 }

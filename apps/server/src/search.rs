@@ -135,6 +135,13 @@ pub async fn search(
     } else {
         Vec::new()
     };
+    // Files sent in a conversation come only from projects whose conversations
+    // show: DMs with Messages on, a project's channels with Channels on.
+    let conversation_projects = if kinds.contains(&SearchKind::Files) {
+        modules.with_conversations(projects)
+    } else {
+        Vec::new()
+    };
     let mut hits = Vec::new();
     for kind in kinds {
         let projects = match kind {
@@ -169,7 +176,9 @@ pub async fn search(
             .bind(filter.until)
             .bind(limit);
         if *kind == SearchKind::Files {
-            query = query.bind(&task_projects[..]);
+            query = query
+                .bind(&task_projects[..])
+                .bind(&conversation_projects[..]);
         }
         let rows = query.fetch_all(pool).await?;
         hits.extend(rows);
@@ -189,7 +198,9 @@ pub async fn search(
 // $1 viewer, $2 projects, $3 text, $4 conversation, $5 author, $6 since,
 // $7 until, $8 limit. Unused ones are compared against NULL so the planner
 // drops them. The files query also takes $9, the projects where the viewer
-// still sees tasks (`projects_showing_tasks`), for files attached to tasks.
+// still sees tasks (`projects_showing_tasks`), for files attached to tasks,
+// and $10, the projects whose conversations show with the modules on for
+// the viewer, for files sent in a conversation.
 
 const MESSAGES_SQL: &str = r#"
     WITH query AS (SELECT websearch_to_tsquery('english', $3) AS q)
@@ -392,6 +403,10 @@ const FILES_SQL: &str = r#"
       -- $9 (files only): projects where the viewer still sees tasks, so a
       -- task's file never names a task they can't open.
       AND (file.work_item_id IS NULL OR file.project_id = ANY($9))
+      -- $10 (files only): projects whose conversations show (Messages for DMs,
+      -- Channels for a project), so a file never names a conversation whose
+      -- module is off.
+      AND (file.conversation_id IS NULL OR file.project_id = ANY($10))
       AND ($4::uuid IS NULL OR conversation.id = $4 OR conversation.parent_channel_id = $4)
       AND ($5::uuid IS NULL OR file.uploaded_by_actor_id = $5)
       AND ($6::timestamptz IS NULL OR file.created_at >= $6)
