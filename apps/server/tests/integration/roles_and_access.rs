@@ -4673,6 +4673,175 @@ async fn moving_a_task_needs_its_contents_and_code_to_be_seen() {
     );
 }
 
+/// Changing a task's links (task_relate, task_depend) answers with the task.
+/// Someone who may change tasks here but not see them gets only its id and
+/// key, with no title, status or readiness, even for a change that changes
+/// nothing; with "see tasks", all of it.
+#[tokio::test]
+async fn link_changes_name_the_task_only_where_tasks_are_seen() {
+    let Some(setup) = setup("awd74_link_changes").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
+    let task = owner_task(&setup, &work, "Secret linked task").await;
+    let other = owner_task(&setup, &work, "Other linked task").await;
+    let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
+    let session = initialize(app, &bea_app).await.expect("Bea's app");
+    let calls = [
+        (
+            "task_relate",
+            json!({"taskId": task.to_string(), "otherTaskId": other.to_string(), "remove": true}),
+        ),
+        (
+            "task_depend",
+            json!({"taskId": task.to_string(), "blockedBy": [other.to_string()], "remove": true}),
+        ),
+    ];
+
+    // As a plain Member, Bea sees the task.
+    for (name, arguments) in calls.clone() {
+        let seen = tool(app, &bea_app, &session, name, arguments).await;
+        assert_eq!(seen["outcome"], "ok", "{name}: {seen}");
+        let changed = &seen["value"]["task"];
+        assert_eq!(changed["title"], "Secret linked task", "{name}: {seen}");
+        assert!(changed["status"].is_string(), "{name}: {seen}");
+        assert!(changed["statusGroup"].is_string(), "{name}: {seen}");
+        assert_eq!(changed["finished"], false, "{name}: {seen}");
+        if name == "task_depend" {
+            assert!(seen["value"]["ready"].is_boolean(), "{name}: {seen}");
+        }
+    }
+
+    // Changing tasks without seeing them: its id and key only.
+    let (status, editors) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Blind editors", "baseRole": "member", "permissions": ["tasks.edit"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{editors}");
+    let (status, changed) = set_project_role(
+        &setup,
+        &work,
+        bea,
+        "bea-blind-editors",
+        json!({"roleId": editors["id"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    for (name, arguments) in calls {
+        let blind = tool(app, &bea_app, &session, name, arguments).await;
+        assert_eq!(blind["outcome"], "ok", "{name}: {blind}");
+        let changed = &blind["value"]["task"];
+        assert_eq!(changed["id"], task.to_string(), "{name}: {blind}");
+        assert!(changed["key"].is_string(), "{name}: {blind}");
+        for field in ["title", "status", "statusGroup", "finished"] {
+            assert!(changed.get(field).is_none(), "{name} {field}: {blind}");
+        }
+        assert!(blind["value"].get("ready").is_none(), "{name}: {blind}");
+        assert!(
+            !blind.to_string().contains("Secret linked task"),
+            "{name}: {blind}"
+        );
+    }
+}
+
+/// The tasks a link change lists (its relations, what blocks it and what it
+/// blocks) follow "see tasks" in their own project, by role and, in an
+/// app's call, by the app's limit there: a task in another project that the
+/// app's limit hides there is left out, while the changed task still shows.
+#[tokio::test]
+async fn link_changes_list_linked_tasks_only_where_the_app_sees_them() {
+    let Some(setup) = setup("awd74_linked_limit").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let other_project = create_project(&setup, "OTHER", "Other").await;
+    let (bea, bea_browser) = add_person(&setup, &[&work, &other_project], "bea").await;
+    let task = owner_task(&setup, &work, "Changed task").await;
+    let spare = owner_task(&setup, &work, "Spare task").await;
+    let elsewhere = owner_task(&setup, &other_project, "Elsewhere secret").await;
+    let owner_app = connect_app(app, &setup.browser, "Owner's app", "full").await;
+    let owner_session = initialize(app, &owner_app).await.expect("owner app");
+    for (name, arguments) in [
+        (
+            "task_relate",
+            json!({"taskId": task.to_string(), "otherTaskId": elsewhere.to_string()}),
+        ),
+        (
+            "task_depend",
+            json!({"taskId": task.to_string(), "blockedBy": [elsewhere.to_string()]}),
+        ),
+    ] {
+        let linked = tool(app, &owner_app, &owner_session, name, arguments).await;
+        assert_eq!(linked["outcome"], "ok", "{name}: {linked}");
+    }
+    let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
+    let session = initialize(app, &bea_app).await.expect("Bea's app");
+    let calls = [
+        (
+            "task_relate",
+            json!({"taskId": task.to_string(), "otherTaskId": spare.to_string(), "remove": true}),
+        ),
+        (
+            "task_depend",
+            json!({"taskId": task.to_string(), "blocks": [spare.to_string()], "remove": true}),
+        ),
+    ];
+
+    // Bea's app sees tasks in both projects: the linked task is listed.
+    for (name, arguments) in calls.clone() {
+        let listed = tool(app, &bea_app, &session, name, arguments).await;
+        assert_eq!(listed["outcome"], "ok", "{name}: {listed}");
+        assert!(
+            listed.to_string().contains("Elsewhere secret"),
+            "{name}: {listed}"
+        );
+    }
+
+    // In Other, her role's limit leaves "see tasks" out of what apps do.
+    let (status, limited) = create_role(
+        &setup,
+        &setup.browser,
+        json!({
+            "name": "Hands-on elsewhere",
+            "baseRole": "member",
+            "permissions": ["tasks.view", "tasks.edit"],
+            "agentLimit": ["tasks.edit"],
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{limited}");
+    let (status, changed) = set_project_role(
+        &setup,
+        &other_project,
+        bea,
+        "bea-hands-on-elsewhere",
+        json!({"roleId": limited["id"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    for (name, arguments) in calls {
+        let listed = tool(app, &bea_app, &session, name, arguments).await;
+        assert_eq!(listed["outcome"], "ok", "{name}: {listed}");
+        assert_eq!(
+            listed["value"]["task"]["title"], "Changed task",
+            "{name}: {listed}"
+        );
+        assert!(
+            !listed.to_string().contains("Elsewhere secret"),
+            "{name}: {listed}"
+        );
+        assert!(
+            !listed.to_string().contains(&elsewhere.to_string()),
+            "{name}: {listed}"
+        );
+    }
+}
+
 /// The custom role `actor` holds in `project`, if any.
 async fn project_role_id(setup: &Setup, project: &str, actor: Uuid) -> Option<Uuid> {
     sqlx::query_scalar::<_, Option<Uuid>>(
