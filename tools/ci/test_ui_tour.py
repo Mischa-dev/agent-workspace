@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 
 CI_DIR = Path(__file__).resolve().parent
@@ -127,6 +128,90 @@ class RunnerTests(Harness):
                 self.assertNotIn("CI_UI_TOUR", self.command(*args))
 
 
+class FetchTests(unittest.TestCase):
+    """run.sh's ui_tour_after, from run.sh itself, against a stand-in host directory."""
+
+    FILES = [*SCREENS, "index.html", "summary.txt"]
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.repo = self.root / "repo"
+        self.repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=self.repo, check=True, capture_output=True)
+        self.tour = self.root / "host" / "src" / "apps" / "web" / "e2e-output" / "tour"
+        self.tour.mkdir(parents=True)
+        (self.tour.parent / "state").mkdir()
+        (self.tour.parent / "state" / "signed-in.json").write_text('{"cookies": "session-secret"}')
+        self.local = self.repo / "apps" / "web" / "e2e-output" / "ci-tour"
+
+    def outputs(self, run="RUN1", skip=(), empty=()):
+        for name in self.FILES:
+            if name in skip:
+                continue
+            text = "" if name in empty else (f"UI tour (channel)\nrun: {run}\n" if name == "summary.txt" else name)
+            (self.tour / name).write_text(text)
+
+    def after(self, status=0):
+        script, boundary, _ = (CI_DIR / "run.sh").read_text().partition("# One CI job per machine:")
+        self.assertTrue(boundary, "could not isolate ui_tour_after from host scheduling")
+        script += (
+            f'\nwork={self.root / "host"}\nroot={self.repo}\nrun_id=RUN1\nheld_host=redhat\n'
+            'remote() { bash -c "$1"; }\n'
+            f'ui_tour_after {status} && echo status=0 || echo "status=$?"\n'
+        )
+        result = subprocess.run(["bash", "-s", "--", "--host", "redhat", "--ui-tour", "channel"], input=script,
+                                text=True, cwd=self.repo, capture_output=True, timeout=10)
+        return result.stdout + result.stderr
+
+    def copied(self):
+        return sorted(path.name for path in self.local.iterdir()) if self.local.exists() else []
+
+    def test_a_passing_run_brings_back_exactly_its_six_files(self):
+        self.outputs()
+        out = self.after()
+        self.assertIn("status=0", out)
+        self.assertIn("UI tour output copied", out)
+        self.assertEqual(self.copied(), sorted(self.FILES))
+        self.assertNotIn("session-secret", "".join((self.local / name).read_text() for name in self.FILES))
+
+    def test_a_missing_or_empty_output_fails(self):
+        for skip, empty in (([SCREENS[0]], []), ([], [SCREENS[1]]), (["summary.txt"], [])):
+            with self.subTest(skip=skip, empty=empty):
+                for path in self.tour.iterdir():
+                    path.unlink()
+                self.outputs(skip=skip, empty=empty)
+                out = self.after()
+                self.assertIn("status=1", out)
+                self.assertNotIn("UI tour output copied", out)
+                self.assertRegex(out, r"couldn't copy the UI tour's output|output is missing")
+
+    def test_an_earlier_runs_files_never_pass_for_this_one(self):
+        self.outputs(run="RUN0")
+        out = self.after()
+        self.assertIn("status=1", out)
+        self.assertIn("isn't from this run (RUN1)", out)
+        self.assertNotIn("UI tour output copied", out)
+
+    def test_no_output_on_the_host_fails(self):
+        for path in self.tour.iterdir():
+            path.unlink()
+        self.tour.rmdir()
+        out = self.after()
+        self.assertIn("status=1", out)
+        self.assertIn("couldn't copy the UI tour's output back from redhat", out)
+
+    def test_failed_checks_copy_nothing_and_keep_their_status(self):
+        self.outputs()
+        self.local.mkdir(parents=True)
+        (self.local / "summary.txt").write_text("run: RUN0\n")
+        out = self.after(status=7)
+        self.assertIn("status=7", out)
+        self.assertIn("the checks failed, so no UI tour output was copied back", out)
+        self.assertFalse(self.local.exists(), "an earlier copy was left in place")
+
+
 class ChecksTests(Harness):
     def test_off_by_default(self):
         result, calls = self.run_script("checks.sh", ["web"])
@@ -229,8 +314,10 @@ class TourCheckTests(unittest.TestCase):
     def test_a_complete_tour_passes_and_summarises_without_secrets_or_seeded_text(self):
         problems, _ = self.run_check()
         self.assertEqual(problems, [])
-        self.assertEqual(self.checker.main(["check", str(self.output), str(self.started)]), 0)
+        with mock.patch.dict(os.environ, {"CI_RUN_ID": "gh123_1"}):
+            self.assertEqual(self.checker.main(["check", str(self.output), str(self.started)]), 0)
         summary = (self.output / "tour" / "summary.txt").read_text()
+        self.assertIn("run: gh123_1\n", summary)
         self.assertIn("runId: 019fb8b0-0000-7000-8000-0000000000aa", summary)
         for name in SCREENS:
             self.assertIn(name, summary)

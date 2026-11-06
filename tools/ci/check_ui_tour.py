@@ -6,12 +6,15 @@ The tour ran with UI_TOUR_ONLY=channel: its whole seed, then the channel
 screen at 1440 and 390 px in light and dark. This fails unless the seed made a
 run and warned about nothing, and the four channel screenshots and the contact
 sheet are this run's (written since <started>) and are what they say. It then
-writes tour/summary.txt: the run's ID and each file's size and SHA-256. Nothing
-from the signed-in browser state, and none of the seeded text, goes in it.
+writes tour/summary.txt: the CI run it belongs to (CI_RUN_ID, which run.sh
+checks before copying anything back), the tour's run ID, and each file's size
+and SHA-256. Nothing from the signed-in browser state, and none of the seeded
+text, goes in it.
 """
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -73,7 +76,8 @@ def main(argv: list[str]) -> int:
         return 2
     output, started = Path(argv[1]), int(argv[2])
     problems, lines = check(output, started)
-    summary = "\n".join(["UI tour (channel)", *lines, *(f"problem: {p}" for p in problems)]) + "\n"
+    run = os.environ.get("CI_RUN_ID") or "unknown"
+    summary = "\n".join(["UI tour (channel)", f"run: {run}", *lines, *(f"problem: {p}" for p in problems)]) + "\n"
     if (output / "tour").is_dir():
         (output / "tour" / "summary.txt").write_text(summary)
     print(summary, end="")

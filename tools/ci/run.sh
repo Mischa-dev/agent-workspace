@@ -171,18 +171,42 @@ checks_command() {
     exec setsid -w tools/ci/checks.sh '${areas}'"
 }
 
-# `fetch_ui_tour`: copy what the opt-in tour made back here: the four channel
-# screenshots, their contact sheet and the summary, and nothing else (not the
-# signed-in browser state next to them).
-fetch_ui_tour() {
-  local into="${root}/apps/web/e2e-output/ci-tour"
+# The opt-in tour's outputs that come back here: the four channel screenshots,
+# their contact sheet and the summary. Nothing else does (not the signed-in
+# browser state next to them).
+ui_tour_files=(02-channel-desktop-light.png 02-channel-desktop-dark.png
+  02-channel-phone-light.png 02-channel-phone-dark.png index.html summary.txt)
+
+# `ui_tour_after <checks status>`: after an opt-in tour run, copy its outputs
+# back, only when every check passed, and only all of them, from this run (the
+# summary names this run's ID, so an earlier run's files left on the host never
+# pass for this one). Anything else fails, saying why. Returns the status to
+# exit with.
+ui_tour_after() {
+  local status="$1" into="${root}/apps/web/e2e-output/ci-tour" name missing=()
   rm -rf "${into}"
+  if [ "${status}" -ne 0 ]; then
+    echo "ci: the checks failed, so no UI tour output was copied back" >&2
+    return "${status}"
+  fi
   mkdir -p "${into}"
-  remote "cd ${work}/src/apps/web/e2e-output/tour 2>/dev/null &&
-    tar -cf - --ignore-failed-read 02-channel-desktop-light.png 02-channel-desktop-dark.png \
-      02-channel-phone-light.png 02-channel-phone-dark.png index.html summary.txt 2>/dev/null" |
-    tar -xf - -C "${into}" 2>/dev/null || true
-  echo "ci: UI tour output copied to ${into}: $(cd "${into}" && ls | tr '\n' ' ')"
+  if ! remote "cd ${work}/src/apps/web/e2e-output/tour && tar -cf - ${ui_tour_files[*]}" |
+    tar -xf - -C "${into}"; then
+    echo "ci: couldn't copy the UI tour's output back from ${held_host:-the host}" >&2
+    return 1
+  fi
+  for name in "${ui_tour_files[@]}"; do
+    [ -s "${into}/${name}" ] || missing+=("${name}")
+  done
+  if [ "${#missing[@]}" -gt 0 ]; then
+    echo "ci: the UI tour's output is missing ${missing[*]}" >&2
+    return 1
+  fi
+  if ! grep -qxF "run: ${run_id}" "${into}/summary.txt"; then
+    echo "ci: the UI tour's summary isn't from this run (${run_id})" >&2
+    return 1
+  fi
+  echo "ci: UI tour output copied to ${into}: ${ui_tour_files[*]}"
 }
 
 # One CI job per machine: mkdir is atomic. The holder touches lock/alive every
@@ -293,7 +317,7 @@ while :; do
   wait $!
   status=$?
   set -e
-  if [ -n "${ui_tour}" ]; then fetch_ui_tour; fi
+  if [ -n "${ui_tour}" ]; then ui_tour_after "${status}" || status=$?; fi
   if ci_moves_on "${status}"; then
     busy_host="${held_host}"
     release
