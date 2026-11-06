@@ -20,7 +20,7 @@ import { MobileNavigationProvider } from '../shell/MobileNavigationProvider'
 import { ThemeProvider } from '../theme/ThemeProvider'
 import { Button, EmptyState, PageSkeleton, ToastViewport } from '../ui'
 import { AppErrorBoundary } from './AppErrorBoundary'
-import { ModuleGate } from '../modules/TurnedOffPage'
+import { ModuleGate } from '../modules/ModuleGate'
 
 const SettingsArea = lazy(() => import('../settings/SettingsArea'))
 const SignInPage = lazy(() => import('../auth/SignInPage').then((module) => ({ default: module.SignInPage })))
@@ -371,7 +371,7 @@ export function AuthenticatedRouteBoundary({
 }) {
   return (
     <Suspense fallback={<AuthenticatedRouteFallback />}>
-      <ModuleGate>{children}</ModuleGate>
+      <ModuleGate waiting={<AuthenticatedRouteFallback />}>{children}</ModuleGate>
     </Suspense>
   )
 }

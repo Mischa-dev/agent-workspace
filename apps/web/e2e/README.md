@@ -33,6 +33,10 @@ be a test matrix. Unit and component tests stay in `src/` with Vitest.
   and resolve to the expected theme. The PNGs land in
   `e2e-output/screenshots/` as artifacts; they're never compared against
   committed images.
+- `tour/`: the UI tour (AWD-84), with its own config and seed and not part
+  of CI. `tools/ui-tour/run.sh` makes 15 key screens at 1440 and 390 px in
+  light and dark against a busy seeded workspace; see
+  `docs/plans/ui-hill-climb/round-0.md`.
 
 ## Running locally
 

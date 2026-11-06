@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
+import paletteClaims from 'virtual:modules/slots/palette'
+import shortcutClaims from 'virtual:modules/slots/shortcuts'
+import slashClaims from 'virtual:modules/slots/slash'
 
 import { clearAuthenticatedQueryCache, logout, useAuthenticatedSession } from '../auth/session'
 import { useProjectConversationSidebar } from '../conversations/hooks'
@@ -9,7 +12,7 @@ import { conversationTitle, openDm, useDirectOverview } from '../direct/api'
 import { projectLocationHref } from '../projects/locations'
 import { projectSettingsHref } from '../settings/paths'
 import { useProjectSearch, useProjects, useSwitchProject, useUpdateProjectNavigation } from '../projects/hooks'
-import { moduleOf } from '../modules/slots'
+import { moduleSwitchable, ownerOf } from '../modules/ownership'
 import { ProjectInitials } from '../projects/ProjectInitials'
 import type { Project } from '../projects/types'
 import { THEME_PRESETS } from '../theme/slots'
@@ -81,7 +84,8 @@ export function CommandPalette() {
     [projectsQuery.data?.projects],
   )
   const current = useRouteProject(projects)
-  // AWD-75: entries of modules that are off for the person don't show.
+  // AWD-75: entries of modules that are off for the person don't show, nor
+  // those of a module that can be off while the person's settings load.
   const projectExperience = useProjectExperience(current?.id)
   const homeExperience = useHomeExperience()
   const experience = current ? projectExperience : homeExperience
@@ -411,7 +415,8 @@ export function CommandPalette() {
     () =>
       items.filter((item) => {
         const module = paletteModule(item.id)
-        return !module || experience.moduleOn(module)
+        if (!module || !moduleSwitchable(module)) return true
+        return experience.modules !== 'loading' && experience.moduleOn(module)
       }),
     [experience, items],
   )
@@ -475,7 +480,7 @@ function ShortcutSheet({ inProject, onClose, open, taskView }: { inProject: bool
   const taskKeys = (taskView === 'board' ? BOARD_SHORTCUTS : LIST_SHORTCUTS).filter((shortcut) => shortcut.keys.join() !== '?')
   const experience = useHomeExperience()
   const shortcutOn = (action: string) => {
-    const module = moduleOf('shortcuts', action)
+    const module = ownerOf(shortcutClaims, action)
     return !module || experience.moduleOn(module)
   }
   return (
@@ -589,5 +594,5 @@ function MarkAllReadDialog({ onClose, open, projectIds }: { onClose: () => void;
 
 /** The module a palette entry belongs to; slash commands follow their own. */
 function paletteModule(id: string) {
-  return id.startsWith('slash:') ? moduleOf('slash', id.slice('slash:'.length)) : moduleOf('palette', id)
+  return id.startsWith('slash:') ? ownerOf(slashClaims, id.slice('slash:'.length)) : ownerOf(paletteClaims, id)
 }

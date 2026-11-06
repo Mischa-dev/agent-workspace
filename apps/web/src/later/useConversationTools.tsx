@@ -2,12 +2,13 @@ import { BellOff } from 'lucide-react'
 import { useRef } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from 'react-router-dom'
+import slashClaims from 'virtual:modules/slots/slash'
 
 import { createIdempotencyKey } from '../conversations/composerModel'
 import type { ConversationKind, MessageContentV1 } from '../conversations/types'
 import { toastError } from '../app/mutations'
 import { useHomeExperience, useProjectExperience } from '../experience/layout'
-import { moduleOf } from '../modules/slots'
+import { ownerOf } from '../modules/ownership'
 import { Banner, countLabel, showToast, type MenuEntry } from '../ui'
 import { createWorkItem } from '../work-items/api'
 import {
@@ -57,7 +58,7 @@ export function useConversationTools({
   const homeExperience = useHomeExperience()
   const experience = inProject ? projectExperience : homeExperience
   const slashOn = (name: string) => {
-    const module = moduleOf('slash', name)
+    const module = ownerOf(slashClaims, name)
     return !module || experience.moduleOn(module)
   }
   const scheduling = experience.shows('talk.scheduling')

@@ -1,8 +1,9 @@
 import { lazy, Suspense, useEffect, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
+import shortcutClaims from 'virtual:modules/slots/shortcuts'
 
 import { useHomeExperience, useProjectExperience } from '../experience/layout'
-import { moduleOf } from '../modules/slots'
+import { moduleSwitchable, ownerOf } from '../modules/ownership'
 import { useProjects } from '../projects/hooks'
 import { projectSettingsHref } from '../settings/paths'
 import { createTaskHref } from '../work-items/links'
@@ -34,7 +35,9 @@ export function CommandCenter() {
   )
   const current = useRouteProject(projects)
   const currentRef = useRef(current)
-  // AWD-75: shortcuts of modules that are off for the person do nothing.
+  // AWD-75: shortcuts of modules that are off for the person do nothing, nor
+  // those of a module that can be off while the person's settings load. This
+  // hides in the app; the server checks access on its own.
   const projectExperience = useProjectExperience(current?.id)
   const homeExperience = useHomeExperience()
   const experience = current ? projectExperience : homeExperience
@@ -98,8 +101,11 @@ export function CommandCenter() {
       if (event.defaultPrevented) return
       const action = press(event)
       if (!action) return
-      const module = moduleOf('shortcuts', action)
-      if (module && !experienceRef.current.moduleOn(module)) return
+      const module = ownerOf(shortcutClaims, action)
+      if (module && moduleSwitchable(module)) {
+        const experience = experienceRef.current
+        if (experience.modules === 'loading' || !experience.moduleOn(module)) return
+      }
       event.preventDefault()
       // One sheet: it lists the task list and board keys too, so a page's own
       // "?" listener (on window, after this one) doesn't open a second.

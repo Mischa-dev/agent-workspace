@@ -1,4 +1,4 @@
-import { cpSync, createReadStream, existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
+import { cpSync, createReadStream, existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { dirname, join, normalize, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -44,6 +44,53 @@ function excalidrawAssets(): Plugin {
   }
 }
 
+// AWD-75: the module manifests (`modules/*.json`, which the server reads too)
+// as small build-time projections, so each part of the app bundles only the
+// ownership it asks for: `virtual:modules/slots/<kind>` is that kind's
+// [pattern, module] claims, in module and then manifest order;
+// `virtual:modules/switchable` the modules that can be off, and
+// `virtual:modules/names` each module's name. One module per kind, so the
+// first page load doesn't carry the palette's or Home's claims.
+const SLOT_KINDS = ['pages', 'parts', 'sidebar', 'home', 'settings', 'palette', 'shortcuts', 'slash', 'setup'] as const
+const manifestsDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'modules')
+
+type Manifest = { name?: string; switchable?: boolean; slots?: Record<string, string[] | undefined> }
+
+function readManifests(): Array<{ id: string; file: string; manifest: Manifest }> {
+  return readdirSync(manifestsDir)
+    .filter((file) => file.endsWith('.json') && file !== 'presets.json')
+    .sort()
+    .map((file) => ({
+      id: file.slice(0, -'.json'.length),
+      file: join(manifestsDir, file),
+      manifest: JSON.parse(readFileSync(join(manifestsDir, file), 'utf8')) as Manifest,
+    }))
+}
+
+function moduleProjections(): Plugin {
+  const prefix = 'virtual:modules/'
+  return {
+    name: 'module-projections',
+    resolveId: (id) => (id.startsWith(prefix) ? `\0${id}` : null),
+    load(id) {
+      if (!id.startsWith(`\0${prefix}`)) return null
+      const what = id.slice(prefix.length + 1)
+      const manifests = readManifests()
+      for (const { file } of manifests) this.addWatchFile(file)
+      if (what === 'switchable') {
+        return `export default ${JSON.stringify(manifests.filter(({ manifest }) => manifest.switchable === true).map(({ id }) => id))}`
+      }
+      if (what === 'names') {
+        return `export default ${JSON.stringify(Object.fromEntries(manifests.map(({ id, manifest }) => [id, manifest.name ?? id])))}`
+      }
+      const kind = what.startsWith('slots/') ? what.slice('slots/'.length) : ''
+      if (!(SLOT_KINDS as readonly string[]).includes(kind)) this.error(`unknown module projection ${id}`)
+      const claims = manifests.flatMap(({ id, manifest }) => (manifest.slots?.[kind] ?? []).map((pattern) => [pattern, id]))
+      return `export default ${JSON.stringify(claims)}`
+    },
+  }
+}
+
 // Excalidraw and what it pulls in (diagram parsers, maths, locales) load only
 // on a whiteboard. Their chunks go under assets/whiteboard/ so the web budget
 // can hold them to their own limit; see scripts/web-budget-lib.mjs.
@@ -74,7 +121,7 @@ function isWhiteboardChunk(moduleIds: readonly string[]) {
 }
 
 export default defineConfig({
-  plugins: [react(), excalidrawAssets()],
+  plugins: [react(), excalidrawAssets(), moduleProjections()],
   build: {
     rollupOptions: {
       output: {

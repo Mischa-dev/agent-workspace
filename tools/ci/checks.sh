@@ -21,6 +21,13 @@ case "${areas}" in
   *) echo "ci: invalid areas '${areas}' (expected rust,web, rust or web)" >&2; exit 2 ;;
 esac
 has() { [[ ",${areas}," == *",$1,"* ]]; }
+# CI_UI_TOUR=channel (run.sh --host redhat --ui-tour channel, never the
+# default): after the browser smoke tests, the UI tour's seed and its channel
+# screens, in the same step (run_ui_tour).
+case "${CI_UI_TOUR:-}" in
+  '' | channel) ;;
+  *) echo "ci: invalid CI_UI_TOUR '${CI_UI_TOUR}' (expected channel)" >&2; exit 2 ;;
+esac
 
 # Run at low priority, capped, so the machine's owner always comes first.
 if [ -z "${CI_SCOPED:-}" ]; then
@@ -41,6 +48,12 @@ if [ -z "${CI_SCOPED:-}" ]; then
   # a machine without user scopes still runs the checks at low priority.
   if [ -n "${CI_BUILD_LOCK:-}" ]; then
     echo "ci: not running checks: the laptop route needs a capped scope" \
+      "(CI_MEMORY_MAX='${CI_MEMORY_MAX:-}'), and systemd-run --user --scope couldn't make one" >&2
+    exit 125
+  fi
+  # So is the opt-in UI tour's, which never runs uncapped.
+  if [ -n "${CI_UI_TOUR:-}" ]; then
+    echo "ci: not running checks: the UI tour needs a capped scope" \
       "(CI_MEMORY_MAX='${CI_MEMORY_MAX:-}'), and systemd-run --user --scope couldn't make one" >&2
     exit 125
   fi
@@ -350,10 +363,36 @@ run_browser_smoke() {
     local server_port="${E2E_SERVER_PORT:-3190}"
     python3 tools/ci/free_ports.py "${server_port}" "$((server_port + 1))" "${E2E_WEB_PORT:-5190}"
   fi
+  local database_name
+  database_name="aw_e2e_$(printf '%s' "${CI_RUN_ID:-$$}" | tr -c 'a-zA-Z0-9' '_' | tr 'A-Z' 'a-z')"
   E2E_SERVER_BINARY="${binary}" E2E_DATABASE_BASE="${CI_DATABASE_BASE}" CI=1 \
-    E2E_DATABASE_NAME="aw_e2e_$(printf '%s' "${CI_RUN_ID:-$$}" | tr -c 'a-zA-Z0-9' '_' | tr 'A-Z' 'a-z')" \
-    pnpm test:e2e
+    E2E_DATABASE_NAME="${database_name}" \
+    pnpm test:e2e || return
+  [ "${CI_UI_TOUR:-}" = channel ] || return 0
+  run_ui_tour "${binary}" "${database_name}"
 }
+
+# `run_ui_tour <server> <database name>`: the opt-in UI tour (CI_UI_TOUR=channel)
+# after the smoke tests, in the same step: the tour's whole seed and its channel
+# screens (apps/web/e2e/tour, UI_TOUR_ONLY=channel), against the server and
+# throwaway database name the smoke tests just used. Not the tour's launcher,
+# which would build the server again. check_ui_tour.py then fails the step
+# unless the seed finished with a run and no warnings and the four channel
+# screenshots and contact sheet are this run's, and writes a summary.
+run_ui_tour() {
+  local output=apps/web/e2e-output started
+  rm -rf "${output}/tour" "${output}/state/tour.json"
+  if [ -n "${CI_LOCK_DIR:-}" ]; then
+    local server_port="${E2E_SERVER_PORT:-3190}"
+    python3 tools/ci/free_ports.py "${server_port}" "$((server_port + 1))" "${E2E_WEB_PORT:-5190}"
+  fi
+  started=$(date +%s)
+  E2E_SERVER_BINARY="$1" E2E_DATABASE_BASE="${CI_DATABASE_BASE}" CI=1 \
+    E2E_DATABASE_NAME="$2" UI_TOUR_ONLY=channel \
+    pnpm --filter @agent-workspace/web exec playwright test --config playwright.tour.config.ts || return
+  python3 tools/ci/check_ui_tour.py "${output}" "${started}"
+}
+
 # Under an admission lock nothing heavy runs side by side: the web checks wait.
 if has web && has rust && { [ "$(nproc)" -lt 8 ] || [ -n "${CI_MEMORY_MAX:-}" ] || [ -n "${CI_BUILD_LOCK:-}" ]; }; then
   web_later=1

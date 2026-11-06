@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { describeError } from '../../app/mutations'
 import { useWorkspaceLayout } from '../../experience/api'
 import { REGISTRY } from '../../experience/registry'
-import { MODULE_SLOTS, moduleName } from '../../modules/slots'
+import { MODULE_IDS, moduleName } from '../../modules/names'
 import {
   Banner,
   Button,
@@ -46,7 +46,7 @@ import {
 import './roles.css'
 
 // AWD-75: the modules a role can turn off for its holders.
-const SWITCHABLE_MODULES = Object.keys(MODULE_SLOTS).filter((module) => module !== 'workspace')
+const SWITCHABLE_MODULES = MODULE_IDS.filter((module) => module !== 'workspace')
 
 const BASE_LABELS: Record<BaseRole, string> = { owner: 'Owner', admin: 'Admin', member: 'Member', viewer: 'Viewer' }
 const PINNABLE_VIEWS = [

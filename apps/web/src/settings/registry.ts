@@ -7,9 +7,10 @@
 // page's old id redirects in ./route.ts.
 import { lazy, type ComponentType, type LazyExoticComponent } from 'react'
 import { ArrowDownUp, Bell, Blocks, BookOpen, Bug, Cpu, LayoutTemplate, Mail, PanelsTopLeft, Plug, ScrollText, Server, User, UserCog, Webhook, Zap } from 'lucide-react'
+import settingsClaims from 'virtual:modules/slots/settings'
 
 import type { PartId } from '../experience/parts'
-import { moduleOf } from '../modules/slots'
+import { ownerOf } from '../modules/ownership'
 import type { IconGlyph } from '../ui'
 import type { SettingsGroup, SettingsPageProps, SettingsVisibility } from './types'
 
@@ -119,6 +120,6 @@ export function findPage(group: SettingsGroup, id: string) {
 
 /** AWD-75: a page of a module that's off for the person leaves the nav. */
 function moduleShows(context: SettingsVisibility, page: string) {
-  const module = moduleOf('settings', page)
+  const module = ownerOf(settingsClaims, page)
   return !module || (context.experience?.moduleOn(module) ?? true)
 }

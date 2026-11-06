@@ -1,9 +1,10 @@
 import { type MouseEvent } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
+import homeClaims from 'virtual:modules/slots/home'
 
 import { useAuthenticatedSession } from '../auth/session'
 import { useHomeExperience } from '../experience/layout'
-import { moduleOf } from '../modules/slots'
+import { ownerOf } from '../modules/ownership'
 import { AppShell } from '../shell/AppShell'
 import { defaultWorkspace } from '../settings/workspaceChoice'
 import { Badge, Banner, ButtonLink, EmptyState, ErrorState, Icon, ListSkeleton, PageHeader, Row, RowList, Section, relativeDay } from '../ui'
@@ -65,7 +66,7 @@ export function HomePage() {
 
   // AWD-75: a Home section of a module that's off doesn't show.
   const homeOn = (section: string) => {
-    const module = moduleOf('home', section)
+    const module = ownerOf(homeClaims, section)
     return !module || experience.moduleOn(module)
   }
   // Sections this layout shows; the ones that loaded empty fold into one line above the rest.

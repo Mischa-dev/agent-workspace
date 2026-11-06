@@ -5,6 +5,8 @@ import { outputRoot, ports, serverOrigin, webOrigin } from './e2e/environment'
 // Browser smoke tests: a few real flows against a throwaway server. See e2e/README.md.
 export default defineConfig({
   testDir: './e2e',
+  // The UI tour has its own config and seed (playwright.tour.config.ts).
+  testIgnore: ['tour/**'],
   outputDir: `${outputRoot}/test-results`,
   globalSetup: './e2e/global-setup.ts',
   // One seeded User and Project shared by every spec, so run them in order.
