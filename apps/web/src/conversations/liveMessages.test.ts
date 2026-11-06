@@ -255,3 +255,39 @@ describe('removed and edited messages', () => {
     expect(buildMessageContent(draft.text, draft.mentions, draft.workItems)).toEqual(content)
   })
 })
+
+describe('reply quotes of removed messages', () => {
+  const quoteOf = (sequence: number, text: string) => ({
+    replyTo: { messageId: messageId(sequence), available: true, removed: false, authorName: 'Bob', text, href: null },
+  })
+
+  it('blank during render when the quoted message is removed live, in this conversation only', () => {
+    const list = entries(wireEntry(1, 'ghp_secret'), wireEntry(2, 'Answer', quoteOf(1, 'ghp_secret')))
+    const removal: MessageUpdates = {
+      [messageId(1)]: { conversationId, messageId: messageId(1), revision: 1, removed: true },
+    }
+    const shown = applyLiveMessages(list, removal, {}, conversationId)
+    expect(JSON.stringify(shown)).not.toContain('ghp_secret')
+    expect(shown[1].message?.replyTo).toMatchObject({ messageId: messageId(1), removed: true, text: null })
+    expect(shown[1].message?.plainText).toBe('Answer')
+    // A removal seen in another conversation changes nothing here.
+    const elsewhere: MessageUpdates = {
+      [messageId(1)]: { conversationId: projectId, messageId: messageId(1), revision: 1, removed: true },
+    }
+    expect(applyLiveMessages(list, elsewhere, {}, conversationId)).toBe(list)
+  })
+
+  it('blank in cached timelines at once', () => {
+    const queryClient = new QueryClient()
+    const timelineKey = queryKeys.timeline(projectId, conversationId)
+    queryClient.setQueryData(
+      timelineKey,
+      page([wireEntry(1, 'ghp_secret'), wireEntry(2, 'Answer', quoteOf(1, 'ghp_secret')), wireEntry(3, 'Other', quoteOf(9, 'Keep me'))]),
+    )
+    dropRemovedMessage(queryClient, { conversationId, messageId: messageId(1) })
+    const cached = JSON.stringify(queryClient.getQueryData(timelineKey))
+    expect(cached).not.toContain('ghp_secret')
+    expect(cached).toContain('Answer')
+    expect(cached).toContain('Keep me')
+  })
+})

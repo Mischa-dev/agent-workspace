@@ -121,6 +121,10 @@ pub(super) struct MessageSendArguments {
     /// Files to attach (up to 10), uploaded first with file_upload to this
     /// conversation. With files, text may be left out.
     pub attachment_ids: Option<Vec<String>>,
+    /// Reply to this message in the same conversation (an ID or a link): it
+    /// shows quoted above yours, with a jump back to it. To answer at length
+    /// or start a side discussion in a channel, use thread_start instead.
+    pub reply_to_message_id: Option<String>,
     /// A stable ID for this message, so retrying never sends it twice.
     pub client_request_id: Option<String>,
 }
@@ -289,6 +293,24 @@ pub(super) struct MessageItem {
     /// Files attached to the message. Read one with file_read.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<super::file_tools::FileSummary>,
+    /// The message this one replies to, quoted as you may see it now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<ReplyQuote>,
+}
+
+/// The message a reply answers (AWD-70).
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ReplyQuote {
+    pub message_id: String,
+    /// "Name", or nothing when you can't see it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    /// Up to 280 characters of its text as it reads now; empty once removed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub removed: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -317,6 +339,7 @@ struct MessageRow {
     removed: Option<bool>,
     remover_name: Option<String>,
     remover_handle: Option<String>,
+    reply_to_message_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -908,6 +931,7 @@ pub(super) async fn message_items(
                message.revision, message.edited_at::text AS edited_at,
                message.removed_at IS NOT NULL AS removed,
                remover.display_name AS remover_name, remover.handle AS remover_handle,
+               message.reply_to_message_id,
                (SELECT jsonb_agg(jsonb_build_object(
                         'id', thread.id, 'name', thread.name, 'status', thread.thread_status)
                         ORDER BY thread.created_at)
@@ -943,6 +967,14 @@ pub(super) async fn message_items(
         .collect::<Vec<_>>();
     let mut reactions = reaction_rows(&state.pool, conversation_id, &live, viewer).await?;
     let mut attachments = super::file_tools::message_attachments(state, &live).await?;
+    // What replies answer, read for the viewer: a quote they can't see now
+    // shows only its ID.
+    let replied_to = rows
+        .iter()
+        .filter(|row| !row.removed.unwrap_or(false))
+        .filter_map(|row| row.reply_to_message_id)
+        .collect::<Vec<_>>();
+    let quotes = crate::forwarding::quotes(&state.pool, &replied_to, viewer).await?;
     Ok(rows
         .into_iter()
         .map(|row| {
@@ -954,12 +986,42 @@ pub(super) async fn message_items(
                 .message_id
                 .and_then(|id| attachments.remove(&id))
                 .unwrap_or_default();
+            let reply_to = row
+                .reply_to_message_id
+                .filter(|_| !row.removed.unwrap_or(false))
+                .map(|id| reply_quote(id, quotes.get(&id)));
             let mut item = message_item(row);
             item.reactions = reaction_summaries(summaries);
             item.attachments = files;
+            item.reply_to = reply_to;
             item
         })
         .collect())
+}
+
+/// How much of a replied-to message an agent sees beside the reply.
+const REPLY_QUOTE_CHARACTERS: usize = 280;
+
+/// A reply's quote for an agent: who and what, cut short, or only the ID
+/// when the reader can't see it.
+fn reply_quote(id: Uuid, quote: Option<&crate::forwarding::ForwardedView>) -> ReplyQuote {
+    let Some(quote) = quote else {
+        return ReplyQuote {
+            message_id: id.to_string(),
+            author: None,
+            text: None,
+            removed: false,
+        };
+    };
+    ReplyQuote {
+        message_id: id.to_string(),
+        author: quote.author_name.clone(),
+        text: quote
+            .text
+            .as_deref()
+            .map(|text| truncate_text(text, REPLY_QUOTE_CHARACTERS).0),
+        removed: quote.removed,
+    }
 }
 
 /// "Name (@handle)", with ", agent" for agents.
@@ -1010,6 +1072,7 @@ fn message_item(row: MessageRow) -> MessageItem {
             .unwrap_or_default(),
         reactions: Vec::new(),
         attachments: Vec::new(),
+        reply_to: None,
     }
 }
 
@@ -1360,6 +1423,18 @@ pub(super) async fn message_send(
     let Some(conversation_id) = parse_id(&arguments.conversation_id) else {
         return ToolResult::invalid("conversationId", "Pass a conversation ID or link.");
     };
+    let reply_to_message_id = match arguments.reply_to_message_id.as_deref() {
+        None => None,
+        Some(value) => match parse_message_id(value) {
+            Some(id) => Some(id),
+            None => {
+                return ToolResult::invalid(
+                    "replyToMessageId",
+                    "Pass the ID or link of a message in this conversation.",
+                );
+            }
+        },
+    };
     let attachments = match super::file_tools::attachment_ids(arguments.attachment_ids) {
         Ok(ids) => ids,
         Err(refused) => return refused,
@@ -1388,6 +1463,7 @@ pub(super) async fn message_send(
         content,
         &attachments,
         arguments.client_request_id,
+        reply_to_message_id,
     )
     .await
 }
@@ -1457,6 +1533,7 @@ async fn send(
     content: serde_json::Value,
     attachments: &[Uuid],
     client_request_id: Option<String>,
+    reply_to_message_id: Option<Uuid>,
 ) -> ToolResult<SentMessage> {
     let key = client_request_id.unwrap_or_else(|| Uuid::now_v7().to_string());
     let Ok(idempotency_key) = IdempotencyKey::parse(&key) else {
@@ -1478,7 +1555,10 @@ async fn send(
         content,
         attachments,
         None,
-        crate::conversations::AppendExtras::default(),
+        crate::conversations::AppendExtras {
+            reply_to_message_id,
+            ..crate::conversations::AppendExtras::default()
+        },
     )
     .await
     {
@@ -1498,6 +1578,10 @@ async fn send(
             "attachmentIds",
             "Attach files you uploaded to this conversation with file_upload and haven't sent yet.",
         ),
+        Err(AppError::Refused {
+            field: "replyToMessageId",
+            message,
+        }) => ToolResult::invalid("replyToMessageId", message),
         Err(error) => ToolResult::from_error(error, "message_send"),
     }
 }
@@ -1628,7 +1712,7 @@ pub(super) async fn conversation_start(
         {
             Some(text) => {
                 let content = content_from_text(state, space_id, text).await?;
-                match send(state, principal, conversation_id, content, &[], None).await {
+                match send(state, principal, conversation_id, content, &[], None, None).await {
                     ToolResult::Ok { value } => Some(value),
                     failed => return Ok(retype(failed)),
                 }
@@ -1955,7 +2039,7 @@ async fn post_optional(
     });
     let content = content_from_text(state, principal.project_id, text).await?;
     Ok(
-        match send(state, principal, conversation_id, content, &[], key).await {
+        match send(state, principal, conversation_id, content, &[], key, None).await {
             ToolResult::Ok { value } => Some(value),
             _ => None,
         },

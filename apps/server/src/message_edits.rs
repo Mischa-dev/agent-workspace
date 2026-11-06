@@ -415,6 +415,17 @@ async fn locked_entry(
     Ok(entry)
 }
 
+/// An edit's response as it's stored for replays: a reply's quote keeps which
+/// message it quotes, not its text (`forwarding::without_reply_quote_text`).
+pub(crate) fn stored_edit(body: &MessageEditResponse) -> MessageEditResponse {
+    let mut stored = body.clone();
+    crate::forwarding::without_reply_quote_text(&mut stored.message);
+    if let Some(message) = stored.entry.message.as_mut() {
+        crate::forwarding::without_reply_quote_text(message);
+    }
+    stored
+}
+
 /// Replace the text of a locked message. The earlier versions stay in
 /// `message_revisions`; mentions and task references follow the new content.
 /// Agents newly mentioned are told, and in a channel or thread a person's
@@ -1239,7 +1250,15 @@ async fn edit_message(
     .await?
     {
         IdempotencyOutcome::Replay(replay) => {
-            let body: MessageEditResponse = replay.decode()?;
+            let mut body: MessageEditResponse = replay.decode()?;
+            // Kept without quote text: read the quote again, as it is now.
+            crate::forwarding::refresh_reply_quote(
+                &mut *transaction,
+                &mut body.message,
+                &mut body.entry,
+                principal.actor_id,
+            )
+            .await?;
             transaction.commit().await?;
             return Ok((replay.status(), Json(body)));
         }
@@ -1263,7 +1282,13 @@ async fn edit_message(
         entry: edit.entry,
         changed: edit.changed,
     };
-    finish_idempotent_command(&mut transaction, &reservation, StatusCode::OK, &body).await?;
+    finish_idempotent_command(
+        &mut transaction,
+        &reservation,
+        StatusCode::OK,
+        &stored_edit(&body),
+    )
+    .await?;
     if edit.changed {
         insert_audit_event_for(
             &mut transaction,

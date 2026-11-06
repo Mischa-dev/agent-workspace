@@ -586,7 +586,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Send a message to a channel, thread, DM or group. Write plain text; @handles of people in the project become mentions and notify them. Pass a clientRequestId so a retry never sends twice.",
+        description = "Send a message to a channel, thread, DM or group. Write plain text; @handles of people in the project become mentions and notify them. To answer one message there, pass replyToMessageId: it shows quoted above yours. Pass a clientRequestId so a retry never sends twice.",
         annotations(
             title = "Send message",
             read_only_hint = false,

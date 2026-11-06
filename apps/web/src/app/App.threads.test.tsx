@@ -1,4 +1,5 @@
 import {
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -462,5 +463,45 @@ describe('App Thread access and capabilities', () => {
     expect(
       screen.getByRole('button', { name: 'Start run' }),
     ).toBeDisabled()
+  })
+
+  it('switches to the message composer when you choose Reply from the run composer', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      `/projects/${projectAId}/threads/${threadId}`,
+    )
+    const bothTimeline = {
+      ...timeline,
+      activeRun: null,
+      approvals: [],
+      capabilities: { sendMessage: true, workerInvoke: true },
+    }
+    const fetchMock = installStandardApi()
+    const standardImplementation = fetchMock.getMockImplementation()
+    fetchMock.mockImplementation((input, init) => {
+      if (String(input).includes(`/conversations/${threadId}/timeline`)) {
+        return jsonResponse(bothTimeline)
+      }
+      if (!standardImplementation) {
+        throw new Error('Standard API implementation unavailable.')
+      }
+      return standardImplementation(input, init)
+    })
+    render(<App />)
+
+    fireEvent.click(await screen.findByRole('radio', { name: 'Run an agent' }))
+    expect(
+      await screen.findByLabelText('Describe the change for the agent'),
+    ).toBeVisible()
+    fireEvent.click(screen.getAllByRole('button', { name: 'Reply' })[0])
+
+    expect(
+      await screen.findByRole('button', {
+        name: 'Replying to Mischa Nelson. Go to their message',
+      }),
+    ).toBeVisible()
+    expect(screen.getByLabelText('Message M0 walking skeleton')).toBeVisible()
+    expect(screen.queryByLabelText('Describe the change for the agent')).not.toBeInTheDocument()
   })
 })

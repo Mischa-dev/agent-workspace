@@ -10,6 +10,7 @@ import { continueConversation, getConversationTimeline, retryReplyRequest, stopR
 import { ConversationHeader } from '../conversations/ConversationHeader'
 import { useConversationTimeline } from '../conversations/useConversationTimeline'
 import { useMessageActions } from '../conversations/MessageActions'
+import { useReplyTarget } from '../conversations/replyTarget'
 import { useConversationTools } from '../later/useConversationTools'
 import { ReplyStatusList } from '../conversations/ReplyStatus'
 import { groupReplyRequests } from '../conversations/replyStatusModel'
@@ -151,8 +152,10 @@ export function DirectConversationPage() {
 
   const canPost = Boolean(valid && page?.capabilities.sendMessage)
   const startThread = (origin: { messageId: string; text: string; author: string }) => setThreadDialog({ conversationId, origin })
+  const reply = useReplyTarget(conversationId, null)
   const messageActions = useMessageActions({
     projectId,
+    onReply: reply.start,
     conversationId,
     direct: true,
     viewerId,
@@ -424,7 +427,9 @@ export function DirectConversationPage() {
             href: `/messages/${encodeURIComponent(conversationId)}`,
           }}
           onEditLast={() => messageActions.editLast(entries)}
+          onReplyChange={reply.set}
           onSubmit={sender.send}
+          replyTo={reply.target}
           placeholder={`Message ${title}`}
           searchActors={searchMembers}
           upload={uploadFile({ kind: 'conversation', conversationId })}
