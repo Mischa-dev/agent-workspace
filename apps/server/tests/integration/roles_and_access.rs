@@ -3115,6 +3115,95 @@ async fn a_browser_rule_run_through_an_app_keeps_to_the_apps_limit() {
     assert_eq!(notified_of(&setup, bea, "Secret app plan").await, 1);
 }
 
+/// "Apply to their projects" changes someone's role only in projects where
+/// the caller may manage members: a workspace admin whose custom role in
+/// one project lacks "manage members" leaves that project as it was, and
+/// it's reported as skipped; where they keep it, the role is applied.
+#[tokio::test]
+async fn applying_a_role_to_projects_skips_those_the_caller_cant_manage() {
+    let Some(setup) = setup("awd74_apply_projects").await else {
+        return;
+    };
+    let closed = create_project(&setup, "SHUT", "Shut").await;
+    let open = create_project(&setup, "OPEN", "Open").await;
+    let (alex, alex_browser) = add_person(&setup, &[&closed, &open], "alex").await;
+    let (bea, _) = add_person(&setup, &[&closed, &open], "bea").await;
+    make_admin(&setup, alex).await;
+    let (status, no_members) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "No members", "baseRole": "admin", "permissions": ["tasks.view", "members.view"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{no_members}");
+    let (status, helpers) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Helpers", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{helpers}");
+    // Alex manages members in Open (built-in admin) but not in Shut.
+    sqlx::query(
+        "UPDATE project_memberships SET role = 'admin' WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(open.parse::<Uuid>().expect("project"))
+    .bind(alex)
+    .execute(&setup.pool)
+    .await
+    .expect("alex is an admin in Open");
+    sqlx::query(
+        "UPDATE project_memberships SET role_id = $3 WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(closed.parse::<Uuid>().expect("project"))
+    .bind(alex)
+    .bind(
+        no_members["id"]
+            .as_str()
+            .expect("id")
+            .parse::<Uuid>()
+            .expect("UUID"),
+    )
+    .execute(&setup.pool)
+    .await
+    .expect("alex doesn't manage members in Shut");
+
+    let (status, assigned) = assign(&setup, &alex_browser, bea, &helpers["id"], true).await;
+    assert_eq!(status, StatusCode::OK, "{assigned}");
+    assert_eq!(assigned["projectsChanged"], 1, "{assigned}");
+    assert_eq!(assigned["projectsSkipped"], 1, "{assigned}");
+    assert_eq!(
+        assigned["skippedProjects"][0]["projectId"],
+        closed.as_str(),
+        "{assigned}"
+    );
+    assert!(
+        assigned["skippedProjects"][0]["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("manage members")),
+        "{assigned}"
+    );
+    assert_eq!(project_role_id(&setup, &closed, bea).await, None);
+    assert_eq!(
+        project_role_id(&setup, &open, bea)
+            .await
+            .map(|id| id.to_string()),
+        helpers["id"].as_str().map(str::to_owned)
+    );
+}
+
+/// The custom role `actor` holds in `project`, if any.
+async fn project_role_id(setup: &Setup, project: &str, actor: Uuid) -> Option<Uuid> {
+    sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT role_id FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project.parse::<Uuid>().expect("project"))
+    .bind(actor)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("project role")
+}
+
 /// How many of `actor`'s notifications have `text` in their title.
 async fn notified_of(setup: &Setup, actor: Uuid, text: &str) -> i64 {
     sqlx::query_scalar::<_, i64>(

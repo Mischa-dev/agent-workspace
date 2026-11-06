@@ -464,8 +464,18 @@ pub(super) struct AssignmentLine {
     pub workspace_role: String,
     /// Projects where their role changed with it.
     pub projects_changed: usize,
-    /// Projects left as they were: they own it, or it takes an owner.
+    /// Projects left as they were: they own it, it takes an owner, or you
+    /// may not manage members there.
     pub projects_skipped: usize,
+    /// Each project left as it was, and why.
+    pub skipped_projects: Vec<SkippedProjectLine>,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct SkippedProjectLine {
+    pub project_id: String,
+    pub reason: String,
 }
 
 pub(super) async fn role_assign(
@@ -527,6 +537,14 @@ pub(super) async fn role_assign(
             workspace_role: assignment.role_name,
             projects_changed: assignment.projects_changed,
             projects_skipped: assignment.projects_skipped,
+            skipped_projects: assignment
+                .skipped_projects
+                .iter()
+                .map(|skipped| SkippedProjectLine {
+                    project_id: skipped.project_id.to_string(),
+                    reason: skipped.reason.to_owned(),
+                })
+                .collect(),
         }))
     }
     .await;

@@ -151,6 +151,8 @@ export type Assignment = {
   roleName: string
   projectsChanged: number
   projectsSkipped: number
+  // Each project left as it was, and why.
+  skippedProjects: { projectId: string; reason: string }[]
 }
 
 export const assignRole = (

@@ -44,8 +44,9 @@ use crate::{
     mcp::McpPrincipal,
     outbox::{OutboxEventPayload, ProjectMembershipUpdatedPayload, enqueue_typed},
     policy::{
-        ActorKind, AgentLimits, MembershipRole, MembershipScope, PERMISSION_MODULES, PERMISSIONS,
-        Permission, PermissionSet, RoleGrant, current_agent_limit,
+        Action, ActorKind, AgentLimits, Decision, DenyReason, Membership, MembershipRole,
+        MembershipScope, PERMISSION_MODULES, PERMISSIONS, Permission, PermissionSet, ProjectScope,
+        Resource, RoleGrant, Subject, authorize, current_agent_limit,
     },
     work_items::views::BUILTIN_VIEWS,
 };
@@ -1329,9 +1330,19 @@ pub(crate) struct Assignment {
     pub role_name: String,
     /// Projects whose role changed with it.
     pub projects_changed: usize,
-    /// Projects left as they were: they own it, or managing their role
-    /// there takes an owner.
+    /// Projects left as they were: they own it, managing their role there
+    /// takes an owner, or the caller may not manage members there.
     pub projects_skipped: usize,
+    /// Each project left as it was, and why.
+    pub skipped_projects: Vec<SkippedProject>,
+}
+
+/// A project "apply to their projects" left as it was.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SkippedProject {
+    pub project_id: Uuid,
+    pub reason: &'static str,
 }
 
 /// Give someone a role in the workspace and, when asked, in every project
@@ -1432,7 +1443,7 @@ pub(crate) async fn assign(
         apply_to_their_projects(transaction, caller, organization_id, actor_id, base, custom)
             .await?
     } else {
-        (Vec::new(), 0)
+        (Vec::new(), Vec::new())
     };
     if changed || !projects_changed.is_empty() {
         auditor
@@ -1460,8 +1471,63 @@ pub(crate) async fn assign(
         role_id: custom,
         role_name: role.name,
         projects_changed: projects_changed.len(),
-        projects_skipped,
+        projects_skipped: projects_skipped.len(),
+        skipped_projects: projects_skipped,
     })
+}
+
+/// One project of the person whose role is being given, with the caller's
+/// own membership there (none if they only reach it otherwise).
+#[derive(FromRow)]
+struct TheirProject {
+    project_id: Uuid,
+    role: String,
+    role_id: Option<Uuid>,
+    caller_role: Option<String>,
+    caller_permissions: Option<Vec<String>>,
+    caller_enabled: bool,
+}
+
+/// Why the caller may not manage members in a project, if they may not: no
+/// membership there, a project role without "manage members", or (through
+/// an app) an agent limit without it. Workspace owners and admins hold it
+/// in their projects unless a custom role or a limit takes it away.
+fn manage_refusal(
+    caller: Standing,
+    project_id: Uuid,
+    role: Option<&str>,
+    permissions: Option<&[String]>,
+    enabled: bool,
+) -> Result<Option<&'static str>, AppError> {
+    let Some(role) = role else {
+        return Ok(Some(
+            "You aren't in this project, so you can't manage its members.",
+        ));
+    };
+    let subject = Subject::new(
+        caller.actor_id,
+        caller.kind,
+        true,
+        Some(Membership::project(
+            project_id,
+            RoleGrant::stored(role, permissions)?,
+            enabled,
+        )),
+        None,
+    );
+    Ok(
+        match authorize(
+            &subject,
+            Action::MembershipManage,
+            Resource::Project(ProjectScope::project(project_id)),
+        ) {
+            Decision::Allow => None,
+            Decision::Deny(DenyReason::AgentLimit) => {
+                Some("The app you're using may not manage members in this project.")
+            }
+            Decision::Deny(_) => Some("Your role in this project doesn't manage members."),
+        },
+    )
 }
 
 async fn apply_to_their_projects(
@@ -1471,12 +1537,17 @@ async fn apply_to_their_projects(
     actor_id: Uuid,
     base: MembershipRole,
     custom: Option<Uuid>,
-) -> Result<(Vec<Uuid>, usize), AppError> {
-    let memberships = sqlx::query_as::<_, (Uuid, String, Option<Uuid>)>(
+) -> Result<(Vec<Uuid>, Vec<SkippedProject>), AppError> {
+    let memberships = sqlx::query_as::<_, TheirProject>(
         r#"
-        SELECT membership.project_id, membership.role, membership.role_id
+        SELECT membership.project_id, membership.role, membership.role_id,
+               caller_membership.role AS caller_role,
+               workspace_role_permissions(caller_membership.role_id) AS caller_permissions,
+               COALESCE(caller_membership.enabled, false) AS caller_enabled
         FROM project_memberships membership
         JOIN projects project ON project.id = membership.project_id
+        LEFT JOIN project_memberships caller_membership
+          ON caller_membership.project_id = project.id AND caller_membership.actor_id = $3
         WHERE project.organization_id = $1 AND membership.actor_id = $2
           AND membership.enabled AND project.kind <> 'direct' AND project.archived_at IS NULL
           -- Only projects the caller is in: never one they can't open.
@@ -1490,15 +1561,42 @@ async fn apply_to_their_projects(
     .fetch_all(&mut **transaction)
     .await?;
     let mut changed = Vec::new();
-    let mut skipped = 0;
-    for (project_id, role, role_id) in memberships {
+    let mut skipped = Vec::new();
+    for TheirProject {
+        project_id,
+        role,
+        role_id,
+        caller_role,
+        caller_permissions,
+        caller_enabled,
+    } in memberships
+    {
         if role == base.key() && role_id == custom {
             continue;
         }
         // Project owners stay owners, only owners change an admin's role,
         // and workers stay workers.
-        if role == "owner" || role == "worker" || (role == "admin" && !caller.is_owner()) {
-            skipped += 1;
+        let kept = match role.as_str() {
+            "owner" => Some("They own this project."),
+            "worker" => Some("A worker keeps its role."),
+            "admin" if !caller.is_owner() => Some("Only an owner changes an admin's role."),
+            _ => None,
+        };
+        if let Some(reason) = kept {
+            skipped.push(SkippedProject { project_id, reason });
+            continue;
+        }
+        // Managing members there, as changing their role there one project
+        // at a time takes: the caller's role in the project (custom roles
+        // included) and, through an app, the app's current limit.
+        if let Some(reason) = manage_refusal(
+            caller,
+            project_id,
+            caller_role.as_deref(),
+            caller_permissions.as_deref(),
+            caller_enabled,
+        )? {
+            skipped.push(SkippedProject { project_id, reason });
             continue;
         }
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
