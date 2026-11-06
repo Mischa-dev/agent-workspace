@@ -17,7 +17,7 @@ Commands are split between the Mac, the existing `bot` build operator, and
 - HTTP/WebSocket listens on `127.0.0.1:3100`; GitHub webhooks listen separately
   on `127.0.0.1:3101`; PostgreSQL listens on `127.0.0.1:55432`.
 - PostgreSQL 18.4 runs in the rootless `bot` Podman Compose project.
-- Node 24.18.1 and Codex 0.146.0 live below `/opt/agent-workspace`.
+- Node 24.22.1 and Codex 0.146.0 live below `/opt/agent-workspace`.
 - Rust uses the repository's pinned toolchain below the `bot` account's
   `.local/share/agent-workspace` root.
 - Releases are immutable directories at
@@ -82,11 +82,100 @@ Confirm isolation:
 getent passwd agent-workspace
 sudo -u agent-workspace sh -c 'test ! -w /opt/agent-workspace'
 /usr/bin/node --version 2>/dev/null || true
-/opt/agent-workspace/toolchains/node-v24.18.1-linux-arm64/bin/node --version
+/opt/agent-workspace/toolchains/node-v24.22.1-linux-arm64/bin/node --version
 /opt/agent-workspace/bin/codex --version
 ```
 
 Do not alter the system Node result or any existing global Codex path.
+
+## Updating an existing Node toolchain
+
+Node 24.22.1 is the October 21, 2026 security release. See the
+[upstream advisory](https://nodejs.org/en/blog/vulnerability/october-2026-security-releases)
+and [release notes](https://nodejs.org/en/blog/release/v24.22.1).
+The checkout pins the desired version, not evidence of the running host version.
+This update has no database migration of its own.
+
+Stage the toolchain from the reviewed checkout before changing the service:
+
+```bash
+cd /home/bot/deployments/agent-workspace
+sudo ./deploy/redhat/install-toolchains.sh --node-only
+export PATH="/opt/agent-workspace/toolchains/node-v24.22.1-linux-arm64/bin:${PATH}"
+node --version
+corepack --version
+corepack pnpm --version
+```
+
+`--node-only` verifies the download checksum and installs into a separate
+directory. It leaves the existing Node directories, Codex installation and
+symlink, service unit, and `current` release selector in place. Do not remove
+the old toolchain while a retained release or wrapper still references it.
+
+Run `tools/ci/run.sh` before cutover. CI follows `.node-version` by itself:
+on a host whose own Node differs, `tools/ci/checks.sh` fetches the official
+build, checked against nodejs.org's SHA-256 list, into the runner account's
+cache (`~/.cache/aw-ci/node`) and puts it first on PATH, so the runners need
+no Node change. Then run lint, typecheck, tests, build, asset budgets,
+and browser smoke checks. Also test each configured Node-based harness CLI
+with the new PATH as the service user, including its ordinary `--version`
+command. A successful web build alone does not test those CLIs.
+
+After those checks pass, take and validate the normal pre-deploy backup.
+Record the old release and save the installed unit outside the checkout:
+
+```bash
+readlink -f /opt/agent-workspace/current
+sudo install -d -m 0700 /var/backups/agent-workspace/node-upgrade
+sudo cp -a /etc/systemd/system/agent-workspace.service \
+  /var/backups/agent-workspace/node-upgrade/agent-workspace.service.before
+```
+
+Keep that saved unit for this cutover; do not overwrite it on a retry. Inspect
+any local systemd drop-ins for a PATH override and preserve their previous
+configuration too. The release script does not install the application unit.
+At the approved cutover, install the reviewed unit and reload systemd before
+deploying:
+
+```bash
+sudo install -m 0644 deploy/redhat/agent-workspace.service \
+  /etc/systemd/system/agent-workspace.service
+sudo systemctl daemon-reload
+./deploy/redhat/deploy-release.sh
+```
+
+Reloading the unit does not restart the running service. The release script
+builds with 24.22.1 and runs the candidate's read-only preflight before
+switching `current` and restarting. Until restart, the old process keeps its
+old environment. If build or preflight fails, restore the saved unit and
+reload systemd before any later restart.
+
+After deployment, check `/health/ready`, `/health/version`, and a normal
+harness run. The server itself is Rust, so its MainPID executable is not
+Node. Check the executable of any running Node children separately:
+
+```bash
+for pid in $(pgrep -u agent-workspace -x node); do
+  sudo readlink -f "/proc/${pid}/exe"
+done
+```
+
+Those processes should name the patched toolchain. No Node child means there
+is no running Node version to infer from this check; trigger a normal harness
+operation and inspect again. Check other service users and long-running
+workers separately. Existing processes do not acquire a new runtime from a
+PATH edit.
+
+For a failed cutover, follow the rollback boundary below. With compatible
+schemas, restore the previous `current` selector and the saved service unit,
+run `systemctl daemon-reload`, restart, and verify readiness and the expected
+commit. Retained wrappers still reference their original toolchain, so keep
+both installations. Returning to the vulnerable Node version is a temporary
+incident rollback; plan a forward fix. An application-only rollback can keep
+the patched service PATH if the old release and its harnesses pass checks on
+it. Do not use `deploy-dev-checkout.sh` for this upgrade: its build inherits
+the host-local `/home/bot/dev/env.sh` and it does not install this unit or run
+the candidate preflight.
 
 ## Rootless PostgreSQL
 

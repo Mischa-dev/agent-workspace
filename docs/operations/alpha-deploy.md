@@ -7,6 +7,14 @@ PR's description has the detail behind its line here.
 
 ## Before
 
+Stage Node 24.22.1 with `install-toolchains.sh --node-only` and pass the
+checks before cutover (CI fetches the pinned Node itself). Existing hosts also
+need the reviewed application service unit installed and systemd reloaded;
+`deploy-release.sh` does not replace that unit. Follow "Updating an existing
+Node toolchain" in `docs/self-hosted-red-hat.md` for the staging, harness
+checks, and unit/toolchain rollback steps. Keep the live release running until
+those checks pass.
+
 1. **Back up.** About 40 migrations run in one go, and an application-only
    rollback isn't possible once they have (see "Rollback boundary" in
    `docs/self-hosted-red-hat.md`). Take an ordinary backup with the current
@@ -189,3 +197,4 @@ Each run writes its outcome (start, finish, which steps worked; no paths or
 remotes) to `/var/lib/agent-workspace/backup-status.json`, which the Server
 page reads. Set `BACKUP_STATUS_FILE` in `backup.env` to put it elsewhere, but
 it must stay in the app's data root for the page to see it.
+

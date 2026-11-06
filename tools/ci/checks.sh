@@ -73,6 +73,90 @@ if ! type -P pnpm >/dev/null; then
   export PATH="${HOME}/.local/bin:${PATH}"
 fi
 
+# The Node pinned in .node-version, for CI: the host's own Node when it is
+# exactly that version, otherwise the official build kept in the CI user's
+# cache (no root, nothing the app's service uses), so CI follows the pin
+# instead of waiting for each host's Node to be upgraded.
+#
+# pinned_node_dir: sets pin_version and pin_dir (where the official build is
+# kept) for the caller.
+pinned_node_dir() {
+  local arch
+  pin_version=$(tr -d '[:space:]' < .node-version)
+  case "$(uname -m)" in
+    x86_64) arch=x64 ;;
+    aarch64 | arm64) arch=arm64 ;;
+    *) echo "No official Node build for $(uname -m)." >&2; return 1 ;;
+  esac
+  pin_dir="${CI_NODE_CACHE:-${HOME}/.cache/aw-ci/node}/node-v${pin_version}-linux-${arch}"
+}
+
+# is_pinned_node <node>: whether that node binary reports exactly the pin.
+is_pinned_node() {
+  [ "$("$1" --version 2> /dev/null || true)" = "v${pin_version}" ]
+}
+
+# fetch_pinned_node: makes sure the pinned Node is there, downloading it
+# (checked against nodejs.org's SHA-256 list) only when neither the host's
+# Node nor a kept copy is exactly that version. Fails unless a copy reporting
+# exactly that version ends up kept.
+fetch_pinned_node() {
+  [ -f .node-version ] || return 0
+  local pin_version pin_dir name cache tmp
+  pinned_node_dir || return 1
+  if is_pinned_node node || is_pinned_node "${pin_dir}/bin/node"; then
+    return 0
+  fi
+  name=$(basename "${pin_dir}")
+  cache=$(dirname "${pin_dir}")
+  echo "Fetching ${name} (host has $(node --version 2> /dev/null || echo 'no Node'))."
+  mkdir -p "${cache}"
+  tmp=$(mktemp -d "${cache}/.fetch.XXXXXX")
+  if ! (
+    cd "${tmp}" &&
+      curl -fsSL --retry 3 -o SHASUMS256.txt "https://nodejs.org/dist/v${pin_version}/SHASUMS256.txt" &&
+      curl -fsSL --retry 3 -o "${name}.tar.xz" "https://nodejs.org/dist/v${pin_version}/${name}.tar.xz" &&
+      grep -E "^[0-9a-f]{64}  ${name}\.tar\.xz\$" SHASUMS256.txt | sha256sum -c --strict - &&
+      tar -xJf "${name}.tar.xz" &&
+      is_pinned_node "./${name}/bin/node"
+  ); then
+    rm -rf "${tmp}"
+    return 1
+  fi
+  # A broken copy left there is replaced; another run may have kept a good
+  # one meanwhile, and either will do. Either way one must be there now.
+  if [ -e "${pin_dir}" ] && ! is_pinned_node "${pin_dir}/bin/node"; then
+    rm -rf "${pin_dir}"
+  fi
+  mv -T "${tmp}/${name}" "${pin_dir}" 2> /dev/null || true
+  rm -rf "${tmp}"
+  if ! is_pinned_node "${pin_dir}/bin/node"; then
+    echo "Couldn't keep ${name} in ${cache}." >&2
+    return 1
+  fi
+}
+
+# activate_pinned_node: puts the pinned Node first on PATH in this shell. It
+# never downloads: it uses the host's Node when that is exactly the pin, or
+# the copy fetch_pinned_node kept, and refuses when that copy is missing or
+# isn't exactly the pinned version, so a host Node never stands in for it.
+activate_pinned_node() {
+  [ -f .node-version ] || return 0
+  local pin_version pin_dir
+  pinned_node_dir || return 1
+  if is_pinned_node node; then
+    return 0
+  fi
+  if ! is_pinned_node "${pin_dir}/bin/node"; then
+    echo "Node v${pin_version} isn't kept in ${pin_dir}; the Node toolchain step must fetch it first." >&2
+    return 1
+  fi
+  export PATH="${pin_dir}/bin:${PATH}"
+  # This Node's own corepack provides the pinned pnpm.
+  corepack enable --install-directory "${pin_dir}/bin" pnpm
+  node --version
+}
+
 # `admitted <name> <command...>`: run one step under the build admission lock
 # when there is one. The subshell drops any inherited marker and opens its own
 # descriptor, so steps running side by side wait for each other, and it closes
@@ -188,6 +272,7 @@ report_web() {
 if has rust; then
   step "CI script tests" python3 -m unittest discover -s tools/ci -p 'test_*.py'
   step "admission lock tests" tools/ci/test_admission.sh
+  step "pinned Node tests" tools/ci/test_pinned_node.sh
   rustup toolchain install >/dev/null 2>&1 || true
   step "cargo fmt" cargo fmt --check
   step "self-hosted guide" ./tools/verify-self-hosted-guide.sh
@@ -195,6 +280,21 @@ if has rust; then
   step "agentos-nyx tests" python3 -m unittest discover -s integrations/agentos-nyx -p 'test_*.py'
 fi
 if has web; then
+  step "Node toolchain" fetch_pinned_node
+  # In this shell, not a step: a step under the build admission lock runs in
+  # a subshell, and the PATH has to hold for the steps after it. It never
+  # downloads, and stops CI here if the kept copy is missing or wrong.
+  if ! activate_pinned_node > /dev/null; then
+    echo "✗ Node toolchain: the pinned Node isn't usable here." >&2
+    exit 1
+  fi
+  step "Node version" node -e '
+    const expected = require("node:fs").readFileSync(".node-version", "utf8").trim();
+    if (process.version !== `v${expected}`) {
+      throw new Error(`CI needs Node ${expected}; selected host has ${process.version}.`);
+    }
+    console.log(`Node ${process.version}`);
+  '
   step "pnpm install" pnpm install --frozen-lockfile --reporter=silent
   step "web lint" pnpm lint
   step "web typecheck" pnpm typecheck
