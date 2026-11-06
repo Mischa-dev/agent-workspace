@@ -3922,6 +3922,92 @@ async fn working_with_a_worker_needs_see_tasks() {
     assert_eq!(threads, 0, "no thread named after the task");
 }
 
+/// Preparing or archiving a repository answers with the repository (owner,
+/// name, clone URL, branch), so it needs "see code" as well as "manage code":
+/// a role that manages code without seeing it is refused, and the repository
+/// is left as it was.
+#[tokio::test]
+async fn managing_a_repository_needs_see_code() {
+    let Some(setup) = setup("awd74_repository_manage").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let project = work.parse::<Uuid>().expect("project");
+    let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
+    let repository = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO repositories (
+            id, project_id, github_repository_id, owner, name, clone_url,
+            default_branch, mirror_path, trusted, preparation_state, prepared_at
+        ) VALUES ($1, $2, 474747, 'Mischa-dev', 'managed-secret',
+                  'https://github.com/Mischa-dev/managed-secret.git',
+                  'main', $3, true, 'ready', now())
+        "#,
+    )
+    .bind(repository)
+    .bind(project)
+    .bind(format!("/tmp/agent-workspace-test-{repository}.git"))
+    .execute(&setup.pool)
+    .await
+    .expect("repository");
+    let (status, keepers) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Blind code keepers", "baseRole": "admin", "permissions": ["code.manage", "tasks.view"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{keepers}");
+    sqlx::query(
+        "UPDATE project_memberships SET role = 'admin', role_id = $3 WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project)
+    .bind(bea)
+    .bind(
+        keepers["id"]
+            .as_str()
+            .expect("id")
+            .parse::<Uuid>()
+            .expect("UUID"),
+    )
+    .execute(&setup.pool)
+    .await
+    .expect("bea manages code without seeing it");
+    let base = format!("/api/v1/projects/{work}/repositories/{repository}");
+    let version: i64 = sqlx::query_scalar("SELECT version FROM repositories WHERE id = $1")
+        .bind(repository)
+        .fetch_one(&setup.pool)
+        .await
+        .expect("repository version");
+    for (path, key, body) in [
+        (format!("{base}/prepare"), "bea-prepare", json!({})),
+        (
+            format!("{base}/archive"),
+            "bea-archive",
+            json!({"expectedVersion": version}),
+        ),
+    ] {
+        let (status, refused) =
+            send(app, bea_browser.request("POST", &path, Some(key), body)).await;
+        assert!(
+            matches!(status, StatusCode::FORBIDDEN | StatusCode::NOT_FOUND),
+            "{path}: {status} {refused}"
+        );
+        assert!(
+            !refused.to_string().contains("managed-secret"),
+            "{path}: {refused}"
+        );
+    }
+    let archived: bool =
+        sqlx::query_scalar("SELECT archived_at IS NOT NULL FROM repositories WHERE id = $1")
+            .bind(repository)
+            .fetch_one(&setup.pool)
+            .await
+            .expect("repository state");
+    assert!(!archived, "the repository was left as it was");
+}
+
 /// A comment that references another task shows that task's title and
 /// status only to someone who may see tasks: posting or editing it with a
 /// role that may edit but not see tasks returns the reference by id and

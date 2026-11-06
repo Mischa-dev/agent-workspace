@@ -185,6 +185,15 @@ async fn register_repository(
         Action::RepositoryManage,
     )
     .await?;
+    // The answer is the repository (owner, name, clone URL, branch): only
+    // for someone who also sees code here.
+    require_project_access(
+        &mut transaction,
+        &principal,
+        project_id,
+        Action::RepositoryView,
+    )
+    .await?;
     let reservation = match idempotency::reserve(
         &mut transaction,
         principal.actor_id,
@@ -324,6 +333,15 @@ async fn prepare_registered_repository(
         &principal,
         project_id,
         Action::RepositoryManage,
+    )
+    .await?;
+    // The answer is the repository (owner, name, clone URL, branch): only
+    // for someone who also sees code here.
+    require_project_access(
+        &mut transaction,
+        &principal,
+        project_id,
+        Action::RepositoryView,
     )
     .await?;
     let reservation = match idempotency::reserve(
@@ -496,6 +514,15 @@ async fn archive_repository(
         &principal,
         project_id,
         Action::RepositoryManage,
+    )
+    .await?;
+    // The answer is the repository (owner, name, clone URL, branch): only
+    // for someone who also sees code here.
+    require_project_access(
+        &mut transaction,
+        &principal,
+        project_id,
+        Action::RepositoryView,
     )
     .await?;
     let reservation = match idempotency::reserve(
