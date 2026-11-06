@@ -1168,7 +1168,7 @@ async fn require_grantable(
     if !grant.permissions().is_subset_of(caller.permissions) {
         return Err(AppError::Forbidden);
     }
-    let held = crate::roles::project_holding(&mut **transaction, caller_actor_id, project_id)
+    let held = crate::roles::project_holding(transaction, caller_actor_id, project_id)
         .await?
         .ok_or(AppError::Forbidden)?;
     if !crate::roles::project_checked(grant.permissions()).is_subset_of(held) {
