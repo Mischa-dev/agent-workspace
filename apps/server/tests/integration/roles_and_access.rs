@@ -17,6 +17,7 @@ use super::{
     mcp_admin::{Setup, create_project, setup},
     mcp_tasks::{add_member, space},
     message_edits::{add_person, create_channel},
+    w20_files::{read, with_data_root},
 };
 
 fn roles_path(setup: &Setup) -> String {
@@ -1084,4 +1085,181 @@ async fn a_narrowed_project_admin_role_does_not_make_a_workspace_admin() {
     .await
     .expect("workspace role");
     assert_eq!(workspace_role, "member");
+}
+
+/// A task's files follow who may see the task: removing "see tasks" from a
+/// role, or from an app's agent limit, removes its files too, in the browser
+/// and over MCP. "Edit tasks" alone is enough to attach a file to a task.
+#[tokio::test]
+async fn task_files_follow_who_can_see_tasks() {
+    let Some((setup, _root)) = with_data_root("awd74_files").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let work_id = work.parse::<Uuid>().expect("project");
+    let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
+    let (status, made) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/work-items"),
+            Some("files-task"),
+            json!({"title": "With a file"}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {made}");
+    let task = made["id"].as_str().expect("task").to_owned();
+
+    // An agent that may edit tasks but not post messages attaches a file.
+    let (tom, tom_token) =
+        create_agent(app, &setup.browser, &space(&setup).await, "Tom", "tom").await;
+    add_member(&setup, &work, tom, "member").await;
+    let (status, editors) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Task editors", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{editors}");
+    let version = sqlx::query_scalar::<_, i64>(
+        "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(work_id)
+    .bind(tom)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("version");
+    let (status, changed) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            &format!("/api/v1/projects/{work}/members/{tom}"),
+            Some("tom-task-editors"),
+            json!({"expectedVersion": version, "roleId": editors["id"]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let session = initialize(app, &tom_token).await.expect("Tom");
+    let uploaded = tool(
+        app,
+        &tom_token,
+        &session,
+        "file_upload",
+        json!({"taskId": task, "name": "notes.txt", "text": "task notes"}),
+    )
+    .await;
+    assert_eq!(uploaded["outcome"], "ok", "{uploaded}");
+    let file = uploaded["value"]["fileId"]
+        .as_str()
+        .expect("file")
+        .to_owned();
+    let opened = tool(
+        app,
+        &tom_token,
+        &session,
+        "file_read",
+        json!({"fileId": file}),
+    )
+    .await;
+    assert_eq!(opened["value"]["text"], "task notes", "{opened}");
+
+    // Without "see tasks" in Tom's role, the file is gone for him.
+    sqlx::query("UPDATE workspace_roles SET permissions = ARRAY['tasks.edit'] WHERE id = $1")
+        .bind(
+            editors["id"]
+                .as_str()
+                .expect("id")
+                .parse::<Uuid>()
+                .expect("UUID"),
+        )
+        .execute(&setup.pool)
+        .await
+        .expect("Task editors no longer see tasks");
+    let refused = tool(
+        app,
+        &tom_token,
+        &session,
+        "file_read",
+        json!({"fileId": file}),
+    )
+    .await;
+    assert_ne!(refused["outcome"], "ok", "{refused}");
+    assert!(!refused.to_string().contains("task notes"), "{refused}");
+
+    // Bea's app reads it until her agent limit leaves out "see tasks";
+    // Bea herself still reads it in the browser.
+    let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
+    let bea_session = initialize(app, &bea_app).await.expect("Bea's app");
+    let opened = tool(
+        app,
+        &bea_app,
+        &bea_session,
+        "file_read",
+        json!({"fileId": file}),
+    )
+    .await;
+    assert_eq!(opened["value"]["text"], "task notes", "{opened}");
+    let (status, limit) = send(
+        app,
+        setup.browser.request(
+            "PUT",
+            &format!(
+                "/api/v1/organizations/{}/members/{bea}/agent-limit",
+                setup.organization_id
+            ),
+            None,
+            json!({"permissions": ["channels.post"]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{limit}");
+    let refused = tool(
+        app,
+        &bea_app,
+        &bea_session,
+        "file_read",
+        json!({"fileId": file}),
+    )
+    .await;
+    assert_ne!(refused["outcome"], "ok", "{refused}");
+    assert!(!refused.to_string().contains("task notes"), "{refused}");
+    assert_eq!(
+        read(&setup, &bea_browser, &file).await.as_deref(),
+        Ok(&b"task notes"[..])
+    );
+
+    // In the browser, a role without "see tasks" loses the file too.
+    let (status, blind) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "No tasks", "baseRole": "viewer", "permissions": []}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{blind}");
+    let version = sqlx::query_scalar::<_, i64>(
+        "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(work_id)
+    .bind(bea)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("version");
+    let (status, changed) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            &format!("/api/v1/projects/{work}/members/{bea}"),
+            Some("bea-no-tasks"),
+            json!({"expectedVersion": version, "roleId": blind["id"]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    assert_eq!(
+        read(&setup, &bea_browser, &file).await,
+        Err(StatusCode::NOT_FOUND)
+    );
 }

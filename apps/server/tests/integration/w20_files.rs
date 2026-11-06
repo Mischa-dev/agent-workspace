@@ -18,7 +18,7 @@ use super::{
     message_edits::{add_person, create_channel, text},
 };
 
-async fn with_data_root(prefix: &str) -> Option<(Setup, tempfile::TempDir)> {
+pub(super) async fn with_data_root(prefix: &str) -> Option<(Setup, tempfile::TempDir)> {
     let mut setup = setup(prefix).await?;
     let root = tempfile::tempdir().expect("data root");
     let database_url = std::env::var("AGENT_WORKSPACE_DATABASE_URL").expect("database URL");
@@ -66,7 +66,11 @@ async fn upload_to(setup: &Setup, browser: &Browser, conversation: &str, name: &
 }
 
 /// The file's bytes as `browser` gets them, or the status.
-async fn read(setup: &Setup, browser: &Browser, file: &str) -> Result<Vec<u8>, StatusCode> {
+pub(super) async fn read(
+    setup: &Setup,
+    browser: &Browser,
+    file: &str,
+) -> Result<Vec<u8>, StatusCode> {
     let response = setup
         .app
         .clone()
