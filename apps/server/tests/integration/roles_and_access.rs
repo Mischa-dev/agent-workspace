@@ -2735,3 +2735,101 @@ async fn the_built_in_viewer_cannot_be_the_workspace_default() {
     assert_eq!(role(&listed, "member")["isDefault"], true, "{listed}");
     assert_eq!(role(&listed, "viewer")["isDefault"], false, "{listed}");
 }
+
+/// A write-scope personal token for anyone whose role may write anything
+/// in the project, not only edit tasks; each tool still checks its own
+/// action. A role that may only see things still gets read access only.
+#[tokio::test]
+async fn a_write_token_follows_any_write_permission() {
+    let Some(setup) = setup("awd74_write_token").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
+    let (cal, cal_browser) = add_person(&setup, &[&work], "cal").await;
+    let task = owner_task(&setup, &work, "Not Bea's to edit").await;
+    let (status, writers) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Page writers", "baseRole": "member", "permissions": ["tasks.view", "pages.edit"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{writers}");
+    let (status, readers) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Readers", "baseRole": "viewer", "permissions": ["tasks.view"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{readers}");
+    for (actor, role, key) in [
+        (bea, &writers, "bea-writers"),
+        (cal, &readers, "cal-readers"),
+    ] {
+        let (status, changed) =
+            set_project_role(&setup, &work, actor, key, json!({"roleId": role["id"]})).await;
+        assert_eq!(status, StatusCode::OK, "{changed}");
+    }
+    let token_request = json!({"projectId": work, "name": "script", "scopes": ["read", "write"], "expiresInDays": 30});
+
+    // Bea may edit pages: she gets a write token, which edits pages only.
+    let (status, issued) = send(
+        app,
+        bea_browser.request(
+            "POST",
+            "/api/v1/account/api-tokens",
+            Some("bea-write-token"),
+            token_request.clone(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{issued}");
+    let token = issued["token"].as_str().expect("token").to_owned();
+    let (status, page) = public_call(
+        app,
+        &token,
+        "page_write",
+        json!({"projectId": work, "title": "Written by the token", "body": "Hello"}),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {page}");
+    let pages = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM project_pages WHERE title = 'Written by the token'",
+    )
+    .fetch_one(&setup.pool)
+    .await
+    .expect("count pages");
+    assert_eq!(pages, 1, "{page}");
+    let (_, refused) = public_call(
+        app,
+        &token,
+        "task_update",
+        json!({"taskId": task, "title": "Renamed by the token", "expectedVersion": 1}),
+    )
+    .await;
+    assert_ne!(refused["outcome"], "applied", "{refused}");
+    let renamed = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM work_items WHERE title = 'Renamed by the token'",
+    )
+    .fetch_one(&setup.pool)
+    .await
+    .expect("count tasks");
+    assert_eq!(renamed, 0, "the token edited a task: {refused}");
+
+    // Cal may only see things: no write token.
+    let (status, refused) = send(
+        app,
+        cal_browser.request(
+            "POST",
+            "/api/v1/account/api-tokens",
+            Some("cal-write-token"),
+            token_request,
+        ),
+    )
+    .await;
+    assert!(
+        !status.is_success(),
+        "a read-only role got a write token: {refused}"
+    );
+}
