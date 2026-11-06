@@ -12,5 +12,5 @@
     "strict": true,
     "types": ["node"]
   },
-  "include": ["playwright.config.ts", "e2e"]
+  "include": ["playwright.config.ts", "playwright.tour.config.ts", "e2e"]
 }
