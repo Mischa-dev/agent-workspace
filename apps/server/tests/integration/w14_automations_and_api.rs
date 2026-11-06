@@ -1045,6 +1045,88 @@ async fn api_webhooks_and_automations_act_for_their_maker_only() {
         "the owner's @everyone reaches everyone"
     );
 
+    // A rule a script made skips what the script's current limit hides: it
+    // doesn't post a task's title once the limit leaves out "see tasks".
+    let title_rule = bearer(
+        &application,
+        Some(&token),
+        "POST",
+        "/api/public/v1/automation_write",
+        json!({
+            "projectId": seed.project_id,
+            "operation": "create",
+            "name": "Announce new tasks",
+            "trigger": {"kind": "task_created"},
+            "actions": [{"kind": "post_message", "conversationId": seed.channel_id, "text": "New: {{task.title}}"}],
+        }),
+    )
+    .await;
+    assert_eq!(title_rule.2["outcome"], "ok", "{}", title_rule.1);
+    let title_rule_id = uuid_field(&title_rule.2["value"], "id");
+    let posted = move |pool: PgPool, title: &'static str| async move {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM messages WHERE conversation_id = $1 AND plain_text LIKE $2",
+        )
+        .bind(seed.channel_id)
+        .bind(format!("%{title}%"))
+        .fetch_one(&pool)
+        .await
+        .expect("count messages")
+    };
+    sqlx::query(
+        "UPDATE organization_memberships SET agent_limit = ARRAY['tasks.edit', 'channels.post'] WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.organization_id)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("the owner's apps no longer see tasks");
+    let hidden_task = send(
+        &application,
+        owner,
+        "POST",
+        &format!("{project}/work-items"),
+        "title-hidden-task",
+        json!({"title": "Quiet launch plan"}),
+    )
+    .await;
+    assert_eq!(hidden_task.0, StatusCode::CREATED, "{}", hidden_task.1);
+    pump(&state).await;
+    assert_eq!(
+        posted(pool.clone(), "Quiet launch plan").await,
+        0,
+        "the script's rule posted a title its limit hides"
+    );
+    sqlx::query(
+        "UPDATE organization_memberships SET agent_limit = NULL WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.organization_id)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("lift the limit a fifth time");
+    let shown_task = send(
+        &application,
+        owner,
+        "POST",
+        &format!("{project}/work-items"),
+        "title-shown-task",
+        json!({"title": "Open roadmap"}),
+    )
+    .await;
+    assert_eq!(shown_task.0, StatusCode::CREATED, "{}", shown_task.1);
+    pump(&state).await;
+    assert_eq!(
+        posted(pool.clone(), "Open roadmap").await,
+        1,
+        "the script's rule posts the title it may see"
+    );
+    sqlx::query("UPDATE automation_rules SET enabled = false WHERE id = $1")
+        .bind(title_rule_id)
+        .execute(&pool)
+        .await
+        .expect("turn the rule off");
+
     // ---------------------------------------------------------------------
     // A rule whose maker lost the project turns off instead of acting.
     let members_rule = send(

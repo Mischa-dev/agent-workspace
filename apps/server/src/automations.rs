@@ -1337,8 +1337,19 @@ pub async fn on_event(state: &AppState, event: &Event) -> Result<usize, AppError
             disable(state, &rule, &reason).await?;
             continue;
         }
-        // Only what its maker could see fires it.
+        // Only what its maker could see fires it, and for a rule made through
+        // an app, only what that app's current limit lets it see.
         if !crate::webhooks::visible_to(pool, rule.owner_actor_id, rule.project_id, subject).await?
+        {
+            continue;
+        }
+        if let Some(limits) = app_limits(pool, &rule).await?
+            && limit_hides(
+                &limits,
+                rule.project_id,
+                subject.work_item_id.is_some(),
+                subject.pull_request_id.is_some(),
+            )
         {
             continue;
         }
@@ -1875,6 +1886,27 @@ async fn fire(state: &AppState, run_id: Uuid) -> Result<(), AppError> {
         .and_then(Value::as_str)
         .and_then(|value| value.parse::<Uuid>().ok());
     let context = Context::load(state, &rule, &subject, &due.trigger_summary).await?;
+    // A rule made through an app skips what that app's current limit hides:
+    // the task or pull request the context loaded (a run's task, say) would
+    // otherwise reach its messages through placeholders. Nothing is sent
+    // before this.
+    if let Some(limits) = app_limits(pool, &rule).await?
+        && limit_hides(
+            &limits,
+            rule.project_id,
+            context.work_item_id.is_some(),
+            context.pull_request_id.is_some() || context.pull_request.is_some(),
+        )
+    {
+        return finish(
+            pool,
+            run_id,
+            "skipped",
+            Some("Skipped: the app it was made through can't see what this is about."),
+            &[],
+        )
+        .await;
+    }
     let mut results = Vec::new();
     for (index, action) in actions.iter().enumerate() {
         // A rule made through an app acts within that app's limits when it
@@ -2514,6 +2546,20 @@ async fn app_limits(pool: &PgPool, rule: &RuleRow) -> Result<Option<AgentLimits>
             .await?
             .limits,
     ))
+}
+
+/// Whether an app's limits keep it from what a rule is about in
+/// `project_id`: a task without "see tasks", or a pull request without "see
+/// code".
+fn limit_hides(limits: &AgentLimits, project_id: Uuid, task: bool, pull_request: bool) -> bool {
+    use crate::policy::{Permission, PermissionSet};
+    let allowed = limits
+        .projects
+        .get(&project_id)
+        .copied()
+        .unwrap_or(PermissionSet::EMPTY);
+    (task && !allowed.contains(Permission::TasksView))
+        || (pull_request && !allowed.contains(Permission::CodeView))
 }
 
 /// Runs `call` within `limits`, if there are any.
