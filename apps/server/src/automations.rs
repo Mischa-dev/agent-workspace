@@ -1135,6 +1135,15 @@ pub(crate) async fn run_now(
         &format!("manual:{}", Uuid::now_v7()),
         "Run by hand",
         &subject,
+        // Through the maker's app or script (MCP or the public API set its
+        // agent limit for this call): the run keeps to that limit, inline
+        // here and from the job alike, even for a rule made in the browser.
+        caller.actor_kind == ActorKind::Human
+            && crate::policy::current_agent_limit(
+                caller.actor_id,
+                crate::policy::MembershipScope::Project(project_id),
+            )
+            .is_some(),
     )
     .await?
     .ok_or(AppError::Internal("manual automation run collided"))?;
@@ -1193,11 +1202,16 @@ async fn queue_fire(
     dedupe_key: &str,
     summary: &str,
     subject: &Subject,
+    // Run by hand through the maker's app or script: the firing keeps to
+    // that app's limit (`app_limits`). False for events and schedules.
+    through_app: bool,
 ) -> Result<Option<Uuid>, AppError> {
     let run_id = sqlx::query_scalar::<_, Uuid>(
         r#"
-        INSERT INTO automation_runs (id, rule_id, project_id, dedupe_key, trigger_summary, subject)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        INSERT INTO automation_runs (
+            id, rule_id, project_id, dedupe_key, trigger_summary, subject, made_through_app
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         ON CONFLICT (rule_id, dedupe_key) DO NOTHING
         RETURNING id
         "#,
@@ -1208,6 +1222,7 @@ async fn queue_fire(
     .bind(dedupe_key.chars().take(300).collect::<String>())
     .bind(summary.chars().take(300).collect::<String>())
     .bind(serde_json::to_value(subject).unwrap_or_else(|_| json!({})))
+    .bind(through_app)
     .fetch_optional(&mut **transaction)
     .await?;
     if let Some(run_id) = run_id {
@@ -1343,7 +1358,7 @@ pub async fn on_event(state: &AppState, event: &Event) -> Result<usize, AppError
         {
             continue;
         }
-        if let Some(limits) = app_limits(pool, &rule).await?
+        if let Some(limits) = app_limits(pool, &rule, false).await?
             && limit_hides(
                 &limits,
                 rule.project_id,
@@ -1431,6 +1446,7 @@ pub async fn on_event(state: &AppState, event: &Event) -> Result<usize, AppError
             &dedupe,
             &summary_for(event),
             subject,
+            false,
         )
         .await?
         .is_some()
@@ -1501,6 +1517,7 @@ async fn sweep_schedules(state: &AppState) -> Result<usize, AppError> {
             &format!("schedule:{}", slot.to_rfc3339()),
             "On its schedule",
             &Subject::default(),
+            false,
         )
         .await?
         .is_some()
@@ -1808,6 +1825,7 @@ struct DueRun {
     state: String,
     subject: Value,
     trigger_summary: String,
+    made_through_app: bool,
 }
 
 async fn finish(
@@ -1838,7 +1856,7 @@ async fn finish(
 async fn fire(state: &AppState, run_id: Uuid) -> Result<(), AppError> {
     let pool = &state.pool;
     let Some(due) = sqlx::query_as::<_, DueRun>(
-        "SELECT rule_id, project_id, state, subject, trigger_summary FROM automation_runs WHERE id = $1",
+        "SELECT rule_id, project_id, state, subject, trigger_summary, made_through_app FROM automation_runs WHERE id = $1",
     )
     .bind(run_id)
     .fetch_optional(pool)
@@ -1906,7 +1924,7 @@ async fn fire(state: &AppState, run_id: Uuid) -> Result<(), AppError> {
     // the task or pull request the context loaded (a run's task, say) would
     // otherwise reach its messages through placeholders. Nothing is sent
     // before this.
-    if let Some(limits) = app_limits(pool, &rule).await?
+    if let Some(limits) = app_limits(pool, &rule, due.made_through_app).await?
         && limit_hides(
             &limits,
             rule.project_id,
@@ -1918,7 +1936,7 @@ async fn fire(state: &AppState, run_id: Uuid) -> Result<(), AppError> {
             pool,
             run_id,
             "skipped",
-            Some("Skipped: the app it was made through can't see what this is about."),
+            Some("Skipped: the app it was made or run through can't see what this is about."),
             &[],
         )
         .await;
@@ -1927,7 +1945,7 @@ async fn fire(state: &AppState, run_id: Uuid) -> Result<(), AppError> {
     for (index, action) in actions.iter().enumerate() {
         // A rule made through an app acts within that app's limits when it
         // fires, as the tool call that made it did.
-        let limits = app_limits(pool, &rule).await?;
+        let limits = app_limits(pool, &rule, due.made_through_app).await?;
         let acting = match with_limits(limits.clone(), acting_access(pool, &rule)).await? {
             Ok(acting) => acting,
             Err(reason) => {
@@ -2579,9 +2597,15 @@ async fn runs_route(
 /// The limits of the app a rule was made through, for a person's rule made
 /// through one: the person's role there cut down by the role's and their own
 /// agent limit, read again each time so a narrowed limit applies at once.
-/// None for a rule made in the browser or by an agent acting as itself.
-async fn app_limits(pool: &PgPool, rule: &RuleRow) -> Result<Option<AgentLimits>, AppError> {
-    if !rule.made_through_app {
+/// None for a rule made in the browser or by an agent acting as itself,
+/// unless this firing was run by hand through the person's app
+/// (`invoked_through_app`, automation_runs.made_through_app).
+async fn app_limits(
+    pool: &PgPool,
+    rule: &RuleRow,
+    invoked_through_app: bool,
+) -> Result<Option<AgentLimits>, AppError> {
+    if !rule.made_through_app && !invoked_through_app {
         return Ok(None);
     }
     let mut connection = pool.acquire().await?;

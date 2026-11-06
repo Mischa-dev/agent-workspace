@@ -745,16 +745,25 @@ async fn queued_runs_are_idempotent_and_create_no_workspace_before_admission() {
         .expect("drop scheduler schema");
 }
 
-/// AWD-74: a run waiting in the admission queue starts only if whoever
-/// started it may still start runs there when a slot frees up. Someone
-/// whose role lost "start runs" while it waited has it cancelled, with no
-/// workspace made for it.
-#[tokio::test]
-async fn a_queued_run_is_cancelled_when_its_requester_loses_start_runs() {
-    let Some((database_url, administrative_pool)) = integration_pool().await else {
-        return;
-    };
-    let schema = format!("m3_admission_role_{}", Uuid::now_v7().simple());
+/// A scheduler with one host slot, for the AWD-74 admission tests: the
+/// first test's setup, kept in one place.
+struct AdmissionFixture {
+    pool: PgPool,
+    administrative_pool: PgPool,
+    schema: String,
+    state: AppState,
+    supervisors: SupervisorRegistry,
+    application: axum::Router,
+    cookie: String,
+    csrf: String,
+    seed: agent_workspace_server::seed::DevSeed,
+    second_thread_id: Uuid,
+    _temporary: tempfile::TempDir,
+}
+
+async fn admission_fixture(name: &str) -> Option<AdmissionFixture> {
+    let (database_url, administrative_pool) = integration_pool().await?;
+    let schema = format!("m3_{name}_{}", Uuid::now_v7().simple());
     administrative_pool
         .execute(format!("CREATE SCHEMA {schema}").as_str())
         .await
@@ -853,69 +862,137 @@ async fn a_queued_run_is_cancelled_when_its_requester_loses_start_runs() {
     };
     let application = router(state.clone());
     let (cookie, csrf) = login(&application).await;
-
-    // The first run holds the only slot; the second waits in the queue.
-    let first = start_run(
-        &application,
-        &cookie,
-        &csrf,
-        seed.thread_id,
-        "admission-first-run",
-        "hold the only host slot",
-    )
-    .await;
-    assert_eq!(first.0, StatusCode::ACCEPTED, "{}", first.1);
-    let first_run_id = uuid_field(&first.2, "runId");
-    wait_for_state(&pool, first_run_id, "blocked").await;
-    let second = start_run(
-        &application,
-        &cookie,
-        &csrf,
+    Some(AdmissionFixture {
+        pool,
+        administrative_pool,
+        schema,
+        state,
+        supervisors,
+        application,
+        cookie,
+        csrf,
+        seed,
         second_thread_id,
-        "admission-second-run",
-        "wait for a slot",
-    )
-    .await;
-    assert_eq!(second.0, StatusCode::ACCEPTED, "{}", second.1);
-    let second_run_id = uuid_field(&second.2, "runId");
-    sleep(Duration::from_millis(250)).await;
-    wait_for_state(&pool, second_run_id, "queued").await;
+        _temporary: temporary,
+    })
+}
 
-    // Hold the queued run while the slot frees, so nothing claims it before
-    // the role changes.
-    sqlx::query(
-        r#"
-        UPDATE agent_runs
-        SET scheduler_claim_id = $2,
-            scheduler_claimed_at = now(),
-            scheduler_lease_expires_at = now() + interval '1 hour'
-        WHERE id = $1 AND state = 'queued'
-        "#,
-    )
-    .bind(second_run_id)
-    .bind(Uuid::now_v7())
-    .execute(&pool)
-    .await
-    .expect("hold the queued run");
-    let interrupted = interrupt(&application, &cookie, &csrf, first_run_id).await;
-    assert_eq!(interrupted.0, StatusCode::OK, "{}", interrupted.1);
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let active = sqlx::query_scalar::<_, bool>(
-            "SELECT state IN ('starting', 'working', 'blocked', 'recovering') FROM agent_runs WHERE id = $1",
+impl AdmissionFixture {
+    /// A second run, started by the owner in the browser, waiting in the
+    /// queue while the first holds the only host slot; then the slot is
+    /// freed with the run still held (a live claim), so nothing takes it
+    /// before the test changes who may start it. Returns the waiting run.
+    async fn run_waiting_for_a_slot(&self) -> Uuid {
+        let first = start_run(
+            &self.application,
+            &self.cookie,
+            &self.csrf,
+            self.seed.thread_id,
+            "admission-first-run",
+            "hold the only host slot",
         )
-        .bind(first_run_id)
-        .fetch_one(&pool)
+        .await;
+        assert_eq!(first.0, StatusCode::ACCEPTED, "{}", first.1);
+        let first_run_id = uuid_field(&first.2, "runId");
+        wait_for_state(&self.pool, first_run_id, "blocked").await;
+        let second = start_run(
+            &self.application,
+            &self.cookie,
+            &self.csrf,
+            self.second_thread_id,
+            "admission-second-run",
+            "wait for a slot",
+        )
+        .await;
+        assert_eq!(second.0, StatusCode::ACCEPTED, "{}", second.1);
+        let second_run_id = uuid_field(&second.2, "runId");
+        sleep(Duration::from_millis(250)).await;
+        wait_for_state(&self.pool, second_run_id, "queued").await;
+        // A live claim: all three claim columns set, the lease after the
+        // claim (agent_runs_scheduler_claim_shape_check).
+        sqlx::query(
+            r#"
+            UPDATE agent_runs
+            SET scheduler_claim_id = $2,
+                scheduler_claimed_at = now(),
+                scheduler_lease_expires_at = now() + interval '1 hour'
+            WHERE id = $1 AND state = 'queued'
+            "#,
+        )
+        .bind(second_run_id)
+        .bind(Uuid::now_v7())
+        .execute(&self.pool)
         .await
-        .expect("read first run");
-        if !active {
-            break;
+        .expect("hold the queued run");
+        let interrupted =
+            interrupt(&self.application, &self.cookie, &self.csrf, first_run_id).await;
+        assert_eq!(interrupted.0, StatusCode::OK, "{}", interrupted.1);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let active = sqlx::query_scalar::<_, bool>(
+                "SELECT state IN ('starting', 'working', 'blocked', 'recovering') FROM agent_runs WHERE id = $1",
+            )
+            .bind(first_run_id)
+            .fetch_one(&self.pool)
+            .await
+            .expect("read first run");
+            if !active {
+                break;
+            }
+            assert!(Instant::now() < deadline, "the first run kept its slot");
+            sleep(Duration::from_millis(25)).await;
         }
-        assert!(Instant::now() < deadline, "the first run kept its slot");
-        sleep(Duration::from_millis(25)).await;
+        second_run_id
     }
 
-    // The requester's role in the project loses "start runs".
+    /// Lets the held run's claim lapse the way the first test does (claimed
+    /// two minutes ago, lease over one minute ago, so the lease still
+    /// follows the claim), drains the queue, and returns the run's state and
+    /// workspace.
+    async fn release_and_drain(&self, run_id: Uuid) -> (String, Option<Uuid>) {
+        sqlx::query(
+            r#"
+            UPDATE agent_runs
+            SET scheduler_claimed_at = now() - interval '2 minutes',
+                scheduler_lease_expires_at = now() - interval '1 minute'
+            WHERE id = $1 AND state = 'queued'
+            "#,
+        )
+        .bind(run_id)
+        .execute(&self.pool)
+        .await
+        .expect("let the held claim lapse");
+        agent_workspace_server::scheduler::drain_now(&self.state)
+            .await
+            .expect("drain the queue");
+        sqlx::query_as::<_, (String, Option<Uuid>)>(
+            "SELECT state, repository_workspace_id FROM agent_runs WHERE id = $1",
+        )
+        .bind(run_id)
+        .fetch_one(&self.pool)
+        .await
+        .expect("read the queued run")
+    }
+
+    async fn close(self) {
+        self.supervisors.shutdown_all().await;
+        self.pool.close().await;
+        agent_workspace_server::test_support::drop_schema(&self.administrative_pool, &self.schema)
+            .await
+            .expect("drop admission schema");
+    }
+}
+
+/// AWD-74: a run waiting in the admission queue starts only if whoever
+/// started it may still start runs there when a slot frees up. Someone
+/// whose role lost "start runs" while it waited has it cancelled, with no
+/// workspace made for it.
+#[tokio::test]
+async fn a_queued_run_is_cancelled_when_its_requester_loses_start_runs() {
+    let Some(fixture) = admission_fixture("admission_role").await else {
+        return;
+    };
+    let run_id = fixture.run_waiting_for_a_slot().await;
     let no_runs = sqlx::query_scalar::<_, Uuid>(
         r#"
         INSERT INTO workspace_roles (id, organization_id, key, base_role, name, permissions)
@@ -924,44 +1001,54 @@ async fn a_queued_run_is_cancelled_when_its_requester_loses_start_runs() {
         RETURNING id
         "#,
     )
-    .bind(seed.organization_id)
-    .fetch_one(&pool)
+    .bind(fixture.seed.organization_id)
+    .fetch_one(&fixture.pool)
     .await
     .expect("role without start runs");
     sqlx::query(
         "UPDATE project_memberships SET role_id = $3 WHERE project_id = $1 AND actor_id = $2",
     )
-    .bind(seed.project_id)
-    .bind(seed.human_actor_id)
+    .bind(fixture.seed.project_id)
+    .bind(fixture.seed.human_actor_id)
     .bind(no_runs)
-    .execute(&pool)
+    .execute(&fixture.pool)
     .await
     .expect("narrow the requester's role");
-    sqlx::query(
-        "UPDATE agent_runs SET scheduler_lease_expires_at = now() - interval '1 minute' WHERE id = $1",
-    )
-    .bind(second_run_id)
-    .execute(&pool)
-    .await
-    .expect("release the held run");
-    agent_workspace_server::scheduler::drain_now(&state)
-        .await
-        .expect("drain the queue");
-    let (second_state, second_workspace) = sqlx::query_as::<_, (String, Option<Uuid>)>(
-        "SELECT state, repository_workspace_id FROM agent_runs WHERE id = $1",
-    )
-    .bind(second_run_id)
-    .fetch_one(&pool)
-    .await
-    .expect("read the queued run");
-    assert_eq!(second_state, "canceled");
-    assert!(second_workspace.is_none());
+    let (state, workspace) = fixture.release_and_drain(run_id).await;
+    assert_eq!(state, "canceled");
+    assert!(workspace.is_none());
+    fixture.close().await;
+}
 
-    supervisors.shutdown_all().await;
-    pool.close().await;
-    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
+/// AWD-74: a run a person's app started (directly, or for a launch the app
+/// queued, which records the same origin on the run) starts only within
+/// the app's agent limit as it is when a slot frees up. The person's role
+/// still allows it; their apps' limit no longer does, so it is cancelled.
+#[tokio::test]
+async fn a_queued_app_run_is_cancelled_when_the_app_loses_start_runs() {
+    let Some(fixture) = admission_fixture("admission_app").await else {
+        return;
+    };
+    let run_id = fixture.run_waiting_for_a_slot().await;
+    // Started through the person's app (what start_run_in records inside an
+    // app's call, or for a launch the app queued).
+    sqlx::query("UPDATE agent_runs SET made_through_app = true WHERE id = $1")
+        .bind(run_id)
+        .execute(&fixture.pool)
         .await
-        .expect("drop admission schema");
+        .expect("mark the run as the app's");
+    sqlx::query(
+        "UPDATE organization_memberships SET agent_limit = ARRAY['tasks.view', 'tasks.edit'] WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(fixture.seed.organization_id)
+    .bind(fixture.seed.human_actor_id)
+    .execute(&fixture.pool)
+    .await
+    .expect("the person's apps no longer start runs");
+    let (state, workspace) = fixture.release_and_drain(run_id).await;
+    assert_eq!(state, "canceled");
+    assert!(workspace.is_none());
+    fixture.close().await;
 }
 
 async fn start_run(

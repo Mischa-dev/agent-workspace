@@ -3041,6 +3041,80 @@ async fn a_rule_run_by_hand_shows_only_tasks_its_maker_sees() {
     assert_eq!(notified_of(&setup, bea, "Secret rule plan").await, 1);
 }
 
+/// A rule made in the browser and run by hand through the maker's app keeps
+/// to that app's limit: without "see tasks" there the run is skipped and the
+/// title goes nowhere. The same run from the browser tells her the title.
+#[tokio::test]
+async fn a_browser_rule_run_through_an_app_keeps_to_the_apps_limit() {
+    let Some(setup) = setup("awd74_rule_app_run").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
+    let task = owner_task(&setup, &work, "Secret app plan").await;
+    let (status, rule) = send(
+        app,
+        bea_browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/automations"),
+            None,
+            json!({
+                "name": "Tell me",
+                "trigger": {"kind": "task_created"},
+                "actions": [{"kind": "notify", "recipients": "owner", "message": "Task: {{task.title}}"}],
+            }),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {rule}");
+    let rule_id = rule["id"].as_str().expect("rule").to_owned();
+    let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
+    let session = initialize(app, &bea_app).await.expect("Bea's app");
+    // Her apps may change tasks but not see them.
+    let (status, limit) = send(
+        app,
+        setup.browser.request(
+            "PUT",
+            &format!(
+                "/api/v1/organizations/{}/members/{bea}/agent-limit",
+                setup.organization_id
+            ),
+            None,
+            json!({"permissions": ["tasks.edit"]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{limit}");
+
+    let ran = tool(
+        app,
+        &bea_app,
+        &session,
+        "automation_write",
+        json!({"projectId": work, "operation": "run", "ruleId": rule_id, "taskId": task}),
+    )
+    .await;
+    assert_eq!(ran["outcome"], "ok", "{ran}");
+    assert_eq!(ran["value"]["state"], "skipped", "{ran}");
+    assert!(!ran.to_string().contains("Secret app plan"), "{ran}");
+    assert_eq!(notified_of(&setup, bea, "Secret app plan").await, 0);
+
+    let (status, run) = send(
+        app,
+        bea_browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/automations/{rule_id}/run"),
+            None,
+            json!({"workItemId": task}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {run}");
+    assert_eq!(run["state"], "succeeded", "{run}");
+    assert_eq!(notified_of(&setup, bea, "Secret app plan").await, 1);
+}
+
 /// How many of `actor`'s notifications have `text` in their title.
 async fn notified_of(setup: &Setup, actor: Uuid, text: &str) -> i64 {
     sqlx::query_scalar::<_, i64>(

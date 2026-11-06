@@ -452,11 +452,12 @@ pub(crate) async fn start_run_in(
     // is then (`scheduler::requester_refusal`).
     .bind(
         matches!(principal.actor_kind(), Ok(ActorKind::Human))
-            && crate::policy::current_agent_limit(
-                principal.actor_id(),
-                crate::policy::MembershipScope::Project(conversation.project_id),
-            )
-            .is_some(),
+            && (principal.made_through_app()
+                || crate::policy::current_agent_limit(
+                    principal.actor_id(),
+                    crate::policy::MembershipScope::Project(conversation.project_id),
+                )
+                .is_some()),
     )
     .execute(&mut *transaction)
     .await?;
@@ -2429,6 +2430,12 @@ pub(crate) trait RunActor {
     fn actor_id(&self) -> Uuid;
     fn actor_kind(&self) -> Result<ActorKind, AppError>;
     fn is_mcp(&self) -> bool {
+        false
+    }
+    /// Started for something a person's app set going earlier (a queued
+    /// launch), outside the app's own call. A run started inside such a
+    /// call is recognized by its agent limit (`start_run_in`).
+    fn made_through_app(&self) -> bool {
         false
     }
 }

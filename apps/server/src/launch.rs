@@ -589,6 +589,30 @@ impl RunActor for LaunchCaller {
     }
 }
 
+/// The caller of a launch's start, with where the launch came from: a run
+/// started for a launch a person's app queued records it, so it stays
+/// within that app's limit if it waits for a slot (`scheduler`). Only the
+/// record changes; who may start the run is the caller's as before.
+struct LaunchStarter<'a> {
+    caller: &'a LaunchCaller,
+    through_app: bool,
+}
+
+impl RunActor for LaunchStarter<'_> {
+    fn actor_id(&self) -> Uuid {
+        self.caller.actor_id
+    }
+    fn actor_kind(&self) -> Result<ActorKind, AppError> {
+        Ok(self.caller.actor_kind)
+    }
+    fn is_mcp(&self) -> bool {
+        self.caller.mcp
+    }
+    fn made_through_app(&self) -> bool {
+        self.through_app
+    }
+}
+
 async fn audit(
     executor: impl PgExecutor<'_>,
     caller: &LaunchCaller,
@@ -688,12 +712,26 @@ struct LaunchRow {
     provider_account_id: Option<Uuid>,
     status_reason: Option<String>,
     agent_profile_id: Option<Uuid>,
+    source: String,
+    made_through_app: bool,
+}
+
+impl LaunchRow {
+    /// Queued by a person's app or script (directly, in a batch, from a
+    /// message it sent or through an automation it made): the run it starts
+    /// stays within that app's limit while it waits for a slot. Source mcp
+    /// covers rows from before the flag was set on every insert, as in
+    /// `drain`.
+    fn through_app(&self) -> bool {
+        self.made_through_app || self.source == "mcp"
+    }
 }
 
 const LAUNCH_ROW: &str = r#"
     id, project_id, work_item_id, conversation_id,
     requested_by_actor_id, via_oauth_grant_id, environment_id,
-    overrides, prompt, provider_account_id, status_reason, agent_profile_id
+    overrides, prompt, provider_account_id, status_reason, agent_profile_id,
+    source, made_through_app
 "#;
 
 #[derive(Clone, Debug, Serialize)]
@@ -1560,9 +1598,19 @@ pub(crate) async fn launch_tasks(
         .bind(request.provider_account_id)
         .bind(reason)
         .bind(request.agent_profile_id)
-        // A person's app or script queued it (whatever the display source):
-        // it starts only within that app's limit when the queue drains.
-        .bind(caller.mcp && caller.actor_kind == ActorKind::Human)
+        // A person's app or script queued it (whatever the display source),
+        // directly or through an automation it made, whose actions run
+        // within the app's limit: it starts only within that limit when the
+        // queue drains.
+        .bind(
+            caller.actor_kind == ActorKind::Human
+                && (caller.mcp
+                    || crate::policy::current_agent_limit(
+                        caller.actor_id,
+                        crate::policy::MembershipScope::Project(project_id),
+                    )
+                    .is_some()),
+        )
         .execute(&mut *transaction)
         .await?;
         audit(
@@ -1992,7 +2040,10 @@ async fn start_launch(
     };
     let started = crate::api::start_run_in(
         state,
-        caller,
+        &LaunchStarter {
+            caller,
+            through_app: launch.through_app(),
+        },
         launch.via_oauth_grant_id,
         thread_id,
         StartRunRequest {

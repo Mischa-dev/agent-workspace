@@ -29,6 +29,8 @@ const UNKNOWN_HARNESS_REASON: &str =
     "This run's harness is not installed on the server. Nothing was started.";
 const REQUESTER_REFUSED_REASON: &str =
     "Cancelled before it started: whoever started it can no longer start runs in this project.";
+const SPONSORED_REQUESTER_REFUSED_REASON: &str = "Cancelled before it started: the agent that asked for it can no longer start runs in this project.";
+const SPONSOR_REFUSED_REASON: &str = "Cancelled before it started: the person who approved it can no longer start runs in this project.";
 const REQUESTER_APP_REFUSED_REASON: &str = "Cancelled before it started: whoever started it, or the app it was started from, can no longer start runs in this project.";
 const CLEANED_RETRY_REASON: &str = "The previous worktree was removed by retention cleanup before the retry could use it. Start a new Thread to continue.";
 /// Run states that hold a harness turn (and count against limits).
@@ -101,21 +103,56 @@ async fn drain(state: &AppState) -> Result<(), AppError> {
     Ok(())
 }
 
-/// Why a queued run's requester may no longer start it, if they may not:
-/// their role here no longer lets them start runs (or they left), or the
-/// run was started through their app and the app's agent limit, as it is
-/// now, no longer does.
-async fn requester_refusal(
+/// Why a queued run may no longer start, if it may not, checked when a slot
+/// frees up (principle 9):
+///
+/// - its requester's role in the project must still let them start runs
+///   (custom roles included), and for a run their app or script started,
+///   within that app's agent limit as it is now;
+/// - for a sponsored run (an external agent's request a person approved),
+///   the requester's role and the sponsor's role must both still let them
+///   start runs. Sponsorship stands in for an app limit the requester
+///   doesn't have, not for either party's role.
+///
+/// Whether memberships, actors and workspace memberships are still active
+/// stays with the admission trigger (validate_agent_run_scope_and_admission).
+async fn admission_refusal(
+    state: &AppState,
+    requester: Uuid,
+    requester_kind: &str,
+    sponsor: Option<Uuid>,
+    project_id: Uuid,
+    through_app: bool,
+) -> Result<Option<&'static str>, AppError> {
+    if !may_start_runs(state, requester, requester_kind, project_id, through_app).await? {
+        return Ok(Some(match (sponsor.is_some(), through_app) {
+            (true, _) => SPONSORED_REQUESTER_REFUSED_REASON,
+            (false, true) => REQUESTER_APP_REFUSED_REASON,
+            (false, false) => REQUESTER_REFUSED_REASON,
+        }));
+    }
+    if let Some(sponsor) = sponsor
+        && !may_start_runs(state, sponsor, "human", project_id, false).await?
+    {
+        return Ok(Some(SPONSOR_REFUSED_REASON));
+    }
+    Ok(None)
+}
+
+/// Whether `actor_id`'s role in the project lets them start runs now, and
+/// for a run their app started (`through_app`), within the app's limit.
+/// Actors other than people and agents aren't checked here.
+async fn may_start_runs(
     state: &AppState,
     actor_id: Uuid,
     kind: &str,
     project_id: Uuid,
     through_app: bool,
-) -> Result<Option<&'static str>, AppError> {
+) -> Result<bool, AppError> {
     let actor_kind = match kind {
         "human" => ActorKind::Human,
         "external_agent" => ActorKind::ExternalAgent,
-        _ => return Ok(None),
+        _ => return Ok(true),
     };
     let limits = if through_app && actor_kind == ActorKind::Human {
         let mut connection = state.pool.acquire().await?;
@@ -127,9 +164,6 @@ async fn requester_refusal(
     } else {
         None
     };
-    // The role only: whether the membership, the actor and the workspace
-    // membership are still active is the admission trigger's
-    // (validate_agent_run_scope_and_admission), which keeps its own rules.
     let membership = sqlx::query_as::<_, (String, Option<Vec<String>>, bool)>(
         r#"
         SELECT role, workspace_role_permissions(role_id), enabled
@@ -141,13 +175,8 @@ async fn requester_refusal(
     .bind(actor_id)
     .fetch_optional(&state.pool)
     .await?;
-    let refused = Some(if through_app {
-        REQUESTER_APP_REFUSED_REASON
-    } else {
-        REQUESTER_REFUSED_REASON
-    });
     let Some((role, permissions, enabled)) = membership else {
-        return Ok(refused);
+        return Ok(false);
     };
     let subject = Subject::new(
         actor_id,
@@ -168,16 +197,13 @@ async fn requester_refusal(
         )
     })
     .await;
-    Ok(match decision {
-        Decision::Allow => None,
-        Decision::Deny(_) => refused,
-    })
+    Ok(decision == Decision::Allow)
 }
 
 /// What one look at the queue found.
 enum Claim {
     Run(Box<ClaimedRun>),
-    /// The oldest eligible run was cancelled (`requester_refusal`): look again.
+    /// The oldest eligible run was cancelled (`admission_refusal`): look again.
     Cancelled,
     Nothing,
 }
@@ -244,7 +270,7 @@ async fn claim_one(state: &AppState) -> Result<Claim, AppError> {
         predecessor_run_id: Option<Uuid>,
         requesting_actor_id: Uuid,
         requester_kind: String,
-        sponsored: bool,
+        sponsoring_actor_id: Option<Uuid>,
         made_through_app: bool,
     }
     // Oldest first among runs whose account has a free slot (up to its
@@ -258,7 +284,7 @@ async fn claim_one(state: &AppState) -> Result<Claim, AppError> {
                run.execution_profile_id, account.adapter_kind, run.prompt,
                run.predecessor_run_id, run.requesting_actor_id,
                requester.kind AS requester_kind,
-               run.sponsoring_actor_id IS NOT NULL AS sponsored, run.made_through_app
+               run.sponsoring_actor_id, run.made_through_app
         FROM agent_runs run
         JOIN actors requester ON requester.id = run.requesting_actor_id
         JOIN repositories repository
@@ -295,20 +321,18 @@ async fn claim_one(state: &AppState) -> Result<Claim, AppError> {
         transaction.commit().await?;
         return Ok(Claim::Nothing);
     };
-    // Principle 9: the person (or agent) who started it must still be able
-    // to start runs here now, and a run their app or script started must
-    // still be within that app's agent limit as it is now. Otherwise it's
-    // cancelled, saying why, and the next one is looked at. Sponsored runs
-    // are admitted by their own request's checks.
-    if !candidate.sponsored
-        && let Some(reason) = requester_refusal(
-            state,
-            candidate.requesting_actor_id,
-            &candidate.requester_kind,
-            candidate.project_id,
-            candidate.made_through_app,
-        )
-        .await?
+    // Whoever started it (and, for a sponsored run, whoever approved it)
+    // must still be able to start runs here now (`admission_refusal`).
+    // Otherwise it's cancelled, saying why, and the next one is looked at.
+    if let Some(reason) = admission_refusal(
+        state,
+        candidate.requesting_actor_id,
+        &candidate.requester_kind,
+        candidate.sponsoring_actor_id,
+        candidate.project_id,
+        candidate.made_through_app,
+    )
+    .await?
     {
         transition_run(
             &mut transaction,

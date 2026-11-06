@@ -931,6 +931,61 @@ async fn api_webhooks_and_automations_act_for_their_maker_only() {
     .execute(&pool)
     .await
     .expect("lift the limit a third time");
+    // Within the limit, the queue starts it, and the run it starts records
+    // the app's origin, so a run that then waits for a slot is checked
+    // against the app's limit again when one frees up (AWD-74).
+    sqlx::query("UPDATE provider_accounts SET max_concurrent_runs = 16")
+        .execute(&pool)
+        .await
+        .expect("room on the accounts");
+    let handed_task = send(
+        &application,
+        owner,
+        "POST",
+        &format!("{project}/work-items"),
+        "rule-handed-task",
+        json!({"title": "Handed to a run by the queue"}),
+    )
+    .await;
+    assert_eq!(handed_task.0, StatusCode::CREATED, "{}", handed_task.1);
+    let handed = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO launches (
+            id, organization_id, project_id, work_item_id, requested_by_actor_id,
+            source, start_when, position, made_through_app
+        ) VALUES ($1, $2, $3, $4, $5, 'automation', 'now',
+                  (SELECT COALESCE(max(position), 0) + 1 FROM launches WHERE project_id = $3),
+                  true)
+        "#,
+    )
+    .bind(handed)
+    .bind(seed.organization_id)
+    .bind(seed.project_id)
+    .bind(uuid_field(&handed_task.2, "id"))
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("queued launch within the limit");
+    launch::drain(&state).await.expect("drain");
+    let (launch_state, reason, run_origin) =
+        sqlx::query_as::<_, (String, Option<String>, Option<bool>)>(
+            r#"
+        SELECT launch.state, launch.status_reason, run.made_through_app
+        FROM launches launch
+        LEFT JOIN agent_runs run ON run.id = launch.agent_run_id
+        WHERE launch.id = $1
+        "#,
+        )
+        .bind(handed)
+        .fetch_one(&pool)
+        .await
+        .expect("handed launch");
+    assert_eq!(
+        run_origin,
+        Some(true),
+        "the run lost the launch's app origin (launch {launch_state}: {reason:?})"
+    );
 
     // @everyone in a channel of more than 50 people reaches everyone only
     // if its author may moderate, the script's agent limit included, as it
