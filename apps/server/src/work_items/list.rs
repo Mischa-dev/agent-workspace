@@ -1684,7 +1684,7 @@ fn card(
         && row.archived_at.is_none()
         && row.blocked_reason.is_none()
         && row.open_blocker_count == 0;
-    Ok(TaskCard {
+    let card = TaskCard {
         id: row.id,
         project_id: row.project_id,
         key: format!("{}-{}", row.project_key, row.number),
@@ -1720,7 +1720,36 @@ fn card(
         claimed_by: row.claimed_by,
         board_order: board_order(row.status_position, row.board_rank),
         group,
+    };
+    Ok(if capabilities.tasks {
+        card
+    } else {
+        without_contents(card)
     })
+}
+
+/// For someone who may change tasks here but not see them (a bulk change's
+/// response, say): the card's id, key, version, type and status, not its
+/// contents, as a single task's view does.
+fn without_contents(card: TaskCard) -> TaskCard {
+    TaskCard {
+        title: String::new(),
+        priority: "no_priority".to_owned(),
+        assignee: None,
+        labels: Vec::new(),
+        parent_id: None,
+        milestone: None,
+        start_date: None,
+        due_date: None,
+        estimate: None,
+        blocked_reason: None,
+        open_blocker_count: 0,
+        ready: false,
+        subtask_count: 0,
+        subtasks_done: 0,
+        claimed_by: None,
+        ..card
+    }
 }
 
 /// Status position, then rank, as fixed-width digits so that comparing the

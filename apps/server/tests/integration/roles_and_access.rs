@@ -3762,6 +3762,106 @@ async fn ai_suggestions_need_see_tasks() {
     );
 }
 
+/// A bulk change returns its cards the way a single task's change does:
+/// someone who may archive tasks but not see them gets each card's id,
+/// key, version, type and status, not its title, assignee or other
+/// contents; with "see tasks" the whole card comes back.
+#[tokio::test]
+async fn bulk_changes_without_see_tasks_reveal_no_task() {
+    let Some(setup) = setup("awd74_bulk_cards").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let project = work.parse::<Uuid>().expect("project");
+    let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
+    let task = owner_task(&setup, &work, "Secret bulk plan").await;
+    sqlx::query("UPDATE work_items SET assignee_actor_id = $3 WHERE project_id = $1 AND id = $2")
+        .bind(project)
+        .bind(task)
+        .bind(owner_id(&setup.pool).await)
+        .execute(&setup.pool)
+        .await
+        .expect("assign the task");
+    let (status, archivers) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Archivers", "baseRole": "member", "permissions": ["tasks.delete"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{archivers}");
+    let (status, changed) = set_project_role(
+        &setup,
+        &work,
+        bea,
+        "bea-archivers",
+        json!({"roleId": archivers["id"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let bulk = format!("/api/v1/projects/{work}/work-items/bulk");
+
+    // Restoring a task that's already active changes nothing and returns
+    // its card: without "see tasks", only what identifies it.
+    let version = task_version(&setup, project, task).await;
+    let (status, restored) = send(
+        app,
+        bea_browser.request(
+            "POST",
+            &bulk,
+            Some("bea-bulk-blind"),
+            json!({"items": [{"id": task, "expectedVersion": version}], "changes": {"archived": false}}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{restored}");
+    let card = &restored["items"][0];
+    assert_eq!(card["id"], task.to_string(), "{restored}");
+    assert!(card["key"].is_string(), "{restored}");
+    assert!(card["status"]["id"].is_string(), "{restored}");
+    assert_eq!(card["title"], "", "{restored}");
+    assert!(card["assignee"].is_null(), "{restored}");
+    assert!(
+        !restored.to_string().contains("Secret bulk plan"),
+        "{restored}"
+    );
+
+    // With "see tasks", the whole card.
+    let (status, seeing) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Seeing archivers", "baseRole": "member", "permissions": ["tasks.view", "tasks.delete"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{seeing}");
+    let (status, changed) = set_project_role(
+        &setup,
+        &work,
+        bea,
+        "bea-seeing-archivers",
+        json!({"roleId": seeing["id"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let version = task_version(&setup, project, task).await;
+    let (status, restored) = send(
+        app,
+        bea_browser.request(
+            "POST",
+            &bulk,
+            Some("bea-bulk-seeing"),
+            json!({"items": [{"id": task, "expectedVersion": version}], "changes": {"archived": false}}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{restored}");
+    assert_eq!(
+        restored["items"][0]["title"], "Secret bulk plan",
+        "{restored}"
+    );
+    assert!(restored["items"][0]["assignee"].is_object(), "{restored}");
+}
+
 /// The custom role `actor` holds in `project`, if any.
 async fn project_role_id(setup: &Setup, project: &str, actor: Uuid) -> Option<Uuid> {
     sqlx::query_scalar::<_, Option<Uuid>>(
