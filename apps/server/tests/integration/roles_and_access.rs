@@ -3436,6 +3436,80 @@ async fn an_invite_only_admin_sees_which_roles_they_may_invite_to() {
     );
 }
 
+/// Rotating an agent's credentials hands out the role it holds, custom ones
+/// included, not its base role: an admin without "edit tasks" may rotate
+/// them for an agent whose custom role leaves "edit tasks" out too, but not
+/// for an agent holding plain Member.
+#[tokio::test]
+async fn rotating_an_agent_checks_the_role_it_holds() {
+    let Some(setup) = setup("awd74_agent_rotate").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let project = work.parse::<Uuid>().expect("project");
+    let (alex, alex_browser) = add_person(&setup, &[&work], "alex").await;
+    let (status, keepers) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Agent keepers", "baseRole": "admin", "permissions": ["agents.manage", "members.view", "tasks.view"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{keepers}");
+    let (status, assigned) = assign(&setup, &setup.browser, alex, &keepers["id"], false).await;
+    assert_eq!(status, StatusCode::OK, "{assigned}");
+    sqlx::query(
+        "UPDATE project_memberships SET role_id = $3 WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project)
+    .bind(alex)
+    .bind(
+        keepers["id"]
+            .as_str()
+            .expect("id")
+            .parse::<Uuid>()
+            .expect("UUID"),
+    )
+    .execute(&setup.pool)
+    .await
+    .expect("alex keeps agents in the project too");
+
+    // Mara holds a custom role without "edit tasks"; Rook holds Member.
+    let (mara, _) = create_agent(app, &setup.browser, &work, "Mara", "mara").await;
+    let (rook, _) = create_agent(app, &setup.browser, &work, "Rook", "rook").await;
+    let (status, quiet) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Quiet agents", "baseRole": "member", "permissions": ["tasks.view"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{quiet}");
+    let (status, changed) = set_project_role(
+        &setup,
+        &work,
+        mara,
+        "mara-quiet",
+        json!({"roleId": quiet["id"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+
+    let rotate = |connection: Uuid, version: i64| {
+        alex_browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/external-agents/{connection}/credentials/rotate"),
+            None,
+            json!({"expectedVersion": version}),
+        )
+    };
+    let (connection, version, _) = agent_connection(&setup, mara).await;
+    let (status, rotated) = send(app, rotate(connection, version)).await;
+    assert_eq!(status, StatusCode::OK, "{rotated}");
+    let (connection, version, _) = agent_connection(&setup, rook).await;
+    let (status, refused) = send(app, rotate(connection, version)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+}
+
 /// The custom role `actor` holds in `project`, if any.
 async fn project_role_id(setup: &Setup, project: &str, actor: Uuid) -> Option<Uuid> {
     sqlx::query_scalar::<_, Option<Uuid>>(

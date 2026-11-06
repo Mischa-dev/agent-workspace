@@ -230,6 +230,7 @@ async fn create_connection(
         access.organization_id,
         principal.actor_id,
         &normalized.role,
+        None,
     )
     .await?;
     let created = insert_agent(
@@ -518,6 +519,7 @@ pub async fn provision(
         organization_id,
         owner_actor_id,
         &normalized.role,
+        None,
     )
     .await?;
     let created = insert_agent(
@@ -875,11 +877,19 @@ async fn mutate_connection(
     // the caller a token for the agent) all hand the agent's role out again,
     // so the role must be within what the caller holds.
     if role_changed || restores || widens_scopes || should_issue {
+        // A new built-in role is checked as asked; otherwise the agent keeps
+        // the role it holds, custom ones included.
+        let role_id = if role_changed {
+            None
+        } else {
+            agent_role_id(&mut transaction, current.project_id, current.actor_id).await?
+        };
         require_grantable(
             &mut transaction,
             access.organization_id,
             principal.actor_id,
             next_role,
+            role_id,
         )
         .await?;
     }
@@ -1126,14 +1136,26 @@ fn normalize_scopes(mut scopes: Vec<String>) -> Result<Vec<String>, AppError> {
 
 /// Refuses giving an agent a role that holds a permission the person
 /// giving it doesn't, so a narrowed admin can't win back what their role
-/// leaves out through an agent of their own.
+/// leaves out through an agent of their own. `role_id` is the custom role
+/// the agent holds (or is given), whose permissions are what's handed out,
+/// not its base role's; None for a built-in role.
 async fn require_grantable(
     transaction: &mut Transaction<'_, Postgres>,
     organization_id: Uuid,
     caller_actor_id: Uuid,
     role: &str,
+    role_id: Option<Uuid>,
 ) -> Result<(), AppError> {
-    let grant = RoleGrant::stored(role, None::<&[String]>)
+    let permissions = match role_id {
+        Some(role_id) => {
+            sqlx::query_scalar::<_, Option<Vec<String>>>("SELECT workspace_role_permissions($1)")
+                .bind(role_id)
+                .fetch_one(&mut **transaction)
+                .await?
+        }
+        None => None,
+    };
+    let grant = RoleGrant::stored(role, permissions.as_deref())
         .map_err(|_| AppError::Validation("agent role"))?;
     let caller = crate::roles::standing(transaction, organization_id, caller_actor_id).await?;
     if !grant.permissions().is_subset_of(caller.permissions) {
@@ -1543,13 +1565,31 @@ pub(crate) async fn require_connection_grantable(
     connection_id: Uuid,
 ) -> Result<(), AppError> {
     let connection = load_connection_tx(transaction, project_id, connection_id).await?;
+    let role_id = agent_role_id(transaction, project_id, connection.actor_id).await?;
     require_grantable(
         transaction,
         organization_id,
         caller_actor_id,
         &connection.role,
+        role_id,
     )
     .await
+}
+
+/// The custom role an agent holds in the project, if any.
+async fn agent_role_id(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    actor_id: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT role_id FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project_id)
+    .bind(actor_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .flatten())
 }
 
 #[cfg(test)]
