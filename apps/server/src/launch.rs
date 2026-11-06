@@ -1416,6 +1416,18 @@ pub(crate) async fn launch_tasks(
         Action::WorkerInvoke,
     )
     .await?;
+    // A launch names its thread after the task and writes the task's title,
+    // description and criteria into the run's prompt, which the thread
+    // shows: only for someone who sees tasks here (their role, and an app's
+    // agent limit in its call).
+    environments::authorize_project(
+        &state.pool,
+        caller.actor_id,
+        caller.actor_kind,
+        project_id,
+        Action::WorkItemView,
+    )
+    .await?;
     if request.work_item_ids.is_empty() || request.work_item_ids.len() > MAX_TASKS_PER_LAUNCH {
         return Err(AppError::Validation("workItemIds"));
     }
@@ -2287,10 +2299,40 @@ pub async fn drain(state: &AppState) -> Result<usize, AppError> {
             queued.project_id,
             Action::WorkerInvoke,
         );
-        let access = match limits {
+        let access = match limits.clone() {
             Some(limits) => crate::policy::with_agent_limits(limits, access).await,
             None => access.await,
         };
+        // A task's launch writes the task into the run's prompt: whoever
+        // queued it must still see tasks here, by role and app limit.
+        let sees_tasks = if queued.work_item_id.is_some() {
+            let view = memory::project_access(
+                &state.pool,
+                queued.requested_by_actor_id,
+                kind,
+                queued.project_id,
+                Action::WorkItemView,
+            );
+            match limits {
+                Some(limits) => crate::policy::with_agent_limits(limits, view).await,
+                None => view.await,
+            }
+            .is_ok()
+        } else {
+            true
+        };
+        if !sees_tasks {
+            cancel_from_queue(
+                state,
+                &launch,
+                &format!(
+                    "{} can no longer see tasks in this project, so it was cancelled.",
+                    queued.actor_name
+                ),
+            )
+            .await?;
+            continue;
+        }
         if access.is_err() {
             cancel_from_queue(
                 state,
