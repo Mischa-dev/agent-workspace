@@ -391,6 +391,116 @@ async fn launches_use_the_defaults_queue_in_order_and_recheck_access() {
     .expect("count member runs");
     assert_eq!(runs_for_member_task, 0);
 
+    // A launch writes its task into the run's prompt, so it needs "see
+    // tasks": the member, back in the project with a role that may start
+    // runs but not see tasks, can't launch a task, and a launch they queued
+    // is cancelled when it comes up.
+    let member_id = sqlx::query_scalar::<_, Uuid>(
+        "UPDATE project_memberships SET enabled = true WHERE project_id = $1 AND handle = 'w2-member' RETURNING actor_id",
+    )
+    .bind(seed.project_id)
+    .fetch_one(&pool)
+    .await
+    .expect("the member is back");
+    let mut blind_tasks = Vec::new();
+    for title in ["Secret launch title", "Secret queued title"] {
+        let created = send(
+            &application,
+            owner,
+            "POST",
+            &format!("{project}/work-items"),
+            &format!("task-{}", title.replace(' ', "-")),
+            json!({"title": title, "description": "Secret launch details"}),
+        )
+        .await;
+        assert_eq!(created.0, StatusCode::CREATED, "{}", created.1);
+        blind_tasks.push(uuid_field(&created.2, "id"));
+    }
+    let (asked, queued_blind) = (blind_tasks[0], blind_tasks[1]);
+    let role = send(
+        &application,
+        owner,
+        "POST",
+        &format!("/api/v1/organizations/{}/roles", seed.organization_id),
+        "blind-launchers",
+        json!({"name": "Blind launchers", "baseRole": "member", "permissions": ["runs.launch"]}),
+    )
+    .await;
+    assert_eq!(role.0, StatusCode::CREATED, "{}", role.1);
+    let version = sqlx::query_scalar::<_, i64>(
+        "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.project_id)
+    .bind(member_id)
+    .fetch_one(&pool)
+    .await
+    .expect("member version");
+    let changed = send(
+        &application,
+        owner,
+        "PATCH",
+        &format!("{project}/members/{member_id}"),
+        "member-blind-launcher",
+        json!({"roleId": role.2["id"], "expectedVersion": version}),
+    )
+    .await;
+    assert_eq!(changed.0, StatusCode::OK, "{}", changed.1);
+    let refused = send(
+        &application,
+        member,
+        "POST",
+        &format!("{project}/launches"),
+        "blind-launch",
+        json!({"workItemIds": [asked]}),
+    )
+    .await;
+    assert!(
+        matches!(refused.0, StatusCode::FORBIDDEN | StatusCode::NOT_FOUND),
+        "a member who can't see tasks launched one: {} {}",
+        refused.0,
+        refused.1
+    );
+    assert!(!refused.1.contains("Secret launch"), "{}", refused.1);
+    let blind_launches =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM launches WHERE work_item_id = $1")
+            .bind(asked)
+            .fetch_one(&pool)
+            .await
+            .expect("count blind launches");
+    assert_eq!(blind_launches, 0);
+    // Queued while they could still see tasks, and due now.
+    sqlx::query(
+        r#"
+        INSERT INTO launches (
+            id, organization_id, project_id, work_item_id, requested_by_actor_id,
+            source, start_when, position
+        ) VALUES ($1, $2, $3, $4, $5, 'button', 'blockers_done',
+                  (SELECT COALESCE(max(position), 0) + 1 FROM launches WHERE project_id = $3))
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(seed.organization_id)
+    .bind(seed.project_id)
+    .bind(queued_blind)
+    .bind(member_id)
+    .execute(&pool)
+    .await
+    .expect("queued launch");
+    launch::drain(&state).await.expect("drain");
+    let (blind_state, blind_reason) = launch_state(&pool, queued_blind).await;
+    assert_eq!(blind_state, "cancelled");
+    assert!(
+        blind_reason.contains("can no longer see tasks"),
+        "{blind_reason}"
+    );
+    let blind_prompts = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM agent_runs WHERE strpos(prompt, 'Secret') > 0",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("count runs with the secret");
+    assert_eq!(blind_prompts, 0);
+
     // The queue view shows what happened, newest first.
     let list = send_get(&application, owner, &format!("{project}/launches")).await;
     assert_eq!(list.0, StatusCode::OK, "{}", list.1);

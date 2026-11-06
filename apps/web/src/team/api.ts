@@ -8,6 +8,8 @@ export type Member = {
   actorId: string
   actorKind?: string
   role: TeamRole
+  /** The workspace's custom role they hold here (AWD-74). */
+  roleId?: string | null
   displayName: string
   handle: string
   enabled: boolean
@@ -30,6 +32,7 @@ export type Invitation = {
   id: string
   projectId: string
   role: Exclude<TeamRole, 'owner'>
+  roleId?: string | null
   tokenPrefix: string
   status: 'active' | 'accepted' | 'revoked' | 'replaced' | 'expired'
   version: number
@@ -53,7 +56,7 @@ export function listMembers(projectId: string) {
 export function updateMember(
   projectId: string,
   actorId: string,
-  input: { expectedVersion: number; role?: TeamRole; enabled?: boolean },
+  input: { expectedVersion: number; role?: TeamRole; roleId?: string; enabled?: boolean },
 ) {
   return requestJson<Member>(
     `/api/v1/projects/${projectId}/members/${actorId}`,
@@ -71,10 +74,11 @@ export function issueInvitation(
   projectId: string,
   role: Exclude<TeamRole, 'owner'>,
   expiresInHours: number,
+  roleId?: string,
 ) {
   return requestJson<IssuedInvitation>(
     `/api/v1/projects/${projectId}/invitations`,
-    { method: 'POST', json: { role, expiresInHours } },
+    { method: 'POST', json: roleId ? { role, roleId, expiresInHours } : { role, expiresInHours } },
   )
 }
 
@@ -100,6 +104,9 @@ export type MemberCandidate = { actorId: string; actorKind: string; displayName:
 export function listMemberCandidates(projectId: string) {
   return requestJson<MemberCandidate[]>(`/api/v1/projects/${projectId}/member-candidates`)
 }
-export function addExistingMember(projectId: string, actorId: string, role: 'member' | 'viewer') {
-  return requestJson<Member>(`/api/v1/projects/${projectId}/members`, { method: 'POST', json: { actorId, role } })
+export function addExistingMember(projectId: string, actorId: string, role: 'member' | 'viewer', roleId?: string) {
+  return requestJson<Member>(`/api/v1/projects/${projectId}/members`, {
+    method: 'POST',
+    json: roleId ? { actorId, role, roleId } : { actorId, role },
+  })
 }

@@ -471,7 +471,7 @@ pub(super) async fn page_write(
     };
     let result = async {
         let project_id = principal.project_id;
-        if !can_write_in(state, principal, project_id, Action::WorkItemEdit).await? {
+        if !can_write_in(state, principal, project_id, Action::PageEdit).await? {
             return Ok(ToolResult::denied("You can't edit pages in that project."));
         }
         let mut transaction = state.pool.begin().await?;
@@ -480,7 +480,7 @@ pub(super) async fn page_write(
             principal.actor_id,
             principal.actor_kind,
             project_id,
-            Action::WorkItemEdit,
+            Action::PageEdit,
         )
         .await?;
         if direct {
@@ -904,7 +904,7 @@ pub(super) async fn decision_record(
     };
     let result = async {
         let project_id = principal.project_id;
-        if !can_write_in(state, principal, project_id, Action::MessageSend).await? {
+        if !can_write_in(state, principal, project_id, Action::PageEdit).await? {
             return Ok(ToolResult::denied(
                 "You can't record decisions in that project.",
             ));
@@ -915,7 +915,7 @@ pub(super) async fn decision_record(
             principal.actor_id,
             principal.actor_kind,
             project_id,
-            Action::MessageSend,
+            Action::PageEdit,
         )
         .await?;
         let decision_id =

@@ -10,7 +10,7 @@ export default function MembersPage({ project, workspace }: SettingsPageProps) {
       <PageHeader icon="users" title="Members">
         People and agents in {project.name}. Add anyone already in the workspace, or invite someone new.
       </PageHeader>
-      <TeamSettings organizationRole={workspace.role} projectId={project.id} />
+      <TeamSettings organizationId={workspace.id} organizationRole={workspace.role} projectId={project.id} />
     </>
   )
 }

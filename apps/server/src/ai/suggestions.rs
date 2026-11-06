@@ -374,6 +374,22 @@ const JOINS: &str = r#"
       ON other_status.project_id = other.project_id AND other_status.id = other.status_id
 "#;
 
+// An app acting for the reader sees only suggestions whose projects its
+// current limit lets it see tasks in (`app_limit_projects`; NULL outside
+// such a call). The role's "see tasks" is in ai_suggestion_visible_to.
+const WITHIN_APP_LIMIT_4: &str = "$4::uuid[] IS NULL OR (suggestion.project_id = ANY($4) AND (suggestion.other_project_id IS NULL OR suggestion.other_project_id = ANY($4)))";
+const WITHIN_APP_LIMIT_5: &str = "$5::uuid[] IS NULL OR (suggestion.project_id = ANY($5) AND (suggestion.other_project_id IS NULL OR suggestion.other_project_id = ANY($5)))";
+const WITHIN_APP_LIMIT_11: &str = "$11::uuid[] IS NULL OR (suggestion.project_id = ANY($11) AND (suggestion.other_project_id IS NULL OR suggestion.other_project_id = ANY($11)))";
+
+/// While an app acts for the reader: the projects its limit lets it see
+/// tasks in. None otherwise.
+fn app_limit_projects(reader: Reader) -> Option<Vec<Uuid>> {
+    crate::policy::agent_limit_projects_allowing(
+        reader.actor_id,
+        crate::policy::Permission::TasksView,
+    )
+}
+
 fn parse_cursor(cursor: &str) -> Option<(f32, Uuid)> {
     let (confidence, id) = cursor.split_once('_')?;
     Some((confidence.parse().ok()?, id.parse().ok()?))
@@ -425,6 +441,7 @@ pub async fn list(
           AND ($5::real IS NULL OR (suggestion.confidence, suggestion.id) < ($5, $6))
           AND (NOT $9 OR ({STILL_USEFUL}))
           AND ai_suggestion_visible_to(suggestion.id, $7, $8)
+          AND ({WITHIN_APP_LIMIT_11})
         ORDER BY suggestion.confidence DESC, suggestion.id DESC
         LIMIT $10
         "#
@@ -439,6 +456,7 @@ pub async fn list(
     .bind(reader.connection_id)
     .bind(pending_only)
     .bind(limit + 1)
+    .bind(app_limit_projects(reader))
     .fetch_all(&mut *connection)
     .await?;
     let has_more = rows.len() as i64 > limit;
@@ -457,11 +475,13 @@ pub async fn list(
         WHERE suggestion.project_id = $1 AND suggestion.status = 'pending'
           AND ({STILL_USEFUL})
           AND ai_suggestion_visible_to(suggestion.id, $2, $3)
+          AND ({WITHIN_APP_LIMIT_4})
         "#
     ))
     .bind(project_id)
     .bind(reader.actor_id)
     .bind(reader.connection_id)
+    .bind(app_limit_projects(reader))
     .fetch_one(&mut *connection)
     .await?;
     let suggestions = views(connection, reader, rows).await?;
@@ -479,19 +499,24 @@ pub async fn get(
     project_id: Uuid,
     suggestion_id: Uuid,
 ) -> Result<Option<SuggestionView>, AppError> {
-    let rows = sqlx::query_as::<_, Row>(
+    let rows = sqlx::query_as::<_, Row>(&format!(
         r#"
-        SELECT id, project_id, work_item_id, kind, other_work_item_id, value, confidence,
-               reason, sources, status, origin, audience_actor_id, provider, model,
-               created_at, decided_at
-        FROM ai_suggestions
-        WHERE id = $1 AND project_id = $2 AND ai_suggestion_visible_to(id, $3, $4)
-        "#,
-    )
+        SELECT suggestion.id, suggestion.project_id, suggestion.work_item_id, suggestion.kind,
+               suggestion.other_work_item_id, suggestion.value, suggestion.confidence,
+               suggestion.reason, suggestion.sources, suggestion.status, suggestion.origin,
+               suggestion.audience_actor_id, suggestion.provider, suggestion.model,
+               suggestion.created_at, suggestion.decided_at
+        FROM ai_suggestions suggestion
+        WHERE suggestion.id = $1 AND suggestion.project_id = $2
+          AND ai_suggestion_visible_to(suggestion.id, $3, $4)
+          AND ({WITHIN_APP_LIMIT_5})
+        "#
+    ))
     .bind(suggestion_id)
     .bind(project_id)
     .bind(reader.actor_id)
     .bind(reader.connection_id)
+    .bind(app_limit_projects(reader))
     .fetch_all(&mut *connection)
     .await?;
     Ok(views(connection, reader, rows).await?.into_iter().next())
@@ -683,19 +708,22 @@ async fn lock(
     reader: Reader,
     suggestion_id: Uuid,
 ) -> Result<Result<Locked, Refusal>, AppError> {
-    let Some(locked) = sqlx::query_as::<_, Locked>(
+    let Some(locked) = sqlx::query_as::<_, Locked>(&format!(
         r#"
-        SELECT id, work_item_id, kind, other_project_id, other_work_item_id, value, status,
-               ai_suggestion_visible_to(id, $3, $4) AS visible
-        FROM ai_suggestions
-        WHERE id = $1 AND project_id = $2
+        SELECT suggestion.id, suggestion.work_item_id, suggestion.kind,
+               suggestion.other_project_id, suggestion.other_work_item_id, suggestion.value,
+               suggestion.status,
+               ai_suggestion_visible_to(suggestion.id, $3, $4) AND ({WITHIN_APP_LIMIT_5}) AS visible
+        FROM ai_suggestions suggestion
+        WHERE suggestion.id = $1 AND suggestion.project_id = $2
         FOR UPDATE
-        "#,
-    )
+        "#
+    ))
     .bind(suggestion_id)
     .bind(actor.project_id)
     .bind(reader.actor_id)
     .bind(reader.connection_id)
+    .bind(app_limit_projects(reader))
     .fetch_optional(&mut **transaction)
     .await?
     else {
