@@ -3510,6 +3510,121 @@ async fn rotating_an_agent_checks_the_role_it_holds() {
     assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
 }
 
+/// A comment that references another task shows that task's title and
+/// status only to someone who may see tasks: posting or editing it with a
+/// role that may edit but not see tasks returns the reference by id and
+/// key alone; with "see tasks" the title and status come back.
+#[tokio::test]
+async fn comment_references_show_titles_only_with_see_tasks() {
+    let Some(setup) = setup("awd74_comment_refs").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
+    let on = owner_task(&setup, &work, "Commented task").await;
+    let secret = owner_task(&setup, &work, "Secret referenced task").await;
+    let (status, editors) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Commenters", "baseRole": "member", "permissions": ["tasks.edit"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{editors}");
+    let (status, changed) = set_project_role(
+        &setup,
+        &work,
+        bea,
+        "bea-commenters",
+        json!({"roleId": editors["id"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let content = |text: &str| {
+        json!({"version": 1, "nodes": [
+            {"type": "text", "text": text},
+            {"type": "work_item_ref", "workItemId": secret}
+        ]})
+    };
+    let comments = format!("/api/v1/projects/{work}/work-items/{on}/comments");
+
+    // Without "see tasks": the reference, by id and key only.
+    let (status, posted) = send(
+        app,
+        bea_browser.request(
+            "POST",
+            &comments,
+            Some("bea-comment-blind"),
+            json!({"content": content("See ")}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{posted}");
+    let reference = &posted["comment"]["referencedWorkItems"][0];
+    assert_eq!(reference["id"], secret.to_string(), "{posted}");
+    assert_eq!(reference["title"], "", "{posted}");
+    assert_eq!(reference["statusCategory"], "", "{posted}");
+    assert!(
+        !posted.to_string().contains("Secret referenced task"),
+        "{posted}"
+    );
+    let comment_id = posted["comment"]["id"]
+        .as_str()
+        .expect("comment")
+        .to_owned();
+    let (status, edited) = send(
+        app,
+        bea_browser.request(
+            "PATCH",
+            &format!("{comments}/{comment_id}"),
+            None,
+            json!({"content": content("Also see "), "expectedRevision": 1}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    assert_eq!(
+        edited["comment"]["referencedWorkItems"][0]["title"], "",
+        "{edited}"
+    );
+    assert!(
+        !edited.to_string().contains("Secret referenced task"),
+        "{edited}"
+    );
+
+    // With "see tasks": the title and status come back.
+    let (status, seeing) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Seeing commenters", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{seeing}");
+    let (status, changed) = set_project_role(
+        &setup,
+        &work,
+        bea,
+        "bea-seeing-commenters",
+        json!({"roleId": seeing["id"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let (status, posted) = send(
+        app,
+        bea_browser.request(
+            "POST",
+            &comments,
+            Some("bea-comment-seeing"),
+            json!({"content": content("Now see ")}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{posted}");
+    let reference = &posted["comment"]["referencedWorkItems"][0];
+    assert_eq!(reference["title"], "Secret referenced task", "{posted}");
+    assert_ne!(reference["statusCategory"], "", "{posted}");
+}
+
 /// The custom role `actor` holds in `project`, if any.
 async fn project_role_id(setup: &Setup, project: &str, actor: Uuid) -> Option<Uuid> {
     sqlx::query_scalar::<_, Option<Uuid>>(

@@ -2904,7 +2904,12 @@ async fn create_work_item_comment(
         .into_iter()
         .next()
         .ok_or(AppError::Internal("comment author unavailable"))?;
-    let body = CommentAppendResponse {
+    // Commenting takes "edit tasks"; the referenced tasks' titles and
+    // statuses also take "see tasks" here (an app's limit included).
+    let sees_tasks =
+        crate::conversations::sees_tasks_in(&mut *transaction, principal.actor_id, project_id)
+            .await?;
+    let mut body = CommentAppendResponse {
         work_item_id,
         sequence,
         comment: WorkItemCommentView {
@@ -2924,6 +2929,9 @@ async fn create_work_item_comment(
             removed: None,
         },
     };
+    if !sees_tasks {
+        hide_reference_details(&mut body.comment);
+    }
     complete(&mut transaction, &reservation, StatusCode::CREATED, &body).await?;
     transaction.commit().await?;
     Ok((StatusCode::CREATED, Json(body)).into_response())
@@ -3148,6 +3156,16 @@ fn work_item_reference_view(project_id: Uuid, row: WorkItemReferenceRow) -> Work
         status_category: row.status_category,
         archived_at: row.archived_at,
         href: format!("/projects/{project_id}/work-items/{}", row.id),
+    }
+}
+
+/// For someone who may change tasks here but not see them: the tasks a
+/// comment references keep their id, key and link, without their title or
+/// status (the comment's text already names them by key).
+pub(super) fn hide_reference_details(comment: &mut WorkItemCommentView) {
+    for reference in &mut comment.referenced_work_items {
+        reference.title = String::new();
+        reference.status_category = String::new();
     }
 }
 
