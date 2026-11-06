@@ -285,7 +285,7 @@ export function ThreadDetails({
               <li key={item.id}>
                 <Link className="aw-workref" to={item.href}>
                   <span className="aw-workref__key">{item.key}</span>
-                  <span className="aw-workref__title">{item.title}</span>
+                  {item.title ? <span className="aw-workref__title">{item.title}</span> : null}
                 </Link>
                 {item.archivedAt ? <span className="aw-details__archived">Archived</span> : null}
                 {onUnlink ? (

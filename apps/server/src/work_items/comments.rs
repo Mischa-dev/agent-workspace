@@ -742,6 +742,15 @@ pub(crate) async fn is_comment_moderator(
     if actor_kind != ActorKind::Human {
         return Ok(false);
     }
+    // An app acting for them moderates only while its agent limit keeps
+    // "moderate channels" too.
+    if crate::policy::agent_limit_hides(
+        actor_id,
+        project_id,
+        crate::policy::Permission::ChannelsModerate,
+    ) {
+        return Ok(false);
+    }
     Ok(sqlx::query_scalar::<_, bool>(
         r#"
         SELECT EXISTS (

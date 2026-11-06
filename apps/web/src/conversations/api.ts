@@ -39,8 +39,6 @@ function normalizeWorkItemReference(
   if (
     typeof item.id !== 'string' ||
     typeof item.key !== 'string' ||
-    typeof item.title !== 'string' ||
-    typeof item.statusCategory !== 'string' ||
     typeof item.href !== 'string' ||
     !item.href.startsWith('/projects/')
   ) {
@@ -49,8 +47,9 @@ function normalizeWorkItemReference(
   return {
     id: item.id,
     key: item.key.slice(0, 64),
-    title: item.title.slice(0, 240),
-    statusCategory: item.statusCategory.slice(0, 40),
+    title: typeof item.title === 'string' ? item.title.slice(0, 240) : undefined,
+    statusCategory:
+      typeof item.statusCategory === 'string' ? item.statusCategory.slice(0, 40) : undefined,
     archivedAt: nullableString(item.archivedAt),
     href: item.href,
   }

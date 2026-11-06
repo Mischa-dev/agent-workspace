@@ -2234,6 +2234,20 @@ async fn run_action(
             )
             .await
             .map_err(database)?;
+            // A rule a person's app or script made: its launches start only
+            // within that app's limit when the queue drains.
+            if rule.made_through_app && acting.actor_kind == ActorKind::Human {
+                let ids = result
+                    .launches
+                    .iter()
+                    .map(|view| view.id)
+                    .collect::<Vec<_>>();
+                sqlx::query("UPDATE launches SET made_through_app = true WHERE id = ANY($1)")
+                    .bind(&ids)
+                    .execute(&state.pool)
+                    .await
+                    .map_err(|error| database(error.into()))?;
+            }
             Ok(format!(
                 "Launched {} task{}.",
                 result.launches.len(),

@@ -114,8 +114,9 @@ export type MessageRevisions = {
 export type ConversationWorkItemReference = {
   id: string
   key: string
-  title: string
-  statusCategory: string
+  /** Left out when the reader can't see tasks in its project; show the key. */
+  title?: string
+  statusCategory?: string
   archivedAt: string | null
   href: string
 }

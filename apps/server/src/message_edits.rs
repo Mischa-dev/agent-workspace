@@ -390,6 +390,15 @@ async fn locked_entry(
     let mut entry = fetch_timeline_entry(&mut **transaction, &locked.conversation, locked.id)
         .await?
         .ok_or(AppError::Internal("locked message has no timeline entry"))?;
+    if !crate::conversations::sees_tasks_in(
+        &mut **transaction,
+        viewer,
+        locked.conversation.project_id,
+    )
+    .await?
+    {
+        crate::conversations::hide_entry_work_item_details(std::slice::from_mut(&mut entry));
+    }
     reactions::attach_reactions(
         &mut **transaction,
         locked.conversation.id,
@@ -1146,6 +1155,15 @@ async fn get_message(
     let mut entry = fetch_timeline_entry(&state.pool, &conversation, message_id)
         .await?
         .ok_or(AppError::NotFound("message"))?;
+    if !crate::conversations::sees_tasks_in(
+        &state.pool,
+        principal.actor_id,
+        conversation.project_id,
+    )
+    .await?
+    {
+        crate::conversations::hide_entry_work_item_details(std::slice::from_mut(&mut entry));
+    }
     reactions::attach_reactions(
         &state.pool,
         conversation.id,

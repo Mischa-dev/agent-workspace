@@ -833,6 +833,105 @@ async fn api_webhooks_and_automations_act_for_their_maker_only() {
     .await
     .expect("lift the limit again");
 
+    // A launch an app-made automation queued starts only within the app's
+    // limit as it is when the queue drains (AWD-74).
+    let launch_rule = bearer(
+        &application,
+        Some(&token),
+        "POST",
+        "/api/public/v1/automation_write",
+        json!({
+            "projectId": seed.project_id,
+            "operation": "create",
+            "name": "Launch new tasks",
+            "trigger": {"kind": "task_created"},
+            "actions": [{"kind": "launch"}],
+        }),
+    )
+    .await;
+    assert_eq!(launch_rule.2["outcome"], "ok", "{}", launch_rule.1);
+    let launch_rule_id = uuid_field(&launch_rule.2["value"], "id");
+    let launched = send(
+        &application,
+        owner,
+        "POST",
+        &format!("{project}/work-items"),
+        "rule-launched-task",
+        json!({"title": "Launched by the script's rule"}),
+    )
+    .await;
+    assert_eq!(launched.0, StatusCode::CREATED, "{}", launched.1);
+    pump(&state).await;
+    let marked = sqlx::query_scalar::<_, bool>(
+        "SELECT made_through_app FROM launches WHERE work_item_id = $1",
+    )
+    .bind(uuid_field(&launched.2, "id"))
+    .fetch_one(&pool)
+    .await
+    .expect("the rule's launch");
+    assert!(marked, "the app-made rule's launch keeps the app's limit");
+    sqlx::query("UPDATE automation_rules SET enabled = false WHERE id = $1")
+        .bind(launch_rule_id)
+        .execute(&pool)
+        .await
+        .expect("turn the rule off");
+    // One such launch waiting in the queue when the limit narrows.
+    let waiting_task = send(
+        &application,
+        owner,
+        "POST",
+        &format!("{project}/work-items"),
+        "rule-queued-task",
+        json!({"title": "Queued by the script's rule"}),
+    )
+    .await;
+    assert_eq!(waiting_task.0, StatusCode::CREATED, "{}", waiting_task.1);
+    let waiting = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO launches (
+            id, organization_id, project_id, work_item_id, requested_by_actor_id,
+            source, start_when, position, made_through_app
+        ) VALUES ($1, $2, $3, $4, $5, 'automation', 'now',
+                  (SELECT COALESCE(max(position), 0) + 1 FROM launches WHERE project_id = $3),
+                  true)
+        "#,
+    )
+    .bind(waiting)
+    .bind(seed.organization_id)
+    .bind(seed.project_id)
+    .bind(uuid_field(&waiting_task.2, "id"))
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("queued launch");
+    sqlx::query(
+        "UPDATE organization_memberships SET agent_limit = ARRAY['tasks.view', 'tasks.edit'] WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.organization_id)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("the owner's apps no longer launch runs");
+    launch::drain(&state).await.expect("drain");
+    let launch_state = sqlx::query_scalar::<_, String>("SELECT state FROM launches WHERE id = $1")
+        .bind(waiting)
+        .fetch_one(&pool)
+        .await
+        .expect("queued launch");
+    assert_eq!(
+        launch_state, "cancelled",
+        "it started beyond its app's limit"
+    );
+    sqlx::query(
+        "UPDATE organization_memberships SET agent_limit = NULL WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.organization_id)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("lift the limit a third time");
+
     // ---------------------------------------------------------------------
     // A rule whose maker lost the project turns off instead of acting.
     let members_rule = send(

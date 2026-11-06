@@ -1698,11 +1698,14 @@ async fn owner_task(setup: &Setup, project: &str, title: &str) -> Uuid {
         .expect("UUID")
 }
 
-/// The array at `field` in a tool's value, panicking with the result.
-fn listed<'a>(result: &'a Value, field: &str) -> &'a Vec<Value> {
+/// The array at `field` in a successful tool result. Some tools (later_list)
+/// leave an empty list out, so a missing one is empty.
+fn listed(result: &Value, field: &str) -> Vec<Value> {
+    assert_eq!(result["outcome"], "ok", "{field}: {result}");
     result["value"][field]
         .as_array()
-        .unwrap_or_else(|| panic!("{field}: {result}"))
+        .cloned()
+        .unwrap_or_default()
 }
 
 /// Reads that name a task or a repository follow "see tasks" and "see
@@ -1869,4 +1872,228 @@ async fn reads_naming_tasks_or_repositories_follow_the_role_and_limit() {
     )
     .await;
     assert_eq!(page["items"].as_array().map(Vec::len), Some(1), "{page}");
+}
+
+/// Moderating someone else's content through an app needs "moderate
+/// channels" in the app's agent limit as well as in the person's role: an
+/// app acting for a project admin can't delete another person's task
+/// comment while its limit leaves moderation out.
+#[tokio::test]
+async fn an_app_moderates_only_within_its_agent_limit() {
+    let Some(setup) = setup("awd74_moderation").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
+    sqlx::query(
+        "UPDATE project_memberships SET role = 'admin' WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(work.parse::<Uuid>().expect("project"))
+    .bind(bea)
+    .execute(&setup.pool)
+    .await
+    .expect("bea is a project admin");
+    let task = owner_task(&setup, &work, "Moderated").await;
+    let owner_app = connect_app(app, &setup.browser, "Owner's app", "full").await;
+    let owner_session = initialize(app, &owner_app).await.expect("owner app");
+    let commented = tool(
+        app,
+        &owner_app,
+        &owner_session,
+        "task_comment",
+        json!({"taskId": task, "text": "The owner's note", "clientRequestId": "owner-note"}),
+    )
+    .await;
+    assert_eq!(commented["outcome"], "applied", "{commented}");
+    let comment = commented["resultId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("comment id: {commented}"))
+        .parse::<Uuid>()
+        .expect("UUID");
+    let removed = move |pool: sqlx::PgPool| async move {
+        sqlx::query_scalar::<_, bool>(
+            "SELECT removed_at IS NOT NULL FROM work_item_comments WHERE id = $1",
+        )
+        .bind(comment)
+        .fetch_one(&pool)
+        .await
+        .expect("comment")
+    };
+
+    // Bea's app may see and edit tasks, but not moderate.
+    let (status, limit) = send(
+        app,
+        setup.browser.request(
+            "PUT",
+            &format!(
+                "/api/v1/organizations/{}/members/{bea}/agent-limit",
+                setup.organization_id
+            ),
+            None,
+            json!({"permissions": ["tasks.view", "tasks.edit"]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{limit}");
+    let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
+    let session = initialize(app, &bea_app).await.expect("Bea's app");
+    let delete = json!({"taskId": task, "commentId": comment});
+    let refused = tool(
+        app,
+        &bea_app,
+        &session,
+        "task_comment_delete",
+        delete.clone(),
+    )
+    .await;
+    assert_ne!(refused["outcome"], "ok", "{refused}");
+    assert!(
+        !removed(setup.pool.clone()).await,
+        "the app moderated beyond its limit"
+    );
+
+    // With the limit lifted, Bea's admin role moderates through it.
+    let (status, limit) = send(
+        app,
+        setup.browser.request(
+            "PUT",
+            &format!(
+                "/api/v1/organizations/{}/members/{bea}/agent-limit",
+                setup.organization_id
+            ),
+            None,
+            json!({"permissions": null}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{limit}");
+    let deleted = tool(app, &bea_app, &session, "task_comment_delete", delete).await;
+    assert_eq!(deleted["outcome"], "ok", "{deleted}");
+    assert!(removed(setup.pool.clone()).await, "Bea's role moderates");
+}
+
+/// The task chips in `browser`'s view of a conversation's timeline.
+async fn timeline_chips(setup: &Setup, browser: &Browser, conversation: &str) -> Vec<Value> {
+    let (status, timeline) = send(
+        &setup.app,
+        browser.request(
+            "GET",
+            &format!("/api/v1/conversations/{conversation}/timeline"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{timeline}");
+    timeline["entries"]
+        .as_array()
+        .unwrap_or_else(|| panic!("entries: {timeline}"))
+        .iter()
+        .filter_map(|entry| entry["message"]["referencedWorkItems"].as_array())
+        .flatten()
+        .cloned()
+        .collect()
+}
+
+/// A task chip in a message names its task (title and status) only for a
+/// reader who sees tasks there; others get the key and link alone. MCP
+/// reads never name it for an app whose limit leaves out "see tasks".
+#[tokio::test]
+async fn task_chips_name_the_task_only_for_readers_who_see_tasks() {
+    let Some(setup) = setup("awd74_chips").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
+    let (cal, cal_browser) = add_person(&setup, &[&work], "cal").await;
+    let channel = create_channel(&setup, &work, "general").await;
+    let task = owner_task(&setup, &work, "Secret roadmap").await;
+    let (status, posted) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/conversations/{channel}/messages"),
+            Some("chip-message"),
+            json!({"content": {"version": 1, "nodes": [
+                {"type": "text", "text": "See "},
+                {"type": "work_item_ref", "workItemId": task}
+            ]}}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {posted}");
+
+    // Bea sees tasks: the chip names the task.
+    let chips = timeline_chips(&setup, &bea_browser, &channel).await;
+    assert_eq!(chips.len(), 1, "{chips:?}");
+    assert_eq!(chips[0]["title"], "Secret roadmap", "{chips:?}");
+
+    // Once her role leaves out "see tasks", the key and link stay.
+    let (status, blind) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "No tasks", "baseRole": "viewer", "permissions": []}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{blind}");
+    let version = sqlx::query_scalar::<_, i64>(
+        "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(work.parse::<Uuid>().expect("project"))
+    .bind(bea)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("version");
+    let (status, changed) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            &format!("/api/v1/projects/{work}/members/{bea}"),
+            Some("bea-chips-no-tasks"),
+            json!({"expectedVersion": version, "roleId": blind["id"]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let chips = timeline_chips(&setup, &bea_browser, &channel).await;
+    assert_eq!(chips.len(), 1, "{chips:?}");
+    assert!(chips[0].get("title").is_none(), "{chips:?}");
+    assert!(chips[0].get("statusCategory").is_none(), "{chips:?}");
+    assert!(
+        chips[0]["key"].is_string() && chips[0]["href"].is_string(),
+        "{chips:?}"
+    );
+
+    // Cal's app, limited away from "see tasks", reads the channel without
+    // the task's title; Cal in the browser still sees it.
+    let (status, limit) = send(
+        app,
+        setup.browser.request(
+            "PUT",
+            &format!(
+                "/api/v1/organizations/{}/members/{cal}/agent-limit",
+                setup.organization_id
+            ),
+            None,
+            json!({"permissions": ["channels.post"]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{limit}");
+    let cal_app = connect_app(app, &cal_browser, "Cal's app", "full").await;
+    let session = initialize(app, &cal_app).await.expect("Cal's app");
+    let read = tool(
+        app,
+        &cal_app,
+        &session,
+        "conversation_read",
+        json!({"conversationId": channel}),
+    )
+    .await;
+    assert_eq!(read["outcome"], "ok", "{read}");
+    assert!(!read.to_string().contains("Secret roadmap"), "{read}");
+    let chips = timeline_chips(&setup, &cal_browser, &channel).await;
+    assert_eq!(chips[0]["title"], "Secret roadmap", "{chips:?}");
 }

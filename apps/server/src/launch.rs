@@ -2130,6 +2130,7 @@ struct QueuedLaunch {
     overrides: Value,
     provider_account_id: Option<Uuid>,
     source: String,
+    made_through_app: bool,
 }
 
 fn actor_kind(value: &str) -> Option<ActorKind> {
@@ -2164,7 +2165,8 @@ pub async fn drain(state: &AppState) -> Result<usize, AppError> {
         SELECT launch.id, launch.project_id, launch.work_item_id, launch.conversation_id,
                launch.requested_by_actor_id, actor.kind AS actor_kind,
                COALESCE(membership.display_name, 'The person who queued it') AS actor_name,
-               launch.environment_id, launch.overrides, launch.provider_account_id, launch.source
+               launch.environment_id, launch.overrides, launch.provider_account_id, launch.source,
+               launch.made_through_app
         FROM launches launch
         JOIN actors actor ON actor.id = launch.requested_by_actor_id
         LEFT JOIN project_memberships membership
@@ -2184,18 +2186,20 @@ pub async fn drain(state: &AppState) -> Result<usize, AppError> {
             continue;
         };
         // Principle 9: the person who queued it must still be able to start
-        // runs here, and a launch their app or script queued (source mcp)
-        // must still be within that app's agent limit as it is now.
-        let limits = if queued.source == "mcp" && kind == ActorKind::Human {
-            let mut connection = state.pool.acquire().await?;
-            Some(
-                crate::roles::app_access(&mut connection, queued.requested_by_actor_id)
-                    .await?
-                    .limits,
-            )
-        } else {
-            None
-        };
+        // runs here, and a launch their app or script queued (source mcp), or
+        // an automation an app made queued, must still be within that app's
+        // agent limit as it is now.
+        let limits =
+            if (queued.source == "mcp" || queued.made_through_app) && kind == ActorKind::Human {
+                let mut connection = state.pool.acquire().await?;
+                Some(
+                    crate::roles::app_access(&mut connection, queued.requested_by_actor_id)
+                        .await?
+                        .limits,
+                )
+            } else {
+                None
+            };
         let access = memory::project_access(
             &state.pool,
             queued.requested_by_actor_id,

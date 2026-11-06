@@ -382,8 +382,12 @@ pub struct MessageRemovalView {
 pub struct ConversationWorkItemReferenceView {
     pub id: Uuid,
     pub key: String,
-    pub title: String,
-    pub status_category: String,
+    /// Left out for a reader who can't see tasks in its project; the key
+    /// and link stay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_category: Option<String>,
     pub archived_at: Option<String>,
     pub href: String,
 }
@@ -1859,19 +1863,22 @@ pub(crate) async fn append_message_command_with(
         &mentioned_actor_ids,
     )
     .await?;
-    let referenced_work_items = work_item_rows
+    let mut referenced_work_items: Vec<ConversationWorkItemReferenceView> = work_item_rows
         .into_iter()
         .map(
             |(id, key, title, status_category, archived_at)| ConversationWorkItemReferenceView {
                 id,
                 key,
-                title,
-                status_category,
+                title: Some(title),
+                status_category: Some(status_category),
                 archived_at,
                 href: format!("/projects/{}/work-items/{id}", conversation.project_id),
             },
         )
         .collect();
+    if !sees_tasks_in(&mut *transaction, actor.actor_id, conversation.project_id).await? {
+        hide_work_item_details(&mut referenced_work_items);
+    }
     let message = MessageView {
         id: result.message_id,
         author: ActorView {
@@ -2535,11 +2542,18 @@ async fn conversation_timeline(
     )
     .await?;
     crate::forwarding::attach_forwards(&state.pool, &mut entries, principal.actor_id).await?;
+    // Task chips name their task only for a reader who sees tasks here.
+    let sees_tasks =
+        sees_tasks_in(&state.pool, principal.actor_id, conversation.project_id).await?;
+    if !sees_tasks {
+        hide_entry_work_item_details(&mut entries);
+    }
     crate::later::attach_saved(&state.pool, &mut entries, principal.actor_id).await?;
     let read_state = fetch_read_state(&state, conversation.id, principal.actor_id).await?;
-    let linked_work_items = if conversation.kind == "thread" {
-        let value = sqlx::query_scalar::<_, serde_json::Value>(
-            r#"
+    let mut linked_work_items: Vec<ConversationWorkItemReferenceView> =
+        if conversation.kind == "thread" {
+            let value = sqlx::query_scalar::<_, serde_json::Value>(
+                r#"
             SELECT COALESCE(jsonb_agg(
                 jsonb_build_object(
                     'id', item.id,
@@ -2558,16 +2572,19 @@ async fn conversation_timeline(
               ON status.project_id = item.project_id AND status.id = item.status_id
             WHERE link.project_id = $1 AND link.conversation_id = $2
             "#,
-        )
-        .bind(conversation.project_id)
-        .bind(conversation.id)
-        .fetch_one(&state.pool)
-        .await?;
-        serde_json::from_value(value)
-            .map_err(|_| AppError::Internal("invalid linked Work Item projection"))?
-    } else {
-        Vec::new()
-    };
+            )
+            .bind(conversation.project_id)
+            .bind(conversation.id)
+            .fetch_one(&state.pool)
+            .await?;
+            serde_json::from_value(value)
+                .map_err(|_| AppError::Internal("invalid linked Work Item projection"))?
+        } else {
+            Vec::new()
+        };
+    if !sees_tasks {
+        hide_work_item_details(&mut linked_work_items);
+    }
     let (active_run, latest_terminal_run, approvals) =
         fetch_run_projection(&state, &principal, &conversation).await?;
     let capabilities = conversation_capabilities(&principal, &conversation)?;
@@ -4053,6 +4070,52 @@ pub(crate) async fn fetch_actor_views(
             avatar_url: None,
         })
         .collect())
+}
+
+/// Whether `viewer` sees tasks in `project_id`: their role there keeps
+/// "see tasks", and so does an app's agent limit while one acts for them.
+pub(crate) async fn sees_tasks_in<'e, E>(
+    executor: E,
+    viewer: Uuid,
+    project_id: Uuid,
+) -> Result<bool, AppError>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    if crate::policy::agent_limit_hides(viewer, project_id, crate::policy::Permission::TasksView) {
+        return Ok(false);
+    }
+    Ok(sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM project_memberships
+            WHERE project_id = $1 AND actor_id = $2 AND enabled
+              AND custom_role_allows(role_id, 'tasks.view')
+        )
+        "#,
+    )
+    .bind(project_id)
+    .bind(viewer)
+    .fetch_one(executor)
+    .await?)
+}
+
+/// Task chips for a reader who can't see tasks: the key and link stay, the
+/// title and status go.
+pub(crate) fn hide_work_item_details(items: &mut [ConversationWorkItemReferenceView]) {
+    for item in items {
+        item.title = None;
+        item.status_category = None;
+    }
+}
+
+/// `hide_work_item_details` for the chips in these timeline entries.
+pub(crate) fn hide_entry_work_item_details(entries: &mut [TimelineEntryView]) {
+    for entry in entries {
+        if let Some(message) = entry.message.as_mut() {
+            hide_work_item_details(&mut message.referenced_work_items);
+        }
+    }
 }
 
 /// The timeline entry for one message in `conversation`, as the timeline
