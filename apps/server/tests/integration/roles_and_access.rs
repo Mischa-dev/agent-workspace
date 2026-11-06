@@ -3510,6 +3510,110 @@ async fn rotating_an_agent_checks_the_role_it_holds() {
     assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
 }
 
+/// An agent works in a project, so what it's given must be within the
+/// giver's role there too: a workspace Admin whose role in this project
+/// keeps "manage agents" but leaves out editing tasks and seeing code can't
+/// create a Member agent here or rotate a Member agent's credentials, and
+/// may rotate them for an agent whose role is within theirs.
+#[tokio::test]
+async fn agents_are_given_only_what_the_giver_holds_in_the_project() {
+    let Some(setup) = setup("awd74_agent_project_grant").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let project = work.parse::<Uuid>().expect("project");
+    let (alex, alex_browser) = add_person(&setup, &[&work], "alex").await;
+    make_admin(&setup, alex).await;
+    let (status, keepers) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Agent keepers here", "baseRole": "admin", "permissions": ["agents.manage", "tasks.view"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{keepers}");
+    sqlx::query(
+        "UPDATE project_memberships SET role = 'admin', role_id = $3 WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project)
+    .bind(alex)
+    .bind(
+        keepers["id"]
+            .as_str()
+            .expect("id")
+            .parse::<Uuid>()
+            .expect("UUID"),
+    )
+    .execute(&setup.pool)
+    .await
+    .expect("alex keeps only agents and tasks in the project");
+    let agents = |pool: sqlx::PgPool| async move {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM external_agent_connections WHERE project_id = $1",
+        )
+        .bind(project)
+        .fetch_one(&pool)
+        .await
+        .expect("agents")
+    };
+
+    // A Member agent here holds more than Alex's role here.
+    let (status, refused) = send(
+        app,
+        alex_browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/external-agents"),
+            None,
+            json!({
+                "connectionName": "Ivy",
+                "displayName": "Ivy",
+                "handle": "ivy",
+                "role": "member",
+                "scopes": ["read", "write", "events"]
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    assert!(refused.get("oneTimeCredential").is_none(), "{refused}");
+    assert_eq!(agents(setup.pool.clone()).await, 0, "no agent was made");
+
+    // The owner's agents: Rook holds Member, Mara a role within Alex's.
+    let (rook, _) = create_agent(app, &setup.browser, &work, "Rook", "rook").await;
+    let (mara, _) = create_agent(app, &setup.browser, &work, "Mara", "mara").await;
+    let (status, readers) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Reading agents", "baseRole": "member", "permissions": ["tasks.view"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{readers}");
+    let (status, changed) = set_project_role(
+        &setup,
+        &work,
+        mara,
+        "mara-reading",
+        json!({"roleId": readers["id"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let rotate = |connection: Uuid, version: i64| {
+        alex_browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/external-agents/{connection}/credentials/rotate"),
+            None,
+            json!({"expectedVersion": version}),
+        )
+    };
+    let (connection, version, _) = agent_connection(&setup, rook).await;
+    let (status, refused) = send(app, rotate(connection, version)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    assert!(refused.get("oneTimeCredential").is_none(), "{refused}");
+    let (connection, version, _) = agent_connection(&setup, mara).await;
+    let (status, rotated) = send(app, rotate(connection, version)).await;
+    assert_eq!(status, StatusCode::OK, "{rotated}");
+}
+
 /// A comment that references another task shows that task's title and
 /// status only to someone who may see tasks: posting or editing it with a
 /// role that may edit but not see tasks returns the reference by id and

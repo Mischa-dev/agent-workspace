@@ -228,6 +228,7 @@ async fn create_connection(
     require_grantable(
         &mut transaction,
         access.organization_id,
+        project_id,
         principal.actor_id,
         &normalized.role,
         None,
@@ -517,6 +518,7 @@ pub async fn provision(
     require_grantable(
         &mut transaction,
         organization_id,
+        project_id,
         owner_actor_id,
         &normalized.role,
         None,
@@ -887,6 +889,7 @@ async fn mutate_connection(
         require_grantable(
             &mut transaction,
             access.organization_id,
+            current.project_id,
             principal.actor_id,
             next_role,
             role_id,
@@ -1138,10 +1141,14 @@ fn normalize_scopes(mut scopes: Vec<String>) -> Result<Vec<String>, AppError> {
 /// giving it doesn't, so a narrowed admin can't win back what their role
 /// leaves out through an agent of their own. `role_id` is the custom role
 /// the agent holds (or is given), whose permissions are what's handed out,
-/// not its base role's; None for a built-in role.
+/// not its base role's; None for a built-in role. The agent works in
+/// `project_id`, so what it's given there must also be within the giver's
+/// role in that project, not only their workspace role: a project role that
+/// leaves out "see code" or "edit tasks" can't be won back through an agent.
 async fn require_grantable(
     transaction: &mut Transaction<'_, Postgres>,
     organization_id: Uuid,
+    project_id: Uuid,
     caller_actor_id: Uuid,
     role: &str,
     role_id: Option<Uuid>,
@@ -1159,6 +1166,40 @@ async fn require_grantable(
         .map_err(|_| AppError::Validation("agent role"))?;
     let caller = crate::roles::standing(transaction, organization_id, caller_actor_id).await?;
     if !grant.permissions().is_subset_of(caller.permissions) {
+        return Err(AppError::Forbidden);
+    }
+    let Some((project_role, project_permissions)) =
+        sqlx::query_as::<_, (String, Option<Vec<String>>)>(
+            r#"
+            SELECT role, workspace_role_permissions(role_id)
+            FROM project_memberships
+            WHERE project_id = $1 AND actor_id = $2 AND enabled
+            "#,
+        )
+        .bind(project_id)
+        .bind(caller_actor_id)
+        .fetch_optional(&mut **transaction)
+        .await?
+    else {
+        return Err(AppError::Forbidden);
+    };
+    let in_project = RoleGrant::stored(&project_role, project_permissions.as_deref())
+        .map_err(|_| AppError::Forbidden)?
+        .permissions();
+    // Only what's checked in a project: workspace-wide permissions (such as
+    // the workspace member directory) are the workspace role's to decide.
+    let project_scoped = |set: crate::policy::PermissionSet| {
+        crate::policy::PERMISSIONS
+            .iter()
+            .filter(|info| {
+                info.scope != crate::policy::PermissionScope::Workspace
+                    && set.contains(info.permission)
+            })
+            .fold(crate::policy::PermissionSet::EMPTY, |kept, info| {
+                kept.with(info.permission)
+            })
+    };
+    if !project_scoped(grant.permissions()).is_subset_of(in_project) {
         return Err(AppError::Forbidden);
     }
     Ok(())
@@ -1569,6 +1610,7 @@ pub(crate) async fn require_connection_grantable(
     require_grantable(
         transaction,
         organization_id,
+        project_id,
         caller_actor_id,
         &connection.role,
         role_id,
