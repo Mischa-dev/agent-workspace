@@ -31,6 +31,7 @@ import { ConversationHeader } from '../conversations/ConversationHeader'
 import { ThreadStatusButton, ThreadStatusDialog } from '../conversations/threadBoard'
 import { useProjectConversationSidebar } from '../conversations/hooks'
 import { useMessageActions } from '../conversations/MessageActions'
+import { useReplyTarget } from '../conversations/replyTarget'
 import { OriginMessage } from '../conversations/OriginMessage'
 import { useConversationTools } from '../later/useConversationTools'
 import { PinnedBar } from '../memory/ConversationMemory'
@@ -51,7 +52,7 @@ import { SessionLinks } from '../launch/SessionLinks'
 import { useLiveOlderEntries } from '../conversations/useLiveOlderEntries'
 import { usePageTitle } from '../shell/documentTitleModel'
 import { retryReplyRequest, searchMentionableActors, stopReplyRequest } from '../conversations/api'
-import type { ConversationTimelineEntry } from '../conversations/types'
+import type { ConversationMessage, ConversationTimelineEntry } from '../conversations/types'
 import { useConversationRealtime } from '../realtime/realtimeContext'
 import { useSetWorkItemThreadLink } from '../work-items/hooks'
 import { searchWorkItemReferences } from '../work-items/api'
@@ -197,8 +198,18 @@ export function ThreadPage() {
 
   const searchActors = async (query: string) => (await searchMentionableActors(projectId, query)).actors
   const searchWorkItems = (query: string) => searchWorkItemReferences(projectId, query)
+  const reply = useReplyTarget(threadId, verifiedTimeline?.conversation.parentKind === 'channel' ? projectId : null)
+  const startReply = reply.start
   const messageActions = useMessageActions({
     projectId,
+    // A reply is written in the message composer, so Reply switches to it
+    // from the Run composer.
+    onReply: startReply
+      ? (message: ConversationMessage) => {
+          setComposerMode('message')
+          startReply(message)
+        }
+      : undefined,
     conversationId: threadId,
     viewerId: session.user.actorId,
     capabilities: verifiedTimeline?.capabilities,
@@ -500,7 +511,9 @@ export function ThreadPage() {
             href: `/projects/${encodeURIComponent(projectId)}/threads/${encodeURIComponent(threadId)}`,
           }}
           onEditLast={() => messageActions.editLast(entries)}
+          onReplyChange={reply.set}
           onSubmit={sender.send}
+          replyTo={reply.target}
           placeholder={`Reply in ${threadName}`}
           searchActors={searchActors}
           searchWorkItems={searchWorkItems}

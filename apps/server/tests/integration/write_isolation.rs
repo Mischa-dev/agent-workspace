@@ -2533,6 +2533,177 @@ async fn one_workspace_never_writes_to_another() {
     );
 }
 
+/// AWD-71: answering an approval on a run the database won't admit again (a
+/// blocked run on a provider account that isn't its requester's, as this net
+/// once made) is a 409 that says why, over HTTP and through MCP, never a 500
+/// or a "retry later". The approval stays open, so it can still be denied.
+#[tokio::test]
+async fn answering_an_approval_on_a_run_that_cant_be_admitted_is_a_conflict() {
+    let Some(fixture) = two_workspaces_with("approval_admission", false).await else {
+        return;
+    };
+    let TwoWorkspaces { app, pool, a, .. } = &fixture;
+    // The owner's profile, on a run rook asked for: the database refuses
+    // it when the run goes back to working.
+    let owner = scalar(
+        pool,
+        "SELECT owner_actor_id FROM execution_profiles WHERE id = $1",
+        a.profile,
+    )
+    .await;
+    assert_ne!(owner, a.rook, "the profile must be someone else's");
+    let worker = scalar(
+        pool,
+        "SELECT execution_worker_id FROM agent_runs WHERE id = $1",
+        a.run,
+    )
+    .await;
+    let project = Uuid::parse_str(&a.project).expect("project");
+    let mut approvals = Vec::new();
+    for index in 0..2 {
+        let thread = Uuid::now_v7();
+        sqlx::query(
+            r#"
+            INSERT INTO conversations (id, project_id, kind, parent_channel_id, repository_id, name)
+            VALUES ($1, $2, 'thread', $3::uuid, $4, $5)
+            "#,
+        )
+        .bind(thread)
+        .bind(project)
+        .bind(&a.channel)
+        .bind(a.repository)
+        .bind(format!("Unadmitted run {index}"))
+        .execute(pool)
+        .await
+        .expect("thread");
+        let run = Uuid::now_v7();
+        // Made failed (no admission check), then blocked, as `spares` does.
+        sqlx::query(
+            r#"
+            INSERT INTO agent_runs (
+                id, conversation_id, execution_worker_id, requesting_actor_id,
+                execution_profile_id, repository_id, state, prompt,
+                authorization_snapshot, failure_reason, started_at, finished_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, 'failed', 'Unadmitted run', '{}'::jsonb,
+                    'Net failure.', now(), now())
+            "#,
+        )
+        .bind(run)
+        .bind(thread)
+        .bind(worker)
+        .bind(a.rook)
+        .bind(a.profile)
+        .bind(a.repository)
+        .execute(pool)
+        .await
+        .expect("run");
+        sqlx::query(
+            "UPDATE agent_runs SET state = 'blocked', failure_reason = NULL, finished_at = NULL WHERE id = $1",
+        )
+        .bind(run)
+        .execute(pool)
+        .await
+        .expect("run blocked");
+        let approval = Uuid::now_v7();
+        sqlx::query(
+            r#"
+            INSERT INTO agent_approvals (
+                id, agent_run_id, requesting_actor_id, provider_request_id,
+                kind, summary, options, eligible_role, human_required
+            )
+            VALUES ($1, $2, $3, $4, 'approval', 'Unadmitted approval',
+                    '[{"id":"approve","label":"Allow"},{"id":"deny","label":"Deny"}]'::jsonb,
+                    'any_authorized', false)
+            "#,
+        )
+        .bind(approval)
+        .bind(run)
+        .bind(a.rook)
+        .bind(format!("unadmitted-{approval}"))
+        .execute(pool)
+        .await
+        .expect("approval");
+        approvals.push((approval, run));
+    }
+    let reason = "This run uses a provider account that isn't its requester's";
+
+    // Over HTTP, as the owner.
+    let (approval, run) = approvals[0];
+    let (status, body) = send(
+        app,
+        a.browser.request(
+            "POST",
+            &format!("/api/v1/agent-approvals/{approval}/respond"),
+            Some("unadmitted-http"),
+            json!({"decision": "approve"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"]["code"], "run_not_admitted", "{body}");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.starts_with(reason)),
+        "{body}"
+    );
+    let (approval_status, run_state) = sqlx::query_as::<_, (String, String)>(
+        "SELECT approval.status, run.state FROM agent_approvals approval \
+         JOIN agent_runs run ON run.id = approval.agent_run_id WHERE approval.id = $1",
+    )
+    .bind(approval)
+    .fetch_one(pool)
+    .await
+    .expect("approval after");
+    assert_eq!(
+        (approval_status.as_str(), run_state.as_str()),
+        ("pending", "blocked"),
+        "nothing changes when the run can't carry on ({run})"
+    );
+    // Denying still works: an interrupted run needs no admission.
+    let (status, body) = send(
+        app,
+        a.browser.request(
+            "POST",
+            &format!("/api/v1/agent-approvals/{approval}/respond"),
+            Some("unadmitted-http-deny"),
+            json!({"decision": "deny"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // Through MCP, as the owner's connected app.
+    let (approval, _) = approvals[1];
+    let session = initialize(app, &a.app_token).await.expect("app MCP");
+    let version = version_now(pool, "agent_approvals", approval).await;
+    let (_, body) = call_tool(
+        app,
+        &a.app_token,
+        &session,
+        "approval_respond",
+        json!({
+            "approvalId": approval,
+            "expectedVersion": version,
+            "decision": "approve",
+            "clientRequestId": "unadmitted-mcp",
+        }),
+    )
+    .await;
+    let result = structured(&body);
+    assert_eq!(result["outcome"], "conflict", "{body}");
+    assert_eq!(result["retryCategory"], "do_not_retry", "{body}");
+    assert_eq!(result["current"]["status"], "pending", "{body}");
+    assert!(
+        result["reason"]
+            .as_str()
+            .is_some_and(|message| message.starts_with(reason)),
+        "{body}"
+    );
+    fixture.finish().await;
+}
+
 async fn own_http(
     sender: &mut Sender<'_>,
     case: &HttpCase,

@@ -161,6 +161,69 @@ pub async fn allocate_conversation_sequence(
     Ok(sequence)
 }
 
+/// Let a blocked run carry on after its approval or question is answered.
+/// The database admits a run again on its way back to `working`; when it
+/// refuses (the requester left, the run's provider account isn't its
+/// requester's, the repository was archived), the answer is a conflict that
+/// says why, never a server error.
+pub async fn resume_answered_run(
+    transaction: &mut Transaction<'_, Postgres>,
+    run_id: Uuid,
+) -> Result<RunState, AppError> {
+    transition_run(transaction, run_id, RunState::Working, None)
+        .await
+        .map_err(refuse_unadmitted_run)
+}
+
+/// Turn the admission check's refusal (`validate_agent_run_scope_and_admission`)
+/// into a conflict with a reason; any other error passes through as it is.
+pub fn refuse_unadmitted_run(error: AppError) -> AppError {
+    let AppError::Database(sqlx::Error::Database(database_error)) = &error else {
+        return error;
+    };
+    if database_error.code().as_deref() != Some("23514") {
+        return error;
+    }
+    match admission_refusal_reason(database_error.message()) {
+        Some(reason) => AppError::RunNotAdmitted { reason },
+        None => error,
+    }
+}
+
+/// The reason to show for each refusal the admission check raises.
+fn admission_refusal_reason(message: &str) -> Option<&'static str> {
+    const REASONS: &[(&str, &str)] = &[
+        (
+            "Agent Run requires an active Project and Thread",
+            "This run's project or thread is archived, so it can't carry on. Deny the approval or stop the run.",
+        ),
+        (
+            "Agent Run requester is unavailable",
+            "Whoever started this run is no longer an active member of the project, so it can't carry on. Deny the approval or stop the run.",
+        ),
+        (
+            "Agent Run sponsor is unavailable",
+            "The person who sponsored this run can no longer sponsor it, so it can't carry on. Deny the approval or stop the run.",
+        ),
+        (
+            "personal Execution Profile must be owned by the requester or sponsor",
+            "This run uses a provider account that isn't its requester's, so it can't carry on. Deny the approval or stop the run, then start a new one.",
+        ),
+        (
+            "Agent Run Worker or Profile is unavailable",
+            "This run's provider account is signed out or its worker is unavailable, so it can't carry on. Sign in again, or deny the approval.",
+        ),
+        (
+            "Agent Run Repository is not prepared and available",
+            "This run's repository is archived, switched off or not ready, so it can't carry on. Deny the approval or stop the run.",
+        ),
+    ];
+    REASONS
+        .iter()
+        .find(|(raised, _)| message == *raised)
+        .map(|(_, reason)| *reason)
+}
+
 pub async fn transition_run(
     transaction: &mut Transaction<'_, Postgres>,
     run_id: Uuid,

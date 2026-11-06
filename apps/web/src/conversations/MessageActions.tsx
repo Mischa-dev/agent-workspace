@@ -1,5 +1,6 @@
 import { useRef, useState, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
+import { Reply } from 'lucide-react'
 
 import { toastError } from '../app/mutations'
 import { IconButton, Menu, showToast, type MenuEntry } from '../ui'
@@ -47,8 +48,9 @@ function focusComposerNear(element: HTMLElement | null) {
 }
 
 /**
- * The one place a message's toolbar is put together. Four buttons show: add a
- * reaction, the page's own main action (a thread), save for later, and More.
+ * The one place a message's toolbar is put together. The buttons that show: add a
+ * reaction, Reply (where the page lets you reply), the page's own main action
+ * (a thread), save for later, and More.
  * Everything else is in More: edit, forward, create task, pin, save as
  * decision, mark unread, copy, remind me, and remove last. A removed message
  * keeps only Copy link.
@@ -66,6 +68,7 @@ export function useMessageActions({
   onChanged,
   onMarkedUnread,
   onReactionsChanged,
+  onReply,
   primaryFor,
   projectId,
   searchActors,
@@ -85,6 +88,8 @@ export function useMessageActions({
   onMarkedUnread?: (entry: ConversationTimelineEntry) => void
   /** Your reaction changed a message's reactions: show them on older pages too. */
   onReactionsChanged?: (messageId: string, reactions: MessageReaction[]) => void
+  /** Reply to this message: quote it in the page's message box. */
+  onReply?: (message: ConversationMessage) => void
   /** The page's main button for a message that isn't removed, such as its thread. */
   primaryFor?: (message: ConversationMessage, entry: ConversationTimelineEntry) => ReactNode
   projectId: string
@@ -130,6 +135,7 @@ export function useMessageActions({
   }
 
   const canReact = (message: ConversationMessage) => canPost && !message.removed
+  const canReply = (message: ConversationMessage) => Boolean(onReply) && canPost && !message.removed
 
   // Your read mark moves back to just before this message, and the New line
   // with it. The page doesn't mark it read again until something new arrives
@@ -216,6 +222,7 @@ export function useMessageActions({
   const menuFor = (entry: ConversationTimelineEntry, message: ConversationMessage): MenuEntry[] => {
     const groups: MenuEntry[][] = [
       [
+        ...(canReply(message) ? [{ label: 'Reply', icon: Reply, onSelect: () => onReply?.(message) }] : []),
         ...(canEdit(message) ? [{ label: 'Edit', icon: 'pencil' as const, onSelect: () => startEditing(message) }] : []),
         ...later.shareItems(message),
       ],
@@ -247,6 +254,7 @@ export function useMessageActions({
             <ReactionPicker onPick={(choice, reacted) => react(message, choice, reacted)} reactions={message.reactions ?? []} />
           </>
         ) : null}
+        {canReply(message) ? <IconButton icon={Reply} label="Reply" onClick={() => onReply?.(message)} size="sm" /> : null}
         {primaryFor?.(message, entry)}
         {later.saveButton(message)}
         <Menu

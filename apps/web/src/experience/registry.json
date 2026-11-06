@@ -245,6 +245,13 @@
       "default": true
     },
     {
+      "id": "talk.replies",
+      "group": "talk",
+      "label": "Replies",
+      "description": "Replying to one message, quoted above the reply.",
+      "default": true
+    },
+    {
       "id": "tech.task_keys",
       "group": "technical",
       "label": "Task keys",
@@ -342,6 +349,7 @@
         "talk.scheduling",
         "talk.agent_mentions",
         "talk.threads",
+        "talk.replies",
         "workspace.my_work",
         "workspace.later"
       ],
@@ -368,6 +376,7 @@
         "talk.scheduling",
         "talk.agent_mentions",
         "talk.threads",
+        "talk.replies",
         "workspace.my_work",
         "workspace.later"
       ],
@@ -412,6 +421,7 @@
         "task.dates",
         "talk.agent_mentions",
         "talk.threads",
+        "talk.replies",
         "workspace.my_work"
       ],
       "words": {
@@ -436,6 +446,7 @@
         "talk.scheduling",
         "talk.agent_mentions",
         "talk.threads",
+        "talk.replies",
         "workspace.my_work",
         "workspace.later"
       ],
@@ -466,6 +477,7 @@
         "talk.scheduling",
         "talk.agent_mentions",
         "talk.threads",
+        "talk.replies",
         "home.working_now",
         "workspace.my_work",
         "workspace.later",
@@ -494,6 +506,7 @@
         "task.dates",
         "talk.scheduling",
         "talk.threads",
+        "talk.replies",
         "workspace.my_work",
         "workspace.later"
       ],
@@ -525,6 +538,7 @@
         "talk.scheduling",
         "talk.agent_mentions",
         "talk.threads",
+        "talk.replies",
         "workspace.my_work",
         "workspace.later"
       ],
@@ -551,6 +565,7 @@
         "talk.scheduling",
         "talk.agent_mentions",
         "talk.threads",
+        "talk.replies",
         "workspace.my_work",
         "workspace.later"
       ],
@@ -582,6 +597,7 @@
         "talk.scheduling",
         "talk.agent_mentions",
         "talk.threads",
+        "talk.replies",
         "tech.task_keys",
         "workspace.my_work",
         "workspace.later"
@@ -622,6 +638,7 @@
         "task.criteria",
         "task.suggestions",
         "talk.threads",
+        "talk.replies",
         "tech.task_keys",
         "workspace.my_work"
       ]
@@ -642,6 +659,7 @@
         "task.milestone",
         "task.dates",
         "talk.threads",
+        "talk.replies",
         "workspace.my_work"
       ]
     },
