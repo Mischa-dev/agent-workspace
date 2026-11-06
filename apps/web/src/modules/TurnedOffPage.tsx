@@ -1,26 +1,14 @@
-import type { ReactNode } from 'react'
-import { useLocation, useNavigate, useParams } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
-import { useHomeExperience, useHomeWorkspaceId, useProjectExperience } from '../experience/layout'
+import { useHomeWorkspaceId } from '../experience/layout'
 import { AppShell } from '../shell/AppShell'
 import { Button, ButtonLink, EmptyState } from '../ui'
-import { moduleName, moduleOfPath } from './slots'
+import { moduleName } from './names'
 
-// AWD-75: a link into a module that's off opens this page, not a 404.
-// Off means hidden, never deleted, so the page says the thing is still there.
-
-/** Renders `children`, or the turned-off page when the page's module is off for the person. */
-export function ModuleGate({ children }: { children: ReactNode }) {
-  const { pathname } = useLocation()
-  const { projectId } = useParams()
-  const project = useProjectExperience(projectId)
-  const home = useHomeExperience()
-  const module = moduleOfPath(pathname)
-  const experience = projectId ? project : home
-  if (module && !experience.moduleOn(module)) return <TurnedOffPage module={module} />
-  return <>{children}</>
-}
+// AWD-75: a link into a module that's off opens this page (ModuleGate), not a
+// 404. Off means hidden, never deleted, so the page says the thing is still
+// there.
 
 export function TurnedOffPage({ module }: { module: string }) {
   const session = useAuthenticatedSession()
