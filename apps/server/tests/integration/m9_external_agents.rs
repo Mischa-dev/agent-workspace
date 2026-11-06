@@ -1645,9 +1645,17 @@ async fn sponsored_run_cancelled_when_a_party_loses_start_runs(party: SponsoredP
 
     // The slot frees; the queue cancels the run, naming who lost access.
     let mut finished = pool.begin().await.expect("begin freeing the slot");
-    transition_run(&mut finished, busy_run_id, RunState::Completed, None)
-        .await
-        .expect("finish the run holding the slot");
+    // Blocked may end as failed (domain::RunState::can_transition_to), as
+    // the M9 sponsored test ends its run; the run holds no claim, so the
+    // claim columns stay empty.
+    transition_run(
+        &mut finished,
+        busy_run_id,
+        RunState::Failed,
+        Some("Freed for the admission test"),
+    )
+    .await
+    .expect("finish the run holding the slot");
     finished.commit().await.expect("free the slot");
     agent_workspace_server::scheduler::drain_now(&state)
         .await
