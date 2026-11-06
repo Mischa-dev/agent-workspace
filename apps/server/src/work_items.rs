@@ -3162,7 +3162,7 @@ fn work_item_reference_view(project_id: Uuid, row: WorkItemReferenceRow) -> Work
 /// For someone who may change tasks here but not see them: the tasks a
 /// comment references keep their id, key and link, without their title or
 /// status (the comment's text already names them by key).
-pub(super) fn hide_reference_details(comment: &mut WorkItemCommentView) {
+fn hide_reference_details(comment: &mut WorkItemCommentView) {
     for reference in &mut comment.referenced_work_items {
         reference.title = String::new();
         reference.status_category = String::new();
