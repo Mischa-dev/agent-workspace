@@ -867,6 +867,24 @@ async fn can_manage(state: &AppState, caller: &LaunchCaller, project_id: Uuid) -
     .is_ok()
 }
 
+/// Whether the caller may see the launched tasks' keys and titles here: their
+/// role and, through an app, its current limit. Launch views leave the task
+/// out otherwise; the launch itself stays visible.
+async fn sees_tasks(
+    state: &AppState,
+    caller: &LaunchCaller,
+    project_id: Uuid,
+) -> Result<bool, AppError> {
+    Ok(
+        !crate::search::projects_showing_tasks(&state.pool, caller.actor_id, &[project_id])
+            .await?
+            .is_empty(),
+    )
+}
+
+/// Launch views by id, for every response that returns launches (cancel,
+/// a launch's result and its replay, a task's launch plan), with the task
+/// left out for someone who may not see tasks here, as in `list_for`.
 async fn views_by_id(
     state: &AppState,
     caller: &LaunchCaller,
@@ -874,6 +892,7 @@ async fn views_by_id(
     ids: &[Uuid],
 ) -> Result<Vec<LaunchView>, AppError> {
     let manage = can_manage(state, caller, project_id).await;
+    let sees_tasks = sees_tasks(state, caller, project_id).await?;
     let rows = sqlx::query_as::<_, LaunchViewRow>(&format!(
         "{LAUNCH_VIEW_SELECT} WHERE launch.project_id = $1 AND launch.id = ANY($2) \
          ORDER BY launch.position"
@@ -884,7 +903,13 @@ async fn views_by_id(
     .await?;
     Ok(rows
         .into_iter()
-        .map(|row| launch_view(state, row, caller.actor_id, manage))
+        .map(|row| {
+            let mut view = launch_view(state, row, caller.actor_id, manage);
+            if !sees_tasks {
+                view.work_item = None;
+            }
+            view
+        })
         .collect())
 }
 
@@ -2494,10 +2519,7 @@ pub(crate) async fn list_for(
     .await?;
     // The launched task's key and title only for someone whose role (and an
     // app's limit) lets them see tasks here; the launch itself stays listed.
-    let sees_tasks =
-        !crate::search::projects_showing_tasks(&state.pool, caller.actor_id, &[project_id])
-            .await?
-            .is_empty();
+    let sees_tasks = sees_tasks(state, caller, project_id).await?;
     let view = |row| {
         let mut view = launch_view(state, row, caller.actor_id, manage);
         if !sees_tasks {

@@ -3275,6 +3275,112 @@ async fn a_former_owner_without_post_messages_cant_send_direct_messages() {
     say(&setup, &bea_browser, &dm, "bea-dm", text("Hello from Bea")).await;
 }
 
+/// Cancelling a launch returns it the way the list does: someone who queued
+/// a launch and then lost "see tasks" gets it back without the task's key
+/// or title; with "see tasks" the task is there.
+#[tokio::test]
+async fn cancelling_a_launch_without_see_tasks_reveals_no_task() {
+    let Some(setup) = setup("awd74_launch_cancel").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let project = work.parse::<Uuid>().expect("project");
+    let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
+    let task = owner_task(&setup, &work, "Secret launch plan").await;
+    // Two launches Bea queued, waiting on the task's blockers.
+    let mut launches = Vec::new();
+    for _ in 0..2 {
+        let launch = Uuid::now_v7();
+        sqlx::query(
+            r#"
+            INSERT INTO launches (
+                id, organization_id, project_id, work_item_id, requested_by_actor_id,
+                source, start_when, position
+            ) VALUES ($1, $2, $3, $4, $5, 'button', 'blockers_done',
+                      (SELECT COALESCE(max(position), 0) + 1 FROM launches WHERE project_id = $3))
+            "#,
+        )
+        .bind(launch)
+        .bind(setup.organization_id)
+        .bind(project)
+        .bind(task)
+        .bind(bea)
+        .execute(&setup.pool)
+        .await
+        .expect("queued launch");
+        launches.push(launch);
+    }
+
+    // Without "see tasks".
+    let (status, blind) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Launchers", "baseRole": "member", "permissions": ["runs.launch"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{blind}");
+    let (status, changed) = set_project_role(
+        &setup,
+        &work,
+        bea,
+        "bea-launchers",
+        json!({"roleId": blind["id"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let (status, cancelled) = send(
+        app,
+        bea_browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/launches/{}/cancel", launches[0]),
+            Some("bea-cancel-blind"),
+            json!({}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{cancelled}");
+    assert_eq!(cancelled["state"], "cancelled", "{cancelled}");
+    assert!(cancelled["workItem"].is_null(), "{cancelled}");
+    assert!(
+        !cancelled.to_string().contains("Secret launch plan"),
+        "{cancelled}"
+    );
+
+    // With it.
+    let (status, seeing) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Seeing launchers", "baseRole": "member", "permissions": ["tasks.view", "runs.launch"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{seeing}");
+    let (status, changed) = set_project_role(
+        &setup,
+        &work,
+        bea,
+        "bea-seeing-launchers",
+        json!({"roleId": seeing["id"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let (status, cancelled) = send(
+        app,
+        bea_browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/launches/{}/cancel", launches[1]),
+            Some("bea-cancel-seeing"),
+            json!({}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{cancelled}");
+    assert_eq!(
+        cancelled["workItem"]["title"], "Secret launch plan",
+        "{cancelled}"
+    );
+}
+
 /// The custom role `actor` holds in `project`, if any.
 async fn project_role_id(setup: &Setup, project: &str, actor: Uuid) -> Option<Uuid> {
     sqlx::query_scalar::<_, Option<Uuid>>(
