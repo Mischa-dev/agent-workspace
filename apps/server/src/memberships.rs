@@ -293,7 +293,13 @@ pub(crate) async fn change_member(
     };
     let next_role = next_role.as_str();
     authorize_target(&access, &target, next_role)?;
-    if next_role != target.role || next_role_id != target.role_id {
+    let next_enabled = enabled.unwrap_or(target.enabled);
+    // Bringing someone back hands their role out again, so it has to be
+    // within what the caller holds, as a role change is.
+    if next_role != target.role
+        || next_role_id != target.role_id
+        || (next_enabled && !target.enabled)
+    {
         require_grantable(
             transaction,
             caller_actor_id,
@@ -312,7 +318,6 @@ pub(crate) async fn change_member(
         });
     }
 
-    let next_enabled = enabled.unwrap_or(target.enabled);
     if target.role == "owner" && (next_role != "owner" || !next_enabled) {
         lock_and_require_other_owners(transaction, target.organization_id, project_id, actor_id)
             .await?;
