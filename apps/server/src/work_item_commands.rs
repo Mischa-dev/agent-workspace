@@ -17,7 +17,7 @@ use crate::{
     external_events::enqueue_external_work_item_event,
     outbox::enqueue_work_item_updated,
     policy::{
-        Action, ActorKind, Decision, Membership, MembershipRole, ProjectScope, Resource, Subject,
+        Action, ActorKind, Decision, Membership, ProjectScope, Resource, RoleGrant, Subject,
         authorize,
     },
     work_item_history::FieldChanges,
@@ -70,7 +70,18 @@ pub struct ProjectMembership {
     pub project_id: Uuid,
     pub project_archived_at: Option<String>,
     pub role: String,
+    /// The custom role's permissions, when they hold one.
+    pub role_permissions: Option<Vec<String>>,
     pub enabled: bool,
+}
+
+impl ProjectMembership {
+    pub fn grant(&self) -> Result<RoleGrant, AppError> {
+        Ok(RoleGrant::stored(
+            &self.role,
+            self.role_permissions.as_deref(),
+        )?)
+    }
 }
 
 #[derive(Debug, FromRow)]
@@ -328,6 +339,7 @@ pub async fn lock_membership(
         SELECT project.id AS project_id,
                project.archived_at::text AS project_archived_at,
                membership.role,
+               workspace_role_permissions(membership.role_id) AS role_permissions,
                membership.enabled
         FROM projects project
         JOIN project_memberships membership ON membership.project_id = project.id
@@ -365,7 +377,7 @@ pub fn authorize_mutation(
             true,
             Some(Membership::project(
                 membership.project_id,
-                membership_role(&membership.role)?,
+                membership.grant()?,
                 membership.enabled,
             )),
             None,
@@ -3044,17 +3056,6 @@ pub async fn record_audit_for(
         }
     }
     Ok(audit_id)
-}
-
-fn membership_role(value: &str) -> Result<MembershipRole, AppError> {
-    match value {
-        "owner" => Ok(MembershipRole::Owner),
-        "admin" => Ok(MembershipRole::Admin),
-        "member" => Ok(MembershipRole::Member),
-        "viewer" => Ok(MembershipRole::Viewer),
-        "worker" => Ok(MembershipRole::Worker),
-        _ => Err(AppError::Internal("invalid membership role")),
-    }
 }
 
 #[cfg(test)]

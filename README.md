@@ -11,7 +11,7 @@ The canonical product and engineering plan is
 Prerequisites:
 
 - Rust 1.97.1
-- Node.js 24.18.1
+- Node.js 24.22.1
 - pnpm 11.18.0 through Corepack
 - PostgreSQL 18.4
 

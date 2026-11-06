@@ -1416,6 +1416,286 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         .expect("drop isolated M9 schema");
 }
 
+/// Which party to a sponsored run loses "start runs" while it waits.
+#[derive(Clone, Copy)]
+enum SponsoredParty {
+    Requester,
+    Sponsor,
+}
+
+/// AWD-74: a sponsored run waiting for a slot starts only if both the
+/// agent that asked for it and the person who approved it may still start
+/// runs in the project, by their roles there (custom roles included).
+async fn sponsored_run_cancelled_when_a_party_loses_start_runs(party: SponsoredParty) {
+    let Some((database_url, administrative_pool)) = integration_pool().await else {
+        return;
+    };
+    let schema = format!("m9_sponsored_admission_{}", Uuid::now_v7().simple());
+    administrative_pool
+        .execute(format!("CREATE SCHEMA {schema}").as_str())
+        .await
+        .expect("create sponsored admission schema");
+    let pool = schema_pool(&database_url, &schema).await;
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .expect("run sponsored admission migrations");
+    let temporary = tempfile::tempdir().expect("temporary sponsored admission root");
+    let config = test_config(&database_url, temporary.path());
+    let seed = dev_seed(&pool, &config)
+        .await
+        .expect("seed sponsored admission fixture");
+    bootstrap_admin(
+        &pool,
+        BootstrapCommand {
+            login_name: LOGIN.to_owned(),
+            display_name: "M9 Owner".to_owned(),
+            organization_name: None,
+            organization_slug: None,
+            adopt_actor_id: Some(seed.human_actor_id),
+            organization_id: Some(seed.organization_id),
+        },
+        PASSWORD.to_owned(),
+    )
+    .await
+    .expect("bootstrap sponsored admission owner");
+    let supervisors = SupervisorRegistry::new(&config).expect("sponsored admission supervisors");
+    let state = AppState {
+        config: Arc::new(config),
+        pool: pool.clone(),
+        rate_limits: RateLimiters::default(),
+        realtime: RealtimeHub::new(16),
+        supervisors,
+    };
+    let application = router(state.clone());
+    let cookie = login(&application).await;
+    let csrf = csrf_from_cookie(&cookie);
+
+    // The external agent, as a member who may ask for sponsored runs.
+    let created = application
+        .clone()
+        .oneshot(write_request(
+            "POST",
+            &format!("/api/v1/projects/{}/external-agents", seed.project_id),
+            &cookie,
+            &csrf,
+            json!({
+                "connectionName":"Hermes admission",
+                "displayName":"Hermes admission teammate",
+                "handle":"hermes_admission",
+                "role":"member",
+                "scopes":["read","write","events","approval_respond","worker_request"]
+            }),
+        ))
+        .await
+        .expect("create connection response");
+    assert_eq!(created.status(), StatusCode::OK);
+    let created = response_json(created).await;
+    let agent_actor_id = created["connection"]["actorId"]
+        .as_str()
+        .expect("actor id")
+        .parse::<Uuid>()
+        .expect("Actor UUID");
+    let token = created["oneTimeCredential"]["token"]
+        .as_str()
+        .expect("one-time token")
+        .to_owned();
+    sqlx::query(
+        "UPDATE execution_profiles SET status = 'available', account_state = 'authenticated' WHERE id = $1",
+    )
+    .bind(seed.execution_profile_id)
+    .execute(&pool)
+    .await
+    .expect("prepare sponsor Execution Profile");
+    sqlx::query(
+        "UPDATE repositories SET preparation_state = 'ready', prepared_at = now() WHERE id = $1",
+    )
+    .bind(seed.repository_id)
+    .execute(&pool)
+    .await
+    .expect("prepare sponsored repository");
+
+    // The account's only slot is taken by a blocked run in another thread.
+    sqlx::query(
+        r#"
+        UPDATE provider_accounts SET max_concurrent_runs = 1
+        WHERE id = (SELECT provider_account_id FROM execution_profiles WHERE id = $1)
+        "#,
+    )
+    .bind(seed.execution_profile_id)
+    .execute(&pool)
+    .await
+    .expect("one slot on the account");
+    let busy_thread_id = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO conversations (
+            id, project_id, kind, parent_channel_id, repository_id, name
+        )
+        VALUES ($1, $2, 'thread', $3, $4, 'Holds the slot')
+        "#,
+    )
+    .bind(busy_thread_id)
+    .bind(seed.project_id)
+    .bind(seed.channel_id)
+    .bind(seed.repository_id)
+    .execute(&pool)
+    .await
+    .expect("insert the busy Thread");
+    let busy_run_id = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO agent_runs (
+            id, project_id, conversation_id, execution_worker_id,
+            requesting_actor_id, execution_profile_id, repository_id,
+            state, prompt, authorization_snapshot
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'blocked', $8, '{}'::jsonb)
+        "#,
+    )
+    .bind(busy_run_id)
+    .bind(seed.project_id)
+    .bind(busy_thread_id)
+    .bind(seed.execution_worker_id)
+    .bind(seed.human_actor_id)
+    .bind(seed.execution_profile_id)
+    .bind(seed.repository_id)
+    .bind("Holds the only slot")
+    .execute(&pool)
+    .await
+    .expect("insert the run holding the slot");
+
+    // The agent asks, the owner approves: the run waits for the slot.
+    let session_id = initialize_mcp(&application, &token).await;
+    let requested = call_mcp_tool(
+        &application,
+        &token,
+        &session_id,
+        "run_request",
+        json!({
+            "conversationId":seed.thread_id.to_string(),
+            "repositoryId":seed.repository_id.to_string(),
+            "sponsorActorId":seed.human_actor_id.to_string(),
+            "prompt":"Make one bounded sponsored change.",
+            "clientRequestId":"admission-sponsored-run"
+        }),
+    )
+    .await;
+    assert_eq!(requested["outcome"], "requested", "{requested}");
+    let approval_id = requested["approvalId"]
+        .as_str()
+        .expect("approval id")
+        .parse::<Uuid>()
+        .expect("approval UUID");
+    let approved = application
+        .clone()
+        .oneshot(write_request_with_idempotency(
+            "POST",
+            &format!("/api/v1/agent-approvals/{approval_id}/respond"),
+            &cookie,
+            &csrf,
+            "admission-sponsored-approval",
+            json!({"decision":"approve"}),
+        ))
+        .await
+        .expect("approval response");
+    assert_eq!(approved.status(), StatusCode::OK);
+    let approved = response_json(approved).await;
+    let run_id = approved["agentRunId"]
+        .as_str()
+        .expect("sponsored Agent Run id")
+        .parse::<Uuid>()
+        .expect("sponsored Agent Run UUID");
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT state FROM agent_runs WHERE id = $1")
+            .bind(run_id)
+            .fetch_one(&pool)
+            .await
+            .expect("waiting sponsored run"),
+        "queued"
+    );
+
+    // One party's custom role, still based on member, loses "start runs".
+    let (who, key) = match party {
+        SponsoredParty::Requester => (agent_actor_id, "agent-no-runs"),
+        SponsoredParty::Sponsor => (seed.human_actor_id, "sponsor-no-runs"),
+    };
+    let no_runs = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO workspace_roles (id, organization_id, key, base_role, name, permissions)
+        VALUES (gen_random_uuid(), $1, $2, 'member', $2,
+                ARRAY['projects.view', 'tasks.view', 'channels.post'])
+        RETURNING id
+        "#,
+    )
+    .bind(seed.organization_id)
+    .bind(key)
+    .fetch_one(&pool)
+    .await
+    .expect("role without start runs");
+    sqlx::query(
+        "UPDATE project_memberships SET role_id = $3 WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.project_id)
+    .bind(who)
+    .bind(no_runs)
+    .execute(&pool)
+    .await
+    .expect("narrow the party's role");
+
+    // The slot frees; the queue cancels the run, naming who lost access.
+    let mut finished = pool.begin().await.expect("begin freeing the slot");
+    // Blocked may end as failed (domain::RunState::can_transition_to), as
+    // the M9 sponsored test ends its run; the run holds no claim, so the
+    // claim columns stay empty.
+    transition_run(
+        &mut finished,
+        busy_run_id,
+        RunState::Failed,
+        Some("Freed for the admission test"),
+    )
+    .await
+    .expect("finish the run holding the slot");
+    finished.commit().await.expect("free the slot");
+    agent_workspace_server::scheduler::drain_now(&state)
+        .await
+        .expect("drain the queue");
+    let (run_state, reason) = sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT state, failure_reason FROM agent_runs WHERE id = $1",
+    )
+    .bind(run_id)
+    .fetch_one(&pool)
+    .await
+    .expect("the sponsored run");
+    assert_eq!(run_state, "canceled", "{reason:?}");
+    let named = match party {
+        SponsoredParty::Requester => "the agent that asked for it",
+        SponsoredParty::Sponsor => "the person who approved it",
+    };
+    assert!(
+        reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains(named)),
+        "{reason:?}"
+    );
+
+    state.supervisors.shutdown_all().await;
+    pool.close().await;
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
+        .await
+        .expect("drop sponsored admission schema");
+}
+
+#[tokio::test]
+async fn a_sponsored_run_is_cancelled_when_its_requester_loses_start_runs() {
+    sponsored_run_cancelled_when_a_party_loses_start_runs(SponsoredParty::Requester).await;
+}
+
+#[tokio::test]
+async fn a_sponsored_run_is_cancelled_when_its_sponsor_loses_start_runs() {
+    sponsored_run_cancelled_when_a_party_loses_start_runs(SponsoredParty::Sponsor).await;
+}
+
 fn test_config(database_url: &str, root: &std::path::Path) -> AppConfig {
     AppConfig::from_values(&BTreeMap::from([
         (

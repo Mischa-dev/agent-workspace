@@ -19,8 +19,8 @@ use uuid::Uuid;
 
 use super::{
     ProjectMembershipRow, authorize_work_item, browser_actor, capabilities, current_work_item_view,
-    list, lock_project_membership, membership_role, parse_task_date, project_membership,
-    validate_priority, work_item_version_conflict_response,
+    list, lock_project_membership, parse_task_date, project_membership, validate_priority,
+    work_item_version_conflict_response,
 };
 use crate::{
     AppState,
@@ -31,7 +31,7 @@ use crate::{
         IdempotencyKey, IdempotencyOutcome, IdempotencyReservation, RequestHash, complete, reserve,
         resource_bound_scope,
     },
-    policy::{Action, MembershipRole},
+    policy::{Action, Permission},
     work_item_commands::{
         ArchiveCommand, ArchiveOutcome, AuditVersionMetadata, CommandActor, TaskFieldChanges,
         UpdateWorkItemCommand, UpdateWorkItemOutcome, enqueue_update, insert_activity,
@@ -194,12 +194,15 @@ pub(super) fn invalid(field: &str, message: impl Into<String>) -> Response {
     )
 }
 
+/// Owners and admins (or a role that kept "Change and archive projects"):
+/// who may release someone else's claim.
 pub(super) fn is_manager(membership: &ProjectMembershipRow) -> Result<bool, AppError> {
-    Ok(membership.membership_enabled
-        && matches!(
-            membership_role(&membership.role)?,
-            MembershipRole::Owner | MembershipRole::Admin
-        ))
+    membership.may(Permission::ProjectsManage)
+}
+
+/// Who may change the project's task workflow.
+pub(super) fn may_change_workflow(membership: &ProjectMembershipRow) -> Result<bool, AppError> {
+    membership.may(Permission::TasksWorkflow)
 }
 
 // ---------------------------------------------------------------------------
@@ -1066,7 +1069,7 @@ pub(super) async fn get_workflow(
         .await?
         .ok_or(AppError::NotFound("project"))?;
     authorize_work_item(&principal, &membership, Action::WorkItemView, None)?;
-    let can_edit = is_manager(&membership)? && membership.project_archived_at.is_none();
+    let can_edit = may_change_workflow(&membership)? && membership.project_archived_at.is_none();
     let mut connection = state.pool.acquire().await?;
     Ok(Json(
         workflow_view(&mut connection, project_id, can_edit).await?,
@@ -1110,8 +1113,8 @@ pub(super) async fn replace_workflow(
         .await
     );
     // Changing the workflow changes every member's board: owners and
-    // admins only.
-    if !is_manager(&write.membership)? {
+    // admins, or a role that kept "Change the workflow".
+    if !may_change_workflow(&write.membership)? {
         return Err(AppError::Forbidden);
     }
     document.replacements = replacements;
@@ -1230,7 +1233,12 @@ pub(super) async fn bulk_update(
             &headers,
             &principal,
             project_id,
-            Action::WorkItemEdit,
+            // Archiving is its own permission.
+            if changes.archived.is_some() {
+                Action::WorkItemArchive
+            } else {
+                Action::WorkItemEdit
+            },
             None,
             resource_bound_scope("projects", project_id, "work_items_bulk")?,
             &request,

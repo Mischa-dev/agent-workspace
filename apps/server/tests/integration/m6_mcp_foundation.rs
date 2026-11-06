@@ -392,8 +392,13 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
             list.pointer("/result/ttlMs").is_some_and(Value::is_u64),
             "{list}"
         );
-        assert_eq!(list.pointer("/result/cacheScope"), Some(&json!("public")));
     }
+    // The tool list follows the caller's roles (AWD-74), so only they cache it.
+    assert_eq!(tools.pointer("/result/cacheScope"), Some(&json!("private")));
+    assert_eq!(
+        prompts.pointer("/result/cacheScope"),
+        Some(&json!("public"))
+    );
     assert_eq!(
         prompts
             .pointer("/result/prompts")

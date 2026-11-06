@@ -3,14 +3,14 @@ import { Link } from 'react-router-dom'
 
 import { Markdown } from '../ui/markdown/Markdown'
 import { parseMessageContent } from './messageContentModel'
-import type { ConversationActor, ConversationWorkItemReference } from './types'
+import type { ConversationActor, ConversationWorkItemChip } from './types'
 import './messageMarkdown.css'
 
 type MessageContentProps = {
   actors: ConversationActor[]
   content: unknown
   fallbackPlainText: string
-  workItems?: ConversationWorkItemReference[]
+  workItems?: ConversationWorkItemChip[]
   /** Mentions of this actor are marked as mentions of you. */
   viewerId?: string
 }
@@ -90,16 +90,18 @@ export function MessageContent({ actors, content, fallbackPlainText, workItems =
       }
       return (
         <Link
-          aria-label={`${item.key}: ${item.title}`}
+          aria-label={item.title ? `${item.key}: ${item.title}` : item.key}
           className="aw-workref"
           data-archived={Boolean(item.archivedAt)}
           key={`chip-${index}`}
-          title={item.title}
+          title={item.title ?? item.key}
           to={item.href}
         >
-          <span aria-hidden="true" className={`aw-workref__status is-${workItemState(item.statusCategory)}`} />
+          {item.statusCategory ? (
+            <span aria-hidden="true" className={`aw-workref__status is-${workItemState(item.statusCategory)}`} />
+          ) : null}
           <span className="aw-workref__key">{item.key}</span>
-          <span className="aw-workref__title">{item.title}</span>
+          {item.title ? <span className="aw-workref__title">{item.title}</span> : null}
         </Link>
       )
     }

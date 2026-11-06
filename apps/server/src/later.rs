@@ -135,6 +135,9 @@ pub(crate) fn timestamp(at: DateTime<Utc>) -> String {
 
 /// The rows `$1` may still see. Callers add conditions after it.
 fn select_sql(extra: &str) -> String {
+    // A saved task only while their role there still lets them see tasks;
+    // an app's agent limit is applied to the rows (`hidden_by_limit`).
+    let sees_task = crate::roles::role_allows_sql("$1", "item.project_id", "tasks.view");
     format!(
         r#"
         SELECT item.id, item.kind, item.note, item.remind_at, item.done_at, item.created_at,
@@ -166,6 +169,7 @@ fn select_sql(extra: &str) -> String {
         WHERE item.actor_id = $1
           AND actor_can_access_project($1, item.external_agent_connection_id, item.project_id)
           AND (item.message_id IS NULL OR conversation_visible_to(message.conversation_id, $1))
+          AND (item.work_item_id IS NULL OR {sees_task})
           {extra}
         "#
     )
@@ -305,9 +309,24 @@ pub async fn list(
         .await?;
     let open_count = open_count(pool, viewer, within).await?;
     Ok(LaterPage {
-        items: rows.into_iter().map(view).collect(),
+        items: rows
+            .into_iter()
+            .filter(|row| !hidden_by_limit(viewer, row))
+            .map(view)
+            .collect(),
         open_count,
     })
+}
+
+/// A saved task an app acting for `viewer` may not see: its agent limit
+/// leaves out "see tasks" there.
+fn hidden_by_limit(viewer: Uuid, row: &SavedRow) -> bool {
+    row.work_item_id.is_some()
+        && crate::policy::agent_limit_hides(
+            viewer,
+            row.project_id,
+            crate::policy::Permission::TasksView,
+        )
 }
 
 pub async fn open_count(
@@ -315,7 +334,9 @@ pub async fn open_count(
     viewer: Uuid,
     within: Option<&[Uuid]>,
 ) -> Result<i64, AppError> {
-    Ok(sqlx::query_scalar::<_, i64>(
+    // $3: while an app acts for them, the projects its limit lets see tasks.
+    let sees_task = crate::roles::role_allows_sql("$1", "item.project_id", "tasks.view");
+    Ok(sqlx::query_scalar::<_, i64>(&format!(
         r#"
         SELECT count(*) FROM saved_items item
         LEFT JOIN messages message ON message.id = item.message_id
@@ -323,10 +344,16 @@ pub async fn open_count(
           AND ($2::uuid[] IS NULL OR item.project_id = ANY($2))
           AND actor_can_access_project($1, item.external_agent_connection_id, item.project_id)
           AND (item.message_id IS NULL OR conversation_visible_to(message.conversation_id, $1))
-        "#,
-    )
+          AND (item.work_item_id IS NULL OR ({sees_task}
+               AND ($3::uuid[] IS NULL OR item.project_id = ANY($3))))
+        "#
+    ))
     .bind(viewer)
     .bind(within)
+    .bind(crate::policy::agent_limit_projects_allowing(
+        viewer,
+        crate::policy::Permission::TasksView,
+    ))
     .fetch_one(pool)
     .await?)
 }
@@ -338,6 +365,7 @@ pub async fn get_item(pool: &PgPool, viewer: Uuid, id: Uuid) -> Result<SavedItem
         .bind(id)
         .fetch_optional(pool)
         .await?
+        .filter(|row| !hidden_by_limit(viewer, row))
         .map(view)
         .ok_or(AppError::NotFound("saved_item"))
 }
@@ -886,7 +914,13 @@ async fn remind(state: &AppState, job: &RemindJob) -> Result<(), JobError> {
                 AND actor_can_access_project(item.actor_id, item.external_agent_connection_id, item.project_id)
                 AND (item.message_id IS NULL
                      OR (message.removed_at IS NULL
-                         AND conversation_visible_to(message.conversation_id, item.actor_id))))
+                         AND conversation_visible_to(message.conversation_id, item.actor_id)))
+                -- A saved task only while their role there lets them see tasks.
+                AND (item.work_item_id IS NULL OR EXISTS (
+                    SELECT 1 FROM project_memberships sees_task
+                    WHERE sees_task.project_id = item.project_id
+                      AND sees_task.actor_id = item.actor_id AND sees_task.enabled
+                      AND custom_role_allows(sees_task.role_id, 'tasks.view'))))
                    AS visible
         FROM saved_items item
         JOIN actors actor ON actor.id = item.actor_id

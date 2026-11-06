@@ -25,7 +25,7 @@ use crate::{
     outbox::{
         ConversationCreatedPayload, OutboxConversationKind, OutboxEventPayload, enqueue_typed,
     },
-    policy::{Action, ActorKind, Decision, MembershipRole},
+    policy::{Action, ActorKind, Decision, Permission, RoleGrant},
     work_item_commands::{
         AllocatedNumberMetadata, ArchiveCommand, ArchiveOutcome, AuditAttribution,
         AuditVersionMetadata, BoardPlacement, ChangeFinalization, CommandActor, ConflictKind,
@@ -298,7 +298,18 @@ struct ProjectMembershipRow {
     project_id: Uuid,
     project_archived_at: Option<String>,
     role: String,
+    role_permissions: Option<Vec<String>>,
     membership_enabled: bool,
+}
+
+impl ProjectMembershipRow {
+    /// What their role lets them do here, if they're still a member.
+    pub(super) fn may(&self, permission: Permission) -> Result<bool, AppError> {
+        Ok(self.membership_enabled
+            && RoleGrant::stored(&self.role, self.role_permissions.as_deref())?
+                .permissions()
+                .contains(permission))
+    }
 }
 
 #[derive(Clone, Debug, FromRow)]
@@ -789,6 +800,14 @@ struct WorkItemCapabilities {
     view: bool,
     edit: bool,
     archive: bool,
+    /// "See code": linked repositories and pull requests are shown only
+    /// with it. Not sent; the view leaves those sections empty without it.
+    #[serde(skip)]
+    code: bool,
+    /// "See tasks": without it a write's response carries the task's id, key,
+    /// version, type and status, not its contents. Not sent.
+    #[serde(skip)]
+    tasks: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1232,7 +1251,7 @@ async fn set_work_item_archived(
     authorize_work_item(
         principal,
         &membership,
-        Action::WorkItemEdit,
+        Action::WorkItemArchive,
         Some(work_item_id),
     )?;
     if membership.project_archived_at.is_some() {
@@ -1342,6 +1361,14 @@ async fn work_with_worker(
     let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("work_item"))?;
+    // The thread it makes is named after the task, and anyone in its channel
+    // reads it: only for someone who sees tasks here.
+    authorize_work_item(
+        &principal,
+        &membership,
+        Action::WorkItemView,
+        Some(work_item_id),
+    )?;
     authorize_work_item(
         &principal,
         &membership,
@@ -2885,7 +2912,12 @@ async fn create_work_item_comment(
         .into_iter()
         .next()
         .ok_or(AppError::Internal("comment author unavailable"))?;
-    let body = CommentAppendResponse {
+    // Commenting takes "edit tasks"; the referenced tasks' titles and
+    // statuses also take "see tasks" here (an app's limit included).
+    let sees_tasks =
+        crate::conversations::sees_tasks_in(&mut *transaction, principal.actor_id, project_id)
+            .await?;
+    let mut body = CommentAppendResponse {
         work_item_id,
         sequence,
         comment: WorkItemCommentView {
@@ -2905,6 +2937,9 @@ async fn create_work_item_comment(
             removed: None,
         },
     };
+    if !sees_tasks {
+        hide_reference_details(&mut body.comment);
+    }
     complete(&mut transaction, &reservation, StatusCode::CREATED, &body).await?;
     transaction.commit().await?;
     Ok((StatusCode::CREATED, Json(body)).into_response())
@@ -3132,6 +3167,16 @@ fn work_item_reference_view(project_id: Uuid, row: WorkItemReferenceRow) -> Work
     }
 }
 
+/// For someone who may change tasks here but not see them: the tasks a
+/// comment references keep their id, key and link, without their title or
+/// status (the comment's text already names them by key).
+fn hide_reference_details(comment: &mut WorkItemCommentView) {
+    for reference in &mut comment.referenced_work_items {
+        reference.title = String::new();
+        reference.status_category = String::new();
+    }
+}
+
 async fn timeline_entry_view(
     pool: &PgPool,
     project_id: Uuid,
@@ -3285,7 +3330,9 @@ async fn project_membership(
         r#"
         SELECT project.id AS project_id,
                project.archived_at::text AS project_archived_at,
-               membership.role, membership.enabled AS membership_enabled
+               membership.role,
+               workspace_role_permissions(membership.role_id) AS role_permissions,
+               membership.enabled AS membership_enabled
         FROM projects project
         JOIN project_memberships membership ON membership.project_id = project.id
         JOIN organization_memberships organization_membership
@@ -3312,6 +3359,7 @@ async fn lock_project_membership(
             project_id: membership.project_id,
             project_archived_at: membership.project_archived_at,
             role: membership.role,
+            role_permissions: membership.role_permissions,
             membership_enabled: membership.enabled,
         }))
 }
@@ -3335,6 +3383,7 @@ fn authorize_work_item(
         project_id: membership.project_id,
         project_archived_at: membership.project_archived_at.clone(),
         role: membership.role.clone(),
+        role_permissions: membership.role_permissions.clone(),
         enabled: membership.membership_enabled,
     };
     match authorize_mutation(&command_actor, &command_membership, action, work_item_id)? {
@@ -3439,19 +3488,12 @@ pub(crate) async fn authorize_task_change(
 }
 
 fn capabilities(membership: &ProjectMembershipRow) -> Result<WorkItemCapabilities, AppError> {
-    let role = membership_role(&membership.role)?;
     Ok(WorkItemCapabilities {
         view: membership.membership_enabled,
-        edit: membership.membership_enabled
-            && matches!(
-                role,
-                MembershipRole::Owner | MembershipRole::Admin | MembershipRole::Member
-            ),
-        archive: membership.membership_enabled
-            && matches!(
-                role,
-                MembershipRole::Owner | MembershipRole::Admin | MembershipRole::Member
-            ),
+        edit: membership.may(Permission::TasksEdit)?,
+        archive: membership.may(Permission::TasksDelete)?,
+        code: membership.may(Permission::CodeView)?,
+        tasks: membership.may(Permission::TasksView)?,
     })
 }
 
@@ -3783,7 +3825,11 @@ const WORK_ITEM_SELECT: &str = concat!(
               AND dependency.blocked_work_item_id = item.id
               AND linked.archived_at IS NULL
               AND (linked.project_id = item.project_id
-                   OR actor_can_access_project($3, NULL, linked.project_id))
+                   OR (actor_can_access_project($3, NULL, linked.project_id)
+                       AND EXISTS (SELECT 1 FROM project_memberships sees_task
+                           WHERE sees_task.project_id = linked.project_id
+                             AND sees_task.actor_id = $3 AND sees_task.enabled
+                             AND custom_role_allows(sees_task.role_id, 'tasks.view'))))
         ), '[]'::jsonb) AS blocked_by,
         COALESCE((
             SELECT jsonb_agg("#,
@@ -3801,7 +3847,11 @@ const WORK_ITEM_SELECT: &str = concat!(
               AND dependency.blocking_work_item_id = item.id
               AND linked.archived_at IS NULL
               AND (linked.project_id = item.project_id
-                   OR actor_can_access_project($3, NULL, linked.project_id))
+                   OR (actor_can_access_project($3, NULL, linked.project_id)
+                       AND EXISTS (SELECT 1 FROM project_memberships sees_task
+                           WHERE sees_task.project_id = linked.project_id
+                             AND sees_task.actor_id = $3 AND sees_task.enabled
+                             AND custom_role_allows(sees_task.role_id, 'tasks.view'))))
         ), '[]'::jsonb) AS blocks,
         COALESCE((
             SELECT jsonb_agg(jsonb_build_object(
@@ -3821,7 +3871,11 @@ const WORK_ITEM_SELECT: &str = concat!(
               ON linked_status.project_id = linked.project_id AND linked_status.id = linked.status_id
             WHERE (relation.work_item_id = item.id OR relation.other_work_item_id = item.id)
               AND (linked.project_id = item.project_id
-                   OR actor_can_access_project($3, NULL, linked.project_id))
+                   OR (actor_can_access_project($3, NULL, linked.project_id)
+                       AND EXISTS (SELECT 1 FROM project_memberships sees_task
+                           WHERE sees_task.project_id = linked.project_id
+                             AND sees_task.actor_id = $3 AND sees_task.enabled
+                             AND custom_role_allows(sees_task.role_id, 'tasks.view'))))
         ), '[]'::jsonb) AS relations,
         COALESCE((
             SELECT jsonb_agg("#,
@@ -3942,11 +3996,20 @@ fn work_item_view(
         .map_err(|_| AppError::Internal("invalid Work Item criteria projection"))?;
     let linked_threads = serde_json::from_value(row.linked_threads)
         .map_err(|_| AppError::Internal("invalid linked Thread projection"))?;
-    let linked_repositories = serde_json::from_value(row.linked_repositories)
-        .map_err(|_| AppError::Internal("invalid linked Repository projection"))?;
-    let linked_pull_requests = serde_json::from_value(row.linked_pull_requests)
-        .map_err(|_| AppError::Internal("invalid linked pull-request projection"))?;
-    Ok(WorkItemView {
+    // Linked code only for those whose role lets them see code here.
+    let linked_repositories = if capabilities.code {
+        serde_json::from_value(row.linked_repositories)
+            .map_err(|_| AppError::Internal("invalid linked Repository projection"))?
+    } else {
+        Vec::new()
+    };
+    let linked_pull_requests = if capabilities.code {
+        serde_json::from_value(row.linked_pull_requests)
+            .map_err(|_| AppError::Internal("invalid linked pull-request projection"))?
+    } else {
+        Vec::new()
+    };
+    let mut view = WorkItemView {
         id: row.id,
         project_id: row.project_id,
         key: format!("{}-{}", row.project_key, row.number),
@@ -3992,7 +4055,21 @@ fn work_item_view(
             watching: row.watching,
             estimate_unit: row.estimate_unit,
         },
-    })
+    };
+    // Someone who may change a task but not see it (a role with "archive
+    // tasks" only, say) gets the outcome, not the task's contents.
+    if !view.capabilities.tasks {
+        view.title = String::new();
+        view.description = String::new();
+        view.assignee = None;
+        view.labels = Vec::new();
+        view.acceptance_criteria = Vec::new();
+        view.linked_threads = Vec::new();
+        view.linked_repositories = Vec::new();
+        view.linked_pull_requests = Vec::new();
+        view.planning = TaskPlanningView::default();
+    }
+    Ok(view)
 }
 
 fn json_list(value: serde_json::Value) -> Result<Vec<serde_json::Value>, AppError> {
@@ -4301,17 +4378,6 @@ fn browser_actor(
             request_id,
         },
     })
-}
-
-fn membership_role(value: &str) -> Result<MembershipRole, AppError> {
-    match value {
-        "owner" => Ok(MembershipRole::Owner),
-        "admin" => Ok(MembershipRole::Admin),
-        "member" => Ok(MembershipRole::Member),
-        "viewer" => Ok(MembershipRole::Viewer),
-        "worker" => Ok(MembershipRole::Worker),
-        _ => Err(AppError::Internal("invalid membership role")),
-    }
 }
 
 fn actor_kind(value: &str) -> Result<ActorKind, AppError> {

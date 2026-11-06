@@ -180,8 +180,15 @@ pub(super) async fn visible_links(
     let links =
         work_item_planning::task_links(connection, reader(principal), project_id, task_id).await?;
     let reachable = accessible_project_ids_in(&mut *connection, principal).await?;
+    // task_links keeps tasks the reader's role lets them see; in an app's
+    // call, its agent limit decides as well.
     let seen = |task: &work_item_planning::TaskRef| {
-        task.project_id == project_id || reachable.contains(&task.project_id)
+        (task.project_id == project_id || reachable.contains(&task.project_id))
+            && !crate::policy::agent_limit_hides(
+                principal.actor_id,
+                task.project_id,
+                crate::policy::Permission::TasksView,
+            )
     };
     Ok(VisibleLinks {
         blocked_by: links
@@ -260,6 +267,57 @@ pub(super) async fn own_task_ref(
         finished: matches!(category.as_str(), "completed" | "canceled"),
         status_group: category,
     }))
+}
+
+/// The task a link change (task_depend, task_relate) was on. Someone who may
+/// change tasks here but not see them (their role, or an app's agent limit)
+/// gets only its id and key: no title, status or whether it's finished.
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ChangedTask {
+    pub id: String,
+    pub key: String,
+    /// Left out without "see tasks" here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Left out without "see tasks" here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// backlog, unstarted, started, review, verification, completed, or
+    /// canceled. Left out without "see tasks" here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status_group: Option<String>,
+    /// True once it's done or canceled. Left out without "see tasks" here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finished: Option<bool>,
+}
+
+/// The changed task as the caller may see it, and whether they see tasks
+/// here.
+async fn changed_task(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    principal: &McpPrincipal,
+    project_id: Uuid,
+    task_id: Uuid,
+) -> Result<(ChangedTask, bool), AppError> {
+    let task = own_task_ref(&mut *transaction, project_id, task_id)
+        .await?
+        .ok_or(AppError::NotFound("work item"))?;
+    let sees = matches!(
+        check_access_for(transaction, principal, Action::WorkItemView).await?,
+        WriteAccess::Allowed
+    );
+    Ok((
+        ChangedTask {
+            id: task.id,
+            key: task.key,
+            title: sees.then_some(task.title),
+            status: sees.then_some(task.status),
+            status_group: sees.then_some(task.status_group),
+            finished: sees.then_some(task.finished),
+        },
+        sees,
+    ))
 }
 
 /// Finds other tasks for a link, in this workspace and among projects the
@@ -346,14 +404,15 @@ pub(super) struct TaskDependArguments {
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct DependencyValue {
-    pub task: TaskRef,
+    pub task: ChangedTask,
     /// What blocks it, each with its status. Tasks in projects you can't
     /// reach are left out.
     pub blocked_by: Vec<TaskRef>,
     pub blocks: Vec<TaskRef>,
     /// True when it isn't finished, isn't marked blocked, and everything
-    /// blocking it is finished.
-    pub ready: bool,
+    /// blocking it is finished. Left out without "see tasks" here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ready: Option<bool>,
     /// How many dependencies this call added or removed.
     #[serde(default)]
     pub changed: u32,
@@ -445,16 +504,14 @@ pub(super) async fn task_depend(
                 return Ok(link_refusal(field(index), reference, &refusal));
             }
         };
-        let task = own_task_ref(&mut transaction, project_id, task_id)
-            .await?
-            .ok_or(AppError::NotFound("work item"))?;
+        let (task, sees) = changed_task(&mut transaction, principal, project_id, task_id).await?;
         let links = visible_links(&mut transaction, principal, project_id, task_id).await?;
         transaction.commit().await?;
         Ok::<_, AppError>(ToolResult::ok(DependencyValue {
             task,
             blocked_by: links.blocked_by,
             blocks: links.blocks,
-            ready: links.ready,
+            ready: sees.then_some(links.ready),
             changed: u32::try_from(outcome.changed).unwrap_or(u32::MAX),
             version: outcome.version,
         }))
@@ -487,7 +544,7 @@ pub(super) struct TaskRelateArguments {
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct RelationsValue {
-    pub task: TaskRef,
+    pub task: ChangedTask,
     /// The task's relations now. Tasks in projects you can't reach are left
     /// out.
     pub relations: Vec<RelationRef>,
@@ -562,9 +619,7 @@ pub(super) async fn task_relate(
             Ok(outcome) => outcome,
             Err(refusal) => return Ok(link_refusal("otherTaskId", &reference, &refusal)),
         };
-        let task = own_task_ref(&mut transaction, project_id, task_id)
-            .await?
-            .ok_or(AppError::NotFound("work item"))?;
+        let (task, _) = changed_task(&mut transaction, principal, project_id, task_id).await?;
         let links = visible_links(&mut transaction, principal, project_id, task_id).await?;
         transaction.commit().await?;
         Ok::<_, AppError>(ToolResult::ok(RelationsValue {

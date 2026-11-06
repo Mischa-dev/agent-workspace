@@ -1285,6 +1285,7 @@ async fn agent_choices(state: &AppState, actor_id: Uuid) -> Result<Vec<AgentChoi
          AND manager.actor_id = $1
          AND manager.enabled
          AND manager.role IN ('owner', 'admin')
+         AND custom_role_allows(manager.role_id, 'agents.manage')
         WHERE connection.status = 'active' AND project.archived_at IS NULL
         ORDER BY lower(agent_membership.display_name), connection.id
         LIMIT 100
@@ -1303,9 +1304,11 @@ async fn managed_agent(
     manager_actor_id: Uuid,
     connection_id: Uuid,
 ) -> Result<Option<(Uuid, Uuid)>, OAuthError> {
-    sqlx::query_as::<_, (Uuid, Uuid)>(
+    let found = sqlx::query_as::<_, (Uuid, Uuid, Uuid, String, Option<Vec<String>>)>(
         r#"
-        SELECT connection.project_id, connection.actor_id
+        SELECT connection.project_id, connection.actor_id, project.organization_id,
+               agent_membership.role,
+               workspace_role_permissions(agent_membership.role_id)
         FROM external_agent_connections connection
         JOIN projects project ON project.id = connection.project_id
         JOIN actors agent ON agent.id = connection.actor_id AND agent.status = 'active'
@@ -1318,6 +1321,7 @@ async fn managed_agent(
          AND manager.actor_id = $2
          AND manager.enabled
          AND manager.role IN ('owner', 'admin')
+         AND custom_role_allows(manager.role_id, 'agents.manage')
         JOIN organization_memberships organization_membership
           ON organization_membership.organization_id = project.organization_id
          AND organization_membership.actor_id = $2
@@ -1330,8 +1334,30 @@ async fn managed_agent(
     .bind(manager_actor_id)
     .fetch_optional(&state.pool)
     .await
-    .map_err(AppError::from)
-    .map_err(Into::into)
+    .map_err(AppError::from)?;
+    let Some((project_id, agent_actor_id, organization_id, role, role_permissions)) = found else {
+        return Ok(None);
+    };
+    // Connecting as the agent hands its role to the app: only within what the
+    // manager holds, as creating or re-enabling the agent requires.
+    let grant = crate::policy::RoleGrant::stored(&role, role_permissions.as_deref())
+        .map_err(AppError::from)?;
+    let mut connection = state.pool.acquire().await.map_err(AppError::from)?;
+    let manager =
+        crate::roles::standing(&mut connection, organization_id, manager_actor_id).await?;
+    if !grant.permissions().is_subset_of(manager.permissions) {
+        return Ok(None);
+    }
+    // And within the manager's role in the agent's project, where it works,
+    // as giving an agent its role or credentials is
+    // (external_agents::require_grantable).
+    let held = crate::roles::project_holding(&mut connection, manager_actor_id, project_id).await?;
+    if !held
+        .is_some_and(|held| crate::roles::project_checked(grant.permissions()).is_subset_of(held))
+    {
+        return Ok(None);
+    }
+    Ok(Some((project_id, agent_actor_id)))
 }
 
 fn parse_scopes(scope: Option<&str>) -> Result<Vec<String>, OAuthError> {

@@ -14,7 +14,8 @@ use crate::{
     error::{ApiJson, ApiPath, AppError},
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     policy::{
-        Action, ActorKind, Membership, MembershipRole, ProjectScope, Resource, Subject, authorize,
+        Action, ActorKind, Membership, Permission, ProjectScope, Resource, RoleGrant, Subject,
+        authorize,
     },
     provider::{
         CODEX_KIND, ProfileHealth, SupervisorRegistry,
@@ -64,7 +65,17 @@ pub fn router() -> Router<AppState> {
 #[derive(Debug, FromRow)]
 struct ProjectAccessRow {
     role: String,
+    role_permissions: Option<Vec<String>>,
     handle: String,
+}
+
+impl ProjectAccessRow {
+    fn grant(&self) -> Result<RoleGrant, AppError> {
+        Ok(RoleGrant::stored(
+            &self.role,
+            self.role_permissions.as_deref(),
+        )?)
+    }
 }
 
 /// Registering a profile uses one of the caller's provider accounts in the
@@ -382,7 +393,10 @@ async fn list_execution_profiles(
         Action::ExecutionProfileView,
     )
     .await?;
-    let can_view_team_readiness = matches!(access.role.as_str(), "owner" | "admin");
+    let can_view_team_readiness = access
+        .grant()?
+        .permissions()
+        .contains(Permission::MembersView);
     let rows = sqlx::query_as::<_, ExecutionProfileRow>(
         r#"
         SELECT
@@ -648,6 +662,7 @@ struct HarnessesResponse {
 struct WorkspaceAccessRow {
     organization_id: Uuid,
     organization_role: String,
+    organization_role_permissions: Option<Vec<String>>,
 }
 
 async fn workspace_access(
@@ -657,7 +672,8 @@ async fn workspace_access(
 ) -> Result<WorkspaceAccessRow, AppError> {
     Ok(sqlx::query_as::<_, WorkspaceAccessRow>(
         r#"
-        SELECT project.organization_id, membership.role AS organization_role
+        SELECT project.organization_id, membership.role AS organization_role,
+               workspace_role_permissions(membership.role_id) AS organization_role_permissions
         FROM projects project
         JOIN organization_memberships membership
           ON membership.organization_id = project.organization_id
@@ -674,7 +690,11 @@ async fn workspace_access(
 
 fn may_edit_catalog(principal: &AuthenticatedActor, workspace: &WorkspaceAccessRow) -> bool {
     principal.actor_kind == "human"
-        && matches!(workspace.organization_role.as_str(), "owner" | "admin")
+        && RoleGrant::stored(
+            &workspace.organization_role,
+            workspace.organization_role_permissions.as_deref(),
+        )
+        .is_ok_and(|grant| grant.permissions().contains(Permission::SettingsManage))
 }
 
 async fn harness_view(
@@ -1129,7 +1149,8 @@ async fn require_project_action(
 ) -> Result<ProjectAccessRow, AppError> {
     let access = sqlx::query_as::<_, ProjectAccessRow>(
         r#"
-        SELECT membership.role, membership.handle
+        SELECT membership.role, workspace_role_permissions(membership.role_id) AS role_permissions,
+               membership.handle
         FROM projects project
         JOIN project_memberships membership
           ON membership.project_id = project.id
@@ -1154,11 +1175,7 @@ async fn require_project_action(
         principal.actor_id,
         actor_kind(&principal.actor_kind)?,
         true,
-        Some(Membership::project(
-            project_id,
-            membership_role(&access.role)?,
-            true,
-        )),
+        Some(Membership::project(project_id, access.grant()?, true)),
         None,
     );
     if authorize(
@@ -1465,17 +1482,6 @@ fn actor_kind(value: &str) -> Result<ActorKind, AppError> {
         "integration" => Ok(ActorKind::Integration),
         "system" => Ok(ActorKind::System),
         _ => Err(AppError::Internal("stored Actor kind")),
-    }
-}
-
-fn membership_role(value: &str) -> Result<MembershipRole, AppError> {
-    match value {
-        "owner" => Ok(MembershipRole::Owner),
-        "admin" => Ok(MembershipRole::Admin),
-        "member" => Ok(MembershipRole::Member),
-        "viewer" => Ok(MembershipRole::Viewer),
-        "worker" => Ok(MembershipRole::Worker),
-        _ => Err(AppError::Internal("stored membership role")),
     }
 }
 

@@ -15,7 +15,7 @@ use crate::{
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, ApiQuery, AppError},
     policy::{
-        Action, ActorKind, Decision, Membership, MembershipRole, ProjectScope, Resource, Subject,
+        Action, ActorKind, Decision, Membership, ProjectScope, Resource, RoleGrant, Subject,
         authorize,
     },
 };
@@ -52,6 +52,7 @@ struct ProjectRow {
     project_key: String,
     name: String,
     role: String,
+    role_permissions: Option<Vec<String>>,
     version: i64,
     archived_at: Option<String>,
     location_kind: Option<String>,
@@ -186,12 +187,14 @@ struct RailOrderResponse {
 #[derive(Debug, FromRow)]
 struct OrganizationMembershipRow {
     role: String,
+    role_permissions: Option<Vec<String>>,
 }
 
 #[derive(Debug, FromRow)]
 struct ProjectMembershipRow {
     id: Uuid,
     role: String,
+    role_permissions: Option<Vec<String>>,
     version: i64,
     archived_at: Option<String>,
 }
@@ -244,6 +247,7 @@ async fn list_projects(
             p.project_key,
             p.name,
             pm.role,
+            workspace_role_permissions(pm.role_id) AS role_permissions,
             p.version,
             p.archived_at::text AS archived_at,
             CASE
@@ -374,7 +378,7 @@ async fn create_project(
     .await?;
     let membership = sqlx::query_as::<_, OrganizationMembershipRow>(
         r#"
-        SELECT role
+        SELECT role, workspace_role_permissions(role_id) AS role_permissions
         FROM organization_memberships
         WHERE organization_id = $1 AND actor_id = $2 AND enabled
         FOR UPDATE
@@ -385,7 +389,12 @@ async fn create_project(
     .fetch_optional(&mut *transaction)
     .await?
     .ok_or(AppError::NotFound("organization"))?;
-    authorize_organization_create(&principal, request.organization_id, &membership.role)?;
+    authorize_organization_create(
+        &principal,
+        request.organization_id,
+        &membership.role,
+        membership.role_permissions.as_deref(),
+    )?;
 
     if let Some(existing) = sqlx::query_as::<_, IdempotencyRow>(
         r#"
@@ -922,6 +931,8 @@ async fn update_navigation(
             (SELECT project_key FROM projects WHERE id = $1) AS project_key,
             (SELECT name FROM projects WHERE id = $1) AS name,
             (SELECT role FROM project_memberships WHERE project_id = $1 AND actor_id = $2) AS role,
+            (SELECT workspace_role_permissions(role_id) FROM project_memberships
+              WHERE project_id = $1 AND actor_id = $2) AS role_permissions,
             (SELECT version FROM projects WHERE id = $1) AS version,
             (SELECT archived_at::text FROM projects WHERE id = $1) AS archived_at,
             location_kind,
@@ -1049,6 +1060,7 @@ async fn set_rail_order(
         SELECT
             p.id,
             pm.role,
+            workspace_role_permissions(pm.role_id) AS role_permissions,
             p.version,
             p.archived_at::text AS archived_at
         FROM projects p
@@ -1153,6 +1165,7 @@ async fn fetch_project_row(
             p.project_key,
             p.name,
             pm.role,
+            workspace_role_permissions(pm.role_id) AS role_permissions,
             p.version,
             p.archived_at::text AS archived_at,
             CASE
@@ -1226,6 +1239,7 @@ async fn fetch_project_row_in_transaction(
             p.project_key,
             p.name,
             pm.role,
+            workspace_role_permissions(pm.role_id) AS role_permissions,
             p.version,
             p.archived_at::text AS archived_at,
             CASE
@@ -1289,6 +1303,7 @@ async fn lock_project_membership(
         SELECT
             p.id,
             pm.role,
+            workspace_role_permissions(pm.role_id) AS role_permissions,
             p.version,
             p.archived_at::text AS archived_at
         FROM projects p
@@ -1310,7 +1325,7 @@ async fn lock_project_membership(
 }
 
 fn project_view(row: ProjectRow) -> Result<ProjectView, AppError> {
-    let role = membership_role(&row.role)?;
+    let role = RoleGrant::stored(&row.role, row.role_permissions.as_deref())?;
     let scope = ProjectScope::project(row.id);
     let subject = subject(Uuid::nil(), ActorKind::Human, row.id, role);
     let view = authorize(&subject, Action::ProjectView, Resource::Project(scope)).is_allowed();
@@ -1473,12 +1488,14 @@ fn authorize_organization_create(
     principal: &AuthenticatedActor,
     organization_id: Uuid,
     role: &str,
+    role_permissions: Option<&[String]>,
 ) -> Result<(), AppError> {
     authorize_project_create(
         principal.actor_id,
         actor_kind(&principal.actor_kind)?,
         organization_id,
         role,
+        role_permissions,
     )
 }
 
@@ -1489,8 +1506,9 @@ pub(crate) fn authorize_project_create(
     kind: ActorKind,
     organization_id: Uuid,
     role: &str,
+    role_permissions: Option<&[String]>,
 ) -> Result<(), AppError> {
-    let role = membership_role(role)?;
+    let role = RoleGrant::stored(role, role_permissions)?;
     let subject = Subject::new(
         actor_id,
         kind,
@@ -1510,7 +1528,7 @@ fn authorize_project_action(
     project: &impl ProjectMembership,
     action: Action,
 ) -> Result<(), AppError> {
-    let role = membership_role(project.role())?;
+    let role = RoleGrant::stored(project.role(), project.role_permissions())?;
     let subject = subject(
         principal.actor_id,
         actor_kind(&principal.actor_kind)?,
@@ -1527,6 +1545,7 @@ fn authorize_project_action(
 trait ProjectMembership {
     fn project_id(&self) -> Uuid;
     fn role(&self) -> &str;
+    fn role_permissions(&self) -> Option<&[String]>;
 }
 
 impl ProjectMembership for ProjectRow {
@@ -1536,6 +1555,10 @@ impl ProjectMembership for ProjectRow {
 
     fn role(&self) -> &str {
         &self.role
+    }
+
+    fn role_permissions(&self) -> Option<&[String]> {
+        self.role_permissions.as_deref()
     }
 }
 
@@ -1547,14 +1570,13 @@ impl ProjectMembership for ProjectMembershipRow {
     fn role(&self) -> &str {
         &self.role
     }
+
+    fn role_permissions(&self) -> Option<&[String]> {
+        self.role_permissions.as_deref()
+    }
 }
 
-fn subject(
-    actor_id: Uuid,
-    actor_kind: ActorKind,
-    project_id: Uuid,
-    role: MembershipRole,
-) -> Subject {
+fn subject(actor_id: Uuid, actor_kind: ActorKind, project_id: Uuid, role: RoleGrant) -> Subject {
     Subject::new(
         actor_id,
         actor_kind,
@@ -1572,17 +1594,6 @@ fn actor_kind(value: &str) -> Result<ActorKind, AppError> {
         "integration" => Ok(ActorKind::Integration),
         "system" => Ok(ActorKind::System),
         _ => Err(AppError::Internal("stored Actor kind")),
-    }
-}
-
-fn membership_role(value: &str) -> Result<MembershipRole, AppError> {
-    match value {
-        "owner" => Ok(MembershipRole::Owner),
-        "admin" => Ok(MembershipRole::Admin),
-        "member" => Ok(MembershipRole::Member),
-        "viewer" => Ok(MembershipRole::Viewer),
-        "worker" => Ok(MembershipRole::Worker),
-        _ => Err(AppError::Internal("stored membership role")),
     }
 }
 

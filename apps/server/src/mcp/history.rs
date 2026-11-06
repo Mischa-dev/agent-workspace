@@ -344,7 +344,17 @@ async fn look_up(
         .into_iter()
         .collect();
     }
-    if !found.repositories.is_empty() {
+    // Repositories and pull requests are named only for those whose role
+    // (and an app's limit) lets them see code here.
+    let sees_code = !crate::search::projects_allowing(
+        pool,
+        viewer,
+        &[project_id],
+        crate::policy::Permission::CodeView,
+    )
+    .await?
+    .is_empty();
+    if sees_code && !found.repositories.is_empty() {
         lookups.repositories = sqlx::query_as::<_, (Uuid, String)>(
             "SELECT id, owner || '/' || name FROM repositories WHERE project_id = $1 AND id = ANY($2)",
         )
@@ -355,7 +365,7 @@ async fn look_up(
         .into_iter()
         .collect();
     }
-    if !found.pull_requests.is_empty() {
+    if sees_code && !found.pull_requests.is_empty() {
         lookups.pull_requests = sqlx::query_as::<_, (Uuid, i64, String)>(
             r#"
             SELECT id, pull_request_number, title FROM github_pull_requests

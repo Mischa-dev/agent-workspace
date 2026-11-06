@@ -5,7 +5,8 @@ use uuid::Uuid;
 
 use super::McpPrincipal;
 use crate::policy::{
-    Action, Decision, Membership, MembershipRole, ProjectScope, Resource, Subject, authorize,
+    Action, Decision, Membership, MembershipRole, ProjectScope, Resource, RoleGrant, Subject,
+    authorize,
 };
 
 const MAX_DESCRIPTION_CHARACTERS: usize = 20_000;
@@ -258,7 +259,7 @@ pub async fn work_item_get(
     principal: &McpPrincipal,
     identifier: &str,
 ) -> ReadResult<WorkItemProjection> {
-    if !authorize_read(&state.pool, principal).await {
+    if !authorize_read(&state.pool, principal, Action::WorkItemView).await {
         return ReadResult::denied();
     }
     let Some(work_item_id) =
@@ -266,11 +267,15 @@ pub async fn work_item_get(
     else {
         return ReadResult::not_found();
     };
+    // Linked repositories and pull requests only for those whose role (and an
+    // app's limit) lets them see code here; the task itself stays.
+    let sees_code = authorize_read(&state.pool, principal, Action::RepositoryView).await;
     match load_work_item(
         state,
         principal.project_id,
         work_item_id,
         principal.actor_id,
+        sees_code,
     )
     .await
     {
@@ -288,7 +293,7 @@ pub async fn repository_get(
     principal: &McpPrincipal,
     repository_id: &str,
 ) -> ReadResult<RepositoryProjection> {
-    if !authorize_read(&state.pool, principal).await {
+    if !authorize_read(&state.pool, principal, Action::RepositoryView).await {
         return ReadResult::denied();
     }
     let Ok(repository_id) = repository_id.parse::<Uuid>() else {
@@ -311,7 +316,7 @@ pub async fn pull_request_get(
     principal: &McpPrincipal,
     identifier: &str,
 ) -> ReadResult<PullRequestProjection> {
-    if !authorize_read(&state.pool, principal).await {
+    if !authorize_read(&state.pool, principal, Action::RepositoryView).await {
         return ReadResult::denied();
     }
     if identifier.is_empty() || identifier.len() > 2048 {
@@ -349,13 +354,15 @@ pub async fn pull_request_get(
     }
 }
 
-async fn authorize_read(pool: &sqlx::PgPool, principal: &McpPrincipal) -> bool {
+/// Whether the caller may read in their project, and do `action` there
+/// with the role they hold in it (custom roles and an app's limits included).
+async fn authorize_read(pool: &sqlx::PgPool, principal: &McpPrincipal, action: Action) -> bool {
     if !principal.can_read() {
         return false;
     }
-    let role = sqlx::query_scalar::<_, String>(
+    let role = sqlx::query_as::<_, (String, Option<Vec<String>>)>(
         r#"
-        SELECT pm.role
+        SELECT pm.role, workspace_role_permissions(pm.role_id)
         FROM project_memberships pm
         JOIN projects p ON p.id = pm.project_id
         JOIN organization_memberships om
@@ -377,23 +384,23 @@ async fn authorize_read(pool: &sqlx::PgPool, principal: &McpPrincipal) -> bool {
     .await
     .ok()
     .flatten();
-    let Some(role) = role.and_then(|role| parse_membership_role(&role)) else {
+    let Some(role) = role.and_then(|(role, permissions)| {
+        parse_membership_role(&role)?;
+        RoleGrant::stored(&role, permissions.as_deref()).ok()
+    }) else {
         return false;
     };
-    matches!(
-        authorize(
-            &Subject::new(
-                principal.actor_id,
-                principal.actor_kind,
-                true,
-                Some(Membership::project(principal.project_id, role, true)),
-                None,
-            ),
-            Action::McpRead,
-            Resource::Project(ProjectScope::project(principal.project_id)),
-        ),
-        Decision::Allow
-    )
+    let subject = Subject::new(
+        principal.actor_id,
+        principal.actor_kind,
+        true,
+        Some(Membership::project(principal.project_id, role, true)),
+        None,
+    );
+    let resource = Resource::Project(ProjectScope::project(principal.project_id));
+    [Action::McpRead, action]
+        .into_iter()
+        .all(|action| matches!(authorize(&subject, action, resource), Decision::Allow))
 }
 
 fn parse_membership_role(role: &str) -> Option<MembershipRole> {
@@ -468,6 +475,7 @@ async fn load_work_item(
     project_id: Uuid,
     work_item_id: Uuid,
     viewer: Uuid,
+    sees_code: bool,
 ) -> Result<Option<WorkItemProjection>, sqlx::Error> {
     let row = sqlx::query_as::<_, WorkItemRow>(WORK_ITEM_BY_ID_SELECT)
         .bind(project_id)
@@ -480,8 +488,20 @@ async fn load_work_item(
     let (labels, criteria, repositories, pull_requests) = tokio::try_join!(
         crate::work_item_labels::active_names(&state.pool, project_id, work_item_id),
         load_acceptance_criteria(&state.pool, project_id, work_item_id),
-        load_linked_repositories(&state.pool, project_id, work_item_id),
-        load_linked_pull_requests(&state.pool, project_id, work_item_id, viewer),
+        async {
+            if sees_code {
+                load_linked_repositories(&state.pool, project_id, work_item_id).await
+            } else {
+                Ok(Vec::new())
+            }
+        },
+        async {
+            if sees_code {
+                load_linked_pull_requests(&state.pool, project_id, work_item_id, viewer).await
+            } else {
+                Ok(Vec::new())
+            }
+        },
     )?;
     Ok(Some(work_item_projection(
         state,

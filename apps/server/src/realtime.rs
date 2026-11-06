@@ -22,8 +22,8 @@ use crate::{
     error::AppError,
     outbox::{self, OUTBOX_SCHEMA_VERSION, OutboxEnvelope, OutboxFailureKind, OutboxPublisher},
     policy::{
-        Action, ActorKind, Decision, Membership, MembershipRole, ProjectScope, Resource, Subject,
-        authorize,
+        Action, ActorKind, Decision, Membership, MembershipRole, ProjectScope, Resource, RoleGrant,
+        Subject, authorize,
     },
 };
 
@@ -540,9 +540,11 @@ fn realtime_policy_allows(
         actor_id,
         parse_actor_kind(actor_kind)?,
         true,
+        // Subscribing needs only "Open projects", which every role holds,
+        // custom ones included, so the built-in role decides it.
         Some(Membership::project(
             project_id,
-            parse_membership_role(role)?,
+            RoleGrant::built_in(parse_membership_role(role)?),
             membership_enabled,
         )),
         None,

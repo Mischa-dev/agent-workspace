@@ -549,7 +549,9 @@ async fn create_task(
         return Ok(WriteResult::invalid("clientRequestId", REQUEST_ID_MESSAGE));
     };
     let mut transaction = state.pool.begin().await?;
-    if let Some(result) = authorize_write(&mut transaction, principal).await? {
+    if let Some(result) =
+        authorize_write_for(&mut transaction, principal, Action::WorkItemCreate).await?
+    {
         return Ok(result);
     }
     let scope = match parent_id {
@@ -687,10 +689,16 @@ async fn create_task(
         }
         CreateWorkItemOutcome::ParentArchived(parent) => {
             let task = task_key(&mut transaction, principal.project_id, parent.number).await?;
+            let sees_tasks = crate::conversations::sees_tasks_in(
+                &mut *transaction,
+                principal.actor_id,
+                principal.project_id,
+            )
+            .await?;
             return Ok(WriteResult::Conflict {
                 work_item_id: parent.id.to_string(),
                 current_version: parent.version,
-                current: Some((&parent).into()),
+                current: sees_tasks.then(|| (&parent).into()),
                 changed_fields: vec!["archived".to_owned()],
                 retry_category: "do_not_retry".to_owned(),
                 message: Some(format!(
@@ -1231,10 +1239,16 @@ async fn post_update_inner(
     };
     if current.archived {
         let task = task_key(&mut transaction, principal.project_id, current.number).await?;
+        let sees_tasks = crate::conversations::sees_tasks_in(
+            &mut *transaction,
+            principal.actor_id,
+            principal.project_id,
+        )
+        .await?;
         return Ok(WriteResult::Conflict {
             work_item_id: work_item_id.to_string(),
             current_version: current.version,
-            current: Some((&current).into()),
+            current: sees_tasks.then(|| (&current).into()),
             changed_fields: vec!["archived".to_owned()],
             retry_category: "do_not_retry".to_owned(),
             message: Some(archived_task_message(&task)),
@@ -1356,6 +1370,7 @@ pub async fn link_pull_request(
             principal.project_id,
             &current,
             arguments.expected_version,
+            principal.actor_id,
         )
         .await?
         {
@@ -1598,6 +1613,7 @@ pub async fn mark_blocked(
             principal.project_id,
             &current,
             arguments.expected_version,
+            principal.actor_id,
         )
         .await?
         {
@@ -1700,6 +1716,7 @@ pub async fn mark_ready_for_review(
             principal.project_id,
             &current,
             arguments.expected_version,
+            principal.actor_id,
         )
         .await?
         {
@@ -1827,7 +1844,10 @@ async fn set_archived_inner(
         return Ok(WriteResult::invalid("clientRequestId", REQUEST_ID_MESSAGE));
     };
     let mut transaction = state.pool.begin().await?;
-    if let Some(result) = authorize_write(&mut transaction, principal).await? {
+    // Archiving takes "Archive tasks", not "Edit tasks".
+    if let Some(result) =
+        authorize_write_for(&mut transaction, principal, Action::WorkItemArchive).await?
+    {
         return Ok(result);
     }
     let scope = resource_bound_scope(
@@ -1942,6 +1962,7 @@ async fn set_archived_inner(
             principal.project_id,
             &current,
             arguments.expected_version,
+            principal.actor_id,
         )
         .await?
         .ok_or(AppError::Internal("archive returned an empty conflict"))?),
@@ -2066,7 +2087,16 @@ async fn authorize_write(
     transaction: &mut Transaction<'_, Postgres>,
     principal: &McpPrincipal,
 ) -> Result<Option<WriteResult>, AppError> {
-    Ok(match check_write_access(transaction, principal).await? {
+    authorize_write_for(transaction, principal, Action::McpWrite).await
+}
+
+/// `authorize_write` with the role checked for `action`.
+async fn authorize_write_for(
+    transaction: &mut Transaction<'_, Postgres>,
+    principal: &McpPrincipal,
+    action: Action,
+) -> Result<Option<WriteResult>, AppError> {
+    Ok(match check_access_for(transaction, principal, action).await? {
         WriteAccess::Allowed => None,
         WriteAccess::ReadOnly => Some(WriteResult::PermissionDenied {
             retry_category: "request_write_scope".to_owned(),
@@ -2109,15 +2139,19 @@ async fn conflict_for(
     project_id: Uuid,
     current: &LockedWorkItem,
     expected_version: i64,
+    viewer: Uuid,
 ) -> Result<Option<WriteResult>, AppError> {
     let Some(kind) = conflict_kind(current, expected_version) else {
         return Ok(None);
     };
     let task = task_key(transaction, project_id, current.number).await?;
+    // The task as it is now only for someone who may see tasks here.
+    let sees_tasks =
+        crate::conversations::sees_tasks_in(&mut **transaction, viewer, project_id).await?;
     Ok(Some(WriteResult::Conflict {
         work_item_id: current.id.to_string(),
         current_version: current.version,
-        current: Some(current.into()),
+        current: sees_tasks.then(|| current.into()),
         changed_fields: vec![match kind {
             ConflictKind::Version => "version".to_owned(),
             ConflictKind::Archived => "archived".to_owned(),
@@ -2218,6 +2252,7 @@ async fn finish_update_outcome(
             principal.project_id,
             &current,
             expected_version,
+            principal.actor_id,
         )
         .await?
         .ok_or(AppError::Internal("command returned an empty conflict"))?),

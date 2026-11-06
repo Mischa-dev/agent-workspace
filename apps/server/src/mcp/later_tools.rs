@@ -446,8 +446,15 @@ pub(super) async fn message_schedule(
         Ok(content) => content,
         Err(refused) => return refused,
     };
-    match scheduled_messages::schedule(state, &actor, conversation_id, content, &arguments.send_at)
-        .await
+    match scheduled_messages::schedule(
+        state,
+        &actor,
+        conversation_id,
+        content,
+        &arguments.send_at,
+        principal.actor_kind == ActorKind::Human,
+    )
+    .await
     {
         Ok(message) => ToolResult::ok(ScheduledValue {
             scheduled: scheduled_line(state, message),
@@ -538,6 +545,7 @@ pub(super) async fn scheduled_message_update(
                 id,
                 content,
                 arguments.send_at.as_deref(),
+                principal.actor_kind == ActorKind::Human,
             )
             .await
             {
