@@ -2303,6 +2303,18 @@ pub async fn drain(state: &AppState) -> Result<usize, AppError> {
             Some(limits) => crate::policy::with_agent_limits(limits, access).await,
             None => access.await,
         };
+        if access.is_err() {
+            cancel_from_queue(
+                state,
+                &launch,
+                &format!(
+                    "{} can no longer start runs in this project, so it was cancelled.",
+                    queued.actor_name
+                ),
+            )
+            .await?;
+            continue;
+        }
         // A task's launch writes the task into the run's prompt: whoever
         // queued it must still see tasks here, by role and app limit.
         let sees_tasks = if queued.work_item_id.is_some() {
@@ -2327,18 +2339,6 @@ pub async fn drain(state: &AppState) -> Result<usize, AppError> {
                 &launch,
                 &format!(
                     "{} can no longer see tasks in this project, so it was cancelled.",
-                    queued.actor_name
-                ),
-            )
-            .await?;
-            continue;
-        }
-        if access.is_err() {
-            cancel_from_queue(
-                state,
-                &launch,
-                &format!(
-                    "{} can no longer start runs in this project, so it was cancelled.",
                     queued.actor_name
                 ),
             )
