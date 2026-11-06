@@ -563,9 +563,12 @@ pub(crate) async fn comment_revisions(
     }))
 }
 
-/// The comment as the task's timeline shows it now.
+/// The comment as the task's timeline shows it now, to `viewer`: the tasks
+/// it references without their titles and statuses unless they may see
+/// tasks here (commenting takes only "edit tasks").
 async fn comment_view(
     pool: &PgPool,
+    viewer: Uuid,
     project_id: Uuid,
     work_item_id: Uuid,
     comment_id: Uuid,
@@ -573,10 +576,14 @@ async fn comment_view(
     let row = super::fetch_comment_timeline_row(pool, project_id, work_item_id, comment_id)
         .await?
         .ok_or(AppError::NotFound("comment"))?;
-    timeline_entry_view(pool, project_id, work_item_id, row)
+    let mut comment = timeline_entry_view(pool, project_id, work_item_id, row)
         .await?
         .comment
-        .ok_or(AppError::Internal("comment view"))
+        .ok_or(AppError::Internal("comment view"))?;
+    if !crate::conversations::sees_tasks_in(pool, viewer, project_id).await? {
+        super::hide_reference_details(&mut comment);
+    }
+    Ok(comment)
 }
 
 // ---------------------------------------------------------------------------
@@ -678,7 +685,14 @@ async fn edit_comment_http(
     .map_err(http_refusal)?;
     transaction.commit().await?;
     Ok(Json(EditCommentResponse {
-        comment: comment_view(&state.pool, project_id, work_item_id, comment_id).await?,
+        comment: comment_view(
+            &state.pool,
+            principal.actor_id,
+            project_id,
+            work_item_id,
+            comment_id,
+        )
+        .await?,
         changed: edit.changed,
     }))
 }
@@ -705,7 +719,14 @@ async fn remove_comment_http(
         .map_err(http_refusal)?;
     transaction.commit().await?;
     Ok(Json(RemoveCommentResponse {
-        comment: comment_view(&state.pool, project_id, work_item_id, comment_id).await?,
+        comment: comment_view(
+            &state.pool,
+            principal.actor_id,
+            project_id,
+            work_item_id,
+            comment_id,
+        )
+        .await?,
         already_removed,
     }))
 }
@@ -740,6 +761,15 @@ pub(crate) async fn is_comment_moderator(
     project_id: Uuid,
 ) -> Result<bool, AppError> {
     if actor_kind != ActorKind::Human {
+        return Ok(false);
+    }
+    // An app acting for them moderates only while its agent limit keeps
+    // "moderate channels" too.
+    if crate::policy::agent_limit_hides(
+        actor_id,
+        project_id,
+        crate::policy::Permission::ChannelsModerate,
+    ) {
         return Ok(false);
     }
     Ok(sqlx::query_scalar::<_, bool>(

@@ -199,6 +199,7 @@ pub enum Permission {
     CodeManage,
     AgentsManage,
     MembersView,
+    DirectoryView,
     MembersInvite,
     MembersManage,
     RolesManage,
@@ -285,7 +286,7 @@ const WORKERS: [bool; 4] = [true, true, true, false];
 const MANAGERS: [bool; 4] = [true, true, false, false];
 
 /// Every permission, in the order the Roles page shows them.
-pub const PERMISSIONS: [PermissionInfo; 26] = [
+pub const PERMISSIONS: [PermissionInfo; 27] = [
     required(permission(
         Permission::ProjectsView,
         "projects.view",
@@ -483,6 +484,19 @@ pub const PERMISSIONS: [PermissionInfo; 26] = [
         "See who's in a project and their roles.",
         PermissionScope::Both,
         MANAGERS,
+    ),
+    // Every built-in role holds it, so the workspace's member list stays as
+    // it was for them. A custom role holds it only when given it: without
+    // it, that list shows its holders only themselves. Projects' member
+    // lists follow "See the member list" (members.view) instead.
+    permission(
+        Permission::DirectoryView,
+        "directory.view",
+        "members",
+        "See the workspace member directory",
+        "See who's in the workspace on its Members page. Without it, only yourself.",
+        PermissionScope::Workspace,
+        ALL_ROLES,
     ),
     permission(
         Permission::MembersInvite,
@@ -748,10 +762,50 @@ pub async fn with_agent_limits<F: std::future::Future>(limits: AgentLimits, call
     AGENT_LIMITS.scope(limits, call).await
 }
 
+/// `with_agent_limits` when there are limits; otherwise just `call`. For
+/// deferred work a person's app set going, which carries the app's limits
+/// as they are when it runs.
+pub async fn within_agent_limits<F: std::future::Future>(
+    limits: Option<AgentLimits>,
+    call: F,
+) -> F::Output {
+    match limits {
+        Some(limits) => with_agent_limits(limits, call).await,
+        None => call.await,
+    }
+}
+
 /// The limit on `actor_id` in `scope` while a call acting for them runs.
 pub fn current_agent_limit(actor_id: Uuid, scope: MembershipScope) -> Option<PermissionSet> {
     AGENT_LIMITS
         .try_with(|limits| (limits.actor_id == actor_id).then(|| limits.for_scope(scope)))
+        .ok()
+        .flatten()
+}
+
+/// Whether an app acting for `actor_id` is kept from `permission` in
+/// `project_id` by its agent limit. False outside such a call.
+pub fn agent_limit_hides(actor_id: Uuid, project_id: Uuid, permission: Permission) -> bool {
+    current_agent_limit(actor_id, MembershipScope::Project(project_id))
+        .is_some_and(|limit| !limit.contains(permission))
+}
+
+/// While an app acts for `actor_id`: the projects its agent limit allows
+/// `permission` in (every other project allows nothing). None outside such
+/// a call, meaning no limit applies. For queries that can't filter rows in
+/// Rust, such as counts.
+pub fn agent_limit_projects_allowing(actor_id: Uuid, permission: Permission) -> Option<Vec<Uuid>> {
+    AGENT_LIMITS
+        .try_with(|limits| {
+            (limits.actor_id == actor_id).then(|| {
+                limits
+                    .projects
+                    .iter()
+                    .filter(|(_, allowed)| allowed.contains(permission))
+                    .map(|(project, _)| *project)
+                    .collect()
+            })
+        })
         .ok()
         .flatten()
 }
@@ -1175,8 +1229,8 @@ fn approval_eligibility_matches(
 mod tests {
     use super::{
         Action, ActorKind, ApprovalEligibility, ApprovalRequirements, Decision, DelegatedScope,
-        DenyReason, Membership, MembershipRole, PERMISSIONS, Permission, PermissionSet,
-        ProjectScope, Resource, RoleGrant, Subject, authorize,
+        DenyReason, Membership, MembershipRole, PERMISSIONS, Permission, PermissionScope,
+        PermissionSet, ProjectScope, Resource, RoleGrant, Subject, authorize,
     };
     use uuid::Uuid;
 
@@ -1942,6 +1996,22 @@ mod tests {
                     .any(|info| info.permission == action.permission())
             );
         }
+    }
+
+    #[test]
+    fn the_workspace_directory_is_its_own_workspace_permission() {
+        // Every built-in role keeps the workspace's member directory, which
+        // anyone in a workspace saw before; a role can still leave it out.
+        let directory = Permission::DirectoryView.info();
+        assert_eq!(directory.key, "directory.view");
+        assert_eq!(directory.scope, PermissionScope::Workspace);
+        assert_eq!(directory.built_in, [true; 4]);
+        assert!(!directory.required && !directory.people_only);
+        // Projects' member lists stay with "See the member list", which
+        // only owners and admins hold.
+        let members = Permission::MembersView.info();
+        assert_eq!(members.scope, PermissionScope::Both);
+        assert_eq!(members.built_in, [true, true, false, false]);
     }
 
     #[test]

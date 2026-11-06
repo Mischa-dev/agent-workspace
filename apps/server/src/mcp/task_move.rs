@@ -197,6 +197,19 @@ pub(super) async fn task_move(
                     "You can't change tasks in {what}."
                 )));
             }
+            // A move copies the task's description, criteria, comments and
+            // notes into the target: only for someone who sees tasks where it
+            // is now (their role, and an app's agent limit).
+            if project == source_project_id
+                && !matches!(
+                    authorize_mutation(actor, &membership, Action::WorkItemView, None)?,
+                    Decision::Allow
+                )
+            {
+                return Ok(ToolResult::denied(
+                    "You can't see tasks in this task's project, so you can't move them.",
+                ));
+            }
         }
 
         // Moving a task that was already moved returns where it went, so a
@@ -212,8 +225,22 @@ pub(super) async fn task_move(
             return Ok(ToolResult::not_found("That task"));
         };
         if archived {
-            let moved = already_moved(&mut transaction, state, principal, task_id).await?;
+            let mut moved = already_moved(&mut transaction, state, principal, task_id).await?;
             transaction.commit().await?;
+            // As on a fresh move: by key only without "see tasks" here.
+            if let Some(moved) = moved.as_mut()
+                && crate::search::projects_showing_tasks(
+                    &state.pool,
+                    principal.actor_id,
+                    &[source_project_id],
+                )
+                .await?
+                .is_empty()
+            {
+                for task in moved.iter_mut() {
+                    task.title = String::new();
+                }
+            }
             return Ok(match moved {
                 Some(moved) => ToolResult::ok(TaskMoveValue {
                     moved,
@@ -226,6 +253,14 @@ pub(super) async fn task_move(
             });
         }
 
+        let sees_code = !crate::search::projects_allowing(
+            &state.pool,
+            principal.actor_id,
+            &[source_project_id],
+            crate::policy::Permission::CodeView,
+        )
+        .await?
+        .is_empty();
         let tasks = sqlx::query_as::<_, SourceTask>(
             r#"
             WITH RECURSIVE tree AS (
@@ -449,7 +484,7 @@ pub(super) async fn task_move(
 
             carry_criteria(&mut transaction, principal, source_project_id, target_project_id, task.id, new_id)
                 .await?;
-            let links = links_left_behind(&mut transaction, source_project_id, task.id, principal.actor_id)
+            let links = links_left_behind(&mut transaction, source_project_id, task.id, principal.actor_id, sees_code)
                 .await?;
             let mut provenance = format!(
                 "Moved from {} by {}. The original is archived with its full history.",
@@ -578,6 +613,16 @@ pub(super) async fn task_move(
             });
         }
         transaction.commit().await?;
+        // Moving takes archive and create, not "see tasks": without it, the
+        // result names the tasks by key only.
+        if crate::search::projects_showing_tasks(&state.pool, principal.actor_id, &[source_project_id])
+            .await?
+            .is_empty()
+        {
+            for task in &mut moved {
+                task.title = String::new();
+            }
+        }
         Ok::<_, AppError>(ToolResult::ok(TaskMoveValue {
             moved,
             notes,
@@ -732,6 +777,9 @@ async fn links_left_behind(
     project_id: Uuid,
     work_item_id: Uuid,
     viewer: Uuid,
+    // Repositories and pull requests are named only for a mover who sees
+    // code in the source project (role, and an app's agent limit).
+    sees_code: bool,
 ) -> Result<Vec<LinkLine>, AppError> {
     Ok(sqlx::query_as::<_, LinkLine>(
         r#"
@@ -746,7 +794,7 @@ async fn links_left_behind(
         SELECT 'Repository', repository.owner || '/' || repository.name, TRUE
         FROM work_item_repository_links link
         JOIN repositories repository ON repository.id = link.repository_id
-        WHERE link.project_id = $1 AND link.work_item_id = $2
+        WHERE link.project_id = $1 AND link.work_item_id = $2 AND $4
         UNION ALL
         -- Same rule as pull_request_visible_to, for a reader who belongs to
         -- no private conversation: no run_artifact link, or one whose
@@ -766,12 +814,13 @@ async fn links_left_behind(
         FROM github_pull_request_work_item_links link
         JOIN github_pull_requests pull_request ON pull_request.id = link.github_pull_request_id
         WHERE link.project_id = $1 AND link.work_item_id = $2
-          AND pull_request_visible_to(pull_request.id, $3)
+          AND pull_request_visible_to(pull_request.id, $3) AND $4
         "#,
     )
     .bind(project_id)
     .bind(work_item_id)
     .bind(viewer)
+    .bind(sees_code)
     .fetch_all(&mut **transaction)
     .await?)
 }
@@ -919,13 +968,24 @@ async fn already_moved(
     if rows.is_empty() {
         return Ok(None);
     }
+    // Each title is the task's current one, where it is now; it is shown
+    // only with "see tasks" in that project, as task_open would.
+    let mut projects = rows.iter().map(|row| row.3).collect::<Vec<_>>();
+    projects.sort_unstable();
+    projects.dedup();
+    let showing =
+        crate::search::projects_showing_tasks(&state.pool, principal.actor_id, &projects).await?;
     Ok(Some(
         rows.into_iter()
             .map(|(from, to, id, project_id, title)| MovedTask {
                 from,
                 to,
                 id: id.to_string(),
-                title,
+                title: if showing.contains(&project_id) {
+                    title
+                } else {
+                    String::new()
+                },
                 url: public_url(state, &format!("/projects/{project_id}/work-items/{id}")),
             })
             .collect(),

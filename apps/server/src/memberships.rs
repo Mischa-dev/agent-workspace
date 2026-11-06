@@ -293,7 +293,13 @@ pub(crate) async fn change_member(
     };
     let next_role = next_role.as_str();
     authorize_target(&access, &target, next_role)?;
-    if next_role != target.role || next_role_id != target.role_id {
+    let next_enabled = enabled.unwrap_or(target.enabled);
+    // Bringing someone back hands their role out again, so it has to be
+    // within what the caller holds, as a role change is.
+    if next_role != target.role
+        || next_role_id != target.role_id
+        || (next_enabled && !target.enabled)
+    {
         require_grantable(
             transaction,
             caller_actor_id,
@@ -312,7 +318,6 @@ pub(crate) async fn change_member(
         });
     }
 
-    let next_enabled = enabled.unwrap_or(target.enabled);
     if target.role == "owner" && (next_role != "owner" || !next_enabled) {
         lock_and_require_other_owners(transaction, target.organization_id, project_id, actor_id)
             .await?;
@@ -402,8 +407,10 @@ pub(crate) async fn change_member(
 }
 
 /// Refuses a project role that would give someone a permission the caller
-/// doesn't hold themselves in the workspace (a narrowed admin can't hand out
-/// a plain Member, say).
+/// doesn't hold themselves: in the workspace (a narrowed admin can't hand
+/// out a plain Member, say), and in this project, where the role is used (a
+/// project role narrowed below the workspace one can't be won back by
+/// giving more to someone else, such as an agent of theirs).
 pub(crate) async fn require_grantable(
     transaction: &mut Transaction<'_, Postgres>,
     caller_actor_id: Uuid,
@@ -422,6 +429,12 @@ pub(crate) async fn require_grantable(
     let grant = crate::policy::RoleGrant::stored(role, permissions.as_deref())?;
     let caller = crate::roles::standing(transaction, organization_id, caller_actor_id).await?;
     if !grant.permissions().is_subset_of(caller.permissions) {
+        return Err(AppError::Forbidden);
+    }
+    let held = crate::roles::project_holding(transaction, caller_actor_id, project_id)
+        .await?
+        .ok_or(AppError::Forbidden)?;
+    if !crate::roles::project_checked(grant.permissions()).is_subset_of(held) {
         return Err(AppError::Forbidden);
     }
     Ok(())
@@ -746,8 +759,9 @@ async fn lock_and_require_other_owners(
 /// in the Organization is one, and someone who is neither anywhere is not.
 /// Owners are never changed here, nor a role an owner set on the
 /// workspace's Members page (`role_explicit`), nor a custom workspace role.
-/// A custom project role based on Admin counts only if it keeps "manage
-/// members": a narrowed one mustn't widen into the full workspace Admin.
+/// Only the built-in project Owner and Admin roles count: a custom role
+/// based on Admin is narrower than workspace Admin, so it never widens into
+/// it.
 async fn sync_organization_role(
     transaction: &mut Transaction<'_, Postgres>,
     organization_id: Uuid,
@@ -762,7 +776,9 @@ async fn sync_organization_role(
                 WHERE project.organization_id = $1 AND project.archived_at IS NULL
                   AND membership.actor_id = $2 AND membership.enabled
                   AND membership.role IN ('owner', 'admin')
-                  AND custom_role_allows(membership.role_id, 'members.manage')
+                  -- Only the built-in roles: a custom Admin-based role grants
+                  -- less than workspace Admin, so it never widens into it.
+                  AND membership.role_id IS NULL
             ) THEN 'admin' ELSE 'member' END AS role
         )
         UPDATE organization_memberships

@@ -1712,3 +1712,322 @@ async fn prompt_redaction_migration_backfills_edited_messages_and_retry_chains()
         assert!(matches!(state.as_str(), "failed" | "canceled"), "{state}");
     }
 }
+
+/// A run's linked pull request (title, link, number, state, checks) comes
+/// with it only for a caller whose role, or app limit, keeps "see code" in
+/// the run's project; the run itself stays (AWD-74).
+#[tokio::test]
+async fn a_runs_pull_request_needs_see_code() {
+    let Some((setup, seed, _temporary)) = seeded("mcp_code_run_pr").await else {
+        return;
+    };
+    let app = &setup.app;
+    let pool = &setup.pool;
+    let aw = seed.project_id.to_string();
+    let thread = thread(pool, &seed, seed.channel_id, "Offline work").await;
+    // A run needs its repository prepared and available, as the other run
+    // tests here set up.
+    execute(
+        pool,
+        "UPDATE repositories SET preparation_state = 'ready', prepared_at = now(), trusted = true WHERE id = $1",
+        &[seed.repository_id],
+    )
+    .await;
+    let (run_id, workspace) = run(pool, &seed, thread, "feature").await;
+    let (pull_request, _) = seed_pull_request(&setup, &aw, seed.repository_id, 41).await;
+    sqlx::query(
+        r#"
+        INSERT INTO github_pull_request_requests (
+            id, project_id, github_installation_id, repository_id, repository_workspace_id,
+            agent_run_id, requesting_actor_id, head_ref, head_sha, base_ref, title, body,
+            state, completed_at, github_pull_request_id
+        )
+        SELECT $1, pr.project_id, pr.github_installation_id, pr.repository_id, $2, $3, $4,
+               pr.head_ref, pr.head_sha, pr.base_ref, pr.title, '', 'completed', now(), pr.id
+        FROM github_pull_requests pr WHERE pr.id = $5
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(workspace)
+    .bind(run_id)
+    .bind(seed.human_actor_id)
+    .bind(pull_request)
+    .execute(pool)
+    .await
+    .expect("the run opened the pull request");
+    let owner_app = connect_app(app, &setup.browser, "Owner's app", "full").await;
+    let session = initialize(app, &owner_app).await.expect("owner's app");
+    let get = json!({"runId": run_id});
+
+    let opened = tool(app, &owner_app, &session, "run_get", get.clone()).await;
+    assert_eq!(opened["outcome"], "ok", "{opened}");
+    assert!(opened.to_string().contains("Offline mode"), "{opened}");
+
+    // The owner's apps no longer see code: the run, without its pull request.
+    sqlx::query(
+        "UPDATE organization_memberships SET agent_limit = ARRAY['tasks.view', 'runs.launch'] WHERE actor_id = $1",
+    )
+    .bind(seed.human_actor_id)
+    .execute(pool)
+    .await
+    .expect("the owner's apps no longer see code");
+    let opened = tool(app, &owner_app, &session, "run_get", get).await;
+    assert_eq!(opened["outcome"], "ok", "{opened}");
+    assert!(opened["value"]["id"].is_string(), "{opened}");
+    assert!(!opened.to_string().contains("Offline mode"), "{opened}");
+    let listed = tool(
+        app,
+        &owner_app,
+        &session,
+        "run_list",
+        json!({"projectId": aw, "state": "all"}),
+    )
+    .await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    assert!(!listed.to_string().contains("Offline mode"), "{listed}");
+}
+
+/// A run's page (run_steps, and the browser's run list and page, which
+/// share it) names its task only for a caller who sees tasks in the run's
+/// project, and its branch, commits, changed files and diff only for one who
+/// sees code; the run itself stays (AWD-74).
+#[tokio::test]
+async fn a_runs_task_and_code_follow_see_tasks_and_see_code() {
+    let Some((setup, seed, _temporary)) = seeded("mcp_code_run_task").await else {
+        return;
+    };
+    let app = &setup.app;
+    let pool = &setup.pool;
+    let thread = thread(pool, &seed, seed.channel_id, "Task work").await;
+    execute(
+        pool,
+        "UPDATE repositories SET preparation_state = 'ready', prepared_at = now(), trusted = true WHERE id = $1",
+        &[seed.repository_id],
+    )
+    .await;
+    let (run_id, _) = run(pool, &seed, thread, "secret-branch").await;
+    let owner_app = connect_app(app, &setup.browser, "Owner's app", "full").await;
+    let session = initialize(app, &owner_app).await.expect("owner's app");
+    let created = tool(
+        app,
+        &owner_app,
+        &session,
+        "task_create",
+        json!({"projectId": seed.project_id.to_string(), "title": "Secret run task"}),
+    )
+    .await;
+    let task = created["workItemId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("task: {created}"))
+        .parse::<Uuid>()
+        .expect("task id");
+    sqlx::query(
+        r#"
+        INSERT INTO work_item_conversation_links
+            (project_id, work_item_id, conversation_id, created_by_actor_id)
+        VALUES ($1, $2, $3, $4)
+        "#,
+    )
+    .bind(seed.project_id)
+    .bind(task)
+    .bind(thread)
+    .bind(seed.human_actor_id)
+    .execute(pool)
+    .await
+    .expect("the task's thread");
+    let steps = json!({"runId": run_id, "includeDiff": true});
+
+    let seen = tool(app, &owner_app, &session, "run_steps", steps.clone()).await;
+    assert_eq!(seen["outcome"], "ok", "{seen}");
+    assert_eq!(
+        seen["value"]["run"]["taskTitle"], "Secret run task",
+        "{seen}"
+    );
+    assert_eq!(seen["value"]["run"]["branch"], "secret-branch", "{seen}");
+
+    // The owner's apps see neither tasks nor code now.
+    sqlx::query(
+        "UPDATE organization_memberships SET agent_limit = ARRAY['runs.launch'] WHERE actor_id = $1",
+    )
+    .bind(seed.human_actor_id)
+    .execute(pool)
+    .await
+    .expect("the owner's apps see neither");
+    let limited = tool(app, &owner_app, &session, "run_steps", steps).await;
+    assert_eq!(limited["outcome"], "ok", "{limited}");
+    let run = &limited["value"]["run"];
+    assert_eq!(run["id"], run_id.to_string(), "{limited}");
+    assert!(run["taskKey"].is_string(), "{limited}");
+    assert!(run["taskTitle"].is_null(), "{limited}");
+    assert!(run["branch"].is_null(), "{limited}");
+    assert!(run["files"].is_null(), "{limited}");
+    assert_eq!(
+        limited["value"]["diff"]["state"], "unavailable",
+        "{limited}"
+    );
+    assert!(
+        !limited.to_string().contains("Secret run task"),
+        "{limited}"
+    );
+    assert!(!limited.to_string().contains("secret-branch"), "{limited}");
+    // run_get and run_list leave out the branch too, with no pull request.
+    let opened = tool(
+        app,
+        &owner_app,
+        &session,
+        "run_get",
+        json!({"runId": run_id}),
+    )
+    .await;
+    assert_eq!(opened["outcome"], "ok", "{opened}");
+    assert!(opened["value"]["branch"].is_null(), "{opened}");
+    assert!(!opened.to_string().contains("secret-branch"), "{opened}");
+    let listed = tool(
+        app,
+        &owner_app,
+        &session,
+        "run_list",
+        json!({"projectId": seed.project_id.to_string(), "state": "all"}),
+    )
+    .await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    assert!(!listed.to_string().contains("secret-branch"), "{listed}");
+}
+
+/// A thread's run (opening the thread, and the run an interrupt answers
+/// with, which share conversations::hide_pull_request) shows its branch and
+/// its base and published commits only to someone who sees code in the
+/// project, with no pull request involved; the run itself stays (AWD-74).
+#[tokio::test]
+async fn a_threads_run_shows_its_branch_only_to_those_who_see_code() {
+    let Some((setup, seed, _temporary)) = seeded("mcp_code_thread_run").await else {
+        return;
+    };
+    let app = &setup.app;
+    let pool = &setup.pool;
+    let aw = seed.project_id.to_string();
+    let thread = thread(pool, &seed, seed.channel_id, "Branch work").await;
+    execute(
+        pool,
+        "UPDATE repositories SET preparation_state = 'ready', prepared_at = now(), trusted = true WHERE id = $1",
+        &[seed.repository_id],
+    )
+    .await;
+    let (run_id, workspace) = run(pool, &seed, thread, "hidden-branch").await;
+    // Working, so that an interrupt stops it.
+    for next in ["starting", "working"] {
+        sqlx::query("UPDATE agent_runs SET state = $2 WHERE id = $1")
+            .bind(run_id)
+            .bind(next)
+            .execute(pool)
+            .await
+            .unwrap_or_else(|error| panic!("run to {next}: {error}"));
+    }
+    let base = "b".repeat(40);
+    let published = "c".repeat(40);
+    // Published as the workspace's publication shape wants: commit, time and
+    // who, together.
+    sqlx::query(
+        "UPDATE repository_workspaces SET published_commit = $2, published_at = now(), published_by_actor_id = $3 WHERE id = $1",
+    )
+    .bind(workspace)
+    .bind(&published)
+    .bind(seed.human_actor_id)
+    .execute(pool)
+    .await
+    .expect("published commit");
+    let (bea, bea_browser) = add_person(&setup, &[&aw], "bea").await;
+    let timeline = format!("/api/v1/conversations/{thread}/timeline");
+    let open = |browser: &Browser| browser.request("GET", &timeline, None, Value::Null);
+    let interrupt = |browser: &Browser, key: &str| {
+        browser.request(
+            "POST",
+            &format!("/api/v1/agent-runs/{run_id}/interrupt"),
+            Some(key),
+            Value::Null,
+        )
+    };
+    let shows_code = |body: &Value| {
+        let text = body.to_string();
+        (
+            text.contains("hidden-branch"),
+            text.contains(&base),
+            text.contains(&published),
+        )
+    };
+
+    // As a plain Member, Bea sees the run's branch and commits.
+    let (status, seen) = send(app, open(&bea_browser)).await;
+    assert_eq!(status, StatusCode::OK, "{seen}");
+    assert!(seen.to_string().contains(&run_id.to_string()), "{seen}");
+    assert_eq!(shows_code(&seen), (true, true, true), "{seen}");
+
+    // A role that may stop runs but not see code.
+    let (status, role) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/organizations/{}/roles", setup.organization_id),
+            None,
+            json!({"name": "No code", "baseRole": "member", "permissions": ["tasks.view", "channels.post", "runs.interrupt"]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{role}");
+    let version: i64 = sqlx::query_scalar(
+        "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.project_id)
+    .bind(bea)
+    .fetch_one(pool)
+    .await
+    .expect("membership version");
+    let (status, changed) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            &format!("/api/v1/projects/{aw}/members/{bea}"),
+            Some("bea-no-code"),
+            json!({"roleId": role["id"], "expectedVersion": version}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+
+    // The thread's active run, the run her interrupt answers with, and the
+    // thread's latest finished run: no branch or commits.
+    let (status, active) = send(app, open(&bea_browser)).await;
+    assert_eq!(status, StatusCode::OK, "{active}");
+    assert!(active.to_string().contains(&run_id.to_string()), "{active}");
+    assert_eq!(shows_code(&active), (false, false, false), "{active}");
+    let (status, stopped) = send(app, interrupt(&bea_browser, "bea-interrupt")).await;
+    assert_eq!(status, StatusCode::OK, "{stopped}");
+    assert!(
+        stopped.to_string().contains(&run_id.to_string()),
+        "{stopped}"
+    );
+    assert_eq!(shows_code(&stopped), (false, false, false), "{stopped}");
+    let (status, finished) = send(app, open(&bea_browser)).await;
+    assert_eq!(status, StatusCode::OK, "{finished}");
+    assert!(
+        finished.to_string().contains(&run_id.to_string()),
+        "{finished}"
+    );
+    assert_eq!(shows_code(&finished), (false, false, false), "{finished}");
+
+    // The owner sees code: the same answers carry the branch and commits.
+    let (status, owner_stopped) = send(app, interrupt(&setup.browser, "owner-interrupt")).await;
+    assert_eq!(status, StatusCode::OK, "{owner_stopped}");
+    assert_eq!(
+        shows_code(&owner_stopped),
+        (true, true, true),
+        "{owner_stopped}"
+    );
+    let (status, owner_finished) = send(app, open(&setup.browser)).await;
+    assert_eq!(status, StatusCode::OK, "{owner_finished}");
+    assert_eq!(
+        shows_code(&owner_finished),
+        (true, true, true),
+        "{owner_finished}"
+    );
+}

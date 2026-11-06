@@ -2,6 +2,15 @@
 
 October 16, 2026. For Mischa, and for the agents that will build it.
 
+> **Where it's going now (November 4, 2026).** W0 to W14 have all merged,
+> and W16 to W23 and the AWD tasks came after them (see
+> [After W14](#after-w14-w16-to-w23-and-the-awd-work)). The current direction
+> lives in the app's AWD project, on two pages: **"Plan: the build-out
+> phase (scope creep on purpose)"**, which is what's being built now, and
+> **"Path to public"**, the polish for release that comes after it. New work
+> is an AWD task, not a workstream here. This file stays the reference for
+> the items below and for how an agent runs a piece of work.
+
 This is the plan to take Agent Workspace from what it is today to the
 platform you want: a polished workspace that holds a whole project, where
 agents of any make do the work in the right place, and where your own
@@ -181,10 +190,10 @@ waiting for the rest of its wave, and every workstream merges after W0.
 
 | Wave | Workstreams, run at once | What you get |
 |---|---|---|
-| 0 | [W0](#w0-runway) Runway | Green CI on the Red Hat runner, cloud sessions that can run every test, and pull requests that don't collide. Small; starts with wave 1 and merges first. |
-| 1 | [W1](#w1-backbone) Backbone, [W2](#w2-harness-platform) Harness platform, [W3](#w3-tasks) Tasks, [W4](#w4-app-shell-and-polish) App shell and polish, [W5](#w5-agents-in-conversations) Agents in conversations, [W6](#w6-notifications) Notifications | The plumbing (jobs, secrets, settings, the harness adapter), task views that hold a whole project, Cmd+K and instant changes, tag-an-agent finished, and an inbox. |
-| 2 | [W7](#w7-launch) Launch, [W8](#w8-settings-and-accounts) Settings and accounts, [W9](#w9-capacity-and-push) Capacity and push, [W10](#w10-ai-planning) AI planning, [W11](#w11-views-and-data) Views and data | Launch to Codex Cloud with your defaults, reset alerts on your phone, one settings area, AI dependency suggestions, saved views and import. Usable day to day from here. |
-| 3 | [W12](#w12-your-harnesses) Your harnesses, [W13](#w13-payoff-and-finish) Payoff and finish, [W14](#w14-automations-and-api) Automations and API | Claude Code and your own harnesses, run pages with logs and cost, one tap to use capacity before a reset, Home and onboarding, the API and automations. |
+| 0 | [W0](#w0-runway-135-139) Runway | Green CI on the Red Hat runner, cloud sessions that can run every test, and pull requests that don't collide. Small; starts with wave 1 and merges first. |
+| 1 | [W1](#w1-backbone-137) Backbone, [W2](#w2-harness-platform-138) Harness platform, [W3](#w3-tasks-136) Tasks, [W4](#w4-app-shell-and-polish-133) App shell and polish, [W5](#w5-agents-in-conversations-132) Agents in conversations, [W6](#w6-notifications-134) Notifications | The plumbing (jobs, secrets, settings, the harness adapter), task views that hold a whole project, Cmd+K and instant changes, tag-an-agent finished, and an inbox. |
+| 2 | [W7](#w7-launch-144) Launch, [W8](#w8-settings-and-accounts-141) Settings and accounts, [W9](#w9-capacity-and-push-147) Capacity and push, [W10](#w10-ai-planning-145) AI planning, [W11](#w11-views-and-data-143) Views and data | Launch to Codex Cloud with your defaults, reset alerts on your phone, one settings area, AI dependency suggestions, saved views and import. Usable day to day from here. |
+| 3 | [W12](#w12-your-harnesses-150) Your harnesses, [W13](#w13-payoff-and-finish-149) Payoff and finish, [W14](#w14-automations-and-api-148) Automations and API | Claude Code and your own harnesses, run pages with logs and cost, one tap to use capacity before a reset, Home and onboarding, the API and automations. |
 | Later | [W15](#w15-open-up) Open up | Self-hosting, the open-source release and the SaaS, when you decide. |
 
 Each workstream below lists its checklist (the items are described in
@@ -193,7 +202,7 @@ collide, its seams with other workstreams, and when it's done.
 
 ### Wave 0: Runway
 
-#### W0. Runway
+#### W0. Runway (#135, #139)
 
 *5 items · Starts now, alongside wave 1*
 
@@ -201,8 +210,8 @@ Clear the way for many agents at once: the older pull requests settled, main
 green on the Red Hat runner, cloud sessions that can test, and changes that
 don't collide.
 
-- [ ] [F1](#f1-land-or-close-the-open-pull-requests) Land or close the open pull requests
-- [ ] [F2](#f2-make-main-ci-green-and-keep-it-green) Make main CI green and keep it green
+- [x] [F1](#f1-land-or-close-the-open-pull-requests) Land or close the open pull requests
+- [x] [F2](#f2-make-main-ci-green-and-keep-it-green) Make main CI green and keep it green
 - [x] [F3](#f3-cloud-sessions-can-build-and-test) Cloud sessions can build and test
 - [x] [F4](#f4-changes-that-dont-collide) Changes that don't collide
 - [x] [F10](#f10-docs-that-match-the-code) Docs that match the code
@@ -227,7 +236,7 @@ order.
 
 ### Wave 1: Foundations and the first things you'll notice
 
-#### W1. Backbone
+#### W1. Backbone (#137)
 
 *7 items · Starts now · 3 add a migration*
 
@@ -265,20 +274,20 @@ survives a restart and its retries reuse one idempotency key; a restore drill
 works from the off-host copy; and the isolation suite covers every existing
 list, search and MCP read tool.
 
-#### W2. Harness platform
+#### W2. Harness platform (#138)
 
 *7 items · Starts now · 5 add a migration*
 
 Codex becomes one adapter among many, runs carry a model, reasoning level and
 speed, and provider accounts belong to people instead of projects.
 
-- [ ] [F8](#f8-free-codex-supervisor-slots) Free Codex supervisor slots
-- [ ] [H1](#h1-open-the-schema-to-any-provider) Open the schema to any provider
-- [ ] [H2](#h2-the-harness-adapter-interface) The harness adapter interface
-- [ ] [S6](#s6-provider-accounts-belong-to-you) Provider accounts belong to you
-- [ ] [H3](#h3-capabilities-and-the-model-catalog) Capabilities and the model catalog
-- [ ] [H4](#h4-run-settings-model-reasoning-speed) Run settings: model, reasoning, speed
-- [ ] [H8](#h8-several-runs-at-once) Several runs at once
+- [x] [F8](#f8-free-codex-supervisor-slots) Free Codex supervisor slots
+- [x] [H1](#h1-open-the-schema-to-any-provider) Open the schema to any provider
+- [x] [H2](#h2-the-harness-adapter-interface) The harness adapter interface
+- [x] [S6](#s6-provider-accounts-belong-to-you) Provider accounts belong to you
+- [x] [H3](#h3-capabilities-and-the-model-catalog) Capabilities and the model catalog
+- [x] [H4](#h4-run-settings-model-reasoning-speed) Run settings: model, reasoning, speed
+- [x] [H8](#h8-several-runs-at-once) Several runs at once
 
 **Owns:** `provider.rs` and `provider/`, `scheduler.rs`, `execution.rs`,
 `execution_setup.rs`, `profile_runtime.rs`, `recovery.rs`, `runs.rs`,
@@ -297,7 +306,7 @@ with a model, reasoning level and speed shows them on its card and Codex
 received them; one Codex sign-in works in every project; two runs go at once
 on one account; and the demo adapter passes the same contract tests as Codex.
 
-#### W3. Tasks
+#### W3. Tasks (#136)
 
 *13 items · Starts now · 3 add a migration*
 
@@ -305,19 +314,19 @@ A whole project fits in the task list: the planning model complete on the web
 and MCP, fast at 10,000 tasks, and a list, board, task panel and milestones
 page that make it easy to work through.
 
-- [ ] [T1](#t1-web-api-for-planning) Web API for planning
-- [ ] [T2](#t2-dependencies-and-milestones-everywhere) Dependencies and milestones everywhere
-- [ ] [T3](#t3-more-kinds-of-links-between-tasks) More kinds of links between tasks
-- [ ] [T4](#t4-your-own-workflow) Your own workflow
-- [ ] [T5](#t5-dates-estimates-and-watchers) Dates, estimates and watchers
-- [ ] [T6](#t6-fast-at-10000-tasks) Fast at 10,000 tasks
-- [ ] [T7](#t7-bulk-edits-from-the-web) Bulk edits from the web
-- [ ] [T8](#t8-before-and-after-in-history) Before and after in history
-- [ ] [V1](#v1-list-view) List view
-- [ ] [V2](#v2-keyboard-and-inline-editing) Keyboard and inline editing
-- [ ] [V3](#v3-task-panel-and-detail-page) Task panel and detail page
-- [ ] [V4](#v4-board) Board
-- [ ] [V9](#v9-milestones-page) Milestones page
+- [x] [T1](#t1-web-api-for-planning) Web API for planning
+- [x] [T2](#t2-dependencies-and-milestones-everywhere) Dependencies and milestones everywhere
+- [x] [T3](#t3-more-kinds-of-links-between-tasks) More kinds of links between tasks
+- [x] [T4](#t4-your-own-workflow) Your own workflow
+- [x] [T5](#t5-dates-estimates-and-watchers) Dates, estimates and watchers
+- [x] [T6](#t6-fast-at-10000-tasks) Fast at 10,000 tasks
+- [x] [T7](#t7-bulk-edits-from-the-web) Bulk edits from the web
+- [x] [T8](#t8-before-and-after-in-history) Before and after in history
+- [x] [V1](#v1-list-view) List view
+- [x] [V2](#v2-keyboard-and-inline-editing) Keyboard and inline editing
+- [x] [V3](#v3-task-panel-and-detail-page) Task panel and detail page
+- [x] [V4](#v4-board) Board
+- [x] [V9](#v9-milestones-page) Milestones page
 
 **Owns:** `work_items.rs`, `work_item_commands.rs`, `work_item_labels.rs`, the
 task tools in `mcp/` (planning, labels, tasks, task batches, moves, workflow,
@@ -340,7 +349,7 @@ answer in under 200 ms; workflow, dates, dependencies, milestones, labels and
 bulk edits work from both the web and MCP; and 20 tasks can be triaged from
 the keyboard.
 
-#### W4. App shell and polish
+#### W4. App shell and polish (#133)
 
 *9 items · Starts now*
 
@@ -348,15 +357,20 @@ The app feels like a product: Cmd+K to go anywhere, instant changes with undo
 and clear errors, Markdown, threads beside channels, live updates that patch
 in place, and smoke tests in a real browser.
 
-- [ ] [F5](#f5-web-groundwork) Web groundwork
-- [ ] [F6](#f6-ui-kit-additions) UI kit additions
-- [ ] [F7](#f7-live-updates-that-patch-instead-of-refetch) Live updates that patch instead of refetch
-- [ ] [P1](#p1-command-palette-and-shortcuts) Command palette and shortcuts
-- [ ] [P2](#p2-instant-changes-undo-and-clear-errors) Instant changes, undo and clear errors
-- [ ] [P4](#p4-markdown) Markdown
-- [ ] [P6](#p6-threads-beside-the-channel) Threads beside the channel
+- [x] [F5](#f5-web-groundwork) Web groundwork
+- [x] [F6](#f6-ui-kit-additions) UI kit additions
+- [x] [F7](#f7-live-updates-that-patch-instead-of-refetch) Live updates that patch instead of refetch
+- [x] [P1](#p1-command-palette-and-shortcuts) Command palette and shortcuts
+- [x] [P2](#p2-instant-changes-undo-and-clear-errors) Instant changes, undo and clear errors
+- [x] [P4](#p4-markdown) Markdown
+- [x] [P6](#p6-threads-beside-the-channel) Threads beside the channel
 - [ ] [P8](#p8-smoke-tests-in-a-real-browser) Smoke tests in a real browser
 - [ ] [N5](#n5-toasts-titles-and-badges) Toasts, titles and badges
+
+P8 and N5 are only partly there (checked November 4, 2026). The browser
+smoke tests run in CI and cover sign-in and the task board, but not the demo
+run or the inbox. The title, favicon and app badge show unread counts, but
+there's no background toast when a run finishes.
 
 **Owns:** `apps/web/src/ui/` apart from V1's pickers, and `app/`, `shell/`,
 `realtime/`, `styles/`, `theme/`, `conversations/`, `threads/` and
@@ -376,7 +390,7 @@ reload, and archive can be undone; descriptions, pages and comments render
 Markdown; channel threads open beside the channel; a change in one tab shows
 in another without a refetch; and CI runs the browser smoke tests.
 
-#### W5. Agents in conversations
+#### W5. Agents in conversations (#132)
 
 *6 items · Starts now · 2 add a migration*
 
@@ -409,15 +423,15 @@ told, and adding a runner is one form.
 stops when someone presses Stop; and adding a runner is one form on the Agents
 page.
 
-#### W6. Notifications
+#### W6. Notifications (#134)
 
 *2 items · Starts now · 1 adds a migration*
 
 People hear about what matters: mentions, assignments, approvals and run
 results land in an inbox with a badge.
 
-- [ ] [N1](#n1-notifications-for-people) Notifications for people
-- [ ] [N2](#n2-inbox) Inbox
+- [x] [N1](#n1-notifications-for-people) Notifications for people
+- [x] [N2](#n2-inbox) Inbox
 
 **Owns:** A new notifications module and table, the fan-out from outbox
 events, any event payloads in `outbox.rs` it needs for approvals, pull request
@@ -443,7 +457,7 @@ clear from the keyboard.
 
 ### Wave 2: Launch, capacity and AI planning
 
-#### W7. Launch
+#### W7. Launch (#144)
 
 *7 items · Starts when W1, W2 and W5 have merged · 3 add a migration · Built in #144*
 
@@ -712,6 +726,41 @@ the open-source release first, then the SaaS.
 `docker compose up` and use it, and a hosted workspace can sign up, pay and
 run agents in containers.
 
+### After W14: W16 to W23 and the AWD work
+
+These came after the plan above was written. They aren't broken into items
+here; each pull request says what it did.
+
+| Workstream | What it added | PR |
+|---|---|---|
+| W16 | Whiteboards that people and agents draw on together (`docs/plans/whiteboards.md`) | #153 |
+| W17 | Backlog fixes from the workspace (AWD-1, 3, 13, 14, 16) | #151 |
+| W18 | Phone first: act from notifications, share in, quick add, drafts that survive | #156 |
+| W19 | Running it yourself: email, password reset by email, a Server page | #157 |
+| W20 | Files and rich messages | #162 |
+| W21 | Save for later, reminders, scheduled send, forwarding, slash commands | #158 |
+| W22 | Five improvements for agents | #161 |
+| W23 | Five improvements for people | #159 |
+
+Since then, work is tracked as tasks in the app's AWD project, one pull
+request each:
+
+- **Alpha and its fixes:** main ready to deploy as a usable alpha (#155), a
+  bug sweep (#166), connected apps that stay signed in (#172, #175, #182,
+  #184), single sign-on (#179, #180), security fixes (#185, #188), and
+  CI that holds up under a memory cap (#152, #154, #163, #171, #183).
+- **Layout and look:** a left rail for projects (#164, #165), one settings
+  page for runs and models (#167), a cleaner task page and task filters
+  (#168, #169), a polish pass (#170), one design system with a guard test
+  (#173, #174, #177, #178), keyboard navigation and dragging (#191), a tidy
+  page frame (AWD-73, #192), and new messages as a chat with every agent
+  reachable by DM (AWD-72, #193).
+- **Bigger pieces:** bug report links from other apps (#181), layouts per
+  project, role and person (#189), and the write isolation net, which checks
+  that no write reaches another workspace (#190).
+
+What's next is on the AWD pages named at the top of this file.
+
 ### The path to your Codex example
 
 W1 and W2 in wave 1 give the settings, secrets and harness adapter. In wave
@@ -735,7 +784,7 @@ them somewhere to test.
 
 #### F1. Land or close the open pull requests
 
-*In [W0](#w0-runway) Runway · Needs nothing*
+*In [W0](#w0-runway-135-139) Runway · Needs nothing*
 
 Five PRs from before this roadmap are open: #125 (agent progress and interim
 replies, item A1), #128 (webhook address checks and origin validation), #112
@@ -746,7 +795,7 @@ checks, then merge or close. #128 matters before agents get more webhooks, and #
 
 #### F2. Make main CI green and keep it green
 
-*In [W0](#w0-runway) Runway · Needs nothing*
+*In [W0](#w0-runway-135-139) Runway · Needs nothing*
 
 Every push to main since October 5 has failed while PR runs passed. Two
 causes, fixed in PR #131: a cancelled run left the machine lock held for 90
@@ -761,7 +810,7 @@ starts on the Red Hat runner without anyone touching it.
 
 #### F3. Cloud sessions can build and test
 
-*In [W0](#w0-runway) Runway · Needs nothing*
+*In [W0](#w0-runway-135-139) Runway · Needs nothing*
 
 Workstreams will mostly be built by agents in the cloud: Claude Code cloud
 sessions (Rust 1.97.1, Node 22 and PostgreSQL 16, but no setup) and Codex
@@ -782,7 +831,7 @@ and their integration tests reach PostgreSQL instead of skipping.
 
 #### F4. Changes that don't collide
 
-*In [W0](#w0-runway) Runway · Needs nothing*
+*In [W0](#w0-runway-135-139) Runway · Needs nothing*
 
 Parallel PRs will all want migration 0055, all edit the exact MCP tool count
 (`tests/integration/m6_mcp_foundation.rs:293`) and all raise the one total in
@@ -799,7 +848,7 @@ merge in either order without edits.
 
 #### F5. Web groundwork
 
-*In [W4](#w4-app-shell-and-polish) App shell and polish · Needs F4*
+*In [W4](#w4-app-shell-and-polish-133) App shell and polish · Needs F4*
 
 Make every query key start with the project, so realtime refreshes pages,
 decisions, claims and pickers too (`WorkItemDetailPage.tsx:164`,
@@ -813,7 +862,7 @@ test file is over 800 lines.
 
 #### F6. UI kit additions
 
-*In [W4](#w4-app-shell-and-polish) App shell and polish · Needs F5*
+*In [W4](#w4-app-shell-and-polish-133) App shell and polish · Needs F5*
 
 Add the shared components the rest of the app needs: Toast with Undo, a
 CommandMenu base, skeletons shaped like their page (`MessageSkeleton` is used
@@ -827,7 +876,7 @@ dates are formatted in one place.
 
 #### F7. Live updates that patch instead of refetch
 
-*In [W4](#w4-app-shell-and-polish) App shell and polish · Needs F5*
+*In [W4](#w4-app-shell-and-polish-133) App shell and polish · Needs F5*
 
 Any task change refetches every project query today
 (`realtime/useRealtimeConnection.ts:82-100`). Outbox events carry the id,
@@ -840,7 +889,7 @@ refetching the list.
 
 #### F8. Free Codex supervisor slots
 
-*In [W2](#w2-harness-platform) Harness platform · Needs nothing*
+*In [W2](#w2-harness-platform-138) Harness platform · Needs nothing*
 
 The supervisor registry holds at most `CODEX_HOST_CONCURRENCY_LIMIT` profiles
 (default 1) and releases one only on logout
@@ -854,7 +903,7 @@ test.
 
 #### F9. Background jobs
 
-*In [W1](#w1-backbone) Backbone · Needs F4 · Migration*
+*In [W1](#w1-backbone-137) Backbone · Needs F4 · Migration*
 
 One durable job queue in PostgreSQL (`FOR UPDATE SKIP LOCKED`, retries with
 backoff, run-at times, unique keys, a dead state) with a small worker pool.
@@ -877,7 +926,7 @@ tests.
 
 #### F10. Docs that match the code
 
-*In [W0](#w0-runway) Runway · Needs nothing*
+*In [W0](#w0-runway-135-139) Runway · Needs nothing*
 
 This roadmap's PR points `AGENTS.md` here. Still to do: mark
 `docs/frontend/current-feature-inventory.md` as historical (it describes
@@ -897,7 +946,7 @@ the screen that puts them together.
 
 #### S1. Encrypted secrets
 
-*In [W1](#w1-backbone) Backbone · Needs F4 · Migration*
+*In [W1](#w1-backbone-137) Backbone · Needs F4 · Migration*
 
 A secrets table for anything the server must use later: provider API keys
 (your Anthropic key goes here, entered in settings), webhook signing secrets,
@@ -914,7 +963,7 @@ that needs it.
 
 #### S2. Settings that inherit
 
-*In [W1](#w1-backbone) Backbone · Needs F4 · Migration*
+*In [W1](#w1-backbone-137) Backbone · Needs F4 · Migration*
 
 One settings table (scope: workspace, project or user; key; JSON value;
 version) and a typed registry in Rust where each key declares its type,
@@ -931,7 +980,7 @@ an admin can change their own settings and nobody else's.
 
 #### S3. One settings area
 
-*In [W8](#w8-settings-and-accounts) Settings and accounts · Needs F6, S2*
+*In [W8](#w8-settings-and-accounts-141) Settings and accounts · Needs F6, S2*
 
 Replace the project settings tabs with `/settings` and a left nav in three
 groups. Account: profile, security, notifications, appearance, provider
@@ -946,7 +995,7 @@ links redirect.
 
 #### S4. Manage the workspace
 
-*In [W8](#w8-settings-and-accounts) Settings and accounts · Needs S3 ·
+*In [W8](#w8-settings-and-accounts-141) Settings and accounts · Needs S3 ·
 Migration*
 
 Org roles are derived from project roles (`memberships.rs:638`) and nothing
@@ -960,7 +1009,7 @@ any project.
 
 #### S5. Connect GitHub properly
 
-*In [W8](#w8-settings-and-accounts) Settings and accounts · Needs nothing ·
+*In [W8](#w8-settings-and-accounts-141) Settings and accounts · Needs nothing ·
 Migration*
 
 Replace the numeric installation and repository ID fields
@@ -975,7 +1024,7 @@ a test shows another account can't claim your installation.
 
 #### S6. Provider accounts belong to you
 
-*In [W2](#w2-harness-platform) Harness platform · Needs H1 · Better with S1 ·
+*In [W2](#w2-harness-platform-138) Harness platform · Needs H1 · Better with S1 ·
 Migration*
 
 Execution profiles are per project and per person (`execution.rs:482`), so you
@@ -989,7 +1038,7 @@ profiles.
 
 #### S7. Account security and API tokens
 
-*In [W8](#w8-settings-and-accounts) Settings and accounts · Needs S3 ·
+*In [W8](#w8-settings-and-accounts-141) Settings and accounts · Needs S3 ·
 Migration*
 
 Change your password, see your sessions and sign out elsewhere, create
@@ -1001,7 +1050,7 @@ sign-in.
 
 #### S8. Audit log
 
-*In [W8](#w8-settings-and-accounts) Settings and accounts · Needs S3*
+*In [W8](#w8-settings-and-accounts-141) Settings and accounts · Needs S3*
 
 `audit_events` is written everywhere and read nowhere. Add a workspace page
 and API with filters for who, which app, what kind and when.
@@ -1011,7 +1060,7 @@ app.
 
 #### S9. Appearance follows you
 
-*In [W8](#w8-settings-and-accounts) Settings and accounts · Needs S2*
+*In [W8](#w8-settings-and-accounts-141) Settings and accounts · Needs S2*
 
 Theme, density and text size live in the browser (`theme/preferences.ts:49`).
 Store them on the account and keep the pre-paint script reading a cached copy.
@@ -1028,7 +1077,7 @@ changing what it does; C, U and X all build on that.
 
 #### H1. Open the schema to any provider
 
-*In [W2](#w2-harness-platform) Harness platform · Needs F4 · Migration*
+*In [W2](#w2-harness-platform-138) Harness platform · Needs F4 · Migration*
 
 The database allows only `codex_app_server` on `local_project_host` at binary
 version 0.146.0, and those columns can't change (`0009:162`). Replace the
@@ -1042,7 +1091,7 @@ Codex out of shared run messages (`provider.rs:224`, `scheduler.rs:21`,
 
 #### H2. The harness adapter interface
 
-*In [W2](#w2-harness-platform) Harness platform · Needs H1*
+*In [W2](#w2-harness-platform-138) Harness platform · Needs H1*
 
 There is no provider trait: `provider.rs` mixes run bookkeeping with Codex
 calls. Define a `HarnessAdapter`: start or resume a session, start and
@@ -1058,7 +1107,7 @@ passes the scheduler and recovery tests.
 
 #### H3. Capabilities and the model catalog
 
-*In [W2](#w2-harness-platform) Harness platform · Needs H2 · Better with S2 ·
+*In [W2](#w2-harness-platform-138) Harness platform · Needs H2 · Better with S2 ·
 Migration*
 
 Each adapter publishes a manifest: its models (id, name, context size,
@@ -1073,7 +1122,7 @@ with nothing about Codex in web code.
 
 #### H4. Run settings: model, reasoning, speed
 
-*In [W2](#w2-harness-platform) Harness platform · Needs H3 · Better with S2 ·
+*In [W2](#w2-harness-platform-138) Harness platform · Needs H3 · Better with S2 ·
 Migration*
 
 Runs have no model or effort today; Codex gets only the thread, folder and
@@ -1089,7 +1138,7 @@ received it.
 
 #### H5. See what a run did
 
-*In [W12](#w12-your-harnesses) Your harnesses · Needs H2 · Migration*
+*In [W12](#w12-your-harnesses-150) Your harnesses · Needs H2 · Migration*
 
 Run events are stored with empty payloads and nothing shows commands, output
 or diffs. Store payloads with redaction and size caps, and add a run page: a
@@ -1102,7 +1151,7 @@ projects.
 
 #### H6. Claude Code adapter
 
-*In [W12](#w12-your-harnesses) Your harnesses · Needs H2, H4, S1*
+*In [W12](#w12-your-harnesses-150) Your harnesses · Needs H2, H4, S1*
 
 Run Claude Code headless in the run's worktree under your own Claude login or
 an API key from S1, handed over without putting it in the environment (through
@@ -1115,7 +1164,7 @@ run card, approvals and pull request.
 
 #### H7. Command-line harness adapter
 
-*In [W12](#w12-your-harnesses) Your harnesses · Needs H2, H3*
+*In [W12](#w12-your-harnesses-150) Your harnesses · Needs H2, H3*
 
 A configured adapter for any harness that runs as a command: an argument
 template, the S1 secrets it names handed over on an inherited file descriptor
@@ -1129,7 +1178,7 @@ the secret it was given appears nowhere in its environment.
 
 #### H8. Several runs at once
 
-*In [W2](#w2-harness-platform) Harness platform · Needs H2, S6 · Migration*
+*In [W2](#w2-harness-platform-138) Harness platform · Needs H2, S6 · Migration*
 
 A profile runs one turn at a time (`max_active_turns = 1`, `0009:451`) and one
 host-wide cap covers everything (`scheduler.rs:109`). Take concurrency per
@@ -1147,7 +1196,7 @@ defaults, and Launch sends work there.
 
 #### C1. Environments
 
-*In [W7](#w7-launch) Launch · Needs H3, S2 · Migration*
+*In [W7](#w7-launch-144) Launch · Needs H3, S2 · Migration*
 
 An environment says where a run executes: this host (today's local worktrees),
 a provider's cloud (a Codex Cloud or Claude Code cloud environment), a
@@ -1161,7 +1210,7 @@ agent-workspace', and launching preselects it.
 
 #### C2. Codex Cloud adapter
 
-*In [W7](#w7-launch) Launch · Needs C1, H2, S6*
+*In [W7](#w7-launch-144) Launch · Needs C1, H2, S6*
 
 Start a Codex Cloud task with `codex cloud exec --env <id> [--attempts N]`
 under your Codex login, follow it with `codex cloud list --json` (status, URL,
@@ -1176,7 +1225,7 @@ environment, and its status and pull request show in the task's thread.
 
 #### C3. Claude Code cloud adapter
 
-*In [W12](#w12-your-harnesses) Your harnesses · Needs C1, H6*
+*In [W12](#w12-your-harnesses-150) Your harnesses · Needs C1, H6*
 
 The same as C2 for Claude Code's cloud sessions and environments, or Claude
 running in a managed sandbox through the Agent SDK. Check which launch API
@@ -1187,7 +1236,7 @@ button.
 
 #### C4. The Launch button
 
-*In [W7](#w7-launch) Launch · Needs H4, C1*
+*In [W7](#w7-launch-144) Launch · Needs H4, C1*
 
 One click on a task, or several selected tasks, starts a run with the
 project's defaults. Shift-click or the menu opens a dialog with harness,
@@ -1201,7 +1250,7 @@ task shows it running.
 
 #### C5. Launch queue
 
-*In [W7](#w7-launch) Launch · Needs C4, F9 · Better with U1 · Migration*
+*In [W7](#w7-launch-144) Launch · Needs C4, F9 · Better with U1 · Migration*
 
 Queue launches to start now, at a set time, when an account's window resets,
 or when the tasks blocking them finish. The queue respects per-account
@@ -1216,7 +1265,7 @@ ones last; a launch queued by someone removed from the project never starts.
 
 #### C6. Launch prompt templates
 
-*In [W7](#w7-launch) Launch · Needs C4, S2*
+*In [W7](#w7-launch-144) Launch · Needs C4, S2*
 
 A per-project launch template in Markdown with fields such as
 `{{task.title}}`, `{{task.criteria}}` and `{{project.guide}}`, kept as a
@@ -1245,7 +1294,7 @@ window. Where a provider reports nothing, you set the reset schedule by hand.
 
 #### U1. Usage windows
 
-*In [W9](#w9-capacity-and-push) Capacity and push · Needs S6, H2, F9, F8 ·
+*In [W9](#w9-capacity-and-push-147) Capacity and push · Needs S6, H2, F9, F8 ·
 Migration*
 
 A general model of plan limits: each provider account has windows (a five-hour
@@ -1263,7 +1312,7 @@ including a plan that has only a weekly window.
 
 #### U2. Tokens and cost
 
-*In [W12](#w12-your-harnesses) Your harnesses · Needs H3, H5 · Migration*
+*In [W12](#w12-your-harnesses-150) Your harnesses · Needs H3, H5 · Migration*
 
 Record tokens in, out and cached for each run from the adapter's usage events,
 price them from the model catalog, and total them per project, account and
@@ -1273,7 +1322,7 @@ day.
 
 #### U3. Capacity alerts
 
-*In [W9](#w9-capacity-and-push) Capacity and push · Needs U1, N1*
+*In [W9](#w9-capacity-and-push-147) Capacity and push · Needs U1, N1*
 
 Rules per account: a window resets within X hours with Y% unused; a window is
 above 90%; a limit was hit and resets at a given time; for Codex, banked
@@ -1284,7 +1333,7 @@ inbox and on your phone.
 
 #### U4. Use it before it resets
 
-*In [W13](#w13-payoff-and-finish) Payoff and finish · Needs U3, C5, AI5*
+*In [W13](#w13-payoff-and-finish-149) Payoff and finish · Needs U3, C5, AI5*
 
 The alert carries a suggested batch: ready tasks across your projects
 (dependencies done, criteria written, repository and default environment set)
@@ -1299,7 +1348,7 @@ environments, every run on the account whose window is about to reset.
 
 #### U5. Usage page
 
-*In [W13](#w13-payoff-and-finish) Payoff and finish · Needs U1 · Better with
+*In [W13](#w13-payoff-and-finish-149) Payoff and finish · Needs U1 · Better with
 U2*
 
 For each account: windows over time, runs per window, cost per project, the
@@ -1310,7 +1359,7 @@ waste.
 
 #### U6. Banked resets
 
-*In [W9](#w9-capacity-and-push) Capacity and push · Needs U1*
+*In [W9](#w9-capacity-and-push-147) Capacity and push · Needs U1*
 
 Show Codex's banked rate-limit resets and when they expire, and spend one
 after a confirmation, because it can't be undone.
@@ -1325,7 +1374,7 @@ bring it to the web and make it consistent; T6 makes it fast.
 
 #### T1. Web API for planning
 
-*In [W3](#w3-tasks) Tasks · Needs nothing*
+*In [W3](#w3-tasks-136) Tasks · Needs nothing*
 
 Labels, subtasks, milestones, dependencies, blocked state and claims exist
 only as MCP tools (`mcp/planning.rs`, `mcp/labels.rs`). Add HTTP routes that
@@ -1336,7 +1385,7 @@ tools do.
 
 #### T2. Dependencies and milestones everywhere
 
-*In [W3](#w3-tasks) Tasks · Needs T1*
+*In [W3](#w3-tasks-136) Tasks · Needs T1*
 
 `task_depend` writes only an audit row, and `milestone_write` writes no
 activity or event (`mcp/planning.rs:292`, 592). Write activity, bump versions
@@ -1350,7 +1399,7 @@ live.
 
 #### T3. More kinds of links between tasks
 
-*In [W3](#w3-tasks) Tasks · Needs T2 · Migration*
+*In [W3](#w3-tasks-136) Tasks · Needs T2 · Migration*
 
 Add relates-to and duplicates (with close as duplicate), and blocks across
 projects in the same workspace, checked against what each reader can see.
@@ -1359,7 +1408,7 @@ projects in the same workspace, checked against what each reader can see.
 
 #### T4. Your own workflow
 
-*In [W3](#w3-tasks) Tasks · Needs T1*
+*In [W3](#w3-tasks-136) Tasks · Needs T1*
 
 Every create checks that the project's statuses exactly match the built-in set
 (`work_items.rs:764`), so no project can change its workflow. Remove that
@@ -1372,7 +1421,7 @@ move through it.
 
 #### T5. Dates, estimates and watchers
 
-*In [W3](#w3-tasks) Tasks · Needs T1 · Better with N1 · Migration*
+*In [W3](#w3-tasks-136) Tasks · Needs T1 · Better with N1 · Migration*
 
 Add start and due dates, an estimate (points or hours, chosen per project) and
 watchers who hear about changes through N1's notifications. Keep one assignee
@@ -1382,7 +1431,7 @@ plus agent claims.
 
 #### T6. Fast at 10,000 tasks
 
-*In [W3](#w3-tasks) Tasks · Needs F4 · Migration*
+*In [W3](#w3-tasks-136) Tasks · Needs F4 · Migration*
 
 The list sorts only newest first, search is an unindexed `ILIKE`
 (`work_items.rs:1020`), a board column stops at 100 cards, and `task_list`
@@ -1396,7 +1445,7 @@ against.
 
 #### T7. Bulk edits from the web
 
-*In [W3](#w3-tasks) Tasks · Needs T1*
+*In [W3](#w3-tasks-136) Tasks · Needs T1*
 
 Expose `task_update_many`'s all-or-nothing batch over HTTP for status,
 assignee, labels, milestone, priority and archive.
@@ -1405,7 +1454,7 @@ assignee, labels, milestone, priority and archive.
 
 #### T8. Before and after in history
 
-*In [W3](#w3-tasks) Tasks · Needs nothing*
+*In [W3](#w3-tasks-136) Tasks · Needs nothing*
 
 Activity records which fields changed but not the old and new title,
 description, priority or assignee (`work_item_commands.rs:2216`). Store both,
@@ -1415,7 +1464,7 @@ with a diff for descriptions.
 
 #### T9. Import and export
 
-*In [W11](#w11-views-and-data) Views and data · Needs T1, T5*
+*In [W11](#w11-views-and-data-143) Views and data · Needs T1, T5*
 
 Import a Markdown plan, GitHub issues (through the App) or a CSV from Linear
 or Jira with a mapping preview, all through ordinary commands. Export a
@@ -1426,7 +1475,7 @@ commit.
 
 #### T10. Templates and recurring tasks
 
-*In [W11](#w11-views-and-data) Views and data · Needs T5, T4, F9 · Migration*
+*In [W11](#w11-views-and-data-143) Views and data · Needs T5, T4, F9 · Migration*
 
 Task templates with criteria and subtasks, project templates (workflow,
 labels, channels, default settings) and recurring tasks, which F9's job queue
@@ -1444,7 +1493,7 @@ the ones worth building are folded in here.
 
 #### V1. List view
 
-*In [W3](#w3-tasks) Tasks · Needs T1, T6 · Better with F6*
+*In [W3](#w3-tasks-136) Tasks · Needs T1, T6 · Better with F6*
 
 Add Popover, Combobox (searchable single and multi select for people, labels
 and statuses), DatePicker and a Table with a sticky header and keyboard
@@ -1459,7 +1508,7 @@ pause and replaces the URL instead of adding a history entry per keystroke
 
 #### V2. Keyboard and inline editing
 
-*In [W3](#w3-tasks) Tasks · Needs V1, T7*
+*In [W3](#w3-tasks-136) Tasks · Needs V1, T7*
 
 Change status, priority, assignee, labels and milestone straight from a row or
 card; select with Shift and Cmd; a bulk action bar; keys to move and act (J
@@ -1469,7 +1518,7 @@ and K, X, S, A, L, P, Enter).
 
 #### V3. Task panel and detail page
 
-*In [W3](#w3-tasks) Tasks · Needs T1, T2 · Better with P4*
+*In [W3](#w3-tasks-136) Tasks · Needs T1, T2 · Better with P4*
 
 Open any task in a side panel from lists, boards and links. Rebuild the detail
 page (1,183 lines) from small parts: each field saves when changed instead of
@@ -1481,7 +1530,7 @@ lands.
 
 #### V4. Board
 
-*In [W3](#w3-tasks) Tasks · Needs V1 · Better with F7*
+*In [W3](#w3-tasks-136) Tasks · Needs V1 · Better with F7*
 
 Columns by any field, swimlanes, reordering within a column (a drop only
 appends today), touch dragging, instant moves, and paging per column.
@@ -1490,7 +1539,7 @@ appends today), touch dragging, instant moves, and paging per column.
 
 #### V5. Saved views
 
-*In [W11](#w11-views-and-data) Views and data · Needs V1 · Migration*
+*In [W11](#w11-views-and-data-143) Views and data · Needs V1 · Migration*
 
 Named views (filters, sort, grouping, layout, visible fields), personal or
 shared with the project, pinned in the sidebar. Ship four: My tasks, Ready for
@@ -1502,7 +1551,7 @@ read it.
 
 #### V6. My work
 
-*In [W11](#w11-views-and-data) Views and data · Needs V1*
+*In [W11](#w11-views-and-data-143) Views and data · Needs V1*
 
 One personal view across every project: assigned to you, claimed by your
 agents, waiting for your review.
@@ -1511,7 +1560,7 @@ agents, waiting for your review.
 
 #### V7. Dependency graph
 
-*In [W10](#w10-ai-planning) AI planning · Needs T2, V3*
+*In [W10](#w10-ai-planning-145) AI planning · Needs T2, V3*
 
 An interactive graph for a project or milestone: the ready frontier
 highlighted, the critical path, AI-suggested links dashed with accept and
@@ -1523,7 +1572,7 @@ from the graph.
 
 #### V8. Timeline
 
-*In [W11](#w11-views-and-data) Views and data · Needs T5 · Better with V7*
+*In [W11](#w11-views-and-data-143) Views and data · Needs T5 · Better with V7*
 
 Milestones and tasks on a time axis from their dates and estimates, with
 dependency arrows and drag to reschedule.
@@ -1532,7 +1581,7 @@ dependency arrows and drag to reschedule.
 
 #### V9. Milestones page
 
-*In [W3](#w3-tasks) Tasks · Needs T2, V1*
+*In [W3](#w3-tasks-136) Tasks · Needs T2, V1*
 
 Milestones with progress, target date and overdue state; each opens as a
 filtered view.
@@ -1547,7 +1596,7 @@ stays in settings.
 
 #### AI1. Model gateway
 
-*In [W10](#w10-ai-planning) AI planning · Needs S1, S2, F9 · Migration*
+*In [W10](#w10-ai-planning-145) AI planning · Needs S1, S2, F9 · Migration*
 
 A small server module for short AI jobs that works with any provider:
 Anthropic, OpenAI and any OpenAI-compatible endpoint (OpenRouter, Ollama,
@@ -1563,7 +1612,7 @@ Anthropic key from settings.
 
 #### AI2. Dependency and blocker detection
 
-*In [W10](#w10-ai-planning) AI planning · Needs AI1, T2 · Migration*
+*In [W10](#w10-ai-planning-145) AI planning · Needs AI1, T2 · Migration*
 
 An `ai_suggestions` table (blocks, relates to, duplicates, blocked reason,
 parent) with confidence, a one-line reason, the evidence used, status, and the
@@ -1587,7 +1636,7 @@ private thread ever sees a suggestion drawn from it.
 
 #### AI3. Plan to tasks
 
-*In [W10](#w10-ai-planning) AI planning · Needs AI1, V3 · Migration*
+*In [W10](#w10-ai-planning-145) AI planning · Needs AI1, V3 · Migration*
 
 Paste a plan or pick a page and get a proposed tree of tasks with criteria,
 labels, milestones and dependencies; edit the preview, then commit through
@@ -1603,7 +1652,7 @@ creates nothing twice.
 
 #### AI4. Triage on create
 
-*In [W10](#w10-ai-planning) AI planning · Needs AI2*
+*In [W10](#w10-ai-planning-145) AI planning · Needs AI2*
 
 When a task is created, suggest labels, priority, type, parent and likely
 duplicates as chips to accept.
@@ -1612,7 +1661,7 @@ duplicates as chips to accept.
 
 #### AI5. Ready and next
 
-*In [W10](#w10-ai-planning) AI planning · Needs T2*
+*In [W10](#w10-ai-planning-145) AI planning · Needs T2*
 
 A readiness check per task: dependencies done, criteria written, repository
 and environment set, a real description. Rank ready tasks by priority, how
@@ -1623,7 +1672,7 @@ criteria on request. U4 and 'what should I launch next?' use it.
 
 #### AI6. Summaries
 
-*In [W10](#w10-ai-planning) AI planning · Needs AI1*
+*In [W10](#w10-ai-planning-145) AI planning · Needs AI1*
 
 On request, summarize a long thread or a task's history and suggest the
 thread's outcome.
@@ -1645,7 +1694,7 @@ clearly falls short.
 
 #### N1. Notifications for people
 
-*In [W6](#w6-notifications) Notifications · Needs nothing · Better with F9 ·
+*In [W6](#w6-notifications-134) Notifications · Needs nothing · Better with F9 ·
 Migration*
 
 A notifications table per recipient (kind, subject, actor, source conversation
@@ -1670,7 +1719,7 @@ seeing its notifications.
 
 #### N2. Inbox
 
-*In [W6](#w6-notifications) Notifications · Needs N1 · Better with F6*
+*In [W6](#w6-notifications-134) Notifications · Needs N1 · Better with F6*
 
 An inbox page: notifications grouped by subject, a preview pane, read, unread,
 archive and snooze, filters, keyboard, and actions in place (approve, launch,
@@ -1680,7 +1729,7 @@ open). A badge on the rail.
 
 #### N3. Push to phone and desktop
 
-*In [W9](#w9-capacity-and-push) Capacity and push · Needs N1, S1 · Better with
+*In [W9](#w9-capacity-and-push-147) Capacity and push · Needs N1, S1 · Better with
 C4 · Migration*
 
 Web Push with keys from S1, a subscription per device, push and
@@ -1695,7 +1744,7 @@ on iOS.
 
 #### N4. Notification settings
 
-*In [W9](#w9-capacity-and-push) Capacity and push · Needs N1, S2*
+*In [W9](#w9-capacity-and-push-147) Capacity and push · Needs N1, S2*
 
 Per kind and channel (in app, push, email), quiet hours, mute per project,
 digest frequency.
@@ -1704,7 +1753,7 @@ digest frequency.
 
 #### N5. Toasts, titles and badges
 
-*In [W4](#w4-app-shell-and-polish) App shell and polish · Needs F6*
+*In [W4](#w4-app-shell-and-polish-133) App shell and polish · Needs F6*
 
 Toasts for results that happen in the background ('Run finished · Open PR'),
 page titles with unread counts (`index.html` has one fixed title), and favicon
@@ -1721,7 +1770,7 @@ started by Launch and by a tag share one idea of a session. A8 to A10 are new.
 
 #### A1. Progress and interim messages
 
-*In [W5](#w5-agents-in-conversations) Agents in conversations · Needs nothing*
+*In [W5](#w5-agents-in-conversations-132) Agents in conversations · Needs nothing*
 
 Piece 1 of `docs/plans/agent-tag.md`, already built as draft PR #125:
 `reply_progress`, and `reply_send` with `final: false`.
@@ -1730,7 +1779,7 @@ Piece 1 of `docs/plans/agent-tag.md`, already built as draft PR #125:
 
 #### A2. Follow-ups stick to the thread
 
-*In [W5](#w5-agents-in-conversations) Agents in conversations · Needs A1 ·
+*In [W5](#w5-agents-in-conversations-132) Agents in conversations · Needs A1 ·
 Migration*
 
 `agent-tag.md` piece 2: a person's next message in a thread where an agent was
@@ -1742,7 +1791,7 @@ thread, and never an agent who can't see it.
 
 #### A3. Agent sessions
 
-*In [W7](#w7-launch) Launch · Needs A1, H2 · Migration*
+*In [W7](#w7-launch-144) Launch · Needs A1, H2 · Migration*
 
 `agent-tag.md` piece 3, widened: one sessions table for external runners and
 for harness runs, so a thread knows its Claude Code, Codex Cloud or custom
@@ -1754,7 +1803,7 @@ work started.
 
 #### A4. Tags in a channel open a thread
 
-*In [W5](#w5-agents-in-conversations) Agents in conversations · Needs A1*
+*In [W5](#w5-agents-in-conversations-132) Agents in conversations · Needs A1*
 
 `agent-tag.md` piece 4, plus agents' status lines in project channels and
 their threads (today only DMs and groups show them).
@@ -1764,7 +1813,7 @@ under the message.
 
 #### A5. Stop
 
-*In [W5](#w5-agents-in-conversations) Agents in conversations · Needs A1 ·
+*In [W5](#w5-agents-in-conversations-132) Agents in conversations · Needs A1 ·
 Migration*
 
 `agent-tag.md` piece 5: a Stop button on a working agent's status line that
@@ -1776,7 +1825,7 @@ clear reason.
 
 #### A6. Typed wakeups
 
-*In [W5](#w5-agents-in-conversations) Agents in conversations · Needs A1 ·
+*In [W5](#w5-agents-in-conversations-132) Agents in conversations · Needs A1 ·
 Better with A3*
 
 `agent-tag.md` piece 6: webhooks say what happened (requested, follow-up,
@@ -1787,7 +1836,7 @@ session once A3 lands. `inbox.available` keeps working for one release.
 
 #### A7. Runner contract and presets
 
-*In [W5](#w5-agents-in-conversations) Agents in conversations · Needs A6*
+*In [W5](#w5-agents-in-conversations-132) Agents in conversations · Needs A6*
 
 `agent-tag.md` piece 7: `docs/agent-runner.md` for the protocol, and presets
 on the Agents page for Claude Code, Codex and a custom runner, ending on the
@@ -1797,7 +1846,7 @@ token, webhook secret and settings to copy.
 
 #### A8. Tag to launch
 
-*In [W7](#w7-launch) Launch · Needs A3, C4*
+*In [W7](#w7-launch-144) Launch · Needs A3, C4*
 
 Tagging an agent backed by a harness (@codex do X) launches a run with the
 project's defaults in that thread; tagging an external runner wakes it. One
@@ -1808,7 +1857,7 @@ run there when that's the project default.
 
 #### A9. Agent profiles
 
-*In [W12](#w12-your-harnesses) Your harnesses · Needs H3, A3 · Migration*
+*In [W12](#w12-your-harnesses-150) Your harnesses · Needs H3, A3 · Migration*
 
 An agent becomes a profile: name and avatar, harness, default model settings,
 instructions, allowed tools and environment. Templates such as Reviewer,
@@ -1819,7 +1868,7 @@ request.
 
 #### A10. Agent presence
 
-*In [W12](#w12-your-harnesses) Your harnesses · Needs A3*
+*In [W12](#w12-your-harnesses-150) Your harnesses · Needs A3*
 
 Live state per agent (idle, working on AWD-12, waiting for you) in the sidebar
 and on agent cards, replacing the hard-coded online dot
@@ -1835,7 +1884,7 @@ ones.
 
 #### P1. Command palette and shortcuts
 
-*In [W4](#w4-app-shell-and-polish) App shell and polish · Needs F6*
+*In [W4](#w4-app-shell-and-polish-133) App shell and polish · Needs F6*
 
 Cmd+K only finds projects today (`ProjectRail.tsx:115`). Make it the way to go
 anywhere (projects, tasks by key, channels, people, pages, settings) and do
@@ -1847,7 +1896,7 @@ create, G then I for the inbox). Task keys work as URLs (`/AWD-12`).
 
 #### P2. Instant changes, undo and clear errors
 
-*In [W4](#w4-app-shell-and-polish) App shell and polish · Needs F6*
+*In [W4](#w4-app-shell-and-polish-133) App shell and polish · Needs F6*
 
 One way to write mutations: instant cache updates, error toasts instead of
 'Reload the page' (`WorkItemDetailPage.tsx:813`), Undo for archive, move and
@@ -1858,7 +1907,7 @@ onto it.
 
 #### P3. Home
 
-*In [W13](#w13-payoff-and-finish) Payoff and finish · Needs N2, U1*
+*In [W13](#w13-payoff-and-finish-149) Payoff and finish · Needs N2, U1*
 
 Home becomes a real start page: what needs you (from the inbox), agents
 working now, capacity windows with countdowns, your tasks, recent projects.
@@ -1867,7 +1916,7 @@ working now, capacity windows with countdowns, your tasks, recent projects.
 
 #### P4. Markdown
 
-*In [W4](#w4-app-shell-and-polish) App shell and polish · Needs F6*
+*In [W4](#w4-app-shell-and-polish-133) App shell and polish · Needs F6*
 
 Pages say Markdown but render plain text (`pages.css:1571`). Add a safe
 renderer (no raw HTML) for descriptions, pages and comments, an editor with
@@ -1878,7 +1927,7 @@ highlighting loaded only when needed.
 
 #### P5. Onboarding
 
-*In [W13](#w13-payoff-and-finish) Payoff and finish · Needs S3, S5, S6, C1*
+*In [W13](#w13-payoff-and-finish-149) Payoff and finish · Needs S3, S5, S6, C1*
 
 A first-run path: name the workspace, connect GitHub and pick a repository,
 connect a provider account, choose an environment and defaults, create or
@@ -1889,7 +1938,7 @@ the path.
 
 #### P6. Threads beside the channel
 
-*In [W4](#w4-app-shell-and-polish) App shell and polish · Needs P2*
+*In [W4](#w4-app-shell-and-polish-133) App shell and polish · Needs P2*
 
 Project channels open threads as a full page while DMs use a side panel
 (`direct/ThreadPanel.tsx`). Use the panel everywhere with one thread
@@ -1899,7 +1948,7 @@ component.
 
 #### P7. Finish each area
 
-*In [W13](#w13-payoff-and-finish) Payoff and finish · Needs F6, P2*
+*In [W13](#w13-payoff-and-finish-149) Payoff and finish · Needs F6, P2*
 
 One pass per area (conversations, tasks, settings, agents), repeated as areas
 land: skeletons shaped like the page, consistent dates, no raw markup outside
@@ -1913,7 +1962,7 @@ same checklist on their own pages before they're marked ready.
 
 #### P8. Smoke tests in a real browser
 
-*In [W4](#w4-app-shell-and-polish) App shell and polish · Needs F3 · Better
+*In [W4](#w4-app-shell-and-polish-133) App shell and polish · Needs F3 · Better
 with H2, N2*
 
 A few Playwright flows (sign in, create and move a task, start a run on the
@@ -1934,7 +1983,7 @@ that the workspace wakes (A7 and X1), or in a container the workspace starts
 
 #### X1. Runner SDKs and the harness guide
 
-*In [W12](#w12-your-harnesses) Your harnesses · Needs A7*
+*In [W12](#w12-your-harnesses-150) Your harnesses · Needs A7*
 
 TypeScript and Python packages for the runner side: verify the signature,
 claim, bind the session, stream progress and events, post interim and final
@@ -1945,7 +1994,7 @@ task to a pull request.
 
 #### X2. Register a harness
 
-*In [W12](#w12-your-harnesses) Your harnesses · Needs H3, A7, H7 · Migration*
+*In [W12](#w12-your-harnesses-150) Your harnesses · Needs H3, A7, H7 · Migration*
 
 A workspace registers a custom harness, either a connected runner (X1) or a
 command-line adapter (H7), with a manifest of models, options and features. It
@@ -1957,7 +2006,7 @@ models and options.
 
 #### X3. Public API
 
-*In [W14](#w14-automations-and-api) Automations and API · Needs S7*
+*In [W14](#w14-automations-and-api-148) Automations and API · Needs S7*
 
 A versioned REST API with an OpenAPI document generated from the Rust types,
 personal tokens with scopes (S7), and a docs page.
@@ -1967,7 +2016,7 @@ personal tokens with scopes (S7), and a docs page.
 
 #### X4. Outgoing webhooks
 
-*In [W14](#w14-automations-and-api) Automations and API · Needs F9 ·
+*In [W14](#w14-automations-and-api-148) Automations and API · Needs F9 ·
 Migration*
 
 Subscriptions to a workspace's events (task, run, pull request, message), each
@@ -1982,7 +2031,7 @@ about a message in a conversation its subscription's owner can't see.
 
 #### X5. Automations
 
-*In [W14](#w14-automations-and-api) Automations and API · Needs C5, N1, V5 ·
+*In [W14](#w14-automations-and-api-148) Automations and API · Needs C5, N1, V5 ·
 Better with A9 · Migration*
 
 Rules with a trigger (an event, a schedule, a capacity window), conditions (a
@@ -2009,7 +2058,7 @@ and O9 are for when you open it up (D1); principle 8 keeps that path short.
 
 #### O1. Backups you can restore
 
-*In [W1](#w1-backbone) Backbone · Needs nothing*
+*In [W1](#w1-backbone-137) Backbone · Needs nothing*
 
 Daily dumps stay on the same disk forever and skip the data root
 (`agent-workspace-daily-backup.service`). Encrypt them and copy them off the
@@ -2022,7 +2071,7 @@ copy.
 
 #### O2. Metrics and error tracking
 
-*In [W1](#w1-backbone) Backbone · Needs F9 · Better with N1*
+*In [W1](#w1-backbone-137) Backbone · Needs F9 · Better with N1*
 
 A metrics endpoint (requests, job queue, run states, outbox lag, webhook
 failures, AI spend), error reporting from the browser and the server, and
@@ -2032,7 +2081,7 @@ alerts to you through notifications (in the log until N1 lands).
 
 #### O3. Retention on a schedule
 
-*In [W1](#w1-backbone) Backbone · Needs F9*
+*In [W1](#w1-backbone-137) Backbone · Needs F9*
 
 Run the existing retention commands as jobs instead of by hand.
 
@@ -2071,7 +2120,7 @@ a small broker.
 
 #### O7. Two-workspace isolation tests
 
-*In [W1](#w1-backbone) Backbone · Needs nothing*
+*In [W1](#w1-backbone-137) Backbone · Needs nothing*
 
 The SaaS will hold many workspaces in one database, so leaks between them must
 be caught from now on, not audited later. A test fixture builds two workspaces

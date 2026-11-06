@@ -11,6 +11,7 @@ use uuid::Uuid;
 use agent_workspace_server::{provider::adapter::UsageReport, usage};
 
 use super::{
+    agent_interface::{connect_app, initialize, tool},
     mcp_admin::{Setup, create_project},
     message_edits::{add_person, get},
     notifications::inbox,
@@ -171,6 +172,49 @@ async fn the_alert_launches_its_batch_on_the_account_in_each_projects_environmen
         "{batch}"
     );
 
+    // Through the owner's app, the batch names tasks only where the app's
+    // limit keeps "see tasks" (AWD-74): without it, Alpha is skipped.
+    let owner_app = connect_app(&setup.app, &setup.browser, "Owner's app", "full").await;
+    let session = initialize(&setup.app, &owner_app)
+        .await
+        .expect("owner's app");
+    let batch_tool = json!({"accountId": account.to_string()});
+    let listed = tool(
+        &setup.app,
+        &owner_app,
+        &session,
+        "usage_batch",
+        batch_tool.clone(),
+    )
+    .await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    assert!(listed.to_string().contains("Fix the outage"), "{listed}");
+    let owner = sqlx::query_scalar::<_, Uuid>(
+        "SELECT actor_id FROM organization_memberships WHERE organization_id = $1 AND role = 'owner' LIMIT 1",
+    )
+    .bind(setup.organization_id)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("owner");
+    sqlx::query(
+        "UPDATE organization_memberships SET agent_limit = ARRAY['runs.launch'] WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(setup.organization_id)
+    .bind(owner)
+    .execute(&setup.pool)
+    .await
+    .expect("the owner's apps no longer see tasks");
+    let listed = tool(&setup.app, &owner_app, &session, "usage_batch", batch_tool).await;
+    assert!(!listed.to_string().contains("Fix the outage"), "{listed}");
+    assert!(!listed.to_string().contains("Tidy the docs"), "{listed}");
+    sqlx::query(
+        "UPDATE organization_memberships SET agent_limit = NULL WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(setup.organization_id)
+    .bind(owner)
+    .execute(&setup.pool)
+    .await
+    .expect("lift the limit");
     // Someone else can neither see nor launch the owner's batch.
     let (status, body) = get(setup, &mara, &batch_uri).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");

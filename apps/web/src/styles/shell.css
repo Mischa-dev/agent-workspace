@@ -689,7 +689,8 @@ button.aw-sidebar__title[aria-expanded="true"] {
   .aw-mobilebar {
     position: sticky;
     top: 0;
-    z-index: var(--layer-sticky);
+    /* Above the headers that stick inside the page (AWD-82). */
+    z-index: calc(var(--layer-sticky) + 1);
     display: flex;
     align-items: center;
     flex: none;
@@ -698,6 +699,13 @@ button.aw-sidebar__title[aria-expanded="true"] {
     background: var(--sidebar-bg);
     color: var(--sidebar-fg-strong);
     --r-focus: var(--sidebar-fg-strong);
+  }
+
+  /* The page scrolls under the bar, so a header that sticks inside the page
+     stops just below it rather than sliding over it (AWD-82). Sticky rules
+     read this as `top: var(--aw-sticky-top, 0)`. */
+  .aw-main:has(> .aw-mobilebar) {
+    --aw-sticky-top: var(--size-header);
   }
 
   .aw-menubutton {

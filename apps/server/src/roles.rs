@@ -19,6 +19,14 @@
 //! - Agent limits: an app or agent acting for a person may do only what the
 //!   person may, cut down by their role's agent limit and their own. An agent
 //!   with its own identity holds a role like anyone else.
+//! - The workspace's member directory (its Members page) follows "See the
+//!   workspace member directory" (`directory.view`, workspace only). Every
+//!   built-in role holds it, so it's as before for them, and the starting
+//!   points include it. A custom role holds it only when given it: without
+//!   it, holders see only themselves there. An owner, or an admin who manages
+//!   roles and holds it, gives it by ticking it on the role (Settings, Roles).
+//!   Projects' member lists follow "See the member list" (`members.view`),
+//!   which only owners and admins hold by default.
 //!
 //! Every change is audited with what it was before and after.
 
@@ -44,8 +52,9 @@ use crate::{
     mcp::McpPrincipal,
     outbox::{OutboxEventPayload, ProjectMembershipUpdatedPayload, enqueue_typed},
     policy::{
-        ActorKind, AgentLimits, MembershipRole, MembershipScope, PERMISSION_MODULES, PERMISSIONS,
-        Permission, PermissionSet, RoleGrant, current_agent_limit,
+        Action, ActorKind, AgentLimits, Decision, DenyReason, Membership, MembershipRole,
+        MembershipScope, PERMISSION_MODULES, PERMISSIONS, Permission, PermissionSet, ProjectScope,
+        Resource, RoleGrant, Subject, authorize, current_agent_limit,
     },
     work_items::views::BUILTIN_VIEWS,
 };
@@ -258,6 +267,56 @@ impl Standing {
     }
 }
 
+/// What `actor_id` may do in `project_id` as checked there: their role in
+/// the project (custom role included), cut down in an app's call by its
+/// agent limit for the project, and only the permissions a project checks
+/// (workspace-only ones, such as the member directory, are the workspace
+/// role's). None when they aren't an enabled member of it.
+pub(crate) async fn project_holding(
+    connection: &mut PgConnection,
+    actor_id: Uuid,
+    project_id: Uuid,
+) -> Result<Option<PermissionSet>, AppError> {
+    let Some((kind, role, role_permissions)) =
+        sqlx::query_as::<_, (String, String, Option<Vec<String>>)>(
+            r#"
+            SELECT actor.kind, membership.role, workspace_role_permissions(membership.role_id)
+            FROM project_memberships membership
+            JOIN actors actor ON actor.id = membership.actor_id
+            WHERE membership.project_id = $1 AND membership.actor_id = $2
+              AND membership.enabled AND actor.status = 'active'
+            "#,
+        )
+        .bind(project_id)
+        .bind(actor_id)
+        .fetch_optional(&mut *connection)
+        .await?
+    else {
+        return Ok(None);
+    };
+    let kind = if kind == "human" {
+        ActorKind::Human
+    } else {
+        ActorKind::ExternalAgent
+    };
+    let grant = RoleGrant::stored(&role, role_permissions.as_deref())?;
+    let limit = current_agent_limit(actor_id, MembershipScope::Project(project_id));
+    Ok(Some(project_checked(effective(grant, limit, kind))))
+}
+
+/// The permissions of `set` that a project checks, leaving out the
+/// workspace-only ones.
+pub(crate) fn project_checked(set: PermissionSet) -> PermissionSet {
+    crate::policy::PERMISSIONS
+        .iter()
+        .filter(|info| {
+            info.scope != crate::policy::PermissionScope::Workspace && set.contains(info.permission)
+        })
+        .fold(PermissionSet::EMPTY, |kept, info| {
+            kept.with(info.permission)
+        })
+}
+
 pub(crate) async fn standing(
     connection: &mut PgConnection,
     organization_id: Uuid,
@@ -292,6 +351,49 @@ pub(crate) async fn standing(
         role: grant.role(),
         permissions: effective(grant, limit, kind),
     })
+}
+
+/// Whether an invitation `issuer` sent still holds: they may still invite,
+/// and the role it gives (`role`, or the custom `role_id`) is within what
+/// they hold now. Checked when an invitation is opened or accepted, since
+/// the issuer's role may have narrowed since they sent it.
+pub(crate) async fn issuer_still_grants(
+    connection: &mut PgConnection,
+    organization_id: Uuid,
+    issuer: Uuid,
+    role: &str,
+    role_id: Option<Uuid>,
+) -> Result<bool, AppError> {
+    let issuer = match standing(connection, organization_id, issuer).await {
+        Ok(issuer) => issuer,
+        Err(AppError::NotFound(_)) => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    let invited =
+        sqlx::query_scalar::<_, Option<Vec<String>>>("SELECT workspace_role_permissions($1)")
+            .bind(role_id)
+            .fetch_one(&mut *connection)
+            .await?;
+    let invited = RoleGrant::stored(role, invited.as_deref())?;
+    Ok(issuer.may(Permission::MembersInvite)
+        && invited.permissions().is_subset_of(issuer.permissions))
+}
+
+/// SQL that is true when `actor`'s role in `project` (both SQL expressions,
+/// written by us, never user input) keeps `permission`, a catalogue key such
+/// as `tasks.view`. An app's agent limit is applied separately, in Rust
+/// (`policy::agent_limit_hides`) or as a bound project list
+/// (`policy::agent_limit_projects_allowing`).
+pub(crate) fn role_allows_sql(actor: &str, project: &str, permission: &str) -> String {
+    debug_assert!(
+        PERMISSIONS.iter().any(|info| info.key == permission),
+        "unknown permission {permission}"
+    );
+    format!(
+        "EXISTS (SELECT 1 FROM project_memberships role_check \
+         WHERE role_check.project_id = {project} AND role_check.actor_id = {actor} \
+         AND role_check.enabled AND custom_role_allows(role_check.role_id, '{permission}'))"
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -390,6 +492,11 @@ pub(crate) struct RoleCapabilities {
     pub remove: bool,
     /// Give it to someone.
     pub assign: bool,
+    /// Invite someone to it, to the workspace or a project: what the
+    /// invitation endpoints allow (an owner or admin holding "invite
+    /// members", a role within what they hold, admin-based ones by owners).
+    /// A project's own "invite members" decides whether its form shows.
+    pub invite: bool,
 }
 
 /// What `caller` may do to a role.
@@ -410,6 +517,12 @@ fn role_capabilities(caller: Standing, row: &RoleRow) -> RoleCapabilities {
             && row.workspace_holders + row.project_holders == 0,
         assign: caller.kind == ActorKind::Human
             && caller.may(Permission::MembersManage)
+            && row.key != "owner"
+            && (!base_is_high || caller.is_owner())
+            && within_caller,
+        invite: caller.kind == ActorKind::Human
+            && matches!(caller.role, MembershipRole::Owner | MembershipRole::Admin)
+            && caller.may(Permission::MembersInvite)
             && row.key != "owner"
             && (!base_is_high || caller.is_owner())
             && within_caller,
@@ -626,6 +739,7 @@ pub(crate) fn starting_points() -> Vec<StartingPoint> {
                 "runs.interrupt",
                 "code.view",
                 "code.publish",
+                "directory.view",
             ],
             agent_limit: None,
             defaults: RoleDefaults::default(),
@@ -635,7 +749,7 @@ pub(crate) fn starting_points() -> Vec<StartingPoint> {
             name: "Read only",
             description: "Reads everything they're given and changes nothing, across the whole workspace.",
             base_role: "viewer",
-            permissions: vec!["projects.view", "tasks.view", "code.view"],
+            permissions: vec!["projects.view", "tasks.view", "code.view", "directory.view"],
             agent_limit: None,
             defaults: RoleDefaults::default(),
         },
@@ -654,6 +768,7 @@ pub(crate) fn starting_points() -> Vec<StartingPoint> {
                 "channels.create",
                 "pages.edit",
                 "whiteboards.edit",
+                "directory.view",
             ],
             agent_limit: Some(vec![
                 "projects.view",
@@ -1172,6 +1287,14 @@ pub(crate) async fn change(
                 message: "New members can't start as an owner or admin.",
             });
         }
+        // A workspace has no plain Viewer role (assign refuses it there too),
+        // and invitations couldn't honour it.
+        if before.built_in && base == MembershipRole::Viewer {
+            return Err(AppError::Refused {
+                field: "isDefault",
+                message: "Viewer is for projects. For new members of the workspace, use a role based on Viewer, such as Read only.",
+            });
+        }
         clear_default(transaction, organization_id).await?;
     } else if !is_default && before.is_default {
         return Err(AppError::Refused {
@@ -1324,9 +1447,19 @@ pub(crate) struct Assignment {
     pub role_name: String,
     /// Projects whose role changed with it.
     pub projects_changed: usize,
-    /// Projects left as they were: they own it, or managing their role
-    /// there takes an owner.
+    /// Projects left as they were: they own it, managing their role there
+    /// takes an owner, or the caller may not manage members there.
     pub projects_skipped: usize,
+    /// Each project left as it was, and why.
+    pub skipped_projects: Vec<SkippedProject>,
+}
+
+/// A project "apply to their projects" left as it was.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SkippedProject {
+    pub project_id: Uuid,
+    pub reason: &'static str,
 }
 
 /// Give someone a role in the workspace and, when asked, in every project
@@ -1427,7 +1560,7 @@ pub(crate) async fn assign(
         apply_to_their_projects(transaction, caller, organization_id, actor_id, base, custom)
             .await?
     } else {
-        (Vec::new(), 0)
+        (Vec::new(), Vec::new())
     };
     if changed || !projects_changed.is_empty() {
         auditor
@@ -1455,8 +1588,63 @@ pub(crate) async fn assign(
         role_id: custom,
         role_name: role.name,
         projects_changed: projects_changed.len(),
-        projects_skipped,
+        projects_skipped: projects_skipped.len(),
+        skipped_projects: projects_skipped,
     })
+}
+
+/// One project of the person whose role is being given, with the caller's
+/// own membership there (none if they only reach it otherwise).
+#[derive(FromRow)]
+struct TheirProject {
+    project_id: Uuid,
+    role: String,
+    role_id: Option<Uuid>,
+    caller_role: Option<String>,
+    caller_permissions: Option<Vec<String>>,
+    caller_enabled: bool,
+}
+
+/// Why the caller may not manage members in a project, if they may not: no
+/// membership there, a project role without "manage members", or (through
+/// an app) an agent limit without it. Workspace owners and admins hold it
+/// in their projects unless a custom role or a limit takes it away.
+fn manage_refusal(
+    caller: Standing,
+    project_id: Uuid,
+    role: Option<&str>,
+    permissions: Option<&[String]>,
+    enabled: bool,
+) -> Result<Option<&'static str>, AppError> {
+    let Some(role) = role else {
+        return Ok(Some(
+            "You aren't in this project, so you can't manage its members.",
+        ));
+    };
+    let subject = Subject::new(
+        caller.actor_id,
+        caller.kind,
+        true,
+        Some(Membership::project(
+            project_id,
+            RoleGrant::stored(role, permissions)?,
+            enabled,
+        )),
+        None,
+    );
+    Ok(
+        match authorize(
+            &subject,
+            Action::MembershipManage,
+            Resource::Project(ProjectScope::project(project_id)),
+        ) {
+            Decision::Allow => None,
+            Decision::Deny(DenyReason::AgentLimit) => {
+                Some("The app you're using may not manage members in this project.")
+            }
+            Decision::Deny(_) => Some("Your role in this project doesn't manage members."),
+        },
+    )
 }
 
 async fn apply_to_their_projects(
@@ -1466,12 +1654,17 @@ async fn apply_to_their_projects(
     actor_id: Uuid,
     base: MembershipRole,
     custom: Option<Uuid>,
-) -> Result<(Vec<Uuid>, usize), AppError> {
-    let memberships = sqlx::query_as::<_, (Uuid, String, Option<Uuid>)>(
+) -> Result<(Vec<Uuid>, Vec<SkippedProject>), AppError> {
+    let memberships = sqlx::query_as::<_, TheirProject>(
         r#"
-        SELECT membership.project_id, membership.role, membership.role_id
+        SELECT membership.project_id, membership.role, membership.role_id,
+               caller_membership.role AS caller_role,
+               workspace_role_permissions(caller_membership.role_id) AS caller_permissions,
+               COALESCE(caller_membership.enabled, false) AS caller_enabled
         FROM project_memberships membership
         JOIN projects project ON project.id = membership.project_id
+        LEFT JOIN project_memberships caller_membership
+          ON caller_membership.project_id = project.id AND caller_membership.actor_id = $3
         WHERE project.organization_id = $1 AND membership.actor_id = $2
           AND membership.enabled AND project.kind <> 'direct' AND project.archived_at IS NULL
           -- Only projects the caller is in: never one they can't open.
@@ -1484,16 +1677,67 @@ async fn apply_to_their_projects(
     .bind(caller.actor_id)
     .fetch_all(&mut **transaction)
     .await?;
+    // What the role gives in a project, held to what the caller holds in
+    // each one, as giving it there one project at a time is.
+    let custom_permissions = match custom {
+        Some(role_id) => {
+            sqlx::query_scalar::<_, Option<Vec<String>>>("SELECT workspace_role_permissions($1)")
+                .bind(role_id)
+                .fetch_one(&mut **transaction)
+                .await?
+        }
+        None => None,
+    };
+    let given = project_checked(
+        RoleGrant::stored(base.key(), custom_permissions.as_deref())?.permissions(),
+    );
     let mut changed = Vec::new();
-    let mut skipped = 0;
-    for (project_id, role, role_id) in memberships {
+    let mut skipped = Vec::new();
+    for TheirProject {
+        project_id,
+        role,
+        role_id,
+        caller_role,
+        caller_permissions,
+        caller_enabled,
+    } in memberships
+    {
         if role == base.key() && role_id == custom {
             continue;
         }
         // Project owners stay owners, only owners change an admin's role,
         // and workers stay workers.
-        if role == "owner" || role == "worker" || (role == "admin" && !caller.is_owner()) {
-            skipped += 1;
+        let kept = match role.as_str() {
+            "owner" => Some("They own this project."),
+            "worker" => Some("A worker keeps its role."),
+            "admin" if !caller.is_owner() => Some("Only an owner changes an admin's role."),
+            _ => None,
+        };
+        if let Some(reason) = kept {
+            skipped.push(SkippedProject { project_id, reason });
+            continue;
+        }
+        // Managing members there, as changing their role there one project
+        // at a time takes: the caller's role in the project (custom roles
+        // included) and, through an app, the app's current limit.
+        if let Some(reason) = manage_refusal(
+            caller,
+            project_id,
+            caller_role.as_deref(),
+            caller_permissions.as_deref(),
+            caller_enabled,
+        )? {
+            skipped.push(SkippedProject { project_id, reason });
+            continue;
+        }
+        if !project_holding(transaction, caller.actor_id, project_id)
+            .await?
+            .is_some_and(|held| given.is_subset_of(held))
+        {
+            skipped.push(SkippedProject {
+                project_id,
+                reason: "This role gives more than your role in this project holds.",
+            });
             continue;
         }
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")

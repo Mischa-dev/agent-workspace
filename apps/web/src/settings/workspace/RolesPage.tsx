@@ -398,7 +398,8 @@ function RoleEditor({
           rows={2}
           value={input.description}
         />
-        {!isOwnerRole && input.baseRole !== 'admin' ? (
+        {/* The built-in Viewer is for projects; a workspace default must be a role based on it. */}
+        {!isOwnerRole && input.baseRole !== 'admin' && !(role?.builtIn && input.baseRole === 'viewer') ? (
           <Checkbox
             checked={input.isDefault}
             description="Invitations and new members start with it."

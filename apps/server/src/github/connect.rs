@@ -870,6 +870,15 @@ async fn add_repository(
         Action::GithubIntegrationManage,
     )
     .await?;
+    // It answers with the repository it registers: only for someone who
+    // also sees code here.
+    require_project_access(
+        &mut transaction,
+        &principal,
+        project_id,
+        Action::RepositoryView,
+    )
+    .await?;
     if !workspace_claims_installation(&mut transaction, project_id, request.installation_id).await?
     {
         return Err(AppError::NotFound("github_installation"));

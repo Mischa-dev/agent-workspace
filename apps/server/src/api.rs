@@ -428,9 +428,9 @@ pub(crate) async fn start_run_in(
         INSERT INTO agent_runs (
             id, conversation_id, execution_worker_id, requesting_actor_id,
             execution_profile_id, repository_id, state, prompt,
-            authorization_snapshot, prompt_message_id, config
+            authorization_snapshot, prompt_message_id, config, made_through_app
         )
-        VALUES ($1, $2, $3, $4, $5, $6, 'created', $7, $8, $9, $10)
+        VALUES ($1, $2, $3, $4, $5, $6, 'created', $7, $8, $9, $10, $11)
         "#,
     )
     .bind(run_id)
@@ -447,6 +447,18 @@ pub(crate) async fn start_run_in(
     }))
     .bind(prompt_message_id)
     .bind(serde_json::to_value(&config).map_err(|_| AppError::Internal("serialize run settings"))?)
+    // A person's app or script is in this call when its agent limit is set:
+    // if the run waits in the queue, it starts only within that limit as it
+    // is then (`scheduler::requester_refusal`).
+    .bind(
+        matches!(principal.actor_kind(), Ok(ActorKind::Human))
+            && (principal.made_through_app()
+                || crate::policy::current_agent_limit(
+                    principal.actor_id(),
+                    crate::policy::MembershipScope::Project(conversation.project_id),
+                )
+                .is_some()),
+    )
     .execute(&mut *transaction)
     .await?;
     transition_run(&mut transaction, run_id, RunState::Queued, None).await?;
@@ -1941,7 +1953,7 @@ async fn interrupt_agent_run(
                 ));
             }
             transaction.commit().await?;
-            return fetch_run(&state, run_id, context.project_id)
+            return fetch_run(&state, run_id, context.project_id, principal.actor_id)
                 .await
                 .map(Json);
         }
@@ -1967,7 +1979,7 @@ async fn interrupt_agent_run(
         )
         .await?;
         transaction.commit().await?;
-        return fetch_run(&state, run_id, context.project_id)
+        return fetch_run(&state, run_id, context.project_id, principal.actor_id)
             .await
             .map(Json);
     }
@@ -2013,7 +2025,7 @@ async fn interrupt_agent_run(
     )
     .await?;
     transaction.commit().await?;
-    fetch_run(&state, run_id, context.project_id)
+    fetch_run(&state, run_id, context.project_id, principal.actor_id)
         .await
         .map(Json)
 }
@@ -2086,8 +2098,13 @@ pub(crate) async fn insert_event_entry(
     Ok(())
 }
 
-async fn fetch_run(state: &AppState, run_id: Uuid, project_id: Uuid) -> Result<RunView, AppError> {
-    let run = sqlx::query_as::<_, RunRow>(
+async fn fetch_run(
+    state: &AppState,
+    run_id: Uuid,
+    project_id: Uuid,
+    viewer: Uuid,
+) -> Result<RunView, AppError> {
+    let mut run = sqlx::query_as::<_, RunRow>(
         r#"
         SELECT
             ar.id,
@@ -2143,6 +2160,18 @@ async fn fetch_run(state: &AppState, run_id: Uuid, project_id: Uuid) -> Result<R
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound("agent_run"))?;
+    // The linked pull request only for someone who sees code here.
+    if crate::search::projects_allowing(
+        &state.pool,
+        viewer,
+        &[project_id],
+        crate::policy::Permission::CodeView,
+    )
+    .await?
+    .is_empty()
+    {
+        crate::conversations::hide_pull_request(&mut run);
+    }
     Ok(RunView {
         run,
         failure_acknowledged: false,
@@ -2401,6 +2430,12 @@ pub(crate) trait RunActor {
     fn actor_id(&self) -> Uuid;
     fn actor_kind(&self) -> Result<ActorKind, AppError>;
     fn is_mcp(&self) -> bool {
+        false
+    }
+    /// Started for something a person's app set going earlier (a queued
+    /// launch), outside the app's own call. A run started inside such a
+    /// call is recognized by its agent limit (`start_run_in`).
+    fn made_through_app(&self) -> bool {
         false
     }
 }

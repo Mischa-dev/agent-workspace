@@ -1250,8 +1250,12 @@ async fn list_api_tokens(
     let projects = sqlx::query_as::<_, TokenProject>(
         r#"
         SELECT project.id, project.name, project.project_key AS key,
+               -- As issuing checks: a role that may write anything beyond seeing.
                (membership.role IN ('owner', 'admin', 'member')
-                AND custom_role_allows(membership.role_id, 'tasks.edit')) AS can_write
+                AND (membership.role_id IS NULL OR EXISTS (
+                    SELECT 1 FROM unnest(workspace_role_permissions(membership.role_id)) granted
+                    WHERE granted NOT IN ('projects.view', 'tasks.view', 'code.view', 'members.view', 'directory.view')
+                ))) AS can_write
         FROM project_memberships membership
         JOIN projects project ON project.id = membership.project_id
          AND project.archived_at IS NULL

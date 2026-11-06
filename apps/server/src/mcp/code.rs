@@ -720,6 +720,7 @@ async fn task_pull_requests(
 struct TaskLinkRow {
     pull_request_id: Uuid,
     id: Uuid,
+    project_id: Uuid,
     key: String,
     title: String,
     status: String,
@@ -1020,7 +1021,7 @@ async fn page_details(
     let task_rows = sqlx::query_as::<_, TaskLinkRow>(
         r#"
         SELECT DISTINCT ON (linked.pull_request_id, item.id)
-               linked.pull_request_id, item.id,
+               linked.pull_request_id, item.id, item.project_id,
                project.project_key || '-' || item.number::text AS key,
                item.title, status.name AS status
         FROM (
@@ -1048,8 +1049,22 @@ async fn page_details(
     .bind(ids)
     .fetch_all(&state.pool)
     .await?;
+    // Linked tasks only from projects where the caller (and an app's limit)
+    // still sees tasks: seeing code isn't seeing tasks.
+    let task_projects = task_rows
+        .iter()
+        .map(|row| row.project_id)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let showing =
+        crate::search::projects_showing_tasks(&state.pool, principal.actor_id, &task_projects)
+            .await?;
     let mut tasks: HashMap<Uuid, Vec<LinkedTask>> = HashMap::new();
-    for row in task_rows {
+    for row in task_rows
+        .into_iter()
+        .filter(|row| showing.contains(&row.project_id))
+    {
         let entry = tasks.entry(row.pull_request_id).or_default();
         if entry.len() < 10 {
             entry.push(LinkedTask {

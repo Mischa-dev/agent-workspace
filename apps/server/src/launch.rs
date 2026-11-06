@@ -589,6 +589,30 @@ impl RunActor for LaunchCaller {
     }
 }
 
+/// The caller of a launch's start, with where the launch came from: a run
+/// started for a launch a person's app queued records it, so it stays
+/// within that app's limit if it waits for a slot (`scheduler`). Only the
+/// record changes; who may start the run is the caller's as before.
+struct LaunchStarter<'a> {
+    caller: &'a LaunchCaller,
+    through_app: bool,
+}
+
+impl RunActor for LaunchStarter<'_> {
+    fn actor_id(&self) -> Uuid {
+        self.caller.actor_id
+    }
+    fn actor_kind(&self) -> Result<ActorKind, AppError> {
+        Ok(self.caller.actor_kind)
+    }
+    fn is_mcp(&self) -> bool {
+        self.caller.mcp
+    }
+    fn made_through_app(&self) -> bool {
+        self.through_app
+    }
+}
+
 async fn audit(
     executor: impl PgExecutor<'_>,
     caller: &LaunchCaller,
@@ -688,12 +712,26 @@ struct LaunchRow {
     provider_account_id: Option<Uuid>,
     status_reason: Option<String>,
     agent_profile_id: Option<Uuid>,
+    source: String,
+    made_through_app: bool,
+}
+
+impl LaunchRow {
+    /// Queued by a person's app or script (directly, in a batch, from a
+    /// message it sent or through an automation it made): the run it starts
+    /// stays within that app's limit while it waits for a slot. Source mcp
+    /// covers rows from before the flag was set on every insert, as in
+    /// `drain`.
+    fn through_app(&self) -> bool {
+        self.made_through_app || self.source == "mcp"
+    }
 }
 
 const LAUNCH_ROW: &str = r#"
     id, project_id, work_item_id, conversation_id,
     requested_by_actor_id, via_oauth_grant_id, environment_id,
-    overrides, prompt, provider_account_id, status_reason, agent_profile_id
+    overrides, prompt, provider_account_id, status_reason, agent_profile_id,
+    source, made_through_app
 "#;
 
 #[derive(Clone, Debug, Serialize)]
@@ -829,6 +867,24 @@ async fn can_manage(state: &AppState, caller: &LaunchCaller, project_id: Uuid) -
     .is_ok()
 }
 
+/// Whether the caller may see the launched tasks' keys and titles here: their
+/// role and, through an app, its current limit. Launch views leave the task
+/// out otherwise; the launch itself stays visible.
+async fn sees_tasks(
+    state: &AppState,
+    caller: &LaunchCaller,
+    project_id: Uuid,
+) -> Result<bool, AppError> {
+    Ok(
+        !crate::search::projects_showing_tasks(&state.pool, caller.actor_id, &[project_id])
+            .await?
+            .is_empty(),
+    )
+}
+
+/// Launch views by id, for every response that returns launches (cancel,
+/// a launch's result and its replay, a task's launch plan), with the task
+/// left out for someone who may not see tasks here, as in `list_for`.
 async fn views_by_id(
     state: &AppState,
     caller: &LaunchCaller,
@@ -836,6 +892,7 @@ async fn views_by_id(
     ids: &[Uuid],
 ) -> Result<Vec<LaunchView>, AppError> {
     let manage = can_manage(state, caller, project_id).await;
+    let sees_tasks = sees_tasks(state, caller, project_id).await?;
     let rows = sqlx::query_as::<_, LaunchViewRow>(&format!(
         "{LAUNCH_VIEW_SELECT} WHERE launch.project_id = $1 AND launch.id = ANY($2) \
          ORDER BY launch.position"
@@ -846,7 +903,13 @@ async fn views_by_id(
     .await?;
     Ok(rows
         .into_iter()
-        .map(|row| launch_view(state, row, caller.actor_id, manage))
+        .map(|row| {
+            let mut view = launch_view(state, row, caller.actor_id, manage);
+            if !sees_tasks {
+                view.work_item = None;
+            }
+            view
+        })
         .collect())
 }
 
@@ -1353,6 +1416,18 @@ pub(crate) async fn launch_tasks(
         Action::WorkerInvoke,
     )
     .await?;
+    // A launch names its thread after the task and writes the task's title,
+    // description and criteria into the run's prompt, which the thread
+    // shows: only for someone who sees tasks here (their role, and an app's
+    // agent limit in its call).
+    environments::authorize_project(
+        &state.pool,
+        caller.actor_id,
+        caller.actor_kind,
+        project_id,
+        Action::WorkItemView,
+    )
+    .await?;
     if request.work_item_ids.is_empty() || request.work_item_ids.len() > MAX_TASKS_PER_LAUNCH {
         return Err(AppError::Validation("workItemIds"));
     }
@@ -1529,12 +1604,12 @@ pub(crate) async fn launch_tasks(
                 id, organization_id, project_id, work_item_id, requested_by_actor_id,
                 via_oauth_grant_id, source, environment_id, overrides, prompt,
                 start_when, start_at, provider_account_id, status_reason, position,
-                agent_profile_id
+                agent_profile_id, made_through_app
             )
             VALUES (
                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
                 (SELECT COALESCE(max(position), 0) + 1 FROM launches WHERE project_id = $3),
-                $15
+                $15, $16
             )
             "#,
         )
@@ -1560,6 +1635,19 @@ pub(crate) async fn launch_tasks(
         .bind(request.provider_account_id)
         .bind(reason)
         .bind(request.agent_profile_id)
+        // A person's app or script queued it (whatever the display source),
+        // directly or through an automation it made, whose actions run
+        // within the app's limit: it starts only within that limit when the
+        // queue drains.
+        .bind(
+            caller.actor_kind == ActorKind::Human
+                && (caller.mcp
+                    || crate::policy::current_agent_limit(
+                        caller.actor_id,
+                        crate::policy::MembershipScope::Project(project_id),
+                    )
+                    .is_some()),
+        )
         .execute(&mut *transaction)
         .await?;
         audit(
@@ -1989,7 +2077,10 @@ async fn start_launch(
     };
     let started = crate::api::start_run_in(
         state,
-        caller,
+        &LaunchStarter {
+            caller,
+            through_app: launch.through_app(),
+        },
         launch.via_oauth_grant_id,
         thread_id,
         StartRunRequest {
@@ -2129,6 +2220,8 @@ struct QueuedLaunch {
     environment_id: Option<Uuid>,
     overrides: Value,
     provider_account_id: Option<Uuid>,
+    source: String,
+    made_through_app: bool,
 }
 
 fn actor_kind(value: &str) -> Option<ActorKind> {
@@ -2163,7 +2256,8 @@ pub async fn drain(state: &AppState) -> Result<usize, AppError> {
         SELECT launch.id, launch.project_id, launch.work_item_id, launch.conversation_id,
                launch.requested_by_actor_id, actor.kind AS actor_kind,
                COALESCE(membership.display_name, 'The person who queued it') AS actor_name,
-               launch.environment_id, launch.overrides, launch.provider_account_id
+               launch.environment_id, launch.overrides, launch.provider_account_id, launch.source,
+               launch.made_through_app
         FROM launches launch
         JOIN actors actor ON actor.id = launch.requested_by_actor_id
         LEFT JOIN project_memberships membership
@@ -2183,22 +2277,68 @@ pub async fn drain(state: &AppState) -> Result<usize, AppError> {
             continue;
         };
         // Principle 9: the person who queued it must still be able to start
-        // runs here.
-        if memory::project_access(
+        // runs here, and a launch their app or script queued (made_through_app:
+        // directly, in a batch or through an app-made automation) must still
+        // be within that app's agent limit as it is now. Source mcp covers
+        // rows queued before the flag was set on every insert.
+        let limits =
+            if (queued.source == "mcp" || queued.made_through_app) && kind == ActorKind::Human {
+                let mut connection = state.pool.acquire().await?;
+                Some(
+                    crate::roles::app_access(&mut connection, queued.requested_by_actor_id)
+                        .await?
+                        .limits,
+                )
+            } else {
+                None
+            };
+        let access = memory::project_access(
             &state.pool,
             queued.requested_by_actor_id,
             kind,
             queued.project_id,
             Action::WorkerInvoke,
-        )
-        .await
-        .is_err()
-        {
+        );
+        let access = match limits.clone() {
+            Some(limits) => crate::policy::with_agent_limits(limits, access).await,
+            None => access.await,
+        };
+        if access.is_err() {
             cancel_from_queue(
                 state,
                 &launch,
                 &format!(
                     "{} can no longer start runs in this project, so it was cancelled.",
+                    queued.actor_name
+                ),
+            )
+            .await?;
+            continue;
+        }
+        // A task's launch writes the task into the run's prompt: whoever
+        // queued it must still see tasks here, by role and app limit.
+        let sees_tasks = if queued.work_item_id.is_some() {
+            let view = memory::project_access(
+                &state.pool,
+                queued.requested_by_actor_id,
+                kind,
+                queued.project_id,
+                Action::WorkItemView,
+            );
+            match limits {
+                Some(limits) => crate::policy::with_agent_limits(limits, view).await,
+                None => view.await,
+            }
+            .is_ok()
+        } else {
+            true
+        };
+        if !sees_tasks {
+            cancel_from_queue(
+                state,
+                &launch,
+                &format!(
+                    "{} can no longer see tasks in this project, so it was cancelled.",
                     queued.actor_name
                 ),
             )
@@ -2419,7 +2559,16 @@ pub(crate) async fn list_for(
     .bind(caller.actor_id)
     .fetch_all(&state.pool)
     .await?;
-    let view = |row| launch_view(state, row, caller.actor_id, manage);
+    // The launched task's key and title only for someone whose role (and an
+    // app's limit) lets them see tasks here; the launch itself stays listed.
+    let sees_tasks = sees_tasks(state, caller, project_id).await?;
+    let view = |row| {
+        let mut view = launch_view(state, row, caller.actor_id, manage);
+        if !sees_tasks {
+            view.work_item = None;
+        }
+        view
+    };
     Ok(LaunchList {
         queued: queued.into_iter().map(view).collect(),
         recent: recent.into_iter().map(view).collect(),
@@ -2514,6 +2663,10 @@ async fn cancel_launch(
 pub(crate) struct TagPayload {
     pub message_id: Uuid,
     pub worker_actor_id: Uuid,
+    /// The message was sent by a person's app or script, whose current agent
+    /// limit the launch keeps (checked in the job and again at drain).
+    #[serde(default)]
+    pub made_through_app: bool,
 }
 
 /// A person tagged an agent backed by a harness: launch a run with the
@@ -2551,6 +2704,23 @@ pub(crate) async fn queue_tag_launches(
     let Some(worker_actor_id) = workers.first() else {
         return Ok(());
     };
+    // This runs inside the call that sent the message: an author's app whose
+    // agent limit leaves out "start runs" doesn't launch one by tagging, as
+    // the launch job later runs without that limit.
+    let author =
+        sqlx::query_scalar::<_, Uuid>("SELECT author_actor_id FROM messages WHERE id = $1")
+            .bind(message_id)
+            .fetch_one(&mut **transaction)
+            .await?;
+    if crate::policy::agent_limit_hides(author, project_id, crate::policy::Permission::RunsLaunch) {
+        return Ok(());
+    }
+    // An app acting for the author is in this call when its limit is set.
+    let made_through_app = crate::policy::current_agent_limit(
+        author,
+        crate::policy::MembershipScope::Project(project_id),
+    )
+    .is_some();
     let organization_id =
         sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
             .bind(project_id)
@@ -2563,6 +2733,7 @@ pub(crate) async fn queue_tag_launches(
             .payload(TagPayload {
                 message_id,
                 worker_actor_id: *worker_actor_id,
+                made_through_app,
             })
             .unique(format!("launch.tag:{message_id}"))
             .max_attempts(3),
@@ -2620,17 +2791,33 @@ async fn launch_from_tag(state: &AppState, payload: TagPayload) -> Result<(), Ap
         .bind(caller.actor_id)
         .fetch_one(&state.pool)
         .await?;
-    if !visible
-        || memory::project_access(
-            &state.pool,
-            caller.actor_id,
-            caller.actor_kind,
-            message.project_id,
-            Action::WorkerInvoke,
+    // A message an app sent launches only within that app's current limit.
+    let limits = if payload.made_through_app {
+        let mut connection = state.pool.acquire().await?;
+        Some(
+            crate::roles::app_access(&mut connection, caller.actor_id)
+                .await?
+                .limits,
         )
-        .await
-        .is_err()
-    {
+    } else {
+        None
+    };
+    let access = memory::project_access(
+        &state.pool,
+        caller.actor_id,
+        caller.actor_kind,
+        message.project_id,
+        Action::WorkerInvoke,
+    );
+    let access = match limits {
+        Some(limits) => crate::policy::with_agent_limits(limits, access).await,
+        None => access.await,
+    };
+    if !visible || access.is_err() {
+        tracing::info!(
+            message_id = %payload.message_id,
+            "tag launch skipped: its author, or the app it came through, can no longer start runs here"
+        );
         return Ok(());
     }
     let thread_id = if message.conversation_kind == "thread" {
@@ -2659,7 +2846,7 @@ async fn launch_from_tag(state: &AppState, payload: TagPayload) -> Result<(), Ap
         INSERT INTO launches (
             id, organization_id, project_id, conversation_id, source_message_id,
             requested_by_actor_id, source, environment_id, prompt, start_when, position,
-            work_item_id, agent_profile_id
+            work_item_id, agent_profile_id, made_through_app
         )
         VALUES (
             $1, $2, $3, $4, $5, $6, 'tag', $7, $8, 'now',
@@ -2667,7 +2854,7 @@ async fn launch_from_tag(state: &AppState, payload: TagPayload) -> Result<(), Ap
             (SELECT link.work_item_id FROM work_item_conversation_links link
              WHERE link.project_id = $3 AND link.conversation_id = $4
              ORDER BY link.created_at LIMIT 1),
-            $9
+            $9, $10
         )
         ON CONFLICT (source_message_id) WHERE source = 'tag' DO NOTHING
         "#,
@@ -2695,6 +2882,7 @@ async fn launch_from_tag(state: &AppState, payload: TagPayload) -> Result<(), Ap
         prompt
     })
     .bind(profile.as_ref().map(|profile| profile.id))
+    .bind(payload.made_through_app)
     .execute(&mut *transaction)
     .await?
     .rows_affected();

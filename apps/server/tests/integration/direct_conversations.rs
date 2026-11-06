@@ -446,6 +446,121 @@ async fn agents_in_your_projects_can_be_messaged() {
         ])
     );
 
+    // An agent's read-only access in Messages holds even when its token may
+    // write and its workspace role is Member: Writer, made a Viewer in Build
+    // after it was connected, joins its DM as a Viewer and can't post there,
+    // while Talker, a Member, can; nor does a change to Writer's workspace
+    // role lift its role in Messages.
+    let agent = |name: &'static str| {
+        let headers = headers(None);
+        let app = app.clone();
+        async move {
+            let (status, created) = call(
+                &app,
+                "POST",
+                &format!("/api/v1/projects/{build}/external-agents"),
+                &headers,
+                json!({
+                    "connectionName": name,
+                    "displayName": name,
+                    "handle": name.to_lowercase(),
+                    "role": "member",
+                    "scopes": ["read", "write", "events"],
+                }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{created}");
+            let token = created["oneTimeCredential"]["token"]
+                .as_str()
+                .expect("agent token")
+                .to_owned();
+            (uuid(&created["connection"], "actorId"), token)
+        }
+    };
+    let (talker, talker_token) = agent("Talker").await;
+    let (writer, writer_token) = agent("Writer").await;
+    sqlx::query(
+        "UPDATE project_memberships SET role = 'viewer' WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(build)
+    .bind(writer)
+    .execute(&pool)
+    .await
+    .expect("Writer becomes a Viewer in Build");
+    let mut dms = Vec::new();
+    for (actor, key) in [(talker, "dm-talker"), (writer, "dm-writer")] {
+        let (status, dm) = call(
+            &app,
+            "POST",
+            "/api/v1/direct/dms",
+            &headers(Some(key)),
+            json!({ "actorId": actor }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{dm}");
+        dms.push(uuid(&dm["conversation"], "id"));
+    }
+    let space_role = |actor: Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, String>(
+                "SELECT role FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+            )
+            .bind(space_id)
+            .bind(actor)
+            .fetch_one(&pool)
+            .await
+            .expect("space role")
+        }
+    };
+    assert_eq!(space_role(writer).await, "viewer");
+    let talker_session = super::agent_interface::initialize(&app, &talker_token)
+        .await
+        .expect("Talker's session");
+    let said = super::agent_interface::tool(
+        &app,
+        &talker_token,
+        &talker_session,
+        "message_send",
+        json!({"conversationId": dms[0], "text": "Talker here", "clientRequestId": "talker-hello"}),
+    )
+    .await;
+    assert_eq!(said["outcome"], "ok", "{said}");
+    let writer_session = super::agent_interface::initialize(&app, &writer_token)
+        .await
+        .expect("Writer's session");
+    let refused = super::agent_interface::tool(
+        &app,
+        &writer_token,
+        &writer_session,
+        "message_send",
+        json!({"conversationId": dms[1], "text": "Writer here", "clientRequestId": "writer-hello"}),
+    )
+    .await;
+    assert_ne!(refused["outcome"], "ok", "{refused}");
+    let posted: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM messages WHERE conversation_id = $1 AND author_actor_id = $2",
+    )
+    .bind(dms[1])
+    .bind(writer)
+    .fetch_one(&pool)
+    .await
+    .expect("Writer's messages");
+    assert_eq!(posted, 0, "the Viewer agent posted in Messages");
+    sqlx::query(
+        "UPDATE organization_memberships SET role = 'admin' WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(organization_id)
+    .bind(writer)
+    .execute(&pool)
+    .await
+    .expect("a change to Writer's workspace role");
+    assert_eq!(
+        space_role(writer).await,
+        "viewer",
+        "an agent's role in Messages followed its workspace role"
+    );
+
     agent_workspace_server::test_support::drop_schema(&admin, &schema)
         .await
         .expect("drop schema");
