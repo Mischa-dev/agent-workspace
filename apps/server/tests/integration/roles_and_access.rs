@@ -4415,6 +4415,107 @@ async fn the_workspace_member_directory_follows_directory_view() {
     }
 }
 
+/// Sending a delivery again through an app keeps to that app's limit even
+/// when the webhook was made in the browser: an app without "see tasks"
+/// can't resend a task's delivery; with it, the delivery is queued and
+/// remembers that an app asked, so sending checks the limit again.
+#[tokio::test]
+async fn redelivering_through_an_app_keeps_to_its_limit() {
+    let Some(setup) = setup("awd74_webhook_redeliver").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let project = work.parse::<Uuid>().expect("project");
+    let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
+    let task = owner_task(&setup, &work, "Secret webhook plan").await;
+    // A webhook Bea made in the browser, and a task delivery it sent.
+    let webhook = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO webhook_subscriptions (
+            id, organization_id, project_id, owner_actor_id, name, url, event_types
+        ) VALUES ($1, $2, $3, $4, 'Bea hook', 'https://example.com/hook', '{task.updated}')
+        "#,
+    )
+    .bind(webhook)
+    .bind(setup.organization_id)
+    .bind(project)
+    .bind(bea)
+    .execute(&setup.pool)
+    .await
+    .expect("webhook");
+    let delivery = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO webhook_deliveries (
+            id, subscription_id, organization_id, project_id, event_type, event_key,
+            subject, state, attempts, delivered_at
+        ) VALUES ($1, $2, $3, $4, 'task.updated', $5, $6, 'delivered', 1, now())
+        "#,
+    )
+    .bind(delivery)
+    .bind(webhook)
+    .bind(setup.organization_id)
+    .bind(project)
+    .bind(format!("task:{task}:updated"))
+    .bind(json!({"workItemId": task}))
+    .execute(&setup.pool)
+    .await
+    .expect("delivery");
+    let stored = |pool: sqlx::PgPool| async move {
+        sqlx::query_as::<_, (String, bool)>(
+            "SELECT state, made_through_app FROM webhook_deliveries WHERE id = $1",
+        )
+        .bind(delivery)
+        .fetch_one(&pool)
+        .await
+        .expect("stored delivery")
+    };
+    let limit = |permissions: Value| {
+        setup.browser.request(
+            "PUT",
+            &format!(
+                "/api/v1/organizations/{}/members/{bea}/agent-limit",
+                setup.organization_id
+            ),
+            None,
+            json!({"permissions": permissions}),
+        )
+    };
+    let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
+    let session = initialize(app, &bea_app).await.expect("Bea's app");
+    let redeliver = json!({
+        "operation": "redeliver",
+        "webhookId": webhook.to_string(),
+        "deliveryId": delivery.to_string(),
+    });
+
+    // Her app may change tasks but not see them: no resending.
+    let (status, limited) = send(app, limit(json!(["tasks.edit", "channels.post"]))).await;
+    assert_eq!(status, StatusCode::OK, "{limited}");
+    let refused = tool(app, &bea_app, &session, "webhook_write", redeliver.clone()).await;
+    assert_ne!(refused["outcome"], "ok", "{refused}");
+    assert_eq!(
+        stored(setup.pool.clone()).await,
+        ("delivered".to_owned(), false)
+    );
+
+    // With "see tasks", it's queued, marked as an app's.
+    let (status, limited) = send(
+        app,
+        limit(json!(["tasks.view", "tasks.edit", "channels.post"])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{limited}");
+    let queued = tool(app, &bea_app, &session, "webhook_write", redeliver).await;
+    assert_eq!(queued["outcome"], "ok", "{queued}");
+    assert_eq!(
+        stored(setup.pool.clone()).await,
+        ("pending".to_owned(), true)
+    );
+}
+
 /// The custom role `actor` holds in `project`, if any.
 async fn project_role_id(setup: &Setup, project: &str, actor: Uuid) -> Option<Uuid> {
     sqlx::query_scalar::<_, Option<Uuid>>(

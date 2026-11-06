@@ -732,15 +732,40 @@ pub(crate) async fn redeliver(
     require_person(caller)?;
     let mut transaction = state.pool.begin().await?;
     let current = owned(&mut *transaction, caller, webhook_id).await?;
+    // Through an app, the app's limit decides as well, whatever the webhook
+    // was made through: it may not resend a task without "see tasks", or a
+    // pull request without "see code", and the delivery remembers that an
+    // app asked, so sending it checks that limit again.
+    let app = through_app(caller);
+    if app {
+        let Some((project_id, subject)) = sqlx::query_as::<_, (Option<Uuid>, Value)>(
+            "SELECT project_id, subject FROM webhook_deliveries WHERE id = $1 AND subscription_id = $2",
+        )
+        .bind(delivery_id)
+        .bind(webhook_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        else {
+            return Err(AppError::NotFound("delivery"));
+        };
+        let subject: Subject = serde_json::from_value(subject).unwrap_or_default();
+        if let Some(project_id) = project_id
+            && app_limit_hides(&state.pool, &current, project_id, &subject, true).await?
+        {
+            return Err(AppError::NotFound("delivery"));
+        }
+    }
     let updated = sqlx::query(
         r#"
         UPDATE webhook_deliveries
-        SET state = 'pending', last_error = NULL, updated_at = now()
+        SET state = 'pending', last_error = NULL, updated_at = now(),
+            made_through_app = made_through_app OR $3
         WHERE id = $1 AND subscription_id = $2 AND state <> 'pending'
         "#,
     )
     .bind(delivery_id)
     .bind(webhook_id)
+    .bind(app)
     .execute(&mut *transaction)
     .await?;
     if updated.rows_affected() == 1 {
@@ -850,7 +875,14 @@ pub(crate) async fn fan_out(state: &AppState, event: &Event) -> Result<usize, Ap
             continue;
         }
         if !visible_to(&state.pool, owner, event.project_id, &event.subject).await?
-            || app_limit_hides(&state.pool, &subscription, event.project_id, &event.subject).await?
+            || app_limit_hides(
+                &state.pool,
+                &subscription,
+                event.project_id,
+                &event.subject,
+                false,
+            )
+            .await?
         {
             continue;
         }
@@ -890,17 +922,19 @@ fn through_app(caller: &Caller) -> bool {
     caller.actor_kind == ActorKind::Human && caller.channel == "mcp"
 }
 
-/// Whether the agent limit of the app a webhook was made through, as it is
-/// now, keeps it from what the event is about: a task without "see tasks",
-/// or a pull request without "see code", in the event's project.
+/// Whether the agent limit of the app a webhook was made through (or, with
+/// `through_app`, an app that asked for this delivery), as it is now, keeps
+/// it from what the event is about: a task without "see tasks", or a pull
+/// request without "see code", in the event's project.
 async fn app_limit_hides(
     pool: &PgPool,
     subscription: &SubscriptionRow,
     project_id: Uuid,
     subject: &Subject,
+    through_app: bool,
 ) -> Result<bool, AppError> {
     use crate::policy::{Permission, PermissionSet};
-    if !subscription.made_through_app
+    if !(subscription.made_through_app || through_app)
         || (subject.work_item_id.is_none() && subject.pull_request_id.is_none())
     {
         return Ok(false);
@@ -972,6 +1006,8 @@ struct DueDelivery {
     occurred_at: DateTime<Utc>,
     state: String,
     attempts: i32,
+    /// An app asked to send it again: its limit is checked as well.
+    made_through_app: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1064,7 +1100,7 @@ async fn deliver(context: &JobContext) -> Result<(), JobError> {
     let Some(due) = sqlx::query_as::<_, DueDelivery>(
         r#"
         SELECT id, subscription_id, organization_id, project_id, event_type, subject,
-               occurred_at, state, attempts
+               occurred_at, state, attempts, made_through_app
         FROM webhook_deliveries WHERE id = $1
         "#,
     )
@@ -1098,7 +1134,14 @@ async fn deliver(context: &JobContext) -> Result<(), JobError> {
     if let Some(project_id) = due.project_id
         && due.event_type != "ping"
         && (!visible_to(pool, subscription.owner_actor_id, project_id, &subject).await?
-            || app_limit_hides(pool, &subscription, project_id, &subject).await?)
+            || app_limit_hides(
+                pool,
+                &subscription,
+                project_id,
+                &subject,
+                due.made_through_app,
+            )
+            .await?)
     {
         finish_delivery(
             pool,
