@@ -2,7 +2,7 @@ import type { FileAttachment } from '../files/model'
 import type {
   ConversationActor,
   ConversationKind,
-  ConversationWorkItemReference,
+  ConversationWorkItemChip,
   MessageContentV1,
   MessageNode,
   ReplyTarget,
@@ -17,7 +17,7 @@ export type ComposerSubmission = {
   attachments?: FileAttachment[]
   /** The people and tasks it names, for showing it formatted while it sends. */
   mentions?: ConversationActor[]
-  workItems?: ConversationWorkItemReference[]
+  workItems?: ConversationWorkItemChip[]
   /** The message it replies to, quoted above it. */
   replyTo?: ReplyTarget
 }
@@ -49,7 +49,7 @@ const WORD = /[\p{L}\p{N}_.-]/u
 export function buildMessageContent(
   text: string,
   mentions: ConversationActor[],
-  workItems: ConversationWorkItemReference[] = [],
+  workItems: ConversationWorkItemChip[] = [],
 ): MessageContentV1 | null {
   const source = text.trim()
   if (!source) return null
@@ -93,7 +93,7 @@ export const EDIT_HISTORY_HINT =
 export type ComposerDraft = {
   text: string
   mentions: ConversationActor[]
-  workItems: ConversationWorkItemReference[]
+  workItems: ConversationWorkItemChip[]
 }
 
 /** Where a send waiting for the connection goes, so it can go out from any page, and where to see it. */
@@ -121,12 +121,12 @@ export type QueuedSend = ComposerSubmission & { text: string } & Partial<Pick<Co
 export function draftFromContent(message: {
   content: MessageContentV1
   mentionedActors: ConversationActor[]
-  referencedWorkItems: ConversationWorkItemReference[]
+  referencedWorkItems: ConversationWorkItemChip[]
 }): ComposerDraft {
   const actors = new Map(message.mentionedActors.map((actor) => [actor.id, actor]))
   const items = new Map(message.referencedWorkItems.map((item) => [item.id, item]))
   const mentions = new Map<string, ConversationActor>()
-  const workItems = new Map<string, ConversationWorkItemReference>()
+  const workItems = new Map<string, ConversationWorkItemChip>()
   let text = ''
   for (const node of message.content.nodes) {
     if (node.type === 'text') {

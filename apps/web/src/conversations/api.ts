@@ -13,7 +13,7 @@ import type {
   ConversationMessage,
   ConversationTimelineEntry,
   ConversationTimelinePage,
-  ConversationWorkItemReference,
+  ConversationWorkItemChip,
   MentionSearchPage,
   MessageContentV1,
   MessageReaction,
@@ -34,13 +34,11 @@ export {
 
 function normalizeWorkItemReference(
   value: unknown,
-): ConversationWorkItemReference | null {
+): ConversationWorkItemChip | null {
   const item = asRecord(value)
   if (
     typeof item.id !== 'string' ||
     typeof item.key !== 'string' ||
-    typeof item.title !== 'string' ||
-    typeof item.statusCategory !== 'string' ||
     typeof item.href !== 'string' ||
     !item.href.startsWith('/projects/')
   ) {
@@ -49,8 +47,9 @@ function normalizeWorkItemReference(
   return {
     id: item.id,
     key: item.key.slice(0, 64),
-    title: item.title.slice(0, 240),
-    statusCategory: item.statusCategory.slice(0, 40),
+    title: typeof item.title === 'string' ? item.title.slice(0, 240) : undefined,
+    statusCategory:
+      typeof item.statusCategory === 'string' ? item.statusCategory.slice(0, 40) : undefined,
     archivedAt: nullableString(item.archivedAt),
     href: item.href,
   }
@@ -114,7 +113,7 @@ export function normalizeMessage(value: unknown): ConversationMessage | null {
       ? message.referencedWorkItems
           .map(normalizeWorkItemReference)
           .filter(
-            (item): item is ConversationWorkItemReference => item !== null,
+            (item): item is ConversationWorkItemChip => item !== null,
           )
       : [],
     reactions: normalizeReactions(message.reactions),
@@ -256,7 +255,7 @@ export function normalizeTimelinePage(value: unknown): ConversationTimelinePage 
     linkedWorkItems: Array.isArray(root.linkedWorkItems)
       ? root.linkedWorkItems
           .map(normalizeWorkItemReference)
-          .filter((item): item is ConversationWorkItemReference => item !== null)
+          .filter((item): item is ConversationWorkItemChip => item !== null)
       : [],
     entries,
     nextCursor: nullableString(root.nextCursor),

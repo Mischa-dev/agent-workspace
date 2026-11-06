@@ -31,6 +31,7 @@ use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, AppError},
+    policy::{Permission, RoleGrant},
     settings::{self, SettingType, Target},
     work_item_commands::{AuditAttribution, CommandActor},
     work_item_labels::{self, NewLabel},
@@ -230,10 +231,10 @@ async fn workspace_role(
     connection: &mut PgConnection,
     actor_id: Uuid,
     organization_id: Uuid,
-) -> Result<Option<String>, AppError> {
-    Ok(sqlx::query_scalar::<_, String>(
+) -> Result<Option<RoleGrant>, AppError> {
+    let stored = sqlx::query_as::<_, (String, Option<Vec<String>>)>(
         r#"
-        SELECT membership.role
+        SELECT membership.role, workspace_role_permissions(membership.role_id)
         FROM organization_memberships membership
         JOIN actors actor ON actor.id = membership.actor_id AND actor.status = 'active'
         WHERE membership.organization_id = $1 AND membership.actor_id = $2
@@ -243,12 +244,18 @@ async fn workspace_role(
     .bind(organization_id)
     .bind(actor_id)
     .fetch_optional(&mut *connection)
-    .await?)
+    .await?;
+    stored
+        .map(|(role, permissions)| Ok(RoleGrant::stored(&role, permissions.as_deref())?))
+        .transpose()
 }
 
-fn may_edit(principal: &AuthenticatedActor, role: &str, row: &ProjectTemplateRow) -> bool {
+/// Whoever made the template, or someone who manages the workspace's
+/// settings.
+fn may_edit(principal: &AuthenticatedActor, role: &RoleGrant, row: &ProjectTemplateRow) -> bool {
     principal.actor_kind == "human"
-        && (row.created_by_actor_id == principal.actor_id || matches!(role, "owner" | "admin"))
+        && (row.created_by_actor_id == principal.actor_id
+            || role.permissions().contains(Permission::SettingsManage))
 }
 
 #[derive(Debug, Serialize)]

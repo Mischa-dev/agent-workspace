@@ -29,7 +29,7 @@ use crate::{
     },
     policy::{
         Action, ActorKind, ApprovalEligibility, ApprovalRequirements, Decision, Membership,
-        MembershipRole, ProjectScope, Resource, Subject, authorize,
+        MembershipRole, ProjectScope, Resource, RoleGrant, Subject, authorize,
     },
     reactions::{self, ReactionView},
     replies::{self, ReplyRequestView},
@@ -98,6 +98,7 @@ struct ProjectAccessRow {
     project_id: Uuid,
     project_archived: bool,
     membership_role: String,
+    membership_role_permissions: Option<Vec<String>>,
     membership_enabled: bool,
 }
 
@@ -118,6 +119,7 @@ pub(crate) struct ConversationAccessRow {
     pub(crate) thread_outcome: Option<String>,
     pub(crate) next_entry_sequence: i64,
     membership_role: String,
+    membership_role_permissions: Option<Vec<String>>,
     membership_enabled: bool,
 }
 
@@ -166,7 +168,10 @@ impl ConversationAccessRow {
             true,
             Some(Membership::project(
                 self.project_id,
-                parse_membership_role(&self.membership_role)?,
+                RoleGrant::stored(
+                    &self.membership_role,
+                    self.membership_role_permissions.as_deref(),
+                )?,
                 self.membership_enabled,
             )),
             None,
@@ -384,8 +389,12 @@ pub struct MessageRemovalView {
 pub struct ConversationWorkItemReferenceView {
     pub id: Uuid,
     pub key: String,
-    pub title: String,
-    pub status_category: String,
+    /// Left out for a reader who can't see tasks in its project; the key
+    /// and link stay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_category: Option<String>,
     pub archived_at: Option<String>,
     pub href: String,
 }
@@ -844,6 +853,7 @@ async fn list_channels(
     let create_channel = policy_allows(
         &principal,
         &access.membership_role,
+        access.membership_role_permissions.as_deref(),
         access.membership_enabled,
         project_id,
         Action::ChannelCreate,
@@ -1778,14 +1788,16 @@ pub(crate) async fn append_message_command_with(
     };
 
     let message_id = Uuid::now_v7();
+    let notify_everyone =
+        may_notify_everyone(&mut *transaction, actor.actor_id, conversation.project_id).await?;
     sqlx::query(
         r#"
         INSERT INTO messages (
             id, project_id, conversation_id, author_actor_id,
             content_version, content, plain_text, via_oauth_grant_id, forwarded_message_id,
-            reply_to_message_id
+            reply_to_message_id, may_notify_everyone
         )
-        VALUES ($1, $2, $3, $4, 1, $5, $6, $7, $8, $9)
+        VALUES ($1, $2, $3, $4, 1, $5, $6, $7, $8, $9, $10)
         "#,
     )
     .bind(message_id)
@@ -1797,6 +1809,7 @@ pub(crate) async fn append_message_command_with(
     .bind(actor.via_grant_id)
     .bind(extras.forwarded_message_id)
     .bind(extras.reply_to_message_id)
+    .bind(notify_everyone)
     .execute(&mut *transaction)
     .await?;
     insert_message_projections(
@@ -1891,19 +1904,22 @@ pub(crate) async fn append_message_command_with(
         &mentioned_actor_ids,
     )
     .await?;
-    let referenced_work_items = work_item_rows
+    let mut referenced_work_items: Vec<ConversationWorkItemReferenceView> = work_item_rows
         .into_iter()
         .map(
             |(id, key, title, status_category, archived_at)| ConversationWorkItemReferenceView {
                 id,
                 key,
-                title,
-                status_category,
+                title: Some(title),
+                status_category: Some(status_category),
                 archived_at,
                 href: format!("/projects/{}/work-items/{id}", conversation.project_id),
             },
         )
         .collect();
+    if !sees_tasks_in(&mut *transaction, actor.actor_id, conversation.project_id).await? {
+        hide_work_item_details(&mut referenced_work_items);
+    }
     let message = MessageView {
         id: result.message_id,
         author: ActorView {
@@ -2226,7 +2242,18 @@ pub(crate) async fn lock_message_conversation(
                conversation.thread_status,
                conversation.thread_outcome,
                conversation.next_entry_sequence,
-               membership.role AS membership_role,
+               -- The Messages (direct) space follows the workspace role as it is
+            -- now: its base and its permissions together, never the base stored
+            -- when they first opened Messages with today's permissions.
+            -- That's a person's: an agent keeps the role it was given there (Viewer,
+            -- for one joined to a direct message), as before.
+            CASE WHEN project.kind = 'direct' AND EXISTS (SELECT 1 FROM actors direct_person
+                     WHERE direct_person.id = membership.actor_id AND direct_person.kind = 'human')
+                 THEN organization_membership.role
+                 ELSE membership.role END AS membership_role,
+            workspace_role_permissions(CASE WHEN project.kind = 'direct' AND EXISTS (SELECT 1 FROM actors direct_person
+                     WHERE direct_person.id = membership.actor_id AND direct_person.kind = 'human')
+                THEN organization_membership.role_id ELSE membership.role_id END) AS membership_role_permissions,
                membership.enabled AS membership_enabled
         FROM conversations conversation
         JOIN projects project ON project.id = conversation.project_id
@@ -2271,7 +2298,10 @@ pub(crate) async fn lock_message_conversation(
         true,
         Some(Membership::project(
             row.project_id,
-            parse_membership_role(&row.membership_role)?,
+            RoleGrant::stored(
+                &row.membership_role,
+                row.membership_role_permissions.as_deref(),
+            )?,
             row.membership_enabled,
         )),
         None,
@@ -2565,11 +2595,18 @@ async fn conversation_timeline(
     )
     .await?;
     crate::forwarding::attach_forwards(&state.pool, &mut entries, principal.actor_id).await?;
+    // Task chips name their task only for a reader who sees tasks here.
+    let sees_tasks =
+        sees_tasks_in(&state.pool, principal.actor_id, conversation.project_id).await?;
+    if !sees_tasks {
+        hide_entry_work_item_details(&mut entries);
+    }
     crate::later::attach_saved(&state.pool, &mut entries, principal.actor_id).await?;
     let read_state = fetch_read_state(&state, conversation.id, principal.actor_id).await?;
-    let linked_work_items = if conversation.kind == "thread" {
-        let value = sqlx::query_scalar::<_, serde_json::Value>(
-            r#"
+    let mut linked_work_items: Vec<ConversationWorkItemReferenceView> =
+        if conversation.kind == "thread" {
+            let value = sqlx::query_scalar::<_, serde_json::Value>(
+                r#"
             SELECT COALESCE(jsonb_agg(
                 jsonb_build_object(
                     'id', item.id,
@@ -2588,16 +2625,19 @@ async fn conversation_timeline(
               ON status.project_id = item.project_id AND status.id = item.status_id
             WHERE link.project_id = $1 AND link.conversation_id = $2
             "#,
-        )
-        .bind(conversation.project_id)
-        .bind(conversation.id)
-        .fetch_one(&state.pool)
-        .await?;
-        serde_json::from_value(value)
-            .map_err(|_| AppError::Internal("invalid linked Work Item projection"))?
-    } else {
-        Vec::new()
-    };
+            )
+            .bind(conversation.project_id)
+            .bind(conversation.id)
+            .fetch_one(&state.pool)
+            .await?;
+            serde_json::from_value(value)
+                .map_err(|_| AppError::Internal("invalid linked Work Item projection"))?
+        } else {
+            Vec::new()
+        };
+    if !sees_tasks {
+        hide_work_item_details(&mut linked_work_items);
+    }
     let (active_run, latest_terminal_run, approvals) =
         fetch_run_projection(&state, &principal, &conversation).await?;
     let capabilities = conversation_capabilities(&principal, &conversation)?;
@@ -3159,6 +3199,7 @@ pub(crate) async fn set_conversation_archived(
             thread_outcome,
             next_entry_sequence,
             $3::text AS membership_role,
+            $6::text[] AS membership_role_permissions,
             true AS membership_enabled
         "#,
     )
@@ -3167,6 +3208,7 @@ pub(crate) async fn set_conversation_archived(
     .bind(&conversation.membership_role)
     .bind(&conversation.parent_kind)
     .bind(archive)
+    .bind(&conversation.membership_role_permissions)
     .fetch_one(&mut **transaction)
     .await
     .map_err(|error| {
@@ -3469,6 +3511,7 @@ async fn project_conversation_sidebar(
     let create_channel = policy_allows(
         &principal,
         &access.membership_role,
+        access.membership_role_permissions.as_deref(),
         access.membership_enabled,
         project_id,
         Action::ChannelCreate,
@@ -3608,7 +3651,18 @@ async fn authorized_project(
         SELECT
             project.id AS project_id,
             project.archived_at IS NOT NULL AS project_archived,
-            membership.role AS membership_role,
+            -- The Messages (direct) space follows the workspace role as it is
+            -- now: its base and its permissions together, never the base stored
+            -- when they first opened Messages with today's permissions.
+            -- That's a person's: an agent keeps the role it was given there (Viewer,
+            -- for one joined to a direct message), as before.
+            CASE WHEN project.kind = 'direct' AND EXISTS (SELECT 1 FROM actors direct_person
+                     WHERE direct_person.id = membership.actor_id AND direct_person.kind = 'human')
+                 THEN organization_membership.role
+                 ELSE membership.role END AS membership_role,
+            workspace_role_permissions(CASE WHEN project.kind = 'direct' AND EXISTS (SELECT 1 FROM actors direct_person
+                     WHERE direct_person.id = membership.actor_id AND direct_person.kind = 'human')
+                THEN organization_membership.role_id ELSE membership.role_id END) AS membership_role_permissions,
             membership.enabled AS membership_enabled
         FROM projects project
         JOIN organization_memberships organization_membership
@@ -3629,6 +3683,7 @@ async fn authorized_project(
     require_policy(
         principal,
         &row.membership_role,
+        row.membership_role_permissions.as_deref(),
         row.membership_enabled,
         row.project_id,
         action,
@@ -3648,7 +3703,18 @@ async fn lock_project_access(
         SELECT
             project.id AS project_id,
             project.archived_at IS NOT NULL AS project_archived,
-            membership.role AS membership_role,
+            -- The Messages (direct) space follows the workspace role as it is
+            -- now: its base and its permissions together, never the base stored
+            -- when they first opened Messages with today's permissions.
+            -- That's a person's: an agent keeps the role it was given there (Viewer,
+            -- for one joined to a direct message), as before.
+            CASE WHEN project.kind = 'direct' AND EXISTS (SELECT 1 FROM actors direct_person
+                     WHERE direct_person.id = membership.actor_id AND direct_person.kind = 'human')
+                 THEN organization_membership.role
+                 ELSE membership.role END AS membership_role,
+            workspace_role_permissions(CASE WHEN project.kind = 'direct' AND EXISTS (SELECT 1 FROM actors direct_person
+                     WHERE direct_person.id = membership.actor_id AND direct_person.kind = 'human')
+                THEN organization_membership.role_id ELSE membership.role_id END) AS membership_role_permissions,
             membership.enabled AS membership_enabled
         FROM projects project
         JOIN organization_memberships organization_membership
@@ -3670,6 +3736,7 @@ async fn lock_project_access(
     require_policy(
         principal,
         &row.membership_role,
+        row.membership_role_permissions.as_deref(),
         row.membership_enabled,
         row.project_id,
         action,
@@ -3714,7 +3781,18 @@ pub(crate) async fn fetch_conversation_access(
             conversation.thread_status,
             conversation.thread_outcome,
             conversation.next_entry_sequence,
-            membership.role AS membership_role,
+            -- The Messages (direct) space follows the workspace role as it is
+            -- now: its base and its permissions together, never the base stored
+            -- when they first opened Messages with today's permissions.
+            -- That's a person's: an agent keeps the role it was given there (Viewer,
+            -- for one joined to a direct message), as before.
+            CASE WHEN project.kind = 'direct' AND EXISTS (SELECT 1 FROM actors direct_person
+                     WHERE direct_person.id = membership.actor_id AND direct_person.kind = 'human')
+                 THEN organization_membership.role
+                 ELSE membership.role END AS membership_role,
+            workspace_role_permissions(CASE WHEN project.kind = 'direct' AND EXISTS (SELECT 1 FROM actors direct_person
+                     WHERE direct_person.id = membership.actor_id AND direct_person.kind = 'human')
+                THEN organization_membership.role_id ELSE membership.role_id END) AS membership_role_permissions,
             membership.enabled AS membership_enabled
         FROM conversations conversation
         JOIN projects project ON project.id = conversation.project_id
@@ -3823,7 +3901,18 @@ pub(crate) async fn lock_conversation_for(
             conversation.thread_status,
             conversation.thread_outcome,
             conversation.next_entry_sequence,
-            membership.role AS membership_role,
+            -- The Messages (direct) space follows the workspace role as it is
+            -- now: its base and its permissions together, never the base stored
+            -- when they first opened Messages with today's permissions.
+            -- That's a person's: an agent keeps the role it was given there (Viewer,
+            -- for one joined to a direct message), as before.
+            CASE WHEN project.kind = 'direct' AND EXISTS (SELECT 1 FROM actors direct_person
+                     WHERE direct_person.id = membership.actor_id AND direct_person.kind = 'human')
+                 THEN organization_membership.role
+                 ELSE membership.role END AS membership_role,
+            workspace_role_permissions(CASE WHEN project.kind = 'direct' AND EXISTS (SELECT 1 FROM actors direct_person
+                     WHERE direct_person.id = membership.actor_id AND direct_person.kind = 'human')
+                THEN organization_membership.role_id ELSE membership.role_id END) AS membership_role_permissions,
             membership.enabled AS membership_enabled
         FROM conversations conversation
         JOIN projects project ON project.id = conversation.project_id
@@ -3922,12 +4011,21 @@ pub(crate) fn require_conversation_kind(
 fn require_policy(
     principal: &AuthenticatedActor,
     role: &str,
+    role_permissions: Option<&[String]>,
     enabled: bool,
     project_id: Uuid,
     action: Action,
     scope: ProjectScope,
 ) -> Result<(), AppError> {
-    if policy_allows(principal, role, enabled, project_id, action, scope)? {
+    if policy_allows(
+        principal,
+        role,
+        role_permissions,
+        enabled,
+        project_id,
+        action,
+        scope,
+    )? {
         Ok(())
     } else {
         // Resource lookup and authorization intentionally collapse to the same
@@ -3939,6 +4037,7 @@ fn require_policy(
 fn policy_allows(
     principal: &AuthenticatedActor,
     role: &str,
+    role_permissions: Option<&[String]>,
     enabled: bool,
     project_id: Uuid,
     action: Action,
@@ -3950,7 +4049,7 @@ fn policy_allows(
         true,
         Some(Membership::project(
             project_id,
-            parse_membership_role(role)?,
+            RoleGrant::stored(role, role_permissions)?,
             enabled,
         )),
         None,
@@ -3969,17 +4068,6 @@ pub(crate) fn parse_actor_kind(value: &str) -> Result<ActorKind, AppError> {
         "integration" => Ok(ActorKind::Integration),
         "system" => Ok(ActorKind::System),
         _ => Err(AppError::Internal("stored Actor kind")),
-    }
-}
-
-fn parse_membership_role(value: &str) -> Result<MembershipRole, AppError> {
-    match value {
-        "owner" => Ok(MembershipRole::Owner),
-        "admin" => Ok(MembershipRole::Admin),
-        "member" => Ok(MembershipRole::Member),
-        "viewer" => Ok(MembershipRole::Viewer),
-        "worker" => Ok(MembershipRole::Worker),
-        _ => Err(AppError::Internal("stored membership role")),
     }
 }
 
@@ -4075,6 +4163,88 @@ pub(crate) async fn fetch_actor_views(
             avatar_url: None,
         })
         .collect())
+}
+
+/// Whether `viewer` sees tasks in `project_id`: their role there keeps
+/// "see tasks", and so does an app's agent limit while one acts for them.
+pub(crate) async fn sees_tasks_in<'e, E>(
+    executor: E,
+    viewer: Uuid,
+    project_id: Uuid,
+) -> Result<bool, AppError>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    if crate::policy::agent_limit_hides(viewer, project_id, crate::policy::Permission::TasksView) {
+        return Ok(false);
+    }
+    Ok(sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM project_memberships
+            WHERE project_id = $1 AND actor_id = $2 AND enabled
+              AND custom_role_allows(role_id, 'tasks.view')
+        )
+        "#,
+    )
+    .bind(project_id)
+    .bind(viewer)
+    .fetch_one(executor)
+    .await?)
+}
+
+/// Whether a message `author` sends or edits now may notify everyone in a
+/// large conversation (`@everyone` past the small-audience allowance): an
+/// owner or admin whose role keeps "moderate channels", and, while an app
+/// acts for them, whose agent limit keeps it too. Stored on the message
+/// (`may_notify_everyone`), since the notifications are worked out later.
+pub(crate) async fn may_notify_everyone<'e, E>(
+    executor: E,
+    author: Uuid,
+    project_id: Uuid,
+) -> Result<bool, AppError>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    if crate::policy::agent_limit_hides(
+        author,
+        project_id,
+        crate::policy::Permission::ChannelsModerate,
+    ) {
+        return Ok(false);
+    }
+    Ok(sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM project_memberships
+            WHERE project_id = $1 AND actor_id = $2 AND enabled
+              AND role IN ('owner', 'admin')
+              AND custom_role_allows(role_id, 'channels.moderate')
+        )
+        "#,
+    )
+    .bind(project_id)
+    .bind(author)
+    .fetch_one(executor)
+    .await?)
+}
+
+/// Task chips for a reader who can't see tasks: the key and link stay, the
+/// title and status go.
+pub(crate) fn hide_work_item_details(items: &mut [ConversationWorkItemReferenceView]) {
+    for item in items {
+        item.title = None;
+        item.status_category = None;
+    }
+}
+
+/// `hide_work_item_details` for the chips in these timeline entries.
+pub(crate) fn hide_entry_work_item_details(entries: &mut [TimelineEntryView]) {
+    for entry in entries {
+        if let Some(message) = entry.message.as_mut() {
+            hide_work_item_details(&mut message.referenced_work_items);
+        }
+    }
 }
 
 /// The timeline entry for one message in `conversation`, as the timeline
@@ -4212,6 +4382,29 @@ fn timeline_entry_view(row: TimelineEntryRow) -> Result<TimelineEntryView, AppEr
     })
 }
 
+/// Leaves out a run's code, for a reader without "see code": its branch,
+/// base and published commits, and its linked pull request, as the run pages
+/// do (run_views::redact). The request to open one (its state) stays: it
+/// names no code.
+pub(crate) fn hide_pull_request(run: &mut RunRow) {
+    run.branch = None;
+    run.base_commit = None;
+    run.published_commit = None;
+    run.pull_request_number = None;
+    run.pull_request_id = None;
+    run.pull_request_url = None;
+    run.pull_request_title = None;
+    run.pull_request_state = None;
+    run.pull_request_draft = None;
+    run.pull_request_checks_state = None;
+    run.pull_request_review_state = None;
+    run.pull_request_mergeability_state = None;
+    run.pull_request_sync_state = None;
+    run.pull_request_sync_failure_category = None;
+    run.pull_request_automation_state = None;
+    run.pull_request_automation_reason = None;
+}
+
 async fn fetch_run_projection(
     state: &AppState,
     principal: &AuthenticatedActor,
@@ -4316,6 +4509,27 @@ async fn fetch_run_projection(
     .bind(conversation.id)
     .fetch_optional(&state.pool)
     .await?;
+    // Whether the latest run published, for what may be done next, read
+    // before its code is left out below.
+    let latest_published = latest_terminal_run
+        .as_ref()
+        .is_some_and(|run| run.published_commit.is_some());
+    // The runs' code (branch, commits, linked pull request) only for a reader
+    // who sees code here.
+    let (mut active_run, mut latest_terminal_run) = (active_run, latest_terminal_run);
+    if crate::search::projects_allowing(
+        &state.pool,
+        principal.actor_id,
+        &[conversation.project_id],
+        crate::policy::Permission::CodeView,
+    )
+    .await?
+    .is_empty()
+    {
+        for run in active_run.iter_mut().chain(latest_terminal_run.iter_mut()) {
+            hide_pull_request(run);
+        }
+    }
     let latest_failure_acknowledged = match latest_terminal_run.as_ref() {
         Some(run) if run.state == "failed" => {
             sqlx::query_scalar::<_, bool>(
@@ -4370,6 +4584,7 @@ async fn fetch_run_projection(
         let interrupt = policy_allows(
             principal,
             &conversation.membership_role,
+            conversation.membership_role_permissions.as_deref(),
             conversation.membership_enabled,
             conversation.project_id,
             Action::RunInterrupt,
@@ -4393,6 +4608,7 @@ async fn fetch_run_projection(
             && policy_allows(
                 principal,
                 &conversation.membership_role,
+                conversation.membership_role_permissions.as_deref(),
                 conversation.membership_enabled,
                 conversation.project_id,
                 Action::WorkerInvoke,
@@ -4410,6 +4626,7 @@ async fn fetch_run_projection(
             && policy_allows(
                 principal,
                 &conversation.membership_role,
+                conversation.membership_role_permissions.as_deref(),
                 conversation.membership_enabled,
                 conversation.project_id,
                 Action::RepositoryPublish,
@@ -4422,12 +4639,13 @@ async fn fetch_run_projection(
             )
             .unwrap_or(false);
         let create_pull_request = active_run.is_none()
-            && run.published_commit.is_some()
+            && latest_published
             && run.pull_request_request_state.is_none()
             && state.config.github.is_some()
             && policy_allows(
                 principal,
                 &conversation.membership_role,
+                conversation.membership_role_permissions.as_deref(),
                 conversation.membership_enabled,
                 conversation.project_id,
                 Action::PullRequestCreate,
@@ -4444,6 +4662,7 @@ async fn fetch_run_projection(
             && policy_allows(
                 principal,
                 &conversation.membership_role,
+                conversation.membership_role_permissions.as_deref(),
                 conversation.membership_enabled,
                 conversation.project_id,
                 Action::PullRequestRefresh,
@@ -4473,7 +4692,10 @@ async fn fetch_run_projection(
         true,
         Some(Membership::project(
             conversation.project_id,
-            parse_membership_role(&conversation.membership_role)?,
+            RoleGrant::stored(
+                &conversation.membership_role,
+                conversation.membership_role_permissions.as_deref(),
+            )?,
             conversation.membership_enabled,
         )),
         None,
@@ -4487,7 +4709,10 @@ async fn fetch_run_projection(
             let eligibility = if approval.eligible_role == "any_authorized" {
                 ApprovalEligibility::AnyAuthorizedMember
             } else {
-                ApprovalEligibility::Role(parse_membership_role(&approval.eligible_role)?)
+                ApprovalEligibility::Role(
+                    MembershipRole::parse(&approval.eligible_role)
+                        .ok_or(AppError::Internal("stored membership role"))?,
+                )
             };
             let respond = approval.status == "pending"
                 && matches!(

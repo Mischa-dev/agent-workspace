@@ -49,7 +49,13 @@ import {
   type QueuedSend,
   type Trigger,
 } from './composerModel'
-import type { ConversationActor, ConversationWorkItemReference, MessageContentV1, ReplyTarget } from './types'
+import type {
+  ConversationActor,
+  ConversationWorkItemChip,
+  ConversationWorkItemReference,
+  MessageContentV1,
+  ReplyTarget,
+} from './types'
 import { ReplyingTo } from './ReplyQuote'
 import { Bold, Code, Italic, Paperclip, SquareCode, TextQuote, Type } from '../files/icons'
 import { useToastOffset } from './toastOffset'
@@ -228,7 +234,7 @@ function ComposerBox({
   const [saved] = useState(() => (draftKey && !initialDraft ? readLocal<ComposerDraft>(`draft:${draftKey}`) : null))
   const [text, setText] = useState(initialDraft?.text ?? saved?.text ?? '')
   const [mentions, setMentions] = useState<ConversationActor[]>(initialDraft?.mentions ?? saved?.mentions ?? [])
-  const [workItems, setWorkItems] = useState<ConversationWorkItemReference[]>(initialDraft?.workItems ?? saved?.workItems ?? [])
+  const [workItems, setWorkItems] = useState<ConversationWorkItemChip[]>(initialDraft?.workItems ?? saved?.workItems ?? [])
   const [queued, setQueued] = useState<QueuedSend[]>(() => (draftKey ? (readLocal<QueuedSend[]>(`unsent:${draftKey}`) ?? []) : []))
   const flushing = useRef(false)
   const mounted = useRef(true)

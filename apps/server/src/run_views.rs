@@ -248,11 +248,12 @@ pub async fn list_runs(
     .fetch_all(&state.pool)
     .await?;
     let more = rows.len() > usize::try_from(limit).unwrap_or(0);
-    let runs = rows
+    let mut runs = rows
         .into_iter()
         .take(usize::try_from(limit).unwrap_or(0))
         .map(|run| named(state, run))
         .collect::<Vec<_>>();
+    redact(state, viewer, &mut runs).await?;
     let next_cursor = more.then(|| runs.last().map(encode_cursor)).flatten();
     Ok(RunList { runs, next_cursor })
 }
@@ -317,8 +318,13 @@ pub struct RunDetail {
     pub files: Option<Vec<ChangedFile>>,
 }
 
-async fn visible_run(state: &AppState, viewer: Uuid, run_id: Uuid) -> Result<RunSummary, AppError> {
-    sqlx::query_as::<_, RunSummary>(&format!(
+/// The run as `viewer` may see it, and whether they see its code.
+async fn visible_run(
+    state: &AppState,
+    viewer: Uuid,
+    run_id: Uuid,
+) -> Result<(RunSummary, bool), AppError> {
+    let mut run = sqlx::query_as::<_, RunSummary>(&format!(
         "{} WHERE run.id = $1 AND conversation_visible_to(run.conversation_id, $2) AND actor_can_access_project($2, NULL, project.id)",
         summary_select()
     ))
@@ -327,7 +333,50 @@ async fn visible_run(state: &AppState, viewer: Uuid, run_id: Uuid) -> Result<Run
     .fetch_optional(&state.pool)
     .await?
     .map(|run| named(state, run))
-    .ok_or(AppError::NotFound("agent_run"))
+    .ok_or(AppError::NotFound("agent_run"))?;
+    let sees_code = redact(state, viewer, std::slice::from_mut(&mut run)).await?;
+    let code = sees_code.contains(&run.project_id);
+    Ok((run, code))
+}
+
+/// Leaves out what `viewer` may not see of each run, by their role in its
+/// project and (in an app's call) its agent limit: without "see tasks", the
+/// linked task's title (its key stays, as a task's view does); without "see
+/// code", the branch, commits and pull request. Returns the projects where
+/// they see code.
+async fn redact(
+    state: &AppState,
+    viewer: Uuid,
+    runs: &mut [RunSummary],
+) -> Result<Vec<Uuid>, AppError> {
+    let mut projects = runs.iter().map(|run| run.project_id).collect::<Vec<_>>();
+    projects.sort_unstable();
+    projects.dedup();
+    if projects.is_empty() {
+        return Ok(Vec::new());
+    }
+    let tasks = crate::search::projects_showing_tasks(&state.pool, viewer, &projects).await?;
+    let code = crate::search::projects_allowing(
+        &state.pool,
+        viewer,
+        &projects,
+        crate::policy::Permission::CodeView,
+    )
+    .await?;
+    for run in runs {
+        if !tasks.contains(&run.project_id) {
+            run.task_title = None;
+        }
+        if !code.contains(&run.project_id) {
+            run.branch = None;
+            run.base_commit = None;
+            run.published_commit = None;
+            run.pull_request_number = None;
+            run.pull_request_url = None;
+            run.pull_request_state = None;
+        }
+    }
+    Ok(code)
 }
 
 pub async fn run_detail(
@@ -335,7 +384,7 @@ pub async fn run_detail(
     viewer: Uuid,
     run_id: Uuid,
 ) -> Result<RunDetail, AppError> {
-    let run = visible_run(state, viewer, run_id).await?;
+    let (run, code) = visible_run(state, viewer, run_id).await?;
     let prompt = sqlx::query_scalar::<_, String>("SELECT prompt FROM agent_runs WHERE id = $1")
         .bind(run_id)
         .fetch_one(&state.pool)
@@ -396,15 +445,20 @@ pub async fn run_detail(
     .bind(run_id)
     .fetch_all(&state.pool)
     .await?;
-    let files = match read_diff(state, &run, 0).await {
-        Ok(Some(diff)) => Some(diff.files),
-        Ok(None) => None,
-        Err(error) => {
-            tracing::debug!(
-                error_category = error.log_category(),
-                "run diff unavailable"
-            );
-            None
+    // Changed files are code: only for a viewer who sees it.
+    let files = if !code {
+        None
+    } else {
+        match read_diff(state, &run, 0).await {
+            Ok(Some(diff)) => Some(diff.files),
+            Ok(None) => None,
+            Err(error) => {
+                tracing::debug!(
+                    error_category = error.log_category(),
+                    "run diff unavailable"
+                );
+                None
+            }
         }
     };
     Ok(RunDetail {
@@ -489,7 +543,13 @@ pub async fn run_diff(
     viewer: Uuid,
     run_id: Uuid,
 ) -> Result<RunDiffView, AppError> {
-    let run = visible_run(state, viewer, run_id).await?;
+    let (run, code) = visible_run(state, viewer, run_id).await?;
+    if !code {
+        return Ok(RunDiffView {
+            state: "unavailable",
+            diff: None,
+        });
+    }
     let diff = read_diff(state, &run, MAX_PATCH_BYTES).await?;
     Ok(RunDiffView {
         state: if diff.is_some() {

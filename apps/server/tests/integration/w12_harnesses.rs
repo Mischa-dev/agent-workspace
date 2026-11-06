@@ -13,6 +13,7 @@ use agent_workspace_server::{
     git_runtime::expected_repository_mirror_path,
     harness_host::ServerHost,
     jobs::{self, WorkerOptions},
+    launch,
     provider::{SupervisorRegistry, host::HarnessHost},
     rate_limit::RateLimiters,
     realtime::{RealtimeHub, publish_ready_outbox_batch},
@@ -26,6 +27,7 @@ use sqlx::Executor;
 use uuid::Uuid;
 
 use crate::{
+    agent_interface::{Browser, connect_app, initialize, tool},
     m3_scheduler_http::{create_test_mirror, integration_pool, schema_pool, uuid_field},
     w2_harness_platform::{MEMBER_LOGIN, insert_member, login, send, send_get},
 };
@@ -410,6 +412,91 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
     )
     .await;
     assert_eq!(rule_off.0, StatusCode::OK, "{}", rule_off.1);
+
+    // A tag sent through an app launches only within that app's current
+    // limit (AWD-74): narrowed after the message but before the tag job, it
+    // launches nothing; queued, it's cancelled at drain.
+    let owner_browser = Browser {
+        cookie: owner_cookie.clone(),
+        csrf: owner_csrf.clone(),
+    };
+    let owner_app = connect_app(&application, &owner_browser, "Owner's app", "full").await;
+    let session = initialize(&application, &owner_app)
+        .await
+        .expect("owner's app");
+    let tagged = tool(
+        &application,
+        &owner_app,
+        &session,
+        "message_send",
+        json!({"conversationId": channel, "content": {"version": 1, "nodes": [
+            {"type": "mention", "actorId": reviewer_actor},
+            {"type": "text", "text": " review this from the app"}
+        ]}}),
+    )
+    .await;
+    assert_eq!(tagged["outcome"], "ok", "{tagged}");
+    let tagged_message = tagged["value"]["messageId"]
+        .as_str()
+        .expect("message id")
+        .parse::<Uuid>()
+        .expect("UUID");
+    let set_limit = |limit: Option<Vec<&'static str>>| {
+        let pool = pool.clone();
+        let organization = seed.organization_id;
+        let owner_actor = seed.human_actor_id;
+        async move {
+            sqlx::query(
+                "UPDATE organization_memberships SET agent_limit = $3 WHERE organization_id = $1 AND actor_id = $2",
+            )
+            .bind(organization)
+            .bind(owner_actor)
+            .bind(limit)
+            .execute(&pool)
+            .await
+            .expect("set the owner's agent limit")
+        }
+    };
+    set_limit(Some(vec!["channels.post", "tasks.view"])).await;
+    jobs::run_due(&state, &jobs::default_registry(), &options())
+        .await
+        .expect("run the tag job");
+    let launched =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM launches WHERE source_message_id = $1")
+            .bind(tagged_message)
+            .fetch_one(&pool)
+            .await
+            .expect("count tag launches");
+    assert_eq!(launched, 0, "the app's tag launched beyond its limit");
+    // Queued by the app's tag, it's cancelled at drain under the same limit.
+    let waiting = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO launches (
+            id, organization_id, project_id, conversation_id, source_message_id,
+            requested_by_actor_id, source, start_when, position, made_through_app
+        ) VALUES ($1, $2, $3, $4, $5, $6, 'tag', 'now',
+                  (SELECT COALESCE(max(position), 0) + 1 FROM launches WHERE project_id = $3),
+                  true)
+        "#,
+    )
+    .bind(waiting)
+    .bind(seed.organization_id)
+    .bind(seed.project_id)
+    .bind(channel)
+    .bind(tagged_message)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("a queued tag launch");
+    launch::drain(&state).await.expect("drain");
+    let waiting_state = sqlx::query_scalar::<_, String>("SELECT state FROM launches WHERE id = $1")
+        .bind(waiting)
+        .fetch_one(&pool)
+        .await
+        .expect("queued tag launch");
+    assert_eq!(waiting_state, "cancelled", "the queued tag launch started");
+    set_limit(None).await;
 
     // Turning it off frees the handle and stops tags.
     let off = send(

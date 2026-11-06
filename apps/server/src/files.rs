@@ -158,9 +158,37 @@ const READABLE: &str = r#"
                 WHERE message.id = file.message_id AND message.removed_at IS NULL
             )
             AND conversation_visible_to(file.conversation_id, $2)
-        ELSE true
+        -- A task's file (its own or a comment's): only while the reader's
+        -- role there still lets them see tasks. An app's agent limit is
+        -- checked in Rust (`hidden_by_agent_limit`).
+        ELSE EXISTS (
+            SELECT 1 FROM project_memberships task_membership
+            WHERE task_membership.project_id = file.project_id
+              AND task_membership.actor_id = $2
+              AND task_membership.enabled
+              AND custom_role_allows(task_membership.role_id, 'tasks.view')
+        )
     END
 "#;
+
+impl Reader {
+    fn actor_id(self) -> Uuid {
+        match self {
+            Self::Browser { actor_id } | Self::Mcp { actor_id, .. } => actor_id,
+        }
+    }
+}
+
+/// Whether the agent limit of an app acting for the reader keeps them from
+/// seeing tasks, and so this task file, in its project.
+fn hidden_by_agent_limit(reader: Reader, row: &FileRow) -> bool {
+    row.work_item_id.is_some()
+        && crate::policy::current_agent_limit(
+            reader.actor_id(),
+            crate::policy::MembershipScope::Project(row.project_id),
+        )
+        .is_some_and(|limit| !limit.contains(crate::policy::Permission::TasksView))
+}
 
 fn bind_reader<'q, O>(
     query: sqlx::query::QueryAs<'q, Postgres, O, sqlx::postgres::PgArguments>,
@@ -194,6 +222,7 @@ pub(crate) async fn readable_file(
     bind_reader(sqlx::query_as::<_, FileRow>(&sql).bind(file_id), reader)
         .fetch_optional(pool)
         .await?
+        .filter(|row| !hidden_by_agent_limit(reader, row))
         .ok_or(AppError::NotFound("file"))
 }
 
@@ -234,7 +263,10 @@ pub(crate) async fn task_files(
     )
     .bind(project_id)
     .fetch_all(pool)
-    .await?)
+    .await?
+    .into_iter()
+    .filter(|row| !hidden_by_agent_limit(reader, row))
+    .collect())
 }
 
 // ---------------------------------------------------------------------------

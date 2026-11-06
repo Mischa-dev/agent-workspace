@@ -993,3 +993,247 @@ async fn the_roadmap_imports_as_tasks_and_a_stopped_import_resumes() {
         "2026-12-01"
     );
 }
+
+/// Calls `tool` on the public API with a personal token: a script, which
+/// acts within the person's agent limit like an app.
+async fn public_tool(
+    application: &axum::Router,
+    token: &str,
+    tool: &str,
+    body: Value,
+) -> (StatusCode, Value) {
+    let response = application
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/public/v1/{tool}"))
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::to_vec(&body).expect("tool body")))
+                .expect("tool request"),
+        )
+        .await
+        .expect("tool response");
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 2_000_000)
+        .await
+        .expect("tool response body");
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+impl Fixture {
+    /// A personal token for the member, with write access to the project.
+    async fn member_token(&self) -> String {
+        let (status, issued) = self
+            .member
+            .post(
+                "/api/v1/account/api-tokens",
+                json!({"projectId": self.project_id, "name": "script", "scopes": ["read", "write"], "expiresInDays": 30}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{issued}");
+        issued["token"].as_str().expect("token").to_owned()
+    }
+
+    /// Narrows what apps and scripts acting for the member may do.
+    async fn limit_member_apps(&self, permissions: Value) {
+        let (status, body) = self
+            .owner
+            .put(
+                &format!(
+                    "/api/v1/organizations/{}/members/{}/agent-limit",
+                    self.organization_id, self.member_actor
+                ),
+                json!({"permissions": permissions}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+
+    async fn tasks_titled(&self, title: &str) -> i64 {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM work_items WHERE project_id = $1 AND title = $2",
+        )
+        .bind(self.project_id)
+        .bind(title)
+        .fetch_one(&self.pool)
+        .await
+        .expect("count tasks")
+    }
+
+    /// Runs jobs until the project's newest import has finished one way or
+    /// the other; returns its status and error.
+    async fn finish_newest_import(&self) -> (String, Option<String>) {
+        let mut last = (String::new(), None);
+        for _ in 0..10 {
+            self.run_jobs().await;
+            last = sqlx::query_as::<_, (String, Option<String>)>(
+                "SELECT status, error FROM task_imports WHERE project_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1",
+            )
+            .bind(self.project_id)
+            .fetch_one(&self.pool)
+            .await
+            .expect("newest import");
+            if matches!(last.0.as_str(), "completed" | "failed") {
+                break;
+            }
+        }
+        last
+    }
+}
+
+/// AWD-74: an import a script committed creates its tasks within the
+/// person's agent limit as it is when each chunk runs. Narrowed after the
+/// commit, the import stops with a reason and makes none of its tasks.
+#[tokio::test]
+async fn an_import_a_script_committed_stops_when_its_limit_narrows() {
+    let Some(fixture) = fixture("import_limit").await else {
+        return;
+    };
+    let application = fixture.member.application.clone();
+    let token = fixture.member_token().await;
+
+    // Within the limit, the import runs to the end.
+    let (status, queued) = public_tool(
+        &application,
+        &token,
+        "task_import",
+        json!({"projectId": fixture.project_id, "source": "markdown", "text": "- [ ] Control import", "commit": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{queued}");
+    let (state, error) = fixture.finish_newest_import().await;
+    assert_eq!(state, "completed", "{error:?}");
+    assert_eq!(fixture.tasks_titled("Control import").await, 1);
+
+    // Narrowed between the commit and the chunk: stopped, nothing made.
+    let (status, queued) = public_tool(
+        &application,
+        &token,
+        "task_import",
+        json!({"projectId": fixture.project_id, "source": "markdown", "text": "- [ ] Narrowed import", "commit": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{queued}");
+    fixture.limit_member_apps(json!(["tasks.view"])).await;
+    let (state, error) = fixture.finish_newest_import().await;
+    assert_eq!(state, "failed", "{error:?}");
+    assert!(
+        error.as_deref().is_some_and(|error| error.contains("app")),
+        "{error:?}"
+    );
+    assert_eq!(fixture.tasks_titled("Narrowed import").await, 0);
+}
+
+/// AWD-74: each step of committing a plan needs what its changes need,
+/// checked again every step: creating tasks and changing them. A plan a
+/// script committed stops once the script's limit loses "edit tasks"; a
+/// plan committed in the browser stops once the person's role loses
+/// "create tasks". Neither makes its tasks.
+#[tokio::test]
+async fn a_plan_stops_when_its_committer_loses_what_its_steps_need() {
+    let Some(fixture) = fixture("plan_limit").await else {
+        return;
+    };
+    let base = fixture.base();
+    let application = fixture.member.application.clone();
+    let token = fixture.member_token().await;
+    let plan = |title: &str| {
+        json!({
+            "title": title,
+            "source": {"kind": "structured", "plan": {"tasks": [
+                {"ref": "one", "title": format!("{title} one")},
+                {"ref": "two", "title": format!("{title} two"), "blockedBy": ["one"]},
+            ]}},
+        })
+    };
+
+    // Committed by a script, whose limit then keeps "create" but not "edit".
+    let (status, created) = fixture
+        .member
+        .post(&format!("{base}/ai/plans"), plan("Scripted plan"))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let id = created["plan"]["id"]
+        .as_str()
+        .expect("plan id")
+        .parse::<Uuid>()
+        .expect("uuid");
+    let (status, committed) = public_tool(
+        &application,
+        &token,
+        "plan_import",
+        json!({
+            "projectId": fixture.project_id,
+            "importId": id,
+            "commit": true,
+            "expectedVersion": created["plan"]["version"],
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{committed}");
+    fixture
+        .limit_member_apps(json!(["tasks.view", "tasks.create"]))
+        .await;
+    let step = plans::commit_next_step(&fixture.pool, id)
+        .await
+        .expect("step");
+    assert!(
+        matches!(&step, Step::Failed(message) if message.contains("app") && message.contains("change")),
+        "{step:?}"
+    );
+    assert_eq!(fixture.tasks_titled("Scripted plan one").await, 0);
+
+    // Committed in the browser; the person's role then loses "create".
+    let (status, created) = fixture
+        .member
+        .post(&format!("{base}/ai/plans"), plan("Browser plan"))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let id = created["plan"]["id"]
+        .as_str()
+        .expect("plan id")
+        .parse::<Uuid>()
+        .expect("uuid");
+    let (status, committed) = fixture
+        .member
+        .post(
+            &format!("{base}/ai/plans/{id}/commit"),
+            json!({"expectedVersion": created["plan"]["version"]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{committed}");
+    let editors = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO workspace_roles (id, organization_id, key, base_role, name, permissions)
+        VALUES (gen_random_uuid(), $1, 'editors-only', 'member', 'Editors only',
+                ARRAY['projects.view', 'tasks.view', 'tasks.edit'])
+        RETURNING id
+        "#,
+    )
+    .bind(fixture.organization_id)
+    .fetch_one(&fixture.pool)
+    .await
+    .expect("role without create tasks");
+    sqlx::query(
+        "UPDATE project_memberships SET role_id = $3 WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(fixture.project_id)
+    .bind(fixture.member_actor)
+    .bind(editors)
+    .execute(&fixture.pool)
+    .await
+    .expect("narrow the member's role");
+    let step = plans::commit_next_step(&fixture.pool, id)
+        .await
+        .expect("step");
+    assert!(
+        matches!(&step, Step::Failed(message) if message.contains("can no longer create")),
+        "{step:?}"
+    );
+    assert_eq!(fixture.tasks_titled("Browser plan one").await, 0);
+}

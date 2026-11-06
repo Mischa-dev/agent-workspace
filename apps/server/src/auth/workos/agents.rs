@@ -371,6 +371,16 @@ async fn attach(
         &mut tx, &principal, project, connection,
     )
     .await?;
+    // Binding an outside identity hands it the agent: only within what the
+    // caller holds.
+    crate::external_agents::require_connection_grantable(
+        &mut tx,
+        org,
+        principal.actor_id,
+        project,
+        connection,
+    )
+    .await?;
     // Hold the local grant locks across provider operations so removal cannot race attachment.
     let (credential, scopes, name): (Uuid, Vec<String>, String) = sqlx::query_as(
         "SELECT id,scopes,client_name FROM mcp_client_credentials WHERE external_agent_connection_id=$1 AND status='active' AND revoked_at IS NULL AND expires_at>now() ORDER BY created_at DESC LIMIT 1 FOR SHARE")

@@ -17,7 +17,7 @@ import type {
   ConversationActor,
   ConversationMessage,
   ConversationTimelineEntry,
-  ConversationWorkItemReference,
+  ConversationWorkItemChip,
   ConversationWorkerEvent,
   MessageContentV1,
   ReplyTarget,
@@ -586,7 +586,7 @@ export function PendingMessageRow({
   replyTo?: ReplyTarget
   seed?: string
   text?: string
-  workItems?: ConversationWorkItemReference[]
+  workItems?: ConversationWorkItemChip[]
 }) {
   const hasText = Boolean(text?.trim())
   return (

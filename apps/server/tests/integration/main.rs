@@ -55,6 +55,7 @@ mod phase3_takedown;
 mod phase4_groundwork;
 mod polish_leftovers;
 mod reply_requests;
+mod roles_and_access;
 mod server_operators;
 mod settings_accounts;
 mod w10_ai_planning;

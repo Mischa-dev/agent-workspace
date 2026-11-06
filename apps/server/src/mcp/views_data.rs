@@ -14,7 +14,7 @@ use super::{
     common::{ToolResult, parse_id, public_url, scope_projects},
     planning::{DATE_MESSAGE, milestone_change},
     tasks::{TaskListArguments, command_actor, resolve_assignee},
-    writes::{WriteAccess, check_write_access},
+    writes::{WriteAccess, check_access_for},
 };
 use crate::{
     AppState,
@@ -373,9 +373,9 @@ pub(super) async fn task_from_template(
     let project_id = principal.project_id;
     let result = async {
         let mut transaction = state.pool.begin().await?;
-        if let Some(refusal) =
-            access_refusal(check_write_access(&mut transaction, principal).await?)
-        {
+        if let Some(refusal) = access_refusal(
+            check_access_for(&mut transaction, principal, Action::WorkItemCreate).await?,
+        ) {
             return Ok(refusal);
         }
         let template_id = sqlx::query_scalar::<_, Uuid>(
@@ -540,7 +540,9 @@ pub(super) async fn task_import(
     };
     let result = async {
         let mut transaction = state.pool.begin().await?;
-        if let Some(refusal) = access_refusal(check_write_access(&mut transaction, principal).await?) {
+        if let Some(refusal) = access_refusal(
+            check_access_for(&mut transaction, principal, Action::WorkItemCreate).await?,
+        ) {
             return Ok(refusal);
         }
         let actor = command_actor(principal, project_id);
@@ -578,7 +580,7 @@ pub(super) async fn task_import(
                 }
             }
         }
-        let Some(view) = imports::import_by_id(&mut transaction, project_id, import_id, !committed).await? else {
+        let Some(view) = imports::import_by_id(&mut transaction, project_id, import_id, !committed, principal.actor_id).await? else {
             return Ok(ToolResult::not_found("That import"));
         };
         transaction.commit().await?;

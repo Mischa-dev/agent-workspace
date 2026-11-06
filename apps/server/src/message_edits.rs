@@ -390,6 +390,15 @@ async fn locked_entry(
     let mut entry = fetch_timeline_entry(&mut **transaction, &locked.conversation, locked.id)
         .await?
         .ok_or(AppError::Internal("locked message has no timeline entry"))?;
+    if !crate::conversations::sees_tasks_in(
+        &mut **transaction,
+        viewer,
+        locked.conversation.project_id,
+    )
+    .await?
+    {
+        crate::conversations::hide_entry_work_item_details(std::slice::from_mut(&mut entry));
+    }
     reactions::attach_reactions(
         &mut **transaction,
         locked.conversation.id,
@@ -482,10 +491,19 @@ pub(crate) async fn apply_edit(
     .bind(actor.via_grant_id)
     .execute(&mut **transaction)
     .await?;
+    // An edit can add @everyone: whether it may reach everyone is decided
+    // again, as the editor now (their app's agent limit included).
+    let notify_everyone = crate::conversations::may_notify_everyone(
+        &mut **transaction,
+        actor.actor_id,
+        locked.project_id,
+    )
+    .await?;
     let updated = sqlx::query(
         r#"
         UPDATE messages
-        SET content = $3, plain_text = $4, revision = revision + 1, edited_at = now()
+        SET content = $3, plain_text = $4, revision = revision + 1, edited_at = now(),
+            may_notify_everyone = $5
         WHERE id = $1 AND revision = $2 AND removed_at IS NULL
         "#,
     )
@@ -493,6 +511,7 @@ pub(crate) async fn apply_edit(
     .bind(locked.revision)
     .bind(&content_json)
     .bind(&plain_text)
+    .bind(notify_everyone)
     .execute(&mut **transaction)
     .await?;
     if updated.rows_affected() != 1 {
@@ -1146,6 +1165,15 @@ async fn get_message(
     let mut entry = fetch_timeline_entry(&state.pool, &conversation, message_id)
         .await?
         .ok_or(AppError::NotFound("message"))?;
+    if !crate::conversations::sees_tasks_in(
+        &state.pool,
+        principal.actor_id,
+        conversation.project_id,
+    )
+    .await?
+    {
+        crate::conversations::hide_entry_work_item_details(std::slice::from_mut(&mut entry));
+    }
     reactions::attach_reactions(
         &state.pool,
         conversation.id,

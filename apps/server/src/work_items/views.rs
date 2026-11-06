@@ -149,12 +149,20 @@ pub(crate) async fn ensure_builtin_views(
     Ok(())
 }
 
-/// Views and whether the reader (`$2`) pinned them. My tasks and Ready for
-/// agents start pinned for everyone until they unpin them.
+/// Views and whether the reader (`$2`) pinned them. Their role's defaults
+/// say which start pinned (AWD-74); without any, My tasks and Ready for
+/// agents do, until they unpin them.
 const VIEW_SELECT: &str = r#"
     SELECT saved.id, saved.project_id, saved.owner_actor_id, saved.builtin, saved.name,
            saved.query, saved.layout, saved.fields, saved.position, saved.version,
-           COALESCE(pin.pinned, saved.builtin IN ('my_tasks', 'ready_for_agents'), false) AS pinned,
+           COALESCE(
+               pin.pinned,
+               saved.builtin = ANY(COALESCE(
+                   role_default_pinned_views(saved.project_id, $2),
+                   ARRAY['my_tasks', 'ready_for_agents']
+               )),
+               false
+           ) AS pinned,
            pin.position AS pin_position
     FROM saved_views saved
     LEFT JOIN saved_view_pins pin ON pin.view_id = saved.id AND pin.actor_id = $2
@@ -953,6 +961,7 @@ pub(crate) async fn my_work(
     reader: Uuid,
     projects: &[Uuid],
 ) -> Result<MyWork, AppError> {
+    let projects = &crate::search::projects_showing_tasks(pool, reader, projects).await?[..];
     let due_first = format!(
         "item.due_date IS NULL, item.due_date, {PRIORITY_RANK}, item.updated_at DESC, item.id"
     );
