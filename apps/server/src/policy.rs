@@ -1229,8 +1229,8 @@ fn approval_eligibility_matches(
 mod tests {
     use super::{
         Action, ActorKind, ApprovalEligibility, ApprovalRequirements, Decision, DelegatedScope,
-        DenyReason, Membership, MembershipRole, PERMISSIONS, Permission, PermissionSet,
-        ProjectScope, Resource, RoleGrant, Subject, authorize,
+        DenyReason, Membership, MembershipRole, PERMISSIONS, Permission, PermissionScope,
+        PermissionSet, ProjectScope, Resource, RoleGrant, Subject, authorize,
     };
     use uuid::Uuid;
 
