@@ -33,6 +33,7 @@ class AreaValidationTests(unittest.TestCase):
         for name in ("cargo", "rustup", "node", "pnpm", "python3", "psql", "createdb", "dropdb"):
             self.stub(self.bin / name)
         self.stub(self.root / "tools" / "verify-self-hosted-guide.sh")
+        self.stub(self.root / "tools" / "ci" / "test_admission.sh")
         self.stub(self.root / "target" / "debug" / "agent-workspace-server")
         # Keep combined checks sequential for deterministic call logs.
         self.stub(self.bin / "nproc", output="4")
@@ -88,6 +89,7 @@ class AreaValidationTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIn("All checks passed", result.stdout)
                 self.assertEqual("cargo fmt --check" in calls, rust)
+                self.assertEqual(any(c.split() == ["test_admission.sh"] for c in calls), rust)
                 self.assertEqual("cargo nextest run --workspace --profile ci" in calls, rust)
                 self.assertEqual("pnpm lint" in calls, web)
                 self.assertEqual("pnpm build" in calls, web)

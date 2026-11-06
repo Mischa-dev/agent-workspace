@@ -596,9 +596,10 @@ async fn record_claims(
     let mut transaction = state.pool.begin().await?;
     // The person who started this must still be allowed to manage the
     // project's GitHub connection when they come back.
-    let (role, kind) = sqlx::query_as::<_, (String, String)>(
-        r#"
-        SELECT membership.role, actor.kind
+    let (role, role_permissions, kind) =
+        sqlx::query_as::<_, (String, Option<Vec<String>>, String)>(
+            r#"
+        SELECT membership.role, workspace_role_permissions(membership.role_id), actor.kind
         FROM projects project
         JOIN project_memberships membership
           ON membership.project_id = project.id
@@ -613,20 +614,20 @@ async fn record_claims(
           AND project.archived_at IS NULL
         FOR SHARE OF project, membership, organization_membership
         "#,
-    )
-    .bind(attempt.project_id)
-    .bind(attempt.actor_id)
-    .bind(attempt.organization_id)
-    .fetch_optional(&mut *transaction)
-    .await?
-    .ok_or(AppError::Forbidden)?;
+        )
+        .bind(attempt.project_id)
+        .bind(attempt.actor_id)
+        .bind(attempt.organization_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or(AppError::Forbidden)?;
     let subject = Subject::new(
         attempt.actor_id,
         actor_kind(&kind)?,
         true,
         Some(Membership::project(
             attempt.project_id,
-            membership_role(&role)?,
+            crate::policy::RoleGrant::stored(&role, role_permissions.as_deref())?,
             true,
         )),
         None,
@@ -867,6 +868,15 @@ async fn add_repository(
         &principal,
         project_id,
         Action::GithubIntegrationManage,
+    )
+    .await?;
+    // It answers with the repository it registers: only for someone who
+    // also sees code here.
+    require_project_access(
+        &mut transaction,
+        &principal,
+        project_id,
+        Action::RepositoryView,
     )
     .await?;
     if !workspace_claims_installation(&mut transaction, project_id, request.installation_id).await?

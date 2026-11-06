@@ -8,7 +8,9 @@ import {
   Avatar,
   Banner,
   Button,
+  Checkbox,
   ConfirmDialog,
+  Dialog,
   ErrorState,
   Icon,
   ListSkeleton,
@@ -39,6 +41,18 @@ import {
   type WorkspaceInvitation,
   type WorkspaceMember,
 } from './api'
+import {
+  assignRole,
+  listRoles,
+  pickerValue,
+  roleKeys,
+  roleNameFor,
+  setAgentLimit,
+  workspaceAssignable,
+  type PermissionKey,
+  type RolesResponse,
+  type WorkspaceRoleView,
+} from './roles'
 
 const INVITATION_TONES: Record<WorkspaceInvitation['status'], ChipTone> = {
   active: 'success',
@@ -54,6 +68,13 @@ export default function MembersPage({ workspace }: SettingsPageProps) {
   const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [removing, setRemoving] = useState<WorkspaceMember | null>(null)
+  const [limiting, setLimiting] = useState<WorkspaceMember | null>(null)
+  const [applyToProjects, setApplyToProjects] = useState(true)
+  const roles = useQuery({
+    queryKey: roleKeys.roles(organizationId),
+    queryFn: () => listRoles(organizationId),
+    enabled: Boolean(organizationId),
+  })
   const members = useQuery({
     queryKey: workspaceKeys.members(organizationId),
     queryFn: () => listWorkspaceMembers(organizationId),
@@ -83,6 +104,19 @@ export default function MembersPage({ workspace }: SettingsPageProps) {
     },
     onSettled: refresh,
   })
+  const assign = useMutation({
+    mutationFn: ({ member, role }: { member: WorkspaceMember; role: WorkspaceRoleView }) =>
+      assignRole(organizationId, member.actorId, { roleId: role.id, applyToProjects, expectedVersion: member.version }),
+    onSuccess: (assignment, { member }) => {
+      const projects = assignment.projectsChanged ? ` and in ${countLabel(assignment.projectsChanged, 'project')}` : ''
+      showToast({ tone: 'success', title: `${member.displayName} is now ${assignment.roleName}${projects}` })
+    },
+    onError: (error, { member }) => toastError(`${member.displayName}’s role wasn’t changed`, error),
+    onSettled: () => {
+      void refresh()
+      void queryClient.invalidateQueries({ queryKey: roleKeys.roles(organizationId) })
+    },
+  })
 
   const shown = useMemo(() => {
     const terms = search.trim().toLocaleLowerCase()
@@ -105,7 +139,7 @@ export default function MembersPage({ workspace }: SettingsPageProps) {
       <PageHeader icon="users" title="Members">
         People and agents in {workspace.name}. Anyone here can be added to any of its projects.
       </PageHeader>
-      {manager && <InviteSection organizationId={organizationId} role={workspace.role} />}
+      {manager && <InviteSection organizationId={organizationId} role={workspace.role} roles={roles.data} />}
       <Section
         actions={total > 8 ? (
           <TextField
@@ -121,6 +155,14 @@ export default function MembersPage({ workspace }: SettingsPageProps) {
         id="workspace-members-heading"
         title={total ? `Members (${total})` : 'Members'}
       >
+        {manager ? (
+          <Checkbox
+            checked={applyToProjects}
+            description="Giving someone a role also gives it to them in each of their projects, except where they’re the owner."
+            label="Change their project roles too"
+            onChange={setApplyToProjects}
+          />
+        ) : null}
         {members.isPending ? (
           <ListSkeleton avatars label="Loading members" rows={4} />
         ) : members.isError ? (
@@ -131,24 +173,33 @@ export default function MembersPage({ workspace }: SettingsPageProps) {
               <Row
                 actions={
                   <>
-                    {member.capabilities.changeRole && member.role !== 'owner' ? (
+                    {member.capabilities.assignRole && member.role !== 'owner' && roles.data ? (
                       <SelectField
                         aria-label={`Role for ${member.displayName}`}
                         className="aw-field--inline"
-                        disabled={update.isPending}
-                        onChange={(event) =>
-                          update.mutate({ member, change: { role: event.target.value as 'admin' | 'member' } })
-                        }
-                        value={member.role}
+                        disabled={assign.isPending}
+                        onChange={(event) => {
+                          const role = roles.data.roles.find((entry) => entry.id === event.target.value)
+                          if (role) assign.mutate({ member, role })
+                        }}
+                        value={pickerValue(roles.data.roles, member.role, member.roleId)}
                       >
-                        {((member.kind === 'human' && workspace.role === 'owner') || member.role === 'admin') && (
-                          <option value="admin">Admin</option>
-                        )}
-                        <option value="member">Member</option>
+                        {rolesFor(roles.data, member, workspace.role === 'owner').map((role) => (
+                          <option key={role.id} value={role.id}>
+                            {role.name}
+                          </option>
+                        ))}
                       </SelectField>
                     ) : (
-                      <StatusChip tone={member.role === 'owner' ? 'agent' : 'muted'}>{roleLabel(member.role)}</StatusChip>
+                      <StatusChip tone={member.role === 'owner' ? 'agent' : 'muted'}>
+                        {member.roleName || roleNameFor(roles.data?.roles, member.role, member.roleId) || roleLabel(member.role)}
+                      </StatusChip>
                     )}
+                    {member.capabilities.limitApps && roles.data ? (
+                      <Button icon="bot" onClick={() => setLimiting(member)} size="sm" variant="ghost">
+                        {member.isYou ? 'Your apps' : 'Their apps'}
+                      </Button>
+                    ) : null}
                     {member.capabilities.remove && !member.isYou && (
                       <Button
                         disabled={update.isPending}
@@ -174,6 +225,7 @@ export default function MembersPage({ workspace }: SettingsPageProps) {
                 meta={
                   <span className="aw-row__metaline aw-wrap">
                     <span>@{member.handle}</span>
+                    {member.agentLimit ? <span>Apps limited</span> : null}
                     <span>In {countLabel(member.projectCount, 'project')}</span>
                     <span title={formatFullDate(member.joinedAt)}>Joined {formatShortDate(member.joinedAt)}</span>
                   </span>
@@ -194,6 +246,18 @@ export default function MembersPage({ workspace }: SettingsPageProps) {
           </p>
         )}
       </Section>
+      {limiting && roles.data ? (
+        <AppsDialog
+          member={limiting}
+          onClose={() => setLimiting(null)}
+          onSaved={() => {
+            setLimiting(null)
+            void refresh()
+          }}
+          organizationId={organizationId}
+          roles={roles.data}
+        />
+      ) : null}
       <ConfirmDialog
         busy={update.isPending}
         confirmLabel="Remove from workspace"
@@ -220,13 +284,115 @@ export default function MembersPage({ workspace }: SettingsPageProps) {
   )
 }
 
-function InviteSection({ organizationId, role }: { organizationId: string; role: string }) {
+/** The roles a member can be given here: admin-based ones only by owners, and member- or viewer-based ones for agents. */
+function rolesFor(data: RolesResponse, member: WorkspaceMember, owner: boolean) {
+  return workspaceAssignable(data.roles).filter(
+    (role) =>
+      role.id === member.roleId ||
+      (role.builtIn && role.key === member.role) ||
+      ((role.baseRole !== 'admin' || (owner && member.kind === 'human')) && role.capabilities.assign),
+  )
+}
+
+/** What apps acting for one person may do in the workspace, on top of their role's limit. */
+function AppsDialog({
+  member,
+  onClose,
+  onSaved,
+  organizationId,
+  roles,
+}: {
+  member: WorkspaceMember
+  onClose: () => void
+  onSaved: () => void
+  organizationId: string
+  roles: RolesResponse
+}) {
+  const [limited, setLimited] = useState(member.agentLimit !== null)
+  const [chosen, setChosen] = useState<PermissionKey[]>(
+    (member.agentLimit as PermissionKey[] | null) ?? roles.permissions.map((permission) => permission.key),
+  )
+  const [error, setError] = useState<string | null>(null)
+  const save = useMutation({
+    mutationFn: () => setAgentLimit(organizationId, member.actorId, limited ? chosen : null),
+    onSuccess: () => {
+      showToast({ tone: 'success', title: member.isYou ? 'Your apps’ access saved' : `${member.displayName}’s apps’ access saved` })
+      onSaved()
+    },
+    onError: (reason) => setError(`It wasn’t saved. ${describeError(reason).message}`),
+  })
+  const choosable = roles.permissions.filter((permission) => !permission.required)
+  return (
+    <Dialog
+      description={
+        member.isYou
+          ? 'Apps you connect, and agents working for you, can do what you can unless you say otherwise. Their role’s limit applies as well.'
+          : `Apps ${member.displayName} connects, and agents working for them, can do what they can unless you say otherwise. Their role’s limit applies as well.`
+      }
+      footer={
+        <>
+          <Button onClick={onClose} variant="ghost">
+            Cancel
+          </Button>
+          <Button busy={save.isPending} type="submit" variant="primary">
+            Save
+          </Button>
+        </>
+      }
+      onClose={onClose}
+      onSubmit={(event) => {
+        event.preventDefault()
+        save.mutate()
+      }}
+      open
+      title={member.isYou ? 'What your apps can do' : `What ${member.displayName}’s apps can do`}
+      width={560}
+    >
+      <div className="aw-form">
+        <Checkbox checked={limited} label="Allow less than the person can do" onChange={setLimited} />
+        {limited
+          ? choosable.map((permission) => (
+              <Checkbox
+                checked={chosen.includes(permission.key)}
+                description={permission.meaning}
+                key={permission.key}
+                label={permission.label}
+                onChange={(on) =>
+                  setChosen((current) => (on ? [...new Set([...current, permission.key])] : current.filter((key) => key !== permission.key)))
+                }
+              />
+            ))
+          : null}
+        <p className="aw-quiet">Reading what they can open always stays allowed.</p>
+        {error ? <Banner tone="danger">{error}</Banner> : null}
+      </div>
+    </Dialog>
+  )
+}
+
+function InviteSection({ organizationId, role, roles }: { organizationId: string; role: string; roles: RolesResponse | undefined }) {
   const queryClient = useQueryClient()
   const invitations = useQuery({
     queryKey: workspaceKeys.invitations(organizationId),
     queryFn: () => listWorkspaceInvitations(organizationId),
   })
-  const [inviteRole, setInviteRole] = useState<'admin' | 'member'>('member')
+  // Roles you may invite someone to (the server works it out as the
+  // invitation endpoint does): inviting needs "invite members", not
+  // "manage members". Until the roles load, Member is offered.
+  const invitable = (roles?.roles ?? []).filter((entry) => entry.capabilities.invite)
+  const offersMember = !roles || invitable.some((entry) => entry.builtIn && entry.key === 'member')
+  const offersAdmin = role === 'owner' && invitable.some((entry) => entry.builtIn && entry.key === 'admin')
+  const customRoles = invitable.filter((entry) => !entry.builtIn && (entry.baseRole !== 'admin' || role === 'owner'))
+  // A built-in role's key, or a custom role's ID. Starts with the workspace's
+  // default role when you may invite to it, else the first role you may.
+  const defaultRole = roles?.roles.find((entry) => entry.isDefault)
+  const [picked, setInviteRole] = useState<string | null>(null)
+  const firstInvitable = offersMember ? 'member' : (customRoles[0]?.id ?? (offersAdmin ? 'admin' : 'member'))
+  const inviteRole =
+    picked ??
+    (defaultRole && !defaultRole.builtIn && customRoles.some((entry) => entry.id === defaultRole.id)
+      ? defaultRole.id
+      : firstInvitable)
   const [hours, setHours] = useState(DEFAULT_INVITATION_HOURS)
   const [revoking, setRevoking] = useState<WorkspaceInvitation | null>(null)
   const [note, setNote] = useState('')
@@ -235,7 +401,12 @@ function InviteSection({ organizationId, role }: { organizationId: string; role:
   const refresh = () => queryClient.invalidateQueries({ queryKey: workspaceKeys.invitations(organizationId) })
   const create = useMutation({
     mutationFn: () =>
-      createWorkspaceInvitation(organizationId, { role: inviteRole, expiresInHours: hours, note: note.trim() || undefined }),
+      createWorkspaceInvitation(organizationId, {
+        role: inviteRole === 'admin' ? 'admin' : 'member',
+        roleId: inviteRole === 'admin' || inviteRole === 'member' ? undefined : inviteRole,
+        expiresInHours: hours,
+        note: note.trim() || undefined,
+      }),
     onSuccess: (invitation) => {
       setIssued(invitation.invitationUrl)
       setNote('')
@@ -271,9 +442,14 @@ function InviteSection({ organizationId, role }: { organizationId: string; role:
       )}
       <form className="aw-card aw-formcard aw-form" onSubmit={submit}>
         <div className="aw-form__grid">
-          <SelectField id="workspace-invite-role" label="Role" onChange={(event) => setInviteRole(event.target.value as 'admin' | 'member')} value={inviteRole}>
-            <option value="member">Member</option>
-            {role === 'owner' && <option value="admin">Admin</option>}
+          <SelectField id="workspace-invite-role" label="Role" onChange={(event) => setInviteRole(event.target.value)} value={inviteRole}>
+            {offersMember && <option value="member">Member</option>}
+            {offersAdmin && <option value="admin">Admin</option>}
+            {customRoles.map((entry) => (
+              <option key={entry.id} value={entry.id}>
+                {entry.name}
+              </option>
+            ))}
           </SelectField>
           <SelectField id="workspace-invite-expiry" label="Link works for" onChange={(event) => setHours(Number(event.target.value))} value={hours}>
             {INVITATION_EXPIRY_OPTIONS.map((option) => (
@@ -333,7 +509,7 @@ function InviteSection({ organizationId, role }: { organizationId: string; role:
               }
               title={
                 <span className="aw-row__titleline">
-                  {roleLabel(invitation.role)} invitation
+                  {invitation.roleName ?? roleLabel(invitation.role)} invitation
                   <StatusChip tone={INVITATION_TONES[invitation.status] ?? 'muted'}>{humanize(invitation.status)}</StatusChip>
                 </span>
               }

@@ -23,7 +23,7 @@ use crate::{
     outbox,
     policy::{
         Action, ActorKind, ApprovalEligibility, ApprovalRequirements, Decision, Membership,
-        MembershipRole, ProjectScope, Resource, Subject, authorize,
+        MembershipRole, ProjectScope, Resource, RoleGrant, Subject, authorize,
     },
     provider::run_config::RunConfig,
 };
@@ -112,11 +112,13 @@ impl ExternalExecutionRequestResult {
 #[derive(Debug, FromRow)]
 struct ExternalAuthorization {
     membership_role: String,
+    membership_role_permissions: Option<Vec<String>>,
 }
 
 #[derive(Debug, FromRow)]
 struct SponsorAuthorization {
     membership_role: String,
+    membership_role_permissions: Option<Vec<String>>,
 }
 
 #[derive(Debug, FromRow)]
@@ -135,6 +137,7 @@ struct SponsoredApprovalContext {
     approval_response: Option<serde_json::Value>,
     responded_by_actor_id: Option<Uuid>,
     sponsor_role: String,
+    sponsor_role_permissions: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -247,7 +250,8 @@ async fn request_sponsored_execution_inner(
     let mut transaction = state.pool.begin().await?;
     let external = sqlx::query_as::<_, ExternalAuthorization>(
         r#"
-        SELECT membership.role AS membership_role
+        SELECT membership.role AS membership_role,
+               workspace_role_permissions(membership.role_id) AS membership_role_permissions
         FROM mcp_client_credentials credential
         JOIN external_agent_connections connection
           ON connection.id = credential.external_agent_connection_id
@@ -291,6 +295,7 @@ async fn request_sponsored_execution_inner(
         ActorKind::ExternalAgent,
         principal.project_id,
         &external.membership_role,
+        external.membership_role_permissions.as_deref(),
         Action::WorkerInvoke,
     )?;
 
@@ -318,7 +323,8 @@ async fn request_sponsored_execution_inner(
 
     let sponsor = sqlx::query_as::<_, SponsorAuthorization>(
         r#"
-        SELECT membership.role AS membership_role
+        SELECT membership.role AS membership_role,
+               workspace_role_permissions(membership.role_id) AS membership_role_permissions
         FROM projects project
         JOIN project_memberships membership
           ON membership.project_id = project.id AND membership.actor_id = $2
@@ -344,6 +350,7 @@ async fn request_sponsored_execution_inner(
         ActorKind::Human,
         principal.project_id,
         &sponsor.membership_role,
+        sponsor.membership_role_permissions.as_deref(),
         Action::WorkerInvoke,
     )?;
     select_run_setup(
@@ -487,9 +494,9 @@ async fn list_sponsored_execution_requests(
     principal: AuthenticatedActor,
     ApiPath(project_id): ApiPath<Uuid>,
 ) -> Result<Json<SponsoredExecutionList>, AppError> {
-    let role = sqlx::query_scalar::<_, String>(
+    let (role, role_permissions) = sqlx::query_as::<_, (String, Option<Vec<String>>)>(
         r#"
-        SELECT membership.role
+        SELECT membership.role, workspace_role_permissions(membership.role_id)
         FROM projects project
         JOIN project_memberships membership
           ON membership.project_id = project.id AND membership.actor_id = $2
@@ -510,6 +517,7 @@ async fn list_sponsored_execution_requests(
         ActorKind::Human,
         project_id,
         &role,
+        role_permissions.as_deref(),
         Action::WorkerInvoke,
     )?;
     let requests = sqlx::query_as::<_, SponsoredExecutionProjection>(
@@ -576,7 +584,8 @@ pub(crate) async fn respond_to_sponsored_execution(
                approval.status AS approval_status,
                approval.response AS approval_response,
                approval.responded_by_actor_id,
-               sponsor_membership.role AS sponsor_role
+               sponsor_membership.role AS sponsor_role,
+               workspace_role_permissions(sponsor_membership.role_id) AS sponsor_role_permissions
         FROM external_execution_requests request
         JOIN agent_approvals approval
           ON approval.external_execution_request_id = request.id
@@ -631,7 +640,10 @@ pub(crate) async fn respond_to_sponsored_execution(
     .fetch_optional(&mut *transaction)
     .await?
     .ok_or(AppError::NotFound("agent_approval"))?;
-    let sponsor_role = parse_role(&context.sponsor_role)?;
+    let sponsor_role = parse_role(
+        &context.sponsor_role,
+        context.sponsor_role_permissions.as_deref(),
+    )?;
     let sponsor = Subject::new(
         principal.actor_id,
         ActorKind::Human,
@@ -1030,12 +1042,10 @@ async fn fetch_sponsored_approval(
     })
 }
 
-fn parse_role(value: &str) -> Result<MembershipRole, AppError> {
-    match value {
-        "owner" => Ok(MembershipRole::Owner),
-        "admin" => Ok(MembershipRole::Admin),
-        "member" => Ok(MembershipRole::Member),
-        "viewer" => Ok(MembershipRole::Viewer),
+/// A person's or agent's stored role; workers never come through here.
+fn parse_role(value: &str, permissions: Option<&[String]>) -> Result<RoleGrant, AppError> {
+    match RoleGrant::stored(value, permissions) {
+        Ok(grant) if grant.role() != MembershipRole::Worker => Ok(grant),
         _ => Err(AppError::Forbidden),
     }
 }
@@ -1045,15 +1055,10 @@ fn require_policy(
     actor_kind: ActorKind,
     project_id: Uuid,
     role: &str,
+    role_permissions: Option<&[String]>,
     action: Action,
 ) -> Result<(), AppError> {
-    let role = match role {
-        "owner" => MembershipRole::Owner,
-        "admin" => MembershipRole::Admin,
-        "member" => MembershipRole::Member,
-        "viewer" => MembershipRole::Viewer,
-        _ => return Err(AppError::Forbidden),
-    };
+    let role = parse_role(role, role_permissions)?;
     let subject = Subject::new(
         actor_id,
         actor_kind,

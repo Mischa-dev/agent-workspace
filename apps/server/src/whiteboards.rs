@@ -226,7 +226,7 @@ pub async fn access(
             caller.actor_id,
             caller.actor_kind,
             project_id,
-            Action::WorkItemEdit,
+            Action::WhiteboardEdit,
         )
         .await
         .is_ok(),
@@ -293,7 +293,7 @@ async fn project_for_board(
         caller.actor_id,
         caller.actor_kind,
         project_id,
-        Action::WorkItemEdit,
+        Action::WhiteboardEdit,
     )
     .await?;
     let (organization_id, reachable) = sqlx::query_as::<_, (Uuid, bool)>(
@@ -638,7 +638,7 @@ pub async fn empty_trash(
             caller.actor_id,
             caller.actor_kind,
             project,
-            Action::WorkItemEdit,
+            Action::WhiteboardEdit,
         )
         .await
         .is_ok()
@@ -750,7 +750,7 @@ pub async fn set_link(
         caller.actor_id,
         caller.actor_kind,
         project_id,
-        Action::WorkItemEdit,
+        Action::WhiteboardEdit,
     )
     .await
     .map_err(|_| AppError::NotFound("link target"))?;
@@ -833,7 +833,7 @@ pub async fn links(
     caller: &Caller,
     whiteboard_id: Uuid,
 ) -> Result<Vec<LinkView>, AppError> {
-    Ok(sqlx::query_as::<_, LinkView>(
+    let mut links = sqlx::query_as::<_, LinkView>(
         r#"
         SELECT link.target_kind, link.target_id, link.target_project_id AS project_id,
                project.name AS project_name,
@@ -864,7 +864,27 @@ pub async fn links(
     .bind(caller.connection_id)
     .bind(caller.confined_project)
     .fetch_all(pool)
-    .await?)
+    .await?;
+    // A linked task's title is its current one: shown only with "see tasks"
+    // in its project (role, and an app's agent limit), as task_open would;
+    // otherwise the link keeps its key.
+    let mut task_projects = links
+        .iter()
+        .filter(|link| link.target_kind == "work_item")
+        .map(|link| link.project_id)
+        .collect::<Vec<_>>();
+    if !task_projects.is_empty() {
+        task_projects.sort_unstable();
+        task_projects.dedup();
+        let showing =
+            crate::search::projects_showing_tasks(pool, caller.actor_id, &task_projects).await?;
+        for link in &mut links {
+            if link.target_kind == "work_item" && !showing.contains(&link.project_id) {
+                link.title = "Task".to_owned();
+            }
+        }
+    }
+    Ok(links)
 }
 
 /// Boards linked to a task, project or page that the caller can see. The

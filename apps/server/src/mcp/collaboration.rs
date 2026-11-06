@@ -18,6 +18,7 @@ use crate::{
 #[derive(Debug, FromRow)]
 pub(super) struct ConnectionAuthorization {
     membership_role: String,
+    membership_role_permissions: Option<Vec<String>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -45,7 +46,8 @@ pub(super) async fn begin_authorized_read<'a>(
         .map_err(|_| ReadFailure::Database("begin"))?;
     let authorization = sqlx::query_as::<_, ConnectionAuthorization>(
         r#"
-        SELECT membership.role AS membership_role
+        SELECT membership.role AS membership_role,
+               workspace_role_permissions(membership.role_id) AS membership_role_permissions
         FROM mcp_client_credentials credential
         JOIN external_agent_connections connection
           ON connection.id = credential.external_agent_connection_id
@@ -89,6 +91,7 @@ pub(super) async fn begin_authorized_read<'a>(
         principal.actor_kind,
         principal.project_id,
         &authorization.membership_role,
+        authorization.membership_role_permissions.as_deref(),
         Action::McpRead,
     ) {
         return Err(ReadFailure::Authorization);

@@ -10,7 +10,7 @@ use crate::{
     idempotency::{IdempotencyKey, IdempotencyOutcome, RequestHash, complete, reserve},
     outbox::{OutboxEventPayload, ProjectMembershipUpdatedPayload, enqueue_typed},
     policy::{
-        Action, ActorKind, Decision, Membership, MembershipRole, ProjectScope, Resource, Subject,
+        Action, ActorKind, Decision, Membership, ProjectScope, Resource, RoleGrant, Subject,
         authorize,
     },
 };
@@ -35,9 +35,20 @@ pub fn router() -> Router<AppState> {
 struct AccessRow {
     project_archived: bool,
     organization_role: String,
+    organization_role_permissions: Option<Vec<String>>,
     organization_enabled: bool,
     project_role: String,
+    project_role_permissions: Option<Vec<String>>,
     project_enabled: bool,
+}
+
+impl AccessRow {
+    fn organization_grant(&self) -> Result<RoleGrant, AppError> {
+        Ok(RoleGrant::stored(
+            &self.organization_role,
+            self.organization_role_permissions.as_deref(),
+        )?)
+    }
 }
 
 #[derive(Clone, Debug, FromRow)]
@@ -49,6 +60,8 @@ pub(crate) struct MemberRow {
     pub(crate) organization_role: String,
     pub(crate) actor_kind: String,
     pub(crate) role: String,
+    /// The custom role they hold here (AWD-74), if any.
+    pub(crate) role_id: Option<Uuid>,
     pub(crate) display_name: String,
     pub(crate) handle: String,
     pub(crate) enabled: bool,
@@ -68,6 +81,9 @@ pub(crate) struct MemberRow {
 struct UpdateMemberRequest {
     expected_version: i64,
     role: Option<String>,
+    /// A custom role of the workspace, instead of `role`.
+    #[serde(default)]
+    role_id: Option<Uuid>,
     enabled: Option<bool>,
 }
 
@@ -85,6 +101,7 @@ struct MemberView {
     actor_id: Uuid,
     actor_kind: String,
     role: String,
+    role_id: Option<Uuid>,
     display_name: String,
     handle: String,
     enabled: bool,
@@ -179,6 +196,7 @@ async fn update_member(
         project_id,
         actor_id,
         request.role.as_deref(),
+        request.role_id,
         request.enabled,
         Some(request.expected_version),
     )
@@ -225,17 +243,22 @@ pub(crate) struct MemberChange {
 /// Only organization owners and admins manage members, never their own
 /// membership, and admins only manage members and viewers. A Project always
 /// keeps an owner. Removing someone revokes their credentials there.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn change_member(
     transaction: &mut Transaction<'_, Postgres>,
     caller_actor_id: Uuid,
     project_id: Uuid,
     actor_id: Uuid,
     role: Option<&str>,
+    role_id: Option<Uuid>,
     enabled: Option<bool>,
     expected_version: Option<i64>,
 ) -> Result<MemberChange, AppError> {
-    if role.is_none() && enabled.is_none() {
+    if role.is_none() && role_id.is_none() && enabled.is_none() {
         return Err(AppError::Validation("project membership update"));
+    }
+    if role.is_some() && role_id.is_some() {
+        return Err(AppError::Validation("project membership role"));
     }
     if role.is_some_and(|role| !matches!(role, "admin" | "member" | "viewer")) {
         return Err(AppError::Validation("project membership role"));
@@ -263,8 +286,29 @@ pub(crate) async fn change_member(
     let target = load_member_for_update(transaction, project_id, actor_id)
         .await?
         .ok_or(AppError::NotFound("project_member"))?;
-    let next_role = role.unwrap_or(&target.role);
+    let (next_role, next_role_id) = match (role, role_id) {
+        (Some(role), _) => (role.to_owned(), None),
+        (None, Some(role_id)) => pick_custom_role(transaction, project_id, role_id).await?,
+        (None, None) => (target.role.clone(), target.role_id),
+    };
+    let next_role = next_role.as_str();
     authorize_target(&access, &target, next_role)?;
+    let next_enabled = enabled.unwrap_or(target.enabled);
+    // Bringing someone back hands their role out again, so it has to be
+    // within what the caller holds, as a role change is.
+    if next_role != target.role
+        || next_role_id != target.role_id
+        || (next_enabled && !target.enabled)
+    {
+        require_grantable(
+            transaction,
+            caller_actor_id,
+            project_id,
+            next_role,
+            next_role_id,
+        )
+        .await?;
+    }
     if let Some(expected_version) = expected_version
         && target.version != expected_version
     {
@@ -274,13 +318,13 @@ pub(crate) async fn change_member(
         });
     }
 
-    let next_enabled = enabled.unwrap_or(target.enabled);
     if target.role == "owner" && (next_role != "owner" || !next_enabled) {
         lock_and_require_other_owners(transaction, target.organization_id, project_id, actor_id)
             .await?;
     }
 
-    if next_role == target.role && next_enabled == target.enabled {
+    if next_role == target.role && next_role_id == target.role_id && next_enabled == target.enabled
+    {
         return Ok(MemberChange {
             access,
             before: target,
@@ -291,7 +335,7 @@ pub(crate) async fn change_member(
     let updated = sqlx::query_as::<_, MemberRow>(
         r#"
         UPDATE project_memberships
-        SET role = $3, enabled = $4,
+        SET role = $3, role_id = $7, enabled = $4,
             disabled_by_actor_id = CASE WHEN $4 THEN NULL ELSE $5 END,
             disabled_at = CASE WHEN $4 THEN NULL ELSE now() END,
             version = version + 1, updated_at = now()
@@ -302,7 +346,7 @@ pub(crate) async fn change_member(
           (SELECT role FROM organization_memberships
             WHERE organization_id = (SELECT organization_id FROM projects WHERE id = $1)
               AND actor_id = $2) AS organization_role,
-          role, display_name, handle, enabled, version,
+          role, role_id, display_name, handle, enabled, version,
           invited_by_actor_id,
           (SELECT display_name FROM project_memberships inviter
             WHERE inviter.project_id = $1
@@ -330,6 +374,7 @@ pub(crate) async fn change_member(
     .bind(next_enabled)
     .bind(caller_actor_id)
     .bind(target.version)
+    .bind(next_role_id)
     .fetch_optional(&mut **transaction)
     .await
     .map_err(map_membership_database_error)?
@@ -361,8 +406,71 @@ pub(crate) async fn change_member(
     })
 }
 
+/// Refuses a project role that would give someone a permission the caller
+/// doesn't hold themselves: in the workspace (a narrowed admin can't hand
+/// out a plain Member, say), and in this project, where the role is used (a
+/// project role narrowed below the workspace one can't be won back by
+/// giving more to someone else, such as an agent of theirs).
+pub(crate) async fn require_grantable(
+    transaction: &mut Transaction<'_, Postgres>,
+    caller_actor_id: Uuid,
+    project_id: Uuid,
+    role: &str,
+    role_id: Option<Uuid>,
+) -> Result<(), AppError> {
+    let (organization_id, permissions) = sqlx::query_as::<_, (Uuid, Option<Vec<String>>)>(
+        "SELECT organization_id, workspace_role_permissions($2) FROM projects WHERE id = $1",
+    )
+    .bind(project_id)
+    .bind(role_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(AppError::NotFound("project"))?;
+    let grant = crate::policy::RoleGrant::stored(role, permissions.as_deref())?;
+    let caller = crate::roles::standing(transaction, organization_id, caller_actor_id).await?;
+    if !grant.permissions().is_subset_of(caller.permissions) {
+        return Err(AppError::Forbidden);
+    }
+    let held = crate::roles::project_holding(transaction, caller_actor_id, project_id)
+        .await?
+        .ok_or(AppError::Forbidden)?;
+    if !crate::roles::project_checked(grant.permissions()).is_subset_of(held) {
+        return Err(AppError::Forbidden);
+    }
+    Ok(())
+}
+
+/// A custom role of the project's workspace, as the built-in role it's
+/// based on and its ID. A built-in role's row names just the role. Owner is
+/// never picked this way.
+pub(crate) async fn pick_custom_role(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    role_id: Uuid,
+) -> Result<(String, Option<Uuid>), AppError> {
+    let (built_in, base) = sqlx::query_as::<_, (bool, String)>(
+        r#"
+        SELECT role.built_in, role.base_role
+        FROM workspace_roles role
+        JOIN projects project ON project.organization_id = role.organization_id
+        WHERE project.id = $1 AND role.id = $2
+        "#,
+    )
+    .bind(project_id)
+    .bind(role_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(AppError::NotFound("role"))?;
+    if base == "owner" {
+        return Err(AppError::Validation("project membership role"));
+    }
+    Ok((base, (!built_in).then_some(role_id)))
+}
+
 fn validate_update(request: &UpdateMemberRequest) -> Result<(), AppError> {
-    if request.expected_version < 1 || (request.role.is_none() && request.enabled.is_none()) {
+    if request.expected_version < 1
+        || (request.role.is_none() && request.role_id.is_none() && request.enabled.is_none())
+    {
         return Err(AppError::Validation("project membership update"));
     }
     if request
@@ -381,8 +489,13 @@ fn authorize_access(
     project_id: Uuid,
     action: Action,
 ) -> Result<(), AppError> {
+    // Managing members takes the permission in the workspace as well as in
+    // the project.
     if !access.organization_enabled
-        || !matches!(access.organization_role.as_str(), "owner" | "admin")
+        || !access
+            .organization_grant()?
+            .permissions()
+            .contains(action.permission())
     {
         return Err(AppError::NotFound("project"));
     }
@@ -392,7 +505,10 @@ fn authorize_access(
         true,
         Some(Membership::project(
             project_id,
-            parse_role(&access.project_role)?,
+            RoleGrant::stored(
+                &access.project_role,
+                access.project_role_permissions.as_deref(),
+            )?,
             access.project_enabled,
         )),
         None,
@@ -440,6 +556,7 @@ fn member_view(row: MemberRow, principal: &AuthenticatedActor, access: &AccessRo
         actor_id: row.actor_id,
         actor_kind: row.actor_kind,
         role: row.role,
+        role_id: row.role_id,
         display_name: row.display_name,
         handle: row.handle,
         enabled: row.enabled,
@@ -494,8 +611,11 @@ fn access_sql(lock: bool) -> &'static str {
         r#"
         SELECT project.archived_at IS NOT NULL AS project_archived,
                organization_membership.role AS organization_role,
+               workspace_role_permissions(organization_membership.role_id)
+                 AS organization_role_permissions,
                organization_membership.enabled AS organization_enabled,
                project_membership.role AS project_role,
+               workspace_role_permissions(project_membership.role_id) AS project_role_permissions,
                project_membership.enabled AS project_enabled
         FROM projects project
         JOIN organization_memberships organization_membership
@@ -511,8 +631,11 @@ fn access_sql(lock: bool) -> &'static str {
         r#"
         SELECT project.archived_at IS NOT NULL AS project_archived,
                organization_membership.role AS organization_role,
+               workspace_role_permissions(organization_membership.role_id)
+                 AS organization_role_permissions,
                organization_membership.enabled AS organization_enabled,
                project_membership.role AS project_role,
+               workspace_role_permissions(project_membership.role_id) AS project_role_permissions,
                project_membership.enabled AS project_enabled
         FROM projects project
         JOIN organization_memberships organization_membership
@@ -546,7 +669,7 @@ fn member_list_sql() -> &'static str {
         "SELECT * FROM (",
         // The reusable projection is bounded to human Users and safe metadata.
         "SELECT membership.id, membership.project_id, project.organization_id, membership.actor_id, actor.kind AS actor_kind, ",
-        "organization_membership.role AS organization_role, membership.role, membership.display_name, ",
+        "organization_membership.role AS organization_role, membership.role, membership.role_id, membership.display_name, ",
         "membership.handle, membership.enabled, membership.version, membership.invited_by_actor_id, ",
         "inviter.display_name AS invited_by_display_name, membership.accepted_invitation_id, ",
         "membership.accepted_at::text, membership.disabled_by_actor_id, membership.disabled_at::text, ",
@@ -568,7 +691,7 @@ fn member_list_sql() -> &'static str {
 fn member_query_sql() -> &'static str {
     r#"
     SELECT membership.id, membership.project_id, project.organization_id, membership.actor_id, actor.kind AS actor_kind,
-           organization_membership.role AS organization_role, membership.role,
+           organization_membership.role AS organization_role, membership.role, membership.role_id,
            membership.display_name, membership.handle, membership.enabled, membership.version,
            membership.invited_by_actor_id, inviter.display_name AS invited_by_display_name,
            membership.accepted_invitation_id, membership.accepted_at::text,
@@ -635,7 +758,10 @@ async fn lock_and_require_other_owners(
 /// members requires an Organization admin, so a Project owner or admin anywhere
 /// in the Organization is one, and someone who is neither anywhere is not.
 /// Owners are never changed here, nor a role an owner set on the
-/// workspace's Members page (`role_explicit`).
+/// workspace's Members page (`role_explicit`), nor a custom workspace role.
+/// Only the built-in project Owner and Admin roles count: a custom role
+/// based on Admin is narrower than workspace Admin, so it never widens into
+/// it.
 async fn sync_organization_role(
     transaction: &mut Transaction<'_, Postgres>,
     organization_id: Uuid,
@@ -650,6 +776,9 @@ async fn sync_organization_role(
                 WHERE project.organization_id = $1 AND project.archived_at IS NULL
                   AND membership.actor_id = $2 AND membership.enabled
                   AND membership.role IN ('owner', 'admin')
+                  -- Only the built-in roles: a custom Admin-based role grants
+                  -- less than workspace Admin, so it never widens into it.
+                  AND membership.role_id IS NULL
             ) THEN 'admin' ELSE 'member' END AS role
         )
         UPDATE organization_memberships
@@ -658,6 +787,7 @@ async fn sync_organization_role(
         WHERE organization_id = $1 AND actor_id = $2
           AND organization_memberships.role IN ('admin', 'member')
           AND NOT organization_memberships.role_explicit
+          AND organization_memberships.role_id IS NULL
           AND organization_memberships.role <> next.role
         "#,
     )
@@ -734,17 +864,6 @@ async fn insert_audit_event(
     Ok(())
 }
 
-fn parse_role(value: &str) -> Result<MembershipRole, AppError> {
-    match value {
-        "owner" => Ok(MembershipRole::Owner),
-        "admin" => Ok(MembershipRole::Admin),
-        "member" => Ok(MembershipRole::Member),
-        "viewer" => Ok(MembershipRole::Viewer),
-        "worker" => Ok(MembershipRole::Worker),
-        _ => Err(AppError::Internal("invalid membership role")),
-    }
-}
-
 fn map_membership_database_error(error: sqlx::Error) -> AppError {
     if matches!(
         &error,
@@ -767,6 +886,7 @@ mod tests {
             validate_update(&UpdateMemberRequest {
                 expected_version: 1,
                 role: Some("admin".to_owned()),
+                role_id: None,
                 enabled: None,
             })
             .is_ok()
@@ -776,6 +896,7 @@ mod tests {
                 validate_update(&UpdateMemberRequest {
                     expected_version: 1,
                     role: Some(role.to_owned()),
+                    role_id: None,
                     enabled: None,
                 })
                 .is_err()
@@ -785,6 +906,7 @@ mod tests {
             validate_update(&UpdateMemberRequest {
                 expected_version: 0,
                 role: None,
+                role_id: None,
                 enabled: Some(false),
             })
             .is_err()
@@ -793,6 +915,7 @@ mod tests {
             validate_update(&UpdateMemberRequest {
                 expected_version: 1,
                 role: None,
+                role_id: None,
                 enabled: None,
             })
             .is_err()
@@ -843,6 +966,9 @@ async fn member_candidates(
 struct AddExistingMemberRequest {
     actor_id: Uuid,
     role: String,
+    /// A custom role of the workspace based on `role`.
+    #[serde(default)]
+    role_id: Option<Uuid>,
 }
 
 async fn add_existing_member(
@@ -860,6 +986,7 @@ async fn add_existing_member(
         project_id,
         request.actor_id,
         &request.role,
+        request.role_id,
     )
     .await?;
     if added.inserted {
@@ -889,7 +1016,13 @@ pub(crate) async fn add_member(
     project_id: Uuid,
     actor_id: Uuid,
     role: &str,
+    role_id: Option<Uuid>,
 ) -> Result<AddedMember, AppError> {
+    let (role, role_id) = match role_id {
+        None => (role.to_owned(), None),
+        Some(role_id) => pick_custom_role(tx, project_id, role_id).await?,
+    };
+    let role = role.as_str();
     if !matches!(role, "member" | "viewer") {
         return Err(AppError::Validation("membership role"));
     }
@@ -906,6 +1039,7 @@ pub(crate) async fn add_member(
         project_id,
         Action::MembershipManage,
     )?;
+    require_grantable(tx, caller_actor_id, project_id, role, role_id).await?;
     if access.project_archived {
         return Err(AppError::ProjectArchived);
     }
@@ -920,14 +1054,14 @@ pub(crate) async fn add_member(
     "#).bind(project_id).bind(actor_id).fetch_optional(&mut **tx).await?
         .ok_or(AppError::NotFound("workspace member"))?;
     let inserted = sqlx::query(r#"
-        INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle, invited_by_actor_id)
-        VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (project_id, actor_id) DO NOTHING
+        INSERT INTO project_memberships (id, project_id, actor_id, role, role_id, display_name, handle, invited_by_actor_id)
+        VALUES ($1,$2,$3,$4,$8,$5,$6,$7) ON CONFLICT (project_id, actor_id) DO NOTHING
     "#).bind(Uuid::now_v7()).bind(project_id).bind(actor_id).bind(role)
-        .bind(candidate.1).bind(candidate.2).bind(caller_actor_id).execute(&mut **tx).await?;
+        .bind(candidate.1).bind(candidate.2).bind(caller_actor_id).bind(role_id).execute(&mut **tx).await?;
     let member = load_member_for_update(tx, project_id, actor_id)
         .await?
         .ok_or(AppError::NotFound("member"))?;
-    if !member.enabled || member.role != role {
+    if !member.enabled || member.role != role || member.role_id != role_id {
         return Err(AppError::Conflict(
             "membership",
             "member already exists; use its current version to change access",
@@ -935,6 +1069,7 @@ pub(crate) async fn add_member(
     }
     let inserted = inserted.rows_affected() > 0;
     if inserted {
+        crate::roles::apply_arrival_defaults(tx, project_id, actor_id, caller_actor_id).await?;
         enqueue_typed(
             tx,
             project_id,

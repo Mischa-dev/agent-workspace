@@ -60,6 +60,14 @@ pub enum Action {
     WorkItemView,
     WorkItemCreate,
     WorkItemEdit,
+    /// Archive a task, or bring one back.
+    WorkItemArchive,
+    /// Change a project's task workflow: its statuses and their order.
+    WorkflowManage,
+    /// Write pages, skills and decisions.
+    PageEdit,
+    /// Draw on a project's whiteboards.
+    WhiteboardEdit,
     RepositoryView,
     RepositoryManage,
     RepositoryPublish,
@@ -69,10 +77,12 @@ pub enum Action {
     /// Change settings and keys for a workspace or project (owners and
     /// admins; people only).
     SettingsManage,
+    /// Define the workspace's roles (owners and admins; people only).
+    RoleManage,
 }
 
 impl Action {
-    pub const ALL: [Self; 35] = [
+    pub const ALL: [Self; 40] = [
         Self::OrganizationProjectCreate,
         Self::ProjectView,
         Self::ProjectManage,
@@ -101,6 +111,10 @@ impl Action {
         Self::WorkItemView,
         Self::WorkItemCreate,
         Self::WorkItemEdit,
+        Self::WorkItemArchive,
+        Self::WorkflowManage,
+        Self::PageEdit,
+        Self::WhiteboardEdit,
         Self::RepositoryView,
         Self::RepositoryManage,
         Self::RepositoryPublish,
@@ -108,7 +122,692 @@ impl Action {
         Self::PullRequestCreate,
         Self::PullRequestRefresh,
         Self::SettingsManage,
+        Self::RoleManage,
     ];
+
+    /// The permission a role needs for this action.
+    pub const fn permission(self) -> Permission {
+        match self {
+            Self::OrganizationProjectCreate => Permission::ProjectsCreate,
+            Self::ProjectView
+            | Self::RealtimeSubscribe
+            | Self::McpRead
+            | Self::NavigationRead
+            | Self::NavigationWrite
+            | Self::ReadStateUpdate => Permission::ProjectsView,
+            Self::ProjectManage => Permission::ProjectsManage,
+            Self::InvitationManage => Permission::MembersInvite,
+            Self::MembershipView => Permission::MembersView,
+            Self::MembershipManage => Permission::MembersManage,
+            Self::ExternalAgentManage => Permission::AgentsManage,
+            Self::McpWrite | Self::WorkItemEdit => Permission::TasksEdit,
+            Self::CredentialManage | Self::SettingsManage => Permission::SettingsManage,
+            Self::ExecutionProfileView | Self::ExecutionProfileManage => Permission::RunsAccounts,
+            Self::WorkerInvoke => Permission::RunsLaunch,
+            Self::RunInterrupt => Permission::RunsInterrupt,
+            Self::ApprovalRespond => Permission::RunsApprove,
+            Self::ChannelCreate | Self::ConversationArchive => Permission::ChannelsCreate,
+            Self::MessageSend | Self::ThreadCreate | Self::MentionSearch => {
+                Permission::ChannelsPost
+            }
+            Self::MessageModerate => Permission::ChannelsModerate,
+            Self::WorkItemView => Permission::TasksView,
+            Self::WorkItemCreate => Permission::TasksCreate,
+            Self::WorkItemArchive => Permission::TasksDelete,
+            Self::WorkflowManage => Permission::TasksWorkflow,
+            Self::PageEdit => Permission::PagesEdit,
+            Self::WhiteboardEdit => Permission::WhiteboardsEdit,
+            Self::RepositoryView => Permission::CodeView,
+            Self::RepositoryManage | Self::GithubIntegrationManage => Permission::CodeManage,
+            Self::RepositoryPublish | Self::PullRequestCreate | Self::PullRequestRefresh => {
+                Permission::CodePublish
+            }
+            Self::RoleManage => Permission::RolesManage,
+        }
+    }
+}
+
+/// What a role lets its holders do, in the words people use. Each action
+/// needs exactly one (`Action::permission`); a role holds a set of them.
+///
+/// Adding one: give it a line in `PERMISSIONS` with its default for every
+/// built-in role (anything a role isn't given is denied), map the actions
+/// that need it, and add its key to the web app's list
+/// (`apps/web/src/settings/workspace/roles.ts`). Custom roles made before it
+/// don't hold it until an admin gives it to them.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum Permission {
+    ProjectsView,
+    ProjectsCreate,
+    ProjectsManage,
+    TasksView,
+    TasksCreate,
+    TasksEdit,
+    TasksDelete,
+    TasksWorkflow,
+    ChannelsPost,
+    ChannelsCreate,
+    ChannelsModerate,
+    PagesEdit,
+    WhiteboardsEdit,
+    RunsLaunch,
+    RunsApprove,
+    RunsInterrupt,
+    RunsAccounts,
+    CodeView,
+    CodePublish,
+    CodeManage,
+    AgentsManage,
+    MembersView,
+    DirectoryView,
+    MembersInvite,
+    MembersManage,
+    RolesManage,
+    SettingsManage,
+}
+
+/// Where a permission is checked: in a project (by the role someone has
+/// there), in the workspace (by their workspace role), or both.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PermissionScope {
+    Project,
+    Workspace,
+    Both,
+}
+
+impl PermissionScope {
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Project => "project",
+            Self::Workspace => "workspace",
+            Self::Both => "both",
+        }
+    }
+}
+
+/// One permission as the Roles page and agents read it.
+#[derive(Clone, Copy, Debug)]
+pub struct PermissionInfo {
+    pub permission: Permission,
+    /// Stable key, stored in custom roles: `tasks.edit`.
+    pub key: &'static str,
+    /// The module it belongs to, which the Roles page groups by.
+    pub module: &'static str,
+    pub label: &'static str,
+    /// A short "what this means".
+    pub meaning: &'static str,
+    pub scope: PermissionScope,
+    /// Whether owner, admin, member and viewer hold it, in that order.
+    pub built_in: [bool; 4],
+    /// Never for an agent, even when a role and its limit allow it.
+    pub people_only: bool,
+    /// Every role holds it: without it a role could see nothing at all.
+    pub required: bool,
+}
+
+const fn permission(
+    permission: Permission,
+    key: &'static str,
+    module: &'static str,
+    label: &'static str,
+    meaning: &'static str,
+    scope: PermissionScope,
+    built_in: [bool; 4],
+) -> PermissionInfo {
+    PermissionInfo {
+        permission,
+        key,
+        module,
+        label,
+        meaning,
+        scope,
+        built_in,
+        people_only: false,
+        required: false,
+    }
+}
+
+const fn people_only(info: PermissionInfo) -> PermissionInfo {
+    PermissionInfo {
+        people_only: true,
+        ..info
+    }
+}
+
+const fn required(info: PermissionInfo) -> PermissionInfo {
+    PermissionInfo {
+        required: true,
+        ..info
+    }
+}
+
+const ALL_ROLES: [bool; 4] = [true, true, true, true];
+const WORKERS: [bool; 4] = [true, true, true, false];
+const MANAGERS: [bool; 4] = [true, true, false, false];
+
+/// Every permission, in the order the Roles page shows them.
+pub const PERMISSIONS: [PermissionInfo; 27] = [
+    required(permission(
+        Permission::ProjectsView,
+        "projects.view",
+        "projects",
+        "Open projects they're in",
+        "See a project, its channels, tasks and pages, and get its updates.",
+        PermissionScope::Project,
+        ALL_ROLES,
+    )),
+    permission(
+        Permission::ProjectsCreate,
+        "projects.create",
+        "projects",
+        "Create projects",
+        "Start new projects in the workspace.",
+        PermissionScope::Workspace,
+        MANAGERS,
+    ),
+    permission(
+        Permission::ProjectsManage,
+        "projects.manage",
+        "projects",
+        "Change and archive projects",
+        "Rename a project, change its details, archive it or bring it back.",
+        PermissionScope::Project,
+        MANAGERS,
+    ),
+    permission(
+        Permission::TasksView,
+        "tasks.view",
+        "tasks",
+        "See tasks",
+        "Read tasks, the board, milestones and views.",
+        PermissionScope::Project,
+        ALL_ROLES,
+    ),
+    permission(
+        Permission::TasksCreate,
+        "tasks.create",
+        "tasks",
+        "Create tasks",
+        "Add tasks, import plans and use templates.",
+        PermissionScope::Project,
+        WORKERS,
+    ),
+    permission(
+        Permission::TasksEdit,
+        "tasks.edit",
+        "tasks",
+        "Edit tasks",
+        "Change tasks: status, fields, comments, labels and dependencies.",
+        PermissionScope::Project,
+        WORKERS,
+    ),
+    permission(
+        Permission::TasksDelete,
+        "tasks.delete",
+        "tasks",
+        "Archive tasks",
+        "Archive tasks, or bring archived ones back.",
+        PermissionScope::Project,
+        WORKERS,
+    ),
+    permission(
+        Permission::TasksWorkflow,
+        "tasks.workflow",
+        "tasks",
+        "Change the workflow",
+        "Add, rename and reorder the statuses tasks move through.",
+        PermissionScope::Project,
+        MANAGERS,
+    ),
+    permission(
+        Permission::ChannelsPost,
+        "channels.post",
+        "channels",
+        "Post messages",
+        "Write in channels and threads, and mention people and agents.",
+        PermissionScope::Project,
+        WORKERS,
+    ),
+    permission(
+        Permission::ChannelsCreate,
+        "channels.create",
+        "channels",
+        "Create channels",
+        "Start channels, and archive or restore them.",
+        PermissionScope::Project,
+        WORKERS,
+    ),
+    permission(
+        Permission::ChannelsModerate,
+        "channels.moderate",
+        "channels",
+        "Moderate",
+        "Remove anyone's messages and comments.",
+        PermissionScope::Project,
+        MANAGERS,
+    ),
+    permission(
+        Permission::PagesEdit,
+        "pages.edit",
+        "pages",
+        "Edit pages and decisions",
+        "Write pages and skills, and record decisions.",
+        PermissionScope::Project,
+        WORKERS,
+    ),
+    permission(
+        Permission::WhiteboardsEdit,
+        "whiteboards.edit",
+        "whiteboards",
+        "Draw on whiteboards",
+        "Change a project's whiteboards. Anyone in the project can still look at them.",
+        PermissionScope::Project,
+        WORKERS,
+    ),
+    permission(
+        Permission::RunsLaunch,
+        "runs.launch",
+        "runs",
+        "Launch runs",
+        "Start agents working on tasks.",
+        PermissionScope::Project,
+        WORKERS,
+    ),
+    permission(
+        Permission::RunsApprove,
+        "runs.approve",
+        "runs",
+        "Answer approvals",
+        "Approve or turn down what a run asks to do.",
+        PermissionScope::Project,
+        WORKERS,
+    ),
+    permission(
+        Permission::RunsInterrupt,
+        "runs.interrupt",
+        "runs",
+        "Stop runs",
+        "Interrupt or cancel a run that's working.",
+        PermissionScope::Project,
+        WORKERS,
+    ),
+    permission(
+        Permission::RunsAccounts,
+        "runs.accounts",
+        "runs",
+        "Use run accounts",
+        "Set up and use their own accounts and environments for runs.",
+        PermissionScope::Project,
+        WORKERS,
+    ),
+    permission(
+        Permission::CodeView,
+        "code.view",
+        "code",
+        "See code",
+        "See repositories and pull requests.",
+        PermissionScope::Project,
+        ALL_ROLES,
+    ),
+    permission(
+        Permission::CodePublish,
+        "code.publish",
+        "code",
+        "Publish changes",
+        "Push a run's work and open or refresh pull requests.",
+        PermissionScope::Project,
+        WORKERS,
+    ),
+    permission(
+        Permission::CodeManage,
+        "code.manage",
+        "code",
+        "Manage repositories",
+        "Connect GitHub, and add or archive repositories.",
+        PermissionScope::Project,
+        MANAGERS,
+    ),
+    people_only(permission(
+        Permission::AgentsManage,
+        "agents.manage",
+        "agents",
+        "Manage agents",
+        "Connect agents to a project and change or remove them.",
+        PermissionScope::Project,
+        MANAGERS,
+    )),
+    permission(
+        Permission::MembersView,
+        "members.view",
+        "members",
+        "See the member list",
+        "See who's in a project and their roles.",
+        PermissionScope::Both,
+        MANAGERS,
+    ),
+    // Every built-in role holds it, so the workspace's member list stays as
+    // it was for them. A custom role holds it only when given it: without
+    // it, that list shows its holders only themselves. Projects' member
+    // lists follow "See the member list" (members.view) instead.
+    permission(
+        Permission::DirectoryView,
+        "directory.view",
+        "members",
+        "See the workspace member directory",
+        "See who's in the workspace on its Members page. Without it, only yourself.",
+        PermissionScope::Workspace,
+        ALL_ROLES,
+    ),
+    permission(
+        Permission::MembersInvite,
+        "members.invite",
+        "members",
+        "Invite people",
+        "Send and revoke invitations.",
+        PermissionScope::Both,
+        MANAGERS,
+    ),
+    permission(
+        Permission::MembersManage,
+        "members.manage",
+        "members",
+        "Change roles and remove people",
+        "Give people roles they hold themselves, and remove or bring people back.",
+        PermissionScope::Both,
+        MANAGERS,
+    ),
+    people_only(permission(
+        Permission::RolesManage,
+        "roles.manage",
+        "members",
+        "Define roles",
+        "Create, change and remove the workspace's roles.",
+        PermissionScope::Workspace,
+        MANAGERS,
+    )),
+    people_only(permission(
+        Permission::SettingsManage,
+        "settings.manage",
+        "settings",
+        "Manage settings",
+        "Change workspace and project settings, keys and layouts.",
+        PermissionScope::Both,
+        MANAGERS,
+    )),
+];
+
+/// The modules permissions are grouped by, in order, with their names.
+pub const PERMISSION_MODULES: [(&str, &str); 10] = [
+    ("projects", "Projects"),
+    ("tasks", "Tasks"),
+    ("channels", "Channels"),
+    ("pages", "Pages and decisions"),
+    ("whiteboards", "Whiteboards"),
+    ("runs", "Runs"),
+    ("code", "Code"),
+    ("agents", "Agents"),
+    ("members", "Members"),
+    ("settings", "Settings"),
+];
+
+impl Permission {
+    pub fn info(self) -> &'static PermissionInfo {
+        PERMISSIONS
+            .iter()
+            .find(|info| info.permission == self)
+            .unwrap_or(&PERMISSIONS[0])
+    }
+
+    pub fn key(self) -> &'static str {
+        self.info().key
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        PERMISSIONS
+            .iter()
+            .find(|info| info.key == key)
+            .map(|info| info.permission)
+    }
+
+    const fn bit(self) -> u64 {
+        1 << (self as u8)
+    }
+}
+
+/// A set of permissions.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PermissionSet(u64);
+
+impl PermissionSet {
+    pub const EMPTY: Self = Self(0);
+
+    pub fn all() -> Self {
+        PERMISSIONS
+            .iter()
+            .fold(Self::EMPTY, |set, info| set.with(info.permission))
+    }
+
+    /// What a built-in role holds. Workers hold nothing of their own: they
+    /// act only within what a run delegates.
+    pub fn built_in(role: MembershipRole) -> Self {
+        let index = match role {
+            MembershipRole::Owner => 0,
+            MembershipRole::Admin => 1,
+            MembershipRole::Member => 2,
+            MembershipRole::Viewer => 3,
+            MembershipRole::Worker => return Self::EMPTY,
+        };
+        PERMISSIONS
+            .iter()
+            .filter(|info| info.built_in[index])
+            .fold(Self::EMPTY, |set, info| set.with(info.permission))
+    }
+
+    /// The permissions every role holds.
+    pub fn required() -> Self {
+        PERMISSIONS
+            .iter()
+            .filter(|info| info.required)
+            .fold(Self::EMPTY, |set, info| set.with(info.permission))
+    }
+
+    /// Stored keys; unknown ones (from a newer or older server) are skipped.
+    pub fn from_keys<S: AsRef<str>>(keys: &[S]) -> Self {
+        keys.iter()
+            .filter_map(|key| Permission::from_key(key.as_ref()))
+            .fold(Self::EMPTY, |set, permission| set.with(permission))
+    }
+
+    #[must_use]
+    pub const fn with(self, permission: Permission) -> Self {
+        Self(self.0 | permission.bit())
+    }
+
+    #[must_use]
+    pub const fn without(self, permission: Permission) -> Self {
+        Self(self.0 & !permission.bit())
+    }
+
+    pub const fn contains(self, permission: Permission) -> bool {
+        self.0 & permission.bit() != 0
+    }
+
+    #[must_use]
+    pub const fn intersect(self, other: Self) -> Self {
+        Self(self.0 & other.0)
+    }
+
+    #[must_use]
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    pub const fn is_subset_of(self, other: Self) -> bool {
+        self.0 & !other.0 == 0
+    }
+
+    pub fn iter(self) -> impl Iterator<Item = Permission> {
+        PERMISSIONS
+            .iter()
+            .map(|info| info.permission)
+            .filter(move |permission| self.contains(*permission))
+    }
+
+    pub fn keys(self) -> Vec<&'static str> {
+        self.iter().map(Permission::key).collect()
+    }
+}
+
+/// The role a membership holds: its built-in role (which every check that
+/// reads the plain role sees) and the permissions it grants, which a custom
+/// role narrows from its base.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RoleGrant {
+    role: MembershipRole,
+    permissions: PermissionSet,
+}
+
+/// A stored role the server doesn't know.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UnknownRole;
+
+impl RoleGrant {
+    pub fn built_in(role: MembershipRole) -> Self {
+        Self {
+            role,
+            permissions: PermissionSet::built_in(role),
+        }
+    }
+
+    /// A membership as stored: its `role`, and the custom role's permissions
+    /// when it holds one (`workspace_role_permissions(role_id)`). A custom
+    /// role never holds more than its base, whatever was stored.
+    pub fn stored<S: AsRef<str>>(role: &str, custom: Option<&[S]>) -> Result<Self, UnknownRole> {
+        let role = MembershipRole::parse(role).ok_or(UnknownRole)?;
+        let base = PermissionSet::built_in(role);
+        Ok(Self {
+            role,
+            permissions: match custom {
+                None => base,
+                // Owners always hold everything.
+                Some(_) if role == MembershipRole::Owner => base,
+                Some(keys) => PermissionSet::from_keys(keys)
+                    .union(PermissionSet::required())
+                    .intersect(base),
+            },
+        })
+    }
+
+    pub const fn role(self) -> MembershipRole {
+        self.role
+    }
+
+    pub const fn permissions(self) -> PermissionSet {
+        self.permissions
+    }
+}
+
+impl MembershipRole {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "owner" => Some(Self::Owner),
+            "admin" => Some(Self::Admin),
+            "member" => Some(Self::Member),
+            "viewer" => Some(Self::Viewer),
+            "worker" => Some(Self::Worker),
+            _ => None,
+        }
+    }
+
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Owner => "owner",
+            Self::Admin => "admin",
+            Self::Member => "member",
+            Self::Viewer => "viewer",
+            Self::Worker => "worker",
+        }
+    }
+}
+
+tokio::task_local! {
+    static AGENT_LIMITS: AgentLimits;
+}
+
+/// What an app or agent acting for one person may do in each workspace and
+/// project of theirs, for the length of one call. Set by the MCP layer (and
+/// so the public API and automations); `authorize` narrows that person's
+/// permissions by it. A scope missing from it allows nothing.
+#[derive(Clone, Debug, Default)]
+pub struct AgentLimits {
+    pub actor_id: Uuid,
+    pub organizations: std::collections::HashMap<Uuid, PermissionSet>,
+    pub projects: std::collections::HashMap<Uuid, PermissionSet>,
+}
+
+impl AgentLimits {
+    fn for_scope(&self, scope: MembershipScope) -> PermissionSet {
+        match scope {
+            MembershipScope::Organization(id) => self.organizations.get(&id),
+            MembershipScope::Project(id) => self.projects.get(&id),
+        }
+        .copied()
+        .unwrap_or(PermissionSet::EMPTY)
+    }
+}
+
+/// Run `call` with `limits` applied to every check of that person's
+/// permissions inside it.
+pub async fn with_agent_limits<F: std::future::Future>(limits: AgentLimits, call: F) -> F::Output {
+    AGENT_LIMITS.scope(limits, call).await
+}
+
+/// `with_agent_limits` when there are limits; otherwise just `call`. For
+/// deferred work a person's app set going, which carries the app's limits
+/// as they are when it runs.
+pub async fn within_agent_limits<F: std::future::Future>(
+    limits: Option<AgentLimits>,
+    call: F,
+) -> F::Output {
+    match limits {
+        Some(limits) => with_agent_limits(limits, call).await,
+        None => call.await,
+    }
+}
+
+/// The limit on `actor_id` in `scope` while a call acting for them runs.
+pub fn current_agent_limit(actor_id: Uuid, scope: MembershipScope) -> Option<PermissionSet> {
+    AGENT_LIMITS
+        .try_with(|limits| (limits.actor_id == actor_id).then(|| limits.for_scope(scope)))
+        .ok()
+        .flatten()
+}
+
+/// Whether an app acting for `actor_id` is kept from `permission` in
+/// `project_id` by its agent limit. False outside such a call.
+pub fn agent_limit_hides(actor_id: Uuid, project_id: Uuid, permission: Permission) -> bool {
+    current_agent_limit(actor_id, MembershipScope::Project(project_id))
+        .is_some_and(|limit| !limit.contains(permission))
+}
+
+/// While an app acts for `actor_id`: the projects its agent limit allows
+/// `permission` in (every other project allows nothing). None outside such
+/// a call, meaning no limit applies. For queries that can't filter rows in
+/// Rust, such as counts.
+pub fn agent_limit_projects_allowing(actor_id: Uuid, permission: Permission) -> Option<Vec<Uuid>> {
+    AGENT_LIMITS
+        .try_with(|limits| {
+            (limits.actor_id == actor_id).then(|| {
+                limits
+                    .projects
+                    .iter()
+                    .filter(|(_, allowed)| allowed.contains(permission))
+                    .map(|(project, _)| *project)
+                    .collect()
+            })
+        })
+        .ok()
+        .flatten()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -120,23 +819,23 @@ pub enum MembershipScope {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Membership {
     scope: MembershipScope,
-    role: MembershipRole,
+    grant: RoleGrant,
     enabled: bool,
 }
 
 impl Membership {
-    pub const fn organization(organization_id: Uuid, role: MembershipRole, enabled: bool) -> Self {
+    pub const fn organization(organization_id: Uuid, grant: RoleGrant, enabled: bool) -> Self {
         Self {
             scope: MembershipScope::Organization(organization_id),
-            role,
+            grant,
             enabled,
         }
     }
 
-    pub const fn project(project_id: Uuid, role: MembershipRole, enabled: bool) -> Self {
+    pub const fn project(project_id: Uuid, grant: RoleGrant, enabled: bool) -> Self {
         Self {
             scope: MembershipScope::Project(project_id),
-            role,
+            grant,
             enabled,
         }
     }
@@ -146,7 +845,11 @@ impl Membership {
     }
 
     pub const fn role(self) -> MembershipRole {
-        self.role
+        self.grant.role
+    }
+
+    pub const fn grant(self) -> RoleGrant {
+        self.grant
     }
 
     pub const fn is_enabled(self) -> bool {
@@ -261,6 +964,9 @@ pub struct Subject {
     actor_active: bool,
     membership: Option<Membership>,
     delegated_scope: Option<DelegatedScope>,
+    /// What an app or agent acting for this person may do, when known
+    /// without the call's agent limits (`with_agent_limits`).
+    agent_limit: Option<PermissionSet>,
 }
 
 impl Subject {
@@ -277,7 +983,15 @@ impl Subject {
             actor_active,
             membership,
             delegated_scope,
+            agent_limit: None,
         }
+    }
+
+    /// The same subject acting through an app or agent limited to `limit`.
+    #[must_use]
+    pub const fn limited_to(mut self, limit: PermissionSet) -> Self {
+        self.agent_limit = Some(limit);
+        self
     }
 
     pub const fn actor_id(&self) -> Uuid {
@@ -341,6 +1055,8 @@ pub enum DenyReason {
     ApprovalEligibilityMismatch,
     HumanRequired,
     SeparationOfDuty,
+    /// The person may, but not through an app or agent.
+    AgentLimit,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -369,7 +1085,12 @@ pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decis
 
     let resource_scope = match (action, resource) {
         (
-            Action::OrganizationProjectCreate | Action::SettingsManage,
+            Action::OrganizationProjectCreate
+            | Action::SettingsManage
+            | Action::RoleManage
+            | Action::InvitationManage
+            | Action::MembershipView
+            | Action::MembershipManage,
             Resource::Organization { organization_id },
         ) => MembershipScope::Organization(organization_id),
         (
@@ -399,6 +1120,10 @@ pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decis
             | Action::WorkItemView
             | Action::WorkItemCreate
             | Action::WorkItemEdit
+            | Action::WorkItemArchive
+            | Action::WorkflowManage
+            | Action::PageEdit
+            | Action::WhiteboardEdit
             | Action::RepositoryView
             | Action::RepositoryManage
             | Action::RepositoryPublish
@@ -418,13 +1143,12 @@ pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decis
         return Decision::Deny(DenyReason::MembershipScopeMismatch);
     }
 
-    if matches!(action, Action::ExternalAgentManage | Action::SettingsManage)
-        && subject.actor_kind != ActorKind::Human
-    {
+    let permission = action.permission();
+    if permission.info().people_only && subject.actor_kind != ActorKind::Human {
         return Decision::Deny(DenyReason::HumanRequired);
     }
 
-    if membership.role == MembershipRole::Worker {
+    if membership.role() == MembershipRole::Worker {
         if !worker_action_is_delegatable(action) {
             return Decision::Deny(DenyReason::RoleDenied);
         }
@@ -438,14 +1162,25 @@ pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decis
         if !delegated_scope.allows(action, project_scope) {
             return Decision::Deny(DenyReason::DelegatedScopeMismatch);
         }
-    } else if !ordinary_role_allows(membership.role, action) {
+    } else if !membership.grant.permissions.contains(permission) {
         return Decision::Deny(DenyReason::RoleDenied);
+    }
+
+    // An app or agent acting for a person: that person's permissions, cut
+    // down by their agent limit.
+    if subject.actor_kind == ActorKind::Human
+        && let Some(limit) = subject
+            .agent_limit
+            .or_else(|| current_agent_limit(subject.actor_id, membership.scope))
+        && !limit.contains(permission)
+    {
+        return Decision::Deny(DenyReason::AgentLimit);
     }
 
     if let Resource::Approval { requirements, .. } = resource {
         if !approval_eligibility_matches(
             subject.actor_id,
-            membership.role,
+            membership.role(),
             requirements.eligibility,
         ) {
             return Decision::Deny(DenyReason::ApprovalEligibilityMismatch);
@@ -459,53 +1194,6 @@ pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decis
     }
 
     Decision::Allow
-}
-
-const fn ordinary_role_allows(role: MembershipRole, action: Action) -> bool {
-    match role {
-        MembershipRole::Owner | MembershipRole::Admin => true,
-        MembershipRole::Member => matches!(
-            action,
-            Action::ProjectView
-                | Action::RealtimeSubscribe
-                | Action::McpRead
-                | Action::McpWrite
-                | Action::ExecutionProfileView
-                | Action::ExecutionProfileManage
-                | Action::NavigationRead
-                | Action::NavigationWrite
-                | Action::WorkerInvoke
-                | Action::RunInterrupt
-                | Action::ApprovalRespond
-                | Action::ChannelCreate
-                | Action::MessageSend
-                | Action::ThreadCreate
-                | Action::ConversationArchive
-                | Action::ReadStateUpdate
-                | Action::MentionSearch
-                | Action::WorkItemView
-                | Action::WorkItemCreate
-                | Action::WorkItemEdit
-                | Action::RepositoryView
-                | Action::RepositoryPublish
-                | Action::PullRequestCreate
-                | Action::PullRequestRefresh
-        ),
-        MembershipRole::Viewer => {
-            matches!(
-                action,
-                Action::ProjectView
-                    | Action::RealtimeSubscribe
-                    | Action::McpRead
-                    | Action::NavigationRead
-                    | Action::NavigationWrite
-                    | Action::ReadStateUpdate
-                    | Action::WorkItemView
-                    | Action::RepositoryView
-            )
-        }
-        MembershipRole::Worker => false,
-    }
 }
 
 const fn worker_action_is_delegatable(action: Action) -> bool {
@@ -541,7 +1229,8 @@ fn approval_eligibility_matches(
 mod tests {
     use super::{
         Action, ActorKind, ApprovalEligibility, ApprovalRequirements, Decision, DelegatedScope,
-        DenyReason, Membership, MembershipRole, ProjectScope, Resource, Subject, authorize,
+        DenyReason, Membership, MembershipRole, PERMISSIONS, Permission, PermissionScope,
+        PermissionSet, ProjectScope, Resource, RoleGrant, Subject, authorize,
     };
     use uuid::Uuid;
 
@@ -562,7 +1251,7 @@ mod tests {
 
     fn project_resource(action: Action, role: MembershipRole) -> Resource {
         match action {
-            Action::OrganizationProjectCreate => Resource::Organization {
+            Action::OrganizationProjectCreate | Action::RoleManage => Resource::Organization {
                 organization_id: ORGANIZATION_ID,
             },
             Action::ApprovalRespond => Resource::Approval {
@@ -586,10 +1275,10 @@ mod tests {
 
     fn membership_for(action: Action, role: MembershipRole, enabled: bool) -> Membership {
         match action {
-            Action::OrganizationProjectCreate => {
-                Membership::organization(ORGANIZATION_ID, role, enabled)
+            Action::OrganizationProjectCreate | Action::RoleManage => {
+                Membership::organization(ORGANIZATION_ID, RoleGrant::built_in(role), enabled)
             }
-            _ => Membership::project(PROJECT_ID, role, enabled),
+            _ => Membership::project(PROJECT_ID, RoleGrant::built_in(role), enabled),
         }
     }
 
@@ -618,6 +1307,9 @@ mod tests {
         Some(DelegatedScope::new(scope, [action]))
     }
 
+    /// The roles' permissions before roles became data, kept as the
+    /// reference the built-in roles must still match. Actions added since
+    /// then sit with the action they were split from.
     #[test]
     fn exhaustive_ordinary_role_action_matrix() {
         for role in MembershipRole::ALL {
@@ -659,6 +1351,10 @@ mod tests {
                             | Action::WorkItemCreate
                             | Action::WorkItemEdit
                             | Action::RepositoryView
+                            // Split from WorkItemEdit.
+                            | Action::WorkItemArchive
+                            | Action::PageEdit
+                            | Action::WhiteboardEdit
                     ),
                     MembershipRole::Viewer => {
                         matches!(
@@ -814,7 +1510,7 @@ mod tests {
             MembershipRole::Viewer,
         ] {
             for action in Action::ALL {
-                if matches!(action, Action::ExternalAgentManage | Action::SettingsManage) {
+                if action.permission().info().people_only {
                     continue;
                 }
                 let resource = project_resource(action, role);
@@ -984,7 +1680,11 @@ mod tests {
             ACTOR_ID,
             ActorKind::Human,
             true,
-            Some(Membership::project(PROJECT_ID, MembershipRole::Owner, true)),
+            Some(Membership::project(
+                PROJECT_ID,
+                RoleGrant::built_in(MembershipRole::Owner),
+                true,
+            )),
             None,
         );
         assert_eq!(
@@ -1004,7 +1704,7 @@ mod tests {
             true,
             Some(Membership::organization(
                 ORGANIZATION_ID,
-                MembershipRole::Owner,
+                RoleGrant::built_in(MembershipRole::Owner),
                 true,
             )),
             None,
@@ -1078,7 +1778,11 @@ mod tests {
             actor_id,
             kind,
             true,
-            Some(Membership::project(PROJECT_ID, role, true)),
+            Some(Membership::project(
+                PROJECT_ID,
+                RoleGrant::built_in(role),
+                true,
+            )),
             None,
         )
     }
@@ -1243,7 +1947,7 @@ mod tests {
             true,
             Some(Membership::project(
                 PROJECT_ID,
-                MembershipRole::Worker,
+                RoleGrant::built_in(MembershipRole::Worker),
                 true,
             )),
             Some(DelegatedScope::new(scope, [Action::ApprovalRespond])),
@@ -1253,5 +1957,253 @@ mod tests {
             authorize(&worker, Action::ApprovalRespond, resource),
             Decision::Deny(DenyReason::HumanRequired)
         );
+    }
+
+    #[test]
+    fn every_permission_is_listed_once_with_a_default_for_each_built_in_role() {
+        let mut indexes = PERMISSIONS
+            .iter()
+            .map(|info| info.permission as usize)
+            .collect::<Vec<_>>();
+        indexes.sort_unstable();
+        assert_eq!(indexes, (0..PERMISSIONS.len()).collect::<Vec<_>>());
+        assert_eq!(Permission::SettingsManage as usize, PERMISSIONS.len() - 1);
+        for info in PERMISSIONS {
+            assert_eq!(Permission::from_key(info.key), Some(info.permission));
+            assert_eq!(info.permission.info().key, info.key);
+            // Owners always hold everything, so a workspace can't lock
+            // itself out.
+            assert!(info.built_in[0], "{} must be held by owners", info.key);
+            if info.required {
+                assert!(info.built_in.iter().all(|held| *held), "{}", info.key);
+            }
+            assert!(
+                super::PERMISSION_MODULES
+                    .iter()
+                    .any(|(module, _)| *module == info.module),
+                "{} names an unknown module",
+                info.key
+            );
+        }
+        assert_eq!(
+            PermissionSet::built_in(MembershipRole::Owner),
+            PermissionSet::all()
+        );
+        for action in Action::ALL {
+            assert!(
+                PERMISSIONS
+                    .iter()
+                    .any(|info| info.permission == action.permission())
+            );
+        }
+    }
+
+    #[test]
+    fn the_workspace_directory_is_its_own_workspace_permission() {
+        // Every built-in role keeps the workspace's member directory, which
+        // anyone in a workspace saw before; a role can still leave it out.
+        let directory = Permission::DirectoryView.info();
+        assert_eq!(directory.key, "directory.view");
+        assert_eq!(directory.scope, PermissionScope::Workspace);
+        assert_eq!(directory.built_in, [true; 4]);
+        assert!(!directory.required && !directory.people_only);
+        // Projects' member lists stay with "See the member list", which
+        // only owners and admins hold.
+        let members = Permission::MembersView.info();
+        assert_eq!(members.scope, PermissionScope::Both);
+        assert_eq!(members.built_in, [true, true, false, false]);
+    }
+
+    #[test]
+    fn custom_roles_only_narrow_their_base() {
+        let resource = Resource::Project(ProjectScope::project(PROJECT_ID));
+        let holder = |grant: RoleGrant| {
+            Subject::new(
+                ACTOR_ID,
+                ActorKind::Human,
+                true,
+                Some(Membership::project(PROJECT_ID, grant, true)),
+                None,
+            )
+        };
+        let reader =
+            holder(RoleGrant::stored("member", Some(&["tasks.view"])).expect("valid in the test"));
+        assert!(authorize(&reader, Action::WorkItemView, resource).is_allowed());
+        // Opening the project comes with every role.
+        assert!(authorize(&reader, Action::ProjectView, resource).is_allowed());
+        assert_eq!(
+            authorize(&reader, Action::WorkItemEdit, resource),
+            Decision::Deny(DenyReason::RoleDenied)
+        );
+        // Stored keys beyond the base, or unknown ones, grant nothing.
+        let viewer = holder(
+            RoleGrant::stored(
+                "viewer",
+                Some(&["tasks.edit", "settings.manage", "nonsense"]),
+            )
+            .expect("valid in the test"),
+        );
+        for action in Action::ALL {
+            let resource = project_resource(action, MembershipRole::Viewer);
+            let membership = membership_for(action, MembershipRole::Viewer, true);
+            let custom = Subject::new(
+                ACTOR_ID,
+                ActorKind::Human,
+                true,
+                Some(match membership.scope() {
+                    super::MembershipScope::Organization(id) => Membership::organization(
+                        id,
+                        RoleGrant::stored("viewer", Some(&["tasks.edit", "settings.manage"]))
+                            .expect("valid in the test"),
+                        true,
+                    ),
+                    super::MembershipScope::Project(id) => Membership::project(
+                        id,
+                        RoleGrant::stored("viewer", Some(&["tasks.edit", "settings.manage"]))
+                            .expect("valid in the test"),
+                        true,
+                    ),
+                }),
+                None,
+            );
+            let built_in = Subject::new(ACTOR_ID, ActorKind::Human, true, Some(membership), None);
+            if authorize(&custom, action, resource).is_allowed() {
+                assert!(
+                    authorize(&built_in, action, resource).is_allowed(),
+                    "{action:?}"
+                );
+            }
+        }
+        assert_eq!(
+            authorize(&viewer, Action::WorkItemEdit, resource),
+            Decision::Deny(DenyReason::RoleDenied)
+        );
+        assert!(RoleGrant::stored("someone", None::<&[&str]>).is_err());
+    }
+
+    #[test]
+    fn agent_limits_cut_down_a_person_but_not_an_agent_with_its_own_role() {
+        let resource = Resource::Project(ProjectScope::project(PROJECT_ID));
+        let limit = PermissionSet::EMPTY
+            .with(Permission::ProjectsView)
+            .with(Permission::TasksView);
+        let person = subject(
+            ActorKind::Human,
+            Action::WorkItemEdit,
+            MembershipRole::Member,
+            true,
+            true,
+            None,
+        );
+        assert!(authorize(&person, Action::WorkItemEdit, resource).is_allowed());
+        let through_an_app = person.clone().limited_to(limit);
+        assert_eq!(
+            authorize(&through_an_app, Action::WorkItemEdit, resource),
+            Decision::Deny(DenyReason::AgentLimit)
+        );
+        assert!(authorize(&through_an_app, Action::WorkItemView, resource).is_allowed());
+        // A limit never adds what the role lacks.
+        let viewer = subject(
+            ActorKind::Human,
+            Action::WorkItemEdit,
+            MembershipRole::Viewer,
+            true,
+            true,
+            None,
+        )
+        .limited_to(PermissionSet::all());
+        assert_eq!(
+            authorize(&viewer, Action::WorkItemEdit, resource),
+            Decision::Deny(DenyReason::RoleDenied)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_call_acting_for_a_person_carries_their_limits_into_every_check() {
+        let resource = Resource::Project(ProjectScope::project(PROJECT_ID));
+        let person = subject(
+            ActorKind::Human,
+            Action::WorkItemEdit,
+            MembershipRole::Member,
+            true,
+            true,
+            None,
+        );
+        let other_person = Subject::new(
+            OTHER_ACTOR_ID,
+            ActorKind::Human,
+            true,
+            Some(Membership::project(
+                PROJECT_ID,
+                RoleGrant::built_in(MembershipRole::Member),
+                true,
+            )),
+            None,
+        );
+        let limits = super::AgentLimits {
+            actor_id: ACTOR_ID,
+            organizations: Default::default(),
+            projects: [(
+                PROJECT_ID,
+                PermissionSet::EMPTY.with(Permission::ProjectsView),
+            )]
+            .into_iter()
+            .collect(),
+        };
+        let (edit, view, other, elsewhere) = super::with_agent_limits(limits, async {
+            (
+                authorize(&person, Action::WorkItemEdit, resource),
+                authorize(&person, Action::ProjectView, resource),
+                authorize(&other_person, Action::WorkItemEdit, resource),
+                authorize(
+                    &Subject::new(
+                        ACTOR_ID,
+                        ActorKind::Human,
+                        true,
+                        Some(Membership::project(
+                            OTHER_PROJECT_ID,
+                            RoleGrant::built_in(MembershipRole::Member),
+                            true,
+                        )),
+                        None,
+                    ),
+                    Action::ProjectView,
+                    Resource::Project(ProjectScope::project(OTHER_PROJECT_ID)),
+                ),
+            )
+        })
+        .await;
+        assert_eq!(edit, Decision::Deny(DenyReason::AgentLimit));
+        assert!(view.is_allowed());
+        // Only the person the call acts for is limited.
+        assert!(other.is_allowed());
+        // A project the call didn't load allows nothing.
+        assert_eq!(elsewhere, Decision::Deny(DenyReason::AgentLimit));
+        assert!(authorize(&person, Action::WorkItemEdit, resource).is_allowed());
+    }
+
+    #[test]
+    fn people_only_permissions_refuse_agents_whatever_their_role() {
+        for info in PERMISSIONS.iter().filter(|info| info.people_only) {
+            let action = Action::ALL
+                .into_iter()
+                .find(|action| action.permission() == info.permission)
+                .expect("valid in the test");
+            let resource = project_resource(action, MembershipRole::Owner);
+            let agent = subject(
+                ActorKind::ExternalAgent,
+                action,
+                MembershipRole::Owner,
+                true,
+                true,
+                None,
+            );
+            assert_eq!(
+                authorize(&agent, action, resource),
+                Decision::Deny(DenyReason::HumanRequired),
+                "{}",
+                info.key
+            );
+        }
     }
 }

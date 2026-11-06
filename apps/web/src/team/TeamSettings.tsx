@@ -39,6 +39,25 @@ import {
   type Member,
   type TeamRole,
 } from './api'
+import { listRoles, roleKeys, type WorkspaceRoleView } from '../settings/workspace/roles'
+
+/** A role picked from a list: a built-in role's key, or a custom role's ID (AWD-74). */
+type RoleChoice = { role?: TeamRole; roleId?: string }
+const BUILT_IN_ROLES = new Set<string>(['owner', 'admin', 'member', 'viewer'])
+function choiceOf(value: string, customRoles: WorkspaceRoleView[]): RoleChoice {
+  if (BUILT_IN_ROLES.has(value)) return { role: value as TeamRole }
+  const custom = customRoles.find((role) => role.id === value)
+  return custom ? { role: custom.baseRole as TeamRole, roleId: custom.id } : {}
+}
+
+function CustomRoleOptions({ roles, agent = false }: { roles: WorkspaceRoleView[]; agent?: boolean }) {
+  const shown = roles.filter((role) => !agent || role.baseRole === 'member' || role.baseRole === 'viewer')
+  return shown.map((role) => (
+    <option key={role.id} value={role.id}>
+      {role.name}
+    </option>
+  ))
+}
 
 const INVITATION_TONES: Record<string, ChipTone> = { active: 'success', accepted: 'muted', revoked: 'muted', expired: 'muted' }
 
@@ -51,8 +70,29 @@ function runReadiness(readiness: string) {
   return `Run account ${humanize(readiness).toLocaleLowerCase()}`
 }
 
-export function TeamSettings({ projectId, organizationRole }: { projectId: string; organizationRole: string }) {
+export function TeamSettings({
+  organizationId,
+  organizationRole,
+  projectId,
+}: {
+  organizationId?: string
+  organizationRole: string
+  projectId: string
+}) {
   const queryClient = useQueryClient()
+  const roles = useQuery({
+    queryKey: roleKeys.roles(organizationId ?? ''),
+    queryFn: () => listRoles(organizationId ?? ''),
+    enabled: Boolean(organizationId),
+  })
+  // Custom roles you may give: admin-based ones only owners give.
+  const customRoles = (roles.data?.roles ?? []).filter(
+    (role) => !role.builtIn && role.capabilities.assign && (role.baseRole !== 'admin' || organizationRole === 'owner'),
+  )
+  // Roles you may invite someone to, built-in ones included: inviting needs
+  // "invite members", not "manage members" (the server works it out as the
+  // invitation endpoint does).
+  const inviteRoles = (roles.data?.roles ?? []).filter((role) => role.capabilities.invite)
   const members = useQuery({
     queryKey: queryKeys.members(projectId),
     queryFn: () => listMembers(projectId),
@@ -85,8 +125,8 @@ export function TeamSettings({ projectId, organizationRole }: { projectId: strin
       input,
     }: {
       actorId: string
-      input: { expectedVersion: number; role?: TeamRole; enabled?: boolean }
-    }) => updateMember(projectId, actorId, input),
+      input: { expectedVersion: number; role?: TeamRole; roleId?: string; enabled?: boolean }
+    }) => updateMember(projectId, actorId, input.roleId ? { expectedVersion: input.expectedVersion, roleId: input.roleId } : input),
     onSuccess: async (updated, { input }) => {
       // Turning access off or on is undone from the toast.
       if (input.enabled !== undefined) {
@@ -103,7 +143,8 @@ export function TeamSettings({ projectId, organizationRole }: { projectId: strin
     onError: mutationError('That change to the team didn’t go through.'),
   })
   const issueMutation = useMutation({
-    mutationFn: ({ role, hours }: { role: Exclude<TeamRole, 'owner'>; hours: number }) => issueInvitation(projectId, role, hours),
+    mutationFn: ({ choice, hours }: { choice: RoleChoice; hours: number }) =>
+      issueInvitation(projectId, (choice.role ?? 'member') as Exclude<TeamRole, 'owner'>, hours, choice.roleId),
     onSuccess: async (issued) => {
       setOneShot(issued)
       await refresh()
@@ -151,7 +192,7 @@ export function TeamSettings({ projectId, organizationRole }: { projectId: strin
           {error}
         </Banner>
       )}
-      <ExistingMemberForm projectId={projectId} onAdded={refresh} />
+      <ExistingMemberForm customRoles={customRoles} projectId={projectId} onAdded={refresh} />
       <Section description="Anyone with the link can join as the role you pick, until it expires or is used." title="Invite people">
         {oneShot && (
           <OneTimeValue copyLabel="Copy link" icon="link" onDone={() => setOneShot(null)} title="Invitation link ready" value={oneShot.invitationUrl}>
@@ -160,10 +201,12 @@ export function TeamSettings({ projectId, organizationRole }: { projectId: strin
         )}
         <InviteForm
           canInviteAdmin={organizationRole === 'owner'}
+          inviteRoles={inviteRoles}
+          rolesLoaded={Boolean(roles.data)}
           disabled={issueMutation.isPending}
-          onSubmit={(role, hours) => {
+          onSubmit={(choice, hours) => {
             setError(null)
-            issueMutation.mutate({ role, hours })
+            issueMutation.mutate({ choice, hours })
           }}
         />
       </Section>
@@ -172,9 +215,11 @@ export function TeamSettings({ projectId, organizationRole }: { projectId: strin
         <RowList label="Members">
           {members.data.members.map((member) => (
             <MemberRow
+              customRoles={customRoles}
               disabled={memberMutation.isPending}
               key={member.actorId}
               member={member}
+              roles={roles.data?.roles ?? []}
               onChange={(input) => {
                 setError(null)
                 memberMutation.mutate({ actorId: member.actorId, input })
@@ -219,7 +264,8 @@ export function TeamSettings({ projectId, organizationRole }: { projectId: strin
                 }
                 title={
                   <span className="aw-row__titleline">
-                    {roleLabel(invitation.role)} invitation
+                    {(invitation.roleId && roles.data?.roles.find((role) => role.id === invitation.roleId)?.name) || roleLabel(invitation.role)}{' '}
+                    invitation
                     <StatusChip tone={INVITATION_TONES[invitation.status] ?? 'muted'}>{humanize(invitation.status)}</StatusChip>
                   </span>
                 }
@@ -248,18 +294,35 @@ export function TeamSettings({ projectId, organizationRole }: { projectId: strin
 
 function InviteForm({
   canInviteAdmin,
+  inviteRoles,
+  rolesLoaded,
   disabled,
   onSubmit,
 }: {
   canInviteAdmin: boolean
+  inviteRoles: WorkspaceRoleView[]
+  rolesLoaded: boolean
   disabled: boolean
-  onSubmit: (role: Exclude<TeamRole, 'owner'>, hours: number) => void
+  onSubmit: (choice: RoleChoice, hours: number) => void
 }) {
-  const [role, setRole] = useState<Exclude<TeamRole, 'owner'>>('member')
+  // Only roles you may invite to are offered; until the roles load, the
+  // plain ones are. It starts on the first one offered.
+  const offers = (key: string) => !rolesLoaded || inviteRoles.some((entry) => entry.builtIn && entry.key === key)
+  const offersMember = offers('member')
+  const offersViewer = offers('viewer')
+  const offersAdmin = canInviteAdmin && inviteRoles.some((entry) => entry.builtIn && entry.key === 'admin')
+  const customRoles = inviteRoles.filter((entry) => !entry.builtIn && (entry.baseRole !== 'admin' || canInviteAdmin))
+  const firstOffered = offersMember
+    ? 'member'
+    : offersViewer
+      ? 'viewer'
+      : (customRoles[0]?.id ?? (offersAdmin ? 'admin' : 'member'))
+  const [picked, setRole] = useState<string | null>(null)
+  const role = picked ?? firstOffered
   const [hours, setHours] = useState(DEFAULT_INVITATION_HOURS)
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    onSubmit(role, hours)
+    onSubmit(choiceOf(role, customRoles), hours)
   }
   return (
     <form className="aw-inline-form" onSubmit={submit}>
@@ -267,12 +330,13 @@ function InviteForm({
         disabled={disabled}
         id="invitation-role"
         label="Invitation role"
-        onChange={(event) => setRole(event.target.value as Exclude<TeamRole, 'owner'>)}
+        onChange={(event) => setRole(event.target.value)}
         value={role}
       >
-        <option value="member">Member</option>
-        <option value="viewer">Viewer</option>
-        {canInviteAdmin && <option value="admin">Admin</option>}
+        {offersMember && <option value="member">Member</option>}
+        {offersViewer && <option value="viewer">Viewer</option>}
+        {offersAdmin && <option value="admin">Admin</option>}
+        <CustomRoleOptions roles={customRoles} />
       </SelectField>
       <SelectField
         disabled={disabled}
@@ -295,14 +359,21 @@ function InviteForm({
 }
 
 function MemberRow({
+  customRoles,
   member,
   disabled,
   onChange,
+  roles,
 }: {
+  customRoles: WorkspaceRoleView[]
   member: Member
   disabled: boolean
-  onChange: (input: { expectedVersion: number; role?: TeamRole; enabled?: boolean }) => void
+  onChange: (input: { expectedVersion: number; role?: TeamRole; roleId?: string; enabled?: boolean }) => void
+  roles: WorkspaceRoleView[]
 }) {
+  // A custom role they hold that you can't give still shows as theirs.
+  const held = member.roleId ? roles.find((role) => role.id === member.roleId) : undefined
+  const options = held && !customRoles.some((role) => role.id === held.id) ? [held, ...customRoles] : customRoles
   return (
     <Row
       actions={
@@ -311,13 +382,14 @@ function MemberRow({
             aria-label={`Role for ${member.displayName}`}
             className="aw-field--inline"
             disabled={disabled || !member.capabilities.changeRole || !member.enabled}
-            onChange={(event) => onChange({ expectedVersion: member.version, role: event.target.value as TeamRole })}
-            value={member.role}
+            onChange={(event) => onChange({ expectedVersion: member.version, ...choiceOf(event.target.value, options) })}
+            value={member.roleId ?? member.role}
           >
             {member.role === 'owner' && <option value="owner">Owner</option>}
             {member.actorKind !== 'external_agent' && <option value="admin">Admin</option>}
             <option value="member">Member</option>
             <option value="viewer">Viewer</option>
+            <CustomRoleOptions agent={member.actorKind === 'external_agent'} roles={options} />
           </SelectField>
           {member.capabilities.disable && (
             <Button
@@ -364,13 +436,25 @@ function MemberRow({
   )
 }
 
-function ExistingMemberForm({ projectId, onAdded }: { projectId: string; onAdded: () => Promise<void> }) {
+function ExistingMemberForm({
+  customRoles,
+  projectId,
+  onAdded,
+}: {
+  customRoles: WorkspaceRoleView[]
+  projectId: string
+  onAdded: () => Promise<void>
+}) {
   const candidates = useQuery({ queryKey: ['member-candidates', projectId], queryFn: () => listMemberCandidates(projectId) })
   const [actorId, setActorId] = useState('')
-  const [role, setRole] = useState<'member' | 'viewer'>('member')
+  const [role, setRole] = useState<string>('member')
   const chosen = (candidates.data ?? []).find((member) => member.actorId === actorId)
+  const addable = customRoles.filter((entry) => entry.baseRole === 'member' || entry.baseRole === 'viewer')
   const mutation = useMutation({
-    mutationFn: () => addExistingMember(projectId, actorId, role),
+    mutationFn: () => {
+      const choice = choiceOf(role, addable)
+      return addExistingMember(projectId, actorId, choice.role === 'viewer' ? 'viewer' : 'member', choice.roleId)
+    },
     onSuccess: async () => {
       if (chosen) showToast({ tone: 'success', title: `Added ${chosen.displayName}` })
       setActorId('')
@@ -413,11 +497,12 @@ function ExistingMemberForm({ projectId, onAdded }: { projectId: string; onAdded
         <SelectField
           id="existing-member-role"
           label="Project role"
-          onChange={(event) => setRole(event.target.value as 'member' | 'viewer')}
+          onChange={(event) => setRole(event.target.value)}
           value={role}
         >
           <option value="member">Member</option>
           <option value="viewer">Viewer</option>
+          <CustomRoleOptions roles={addable} />
         </SelectField>
         <Button busy={mutation.isPending} disabled={!actorId || mutation.isPending} type="submit">
           Add member

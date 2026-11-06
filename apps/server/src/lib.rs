@@ -70,6 +70,7 @@ pub mod recovery;
 pub mod replies;
 pub mod repositories;
 pub mod retention;
+pub mod roles;
 pub mod run_log;
 pub mod run_views;
 pub mod runs;
@@ -170,6 +171,7 @@ pub fn router(state: AppState) -> Router {
         .merge(invitations::router())
         .merge(memberships::router())
         .merge(workspace::router())
+        .merge(roles::router())
         .merge(server_status::router())
         .merge(onboarding::router())
         .merge(audit_log::router())

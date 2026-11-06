@@ -656,6 +656,628 @@ async fn api_webhooks_and_automations_act_for_their_maker_only() {
     assert_eq!(launches, 1);
 
     // ---------------------------------------------------------------------
+    // A rule made by a script keeps the script's agent limit when it fires
+    // later (AWD-74): narrowing what the owner's apps may do turns it off
+    // rather than letting it act with the owner's full role.
+    let limited_rule = bearer(
+        &application,
+        Some(&token),
+        "POST",
+        "/api/public/v1/automation_write",
+        json!({
+            "projectId": seed.project_id,
+            "operation": "create",
+            "name": "Raise everything",
+            "trigger": {"kind": "task_created"},
+            "actions": [{"kind": "set_field", "field": "priority", "value": "urgent"}],
+        }),
+    )
+    .await;
+    assert_eq!(limited_rule.2["outcome"], "ok", "{}", limited_rule.1);
+    let limited_rule_id = uuid_field(&limited_rule.2["value"], "id");
+    sqlx::query(
+        "UPDATE organization_memberships SET agent_limit = ARRAY['tasks.view'] WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.organization_id)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("narrow the owner's apps");
+    let watched = send(
+        &application,
+        owner,
+        "POST",
+        &format!("{project}/work-items"),
+        "limited-task",
+        json!({"title": "Made in the browser"}),
+    )
+    .await;
+    assert_eq!(watched.0, StatusCode::CREATED, "{}", watched.1);
+    pump(&state).await;
+    let priority = sqlx::query_scalar::<_, String>("SELECT priority FROM work_items WHERE id = $1")
+        .bind(uuid_field(&watched.2, "id"))
+        .fetch_one(&pool)
+        .await
+        .expect("watched task");
+    assert_ne!(priority, "urgent", "the rule acted beyond its app's limit");
+    let (enabled, reason) = sqlx::query_as::<_, (bool, Option<String>)>(
+        "SELECT enabled, disabled_reason FROM automation_rules WHERE id = $1",
+    )
+    .bind(limited_rule_id)
+    .fetch_one(&pool)
+    .await
+    .expect("limited rule");
+    assert!(!enabled, "{reason:?}");
+    sqlx::query(
+        "UPDATE organization_memberships SET agent_limit = NULL WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.organization_id)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("lift the limit");
+
+    // ---------------------------------------------------------------------
+    // A webhook made by a script delivers only what the script's agent
+    // limit lets it see when the event happens, and a message it scheduled
+    // goes out only if the limit still lets it post (AWD-74).
+    let limited_hook = bearer(
+        &application,
+        Some(&token),
+        "POST",
+        "/api/public/v1/webhook_write",
+        json!({
+            "operation": "create",
+            "name": "Script's task hook",
+            "url": format!("{receiver_origin}/script-hook"),
+            "eventTypes": ["task.created"],
+            "projectId": seed.project_id,
+        }),
+    )
+    .await;
+    assert_eq!(limited_hook.2["outcome"], "ok", "{}", limited_hook.1);
+    let limited_hook_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM webhook_subscriptions WHERE name = 'Script''s task hook'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("script's hook");
+    let hook_deliveries = move |pool: PgPool| async move {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM webhook_deliveries WHERE subscription_id = $1",
+        )
+        .bind(limited_hook_id)
+        .fetch_one(&pool)
+        .await
+        .expect("count deliveries")
+    };
+    let seen = send(
+        &application,
+        owner,
+        "POST",
+        &format!("{project}/work-items"),
+        "hook-seen-task",
+        json!({"title": "Seen by the script"}),
+    )
+    .await;
+    assert_eq!(seen.0, StatusCode::CREATED, "{}", seen.1);
+    pump(&state).await;
+    let before = hook_deliveries(pool.clone()).await;
+    assert!(before >= 1, "the script's hook heard a task it may see");
+    let scheduled = bearer(
+        &application,
+        Some(&token),
+        "POST",
+        "/api/public/v1/message_schedule",
+        json!({
+            "conversationId": seed.channel_id,
+            "text": "Posted by the script later",
+            "sendAt": (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339(),
+        }),
+    )
+    .await;
+    assert_eq!(scheduled.2["outcome"], "ok", "{}", scheduled.1);
+    let scheduled_id = scheduled.2["value"]["scheduled"]["id"]
+        .as_str()
+        .expect("scheduled id")
+        .to_owned();
+    sqlx::query(
+        "UPDATE organization_memberships SET agent_limit = ARRAY['runs.launch'] WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.organization_id)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("the owner's apps no longer see tasks or post");
+    let hidden = send(
+        &application,
+        owner,
+        "POST",
+        &format!("{project}/work-items"),
+        "hook-hidden-task",
+        json!({"title": "Hidden from the script"}),
+    )
+    .await;
+    assert_eq!(hidden.0, StatusCode::CREATED, "{}", hidden.1);
+    pump(&state).await;
+    assert_eq!(
+        hook_deliveries(pool.clone()).await,
+        before,
+        "the script's hook heard a task its limit hides"
+    );
+    let sent = send(
+        &application,
+        owner,
+        "POST",
+        &format!("/api/v1/scheduled-messages/{scheduled_id}/send-now"),
+        "script-message-now",
+        json!({}),
+    )
+    .await;
+    assert!(sent.0.is_success(), "{}", sent.1);
+    let (status, message) = sqlx::query_as::<_, (String, Option<Uuid>)>(
+        "SELECT status, message_id FROM scheduled_messages WHERE id = $1::uuid",
+    )
+    .bind(&scheduled_id)
+    .fetch_one(&pool)
+    .await
+    .expect("scheduled message");
+    assert_eq!(status, "failed", "it went out beyond its app's limit");
+    assert!(message.is_none());
+    sqlx::query(
+        "UPDATE organization_memberships SET agent_limit = NULL WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.organization_id)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("lift the limit again");
+
+    // A launch an app-made automation queued starts only within the app's
+    // limit as it is when the queue drains (AWD-74).
+    let launch_rule = bearer(
+        &application,
+        Some(&token),
+        "POST",
+        "/api/public/v1/automation_write",
+        json!({
+            "projectId": seed.project_id,
+            "operation": "create",
+            "name": "Launch new tasks",
+            "trigger": {"kind": "task_created"},
+            "actions": [{"kind": "launch"}],
+        }),
+    )
+    .await;
+    assert_eq!(launch_rule.2["outcome"], "ok", "{}", launch_rule.1);
+    let launch_rule_id = uuid_field(&launch_rule.2["value"], "id");
+    let launched = send(
+        &application,
+        owner,
+        "POST",
+        &format!("{project}/work-items"),
+        "rule-launched-task",
+        json!({"title": "Launched by the script's rule"}),
+    )
+    .await;
+    assert_eq!(launched.0, StatusCode::CREATED, "{}", launched.1);
+    pump(&state).await;
+    let marked = sqlx::query_scalar::<_, bool>(
+        "SELECT made_through_app FROM launches WHERE work_item_id = $1",
+    )
+    .bind(uuid_field(&launched.2, "id"))
+    .fetch_one(&pool)
+    .await
+    .expect("the rule's launch");
+    assert!(marked, "the app-made rule's launch keeps the app's limit");
+    sqlx::query("UPDATE automation_rules SET enabled = false WHERE id = $1")
+        .bind(launch_rule_id)
+        .execute(&pool)
+        .await
+        .expect("turn the rule off");
+    // One such launch waiting in the queue when the limit narrows.
+    let waiting_task = send(
+        &application,
+        owner,
+        "POST",
+        &format!("{project}/work-items"),
+        "rule-queued-task",
+        json!({"title": "Queued by the script's rule"}),
+    )
+    .await;
+    assert_eq!(waiting_task.0, StatusCode::CREATED, "{}", waiting_task.1);
+    let waiting = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO launches (
+            id, organization_id, project_id, work_item_id, requested_by_actor_id,
+            source, start_when, position, made_through_app
+        ) VALUES ($1, $2, $3, $4, $5, 'automation', 'now',
+                  (SELECT COALESCE(max(position), 0) + 1 FROM launches WHERE project_id = $3),
+                  true)
+        "#,
+    )
+    .bind(waiting)
+    .bind(seed.organization_id)
+    .bind(seed.project_id)
+    .bind(uuid_field(&waiting_task.2, "id"))
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("queued launch");
+    sqlx::query(
+        "UPDATE organization_memberships SET agent_limit = ARRAY['tasks.view', 'tasks.edit'] WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.organization_id)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("the owner's apps no longer launch runs");
+    launch::drain(&state).await.expect("drain");
+    let launch_state = sqlx::query_scalar::<_, String>("SELECT state FROM launches WHERE id = $1")
+        .bind(waiting)
+        .fetch_one(&pool)
+        .await
+        .expect("queued launch");
+    assert_eq!(
+        launch_state, "cancelled",
+        "it started beyond its app's limit"
+    );
+    sqlx::query(
+        "UPDATE organization_memberships SET agent_limit = NULL WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.organization_id)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("lift the limit a third time");
+    // Within the limit, the queue starts it, and the run it starts records
+    // the app's origin, so a run that then waits for a slot is checked
+    // against the app's limit again when one frees up (AWD-74).
+    sqlx::query("UPDATE provider_accounts SET max_concurrent_runs = 16")
+        .execute(&pool)
+        .await
+        .expect("room on the accounts");
+    let handed_task = send(
+        &application,
+        owner,
+        "POST",
+        &format!("{project}/work-items"),
+        "rule-handed-task",
+        json!({"title": "Handed to a run by the queue"}),
+    )
+    .await;
+    assert_eq!(handed_task.0, StatusCode::CREATED, "{}", handed_task.1);
+    let handed = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO launches (
+            id, organization_id, project_id, work_item_id, requested_by_actor_id,
+            source, start_when, position, made_through_app
+        ) VALUES ($1, $2, $3, $4, $5, 'automation', 'now',
+                  (SELECT COALESCE(max(position), 0) + 1 FROM launches WHERE project_id = $3),
+                  true)
+        "#,
+    )
+    .bind(handed)
+    .bind(seed.organization_id)
+    .bind(seed.project_id)
+    .bind(uuid_field(&handed_task.2, "id"))
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("queued launch within the limit");
+    launch::drain(&state).await.expect("drain");
+    let (launch_state, reason, run_origin) =
+        sqlx::query_as::<_, (String, Option<String>, Option<bool>)>(
+            r#"
+        SELECT launch.state, launch.status_reason, run.made_through_app
+        FROM launches launch
+        LEFT JOIN agent_runs run ON run.id = launch.agent_run_id
+        WHERE launch.id = $1
+        "#,
+        )
+        .bind(handed)
+        .fetch_one(&pool)
+        .await
+        .expect("handed launch");
+    assert_eq!(
+        run_origin,
+        Some(true),
+        "the run lost the launch's app origin (launch {launch_state}: {reason:?})"
+    );
+
+    // @everyone in a channel of more than 50 people reaches everyone only
+    // if its author may moderate, the script's agent limit included, as it
+    // stood when the message was sent (AWD-74).
+    for index in 0..52 {
+        let person = Uuid::now_v7();
+        let handle = format!("crowd-{index}");
+        sqlx::query("INSERT INTO actors (id, kind, status) VALUES ($1, 'human', 'active')")
+            .bind(person)
+            .execute(&pool)
+            .await
+            .expect("crowd actor");
+        // A person needs an active user account to be reached at all
+        // (actor_can_access_project).
+        sqlx::query(
+            "INSERT INTO users (id, actor_id, login_name, display_name) VALUES ($1, $2, $3, $3)",
+        )
+        .bind(Uuid::now_v7())
+        .bind(person)
+        .bind(&handle)
+        .execute(&pool)
+        .await
+        .expect("crowd user");
+        sqlx::query(
+            "INSERT INTO organization_memberships (organization_id, actor_id, role) VALUES ($1, $2, 'member')",
+        )
+        .bind(seed.organization_id)
+        .bind(person)
+        .execute(&pool)
+        .await
+        .expect("crowd workspace membership");
+        sqlx::query(
+            r#"
+            INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle)
+            VALUES ($1, $2, $3, 'member', $4, $4)
+            "#,
+        )
+        .bind(Uuid::now_v7())
+        .bind(seed.project_id)
+        .bind(person)
+        .bind(&handle)
+        .execute(&pool)
+        .await
+        .expect("crowd project membership");
+    }
+    let notified = |pool: PgPool, message: String| async move {
+        sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT count(*) FROM notifications
+            WHERE message_id = $1::uuid AND recipient_actor_id IN (
+                SELECT actor_id FROM project_memberships WHERE handle LIKE 'crowd-%'
+            )
+            "#,
+        )
+        .bind(message)
+        .fetch_one(&pool)
+        .await
+        .expect("count notifications")
+    };
+    sqlx::query(
+        "UPDATE organization_memberships SET agent_limit = ARRAY['channels.post', 'tasks.view'] WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.organization_id)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("the owner's apps no longer moderate");
+    let limited = bearer(
+        &application,
+        Some(&token),
+        "POST",
+        "/api/public/v1/message_send",
+        json!({"conversationId": seed.channel_id, "text": "@everyone from the script, limited", "clientRequestId": "shout-limited"}),
+    )
+    .await;
+    assert_eq!(limited.2["outcome"], "ok", "{}", limited.1);
+    let limited_id = limited.2["value"]["messageId"]
+        .as_str()
+        .expect("message id")
+        .to_owned();
+    sqlx::query(
+        "UPDATE organization_memberships SET agent_limit = NULL WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.organization_id)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("lift the limit a fourth time");
+    // Lifting the limit afterwards doesn't widen a message already sent.
+    pump(&state).await;
+    assert_eq!(
+        notified(pool.clone(), limited_id).await,
+        0,
+        "@everyone reached everyone beyond the script's limit"
+    );
+    let open = bearer(
+        &application,
+        Some(&token),
+        "POST",
+        "/api/public/v1/message_send",
+        json!({"conversationId": seed.channel_id, "text": "@everyone from the script, unlimited", "clientRequestId": "shout-open"}),
+    )
+    .await;
+    assert_eq!(open.2["outcome"], "ok", "{}", open.1);
+    let open_id = open.2["value"]["messageId"]
+        .as_str()
+        .expect("message id")
+        .to_owned();
+    pump(&state).await;
+    assert!(
+        notified(pool.clone(), open_id).await == 52,
+        "the owner's @everyone reaches everyone"
+    );
+
+    // A rule a script made skips what the script's current limit hides: it
+    // doesn't post a task's title once the limit leaves out "see tasks".
+    let title_rule = bearer(
+        &application,
+        Some(&token),
+        "POST",
+        "/api/public/v1/automation_write",
+        json!({
+            "projectId": seed.project_id,
+            "operation": "create",
+            "name": "Announce new tasks",
+            "trigger": {"kind": "task_created"},
+            "actions": [{"kind": "post_message", "conversationId": seed.channel_id, "text": "New: {{task.title}}"}],
+        }),
+    )
+    .await;
+    assert_eq!(title_rule.2["outcome"], "ok", "{}", title_rule.1);
+    let title_rule_id = uuid_field(&title_rule.2["value"], "id");
+    let posted = move |pool: PgPool, title: &'static str| async move {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM messages WHERE conversation_id = $1 AND plain_text LIKE $2",
+        )
+        .bind(seed.channel_id)
+        .bind(format!("%{title}%"))
+        .fetch_one(&pool)
+        .await
+        .expect("count messages")
+    };
+    sqlx::query(
+        "UPDATE organization_memberships SET agent_limit = ARRAY['tasks.edit', 'channels.post'] WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.organization_id)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("the owner's apps no longer see tasks");
+    let hidden_task = send(
+        &application,
+        owner,
+        "POST",
+        &format!("{project}/work-items"),
+        "title-hidden-task",
+        json!({"title": "Quiet launch plan"}),
+    )
+    .await;
+    assert_eq!(hidden_task.0, StatusCode::CREATED, "{}", hidden_task.1);
+    pump(&state).await;
+    assert_eq!(
+        posted(pool.clone(), "Quiet launch plan").await,
+        0,
+        "the script's rule posted a title its limit hides"
+    );
+    sqlx::query(
+        "UPDATE organization_memberships SET agent_limit = NULL WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.organization_id)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("lift the limit a fifth time");
+    let shown_task = send(
+        &application,
+        owner,
+        "POST",
+        &format!("{project}/work-items"),
+        "title-shown-task",
+        json!({"title": "Open roadmap"}),
+    )
+    .await;
+    assert_eq!(shown_task.0, StatusCode::CREATED, "{}", shown_task.1);
+    pump(&state).await;
+    assert_eq!(
+        posted(pool.clone(), "Open roadmap").await,
+        1,
+        "the script's rule posts the title it may see"
+    );
+    sqlx::query("UPDATE automation_rules SET enabled = false WHERE id = $1")
+        .bind(title_rule_id)
+        .execute(&pool)
+        .await
+        .expect("turn the rule off");
+
+    // Several tasks a script launches go through the queue (source "queue")
+    // and still keep the script's limit when the queue drains (AWD-74).
+    let blocker = send(
+        &application,
+        owner,
+        "POST",
+        &format!("{project}/work-items"),
+        "queue-blocker",
+        json!({"title": "Blocks the batch"}),
+    )
+    .await;
+    assert_eq!(blocker.0, StatusCode::CREATED, "{}", blocker.1);
+    let mut queued_tasks = Vec::new();
+    for title in ["Queued one", "Queued two"] {
+        let made = send(
+            &application,
+            owner,
+            "POST",
+            &format!("{project}/work-items"),
+            &format!("queue-{}", title.replace(' ', "-")),
+            json!({"title": title}),
+        )
+        .await;
+        assert_eq!(made.0, StatusCode::CREATED, "{}", made.1);
+        let task = uuid_field(&made.2, "id");
+        // An open blocker keeps it waiting in the queue after a drain.
+        sqlx::query(
+            r#"
+            INSERT INTO work_item_dependencies (
+                project_id, blocked_work_item_id, blocking_project_id, blocking_work_item_id,
+                created_by_actor_id
+            ) VALUES ($1, $2, $1, $3, $4)
+            "#,
+        )
+        .bind(seed.project_id)
+        .bind(task)
+        .bind(uuid_field(&blocker.2, "id"))
+        .bind(seed.human_actor_id)
+        .execute(&pool)
+        .await
+        .expect("blocked by the blocker");
+        queued_tasks.push(task);
+    }
+    let queued = bearer(
+        &application,
+        Some(&token),
+        "POST",
+        "/api/public/v1/task_launch",
+        json!({"taskIds": queued_tasks}),
+    )
+    .await;
+    assert_eq!(queued.2["outcome"], "ok", "{}", queued.1);
+    pump(&state).await;
+    let launches = sqlx::query_as::<_, (String, String, bool)>(
+        "SELECT source, state, made_through_app FROM launches WHERE work_item_id = ANY($1)",
+    )
+    .bind(&queued_tasks)
+    .fetch_all(&pool)
+    .await
+    .expect("queued launches");
+    assert_eq!(launches.len(), 2, "{launches:?}");
+    assert!(
+        launches
+            .iter()
+            .all(|(_, state, marked)| state == "queued" && *marked),
+        "{launches:?}"
+    );
+    sqlx::query(
+        "UPDATE organization_memberships SET agent_limit = ARRAY['tasks.view', 'tasks.edit'] WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.organization_id)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("the owner's apps no longer launch runs");
+    launch::drain(&state).await.expect("drain");
+    let states =
+        sqlx::query_scalar::<_, String>("SELECT state FROM launches WHERE work_item_id = ANY($1)")
+            .bind(&queued_tasks)
+            .fetch_all(&pool)
+            .await
+            .expect("drained launches");
+    assert!(
+        states.iter().all(|state| state == "cancelled"),
+        "they started beyond the script's limit: {states:?}"
+    );
+    sqlx::query(
+        "UPDATE organization_memberships SET agent_limit = NULL WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.organization_id)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("lift the limit a sixth time");
+
+    // ---------------------------------------------------------------------
     // A rule whose maker lost the project turns off instead of acting.
     let members_rule = send(
         &application,

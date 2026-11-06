@@ -21,7 +21,8 @@ use crate::{
     github::repository_git_token,
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     policy::{
-        Action, ActorKind, Membership, MembershipRole, ProjectScope, Resource, Subject, authorize,
+        Action, ActorKind, Membership, Permission, ProjectScope, Resource, RoleGrant, Subject,
+        authorize,
     },
 };
 
@@ -46,6 +47,7 @@ pub fn router() -> Router<AppState> {
 #[derive(Debug, FromRow)]
 struct ProjectAccess {
     role: String,
+    role_permissions: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, FromRow)]
@@ -181,6 +183,15 @@ async fn register_repository(
         &principal,
         project_id,
         Action::RepositoryManage,
+    )
+    .await?;
+    // The answer is the repository (owner, name, clone URL, branch): only
+    // for someone who also sees code here.
+    require_project_access(
+        &mut transaction,
+        &principal,
+        project_id,
+        Action::RepositoryView,
     )
     .await?;
     let reservation = match idempotency::reserve(
@@ -322,6 +333,15 @@ async fn prepare_registered_repository(
         &principal,
         project_id,
         Action::RepositoryManage,
+    )
+    .await?;
+    // The answer is the repository (owner, name, clone URL, branch): only
+    // for someone who also sees code here.
+    require_project_access(
+        &mut transaction,
+        &principal,
+        project_id,
+        Action::RepositoryView,
     )
     .await?;
     let reservation = match idempotency::reserve(
@@ -496,6 +516,15 @@ async fn archive_repository(
         Action::RepositoryManage,
     )
     .await?;
+    // The answer is the repository (owner, name, clone URL, branch): only
+    // for someone who also sees code here.
+    require_project_access(
+        &mut transaction,
+        &principal,
+        project_id,
+        Action::RepositoryView,
+    )
+    .await?;
     let reservation = match idempotency::reserve(
         &mut transaction,
         principal.actor_id,
@@ -628,10 +657,10 @@ async fn require_project_access(
     principal: &AuthenticatedActor,
     project_id: Uuid,
     action: Action,
-) -> Result<MembershipRole, AppError> {
+) -> Result<RoleGrant, AppError> {
     let access = sqlx::query_as::<_, ProjectAccess>(
         r#"
-        SELECT membership.role
+        SELECT membership.role, workspace_role_permissions(membership.role_id) AS role_permissions
         FROM projects project
         JOIN project_memberships membership
           ON membership.project_id = project.id
@@ -650,7 +679,7 @@ async fn require_project_access(
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::NotFound("project"))?;
-    let role = membership_role(&access.role)?;
+    let role = RoleGrant::stored(&access.role, access.role_permissions.as_deref())?;
     let subject = Subject::new(
         principal.actor_id,
         actor_kind(&principal.actor_kind)?,
@@ -748,19 +777,8 @@ fn repository_view(row: RepositoryRow, manage: bool) -> Result<RepositoryView, A
     })
 }
 
-fn role_allows_manage(role: MembershipRole) -> bool {
-    matches!(role, MembershipRole::Owner | MembershipRole::Admin)
-}
-
-fn membership_role(value: &str) -> Result<MembershipRole, AppError> {
-    match value {
-        "owner" => Ok(MembershipRole::Owner),
-        "admin" => Ok(MembershipRole::Admin),
-        "member" => Ok(MembershipRole::Member),
-        "viewer" => Ok(MembershipRole::Viewer),
-        "worker" => Ok(MembershipRole::Worker),
-        _ => Err(AppError::Internal("invalid membership role")),
-    }
+fn role_allows_manage(role: RoleGrant) -> bool {
+    role.permissions().contains(Permission::CodeManage)
 }
 
 fn actor_kind(value: &str) -> Result<ActorKind, AppError> {

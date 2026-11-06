@@ -13,6 +13,8 @@ export type RuleRole = 'admin' | 'member' | 'viewer'
 export type LayoutRule = {
   id: string
   role: RuleRole | null
+  /** A custom role of the workspace (AWD-74), instead of `role`. */
+  roleId?: string | null
   person: { actorId: string; name: string; inProject: boolean } | null
   preset: string
   version: number
@@ -81,7 +83,7 @@ async function write(path: string, method: 'PUT', json: unknown): Promise<Layout
 export const saveProjectLayout = (projectId: string, layout: Layout | null, expectedVersion: number) =>
   write(projectLayoutPath(projectId), 'PUT', { layout, expectedVersion })
 
-export const saveProjectRules = (projectId: string, rules: { role?: RuleRole; actorId?: string; preset: string }[]) =>
+export const saveProjectRules = (projectId: string, rules: { role?: RuleRole; roleId?: string; actorId?: string; preset: string }[]) =>
   write(`${projectLayoutPath(projectId)}/rules`, 'PUT', { rules })
 
 export const saveWorkspaceLayout = (organizationId: string, layout: Layout | null, expectedVersion: number) =>

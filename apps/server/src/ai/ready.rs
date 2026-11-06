@@ -185,11 +185,19 @@ async fn load(pool: &PgPool, reader: Reader, project_id: Uuid) -> Result<Loaded,
         SELECT dependency.blocking_work_item_id, dependency.blocked_work_item_id,
                dependency.blocking_project_id, dependency.project_id,
                dependency.blocking_project_id = dependency.project_id
-                 OR actor_can_access_project($2, $3,
-                      CASE WHEN dependency.project_id = $1
-                           THEN dependency.blocking_project_id ELSE dependency.project_id END)
+                 OR (actor_can_access_project($2, $3, other.project_id)
+                     AND EXISTS (SELECT 1 FROM project_memberships sees_task
+                         WHERE sees_task.project_id = other.project_id
+                           AND sees_task.actor_id = $2 AND sees_task.enabled
+                           AND custom_role_allows(sees_task.role_id, 'tasks.view')))
                  AS visible
         FROM work_item_dependencies dependency
+        -- The end of the dependency outside this project, if any.
+        CROSS JOIN LATERAL (
+            SELECT CASE WHEN dependency.project_id = $1
+                        THEN dependency.blocking_project_id ELSE dependency.project_id END
+                   AS project_id
+        ) other
         JOIN work_items blocking
           ON blocking.project_id = dependency.blocking_project_id
          AND blocking.id = dependency.blocking_work_item_id
@@ -209,6 +217,19 @@ async fn load(pool: &PgPool, reader: Reader, project_id: Uuid) -> Result<Loaded,
     let mut hidden_blockers: HashMap<Uuid, usize> = HashMap::new();
     let mut external = HashSet::new();
     for (blocking, blocked, blocking_project, blocked_project, visible) in edges {
+        // An app's agent limit hides tasks where it leaves "see tasks" out.
+        let other = if blocked_project == project_id {
+            blocking_project
+        } else {
+            blocked_project
+        };
+        let visible = visible
+            && (other == project_id
+                || !crate::policy::agent_limit_hides(
+                    reader.actor_id,
+                    other,
+                    crate::policy::Permission::TasksView,
+                ));
         if !visible {
             if blocked_project == project_id {
                 *hidden_blockers.entry(blocked).or_default() += 1;
@@ -583,7 +604,11 @@ pub async fn readiness_of(
         WHERE dependency.project_id = $1 AND dependency.blocked_work_item_id = $2
           AND item.archived_at IS NULL
           AND status.semantic_category NOT IN ('completed', 'canceled')
-          AND (item.project_id = $1 OR actor_can_access_project($3, $4, item.project_id))
+          AND (item.project_id = $1 OR (actor_can_access_project($3, $4, item.project_id)
+               AND EXISTS (SELECT 1 FROM project_memberships sees_task
+                   WHERE sees_task.project_id = item.project_id
+                     AND sees_task.actor_id = $3 AND sees_task.enabled
+                     AND custom_role_allows(sees_task.role_id, 'tasks.view'))))
         "#
     ))
     .bind(project_id)
@@ -592,7 +617,24 @@ pub async fn readiness_of(
     .bind(reader.connection_id)
     .fetch_all(pool)
     .await?;
-    let hidden = sqlx::query_scalar::<_, i64>(
+    // Blockers in other projects the reader can't see (or an app's limit
+    // hides) still block: counted, not named.
+    let blockers = blockers
+        .into_iter()
+        .filter(|blocker| {
+            blocker.project_id == project_id
+                || !crate::policy::agent_limit_hides(
+                    reader.actor_id,
+                    blocker.project_id,
+                    crate::policy::Permission::TasksView,
+                )
+        })
+        .collect::<Vec<_>>();
+    let shown_elsewhere = blockers
+        .iter()
+        .filter(|blocker| blocker.project_id != project_id)
+        .count() as i64;
+    let elsewhere = sqlx::query_scalar::<_, i64>(
         r#"
         SELECT count(*) FROM work_item_dependencies dependency
         JOIN work_items item
@@ -604,15 +646,13 @@ pub async fn readiness_of(
           AND item.archived_at IS NULL
           AND status.semantic_category NOT IN ('completed', 'canceled')
           AND item.project_id <> $1
-          AND NOT actor_can_access_project($3, $4, item.project_id)
         "#,
     )
     .bind(project_id)
     .bind(task_id)
-    .bind(reader.actor_id)
-    .bind(reader.connection_id)
     .fetch_one(pool)
     .await?;
+    let hidden = (elsewhere - shown_elsewhere).max(0);
     let place = run_place(pool, project_id).await?;
     let blockers = blockers.iter().collect::<Vec<_>>();
     Ok(Some(readiness(

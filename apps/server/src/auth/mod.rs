@@ -27,7 +27,7 @@ use crate::{
     AppState,
     config::{AppConfig, Environment},
     error::{ApiJson, AppError},
-    policy::{Action, ActorKind, Membership, MembershipRole, Resource, Subject, authorize},
+    policy::{Action, ActorKind, Membership, Resource, RoleGrant, Subject, authorize},
 };
 
 const SESSION_COOKIE_DEV: &str = "agent_workspace_session";
@@ -118,6 +118,10 @@ struct OrganizationSummary {
     name: String,
     slug: String,
     role: String,
+    /// The custom role's name, when they hold one.
+    role_name: Option<String>,
+    #[serde(skip)]
+    role_permissions: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -563,9 +567,11 @@ async fn session_response(
     };
     let organizations = sqlx::query_as::<_, OrganizationSummary>(
         r#"
-        SELECT o.id, o.name, o.slug, om.role
+        SELECT o.id, o.name, o.slug, om.role, custom.name AS role_name,
+               workspace_role_permissions(om.role_id) AS role_permissions
         FROM organization_memberships om
         JOIN organizations o ON o.id = om.organization_id
+        LEFT JOIN workspace_roles custom ON custom.id = om.role_id
         WHERE om.actor_id = $1 AND om.enabled
         ORDER BY lower(o.name), o.id
         "#,
@@ -576,7 +582,7 @@ async fn session_response(
     let actor_kind = policy_actor_kind(&principal.actor_kind)?;
     let mut create_project = false;
     for organization in &organizations {
-        let role = policy_membership_role(&organization.role)?;
+        let role = RoleGrant::stored(&organization.role, organization.role_permissions.as_deref())?;
         let subject = Subject::new(
             principal.actor_id,
             actor_kind,
@@ -627,17 +633,6 @@ fn policy_actor_kind(value: &str) -> Result<ActorKind, AppError> {
         "integration" => Ok(ActorKind::Integration),
         "system" => Ok(ActorKind::System),
         _ => Err(AppError::Internal("stored Actor kind")),
-    }
-}
-
-fn policy_membership_role(value: &str) -> Result<MembershipRole, AppError> {
-    match value {
-        "owner" => Ok(MembershipRole::Owner),
-        "admin" => Ok(MembershipRole::Admin),
-        "member" => Ok(MembershipRole::Member),
-        "viewer" => Ok(MembershipRole::Viewer),
-        "worker" => Ok(MembershipRole::Worker),
-        _ => Err(AppError::Internal("stored membership role")),
     }
 }
 

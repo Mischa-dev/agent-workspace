@@ -26,8 +26,8 @@ use crate::{
     error::{ApiJson, ApiPath, AppError},
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     policy::{
-        Action, ActorKind, Decision, Membership, MembershipRole, ProjectScope, Resource, Subject,
-        authorize,
+        Action, ActorKind, Decision, Membership, MembershipRole, ProjectScope, Resource, RoleGrant,
+        Subject, authorize,
     },
     profile_runtime::prepare_private_profile_directory,
     provider::{
@@ -271,6 +271,7 @@ struct ProviderAccountsResponse {
 struct ProjectContext {
     organization_id: Uuid,
     role: String,
+    role_permissions: Option<Vec<String>>,
     handle: String,
 }
 
@@ -1434,7 +1435,9 @@ async fn require_project_manager(
 ) -> Result<ProjectContext, AppError> {
     let project = sqlx::query_as::<_, ProjectContext>(
         r#"
-        SELECT project.organization_id, membership.role, membership.handle
+        SELECT project.organization_id, membership.role,
+               workspace_role_permissions(membership.role_id) AS role_permissions,
+               membership.handle
         FROM projects project
         JOIN project_memberships membership
           ON membership.project_id = project.id
@@ -1452,21 +1455,30 @@ async fn require_project_manager(
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound("project"))?;
-    if may_manage_execution(principal, project_id, &project.role) {
+    if may_manage_execution(
+        principal,
+        project_id,
+        &project.role,
+        project.role_permissions.as_deref(),
+    ) {
         Ok(project)
     } else {
         Err(AppError::NotFound("project"))
     }
 }
 
-fn may_manage_execution(principal: &AuthenticatedActor, project_id: Uuid, role: &str) -> bool {
-    let role = match role {
-        "owner" => MembershipRole::Owner,
-        "admin" => MembershipRole::Admin,
-        "member" => MembershipRole::Member,
-        "viewer" => MembershipRole::Viewer,
-        _ => return false,
+fn may_manage_execution(
+    principal: &AuthenticatedActor,
+    project_id: Uuid,
+    role: &str,
+    role_permissions: Option<&[String]>,
+) -> bool {
+    let Ok(role) = RoleGrant::stored(role, role_permissions) else {
+        return false;
     };
+    if role.role() == MembershipRole::Worker {
+        return false;
+    }
     principal.actor_kind == "human"
         && matches!(
             authorize(
@@ -1527,6 +1539,7 @@ async fn require_profile_owner(
         #[sqlx(flatten)]
         access: AccountAccess,
         role: String,
+        role_permissions: Option<Vec<String>>,
     }
     let row = sqlx::query_as::<_, Row>(
         r#"
@@ -1535,7 +1548,8 @@ async fn require_profile_owner(
                account.max_concurrent_runs, account.status,
                account.account_state,
                profile.id AS profile_id, profile.status AS profile_status,
-               membership.role
+               membership.role,
+               workspace_role_permissions(membership.role_id) AS role_permissions
         FROM execution_profiles profile
         JOIN provider_accounts account
           ON account.id = profile.provider_account_id
@@ -1565,7 +1579,12 @@ async fn require_profile_owner(
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound("execution_profile"))?;
-    if may_manage_execution(principal, project_id, &row.role) {
+    if may_manage_execution(
+        principal,
+        project_id,
+        &row.role,
+        row.role_permissions.as_deref(),
+    ) {
         Ok(row.access)
     } else {
         Err(AppError::NotFound("execution_profile"))
