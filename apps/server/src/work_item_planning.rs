@@ -118,7 +118,13 @@ pub async fn task_links(
     project_id: Uuid,
     task_id: Uuid,
 ) -> Result<TaskLinks, AppError> {
-    let visible = "(item.project_id = $3 OR actor_can_access_project($4, $5, item.project_id))";
+    // A linked task in another project only where the reader can reach it
+    // and their role there keeps "see tasks"; an app's agent limit is applied
+    // to the rows below.
+    let visible = "(item.project_id = $3 OR (actor_can_access_project($4, $5, item.project_id) \
+         AND EXISTS (SELECT 1 FROM project_memberships sees_task \
+             WHERE sees_task.project_id = item.project_id AND sees_task.actor_id = $4 \
+               AND sees_task.enabled AND custom_role_allows(sees_task.role_id, 'tasks.view'))))";
     let blocked_by = sqlx::query_as::<_, TaskRef>(&format!(
         r#"SELECT {TASK_REF_COLUMNS}
         FROM work_item_dependencies dependency
@@ -209,11 +215,29 @@ pub async fn task_links(
     .fetch_optional(&mut *connection)
     .await?
     .unwrap_or((false, false, 0));
+    // An app's agent limit hides tasks in projects it leaves "see tasks" out of.
+    let shown = |task: &TaskRef| {
+        task.project_id == project_id
+            || !crate::policy::agent_limit_hides(
+                reader.actor_id,
+                task.project_id,
+                crate::policy::Permission::TasksView,
+            )
+    };
     Ok(TaskLinks {
-        blocked_by: blocked_by.into_iter().map(TaskRef::with_href).collect(),
-        blocks: blocks.into_iter().map(TaskRef::with_href).collect(),
+        blocked_by: blocked_by
+            .into_iter()
+            .filter(|task| shown(task))
+            .map(TaskRef::with_href)
+            .collect(),
+        blocks: blocks
+            .into_iter()
+            .filter(|task| shown(task))
+            .map(TaskRef::with_href)
+            .collect(),
         relations: relations
             .into_iter()
+            .filter(|row| shown(&row.task))
             .map(|row| RelationView {
                 kind: row.relation_kind,
                 task: row.task.with_href(),

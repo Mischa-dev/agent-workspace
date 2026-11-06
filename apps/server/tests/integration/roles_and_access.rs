@@ -2630,3 +2630,77 @@ async fn a_project_invitation_lapses_when_its_issuer_loses_invite_in_the_project
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{refused}");
 }
+
+/// A task's links to tasks in another project (blockers, blocked tasks,
+/// relations) name those tasks only where the reader sees tasks there.
+#[tokio::test]
+async fn linked_tasks_in_another_project_follow_see_tasks_there() {
+    let Some(setup) = setup("awd74_cross_links").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let other = create_project(&setup, "OTHER", "Other").await;
+    let (bea, bea_browser) = add_person(&setup, &[&work, &other], "bea").await;
+    let blocked = owner_task(&setup, &work, "Needs the other").await;
+    let blocker = owner_task(&setup, &other, "Hidden blocker").await;
+    sqlx::query(
+        r#"
+        INSERT INTO work_item_dependencies (
+            project_id, blocked_work_item_id, blocking_project_id, blocking_work_item_id,
+            created_by_actor_id
+        ) VALUES ($1, $2, $3, $4, $5)
+        "#,
+    )
+    .bind(work.parse::<Uuid>().expect("project"))
+    .bind(blocked)
+    .bind(other.parse::<Uuid>().expect("project"))
+    .bind(blocker)
+    .bind(bea)
+    .execute(&setup.pool)
+    .await
+    .expect("dependency");
+    let detail = |browser: &Browser| {
+        browser.request(
+            "GET",
+            &format!("/api/v1/projects/{work}/work-items/{blocked}"),
+            None,
+            Value::Null,
+        )
+    };
+    let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
+    let session = initialize(app, &bea_app).await.expect("Bea's app");
+    let open = json!({"taskId": blocked});
+
+    // Bea sees tasks in both: the blocker is named.
+    let (status, item) = send(app, detail(&bea_browser)).await;
+    assert_eq!(status, StatusCode::OK, "{item}");
+    assert!(item.to_string().contains("Hidden blocker"), "{item}");
+    let opened = tool(app, &bea_app, &session, "task_open", open.clone()).await;
+    assert_eq!(opened["outcome"], "ok", "{opened}");
+    assert!(opened.to_string().contains("Hidden blocker"), "{opened}");
+
+    // Her role in Other loses "see tasks": the blocker isn't named anywhere.
+    let (status, blind) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "No tasks", "baseRole": "viewer", "permissions": []}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{blind}");
+    let (status, changed) = set_project_role(
+        &setup,
+        &other,
+        bea,
+        "bea-other-blind",
+        json!({"roleId": blind["id"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let (status, item) = send(app, detail(&bea_browser)).await;
+    assert_eq!(status, StatusCode::OK, "{item}");
+    assert!(!item.to_string().contains("Hidden blocker"), "{item}");
+    let opened = tool(app, &bea_app, &session, "task_open", open).await;
+    assert_eq!(opened["outcome"], "ok", "{opened}");
+    assert!(!opened.to_string().contains("Hidden blocker"), "{opened}");
+}
