@@ -645,7 +645,7 @@ async fn defining_fields_follows_the_workflow_permission_and_values_follow_task_
             "POST",
             &format!("/api/v1/organizations/{}/roles", setup.organization_id),
             None,
-            json!({"name": "Workflow keeper", "baseRole": "member", "permissions": ["tasks.view", "tasks.workflow"]}),
+            json!({"name": "Workflow keeper", "baseRole": "admin", "permissions": ["tasks.view", "tasks.workflow"]}),
         ),
     )
     .await;
@@ -701,4 +701,72 @@ async fn defining_fields_follows_the_workflow_permission_and_values_follow_task_
     )
     .await;
     assert!(status.is_client_error(), "{status}: {refused}");
+}
+
+/// Tiny numbers are short in JSON but PostgreSQL writes them out in full
+/// (1e-300 is about 300 bytes): twenty of them changing together still save,
+/// and the stored history stays under work_item_activity's 8 KB check.
+#[tokio::test]
+async fn tiny_numbers_changing_together_keep_history_under_its_limit() {
+    let Some(setup) = setup("awd89_tiny_numbers").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let fields_path = format!("/api/v1/projects/{work}/fields");
+    let mut ids = Vec::new();
+    for number in 0..20 {
+        let (status, field) = send(
+            app,
+            setup.browser.request(
+                "POST",
+                &fields_path,
+                Some(&format!("tiny-field-{number}")),
+                json!({"name": format!("N{number}"), "type": "number"}),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{field}");
+        ids.push(field["id"].as_str().expect("field").to_owned());
+    }
+    let (status, task) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/work-items"),
+            Some("tiny-task"),
+            json!({"title": "Tiny numbers"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{task}");
+    let task_id = task["id"].as_str().expect("task").to_owned();
+    let task_path = format!("/api/v1/projects/{work}/work-items/{task_id}");
+    for (step, number) in [1e-300, 2e-300].into_iter().enumerate() {
+        let values = ids
+            .iter()
+            .map(|id| (id.clone(), json!(number)))
+            .collect::<serde_json::Map<_, _>>();
+        let (status, body) = send(
+            app,
+            setup.browser.request(
+                "PATCH",
+                &task_path,
+                Some(&format!("tiny-values-{step}")),
+                json!({"expectedVersion": task_version(&setup.pool, &task_id).await, "fieldValues": values}),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "step {step}: {body}");
+    }
+    let (updates, largest) = sqlx::query_as::<_, (i64, i32)>(
+        "SELECT count(*), max(octet_length(payload::text)) FROM work_item_activity \
+         WHERE work_item_id = $1::uuid AND kind = 'work_item_updated'",
+    )
+    .bind(&task_id)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("history");
+    assert_eq!(updates, 2);
+    assert!(largest <= 8192, "{largest} bytes");
 }

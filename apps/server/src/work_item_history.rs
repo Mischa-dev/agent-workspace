@@ -138,8 +138,11 @@ fn custom_entry_bytes(key: &str, change: &Value) -> usize {
         + ", ".len()
 }
 
-/// Length of a value as PostgreSQL writes jsonb as text.
+/// Length of a value as PostgreSQL writes jsonb as text, at most.
 fn jsonb_text_len(value: &Value) -> usize {
+    if let Value::Number(number) = value {
+        return expanded_number_len(&number.to_string());
+    }
     let separators = |count: usize| 2 * count.saturating_sub(1);
     match value {
         Value::Object(map) => {
@@ -155,6 +158,23 @@ fn jsonb_text_len(value: &Value) -> usize {
             2 + separators(items.len()) + items.iter().map(jsonb_text_len).sum::<usize>()
         }
         other => other.to_string().len(),
+    }
+}
+
+/// At most how long a JSON number is once PostgreSQL writes it out: jsonb
+/// keeps numbers as numeric, which prints every digit and never an
+/// exponent, so 1e-300 becomes "0.000…1", 302 bytes. The digits as written,
+/// one more per power of ten, and room for "0.".
+fn expanded_number_len(written: &str) -> usize {
+    match written.split_once(['e', 'E']) {
+        Some((digits, exponent)) => {
+            let power = exponent
+                .trim_start_matches(['+', '-'])
+                .parse::<usize>()
+                .unwrap_or(usize::MAX / 4);
+            digits.len().saturating_add(power).saturating_add(2)
+        }
+        None => written.len(),
     }
 }
 
@@ -474,6 +494,28 @@ mod tests {
             map[&format!("field:{first}")],
             json!({"field": "Points", "from": 1, "to": 2})
         );
+    }
+
+    /// PostgreSQL writes 1e-300 out in full, so tiny numbers count at that
+    /// length: short in JSON, about 300 bytes each when stored.
+    #[test]
+    fn tiny_numbers_count_as_postgresql_writes_them() {
+        let expanded = format!("0.{}1", "0".repeat(299));
+        assert!(jsonb_text_len(&json!(1e-300)) >= expanded.len());
+        assert!(jsonb_text_len(&json!(-1.5e-7)) >= "-0.00000015".len());
+        assert_eq!(jsonb_text_len(&json!(2.5)), 3);
+        let mut changes = FieldChanges::default();
+        for number in 0..20 {
+            changes.custom_field(
+                Uuid::now_v7(),
+                &format!("N{number}"),
+                json!(1e-300),
+                json!(2e-300),
+            );
+        }
+        let map = changes.into_map();
+        assert!(!map.is_empty() && map.len() < 20, "{} entries", map.len());
+        assert!(jsonb_text_len(&serde_json::Value::Object(map)) <= CUSTOM_BUDGET_BYTES + 2);
     }
 
     #[test]
