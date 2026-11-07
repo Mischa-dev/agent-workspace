@@ -15,7 +15,7 @@ import { queryKeys } from '../api/queryKeys'
 import { resetQueryScope } from '../api/queryScope'
 import { closeCommandMenu } from '../shell/commandStore'
 import { clearToasts } from '../ui/toastStore'
-import { clearPendingMoves } from '../work-items/moveRecovery'
+import { clearPendingMoves } from '../work-items/moveStore'
 
 export type OrganizationRole = 'owner' | 'admin' | 'member'
 

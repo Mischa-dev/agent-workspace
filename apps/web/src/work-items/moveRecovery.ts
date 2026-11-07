@@ -1,5 +1,6 @@
 import { isApiError } from '../api/errors'
-import { moveTask, type MoveDone, type MoveResolution } from './moveApi'
+import { moveTask, type MoveDone } from './moveApi'
+import { changed, generation, listeners, pending, type PendingMove } from './moveStore'
 
 /**
  * Confirmed moves in flight, and ones whose answer never arrived (AWD-102).
@@ -19,33 +20,14 @@ import { moveTask, type MoveDone, type MoveResolution } from './moveApi'
  * reload forgets it too, and with it the key, so it can't be resent from the
  * browser; the dialog says so, and the task shows what happened: a moved
  * task is archived with a link to where it went.
+ *
+ * The memory itself, and the clearing on sign-in and sign-out, are in
+ * moveStore.ts, which the first page load carries; this file loads with the
+ * Move dialog.
  */
-export type MoveBody = { targetProjectId: string; snapshot: string; resolutions: MoveResolution[]; leaveUnresolved: boolean }
-
-export type PendingMove = {
-  actorId: string
-  targetProjectId: string
-  targetProjectKey: string
-  body: MoveBody
-  key: string
-  state:
-    | { kind: 'sending'; retry: boolean }
-    /** No answer, or one that doesn't say whether it happened. */
-    | { kind: 'unknown'; message: string }
-    | { kind: 'done'; done: MoveDone }
-    /** A clear answer that it didn't happen; nothing moved. */
-    | { kind: 'refused'; status: number; message: string; retry: boolean }
-}
-
-const pending = new Map<string, PendingMove>()
-const listeners = new Set<() => void>()
-let generation = 0
+export { clearPendingMoves, type MoveBody, type PendingMove } from './moveStore'
 
 const id = (actorId: string, projectId: string, taskId: string) => `${actorId}:${projectId}:${taskId}`
-
-function changed() {
-  for (const listener of listeners) listener()
-}
 
 export function pendingMove(actorId: string, projectId: string, taskId: string): PendingMove | undefined {
   const move = pending.get(id(actorId, projectId, taskId))
@@ -61,14 +43,6 @@ export function subscribeMoves(listener: () => void) {
   return () => {
     listeners.delete(listener)
   }
-}
-
-/** Forgets every move, and stops answers still on their way from writing back: on sign-in, sign-out, and in tests. */
-export function clearPendingMoves() {
-  generation += 1
-  if (pending.size === 0) return
-  pending.clear()
-  changed()
 }
 
 /**
