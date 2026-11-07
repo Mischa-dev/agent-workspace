@@ -542,7 +542,7 @@ async fn conversation_tools_follow_the_module_where_the_conversation_lives() {
     let app = &setup.app;
     let work = create_project(&setup, "WORK", "Work").await;
     let direct = direct_space(&setup).await;
-    let (bea, _bea_browser) = add_person(&setup, &[&work, &direct], "bea").await;
+    let (bea, bea_browser) = add_person(&setup, &[&work, &direct], "bea").await;
     let channel = create_channel(&setup, &work, "general").await;
     let in_channel = say(
         &setup,
@@ -619,6 +619,16 @@ async fn conversation_tools_follow_the_module_where_the_conversation_lives() {
     .expect("count");
     assert_eq!(posted, 0, "a message went into a channel that's off");
 
+    // As things too: the channel's thread is turned off, a DM thread isn't.
+    let hidden = call(
+        "thing_open",
+        json!({"kind": "thread", "id": channel_thread}),
+    )
+    .await;
+    assert_eq!(hidden["outcome"], "not_found", "{hidden}");
+    let shown = call("thing_open", json!({"kind": "thread", "id": dm_thread})).await;
+    assert_eq!(shown["outcome"], "ok", "{shown}");
+
     // DMs and their threads follow Messages, which is on.
     let read = call("conversation_read", json!({"conversationId": dm})).await;
     assert_eq!(read["outcome"], "ok", "{read}");
@@ -630,6 +640,39 @@ async fn conversation_tools_follow_the_module_where_the_conversation_lives() {
     )
     .await;
     assert_eq!(sent["outcome"], "ok", "{sent}");
+
+    // A channel that is there, in a project Bea isn't in, with Channels off:
+    // her app hears only "not found", as for one that isn't there, never
+    // that its module is off.
+    let elsewhere = create_project(&setup, "ELSE", "Elsewhere").await;
+    let unseen = create_channel(&setup, &elsewhere, "private-plans").await;
+    let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
+    let bea_session = initialize(app, &bea_app).await.expect("Bea's app");
+    let ask = |name: &'static str, conversation: String, key: &'static str| {
+        let token = bea_app.clone();
+        let session = bea_session.clone();
+        let arguments = if name == "message_send" {
+            json!({"conversationId": conversation, "text": "Hello", "clientRequestId": key})
+        } else {
+            json!({"conversationId": conversation})
+        };
+        async move { tool(app, &token, &session, name, arguments).await }
+    };
+    for name in ["conversation_read", "conversation_open", "message_send"] {
+        let hidden = ask(name, unseen.clone(), "awd75-unseen").await;
+        let missing = ask(name, Uuid::now_v7().to_string(), "awd75-missing").await;
+        assert_ne!(hidden["outcome"], "ok", "{name}: {hidden}");
+        assert_eq!(
+            hidden["outcome"], missing["outcome"],
+            "{name}: {hidden} vs {missing}"
+        );
+        assert_ne!(hidden["retryCategory"], "module", "{name}: {hidden}");
+        let said = hidden.to_string();
+        assert!(
+            !said.contains("Channels") && !said.contains("private-plans"),
+            "{name}: {hidden}"
+        );
+    }
 
     // A conversation that isn't there still says only that.
     let nowhere = Uuid::now_v7().to_string();
@@ -773,6 +816,323 @@ async fn task_lists_leave_out_projects_where_tasks_is_off() {
     assert_eq!(
         titles(&listed),
         ["Harbour survey", "Lantern repair"],
+        "{listed}"
+    );
+}
+
+/// A role with these modules off, as the member role otherwise is, put on
+/// `actor` in `project`.
+async fn narrow_in_project(
+    setup: &Setup,
+    project: &str,
+    actor: Uuid,
+    modules_off: &[&str],
+    key: &str,
+) {
+    let roles_path = format!("/api/v1/organizations/{}/roles", setup.organization_id);
+    let (status, roles) = send(
+        &setup.app,
+        setup.browser.request("GET", &roles_path, None, Value::Null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{roles}");
+    let member = roles["roles"]
+        .as_array()
+        .expect("roles")
+        .iter()
+        .find(|role| role["key"] == "member")
+        .cloned()
+        .expect("member");
+    let (status, made) = send(
+        &setup.app,
+        setup.browser.request(
+            "POST",
+            &roles_path,
+            None,
+            json!({"name": format!("Narrowed {key}"), "baseRole": "member", "permissions": member["permissions"], "modulesOff": modules_off}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {made}");
+    let version = sqlx::query_scalar::<_, i64>(
+        "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project.parse::<Uuid>().expect("project"))
+    .bind(actor)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("version");
+    let (status, changed) = send(
+        &setup.app,
+        setup.browser.request(
+            "PATCH",
+            &format!("/api/v1/projects/{project}/members/{actor}"),
+            Some(key),
+            json!({"expectedVersion": version, "roleId": made["id"]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+}
+
+#[tokio::test]
+async fn things_follow_the_modules_of_their_own_project() {
+    let Some(setup) = setup("awd75_things").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let other = create_project(&setup, "OTHER", "Other").await;
+    let (bea, bea_browser) = add_person(&setup, &[&work, &other], "bea").await;
+    let in_work = create_channel(&setup, &work, "general").await;
+    let in_other = create_channel(&setup, &other, "harbour").await;
+    let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
+    let session = initialize(app, &bea_app).await.expect("Bea's app");
+    let open = |channel: &str| {
+        let token = bea_app.clone();
+        let session = session.clone();
+        let channel = channel.to_owned();
+        async move {
+            tool(
+                app,
+                &token,
+                &session,
+                "thing_open",
+                json!({"kind": "channel", "id": channel}),
+            )
+            .await
+        }
+    };
+    let browse = |channel: &str| {
+        let request = bea_browser.request(
+            "GET",
+            &format!("/api/v1/things/channel/{channel}"),
+            None,
+            Value::Null,
+        );
+        async move { send(app, request).await }
+    };
+    for channel in [&in_work, &in_other] {
+        assert_eq!(open(channel).await["outcome"], "ok");
+        assert_eq!(browse(channel).await.0, StatusCode::OK);
+    }
+
+    // In Other only, Bea's role leaves Channels out. Channels is still on for
+    // her in Work, so the union of her modules has it; Other's channel goes.
+    narrow_in_project(&setup, &other, bea, &["channels"], "awd75-things-bea").await;
+    let hidden = open(&in_other).await;
+    assert_eq!(hidden["outcome"], "not_found", "{hidden}");
+    assert!(!hidden.to_string().contains("harbour"), "{hidden}");
+    let (status, body) = browse(&in_other).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert!(!body.to_string().contains("harbour"), "{body}");
+    assert_eq!(open(&in_work).await["outcome"], "ok");
+    assert_eq!(browse(&in_work).await.0, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn notifications_follow_the_recipient_s_role_modules() {
+    let Some(setup) = setup("awd75_notification_roles").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
+    let (status, task) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/work-items"),
+            Some("awd75-notified-task"),
+            json!({"title": "Ledger review"}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {task}");
+    let task = task["id"]
+        .as_str()
+        .expect("task")
+        .parse::<Uuid>()
+        .expect("task id");
+    sqlx::query(
+        r#"
+        INSERT INTO notifications (
+            id, project_id, recipient_actor_id, kind, subject_kind, subject_id,
+            work_item_id, group_key
+        ) VALUES ($1, $2, $3, 'assigned', 'work_item', $4, $4, $5)
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(work.parse::<Uuid>().expect("project"))
+    .bind(bea)
+    .bind(task)
+    .bind(format!("assigned:{task}"))
+    .execute(&setup.pool)
+    .await
+    .expect("notification");
+    let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
+    let session = initialize(app, &bea_app).await.expect("Bea's app");
+    let count = |result: &Value| {
+        result["value"]["notifications"]
+            .as_array()
+            .unwrap_or_else(|| panic!("notifications: {result}"))
+            .len()
+    };
+    let listed = tool(app, &bea_app, &session, "notification_list", json!({})).await;
+    assert_eq!(count(&listed), 1, "{listed}");
+
+    // Her role in Work turns Tasks off: the notification she already has
+    // leaves every read, though it's kept.
+    narrow_in_project(&setup, &work, bea, &["tasks"], "awd75-notified-bea").await;
+    let listed = tool(app, &bea_app, &session, "notification_list", json!({})).await;
+    assert_eq!(count(&listed), 0, "{listed}");
+    let kept = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM notifications WHERE recipient_actor_id = $1",
+    )
+    .bind(bea)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("count");
+    assert_eq!(kept, 1, "turning a module off deleted a notification");
+
+    // Back on a role that leaves Tasks on, it's back.
+    narrow_in_project(&setup, &work, bea, &[], "awd75-notified-bea-again").await;
+    let listed = tool(app, &bea_app, &session, "notification_list", json!({})).await;
+    assert_eq!(count(&listed), 1, "{listed}");
+}
+
+#[tokio::test]
+async fn task_lists_count_and_page_only_workspaces_with_tasks_on() {
+    let Some(setup) = setup("awd75_task_pages").await else {
+        return;
+    };
+    let app = &setup.app;
+    // The owner is in two workspaces: this test's, and a second one.
+    let owner = sqlx::query_scalar::<_, Uuid>(
+        "SELECT actor_id FROM organization_memberships WHERE organization_id = $1 AND role = 'owner'",
+    )
+    .bind(setup.organization_id)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("owner");
+    let second = Uuid::now_v7();
+    sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, 'Second', $2)")
+        .bind(second)
+        .bind(format!("second-{}", second.simple()))
+        .execute(&setup.pool)
+        .await
+        .expect("second workspace");
+    sqlx::query(
+        "INSERT INTO organization_memberships (organization_id, actor_id, role, enabled) VALUES ($1, $2, 'owner', true)",
+    )
+    .bind(second)
+    .bind(owner)
+    .execute(&setup.pool)
+    .await
+    .expect("second membership");
+    let first_project = create_project(&setup, "AAA", "A work").await;
+    let (status, made) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            "/api/v1/projects",
+            Some("create-BBB"),
+            json!({"organizationId": second, "key": "BBB", "name": "B work"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{made}");
+    let second_project = made["id"].as_str().expect("project").to_owned();
+    for (project, title) in [
+        (&first_project, "A one"),
+        (&first_project, "A two"),
+        (&second_project, "B one"),
+        (&second_project, "B two"),
+        (&second_project, "B three"),
+    ] {
+        let key = format!("awd75-{title}").replace(' ', "-");
+        let (status, made) = send(
+            app,
+            setup.browser.request(
+                "POST",
+                &format!("/api/v1/projects/{project}/work-items"),
+                Some(key.as_str()),
+                json!({"title": title}),
+            ),
+        )
+        .await;
+        assert!(status.is_success(), "{status}: {made}");
+    }
+    let token = connect_app(app, &setup.browser, "Owner's app", "full").await;
+    let session = initialize(app, &token).await.expect("owner app");
+
+    // Every page, one task at a time: the titles, and each page's total.
+    let pages = |arguments: Value| {
+        let token = token.clone();
+        let session = session.clone();
+        async move {
+            let (mut titles, mut totals, mut cursor) = (Vec::new(), Vec::new(), None::<String>);
+            for _ in 0..10 {
+                let mut asked = arguments.clone();
+                asked["limit"] = json!(1);
+                if let Some(cursor) = &cursor {
+                    asked["cursor"] = json!(cursor);
+                }
+                let listed = tool(app, &token, &session, "task_list", asked).await;
+                assert_eq!(listed["outcome"], "ok", "{listed}");
+                totals.push(listed["value"]["total"].as_i64().expect("total"));
+                for task in listed["value"]["tasks"].as_array().expect("tasks") {
+                    titles.push(task["title"].as_str().expect("title").to_owned());
+                }
+                cursor = listed["value"]["nextCursor"].as_str().map(str::to_owned);
+                if cursor.is_none() {
+                    break;
+                }
+            }
+            assert!(cursor.is_none(), "the pages never ended");
+            titles.sort();
+            (titles, totals)
+        }
+    };
+    let (titles, totals) = pages(json!({})).await;
+    assert_eq!(titles, ["A one", "A two", "B one", "B three", "B two"]);
+    assert!(totals.iter().all(|total| *total == 5), "{totals:?}");
+
+    // Tasks off in this test's workspace, on in the second: unscoped and with
+    // both projects named, only the second's tasks are counted and paged.
+    let (status, changed) = switch(
+        &setup,
+        &setup.browser,
+        json!({"switches": {"tasks": false}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    for arguments in [
+        json!({}),
+        json!({"projectIds": [first_project, second_project]}),
+    ] {
+        let (titles, totals) = pages(arguments.clone()).await;
+        assert_eq!(titles, ["B one", "B three", "B two"], "{arguments}");
+        assert_eq!(totals.len(), 3, "{arguments}: {totals:?}");
+        assert!(
+            totals.iter().all(|total| *total == 3),
+            "{arguments}: {totals:?}"
+        );
+    }
+    // Only the first's project named: nothing, and a total of none.
+    let listed = tool(
+        app,
+        &token,
+        &session,
+        "task_list",
+        json!({"projectIds": [first_project]}),
+    )
+    .await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    assert_eq!(listed["value"]["total"], 0, "{listed}");
+    assert_eq!(
+        listed["value"]["tasks"].as_array().map(Vec::len),
+        Some(0),
         "{listed}"
     );
 }

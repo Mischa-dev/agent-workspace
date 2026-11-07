@@ -199,10 +199,13 @@ pub(super) async fn thing_open(
                 .unwrap_or_default(),
             None => anywhere,
         };
-        if !modules.contains(&thing.module) {
-            return Ok(ToolResult::not_found("That thing"));
-        }
+        // The thing and its links follow its own project's modules (the
+        // caller's role there narrowing them), as `shown` reads them: a
+        // conversation by its project's kind, so a DM thread follows Messages.
         let viewer = modules::things::Viewer { modules, ..viewer };
+        let Some(thing) = modules::things::get(&mut connection, &viewer, &kind, id).await? else {
+            return Ok(ToolResult::not_found("That thing"));
+        };
         let links = modules::things::links(&mut connection, &viewer, &thing).await?;
         Ok::<_, AppError>(ToolResult::ok(ThingOpenValue { thing, links }))
     }

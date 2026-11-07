@@ -565,8 +565,11 @@ fn sql_array(keys: &[String]) -> String {
 }
 
 /// A SQL condition, for notification reads, that is true when the
-/// notification `n`'s module is switched on in its project's workspace (and
-/// every module that one needs). Generated once from the manifests.
+/// notification `n`'s module is on for its recipient: switched on in its
+/// project's workspace (and every module that one needs), and not turned off
+/// by the recipient's role there (their project role, or in the direct space
+/// and where they hold none, their workspace role, as `project_rows` reads
+/// it). Generated once from the manifests.
 pub fn notification_switches_sql() -> &'static str {
     static SQL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     SQL.get_or_init(|| {
@@ -596,7 +599,28 @@ pub fn notification_switches_sql() -> &'static str {
                  AND module_switch.value = 'false'::jsonb
                 WHERE module_project.id = n.project_id
                   AND module_switch.key = ANY(CASE n.kind{cases} ELSE ARRAY[]::text[] END)
-            )"#
+            )
+            AND NOT EXISTS (
+                SELECT 1
+                FROM projects module_project
+                WHERE module_project.id = n.project_id
+                  AND COALESCE(
+                      (SELECT {project_off} FROM project_memberships membership
+                       WHERE membership.project_id = module_project.id
+                         AND membership.actor_id = n.recipient_actor_id
+                         AND membership.enabled AND module_project.kind <> 'direct'),
+                      (SELECT {workspace_off} FROM organization_memberships membership
+                       WHERE membership.organization_id = module_project.organization_id
+                         AND membership.actor_id = n.recipient_actor_id AND membership.enabled),
+                      '{{}}'
+                  ) && ARRAY(
+                      SELECT substring(key FROM {prefix})
+                      FROM unnest(CASE n.kind{cases} ELSE ARRAY[]::text[] END) key
+                  )
+            )"#,
+            project_off = held_modules_off("module_project.organization_id", "membership"),
+            workspace_off = held_modules_off("membership.organization_id", "membership"),
+            prefix = setting_key("").len() + 1,
         )
     })
 }
@@ -612,6 +636,11 @@ mod tests {
             sql.contains("WHEN 'assigned' THEN ARRAY['modules.projects', 'modules.tasks']::text[]")
         );
         assert!(sql.contains("WHEN 'mention' THEN CASE WHEN module_project.kind = 'direct'"));
+        // The recipient's role narrows it too: their project role, or their
+        // workspace role in the direct space.
+        assert!(sql.contains("held.modules_off"));
+        assert!(sql.contains("membership.actor_id = n.recipient_actor_id"));
+        assert!(sql.contains("module_project.kind <> 'direct'"));
         assert_eq!(
             super::required_switches("runs"),
             [

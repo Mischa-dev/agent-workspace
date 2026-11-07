@@ -298,7 +298,8 @@ async fn open_thing(
     let thing = things::get(&mut connection, &viewer, &kind, id)
         .await?
         .ok_or(AppError::NotFound("thing"))?;
-    // Links are read in the thing's own workspace's modules.
+    // The thing and its links follow its own project's modules (the person's
+    // role there narrowing them), not every workspace's at once.
     let viewer = match thing.project_id {
         Some(project_id) => things::Viewer {
             modules: state::for_project(&mut connection, project_id, principal.actor_id)
@@ -308,6 +309,9 @@ async fn open_thing(
         },
         None => viewer,
     };
+    let thing = things::get(&mut connection, &viewer, &kind, id)
+        .await?
+        .ok_or(AppError::NotFound("thing"))?;
     let links = things::links(&mut connection, &viewer, &thing).await?;
     Ok(Json(ThingResponse { thing, links }))
 }

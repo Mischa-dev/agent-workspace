@@ -194,7 +194,7 @@ impl<T> BatchResult<T> {
                 ToolResult::InvalidRequest { field, message } => {
                     Self::InvalidRequest { field, message }
                 }
-                ToolResult::PermissionDenied { message } => Self::PermissionDenied { message },
+                ToolResult::PermissionDenied { message, .. } => Self::PermissionDenied { message },
                 ToolResult::Conflict { message } => Self::Conflict { message },
             },
         }
