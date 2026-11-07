@@ -44,7 +44,15 @@ export default function MoveTaskDialog({ onClose, projectId, task }: { onClose: 
   const navigate = useNavigate()
   const [target, setTarget] = useState<string | null>(null)
   const [picked, setPicked] = useState('')
-  const [refusal, setRefusal] = useState<Refusal | null>(null)
+  // A first confirmation's clear refusal (nothing moved) stays in the store,
+  // and the review shows it, until the person goes back, closes or previews
+  // again; a new confirmation replaces it.
+  const refusal: Refusal | null =
+    pending?.state.kind === 'refused' && !pending.state.retry ? { status: pending.state.status, message: pending.state.message } : null
+  const reviewing = target ?? (refusal ? (pending?.targetProjectId ?? null) : null)
+  const dismissRefusal = () => {
+    if (refusal) settleMove(actorId, projectId, task.id)
+  }
   const moved = useMoved(projectId, task, onClose)
   // Worked out by the server from your actual permissions in each project.
   const projects = useQuery({
@@ -55,15 +63,10 @@ export default function MoveTaskDialog({ onClose, projectId, task }: { onClose: 
   })
   const destinations = projects.data?.projects ?? []
 
-  // A first confirmation's clear refusal goes back to the review (nothing
-  // moved); a result is shown once, then forgotten.
+  // A result that arrives while this is open is shown once (toast, then the
+  // task where it went), then forgotten.
   useEffect(() => {
-    if (!pending) return
-    if (pending.state.kind === 'refused' && !pending.state.retry) {
-      setRefusal({ status: pending.state.status, message: pending.state.message })
-      setTarget((current) => current ?? pending.targetProjectId)
-      settleMove(actorId, projectId, task.id)
-    } else if (pending.state.kind === 'done' && !finishedBefore) {
+    if (pending?.state.kind === 'done' && !finishedBefore) {
       const done = pending.state.done
       settleMove(actorId, projectId, task.id)
       moved(done, pending.targetProjectId)
@@ -137,8 +140,8 @@ export default function MoveTaskDialog({ onClose, projectId, task }: { onClose: 
       />
     )
   }
-  if (pending) return null
-  if (!target) {
+  if (pending && !refusal) return null
+  if (!reviewing) {
     return (
       <Dialog
         footer={
@@ -178,16 +181,20 @@ export default function MoveTaskDialog({ onClose, projectId, task }: { onClose: 
     <MoveReview
       actorId={actorId}
       // A different task, a new version of it, or another project: a new review.
-      key={`${task.id}:${task.version}:${target}`}
+      key={`${task.id}:${task.version}:${reviewing}`}
       onBack={() => {
-        setRefusal(null)
+        dismissRefusal()
         setTarget(null)
       }}
-      onClose={onClose}
+      onClose={() => {
+        dismissRefusal()
+        onClose()
+      }}
+      onDismissRefusal={dismissRefusal}
       opener={opener}
       projectId={projectId}
       refusal={refusal}
-      targetProjectId={target}
+      targetProjectId={reviewing}
       task={task}
     />
   )
@@ -207,7 +214,9 @@ function useMoved(projectId: string, task: MovingTask, onClose: () => void) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const latest = useRef({ projectId, task, onClose })
-  latest.current = { projectId, task, onClose }
+  useEffect(() => {
+    latest.current = { projectId, task, onClose }
+  })
   // Stable, so effects that call it don't run again on every render.
   const [moved] = useState(() => (done: MoveDone, requested: string) => {
     const { projectId: source, task: moving, onClose: close } = latest.current
@@ -335,6 +344,7 @@ function MoveReview({
   actorId,
   onBack,
   onClose,
+  onDismissRefusal,
   opener,
   projectId,
   refusal,
@@ -344,9 +354,11 @@ function MoveReview({
   actorId: string
   onBack: () => void
   onClose: () => void
+  /** Forgets the refusal below, before a fresh preview. */
+  onDismissRefusal: () => void
   opener: RefObject<HTMLElement | null>
   projectId: string
-  /** The answer to the last confirmation, when it refused: nothing moved. */
+  /** The answer to the last confirmation, when it refused: this request wasn't carried out. */
   refusal: Refusal | null
   targetProjectId: string
   task: MovingTask
@@ -368,8 +380,7 @@ function MoveReview({
   const targetFields = useFields({ projectId: targetProjectId })
   // Choices belong to the preview they were made in; another preview starts over.
   const [choices, setChoices] = useState<{ snapshot: string; byIssue: Record<string, Choice> }>({ snapshot: '', byIssue: {} })
-  // The answer to the last confirmation, when it was a refusal: nothing moved.
-  const [refused, setRefused] = useState(refusal)
+  const refused = refusal
   const stale = refused?.status === 409
 
   // Only a finished, successful preview can be moved on.
@@ -416,7 +427,7 @@ function MoveReview({
   }
 
   const refresh = () => {
-    setRefused(null)
+    onDismissRefusal()
     // Drop the old plan before asking again, so nothing is sent against it.
     void queryClient.resetQueries({ queryKey: previewKey, exact: true })
   }
