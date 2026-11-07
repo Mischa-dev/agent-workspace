@@ -312,13 +312,31 @@ async fn fields_are_typed_checked_recorded_and_filtered_the_same_for_agents_and_
     )
     .await;
     assert_eq!(refused["outcome"], "invalid_request", "{refused}");
-    // Fields belong to one project.
-    let refused = agent(
+    // Fields belong to one project: across WORK and SIDE, field filters need
+    // projectId.
+    let refused = owner(
         "task_list",
         json!({"fieldFilters": [{"field": "Risk", "op": "empty"}]}),
     )
     .await;
     assert_eq!(refused["outcome"], "invalid_request", "{refused}");
+    assert_eq!(refused["field"], "fieldFilters", "{refused}");
+    // Mara's only project with Tasks is WORK (her agent space has none since
+    // modules, AWD-75), so without projectId her field filters read WORK's.
+    let only_work = agent(
+        "task_list",
+        json!({"fieldFilters": [{"field": "Risk", "op": "empty"}]}),
+    )
+    .await;
+    assert_eq!(only_work["outcome"], "ok", "{only_work}");
+    let tasks = only_work["value"]["tasks"].as_array().expect("tasks");
+    assert!(
+        !tasks.is_empty()
+            && tasks.iter().all(|task| task["key"]
+                .as_str()
+                .is_some_and(|key| key.starts_with("WORK-"))),
+        "{only_work}"
+    );
 
     // The web list filters, sorts and groups by field ID; another project's
     // field is refused.
