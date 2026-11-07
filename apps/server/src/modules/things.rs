@@ -21,6 +21,7 @@ use super::{
     ModuleSet,
     contract::{LinkDirection, LinkKind, Thing, ThingLink, ThingOwner},
     manifest,
+    state::ProjectModules,
 };
 use crate::error::AppError;
 
@@ -181,11 +182,18 @@ fn resolver(kind: &str) -> Option<&'static str> {
 
 /// Whether the viewer's modules show this thing.
 fn shown(viewer: &Viewer<'_>, row: &ThingRow) -> bool {
-    match row.kind.as_str() {
-        "conversation" | "channel" | "thread" => viewer
-            .modules
-            .allows_conversations_in(if row.direct { "direct" } else { "standard" }),
-        kind => manifest::of_thing(kind).is_none_or(|module| viewer.modules.contains(&module.id)),
+    shown_in(viewer.modules, &row.kind, row.direct)
+}
+
+/// Whether a thing of `kind` shows with `modules` on: a conversation by
+/// where it lives (Messages in the direct space, Channels in a project),
+/// anything else by the module that makes it.
+fn shown_in(modules: ModuleSet, kind: &str, direct: bool) -> bool {
+    match kind {
+        "conversation" | "channel" | "thread" => {
+            modules.allows_conversations_in(if direct { "direct" } else { "standard" })
+        }
+        kind => manifest::of_thing(kind).is_none_or(|module| modules.contains(&module.id)),
     }
 }
 
@@ -342,6 +350,16 @@ pub async fn links(
         .filter(|row| seen.insert((row.link.clone(), row.direction.clone(), row.other_id)))
         .take(MAX_LINKS)
         .collect::<Vec<_>>();
+    // Each linked thing follows the modules of its own project (the viewer's
+    // role there narrowing them), not the thing it's linked from: resolve
+    // them all, then keep those whose module is on where they are. One with
+    // no project keeps the viewer's set, as before.
+    let unfiltered = Viewer {
+        actor_id: viewer.actor_id,
+        projects: viewer.projects,
+        task_projects: viewer.task_projects,
+        modules: ModuleSet::all(),
+    };
     let mut others = Vec::new();
     for kind in KINDS {
         let ids = rows
@@ -351,8 +369,21 @@ pub async fn links(
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
-        others.extend(resolve(connection, viewer, kind, &ids).await?);
+        others.extend(resolve(connection, &unfiltered, kind, &ids).await?);
     }
+    let places = others
+        .iter()
+        .filter_map(|other| other.project_id)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let in_places = ProjectModules::load(&mut *connection, viewer.actor_id, &places).await?;
+    others.retain(|other| match other.project_id {
+        Some(project) => !in_places
+            .keep(&[project], |set, direct| shown_in(set, &other.kind, direct))
+            .is_empty(),
+        None => shown_in(viewer.modules, &other.kind, false),
+    });
     Ok(rows
         .into_iter()
         .filter_map(|row| {

@@ -63,6 +63,34 @@ fn refused<T>(error: AppError, operation: &'static str) -> ToolResult<T> {
     }
 }
 
+/// AWD-75: whether Whiteboards is off for the caller where whiteboard `id`
+/// lives: its project, their role there narrowing it, or for a board across
+/// the workspace, the workspace and their workspace role. Asked only once
+/// `whiteboards::access` lets them at the board, so it says nothing about
+/// boards they can't reach; anything that fails leaves the answer to the
+/// tool, which checks access itself.
+async fn board_module_off(state: &AppState, caller: &Caller, id: Uuid) -> bool {
+    let checked = async {
+        let mut connection = state.pool.acquire().await?;
+        let board = whiteboards::access(&mut connection, caller, id, false).await?;
+        let modules = match board.project_id {
+            Some(project) => {
+                crate::modules::state::for_project(&mut connection, project, caller.actor_id)
+                    .await?
+                    .unwrap_or_default()
+            }
+            None => crate::modules::state::by_workspace(&mut connection, caller.actor_id)
+                .await?
+                .get(&board.organization_id)
+                .copied()
+                .unwrap_or_default(),
+        };
+        Ok::<_, AppError>(!modules.contains("whiteboards"))
+    }
+    .await;
+    checked.unwrap_or(false)
+}
+
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct WhiteboardLine {
@@ -229,6 +257,9 @@ pub(super) async fn whiteboard_read(
         return ToolResult::invalid("whiteboardId", "Pass a whiteboard ID or link.");
     };
     let caller = caller(principal);
+    if board_module_off(state, &caller, id).await {
+        return ToolResult::module_off("whiteboard_read", "Whiteboards");
+    }
     match read(
         state,
         &caller,
@@ -374,6 +405,12 @@ pub(super) async fn whiteboard_render(
         );
     }
     let caller = caller(principal);
+    if board_module_off(state, &caller, id).await {
+        return render_result(
+            ToolResult::module_off("whiteboard_render", "Whiteboards"),
+            None,
+        );
+    }
     let drawn = async {
         let mut connection = state.pool.acquire().await?;
         whiteboards::access(&mut connection, &caller, id, false).await?;
@@ -610,6 +647,9 @@ pub(super) async fn whiteboard_edit(
         return ToolResult::invalid("whiteboardId", "Pass a whiteboard ID or link.");
     };
     let caller = caller(principal);
+    if board_module_off(state, &caller, id).await {
+        return ToolResult::module_off("whiteboard_edit", "Whiteboards");
+    }
     let result = async {
         let mut transaction = state.pool.begin().await?;
         let board = whiteboards::access(&mut transaction, &caller, id, true).await?;
@@ -703,6 +743,9 @@ pub(super) async fn whiteboard_update(
         expected_version: arguments.expected_version,
     };
     let caller = caller(principal);
+    if board_module_off(state, &caller, id).await {
+        return ToolResult::module_off("whiteboard_update", "Whiteboards");
+    }
     let result = async {
         let mut transaction = state.pool.begin().await?;
         whiteboards::change(&mut transaction, &caller, id, &change).await?;
@@ -756,6 +799,9 @@ pub(super) async fn whiteboard_duplicate(
         return ToolResult::invalid("whiteboardId", "Pass a whiteboard ID or link.");
     };
     let caller = caller(principal);
+    if board_module_off(state, &caller, id).await {
+        return ToolResult::module_off("whiteboard_duplicate", "Whiteboards");
+    }
     let result = async {
         let mut transaction = state.pool.begin().await?;
         let copy =
@@ -817,6 +863,9 @@ pub(super) async fn whiteboard_link(
         return ToolResult::invalid("targetId", "Pass an ID or link.");
     };
     let linked = !arguments.remove.unwrap_or(false);
+    if board_module_off(state, &caller(principal), id).await {
+        return ToolResult::module_off("whiteboard_link", "Whiteboards");
+    }
     match set_link(state, principal, id, kind, target_id, linked).await {
         Ok(value) => ToolResult::ok(value),
         Err(error) => refused(error, "whiteboard_link"),

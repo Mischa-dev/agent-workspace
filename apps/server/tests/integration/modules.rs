@@ -1136,3 +1136,117 @@ async fn task_lists_count_and_page_only_workspaces_with_tasks_on() {
         "{listed}"
     );
 }
+
+#[tokio::test]
+async fn a_project_role_s_modules_reach_boards_links_and_module_list() {
+    let Some(setup) = setup("awd75_project_role_reach").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let other = create_project(&setup, "OTHER", "Other").await;
+    let (bea, bea_browser) = add_person(&setup, &[&work, &other], "bea").await;
+    let (status, task) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{other}/work-items"),
+            Some("awd75-reach-task"),
+            json!({"title": "Harbour survey"}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {task}");
+    let task = task["id"].as_str().expect("task").to_owned();
+    let owner_app = connect_app(app, &setup.browser, "Owner's app", "full").await;
+    let owner_session = initialize(app, &owner_app).await.expect("owner app");
+    let mut boards = Vec::new();
+    for (project, title) in [(&work, "Work map"), (&other, "Harbour map")] {
+        let made = tool(
+            app,
+            &owner_app,
+            &owner_session,
+            "whiteboard_create",
+            json!({"projectId": project, "title": title}),
+        )
+        .await;
+        assert_eq!(made["outcome"], "ok", "{made}");
+        boards.push(
+            made["value"]["whiteboard"]["id"]
+                .as_str()
+                .expect("board")
+                .to_owned(),
+        );
+    }
+    let (in_work, in_other) = (boards[0].clone(), boards[1].clone());
+    // Work's board links to Other's task (links stay within the workspace).
+    let linked = tool(
+        app,
+        &owner_app,
+        &owner_session,
+        "whiteboard_link",
+        json!({"whiteboardId": in_work, "targetKind": "task", "targetId": task}),
+    )
+    .await;
+    assert_eq!(linked["outcome"], "ok", "{linked}");
+
+    let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
+    let session = initialize(app, &bea_app).await.expect("Bea's app");
+    let call = |name: &'static str, arguments: Value| {
+        let token = bea_app.clone();
+        let session = session.clone();
+        async move { tool(app, &token, &session, name, arguments).await }
+    };
+    let read = call("whiteboard_read", json!({"whiteboardId": in_other})).await;
+    assert_eq!(read["outcome"], "ok", "{read}");
+    let opened = call("thing_open", json!({"kind": "whiteboard", "id": in_work})).await;
+    assert_eq!(opened["outcome"], "ok", "{opened}");
+    assert!(opened.to_string().contains("Harbour survey"), "{opened}");
+    let listed = call("module_list", json!({"projectId": other})).await;
+    assert_eq!(module(&listed["value"], "tasks")["on"], true, "{listed}");
+
+    // In Other only, Bea's role leaves Whiteboards and Tasks out.
+    narrow_in_project(
+        &setup,
+        &other,
+        bea,
+        &["whiteboards", "tasks"],
+        "awd75-reach-bea",
+    )
+    .await;
+    for (name, arguments) in [
+        ("whiteboard_read", json!({"whiteboardId": in_other})),
+        (
+            "whiteboard_update",
+            json!({"whiteboardId": in_other, "title": "Renamed"}),
+        ),
+    ] {
+        let refused = call(name, arguments).await;
+        assert_eq!(refused["outcome"], "permission_denied", "{name}: {refused}");
+        assert_eq!(refused["retryCategory"], "module", "{name}: {refused}");
+    }
+    let still = call("whiteboard_read", json!({"whiteboardId": in_work})).await;
+    assert_eq!(still["outcome"], "ok", "{still}");
+    let renamed =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM whiteboards WHERE title = 'Renamed'")
+            .fetch_one(&setup.pool)
+            .await
+            .expect("count");
+    assert_eq!(renamed, 0, "a board in a module that's off was changed");
+    // Work's board still opens, but its link to Other's task is left out.
+    let opened = call("thing_open", json!({"kind": "whiteboard", "id": in_work})).await;
+    assert_eq!(opened["outcome"], "ok", "{opened}");
+    assert!(!opened.to_string().contains("Harbour survey"), "{opened}");
+    // module_list says so for Other, not for Work or the workspace.
+    let listed = call("module_list", json!({"projectId": other})).await;
+    assert_eq!(module(&listed["value"], "tasks")["on"], false, "{listed}");
+    assert_eq!(
+        module(&listed["value"], "whiteboards")["on"],
+        false,
+        "{listed}"
+    );
+    let listed = call("module_list", json!({"projectId": work})).await;
+    assert_eq!(module(&listed["value"], "tasks")["on"], true, "{listed}");
+    let listed = call("module_list", json!({})).await;
+    assert_eq!(module(&listed["value"], "tasks")["on"], true, "{listed}");
+}
