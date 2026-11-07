@@ -423,30 +423,9 @@ async fn check_access(
             "The task is already in that project.",
         )));
     }
-    // Membership alone isn't reach: an agent's connection limits the
-    // projects it may act in.
-    let reach = sqlx::query_as::<_, (Uuid, bool, String, Uuid)>(
-        r#"
-        SELECT id, actor_can_access_project($1, $2, id) AND kind = 'standard',
-               project_key, organization_id
-        FROM projects WHERE id = ANY($3)
-        "#,
-    )
-    .bind(mover.actor_id)
-    .bind(mover.external_agent_connection_id)
-    .bind(vec![source_project_id, target_project_id])
-    .fetch_all(&mut **transaction)
-    .await?;
-    // Checked on every call, the replay of a stored result included: a
-    // connection that has lost the source or the target gets nothing.
-    let reachable = |project: Uuid| reach.iter().find(|row| row.0 == project && row.1);
-    if reachable(source_project_id).is_none() {
-        return Ok(Err(Refusal::NotFound("That task")));
-    }
-    let Some((_, _, target_key, organization_id)) = reachable(target_project_id).cloned() else {
-        return Ok(Err(Refusal::NotFound("That target project")));
-    };
-
+    // Both projects' rows and the mover's memberships first (locked for a
+    // move): a role change or removal waits for the move, or the move reads
+    // it once it has committed.
     let mut order = [source_project_id, target_project_id];
     order.sort();
     let mut memberships: HashMap<Uuid, ProjectMembership> = HashMap::new();
@@ -464,6 +443,29 @@ async fn check_access(
         }
         memberships.insert(project, membership);
     }
+    // Membership alone isn't reach: an agent's connection limits the
+    // projects it may act in. Read after the locks, so a connection changed
+    // while this waited is read as it is now. Checked on every call, a
+    // replay's included: a caller that has lost either project gets nothing.
+    let reach = sqlx::query_as::<_, (Uuid, bool, String, Uuid)>(
+        r#"
+        SELECT id, actor_can_access_project($1, $2, id) AND kind = 'standard',
+               project_key, organization_id
+        FROM projects WHERE id = ANY($3)
+        "#,
+    )
+    .bind(mover.actor_id)
+    .bind(mover.external_agent_connection_id)
+    .bind(vec![source_project_id, target_project_id])
+    .fetch_all(&mut **transaction)
+    .await?;
+    let reachable = |project: Uuid| reach.iter().find(|row| row.0 == project && row.1);
+    if reachable(source_project_id).is_none() {
+        return Ok(Err(Refusal::NotFound("That task")));
+    }
+    let Some((_, _, target_key, organization_id)) = reachable(target_project_id).cloned() else {
+        return Ok(Err(Refusal::NotFound("That target project")));
+    };
     let allows = |actor: &CommandActor, project: Uuid, action: Action| -> Result<bool, AppError> {
         let membership = memberships
             .get(&project)
@@ -950,12 +952,42 @@ async fn plan(
         )),
     }
 
+    // Labels go by name at the move; the target's labels of those names
+    // (and whether they're archived) decide what each becomes.
+    let mut label_names = Vec::new();
+    for task in &tasks {
+        for (name, _) in work_item_labels::active_labels_with_colors(
+            &mut **transaction,
+            source_project_id,
+            task.id,
+        )
+        .await?
+        {
+            label_names.push(name.to_lowercase());
+        }
+    }
+    label_names.sort();
+    label_names.dedup();
+    let target_labels = sqlx::query_as::<_, (Uuid, String, bool)>(
+        r#"
+        SELECT id, lower(name), archived_at IS NOT NULL FROM project_labels
+        WHERE project_id = $1 AND lower(name) = ANY($2)
+        ORDER BY lower(name), id
+        "#,
+    )
+    .bind(target_project_id)
+    .bind(&label_names)
+    .fetch_all(&mut **transaction)
+    .await?;
+
     let snapshot = snapshot_of(
         mover,
         source_project_id,
         target_project_id,
         access,
         &tasks,
+        &settings,
+        &target_labels,
         &source_definitions,
         &target_definitions,
         &values,
@@ -975,9 +1007,12 @@ async fn plan(
 }
 
 /// A digest of everything a plan rests on: who moves, the tree's versions,
-/// both projects' field definitions, every decision and note. A move whose
-/// own plan digests differently refuses the preview as out of date. It
-/// holds IDs and versions, never names or values in the clear.
+/// where each task's status, type, assignee, milestone and estimate land
+/// (by the target's IDs, so a record replaced by another of the same name
+/// counts as a change), the target's labels of the names that move, both
+/// projects' field definitions, every decision and note. A move whose own
+/// plan digests differently refuses the preview as out of date. It holds
+/// IDs and versions, never names or values in the clear.
 #[allow(clippy::too_many_arguments)]
 fn snapshot_of(
     mover: &Mover,
@@ -985,6 +1020,8 @@ fn snapshot_of(
     target_project_id: Uuid,
     access: &Access,
     tasks: &[SourceTask],
+    settings: &[TaskSettings],
+    target_labels: &[(Uuid, String, bool)],
     source_definitions: &[FieldDefinition],
     target_definitions: &[FieldDefinition],
     values: &[PlannedValue],
@@ -1024,6 +1061,14 @@ fn snapshot_of(
         "target": target_project_id,
         "seesTarget": access.sees_target,
         "tasks": tasks.iter().map(|task| (task.id, task.version, task.parent_id)).collect::<Vec<_>>(),
+        "settings": settings.iter().map(|setting| (
+            setting.status_id,
+            setting.type_id,
+            setting.assignee,
+            setting.milestone_id,
+            setting.estimate,
+        )).collect::<Vec<_>>(),
+        "targetLabels": target_labels,
         "sourceFields": source_definitions.iter().map(|field| (field.id, field.version)).collect::<Vec<_>>(),
         "targetFields": target_definitions.iter().map(|field| (field.id, field.version)).collect::<Vec<_>>(),
         "decisions": decisions,

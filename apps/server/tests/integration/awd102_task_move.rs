@@ -1,0 +1,862 @@
+//! AWD-102: moving a task (with its subtasks) to another project with a
+//! private preview and one confirmation, through MCP and the web app. The
+//! silent, costly failures: a value the target can't see being named in its
+//! history, audit or stored results; a stale preview or lost access still
+//! moving something; a retry moving twice, or a changed request being taken
+//! as the same one; and the original losing its values.
+
+use axum::http::StatusCode;
+use serde_json::{Value, json};
+use uuid::Uuid;
+
+use super::{
+    agent_interface::{connect_app, create_agent, initialize, send, tool},
+    mcp_admin::{Setup, create_project, setup},
+    mcp_tasks::{add_member, space},
+    message_edits::add_person,
+};
+
+/// Values that must never reach the target project: a person who isn't
+/// there, a page and a text field it has no place for.
+const SECRET_TEXT: &str = "omitted-sentinel-text";
+const SECRET_PERSON: &str = "patsentinel";
+const SECRET_PAGE: &str = "Sentinel page";
+
+/// Every row of the target project that a move writes (history, comments,
+/// audit, outbox, notifications) and every receipt, as text.
+async fn target_rows(setup: &Setup, project: &str) -> String {
+    let mut text = String::new();
+    for query in [
+        "SELECT row_to_json(activity)::text FROM work_item_activity activity WHERE project_id = $1::uuid",
+        "SELECT row_to_json(comment)::text FROM work_item_comments comment WHERE project_id = $1::uuid",
+        "SELECT row_to_json(audit)::text FROM audit_events audit WHERE project_id = $1::uuid",
+        "SELECT row_to_json(event)::text FROM outbox_events event WHERE event.payload::text LIKE '%' || $1 || '%'",
+        "SELECT row_to_json(note)::text FROM notifications note WHERE note::text LIKE '%' || $1 || '%'",
+        "SELECT row_to_json(receipt)::text FROM work_item_move_receipts receipt",
+        "SELECT row_to_json(item)::text FROM work_items item WHERE project_id = $1::uuid",
+    ] {
+        for row in sqlx::query_scalar::<_, String>(query)
+            .bind(project)
+            .fetch_all(&setup.pool)
+            .await
+            .unwrap_or_else(|error| panic!("{query}: {error}"))
+        {
+            text.push_str(&row);
+            text.push('\n');
+        }
+    }
+    text
+}
+
+/// Counts of everything a move adds, so a refused or replayed one can be
+/// shown to add nothing.
+async fn footprint(setup: &Setup) -> Vec<i64> {
+    let mut counts = Vec::new();
+    for table in [
+        "work_items",
+        "work_item_comments",
+        "work_item_activity",
+        "work_item_key_aliases",
+        "work_item_move_receipts",
+        "audit_events",
+        "outbox_events",
+        "notifications",
+        "work_item_claims",
+    ] {
+        counts.push(
+            sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) FROM {table}"))
+                .fetch_one(&setup.pool)
+                .await
+                .expect(table),
+        );
+    }
+    counts.push(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM work_items WHERE archived_at IS NOT NULL",
+        )
+        .fetch_one(&setup.pool)
+        .await
+        .expect("archived"),
+    );
+    counts
+}
+
+async fn field_values(setup: &Setup, task: &str) -> Value {
+    sqlx::query_scalar::<_, Value>("SELECT field_values FROM work_items WHERE id = $1::uuid")
+        .bind(task)
+        .fetch_one(&setup.pool)
+        .await
+        .expect("values")
+}
+
+async fn field_id(setup: &Setup, project: &str, name: &str) -> String {
+    sqlx::query_scalar::<_, String>(
+        "SELECT id::text FROM field_definitions WHERE project_id = $1::uuid AND name = $2",
+    )
+    .bind(project)
+    .bind(name)
+    .fetch_one(&setup.pool)
+    .await
+    .unwrap_or_else(|_| panic!("field {name}"))
+}
+
+async fn option_id(setup: &Setup, project: &str, field: &str, option: &str) -> String {
+    sqlx::query_scalar::<_, String>(
+        "SELECT option ->> 'id' FROM field_definitions, jsonb_array_elements(config -> 'options') option \
+         WHERE project_id = $1::uuid AND name = $2 AND option ->> 'name' = $3",
+    )
+    .bind(project)
+    .bind(field)
+    .bind(option)
+    .fetch_one(&setup.pool)
+    .await
+    .unwrap_or_else(|_| panic!("option {field}/{option}"))
+}
+
+async fn task_id(setup: &Setup, project: &str, number: i64) -> String {
+    sqlx::query_scalar::<_, String>(
+        "SELECT id::text FROM work_items WHERE project_id = $1::uuid AND number = $2",
+    )
+    .bind(project)
+    .bind(number)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("task")
+}
+
+async fn version_of(setup: &Setup, key: &str) -> i64 {
+    let (project, number) = key.rsplit_once('-').expect("key");
+    sqlx::query_scalar::<_, i64>(
+        "SELECT item.version FROM work_items item JOIN projects project ON project.id = item.project_id \
+         WHERE project.project_key = $1 AND item.number = $2",
+    )
+    .bind(project)
+    .bind(number.parse::<i64>().expect("number"))
+    .fetch_one(&setup.pool)
+    .await
+    .expect("version")
+}
+
+fn issue<'a>(preview: &'a Value, task_key: &str, field: &str) -> &'a Value {
+    preview["issues"]
+        .as_array()
+        .and_then(|issues| {
+            issues
+                .iter()
+                .find(|issue| issue["taskKey"] == task_key && issue["field"] == field)
+        })
+        .unwrap_or_else(|| panic!("no issue {task_key}/{field}: {preview}"))
+}
+
+/// Two projects with fields that partly match, and a task tree in SRC whose
+/// values cover every case: carried as is, an option the target lacks, a
+/// person who isn't there, a page, a link inside the moving tree and one
+/// outside it, and a field the target doesn't have.
+struct World {
+    src: String,
+    dst: String,
+    dee: Uuid,
+    root: String,
+    sub: String,
+}
+
+async fn world(setup: &Setup, codex: &str, session: &str) -> World {
+    let app = &setup.app;
+    let src = create_project(setup, "SRC", "Source").await;
+    let dst = create_project(setup, "DST", "Destination").await;
+    let (pat, _) = add_person(setup, &[&src], SECRET_PERSON).await;
+    let (dee, _) = add_person(setup, &[&src, &dst], "dee").await;
+    let _ = pat;
+    for (project, name, extra) in [
+        (
+            "SRC",
+            "Risk",
+            json!({"type": "single_choice", "options": [{"name": "Low"}, {"name": "High"}]}),
+        ),
+        ("SRC", "Notes", json!({"type": "text"})),
+        ("SRC", "Owner", json!({"type": "person"})),
+        ("SRC", "Spec", json!({"type": "link", "target": "page"})),
+        ("SRC", "Follows", json!({"type": "link", "target": "task"})),
+        ("SRC", "Secret", json!({"type": "text"})),
+        (
+            "DST",
+            "Risk",
+            json!({"type": "single_choice", "options": [{"name": "Low"}, {"name": "Medium"}]}),
+        ),
+        ("DST", "Notes", json!({"type": "text"})),
+        ("DST", "Owner", json!({"type": "person"})),
+        ("DST", "Spec", json!({"type": "link", "target": "page"})),
+        ("DST", "Follows", json!({"type": "link", "target": "task"})),
+        ("DST", "Summary", json!({"type": "text"})),
+    ] {
+        let mut arguments = json!({"projectId": project, "name": name});
+        for (key, value) in extra.as_object().expect("extra") {
+            arguments[key] = value.clone();
+        }
+        let written = tool(app, codex, session, "field_write", arguments).await;
+        assert_eq!(written["outcome"], "ok", "{written}");
+    }
+    let page = tool(
+        app,
+        codex,
+        session,
+        "page_write",
+        json!({"projectId": "SRC", "title": SECRET_PAGE, "body": "Private plan"}),
+    )
+    .await;
+    assert_eq!(page["outcome"], "ok", "{page}");
+    let page_id = page["value"]["id"].as_str().expect("page").to_owned();
+    // SRC-1 the root, SRC-2 its subtask, SRC-3 a task that stays.
+    let made = tool(
+        app,
+        codex,
+        session,
+        "task_create_many",
+        json!({"projectId": "SRC", "clientRequestId": "move-world", "tasks": [
+            {"ref": "root", "title": "Root"},
+            {"ref": "sub", "title": "Sub", "parentRef": "root"},
+            {"title": "Stays"},
+        ]}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let root = task_id(setup, &src, 1).await;
+    let sub = task_id(setup, &src, 2).await;
+    for (task, fields) in [
+        (
+            "SRC-1",
+            json!({"Risk": "High", "Notes": "plain note", "Owner": format!("@{SECRET_PERSON}"),
+                   "Spec": page_id, "Follows": "SRC-2", "Secret": SECRET_TEXT}),
+        ),
+        ("SRC-2", json!({"Owner": "@dee", "Follows": "SRC-3"})),
+    ] {
+        let updated = tool(
+            app,
+            codex,
+            session,
+            "task_update",
+            json!({"taskId": task, "fields": fields, "expectedVersion": version_of(setup, task).await}),
+        )
+        .await;
+        assert_eq!(updated["outcome"], "ok", "{updated}");
+    }
+    World {
+        src,
+        dst,
+        dee,
+        root,
+        sub,
+    }
+}
+
+#[tokio::test]
+async fn a_move_previews_privately_then_moves_once_with_the_choices_made() {
+    let Some(setup) = setup("awd102_move_flow").await else {
+        return;
+    };
+    let app = &setup.app;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let w = world(&setup, &codex, &session).await;
+    let before = footprint(&setup).await;
+    let original = field_values(&setup, &w.root).await;
+
+    // 1. The preview is private and changes nothing.
+    let previewed = tool(
+        app,
+        &codex,
+        &session,
+        "task_move",
+        json!({"taskId": "SRC-1", "toProjectId": "DST", "preview": true}),
+    )
+    .await;
+    assert_eq!(previewed["outcome"], "ok", "{previewed}");
+    let preview = previewed["value"]["preview"].clone();
+    assert_eq!(footprint(&setup).await, before, "a preview writes nothing");
+    let keys = preview["tasks"]
+        .as_array()
+        .expect("tasks")
+        .iter()
+        .map(|task| task["key"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(keys, vec![json!("SRC-1"), json!("SRC-2")], "{preview}");
+    let carried = preview["carried"].as_array().expect("carried");
+    assert!(
+        carried
+            .iter()
+            .any(|value| value["taskKey"] == "SRC-1" && value["field"] == "Notes"),
+        "{preview}"
+    );
+    assert!(
+        carried.iter().any(|value| value["taskKey"] == "SRC-1"
+            && value["field"] == "Follows"
+            && value["followsMove"] == true),
+        "a link inside the moving tree follows it: {preview}"
+    );
+    assert!(
+        carried
+            .iter()
+            .any(|value| value["taskKey"] == "SRC-2" && value["field"] == "Owner"),
+        "{preview}"
+    );
+    for (task, field, reason) in [
+        ("SRC-1", "Risk", "option_missing"),
+        ("SRC-1", "Owner", "person_not_in_target"),
+        ("SRC-1", "Spec", "page_link"),
+        ("SRC-1", "Secret", "no_matching_field"),
+        ("SRC-2", "Follows", "link_outside_move"),
+    ] {
+        assert_eq!(issue(&preview, task, field)["reason"], reason, "{preview}");
+    }
+    // The mover reads what stays, through the task page's own projection.
+    assert!(
+        issue(&preview, "SRC-1", "Owner")["value"]
+            .to_string()
+            .contains(SECRET_PERSON)
+    );
+    assert_eq!(issue(&preview, "SRC-1", "Spec")["value"], SECRET_PAGE);
+    let secret = issue(&preview, "SRC-1", "Secret");
+    assert!(
+        secret["candidates"]
+            .as_array()
+            .expect("candidates")
+            .iter()
+            .any(|candidate| candidate["name"] == "Summary" && candidate["takesValue"] == true),
+        "a text value fits another text field: {secret}"
+    );
+    // The web app reads the same plan.
+    let (status, web) = send(
+        app,
+        setup.browser.request(
+            "GET",
+            &format!(
+                "/api/v1/projects/{}/work-items/{}/project-move?targetProjectId={}",
+                w.src, w.root, w.dst
+            ),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{web}");
+    assert_eq!(web["snapshot"], preview["snapshot"], "one plan for both");
+
+    // 2. Every issue needs a choice; a choice is checked in the target.
+    let snapshot = preview["snapshot"].clone();
+    let id_of = |task: &str, field: &str| issue(&preview, task, field)["id"].clone();
+    let refused = tool(
+        app,
+        &codex,
+        &session,
+        "task_move",
+        json!({"taskId": "SRC-1", "toProjectId": "DST", "snapshot": snapshot,
+               "resolutions": [{"issue": id_of("SRC-1", "Risk"), "action": "leave"}],
+               "clientRequestId": "move-incomplete"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "invalid_request", "{refused}");
+    let refused = tool(
+        app,
+        &codex,
+        &session,
+        "task_move",
+        json!({"taskId": "SRC-1", "toProjectId": "DST", "snapshot": snapshot,
+               "resolutions": [{"issue": id_of("SRC-1", "Owner"), "action": "set",
+                                "targetField": "Owner", "value": format!("@{SECRET_PERSON}")}],
+               "leaveUnresolved": true, "clientRequestId": "move-bad-person"}),
+    )
+    .await;
+    assert_eq!(
+        refused["outcome"], "invalid_request",
+        "someone not in DST: {refused}"
+    );
+    assert_eq!(footprint(&setup).await, before, "refusals write nothing");
+
+    // 3. The move: Risk set to another option, the owner replaced, the
+    // page and the secret left, the outside link left.
+    let confirm = json!({
+        "taskId": "SRC-1", "toProjectId": "DST", "snapshot": snapshot,
+        "resolutions": [
+            {"issue": id_of("SRC-1", "Risk"), "action": "set", "targetField": "Risk", "value": "Medium"},
+            {"issue": id_of("SRC-1", "Owner"), "action": "set", "targetField": "Owner", "value": w.dee.to_string()},
+            {"issue": id_of("SRC-1", "Spec"), "action": "leave"},
+            {"issue": id_of("SRC-1", "Secret"), "action": "leave"},
+            {"issue": id_of("SRC-2", "Follows"), "action": "leave"},
+        ],
+        "clientRequestId": "move-src-1",
+    });
+    let moved = tool(app, &codex, &session, "task_move", confirm.clone()).await;
+    assert_eq!(moved["outcome"], "ok", "{moved}");
+    assert_eq!(moved["value"]["created"], true);
+    assert_eq!(moved["value"]["leftBehind"], 3, "{moved}");
+    let new_root = moved["value"]["moved"][0]["id"]
+        .as_str()
+        .expect("root")
+        .to_owned();
+    let new_sub = moved["value"]["moved"][1]["id"]
+        .as_str()
+        .expect("sub")
+        .to_owned();
+    let values = field_values(&setup, &new_root).await;
+    assert_eq!(
+        values[field_id(&setup, &w.dst, "Risk").await],
+        option_id(&setup, &w.dst, "Risk", "Medium").await
+    );
+    assert_eq!(
+        values[field_id(&setup, &w.dst, "Notes").await],
+        "plain note"
+    );
+    assert_eq!(
+        values[field_id(&setup, &w.dst, "Owner").await],
+        w.dee.to_string()
+    );
+    assert_eq!(
+        values[field_id(&setup, &w.dst, "Follows").await],
+        new_sub,
+        "the link points at the subtask's new copy"
+    );
+    assert_eq!(values.as_object().expect("values").len(), 4, "{values}");
+    let sub_values = field_values(&setup, &new_sub).await;
+    assert_eq!(
+        sub_values[field_id(&setup, &w.dst, "Owner").await],
+        w.dee.to_string()
+    );
+    assert_eq!(
+        sub_values.as_object().expect("values").len(),
+        1,
+        "{sub_values}"
+    );
+    // The original keeps everything, archived.
+    assert_eq!(field_values(&setup, &w.root).await, original);
+    // Nothing that stayed is named in the target.
+    let rows = target_rows(&setup, &w.dst).await;
+    for secret in [SECRET_TEXT, SECRET_PERSON, SECRET_PAGE] {
+        assert!(
+            !rows.contains(secret),
+            "{secret} reached the target: {rows}"
+        );
+    }
+    assert!(
+        rows.contains("3 custom field values stayed on SRC-1"),
+        "{rows}"
+    );
+    let after = footprint(&setup).await;
+
+    // 4. The same request again (a lost response): its first result, and
+    // nothing more is written.
+    let again = tool(app, &codex, &session, "task_move", confirm.clone()).await;
+    assert_eq!(again["outcome"], "ok", "{again}");
+    assert_eq!(again["value"]["replayed"], true, "{again}");
+    assert_eq!(again["value"]["moved"], moved["value"]["moved"]);
+    assert!(
+        again["value"].get("notes").is_none(),
+        "notes aren't kept: {again}"
+    );
+    assert_eq!(footprint(&setup).await, after, "a replay writes nothing");
+    // Changed choices with the same ID: a conflict.
+    let mut changed = confirm.clone();
+    changed["resolutions"][3] =
+        json!({"issue": id_of("SRC-1", "Secret"), "action": "set", "targetField": "Summary"});
+    let conflict = tool(app, &codex, &session, "task_move", changed).await;
+    assert_eq!(conflict["outcome"], "conflict", "{conflict}");
+    // A new request ID: the task was moved, so nothing changes.
+    let mut other = confirm.clone();
+    other["clientRequestId"] = json!("move-src-1-again");
+    let other = tool(app, &codex, &session, "task_move", other).await;
+    assert_eq!(other["outcome"], "ok", "{other}");
+    assert_eq!(other["value"]["created"], false, "{other}");
+    assert_eq!(footprint(&setup).await, after);
+
+    // 5. However late: the receipt doesn't expire with the day-long
+    // request records.
+    sqlx::query("UPDATE work_item_move_receipts SET created_at = now() - interval '400 days'")
+        .execute(&setup.pool)
+        .await
+        .expect("age the receipt");
+    sqlx::query("DELETE FROM idempotency_keys")
+        .execute(&setup.pool)
+        .await
+        .expect("expire request records");
+    let late = tool(app, &codex, &session, "task_move", confirm.clone()).await;
+    assert_eq!(late["value"]["replayed"], true, "{late}");
+    assert_eq!(late["value"]["moved"], moved["value"]["moved"]);
+    // A move made before receipts existed: the same request finds where it
+    // went, and nothing is made twice.
+    sqlx::query("DELETE FROM work_item_move_receipts")
+        .execute(&setup.pool)
+        .await
+        .expect("forget the receipt");
+    let older = tool(app, &codex, &session, "task_move", confirm).await;
+    assert_eq!(older["outcome"], "ok", "{older}");
+    assert_eq!(older["value"]["created"], false, "{older}");
+    let after_forgetting = footprint(&setup).await;
+    assert_eq!(after_forgetting[0], after[0], "no second copy");
+}
+
+#[tokio::test]
+async fn a_stale_preview_or_lost_access_moves_nothing() {
+    let Some(setup) = setup("awd102_move_refusals").await else {
+        return;
+    };
+    let app = &setup.app;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let w = world(&setup, &codex, &session).await;
+    let preview = |who: &'static str| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move {
+            let previewed = tool(
+                app,
+                &codex,
+                &session,
+                "task_move",
+                json!({"taskId": "SRC-1", "toProjectId": "DST", "preview": true}),
+            )
+            .await;
+            assert_eq!(previewed["outcome"], "ok", "{who}: {previewed}");
+            previewed["value"]["preview"].clone()
+        }
+    };
+    let confirm = |preview: &Value, request: &str| {
+        json!({"taskId": "SRC-1", "toProjectId": "DST", "snapshot": preview["snapshot"],
+               "leaveUnresolved": true, "clientRequestId": request})
+    };
+    let before = footprint(&setup).await;
+
+    // The target's fields change after the preview.
+    let stale = preview("first").await;
+    let changed = tool(
+        app,
+        &codex,
+        &session,
+        "field_write",
+        json!({"projectId": "DST", "field": "Risk", "options": [
+            {"id": option_id(&setup, &w.dst, "Risk", "Low").await, "name": "Low"},
+            {"id": option_id(&setup, &w.dst, "Risk", "Medium").await, "name": "Medium"},
+            {"name": "High"},
+        ]}),
+    )
+    .await;
+    assert_eq!(changed["outcome"], "ok", "{changed}");
+    let before = {
+        let _ = before;
+        footprint(&setup).await
+    };
+    let refused = tool(
+        app,
+        &codex,
+        &session,
+        "task_move",
+        confirm(&stale, "move-stale"),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "conflict", "{refused}");
+    assert_eq!(footprint(&setup).await, before);
+
+    // The target's milestone of the same name is replaced by another after
+    // the preview: the same name, a different record.
+    for (project, tasks) in [("SRC", json!(["SRC-1"])), ("DST", json!([]))] {
+        let written = tool(
+            app,
+            &codex,
+            &session,
+            "milestone_write",
+            json!({"projectId": project, "name": "M1", "addTasks": tasks}),
+        )
+        .await;
+        assert_eq!(written["outcome"], "ok", "{written}");
+    }
+    let planned = preview("milestone").await;
+    let old = tool(
+        app,
+        &codex,
+        &session,
+        "milestone_write",
+        json!({"projectId": "DST", "name": "M1"}),
+    )
+    .await;
+    let old_id = old["value"]["id"].as_str().expect("milestone").to_owned();
+    let archived = tool(
+        app,
+        &codex,
+        &session,
+        "milestone_write",
+        json!({"projectId": "DST", "milestoneId": old_id, "archived": true}),
+    )
+    .await;
+    assert_eq!(archived["outcome"], "ok", "{archived}");
+    let replaced = tool(
+        app,
+        &codex,
+        &session,
+        "milestone_write",
+        json!({"projectId": "DST", "name": "M1"}),
+    )
+    .await;
+    assert_eq!(replaced["outcome"], "ok", "{replaced}");
+    assert_ne!(replaced["value"]["id"], old_id, "a new record");
+    let before = footprint(&setup).await;
+    let refused = tool(
+        app,
+        &codex,
+        &session,
+        "task_move",
+        confirm(&planned, "move-milestone"),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "conflict", "{refused}");
+    assert_eq!(footprint(&setup).await, before);
+
+    // A subtask leaves the tree after the preview (its mapping is late).
+    let fresh = preview("second").await;
+    let archived = tool(
+        app,
+        &codex,
+        &session,
+        "task_update",
+        json!({"taskId": "SRC-2", "archived": true, "expectedVersion": version_of(&setup, "SRC-2").await}),
+    )
+    .await;
+    assert_eq!(archived["outcome"], "ok", "{archived}");
+    let before = footprint(&setup).await;
+    let refused = tool(
+        app,
+        &codex,
+        &session,
+        "task_move",
+        confirm(&fresh, "move-tree"),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "conflict", "{refused}");
+    assert_eq!(footprint(&setup).await, before);
+    let restored = tool(
+        app,
+        &codex,
+        &session,
+        "task_update",
+        json!({"taskId": "SRC-2", "archived": false, "expectedVersion": version_of(&setup, "SRC-2").await}),
+    )
+    .await;
+    assert_eq!(restored["outcome"], "ok", "{restored}");
+
+    // Someone who loses the right to create in the target after previewing.
+    let (mo, mo_browser) = add_person(&setup, &[&w.src, &w.dst], "mo").await;
+    let mo_preview = |browser: &super::agent_interface::Browser| {
+        browser.request(
+            "GET",
+            &format!(
+                "/api/v1/projects/{}/work-items/{}/project-move?targetProjectId={}",
+                w.src, w.root, w.dst
+            ),
+            None,
+            Value::Null,
+        )
+    };
+    let (status, plan) = send(app, mo_preview(&mo_browser)).await;
+    assert_eq!(status, StatusCode::OK, "{plan}");
+    sqlx::query("UPDATE project_memberships SET role = 'viewer' WHERE project_id = $1::uuid AND actor_id = $2")
+        .bind(&w.dst)
+        .bind(mo)
+        .execute(&setup.pool)
+        .await
+        .expect("demote");
+    let before = footprint(&setup).await;
+    let (status, body) = send(
+        app,
+        mo_browser.request(
+            "POST",
+            &format!("/api/v1/projects/{}/work-items/{}/project-move", w.src, w.root),
+            Some("mo-move"),
+            json!({"targetProjectId": w.dst, "snapshot": plan["snapshot"], "leaveUnresolved": true}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(footprint(&setup).await, before);
+    // ... or loses the source altogether.
+    sqlx::query("UPDATE project_memberships SET enabled = false WHERE project_id = $1::uuid AND actor_id = $2")
+        .bind(&w.src)
+        .bind(mo)
+        .execute(&setup.pool)
+        .await
+        .expect("remove");
+    let (status, body) = send(app, mo_preview(&mo_browser)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    // An agent in SRC only reaches no DST; one that only reads DST can't
+    // move into it.
+    let (agent, agent_token) =
+        create_agent(app, &setup.browser, &space(&setup).await, "Mover", "mover").await;
+    add_member(&setup, &w.src, agent, "member").await;
+    let agent_session = initialize(app, &agent_token).await.expect("agent MCP");
+    let refused = tool(
+        app,
+        &agent_token,
+        &agent_session,
+        "task_move",
+        json!({"taskId": "SRC-1", "toProjectId": w.dst, "preview": true}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "not_found", "{refused}");
+    add_member(&setup, &w.dst, agent, "viewer").await;
+    let refused = tool(
+        app,
+        &agent_token,
+        &agent_session,
+        "task_move",
+        json!({"taskId": "SRC-1", "toProjectId": "DST", "preview": true}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    assert_eq!(footprint(&setup).await, before);
+
+    // Two identical requests at once make one move.
+    let fresh = preview("third").await;
+    let request = confirm(&fresh, "move-twice");
+    let (first, second) = tokio::join!(
+        tool(app, &codex, &session, "task_move", request.clone()),
+        tool(app, &codex, &session, "task_move", request.clone()),
+    );
+    assert_eq!(first["outcome"], "ok", "{first}");
+    assert_eq!(second["outcome"], "ok", "{second}");
+    assert_eq!(first["value"]["moved"], second["value"]["moved"]);
+    assert_eq!(
+        [&first, &second]
+            .iter()
+            .filter(|result| result["value"]["replayed"] == true)
+            .count(),
+        1,
+        "{first} {second}"
+    );
+    let copies =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM work_items WHERE project_id = $1::uuid")
+            .bind(&w.dst)
+            .fetch_one(&setup.pool)
+            .await
+            .expect("copies");
+    assert_eq!(copies, 2, "the root and its subtask, once");
+    let _ = w.sub;
+}
+
+#[tokio::test]
+async fn a_move_without_a_preview_carries_what_fits_and_keeps_the_rest() {
+    let Some(setup) = setup("awd102_move_legacy").await else {
+        return;
+    };
+    let app = &setup.app;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let w = world(&setup, &codex, &session).await;
+    let original = field_values(&setup, &w.root).await;
+
+    // The two arguments task_move always took: it moves at once.
+    let moved = tool(
+        app,
+        &codex,
+        &session,
+        "task_move",
+        json!({"taskId": "SRC-1", "toProjectId": "DST"}),
+    )
+    .await;
+    assert_eq!(moved["outcome"], "ok", "{moved}");
+    assert_eq!(moved["value"]["created"], true);
+    assert_eq!(moved["value"]["leftBehind"], 5, "{moved}");
+    let notes = moved["value"]["notes"].to_string();
+    assert!(
+        notes.contains("\\\"Secret\\\" on SRC-1 stayed on the original"),
+        "{notes}"
+    );
+    let new_root = moved["value"]["moved"][0]["id"]
+        .as_str()
+        .expect("root")
+        .to_owned();
+    let values = field_values(&setup, &new_root).await;
+    assert_eq!(
+        values.as_object().expect("values").len(),
+        2,
+        "Notes and Follows: {values}"
+    );
+    assert_eq!(field_values(&setup, &w.root).await, original);
+    let rows = target_rows(&setup, &w.dst).await;
+    for secret in [SECRET_TEXT, SECRET_PERSON, SECRET_PAGE] {
+        assert!(!rows.contains(secret), "{secret} reached the target");
+    }
+    // Moving again returns where it went, as it always did.
+    let again = tool(
+        app,
+        &codex,
+        &session,
+        "task_move",
+        json!({"taskId": "SRC-1", "toProjectId": "DST"}),
+    )
+    .await;
+    assert_eq!(again["value"]["created"], false, "{again}");
+    assert_eq!(
+        again["value"]["moved"][0]["to"],
+        moved["value"]["moved"][0]["to"]
+    );
+
+    // The web app moves too, and always previews first.
+    let (status, body) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!(
+                "/api/v1/projects/{}/work-items/{}/project-move",
+                w.src,
+                task_id(&setup, &w.src, 3).await
+            ),
+            Some("web-move-no-preview"),
+            json!({"targetProjectId": w.dst, "snapshot": "0".repeat(64)}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    let stays = task_id(&setup, &w.src, 3).await;
+    let (status, plan) = send(
+        app,
+        setup.browser.request(
+            "GET",
+            &format!(
+                "/api/v1/projects/{}/work-items/{stays}/project-move?targetProjectId={}",
+                w.src, w.dst
+            ),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{plan}");
+    let request = json!({"targetProjectId": w.dst, "snapshot": plan["snapshot"]});
+    let path = format!("/api/v1/projects/{}/work-items/{stays}/project-move", w.src);
+    let (status, done) = send(
+        app,
+        setup
+            .browser
+            .request("POST", &path, Some("web-move"), request.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    let (status, replay) = send(
+        app,
+        setup
+            .browser
+            .request("POST", &path, Some("web-move"), request),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{replay}");
+    assert_eq!(replay["replayed"], true, "{replay}");
+    assert_eq!(replay["moved"], done["moved"]);
+    let (status, conflict) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &path,
+            Some("web-move"),
+            json!({"targetProjectId": w.dst, "snapshot": plan["snapshot"], "leaveUnresolved": true}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{conflict}");
+}
