@@ -6,12 +6,13 @@ import { isApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
 import { useFields } from '../fields/api'
 import type { FieldDefinition, FieldValue } from '../fields/fieldModel'
-import { useProjects } from '../projects/hooks'
+import { useAuthenticatedSession } from '../auth/session'
 import { Banner, Button, Dialog, SelectField, countLabel, describeError, showToast } from '../ui'
 import { workItemHref } from './links'
-import { canMoveInto, moveTask, previewMove, type MoveDone, type MoveIssue, type MovePlan, type MoveResolution } from './moveApi'
+import { listMoveDestinations, moveTask, previewMove, type MoveDone, type MoveIssue, type MovePlan, type MoveResolution } from './moveApi'
 import { pendingMove, rememberMove, settleMove, subscribeMoves, type PendingMove } from './moveRecovery'
 import { FieldEditor } from './TaskCustomFields'
+import { useWorkItem } from './hooks'
 import './moveTask.css'
 
 /** What the mover chose for one issue; `label` is how a picked person, task or page reads. */
@@ -35,13 +36,21 @@ function unknownOutcome(error: unknown) {
 export default function MoveTaskDialog({ onClose, projectId, task }: { onClose: () => void; projectId: string; task: MovingTask }) {
   // Every step is its own dialog: focus goes back to whatever opened the first.
   const [opener] = useState<RefObject<HTMLElement | null>>(() => ({ current: document.activeElement as HTMLElement | null }))
-  const pending = useSyncExternalStore(subscribeMoves, () => pendingMove(projectId, task.id))
+  // A move whose answer never arrived belongs to whoever sent it.
+  const actorId = useAuthenticatedSession().user.actorId
+  const pending = useSyncExternalStore(subscribeMoves, () => pendingMove(actorId, projectId, task.id))
   const [target, setTarget] = useState<string | null>(null)
   const [picked, setPicked] = useState('')
-  const projects = useProjects()
-  const destinations = (projects.data?.projects ?? []).filter((project) => canMoveInto(project, projectId))
+  // Worked out by the server from your actual permissions in each project.
+  const projects = useQuery({
+    queryKey: ['task-move-destinations', actorId, projectId, task.id] as const,
+    queryFn: () => listMoveDestinations(projectId, task.id),
+    gcTime: 0,
+    retry: false,
+  })
+  const destinations = projects.data?.projects ?? []
 
-  if (pending) return <MoveRecovery move={pending} onClose={onClose} opener={opener} onStartOver={() => setTarget(null)} projectId={projectId} task={task} />
+  if (pending) return <MoveRecovery actorId={actorId} move={pending} onClose={onClose} opener={opener} onStartOver={() => setTarget(null)} projectId={projectId} task={task} />
   if (!target) {
     return (
       <Dialog
@@ -69,7 +78,7 @@ export default function MoveTaskDialog({ onClose, projectId, task }: { onClose: 
             </option>
           ))}
         </SelectField>
-        {projects.isError ? <Banner tone="danger" title={describeError(projects.error).message} /> : null}
+        {projects.isError ? <Banner tone="danger" title={isApiError(projects.error) && projects.error.status < 500 ? projects.error.message : describeError(projects.error).message} /> : null}
       </Dialog>
     )
   }
@@ -79,6 +88,7 @@ export default function MoveTaskDialog({ onClose, projectId, task }: { onClose: 
       key={`${task.id}:${task.version}:${target}`}
       onBack={() => setTarget(null)}
       onClose={onClose}
+      actorId={actorId}
       opener={opener}
       projectId={projectId}
       targetProjectId={target}
@@ -106,6 +116,7 @@ function useMoved(projectId: string, task: MovingTask, onClose: () => void) {
 }
 
 function MoveRecovery({
+  actorId,
   move,
   onClose,
   onStartOver,
@@ -113,6 +124,7 @@ function MoveRecovery({
   projectId,
   task,
 }: {
+  actorId: string
   move: PendingMove
   onClose: () => void
   opener: RefObject<HTMLElement | null>
@@ -122,10 +134,12 @@ function MoveRecovery({
 }) {
   const moved = useMoved(projectId, task, onClose)
   const [settled, setSettled] = useState<string | null>(null)
+  // What the task looks like now: a hint only; Check again gets the answer.
+  const current = useWorkItem(projectId, task.id)
   const check = useMutation({
     mutationFn: () => moveTask(projectId, task.id, move.body, move.key),
     onSuccess: (done) => {
-      settleMove(projectId, task.id)
+      settleMove(actorId, projectId, task.id)
       moved(done, move.targetProjectId)
     },
     onError: (error) => {
@@ -145,7 +159,7 @@ function MoveRecovery({
             </Button>
             <Button
               onClick={() => {
-                settleMove(projectId, task.id)
+                settleMove(actorId, projectId, task.id)
                 onStartOver()
               }}
               variant="primary"
@@ -183,15 +197,28 @@ function MoveRecovery({
       returnFocus={opener}
     >
       <p className="aw-move__lede">
-        The answer to that move never arrived, so it may or may not have happened. Checking sends the same move again: if it
-        happened, you get its result, and it can’t happen twice. Until then, nothing else can be sent for {task.key}.
+        The answer to that move never arrived, so it may or may not have happened. Check again sends that same move: if it
+        happened, you get its result, and it can’t happen twice. Until it’s settled, nothing else can be sent for {task.key}.
       </p>
+      <p className="aw-move__lede">
+        Only this tab remembers it, and only while you stay signed in: closing this and coming back keeps it, but reloading or
+        signing out forgets it, and then it can’t be sent again from here. If that happens, open {task.key}: if it moved, it’s
+        archived with a link to its new task; if it didn’t, you can start a new move, which can’t move it twice.
+      </p>
+      {current.data?.archivedAt ? (
+        <Banner tone="info" title={`${task.key} is archived now, so it most likely moved.`}>Check again to see where it went.</Banner>
+      ) : current.data ? (
+        <Banner tone="info" title={`${task.key} is still here and not archived, so it most likely didn’t move.`}>
+          Check again to be sure before moving it another way.
+        </Banner>
+      ) : null}
       {check.isError ? <Banner title={describeError(check.error).message} tone="danger" /> : null}
     </Dialog>
   )
 }
 
 function MoveReview({
+  actorId,
   onBack,
   onClose,
   opener,
@@ -199,6 +226,7 @@ function MoveReview({
   targetProjectId,
   task,
 }: {
+  actorId: string
   onBack: () => void
   onClose: () => void
   opener: RefObject<HTMLElement | null>
@@ -264,7 +292,7 @@ function MoveReview({
         return await moveTask(projectId, task.id, body, key)
       } catch (error) {
         // No answer: keep this exact request until it's settled.
-        if (unknownOutcome(error)) rememberMove(projectId, task.id, { targetProjectId, targetProjectKey: current.targetProjectKey, body, key })
+        if (unknownOutcome(error)) rememberMove(projectId, task.id, { actorId, targetProjectId, targetProjectKey: current.targetProjectKey, body, key })
         throw error
       }
     },

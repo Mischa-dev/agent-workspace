@@ -198,6 +198,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/files",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/readiness",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/project-move",
+    "/api/v1/projects/{project_id}/work-items/{work_item_id}/project-move/destinations",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/launch",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/timeline",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}/revisions",
@@ -2916,6 +2917,19 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
         cases.push(case(
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/project-move",
             vec![],
+            foreign,
+            vec![],
+        ));
+        // Where A's task could go: never one of B's projects.
+        let (own, foreign) = pair(&|outer, inner| {
+            format!(
+                "/api/v1/projects/{}/work-items/{}/project-move/destinations",
+                outer.project, inner.task
+            )
+        });
+        cases.push(case(
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/project-move/destinations",
+            own,
             foreign,
             vec![],
         ));

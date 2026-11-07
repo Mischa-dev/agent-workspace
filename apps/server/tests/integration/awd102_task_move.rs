@@ -1005,3 +1005,160 @@ async fn archiving_an_agents_home_while_its_move_waits_stops_the_move() {
     assert_eq!(moved["outcome"], "not_found", "{moved}");
     assert_eq!(moves_made(&setup).await, before, "nothing moved");
 }
+
+/// The move dialog's projects come from the mover's actual permissions in
+/// each, custom roles included, not their role's name: a role that adds
+/// tasks is offered whatever it's called, one that can't isn't, and the
+/// list grants nothing (the preview and the move check again).
+#[tokio::test]
+async fn only_projects_the_mover_can_add_tasks_to_are_offered() {
+    let Some(setup) = setup("awd102_move_destinations").await else {
+        return;
+    };
+    let app = &setup.app;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let w = world(&setup, &codex, &session).await;
+    let editors = create_project(&setup, "EDIT", "Editors only").await;
+    let looking = create_project(&setup, "LOOK", "Look only").await;
+    let closed = create_project(&setup, "SHUT", "Shut").await;
+    let (mo, mo_browser) =
+        add_person(&setup, &[&w.src, &w.dst, &editors, &looking, &closed], "mo").await;
+    let roles = format!("/api/v1/organizations/{}/roles", setup.organization_id);
+    let mut role_ids = Vec::new();
+    for (name, permissions) in [
+        // An unfamiliar name, with what a move needs.
+        ("Quartermaster", json!(["tasks.view", "tasks.create"])),
+        // A member-like role without adding tasks.
+        ("Editor", json!(["tasks.view", "tasks.edit"])),
+    ] {
+        let (status, role) = send(
+            app,
+            setup.browser.request(
+                "POST",
+                &roles,
+                None,
+                json!({"name": name, "baseRole": "member", "permissions": permissions}),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{role}");
+        role_ids.push(
+            role["id"]
+                .as_str()
+                .expect("role")
+                .parse::<Uuid>()
+                .expect("id"),
+        );
+    }
+    for (project, role, role_id) in [
+        (&w.dst, "member", Some(role_ids[0])),
+        (&editors, "member", Some(role_ids[1])),
+        (&looking, "viewer", None),
+    ] {
+        sqlx::query(
+            "UPDATE project_memberships SET role = $3, role_id = $4 WHERE project_id = $1::uuid AND actor_id = $2",
+        )
+        .bind(project)
+        .bind(mo)
+        .bind(role)
+        .bind(role_id)
+        .execute(&setup.pool)
+        .await
+        .expect("role");
+    }
+    sqlx::query(
+        "UPDATE projects SET archived_at = now(), archived_by_actor_id = $2 WHERE id = $1::uuid",
+    )
+    .bind(&closed)
+    .bind(mo)
+    .execute(&setup.pool)
+    .await
+    .expect("archive");
+    let before = moves_made(&setup).await;
+    let destinations = |browser: &super::agent_interface::Browser, task: &str| {
+        browser.request(
+            "GET",
+            &format!(
+                "/api/v1/projects/{}/work-items/{task}/project-move/destinations",
+                w.src
+            ),
+            None,
+            Value::Null,
+        )
+    };
+    let (status, listed) = send(app, destinations(&mo_browser, &w.root)).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let keys = listed["projects"]
+        .as_array()
+        .expect("projects")
+        .iter()
+        .map(|project| project["key"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(keys, vec![json!("DST")], "{listed}");
+    // The custom role that adds tasks can really preview and move there.
+    let (status, plan) = send(
+        app,
+        mo_browser.request(
+            "GET",
+            &format!(
+                "/api/v1/projects/{}/work-items/{}/project-move?targetProjectId={}",
+                w.src, w.root, w.dst
+            ),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{plan}");
+    // One that doesn't is refused by the preview and the move too.
+    let (status, refused) = send(
+        app,
+        mo_browser.request(
+            "GET",
+            &format!(
+                "/api/v1/projects/{}/work-items/{}/project-move?targetProjectId={editors}",
+                w.src, w.root
+            ),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    let (status, refused) = send(
+        app,
+        mo_browser.request(
+            "POST",
+            &format!("/api/v1/projects/{}/work-items/{}/project-move", w.src, w.root),
+            Some("mo-editors"),
+            json!({"targetProjectId": editors, "snapshot": plan["snapshot"], "leaveUnresolved": true}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    assert_eq!(
+        moves_made(&setup).await,
+        before,
+        "listing and refusals change nothing"
+    );
+    // Roles are as they were: the list granted nothing.
+    let role_now = sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT role_id FROM project_memberships WHERE project_id = $1::uuid AND actor_id = $2",
+    )
+    .bind(&editors)
+    .bind(mo)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("role");
+    assert_eq!(role_now, Some(role_ids[1]));
+    // Someone who can't move tasks out of the source gets no list.
+    sqlx::query("UPDATE project_memberships SET role = 'viewer' WHERE project_id = $1::uuid AND actor_id = $2")
+        .bind(&w.src)
+        .bind(mo)
+        .execute(&setup.pool)
+        .await
+        .expect("viewer");
+    let (status, refused) = send(app, destinations(&mo_browser, &w.root)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+}

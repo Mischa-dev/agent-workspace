@@ -1199,6 +1199,139 @@ pub async fn preview(
     Ok(Ok(view))
 }
 
+/// A project the task could move into.
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Destination {
+    pub id: String,
+    pub key: String,
+    pub name: String,
+}
+
+/// The projects this task could move into, for the person asking: the ones
+/// a preview of the move would accept, by the same checks (reach, an open
+/// ordinary project, their role's permission to add and see tasks there,
+/// and Tasks on for them), read from their actual role, custom or not.
+/// It grants nothing and writes nothing; the move checks everything again.
+pub async fn destinations(
+    state: &AppState,
+    mover: &Mover,
+    source_project_id: Uuid,
+    task_id: Uuid,
+) -> Refusable<Vec<Destination>> {
+    let mut transaction = state.pool.begin().await?;
+    // The task, and the right to move it out of its project.
+    let Some(source) = read_membership(&mut transaction, mover.actor_id, source_project_id).await?
+    else {
+        return Ok(Err(Refusal::NotFound("That task")));
+    };
+    let reaches = |project: Uuid| {
+        sqlx::query_scalar::<_, bool>("SELECT actor_can_access_project($1, $2, $3)")
+            .bind(mover.actor_id)
+            .bind(mover.external_agent_connection_id)
+            .bind(project)
+    };
+    if source.project_archived_at.is_some()
+        || !source.enabled
+        || !reaches(source_project_id)
+            .fetch_one(&mut *transaction)
+            .await?
+    {
+        return Ok(Err(Refusal::NotFound("That task")));
+    }
+    let open = sqlx::query_scalar::<_, bool>(
+        "SELECT archived_at IS NULL FROM work_items WHERE project_id = $1 AND id = $2",
+    )
+    .bind(source_project_id)
+    .bind(task_id)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    match open {
+        None => return Ok(Err(Refusal::NotFound("That task"))),
+        Some(false) => {
+            return Ok(Err(Refusal::Conflict(
+                "That task is archived, or was moved already, so there's nothing to move."
+                    .to_owned(),
+            )));
+        }
+        Some(true) => {}
+    }
+    let allows = |actor: &CommandActor, membership: &ProjectMembership, action: Action| {
+        authorize_mutation(actor, membership, action, None)
+            .map(|decision| matches!(decision, Decision::Allow))
+    };
+    let mcp = mover.surface == Surface::Mcp;
+    if !allows(&mover.source, &source, Action::WorkItemArchive)?
+        || !allows(&mover.source, &source, Action::WorkItemView)?
+        || (mcp && !allows(&mover.source, &source, Action::McpWrite)?)
+    {
+        return Ok(Err(Refusal::Denied(
+            "You can't move tasks out of this project.".to_owned(),
+        )));
+    }
+    if !crate::modules::state::for_project(&mut transaction, source_project_id, mover.actor_id)
+        .await?
+        .unwrap_or_default()
+        .contains("tasks")
+    {
+        return Ok(Err(Refusal::ModuleOff));
+    }
+
+    let candidates = sqlx::query_as::<_, (Uuid, String, String)>(
+        r#"
+        SELECT project.id, project.project_key, project.name
+        FROM projects project
+        JOIN project_memberships membership
+          ON membership.project_id = project.id AND membership.actor_id = $1 AND membership.enabled
+        WHERE project.id <> $3 AND project.kind = 'standard' AND project.archived_at IS NULL
+          AND actor_can_access_project($1, $2, project.id)
+          AND ($4::uuid IS NULL OR project.id = $4)
+        ORDER BY lower(project.name), project.id
+        "#,
+    )
+    .bind(mover.actor_id)
+    .bind(mover.external_agent_connection_id)
+    .bind(source_project_id)
+    .bind(mover.confined_to)
+    .fetch_all(&mut *transaction)
+    .await?;
+    let mut found = Vec::new();
+    for (project, key, name) in candidates {
+        let Some(membership) = read_membership(&mut transaction, mover.actor_id, project).await?
+        else {
+            continue;
+        };
+        // The same attribution the move would use there.
+        let actor = CommandActor {
+            project_id: project,
+            ..mover.source.clone()
+        };
+        // A preview needs to see tasks there; the move needs to add them.
+        if !membership.enabled
+            || membership.project_archived_at.is_some()
+            || !allows(&actor, &membership, Action::WorkItemCreate)?
+            || !allows(&actor, &membership, Action::WorkItemView)?
+            || (mcp && !allows(&actor, &membership, Action::McpWrite)?)
+        {
+            continue;
+        }
+        if !crate::modules::state::for_project(&mut transaction, project, mover.actor_id)
+            .await?
+            .unwrap_or_default()
+            .contains("tasks")
+        {
+            continue;
+        }
+        found.push(Destination {
+            id: project.to_string(),
+            key,
+            name,
+        });
+    }
+    transaction.rollback().await?;
+    Ok(Ok(found))
+}
+
 fn too_many(tasks: &[SourceTask]) -> Option<Refusal> {
     (tasks.len() > MAX_TASKS).then(|| {
         Refusal::invalid(

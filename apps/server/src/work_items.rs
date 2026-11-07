@@ -126,6 +126,10 @@ pub fn router() -> Router<AppState> {
             get(moves::preview_move).post(moves::move_to_project),
         )
         .route(
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/project-move/destinations",
+            get(moves::move_destinations),
+        )
+        .route(
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/work-with-worker",
             axum::routing::post(work_with_worker),
         )

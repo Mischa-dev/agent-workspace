@@ -135,3 +135,27 @@ pub(super) async fn move_to_project(
         },
     )
 }
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DestinationsView {
+    projects: Vec<work_item_move::Destination>,
+}
+
+/// The projects this task could move into, for the person asking, by their
+/// actual permissions there (custom roles included). It grants nothing; the
+/// preview and the move check everything again.
+pub(super) async fn move_destinations(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath((project_id, work_item_id)): ApiPath<(Uuid, Uuid)>,
+) -> Result<Response, AppError> {
+    let mover = mover(&headers, &principal, project_id, project_id)?;
+    Ok(
+        match work_item_move::destinations(&state, &mover, project_id, work_item_id).await? {
+            Ok(projects) => Json(DestinationsView { projects }).into_response(),
+            Err(refusal_reason) => refused(refusal_reason),
+        },
+    )
+}

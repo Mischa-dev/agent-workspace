@@ -5,8 +5,9 @@ import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '../api/errors'
+import { AuthenticatedSessionProvider, clearAuthenticatedQueryCache, type AuthenticatedSession } from '../auth/session'
 import MoveTaskDialog from './MoveTaskDialog'
-import { moveTask, previewMove, type MoveDone, type MovePlan } from './moveApi'
+import { listMoveDestinations, moveTask, previewMove, type MoveDone, type MovePlan } from './moveApi'
 import { clearPendingMoves } from './moveRecovery'
 
 const { owner, plan, risk } = vi.hoisted(() => {
@@ -76,29 +77,14 @@ const { owner, plan, risk } = vi.hoisted(() => {
   return { owner, plan, risk }
 })
 
-const project = (id: string, key: string, extra: Record<string, unknown> = {}) => ({ id, key, name: key, archivedAt: null, role: 'member', modulesOff: [], ...extra })
-
-vi.mock('../projects/hooks', () => ({
-  useProjects: () => ({
-    data: {
-      projects: [
-        project('src', 'SRC'),
-        project('dst', 'DST'),
-        project('old', 'OLD', { archivedAt: '2026-01-01T00:00:00Z' }),
-        project('look', 'LOOK', { role: 'viewer' }),
-        project('quiet', 'QUIET', { modulesOff: ['tasks'] }),
-      ],
-    },
-    isLoading: false,
-    isError: false,
-  }),
-}))
 vi.mock('../fields/api', () => ({ useFields: () => ({ data: { fields: [risk, owner], canManage: false } }) }))
 vi.mock('./hooks', () => ({
+  useWorkItem: () => ({ data: undefined }),
   useAssignableActors: () => ({ data: [{ id: 'dee', displayName: 'Dee Lane', handle: 'dee', kind: 'human' }], isFetching: false, isError: false }),
 }))
 vi.mock('./moveApi', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./moveApi')>()),
+  listMoveDestinations: vi.fn(),
   previewMove: vi.fn(),
   moveTask: vi.fn(),
 }))
@@ -123,28 +109,27 @@ function Host({ version = 1 }: { version?: number }) {
   )
 }
 
+const sessionFor = (actorId: string) => ({ authenticated: true, user: { id: `user-${actorId}`, actorId } }) as unknown as AuthenticatedSession
+
 function renderHost() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  const view = render(
+  const tree = (version: number, actorId: string) => (
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={['/projects/src/work-items/root']}>
-        <Host />
-      </MemoryRouter>
-    </QueryClientProvider>,
-  )
-  const rerender = (version: number) =>
-    view.rerender(
-      <QueryClientProvider client={client}>
+      <AuthenticatedSessionProvider session={sessionFor(actorId)}>
         <MemoryRouter initialEntries={['/projects/src/work-items/root']}>
           <Host version={version} />
         </MemoryRouter>
-      </QueryClientProvider>,
-    )
+      </AuthenticatedSessionProvider>
+    </QueryClientProvider>
+  )
+  const view = render(tree(1, 'actor-a'))
+  const rerender = (version: number, actorId = 'actor-a') => view.rerender(tree(version, actorId))
   return { client, rerender }
 }
 
 async function openReview() {
   fireEvent.click(screen.getByRole('button', { name: 'Move to project…' }))
+  await screen.findByRole('option', { name: 'Destination (DST)' })
   fireEvent.change(screen.getByLabelText('Project'), { target: { value: 'dst' } })
   fireEvent.click(screen.getByRole('button', { name: 'Review the move' }))
   await screen.findByRole('heading', { name: 'Needs a choice' })
@@ -166,6 +151,7 @@ async function settleAll() {
 }
 
 beforeEach(() => {
+  vi.mocked(listMoveDestinations).mockResolvedValue({ projects: [{ id: 'dst', key: 'DST', name: 'Destination' }] })
   vi.mocked(previewMove).mockResolvedValue(plan)
   vi.mocked(moveTask).mockResolvedValue(done)
 })
@@ -179,9 +165,11 @@ afterEach(() => {
 })
 
 describe('MoveTaskDialog (AWD-102)', () => {
-  it('offers only projects the task can move into', async () => {
+  it('offers the projects the server says the task can move into', async () => {
     renderHost()
     fireEvent.click(screen.getByRole('button', { name: 'Move to project…' }))
+    await screen.findByRole('option', { name: 'Destination (DST)' })
+    expect(listMoveDestinations).toHaveBeenCalledWith('src', 'root')
     const options = Array.from((screen.getByLabelText('Project') as HTMLSelectElement).options).map((option) => option.value)
     expect(options).toEqual(['', 'dst'])
   })
@@ -337,5 +325,34 @@ describe('MoveTaskDialog (AWD-102)', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(document.activeElement).toBe(opener)
     expect(moveTask).not.toHaveBeenCalled()
+  })
+
+  it('keeps a lost move only for the person who sent it, until anyone signs in or out', async () => {
+    vi.mocked(moveTask).mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    const { client, rerender } = renderHost()
+    await openReview()
+    fireEvent.click(screen.getByRole('button', { name: 'Leave all unresolved' }))
+    fireEvent.click(confirmButton())
+    await screen.findByRole('heading', { name: 'Did SRC-1 move to DST?' })
+    expect(screen.getByText(/reloading or signing out forgets it/)).toBeTruthy()
+    fireEvent.click(screen.getAllByRole('button', { name: 'Close' })[0])
+
+    // Someone else in this tab never sees it, and can't send it.
+    rerender(1, 'actor-b')
+    fireEvent.click(screen.getByRole('button', { name: 'Move to project…' }))
+    await screen.findByRole('option', { name: 'Destination (DST)' })
+    expect(screen.queryByRole('heading', { name: 'Did SRC-1 move to DST?' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    // Its sender still does, until a session change forgets it.
+    rerender(1, 'actor-a')
+    fireEvent.click(screen.getByRole('button', { name: 'Move to project…' }))
+    await screen.findByRole('heading', { name: 'Did SRC-1 move to DST?' })
+    fireEvent.click(screen.getAllByRole('button', { name: 'Close' })[0])
+    act(() => clearAuthenticatedQueryCache(client))
+    fireEvent.click(screen.getByRole('button', { name: 'Move to project…' }))
+    await screen.findByLabelText('Project')
+    expect(screen.queryByRole('heading', { name: 'Did SRC-1 move to DST?' })).toBeNull()
+    expect(moveTask).toHaveBeenCalledTimes(1)
   })
 })
