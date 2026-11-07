@@ -32,25 +32,29 @@ type Scopes = {
   found?: Array<typeof projectA>
   /** Answers some requests first, such as a run or a task key. */
   extra?: (path: string) => Promise<Response> | undefined
-  /** Holds Home's layout until the returned function is called. */
-  homeLater?: boolean
+  /** Holds Home's layout (or with 'all', every layout) until the returned function is called. */
+  homeLater?: boolean | 'all'
+  /** Layouts fail instead, as when the settings can't load. */
+  layoutsFail?: boolean
 }
 
-function withScopes({ home, projects = {}, found = [], extra, homeLater }: Scopes) {
+function withScopes({ home, projects = {}, found = [], extra, homeLater, layoutsFail }: Scopes) {
   const standard = installStandardApi()
   const off = (project: typeof projectA) => ({ ...project, modulesOff: projects[project.id] ?? [] })
   const waiting: Array<() => void> = []
   let released = !homeLater
+  const layout = (modulesOff: string[], held: boolean) => {
+    if (layoutsFail) return Promise.resolve(new Response('{"error":{"code":"unavailable"}}', { status: 503 }))
+    if (released || !held) return jsonResponse({ effective: effectiveWith(modulesOff) })
+    return new Promise<Response>((resolve) => waiting.push(() => void jsonResponse({ effective: effectiveWith(modulesOff) }).then(resolve)))
+  }
   vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
     const answered = extra?.(path)
     if (answered) return answered
     const project = /\/projects\/([^/]+)\/layout$/.exec(path)?.[1]
-    if (project) return jsonResponse({ effective: effectiveWith(projects[project] ?? []) })
-    if (path.endsWith('/layout')) {
-      if (released) return jsonResponse({ effective: effectiveWith(home) })
-      return new Promise<Response>((resolve) => waiting.push(() => void jsonResponse({ effective: effectiveWith(home) }).then(resolve)))
-    }
+    if (project) return layout(projects[project] ?? [], homeLater === 'all')
+    if (path.endsWith('/layout')) return layout(home, true)
     if (path.startsWith('/api/v1/projects?')) {
       const searched = new URLSearchParams(path.split('?')[1]).get('q')
       return jsonResponse({ projects: [projectA, projectB, ...(searched ? found : [])].map(off) })
@@ -259,5 +263,116 @@ describe('entry points follow the modules where they lead', () => {
     expect(sheet.querySelector('dd[aria-label="G then W"]')).toBeNull()
     await release()
     await waitFor(() => expect(sheet.querySelector('dd[aria-label="G then W"]')).toBeTruthy())
+  })
+  const go = (to: string) =>
+    act(async () => {
+      window.history.pushState({}, '', to)
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+
+  const openMenu = async () => {
+    fireEvent.click(await screen.findByRole('button', { name: 'Search and commands' }))
+    return screen.findByRole('dialog')
+  }
+
+  it('recent runs and boards follow their own project, from their pages; an unknown one is left to its page', async () => {
+    const runAw = '019fb600-0000-7000-8000-0000000000d1'
+    const unknownRun = '019fb600-0000-7000-8000-0000000000d2'
+    const boardAw = '019fb600-0000-7000-8000-0000000000f1'
+    const boardHome = '019fb600-0000-7000-8000-0000000000f2'
+    const board = (id: string, projectId: string | null) => ({
+      whiteboard: { id, projectId, organizationId: organization.id, title: 'Plans', deleted: false },
+      links: [],
+      canEdit: true,
+      revisions: [],
+    })
+    // Runs and Whiteboards off at Home, on in AW.
+    withScopes({
+      home: ['runs', 'whiteboards'],
+      extra: (path) => {
+        if (path.endsWith(`/agent-runs/${runAw}`)) return jsonResponse({ ...run, id: runAw })
+        if (path.endsWith(`/whiteboards/${boardAw}`)) return jsonResponse(board(boardAw, projectAId))
+        if (path.endsWith(`/whiteboards/${boardHome}`)) return jsonResponse(board(boardHome, null))
+        return undefined
+      },
+    })
+    // Their pages, opened earlier, know where they are.
+    window.history.replaceState({}, '', `/runs/${runAw}`)
+    render(<App />)
+    await settle()
+    await go(`/whiteboards/${boardAw}`)
+    await settle()
+    await go(`/whiteboards/${boardHome}`)
+    expect(await screen.findByRole('heading', { name: 'Whiteboards is turned off' })).toBeVisible()
+    await go(`/projects/${projectAId}`)
+    await settle()
+    rememberPlace(user.actorId, { path: `/runs/${runAw}`, title: 'AW run', at: Date.now() })
+    rememberPlace(user.actorId, { path: `/runs/${unknownRun}`, title: 'Unknown run', at: Date.now() })
+    rememberPlace(user.actorId, { path: `/whiteboards/${boardAw}`, title: 'AW board', at: Date.now() })
+    rememberPlace(user.actorId, { path: `/whiteboards/${boardHome}`, title: 'Home board', at: Date.now() })
+    const menu = await openMenu()
+    expect(await within(menu).findByRole('option', { name: /AW run/ })).toBeVisible()
+    expect(within(menu).getByRole('option', { name: /Unknown run/ })).toBeVisible()
+    expect(within(menu).getByRole('option', { name: /AW board/ })).toBeVisible()
+    expect(within(menu).queryByRole('option', { name: /Home board/ })).toBeNull()
+  })
+
+  it('the menu’s slash entries lead to Later, so they follow Home’s Inbox, not the project’s', async () => {
+    // Inbox off in AW, on at Home: listed.
+    withScopes({ home: [], projects: { [projectAId]: ['inbox'] } })
+    window.history.replaceState({}, '', `/projects/${projectAId}`)
+    const first = render(<App />)
+    let menu = await openMenu()
+    fireEvent.change(screen.getByRole('combobox', { name: 'Command menu' }), { target: { value: 'reminder' } })
+    expect(await within(menu).findByRole('option', { name: /Set a reminder for yourself/ })).toBeVisible()
+    first.unmount()
+    // On in AW, off at Home: not listed.
+    withScopes({ home: ['inbox'] })
+    window.history.replaceState({}, '', `/projects/${projectAId}`)
+    render(<App />)
+    menu = await openMenu()
+    fireEvent.change(screen.getByRole('combobox', { name: 'Command menu' }), { target: { value: 'reminder' } })
+    await settle()
+    expect(within(menu).queryByRole('option', { name: /Set a reminder for yourself/ })).toBeNull()
+  })
+
+  /** Watches for a page titled `name`; the returned function stops and says whether it ever showed. */
+  const watchFor = (name: string) => {
+    let seen = false
+    const watch = new MutationObserver(() => {
+      if (screen.queryByRole('heading', { level: 1, name })) seen = true
+    })
+    watch.observe(document.body, { childList: true, subtree: true })
+    return () => {
+      watch.disconnect()
+      return seen
+    }
+  }
+
+  it('a settings page of a module that’s off never shows while the settings load', async () => {
+    const cases: Array<[path: string, title: string, module: string, home: string[], projects: Record<string, string[]>]> = [
+      ['/settings/account/webhooks', 'Webhooks', 'Automations', ['automations'], {}],
+      ['/settings/workspace/runs', 'Runs and models', 'Runs', ['runs'], {}],
+      [`/settings/projects/${projectAId}/runs`, 'Runs and models', 'Runs', [], { [projectAId]: ['runs'] }],
+    ]
+    for (const [path, title, module, home, projects] of cases) {
+      const release = withScopes({ home, projects, homeLater: 'all' })
+      window.history.replaceState({}, '', path)
+      const shown = watchFor(title)
+      const view = render(<App />)
+      await settle()
+      expect(turnedOff(module)).toBeNull()
+      await release()
+      expect(await screen.findByRole('heading', { name: `${module} is turned off` })).toBeVisible()
+      expect(shown()).toBe(false)
+      view.unmount()
+    }
+  })
+
+  it('where the settings can’t load, a settings page shows, as before', async () => {
+    withScopes({ home: ['automations'], layoutsFail: true })
+    window.history.replaceState({}, '', '/settings/account/webhooks')
+    render(<App />)
+    expect(await screen.findByRole('heading', { level: 1, name: 'Webhooks' }, { timeout: 5000 })).toBeVisible()
   })
 })

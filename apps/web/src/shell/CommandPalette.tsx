@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
 import paletteClaims from 'virtual:modules/slots/palette'
 import slashClaims from 'virtual:modules/slots/slash'
 
 import { clearAuthenticatedQueryCache, logout, useAuthenticatedSession } from '../auth/session'
 import { useProjectConversationSidebar } from '../conversations/hooks'
-import { useHomeExperience, useProjectExperience, type Experience } from '../experience/layout'
+import { useHomeExperience, useHomeWorkspaceId, useProjectExperience, type Experience } from '../experience/layout'
 import { conversationTitle, openDm, useDirectOverview } from '../direct/api'
 import { projectLocationHref } from '../projects/locations'
 import { projectSettingsHref } from '../settings/paths'
@@ -89,6 +89,7 @@ export function CommandPalette() {
   // those of a module that can be off while the person's settings load.
   const projectExperience = useProjectExperience(current?.id)
   const homeExperience = useHomeExperience()
+  const homeId = useHomeWorkspaceId()
   const direct = useDirectOverview()
   const { mutateAsync: updateNavigation } = useUpdateProjectNavigation()
   const { mutateAsync: switchProject } = useSwitchProject()
@@ -117,7 +118,7 @@ export function CommandPalette() {
     if (!query.trim()) {
       const here = location.pathname
       for (const place of readRecentPlaces(session.user.actorId).filter((place) => place.path !== here).slice(0, 6)) {
-        list.push({ id: `r:${place.path}`, group: 'Recent', label: place.title, icon: placeIcon(place.path), onSelect: go(place.path), ...destination(place.path) })
+        list.push({ id: `r:${place.path}`, group: 'Recent', label: place.title, icon: placeIcon(place.path), onSelect: go(place.path), ...destination(place.path, queryClient, homeId) })
       }
     }
 
@@ -261,6 +262,8 @@ export function CommandPalette() {
         hint: `/${command.name}`,
         keywords: [`/${command.name}`, command.name],
         onSelect: go(command.paletteHref),
+        // AWD-75: these lead to Later, so they follow Home's Inbox, not the open project.
+        ...destination(command.paletteHref, queryClient, homeId),
       })
     }
     list.push({
@@ -412,7 +415,7 @@ export function CommandPalette() {
       })
     }
     return list
-  }, [current, direct.data, location.pathname, navigate, notificationPause, projectSearch.data, projects, query, queryClient, session.user, sidebar.data, state.open, state.page, switchProject, tasks.data, theme, updateNavigation])
+  }, [current, direct.data, homeId, location.pathname, navigate, notificationPause, projectSearch.data, projects, query, queryClient, session.user, sidebar.data, state.open, state.page, switchProject, tasks.data, theme, updateNavigation])
 
   // AWD-75: an entry follows the module of where it leads, there: in another
   // project, that project's modules off (from the projects lists, so no
@@ -423,7 +426,7 @@ export function CommandPalette() {
     const listed = new Map([...(projectSearch.data?.projects ?? []), ...projects].map((project) => [project.id, project]))
     return items.filter((item) => {
       const module = item.module ?? paletteModule(item.id)
-      if (!module || !moduleSwitchable(module) || item.id.startsWith('k:')) return true
+      if (!module || !moduleSwitchable(module) || item.ownerUnknown || item.id.startsWith('k:')) return true
       if (item.project && item.project !== current?.id) return !listed.get(item.project)?.modulesOff?.includes(module)
       const there = current && (item.project || IN_PROJECT.test(item.id)) ? projectExperience : homeExperience
       return there.modules !== 'loading' && there.moduleOn(module)
@@ -614,11 +617,28 @@ function MarkAllReadDialog({ onClose, open, projectIds }: { onClose: () => void;
 }
 
 /** AWD-75: entries that act in the open project; the rest lead across the workspace. */
-const IN_PROJECT = /^(p:|c:|t:|slash:|s:project$|a:create-task$|a:pin$)/
+const IN_PROJECT = /^(p:|c:|t:|s:project$|a:create-task$|a:pin$)/
 
-/** AWD-75: where a recent place leads: its page's module, and its project. */
-function destination(path: string): { module?: string; project?: string } {
-  return { module: moduleOfPath(path) ?? undefined, project: /^\/projects\/([^/?#]+)/.exec(path)?.[1] }
+/** Where a board or run is, as its page's cached answer says. */
+type Owner = { projectId?: string | null; organizationId?: string; whiteboard?: Owner }
+
+/**
+ * AWD-75: where a place leads: its page's module, and its project. A run's
+ * or a board's comes from its page's cached answer (no request here); a
+ * board across Home's workspace follows Home; one not known here is left to
+ * its own page.
+ */
+function destination(href: string, queryClient: QueryClient, homeId: string | null): Pick<CommandItem, 'module' | 'project' | 'ownerUnknown'> {
+  const path = href.split(/[?#]/)[0]
+  const module = moduleOfPath(path) ?? undefined
+  const project = /^\/projects\/([^/]+)/.exec(path)?.[1]
+  if (project) return { module, project }
+  const [, kind, id] = /^\/(runs|whiteboards)\/([^/]+)/.exec(path) ?? []
+  if (!kind) return { module }
+  const cached = queryClient.getQueryData<Owner>([kind, 'detail', id])
+  const owner = cached?.whiteboard ?? cached
+  if (owner?.projectId) return { module, project: owner.projectId }
+  return owner?.organizationId && owner.organizationId === homeId ? { module } : { module, ownerUnknown: true }
 }
 
 /** The module a palette entry belongs to; slash commands follow their own. */

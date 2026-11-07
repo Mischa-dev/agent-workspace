@@ -85,8 +85,14 @@ function moduleProjections(): Plugin {
       }
       const kind = what.startsWith('slots/') ? what.slice('slots/'.length) : ''
       if (!(SLOT_KINDS as readonly string[]).includes(kind)) this.error(`unknown module projection ${id}`)
-      const claims = manifests.flatMap(({ id, manifest }) => (manifest.slots?.[kind] ?? []).map((pattern) => [pattern, id]))
-      return `export default ${JSON.stringify(claims)}`
+      // Each module's patterns once under its id, in manifest order, spread
+      // back into the same [pattern, module] pairs in the same order: the
+      // first page carries the page and shortcut claims, so this keeps them
+      // short.
+      const grouped = manifests
+        .map(({ id, manifest }) => [id, manifest.slots?.[kind] ?? []] as const)
+        .filter(([, patterns]) => patterns.length > 0)
+      return `export default ${JSON.stringify(grouped)}.flatMap(([m, ps]) => ps.map((p) => [p, m]))`
     },
   }
 }
