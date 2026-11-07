@@ -1873,7 +1873,10 @@ async fn field_tools_and_bulk_arguments_refuse_without_the_role() {
         .await;
         // Refused for the role (field_tools: Action::WorkflowManage), not
         // for anything else about the call.
-        assert_eq!(refused["outcome"], "permission_denied", "{arguments}: {refused}");
+        assert_eq!(
+            refused["outcome"], "permission_denied",
+            "{arguments}: {refused}"
+        );
     }
     assert_eq!(state().await, fields_before);
 
