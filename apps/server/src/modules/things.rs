@@ -73,6 +73,9 @@ struct ThingRow {
     organization_id: Option<Uuid>,
     /// For conversations: whether they're in the hidden direct project.
     direct: bool,
+    /// For a thread: the conversation it was started in.
+    #[sqlx(default)]
+    parent_id: Option<Uuid>,
 }
 
 fn href(kind: &str, id: Uuid, project_id: Option<Uuid>) -> String {
@@ -87,7 +90,14 @@ impl ThingRow {
     fn into_thing(self) -> Thing {
         let module = manifest::of_thing(&self.kind).map_or_else(String::new, |m| m.id.clone());
         Thing {
-            href: href(&self.kind, self.id, self.project_id),
+            // AWD-75: a DM or group's thread opens beside its conversation,
+            // as talk::thread_path links it, not under Channels.
+            href: match self.parent_id {
+                Some(parent) if self.kind == "thread" && self.direct => {
+                    format!("/messages/{parent}?thread={}", self.id)
+                }
+                _ => href(&self.kind, self.id, self.project_id),
+            },
             id: self.id,
             module,
             kind: self.kind,
@@ -164,7 +174,7 @@ const CONVERSATIONS_SQL: &str = r#"
            CASE WHEN conversation.kind = 'thread' THEN conversation.thread_status END AS status,
            NULL::uuid AS owner_id, NULL::text AS owner_name,
            conversation.project_id, NULL::uuid AS organization_id,
-           project.kind = 'direct' AS direct
+           project.kind = 'direct' AS direct, conversation.parent_channel_id AS parent_id
     FROM conversations conversation
     JOIN projects project ON project.id = conversation.project_id
     WHERE conversation.id = ANY($1) AND conversation.project_id = ANY($2)

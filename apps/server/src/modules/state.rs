@@ -122,6 +122,11 @@ impl ModuleSet {
 
     /// Whether an agent tool may be listed and called.
     pub fn allows_tool(self, tool: &str) -> bool {
+        // AWD-75: threads belong to Channels but also work in DMs and
+        // groups, which follow Messages, as the call itself does.
+        if matches!(tool, "thread_start" | "thread_update") && self.contains("messages") {
+            return true;
+        }
         manifest::of_tool(tool).is_none_or(|module| self.contains(&module.id))
     }
 
@@ -682,6 +687,17 @@ mod tests {
         assert!(set.contains("workspace"));
         assert!(!set.contains("messages"));
         assert!(set.contains("a-module-this-server-has-never-heard-of"));
+    }
+
+    #[test]
+    fn thread_tools_are_listed_where_dms_are_on() {
+        let set = ModuleSet::from_switches(|module| module == "channels");
+        assert!(set.allows_tool("thread_start"));
+        assert!(set.allows_tool("thread_update"));
+        assert!(!set.allows_tool("channel_create"));
+        let set = ModuleSet::from_switches(|module| matches!(module, "channels" | "messages"));
+        assert!(!set.allows_tool("thread_start"));
+        assert!(!set.allows_tool("thread_update"));
     }
 
     #[test]

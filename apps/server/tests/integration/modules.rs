@@ -641,6 +641,81 @@ async fn conversation_tools_follow_the_module_where_the_conversation_lives() {
     assert_eq!(hidden["outcome"], "not_found", "{hidden}");
     let shown = call("thing_open", json!({"kind": "thread", "id": dm_thread})).await;
     assert_eq!(shown["outcome"], "ok", "{shown}");
+    // It links where DM threads open, not to the Channels page.
+    assert_eq!(
+        shown["value"]["thing"]["href"],
+        format!("/messages/{dm}?thread={dm_thread}"),
+        "{shown}"
+    );
+    // And the thread tools stay listed for DMs; creating a channel doesn't.
+    let tools = listed_tools(app, &token, &session).await;
+    for listed in ["thread_start", "thread_update"] {
+        assert!(
+            tools.iter().any(|tool| tool == listed),
+            "{listed}: {tools:?}"
+        );
+    }
+    assert!(
+        !tools.iter().any(|tool| tool == "channel_create"),
+        "{tools:?}"
+    );
+
+    // A group's thread links the same way, opened itself or linked from a
+    // task.
+    let (status, group) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            "/api/v1/direct/groups",
+            Some("awd75-group"),
+            json!({"memberIds": [bea]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{group}");
+    let group = group["conversation"]["id"]
+        .as_str()
+        .expect("group")
+        .to_owned();
+    let in_group = say(&setup, &setup.browser, &group, "awd75-g1", text("Plans?")).await;
+    let group_thread = start_thread(&setup, &group, &in_group, "awd75-gt").await;
+    let group_href = format!("/messages/{group}?thread={group_thread}");
+    let opened = call("thing_open", json!({"kind": "thread", "id": group_thread})).await;
+    assert_eq!(opened["value"]["thing"]["href"], group_href, "{opened}");
+    let created = call(
+        "task_create",
+        json!({"projectId": work, "title": "Follow the group's plans"}),
+    )
+    .await;
+    assert_eq!(created["outcome"], "applied", "{created}");
+    let task = created["workItemId"].as_str().expect("task").to_owned();
+    sqlx::query(
+        r#"
+        INSERT INTO work_item_links (work_item_id, project_id, target_kind, target_id, created_by_actor_id)
+        SELECT item.id, item.project_id, 'conversation', $2::uuid, membership.actor_id
+        FROM work_items item
+        JOIN organization_memberships membership
+          ON membership.organization_id = $3 AND membership.role = 'owner'
+        WHERE item.id = $1::uuid
+        "#,
+    )
+    .bind(&task)
+    .bind(&group_thread)
+    .bind(setup.organization_id)
+    .execute(&setup.pool)
+    .await
+    .expect("link");
+    let linked = call("thing_open", json!({"kind": "task", "id": task})).await;
+    assert_eq!(linked["outcome"], "ok", "{linked}");
+    assert!(
+        linked["value"]["links"]
+            .as_array()
+            .is_some_and(|links| links.iter().any(|link| {
+                link["other"]["id"] == group_thread.as_str()
+                    && link["other"]["href"] == group_href.as_str()
+            })),
+        "{linked}"
+    );
 
     // And conversation_list leaves the project.s channels and threads out,
     // previews and all, while DMs stay.
