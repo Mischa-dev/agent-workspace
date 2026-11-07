@@ -262,6 +262,43 @@ async fn webhook_tools_follow_automations_where_each_webhook_acts() {
     assert_eq!(made, 0);
 }
 
+/// A person's plain reminder is kept in their home workspace, so with Inbox
+/// off there (and on in their second), later_save refuses and saves nothing.
+#[tokio::test]
+async fn a_plain_reminder_follows_inbox_in_the_home_workspace() {
+    let Some(setup) = setup("awd75_later_home").await else {
+        return;
+    };
+    let app = &setup.app;
+    second_workspace(&setup).await;
+    let (status, changed) = switch(
+        &setup,
+        &setup.browser,
+        json!({"switches": {"inbox": false}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let token = connect_app(app, &setup.browser, "Owner's app", "full").await;
+    let session = initialize(app, &token).await.expect("owner's app");
+    let at = (Utc::now() + Duration::hours(2)).to_rfc3339();
+    let saved = tool(
+        app,
+        &token,
+        &session,
+        "later_save",
+        json!({"text": "Call the printer", "at": at}),
+    )
+    .await;
+    assert_module_off(&saved, "Inbox");
+    let kept = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM saved_items WHERE note = 'Call the printer'",
+    )
+    .fetch_one(&setup.pool)
+    .await
+    .expect("count");
+    assert_eq!(kept, 0);
+}
+
 /// The usage tools suggest, count and launch only where Runs is on: an
 /// account's projects are found from the account, not from the call.
 #[tokio::test]

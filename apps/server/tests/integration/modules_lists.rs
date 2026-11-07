@@ -7,6 +7,7 @@ use super::{
     agent_interface::{connect_app, create_agent, initialize, send, tool},
     mcp_admin::{Setup, create_project, setup},
     mcp_code::{run, seeded, thread},
+    mcp_task_board::seed_pull_request,
     mcp_tasks::{add_member, space},
     message_edits::create_channel,
     modules::switch,
@@ -48,6 +49,19 @@ fn each(list: &Value, field: &str) -> Vec<String> {
 async fn switched_off(setup: &Setup, body: Value) {
     let (status, changed) = switch(setup, &setup.browser, body).await;
     assert_eq!(status, StatusCode::OK, "{changed}");
+}
+
+/// The reply request asking `agent` in `conversation`.
+async fn request_of(pool: &PgPool, agent: Uuid, conversation: &str) -> String {
+    sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM reply_requests WHERE agent_actor_id = $1 AND conversation_id = $2::uuid",
+    )
+    .bind(agent)
+    .bind(conversation)
+    .fetch_one(pool)
+    .await
+    .expect("reply request")
+    .to_string()
 }
 
 #[tokio::test]
@@ -237,6 +251,44 @@ async fn an_agent_s_inbox_leaves_out_requests_where_channels_is_off() {
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{said}");
+    // Bo, another agent in Work, is asked in the same channel, and in a DM
+    // with the owner that Ada can't see.
+    let (bo, _) = create_agent(app, &setup.browser, &space(&setup).await, "Bo", "bo").await;
+    add_member(&setup, &work, bo, "member").await;
+    let (status, tagged_bo) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/channels/{channel}/messages"),
+            Some("awd75-tag-bo"),
+            json!({"content": {"version": 1, "nodes": [
+                {"type": "mention", "actorId": bo},
+                {"type": "text", "text": " the release notes too"}
+            ]}}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{tagged_bo}");
+    let (status, bo_dm) = send(
+        app,
+        setup
+            .browser
+            .request("POST", "/api/v1/direct/dms", None, json!({"actorId": bo})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{bo_dm}");
+    let bo_dm = bo_dm["conversation"]["id"].as_str().expect("dm").to_owned();
+    let (status, said) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/conversations/{bo_dm}/messages"),
+            Some("awd75-bo-dm"),
+            json!({"content": {"version": 1, "nodes": [{"type": "text", "text": "Status?"}]}}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{said}");
     let session = initialize(app, &ada_token).await.expect("agent");
     let asked = |name: &'static str| {
         let token = ada_token.clone();
@@ -260,14 +312,14 @@ async fn an_agent_s_inbox_leaves_out_requests_where_channels_is_off() {
     let inbox = asked("inbox_list").await;
     assert_eq!(
         each(&inbox["value"]["requests"], "replyConversationId"),
-        [dm.clone()],
+        vec![dm.clone()],
         "{inbox}"
     );
     assert!(!inbox.to_string().contains("release plan"), "{inbox}");
     let briefing = asked("briefing").await;
     assert_eq!(
         each(&briefing["value"]["replyRequests"], "replyConversationId"),
-        [dm.clone()],
+        vec![dm.clone()],
         "{briefing}"
     );
     assert!(!briefing.to_string().contains("release plan"), "{briefing}");
@@ -281,4 +333,113 @@ async fn an_agent_s_inbox_leaves_out_requests_where_channels_is_off() {
     .await
     .expect("count");
     assert_eq!(kept, 1);
+
+    // reply_claim checks the request before the module. Ada's own channel
+    // request is refused because Channels is off there. Bo's request in the
+    // same channel, Bo's DM she can't see, and a request that doesn't exist
+    // all answer not_found, saying nothing about modules.
+    let claim = |request: String| {
+        let token = ada_token.clone();
+        let session = session.clone();
+        async move {
+            tool(
+                app,
+                &token,
+                &session,
+                "reply_claim",
+                json!({"requestId": request}),
+            )
+            .await
+        }
+    };
+    let own = claim(request_of(&setup.pool, ada, &channel).await).await;
+    assert_eq!(own["outcome"], "permission_denied", "{own}");
+    assert_eq!(own["retryCategory"], "module", "{own}");
+    for request in [
+        request_of(&setup.pool, bo, &channel).await,
+        request_of(&setup.pool, bo, &bo_dm).await,
+        Uuid::now_v7().to_string(),
+    ] {
+        let refused = claim(request).await;
+        assert_eq!(refused["outcome"], "not_found", "{refused}");
+        assert_ne!(refused["retryCategory"], "module", "{refused}");
+        assert!(!refused.to_string().contains("Channels"), "{refused}");
+    }
+}
+
+#[tokio::test]
+async fn code_lists_keep_the_messages_space_while_code_is_on() {
+    let Some(setup) = setup("awd75_code_direct").await else {
+        return;
+    };
+    let app = &setup.app;
+    // A second workspace keeps Code on somewhere, so the lists answer rather
+    // than the tool being turned off everywhere.
+    let owner = sqlx::query_scalar::<_, Uuid>(
+        "SELECT actor_id FROM organization_memberships WHERE organization_id = $1 AND role = 'owner'",
+    )
+    .bind(setup.organization_id)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("owner");
+    second_workspace(&setup.pool, owner).await;
+    // A repository and a pull request in the Messages space, which the Code
+    // tools have always listed.
+    let direct = space(&setup).await;
+    let repository = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO repositories (
+            id, project_id, github_repository_id, owner, name, clone_url,
+            default_branch, mirror_path, enabled, trusted, preparation_state
+        )
+        VALUES ($1, $2::uuid, 9200000752, 'Fixture', 'awd75-direct',
+                'https://github.com/Fixture/awd75-direct.git', 'main',
+                '/nonexistent/awd75-direct.git', true, true, 'pending')
+        "#,
+    )
+    .bind(repository)
+    .bind(&direct)
+    .execute(&setup.pool)
+    .await
+    .expect("repository");
+    let (pull_request, _) = seed_pull_request(&setup, &direct, repository, 1).await;
+    let token = connect_app(app, &setup.browser, "Owner's app", "full").await;
+    let session = initialize(app, &token).await.expect("owner app");
+    let call = |name: &'static str| {
+        let token = token.clone();
+        let session = session.clone();
+        async move {
+            let result = tool(app, &token, &session, name, json!({})).await;
+            assert_eq!(result["outcome"], "ok", "{name}: {result}");
+            result
+        }
+    };
+    let repository = repository.to_string();
+    let pull_request = pull_request.to_string();
+
+    // Code on: both are listed.
+    let repositories = call("repository_list").await;
+    assert!(
+        each(&repositories["value"]["repositories"], "id").contains(&repository),
+        "{repositories}"
+    );
+    let pull_requests = call("pull_request_list").await;
+    assert!(
+        each(&pull_requests["value"]["pullRequests"], "id").contains(&pull_request),
+        "{pull_requests}"
+    );
+
+    // Code off in the workspace: neither is.
+    switched_off(&setup, json!({"switches": {"code": false, "runs": false}})).await;
+    let repositories = call("repository_list").await;
+    assert!(
+        !each(&repositories["value"]["repositories"], "id").contains(&repository),
+        "{repositories}"
+    );
+    let pull_requests = call("pull_request_list").await;
+    assert!(
+        !each(&pull_requests["value"]["pullRequests"], "id").contains(&pull_request),
+        "{pull_requests}"
+    );
 }

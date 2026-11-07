@@ -237,7 +237,7 @@ async fn repository_projects(
         let mut connection = state.pool.acquire().await?;
         crate::modules::state::ProjectModules::load(&mut connection, principal.actor_id, projects)
             .await?
-            .with(projects, "code")
+            .keep(projects, |set, _| set.contains("code"))
     };
     let roles = sqlx::query_as::<_, (Uuid, String, Option<Vec<String>>)>(
         r#"

@@ -4655,9 +4655,17 @@ const PRIMARY_SCOPES: &[(&str, &str)] = &[
 ];
 
 const OTHER_SCOPES: &[(&str, &str)] = &[
+    // A reply request names its project only to someone it's for, as the
+    // reply tools check: the agent it asks, or a person who can see the
+    // conversation (who may stop it). Anyone else, like a missing one, gets
+    // the tool's own answer, never a module refusal.
     (
         "requestId",
-        "SELECT project_id FROM reply_requests WHERE id = $1",
+        r#"SELECT request.project_id FROM reply_requests request
+           WHERE request.id = $1
+             AND conversation_visible_to(request.conversation_id, $2)
+             AND (request.agent_actor_id = $2
+                  OR EXISTS (SELECT 1 FROM actors actor WHERE actor.id = $2 AND actor.kind = 'human'))"#,
     ),
     (
         "workItemId",

@@ -294,6 +294,32 @@ pub(super) async fn later_save(
             if arguments.at.is_none() {
                 return Ok(ToolResult::invalid("at", "Say when, as RFC 3339."));
             }
+            // AWD-75: a person's plain reminder is kept in their home
+            // workspace, so Inbox must be on there, not only somewhere. With
+            // no home workspace, saving answers as it always has.
+            if human {
+                let home = match crate::notification_settings::home_workspace(
+                    &state.pool,
+                    principal.actor_id,
+                    None,
+                )
+                .await
+                {
+                    Ok(home) => Some(home),
+                    Err(AppError::NotFound(_)) => None,
+                    Err(error) => return Err(error),
+                };
+                if let Some(home) = home {
+                    let mut connection = state.pool.acquire().await?;
+                    if crate::modules::state::by_workspace(&mut connection, principal.actor_id)
+                        .await?
+                        .get(&home)
+                        .is_some_and(|modules| !modules.contains("inbox"))
+                    {
+                        return Ok(ToolResult::module_off("later_save", "Inbox"));
+                    }
+                }
+            }
         }
         let saver = Saver {
             actor_id: principal.actor_id,
