@@ -1,5 +1,6 @@
 import { requestJson } from '../api/client'
 import type { FieldType, FieldValue } from '../fields/fieldModel'
+import type { Project } from '../projects/types'
 
 /** Moving a task, with its subtasks, to another project (AWD-102). */
 
@@ -71,4 +72,13 @@ export function moveTask(
   idempotencyKey: string,
 ) {
   return requestJson<MoveDone>(movePath(projectId, taskId), { method: 'POST', json: input, idempotencyKey })
+}
+
+/**
+ * Whether a project can take a moved task, as far as the project list knows:
+ * open, Tasks on for you, and a role that adds tasks. The preview checks for
+ * real, with the role's actual permissions there.
+ */
+export function canMoveInto(project: Project, from: string) {
+  return project.id !== from && !project.archivedAt && !(project.modulesOff ?? []).includes('tasks') && project.role !== 'viewer'
 }

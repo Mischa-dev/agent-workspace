@@ -860,3 +860,148 @@ async fn a_move_without_a_preview_carries_what_fits_and_keeps_the_rest() {
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{conflict}");
 }
+
+/// Counts of what a move makes: tasks, aliases, receipts, archived tasks.
+async fn moves_made(setup: &Setup) -> Vec<i64> {
+    let mut counts = Vec::new();
+    for query in [
+        "SELECT count(*) FROM work_items",
+        "SELECT count(*) FROM work_item_key_aliases",
+        "SELECT count(*) FROM work_item_move_receipts",
+        "SELECT count(*) FROM work_items WHERE archived_at IS NOT NULL",
+    ] {
+        counts.push(
+            sqlx::query_scalar::<_, i64>(query)
+                .fetch_one(&setup.pool)
+                .await
+                .expect(query),
+        );
+    }
+    counts
+}
+
+/// The task's old key names the move it made, through the tool's own key
+/// resolution: the same request by key replays, a changed one conflicts,
+/// and neither moves the copy, even after the copy moved on.
+#[tokio::test]
+async fn a_move_named_by_its_old_key_replays_or_conflicts() {
+    let Some(setup) = setup("awd102_move_keys").await else {
+        return;
+    };
+    let app = &setup.app;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let _w = world(&setup, &codex, &session).await;
+    let third = create_project(&setup, "EEE", "Third").await;
+    let call = |arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, "task_move", arguments).await }
+    };
+
+    let first = json!({"taskId": "SRC-1", "toProjectId": "DST", "clientRequestId": "key-move-1"});
+    let moved = call(first.clone()).await;
+    assert_eq!(moved["outcome"], "ok", "{moved}");
+    assert_eq!(moved["value"]["created"], true, "{moved}");
+    let after = moves_made(&setup).await;
+    // The same request by key: its first result, nothing new.
+    let again = call(first.clone()).await;
+    assert_eq!(again["value"]["replayed"], true, "{again}");
+    assert_eq!(again["value"]["moved"], moved["value"]["moved"]);
+    assert_eq!(moves_made(&setup).await, after);
+    // The same request ID with another target: a conflict, and the copy in
+    // DST doesn't move to EEE.
+    let mut elsewhere = first.clone();
+    elsewhere["toProjectId"] = json!("EEE");
+    let conflict = call(elsewhere.clone()).await;
+    assert_eq!(conflict["outcome"], "conflict", "{conflict}");
+    assert_eq!(moves_made(&setup).await, after);
+    let in_third =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM work_items WHERE project_id = $1::uuid")
+            .bind(&third)
+            .fetch_one(&setup.pool)
+            .await
+            .expect("third");
+    assert_eq!(in_third, 0, "nothing reached EEE");
+
+    // The copy moves on, by its own key and request ID.
+    let copy_key = moved["value"]["moved"][0]["to"]
+        .as_str()
+        .expect("copy")
+        .to_owned();
+    let onward = json!({"taskId": copy_key, "toProjectId": "EEE", "clientRequestId": "key-move-2"});
+    let moved_on = call(onward.clone()).await;
+    assert_eq!(moved_on["outcome"], "ok", "{moved_on}");
+    assert_eq!(moved_on["value"]["created"], true, "{moved_on}");
+    let after = moves_made(&setup).await;
+    // Each request still answers as it first did.
+    let first_again = call(first).await;
+    assert_eq!(first_again["value"]["replayed"], true, "{first_again}");
+    assert_eq!(
+        first_again["value"]["moved"][0]["to"],
+        moved["value"]["moved"][0]["to"]
+    );
+    let onward_again = call(onward).await;
+    assert_eq!(onward_again["value"]["replayed"], true, "{onward_again}");
+    assert_eq!(onward_again["value"]["moved"], moved_on["value"]["moved"]);
+    let conflict = call(elsewhere).await;
+    assert_eq!(conflict["outcome"], "conflict", "{conflict}");
+    // Without a request ID, the old key says where it went.
+    let plain = call(json!({"taskId": "SRC-1", "toProjectId": "EEE"})).await;
+    assert_eq!(plain["value"]["created"], false, "{plain}");
+    assert_eq!(moves_made(&setup).await, after, "nothing moved twice");
+}
+
+/// An agent's reach rests on its connection's home project. Archiving that
+/// project while the agent's move waits for a lock stops the move: it reads
+/// reach only once it holds its locks.
+#[tokio::test]
+async fn archiving_an_agents_home_while_its_move_waits_stops_the_move() {
+    let Some(setup) = setup("awd102_move_anchor").await else {
+        return;
+    };
+    let app = &setup.app;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let w = world(&setup, &codex, &session).await;
+    // Made last, so its ID sorts after both projects the move locks.
+    let home = create_project(&setup, "HOME", "Home").await;
+    let (agent, token) = create_agent(app, &setup.browser, &home, "Mover", "mover").await;
+    add_member(&setup, &w.src, agent, "member").await;
+    add_member(&setup, &w.dst, agent, "member").await;
+    let agent_session = initialize(app, &token).await.expect("agent MCP");
+    let before = moves_made(&setup).await;
+
+    // Another write holds the source project's row.
+    let mut held = setup.pool.begin().await.expect("begin");
+    sqlx::query("SELECT 1 FROM projects WHERE id = $1::uuid FOR UPDATE")
+        .bind(&w.src)
+        .execute(&mut *held)
+        .await
+        .expect("hold the source");
+    let moving = tool(
+        app,
+        &token,
+        &agent_session,
+        "task_move",
+        json!({"taskId": w.root, "toProjectId": w.dst}),
+    );
+    let archiving = async {
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        let (status, body) = send(
+            app,
+            setup.browser.request(
+                "POST",
+                &format!("/api/v1/projects/{home}/archive"),
+                Some("archive-home"),
+                json!({"expectedVersion": 1}),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        held.commit().await.expect("release");
+    };
+    let (moved, ()) = tokio::join!(moving, archiving);
+    assert_eq!(moved["outcome"], "not_found", "{moved}");
+    assert_eq!(moves_made(&setup).await, before, "nothing moved");
+}

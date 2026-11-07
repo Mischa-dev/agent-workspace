@@ -425,11 +425,52 @@ async fn check_access(
     }
     // Both projects' rows and the mover's memberships first (locked for a
     // move): a role change or removal waits for the move, or the move reads
-    // it once it has committed.
-    let mut order = [source_project_id, target_project_id];
+    // it once it has committed. An agent's reach also rests on its
+    // connection's home project and its membership there
+    // (agent_connection_can_access), so a move shares those too, in the
+    // same ascending order as the others so moves never wait on each other
+    // in a circle: archiving the home project, or taking the agent out of
+    // it, waits for the move, or the move reads it once it has committed.
+    // The mover's actor row first: removing an agent locks it first too
+    // (then its memberships and connection), so the two take turns there
+    // instead of each holding a row the other needs.
+    if lock {
+        sqlx::query("SELECT 1 FROM actors WHERE id = $1 FOR SHARE")
+            .bind(mover.actor_id)
+            .execute(&mut **transaction)
+            .await?;
+    }
+    let anchor = match mover.external_agent_connection_id {
+        Some(connection) => sqlx::query_scalar::<_, Uuid>(
+            "SELECT project_id FROM external_agent_connections WHERE id = $1",
+        )
+        .bind(connection)
+        .fetch_optional(&mut **transaction)
+        .await?
+        .filter(|home| *home != source_project_id && *home != target_project_id),
+        None => None,
+    };
+    let mut order = vec![source_project_id, target_project_id];
+    order.extend(anchor);
     order.sort();
     let mut memberships: HashMap<Uuid, ProjectMembership> = HashMap::new();
     for project in order {
+        if Some(project) == anchor {
+            if lock {
+                sqlx::query("SELECT 1 FROM projects WHERE id = $1 FOR SHARE")
+                    .bind(project)
+                    .execute(&mut **transaction)
+                    .await?;
+                sqlx::query(
+                    "SELECT 1 FROM project_memberships WHERE project_id = $1 AND actor_id = $2 FOR SHARE",
+                )
+                .bind(project)
+                .bind(mover.actor_id)
+                .execute(&mut **transaction)
+                .await?;
+            }
+            continue;
+        }
         let membership = if lock {
             lock_membership(transaction, mover.actor_id, project).await?
         } else {
@@ -442,6 +483,13 @@ async fn check_access(
             return Ok(Err(Refusal::NotFound("That project")));
         }
         memberships.insert(project, membership);
+    }
+    // The connection itself: revoking it waits for the move, or is read.
+    if lock && let Some(connection) = mover.external_agent_connection_id {
+        sqlx::query("SELECT 1 FROM external_agent_connections WHERE id = $1 FOR SHARE")
+            .bind(connection)
+            .execute(&mut **transaction)
+            .await?;
     }
     // Membership alone isn't reach: an agent's connection limits the
     // projects it may act in. Read after the locks, so a connection changed
@@ -678,7 +726,7 @@ fn compatible(source: &FieldDefinition, target: &FieldDefinition) -> bool {
                 == target.config.target.unwrap_or(LinkTarget::Task))
 }
 
-fn active_option_by_name<'a>(field: &'a FieldDefinition, name: &str) -> Option<Uuid> {
+fn active_option_by_name(field: &FieldDefinition, name: &str) -> Option<Uuid> {
     let wanted = name.trim().to_lowercase();
     field
         .config

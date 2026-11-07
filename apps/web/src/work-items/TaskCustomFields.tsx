@@ -131,6 +131,7 @@ export function FieldEditor({
   anchor,
   field,
   onClose,
+  onLabel,
   onSet,
   projectId,
   references,
@@ -140,6 +141,8 @@ export function FieldEditor({
   anchor: HTMLElement
   field: FieldDefinition
   onClose: () => void
+  /** A picked person, task or page as its picker named it (move dialog, AWD-102). */
+  onLabel?: (label: string | null) => void
   onSet: (value: FieldValue | null) => void
   projectId: string
   references: readonly FieldReference[]
@@ -150,6 +153,10 @@ export function FieldEditor({
     onSet(next)
     onClose()
   }
+  const named = (next: FieldValue | null, label: string | null) => {
+    onLabel?.(next === null ? null : label)
+    pick(next)
+  }
   if (field.type === 'link' && field.target !== 'page') {
     return (
       <TaskSearchPicker
@@ -159,7 +166,7 @@ export function FieldEditor({
         label={field.name}
         noneLabel={isEmpty(value) ? undefined : `Clear ${field.name}`}
         onClose={onClose}
-        onPick={(target) => pick(target.id)}
+        onPick={(target) => named(target.id, target.key || null)}
         projectId={projectId}
       />
     )
@@ -171,10 +178,10 @@ export function FieldEditor({
       body = <ChoiceEditor field={field} onClose={onClose} onSet={onSet} value={value} />
       break
     case 'person':
-      body = <PersonEditor field={field} onClose={onClose} onSet={pick} value={value} projectId={projectId} />
+      body = <PersonEditor field={field} onClose={onClose} onSet={named} value={value} projectId={projectId} />
       break
     case 'link':
-      body = <PageEditor field={field} onClose={onClose} onSet={pick} projectId={projectId} value={value} />
+      body = <PageEditor field={field} onClose={onClose} onSet={named} projectId={projectId} value={value} />
       break
     // The task page edits a date with its own DatePicker; here (the bulk bar) it's the same calendar.
     case 'date':
@@ -255,7 +262,7 @@ function PersonEditor({
 }: {
   field: FieldDefinition
   onClose: () => void
-  onSet: (value: FieldValue | null) => void
+  onSet: (value: FieldValue | null, label: string | null) => void
   projectId: string
   value: FieldValue | undefined
 }) {
@@ -269,7 +276,10 @@ function PersonEditor({
       loading={people.isFetching}
       onClose={onClose}
       onQueryChange={setQuery}
-      onSelect={(id) => onSet(id === '__none' ? null : id)}
+      onSelect={(id) => {
+        const person = (people.data ?? []).find((entry) => entry.id === id)
+        onSet(id === '__none' ? null : id, person ? `${person.displayName} (@${person.handle})` : null)
+      }}
       options={[
         ...(isEmpty(value) || query.trim() ? [] : [{ value: '__none', label: `Clear ${field.name}` }]),
         ...(people.data ?? []).map((person) => ({
@@ -295,7 +305,7 @@ function PageEditor({
 }: {
   field: FieldDefinition
   onClose: () => void
-  onSet: (value: FieldValue | null) => void
+  onSet: (value: FieldValue | null, label: string | null) => void
   projectId: string
   value: FieldValue | undefined
 }) {
@@ -306,7 +316,7 @@ function PageEditor({
       label={field.name}
       loading={pages.isFetching}
       onClose={onClose}
-      onSelect={(id) => onSet(id === '__none' ? null : id)}
+      onSelect={(id) => onSet(id === '__none' ? null : id, (pages.data?.pages ?? []).find((page) => page.id === id)?.title ?? null)}
       options={[
         ...(isEmpty(value) ? [] : [{ value: '__none', label: `Clear ${field.name}` }]),
         ...(pages.data?.pages ?? []).map((page) => ({ value: page.id, label: page.title })),

@@ -1,40 +1,47 @@
-import { useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState, useSyncExternalStore, type RefObject } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
+import { queryKeys } from '../api/queryKeys'
 import { useFields } from '../fields/api'
 import type { FieldDefinition, FieldValue } from '../fields/fieldModel'
 import { useProjects } from '../projects/hooks'
 import { Banner, Button, Dialog, SelectField, countLabel, describeError, showToast } from '../ui'
 import { workItemHref } from './links'
-import { moveTask, previewMove, type MoveIssue, type MovePlan, type MoveResolution } from './moveApi'
+import { canMoveInto, moveTask, previewMove, type MoveDone, type MoveIssue, type MovePlan, type MoveResolution } from './moveApi'
+import { pendingMove, rememberMove, settleMove, subscribeMoves, type PendingMove } from './moveRecovery'
 import { FieldEditor } from './TaskCustomFields'
 import './moveTask.css'
 
-/** What the mover chose for one issue. */
-type Choice = { kind: 'leave' } | { kind: 'set'; targetField: string; value?: FieldValue }
+/** What the mover chose for one issue; `label` is how a picked person, task or page reads. */
+type Choice = { kind: 'leave' } | { kind: 'set'; targetField: string; value?: FieldValue; label?: string | null }
+
+type MovingTask = { id: string; key: string; title: string; version: number }
+
+/** An answer that doesn't say whether the move happened: no response, or the server failing. */
+function unknownOutcome(error: unknown) {
+  return !isApiError(error) || error.status >= 500
+}
 
 /**
  * Moving a task, with its subtasks, to another project (AWD-102): pick the
  * project, read a private preview of what carries over and what needs a
  * choice, settle each issue (put it in a target field, or leave it on the
- * original), then confirm once. Nothing moves until then.
+ * original), then confirm once. Nothing moves until then. If the answer to
+ * the confirmation never arrives, the dialog only offers to send that same
+ * request again, until it's settled.
  */
-export default function MoveTaskDialog({
-  onClose,
-  projectId,
-  task,
-}: {
-  onClose: () => void
-  projectId: string
-  task: { id: string; key: string; title: string }
-}) {
+export default function MoveTaskDialog({ onClose, projectId, task }: { onClose: () => void; projectId: string; task: MovingTask }) {
+  // Every step is its own dialog: focus goes back to whatever opened the first.
+  const [opener] = useState<RefObject<HTMLElement | null>>(() => ({ current: document.activeElement as HTMLElement | null }))
+  const pending = useSyncExternalStore(subscribeMoves, () => pendingMove(projectId, task.id))
   const [target, setTarget] = useState<string | null>(null)
   const [picked, setPicked] = useState('')
   const projects = useProjects()
-  const destinations = (projects.data?.projects ?? []).filter((project) => project.id !== projectId && !project.archivedAt)
+  const destinations = (projects.data?.projects ?? []).filter((project) => canMoveInto(project, projectId))
 
+  if (pending) return <MoveRecovery move={pending} onClose={onClose} opener={opener} onStartOver={() => setTarget(null)} projectId={projectId} task={task} />
   if (!target) {
     return (
       <Dialog
@@ -51,12 +58,11 @@ export default function MoveTaskDialog({
         onClose={onClose}
         open
         title={`Move ${task.key} to another project`}
+        returnFocus={opener}
       >
-        <p className="aw-move__lede">
-          It moves with its subtasks. You’ll see what carries over before anything changes.
-        </p>
+        <p className="aw-move__lede">It moves with its subtasks. You’ll see what carries over before anything changes.</p>
         <SelectField label="Project" onChange={(event) => setPicked(event.target.value)} value={picked}>
-          <option value="">{projects.isLoading ? 'Loading projects…' : 'Choose a project'}</option>
+          <option value="">{projects.isLoading ? 'Loading projects…' : destinations.length ? 'Choose a project' : 'No project you can add tasks to'}</option>
           {destinations.map((project) => (
             <option key={project.id} value={project.id}>
               {project.name} ({project.key})
@@ -69,9 +75,11 @@ export default function MoveTaskDialog({
   }
   return (
     <MoveReview
-      key={target}
+      // A different task, a new version of it, or another project: a new review.
+      key={`${task.id}:${task.version}:${target}`}
       onBack={() => setTarget(null)}
       onClose={onClose}
+      opener={opener}
       projectId={projectId}
       targetProjectId={target}
       task={task}
@@ -79,96 +87,205 @@ export default function MoveTaskDialog({
   )
 }
 
+function useMoved(projectId: string, task: MovingTask, onClose: () => void) {
+  const queryClient = useQueryClient()
+  const navigate = useNavigate()
+  return (done: MoveDone, targetProjectId: string) => {
+    // Both projects' lists, boards and task pages, the original's included.
+    void queryClient.invalidateQueries({ queryKey: queryKeys.workItemsRoot(projectId) })
+    void queryClient.invalidateQueries({ queryKey: queryKeys.workItemsRoot(targetProjectId) })
+    const first = done.moved[0]
+    showToast({
+      tone: 'success',
+      title: first ? `Moved ${first.from} to ${first.to}` : `${task.key} was already moved`,
+      description: done.leftBehind ? `${countLabel(done.leftBehind, 'field value')} stayed on the original.` : undefined,
+    })
+    onClose()
+    if (first) navigate(workItemHref(targetProjectId, first.id))
+  }
+}
+
+function MoveRecovery({
+  move,
+  onClose,
+  onStartOver,
+  opener,
+  projectId,
+  task,
+}: {
+  move: PendingMove
+  onClose: () => void
+  opener: RefObject<HTMLElement | null>
+  onStartOver: () => void
+  projectId: string
+  task: MovingTask
+}) {
+  const moved = useMoved(projectId, task, onClose)
+  const [settled, setSettled] = useState<string | null>(null)
+  const check = useMutation({
+    mutationFn: () => moveTask(projectId, task.id, move.body, move.key),
+    onSuccess: (done) => {
+      settleMove(projectId, task.id)
+      moved(done, move.targetProjectId)
+    },
+    onError: (error) => {
+      // A clear refusal means nothing moved: it's settled, and a new move can start.
+      if (!unknownOutcome(error)) {
+        setSettled(isApiError(error) ? error.message : describeError(error).message)
+      }
+    },
+  })
+  if (settled) {
+    return (
+      <Dialog
+        footer={
+          <>
+            <Button onClick={onClose} variant="ghost">
+              Close
+            </Button>
+            <Button
+              onClick={() => {
+                settleMove(projectId, task.id)
+                onStartOver()
+              }}
+              variant="primary"
+            >
+              Start over
+            </Button>
+          </>
+        }
+        onClose={onClose}
+        open
+        title={`${task.key} didn’t move`}
+        returnFocus={opener}
+      >
+        <Banner title={settled} tone="warning" />
+      </Dialog>
+    )
+  }
+  return (
+    <Dialog
+      footer={
+        <>
+          <Button disabled={check.isPending} onClick={onClose} variant="ghost">
+            Close
+          </Button>
+          <Button busy={check.isPending} onClick={() => check.mutate()} variant="primary">
+            Check again
+          </Button>
+        </>
+      }
+      onClose={() => {
+        if (!check.isPending) onClose()
+      }}
+      open
+      title={`Did ${task.key} move to ${move.targetProjectKey}?`}
+      returnFocus={opener}
+    >
+      <p className="aw-move__lede">
+        The answer to that move never arrived, so it may or may not have happened. Checking sends the same move again: if it
+        happened, you get its result, and it can’t happen twice. Until then, nothing else can be sent for {task.key}.
+      </p>
+      {check.isError ? <Banner title={describeError(check.error).message} tone="danger" /> : null}
+    </Dialog>
+  )
+}
+
 function MoveReview({
   onBack,
   onClose,
+  opener,
   projectId,
   targetProjectId,
   task,
 }: {
   onBack: () => void
   onClose: () => void
+  opener: RefObject<HTMLElement | null>
   projectId: string
   targetProjectId: string
-  task: { id: string; key: string; title: string }
+  task: MovingTask
 }) {
   const queryClient = useQueryClient()
-  const navigate = useNavigate()
+  const moved = useMoved(projectId, task, onClose)
+  const previewKey = ['task-move-preview', projectId, task.id, task.version, targetProjectId] as const
   const preview = useQuery({
-    queryKey: ['task-move-preview', projectId, task.id, targetProjectId],
+    queryKey: previewKey,
     queryFn: () => previewMove(projectId, task.id, targetProjectId),
-    // A preview is private and goes stale fast: never reuse an old one.
+    // A preview is private and goes stale fast: never reuse an old one, and
+    // replace it only when asked.
     gcTime: 0,
-    staleTime: 0,
+    staleTime: Number.POSITIVE_INFINITY,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
     retry: false,
   })
   const targetFields = useFields({ projectId: targetProjectId })
-  const [choices, setChoices] = useState<Record<string, Choice>>({})
+  // Choices belong to the preview they were made in; another preview starts over.
+  const [choices, setChoices] = useState<{ snapshot: string; byIssue: Record<string, Choice> }>({ snapshot: '', byIssue: {} })
   const [stale, setStale] = useState(false)
-  // One key per request: the same choices retried (after a lost response)
-  // send the same key and get the first result; changed choices get a new one.
-  const sent = useRef<{ signature: string; key: string } | null>(null)
 
-  const plan = preview.data
+  // Only a finished, successful preview can be moved on.
+  const plan = preview.isSuccess && !preview.isFetching ? preview.data : undefined
+  const chosen = plan && choices.snapshot === plan.snapshot ? choices.byIssue : {}
   const issues = plan?.issues ?? []
+  const choose = (issue: string, choice: Choice | null) =>
+    plan &&
+    setChoices((current) => {
+      const byIssue = { ...(current.snapshot === plan.snapshot ? current.byIssue : {}) }
+      if (choice) byIssue[issue] = choice
+      else delete byIssue[issue]
+      return { snapshot: plan.snapshot, byIssue }
+    })
   // Settled: left, or put in a field with a value (its own, when it fits).
   const settled = (issue: MoveIssue) => {
-    const choice = choices[issue.id]
+    const choice = chosen[issue.id]
     if (!choice) return false
     if (choice.kind === 'leave' || choice.value !== undefined) return true
     return Boolean(issue.candidates?.find((candidate) => candidate.id === choice.targetField)?.takesValue)
   }
   const unresolved = issues.filter((issue) => !settled(issue)).length
 
-  const resolutions = (current: MovePlan): MoveResolution[] =>
-    (current.issues ?? []).flatMap((issue): MoveResolution[] => {
-      const choice = choices[issue.id]
-      if (!choice) return []
-      if (choice.kind === 'leave') return [{ issue: issue.id, action: 'leave' }]
-      return [{ issue: issue.id, action: 'set', targetField: choice.targetField, ...(choice.value === undefined ? {} : { value: choice.value }) }]
-    })
-
   const move = useMutation({
     mutationFn: async (current: MovePlan) => {
-      const input = { targetProjectId, snapshot: current.snapshot, resolutions: resolutions(current), leaveUnresolved: false }
-      const signature = JSON.stringify(input)
-      if (sent.current?.signature !== signature) sent.current = { signature, key: crypto.randomUUID() }
-      return moveTask(projectId, task.id, input, sent.current.key)
+      const body = {
+        targetProjectId,
+        snapshot: current.snapshot,
+        leaveUnresolved: false,
+        resolutions: (current.issues ?? []).flatMap((issue): MoveResolution[] => {
+          const choice = chosen[issue.id]
+          if (!choice) return []
+          if (choice.kind === 'leave') return [{ issue: issue.id, action: 'leave' }]
+          return [{ issue: issue.id, action: 'set', targetField: choice.targetField, ...(choice.value === undefined ? {} : { value: choice.value }) }]
+        }),
+      }
+      const key = crypto.randomUUID()
+      try {
+        return await moveTask(projectId, task.id, body, key)
+      } catch (error) {
+        // No answer: keep this exact request until it's settled.
+        if (unknownOutcome(error)) rememberMove(projectId, task.id, { targetProjectId, targetProjectKey: current.targetProjectKey, body, key })
+        throw error
+      }
     },
-    onSuccess: (done) => {
-      void queryClient.invalidateQueries({ queryKey: ['work-items'] })
-      const first = done.moved[0]
-      showToast({
-        tone: 'success',
-        title: first ? `Moved ${first.from} to ${first.to}` : `${task.key} was already moved`,
-        description: done.leftBehind ? `${countLabel(done.leftBehind, 'field value')} stayed on the original.` : undefined,
-      })
-      onClose()
-      if (first) navigate(workItemHref(targetProjectId, first.id))
-    },
+    onSuccess: (done) => moved(done, targetProjectId),
     onError: (error) => {
-      // A changed preview needs a fresh one; a lost response keeps its key,
-      // so trying again can't move twice.
       if (isApiError(error) && error.status === 409) setStale(true)
     },
   })
 
   const refresh = () => {
     setStale(false)
-    setChoices({})
-    sent.current = null
     move.reset()
-    void preview.refetch()
+    // Drop the old plan before asking again, so nothing is sent against it.
+    void queryClient.resetQueries({ queryKey: previewKey, exact: true })
   }
 
-  const leaveRest = () =>
-    setChoices((current) => {
-      const next = { ...current }
-      for (const issue of issues) if (!settled(issue)) next[issue.id] = { kind: 'leave' }
-      return next
-    })
+  const leaveRest = () => {
+    for (const issue of issues) if (!settled(issue)) choose(issue.id, { kind: 'leave' })
+  }
 
-  const moveError = move.error ? (isApiError(move.error) && move.error.status < 500 ? move.error.message : describeError(move.error).message) : null
+  const moveError = move.error && !unknownOutcome(move.error) ? (isApiError(move.error) ? move.error.message : describeError(move.error).message) : null
   const previewError = preview.error ? (isApiError(preview.error) && preview.error.status !== 404 ? preview.error.message : describeError(preview.error).message) : null
 
   return (
@@ -181,11 +298,7 @@ function MoveReview({
           <Button disabled={move.isPending} onClick={onClose} variant="ghost">
             Cancel
           </Button>
-          <Button
-            disabled={!plan || unresolved > 0 || move.isPending || stale}
-            onClick={() => plan && move.mutate(plan)}
-            variant="primary"
-          >
+          <Button disabled={!plan || unresolved > 0 || move.isPending || stale} onClick={() => plan && move.mutate(plan)} variant="primary">
             {move.isPending ? 'Moving…' : plan && plan.tasks.length > 1 ? `Move ${plan.tasks.length} tasks` : 'Move task'}
           </Button>
         </>
@@ -195,14 +308,16 @@ function MoveReview({
       }}
       open
       title={plan ? `Move ${task.key} to ${plan.targetProjectKey}` : `Move ${task.key}`}
+      returnFocus={opener}
       width={640}
     >
-      {preview.isLoading ? <p className="aw-move__lede">Checking what carries over…</p> : null}
-      {previewError ? <Banner tone="danger" title={previewError} /> : null}
+      {preview.isFetching ? <p className="aw-move__lede">Checking what carries over…</p> : null}
+      {previewError && !preview.isFetching ? <Banner onRetry={refresh} tone="danger" title={previewError} /> : null}
       {plan ? (
         <div className="aw-move">
           <p className="aw-move__lede">
-            {plan.tasks.length > 1 ? `${task.key} and ${countLabel(plan.tasks.length - 1, 'subtask')} move.` : `${task.key} moves.`} The original is archived with its full history and every field value. Only you see this preview.
+            {plan.tasks.length > 1 ? `${task.key} and ${countLabel(plan.tasks.length - 1, 'subtask')} move.` : `${task.key} moves.`} The original is archived
+            with its full history and every field value. Only you see this preview.
           </p>
           {stale ? (
             <Banner
@@ -230,17 +345,11 @@ function MoveReview({
               <ul className="aw-move__issues">
                 {issues.map((issue) => (
                   <IssueRow
-                    choice={choices[issue.id]}
+                    choice={chosen[issue.id]}
+                    disabled={move.isPending}
                     issue={issue}
                     key={issue.id}
-                    onChoose={(choice) => setChoices((current) => ({ ...current, [issue.id]: choice }))}
-                    onClear={() =>
-                      setChoices((current) => {
-                        const next = { ...current }
-                        delete next[issue.id]
-                        return next
-                      })
-                    }
+                    onChoose={(choice) => choose(issue.id, choice)}
                     targetFields={targetFields.data?.fields ?? []}
                     targetProjectId={targetProjectId}
                   />
@@ -279,21 +388,21 @@ function MoveReview({
 
 function IssueRow({
   choice,
+  disabled,
   issue,
   onChoose,
-  onClear,
   targetFields,
   targetProjectId,
 }: {
   choice: Choice | undefined
+  disabled: boolean
   issue: MoveIssue
-  onChoose: (choice: Choice) => void
-  onClear: () => void
+  onChoose: (choice: Choice | null) => void
   targetFields: readonly FieldDefinition[]
   targetProjectId: string
 }) {
   const [editing, setEditing] = useState<HTMLElement | null>(null)
-  const latest = useRef<FieldValue | null>(null)
+  const latest = useRef<{ value: FieldValue | null; label: string | null } | null>(null)
   const candidates = issue.candidates ?? []
   const selected = choice?.kind === 'set' ? candidates.find((candidate) => candidate.id === choice.targetField) : undefined
   const definition = useMemo(() => targetFields.find((field) => field.id === selected?.id), [targetFields, selected])
@@ -301,10 +410,10 @@ function IssueRow({
 
   const finish = () => {
     setEditing(null)
-    const value = latest.current
+    const picked = latest.current
     latest.current = null
-    if (selected && value !== null && !(Array.isArray(value) && value.length === 0)) {
-      onChoose({ kind: 'set', targetField: selected.id, value })
+    if (selected && picked && picked.value !== null && !(Array.isArray(picked.value) && picked.value.length === 0)) {
+      onChoose({ kind: 'set', targetField: selected.id, value: picked.value, label: picked.label })
     }
   }
 
@@ -318,14 +427,14 @@ function IssueRow({
         <SelectField
           aria-label={`What happens to ${issue.field} on ${issue.taskKey}`}
           compact
+          disabled={disabled}
           onChange={(event) => {
             const next = event.target.value
-            if (!next) return onClear()
+            if (!next) return onChoose(null)
             if (next === 'leave') return onChoose({ kind: 'leave' })
             const candidate = candidates.find((entry) => `set:${entry.id}` === next)
             // A field the value fits as it is keeps it; otherwise a value is chosen next.
-            if (candidate?.takesValue) onChoose({ kind: 'set', targetField: candidate.id })
-            else if (candidate) onChoose({ kind: 'set', targetField: candidate.id, value: undefined })
+            if (candidate) onChoose({ kind: 'set', targetField: candidate.id })
           }}
           value={where}
         >
@@ -340,14 +449,14 @@ function IssueRow({
         {selected ? (
           <div className="aw-move__value">
             {choice?.kind === 'set' && choice.value !== undefined ? (
-              <span>{chosenText(definition, choice.value)}</span>
+              <span>{chosenText(definition, choice.value, choice.label)}</span>
             ) : selected.takesValue ? (
               <span>Same value</span>
             ) : (
               <span className="aw-move__needed">Choose a value</span>
             )}
             {definition ? (
-              <Button onClick={(event) => setEditing(event.currentTarget)} size="sm" variant="ghost">
+              <Button disabled={disabled} onClick={(event) => setEditing(event.currentTarget)} size="sm" variant="ghost">
                 {choice?.kind === 'set' && choice.value !== undefined ? 'Change' : selected.takesValue ? 'Another value…' : 'Choose…'}
               </Button>
             ) : null}
@@ -359,8 +468,11 @@ function IssueRow({
           anchor={editing}
           field={definition}
           onClose={finish}
+          onLabel={(label) => {
+            latest.current = { value: latest.current?.value ?? null, label }
+          }}
           onSet={(value) => {
-            latest.current = value
+            latest.current = { value, label: latest.current?.label ?? null }
           }}
           projectId={targetProjectId}
           references={[]}
@@ -380,13 +492,13 @@ function shown(value: unknown): string {
   return String(value)
 }
 
-/** A chosen target value: option names for a choice; otherwise as typed, or "Chosen". */
-function chosenText(field: FieldDefinition | undefined, value: FieldValue): string {
-  if (!field) return 'Chosen'
+/** A chosen target value: option names for a choice, a picked record by its picker's label, otherwise as typed. */
+function chosenText(field: FieldDefinition | undefined, value: FieldValue, label: string | null | undefined): string {
+  if (label) return label
+  if (!field) return shown(value)
   const ids = Array.isArray(value) ? value : [String(value)]
   if (field.type === 'single_choice' || field.type === 'multiple_choice') {
     return ids.map((id) => field.options.find((option) => option.id === id)?.name ?? id).join(', ')
   }
-  if (field.type === 'person' || field.type === 'link') return 'Chosen'
   return shown(value)
 }

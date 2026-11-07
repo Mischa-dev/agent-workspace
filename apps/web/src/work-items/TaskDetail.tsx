@@ -340,7 +340,7 @@ function TaskDetailBody({
       {item.handoff && !finished ? <HandoffNotice handoff={item.handoff} /> : null}
       {moving ? (
         <Suspense fallback={null}>
-          <MoveTaskDialog onClose={() => setMoving(false)} projectId={item.projectId} task={{ id: item.id, key: item.key, title: item.title }} />
+          <MoveTaskDialog onClose={() => setMoving(false)} projectId={item.projectId} task={{ id: item.id, key: item.key, title: item.title, version: item.version }} />
         </Suspense>
       ) : null}
     </div>
