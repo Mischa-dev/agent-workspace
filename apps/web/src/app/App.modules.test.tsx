@@ -1,7 +1,16 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
-import { installAppShellLifecycle, installStandardApi, jsonResponse, organization, projectAId } from '../test/appHarness'
+import {
+  installAppShellLifecycle,
+  installStandardApi,
+  jsonResponse,
+  organization,
+  projectA,
+  projectAId,
+  projectB,
+  projectBId,
+} from '../test/appHarness'
 import { App } from './App'
 
 // AWD-75: a link into a module that's off shows a turned-off page, not a 404,
@@ -23,11 +32,23 @@ function effectiveWith(modulesOff: string[], hidden: string[] = []) {
   }
 }
 
-function withModulesOff(modulesOff: string[], hidden: string[] = []) {
+/** These modules off in every layout; the projects list marks `projectsOff` as the server does. */
+function withModulesOff(
+  modulesOff: string[],
+  hidden: string[] = [],
+  projectsOff = modulesOff.includes('projects') ? [projectAId, projectBId] : [],
+) {
   const standard = installStandardApi()
-  vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) =>
-    String(input).endsWith('/layout') ? jsonResponse({ effective: effectiveWith(modulesOff, hidden) }) : standard(input, init),
-  )
+  vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input)
+    if (path.endsWith('/layout')) return jsonResponse({ effective: effectiveWith(modulesOff, hidden) })
+    if (path.startsWith('/api/v1/projects?')) {
+      return jsonResponse({
+        projects: [projectA, projectB].map((project) => ({ ...project, projectsOff: projectsOff.includes(project.id) })),
+      })
+    }
+    return standard(input, init)
+  })
 }
 
 /** Layout requests wait until `answer` is called, with these modules off (or `fail` for an error). */
@@ -75,6 +96,22 @@ describe('modules that are off', () => {
     expect(screen.queryByRole('heading', { name: 'Recent projects' })).toBeNull()
     expect(screen.queryByRole('group', { name: 'Pinned and recent projects' })?.querySelector('a')).toBeFalsy()
     expect(screen.queryByRole('link', { name: 'New project' })).toBeNull()
+  })
+
+  it('the rail follows each project’s own Projects setting, not Home’s', async () => {
+    const tile = `[data-rail-project="${projectAId}"]`
+    // Projects off at Home but on in Agent Workspace (another workspace, say).
+    withModulesOff(['projects'], [], [])
+    window.history.replaceState({}, '', '/home')
+    const first = render(<App />)
+    await waitFor(() => expect(first.container.querySelector(tile)).toBeTruthy())
+    first.unmount()
+    // Projects on at Home but off in Agent Workspace.
+    withModulesOff([], [], [projectAId])
+    const second = render(<App />)
+    // Home lists its recent projects once the list has loaded.
+    expect(await screen.findByRole('heading', { name: 'Recent projects' })).toBeVisible()
+    expect(second.container.querySelector(tile)).toBeNull()
   })
 
   it('a link into an off module waits for the settings and never shows the page first', async () => {

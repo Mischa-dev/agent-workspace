@@ -2892,6 +2892,18 @@ async fn caller_modules_anywhere(
     crate::modules::state::anywhere(&mut connection, principal.actor_id).await
 }
 
+/// AWD-75: tools that, naming no project, list across every project the
+/// caller reaches (`common::scope_projects`) and leave out the projects where
+/// their module is off before counting or paging.
+const SPANNING_LISTS: &[&str] = &[
+    "task_list",
+    "my_work",
+    "conversation_list",
+    "agent_list",
+    "repository_list",
+    "pull_request_list",
+];
+
 /// The name of `module` when it's off for the caller where a call acts: the
 /// project it names (or the connection's own), narrowed by their role there.
 /// An app connected for a person's whole account that names no project
@@ -2902,10 +2914,16 @@ async fn caller_modules_anywhere(
 async fn module_off_here(
     state: &AppState,
     principal: &McpPrincipal,
+    tool: &str,
     module: &crate::modules::manifest::Manifest,
 ) -> Result<Option<String>, AppError> {
     let mut connection = state.pool.acquire().await?;
-    if (principal.project_explicit || !principal.account_wide)
+    // A list that names no project spans every project the caller reaches
+    // and leaves out those where its module is off itself, so it's on
+    // wherever it's on somewhere, even for a connection anchored in one.
+    let spans = !principal.project_explicit && SPANNING_LISTS.contains(&tool);
+    if !spans
+        && (principal.project_explicit || !principal.account_wide)
         && let Some(modules) = crate::modules::state::for_project(
             &mut connection,
             principal.project_id,
@@ -3032,7 +3050,7 @@ async fn run_tool(
     if let Some(module) = crate::modules::manifest::of_tool(&request.name)
         && module.switchable
     {
-        match module_off_here(&server.state, &principal, module).await {
+        match module_off_here(&server.state, &principal, &request.name, module).await {
             Ok(None) => {}
             Ok(Some(name)) => {
                 return Ok(module_refusal(&request.name, &name));

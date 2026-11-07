@@ -41,8 +41,8 @@ export function ModuleGate({ children, waiting }: { children: ReactNode; waiting
   const module = moduleOfPath(pathname)
   const experience = inProject ? project : workspace
   if (module && moduleSwitchable(module)) {
-    if (whiteboardId && !shown) return <>{board.isError ? children : waiting}</>
-    if (experience.modules === 'loading') return <>{waiting}</>
+    if (whiteboardId && !shown) return board.isError ? children : waiting
+    if (experience.modules === 'loading') return waiting
     if (!experience.moduleOn(module)) {
       return (
         <Suspense fallback={waiting}>
@@ -51,5 +51,5 @@ export function ModuleGate({ children, waiting }: { children: ReactNode; waiting
       )
     }
   }
-  return <>{children}</>
+  return children
 }

@@ -118,12 +118,13 @@ export function ProjectRail({
   const presence = connection === 'live' ? 'online' : connection ? 'away' : undefined
   const commandMenuOpen = useCommandState().open === 'commands'
   const pausedUntil = usePausedUntil()
-  const projects = (projectsQuery.data?.projects ?? []).filter((project) => !project.archivedAt)
+  // AWD-75: no tile for a project where Projects is off for you.
+  const projects = (projectsQuery.data?.projects ?? []).filter((project) => !project.archivedAt && !project.projectsOff)
   const inboxUnread = useInboxUnread() ?? 0
-  // AWD-75: no project tiles with Projects off, and no Messages tile with Messages off.
+  // AWD-75: no Messages tile with Messages off, and no New project tile
+  // with Projects off at Home, where a new project goes.
   const experience = useHomeExperience()
-  const projectsOn = experience.moduleOn('projects')
-  const visibleProjects = projectsOn ? railProjects(projects, currentProjectId) : []
+  const visibleProjects = railProjects(projects, currentProjectId)
   // Tiles drag into your own order (not on phones, where the rail is a drawer).
   const setRailOrder = useSetRailOrder()
   const [drag, setDrag] = useState<RailDrag | null>(null)
@@ -245,7 +246,7 @@ export function ProjectRail({
             )
           })}
         </div>
-        {user.capabilities.createProject && projectsOn ? (
+        {user.capabilities.createProject && experience.moduleOn('projects') ? (
           <UtilityTile icon="plus" label="New project" onClick={onNavigate} to="/projects/new" />
         ) : null}
         <span className="aw-rail__spacer" />

@@ -84,6 +84,7 @@ export function normalizeProject(value: unknown): Project {
     role: asString(record.role),
     version: Math.max(0, asNumber(record.version)),
     attentionCount: Math.max(0, asNumber(record.attentionCount)),
+    projectsOff: record.projectsOff === true,
     capabilities: normalizeCapabilities(record.capabilities),
     navigation: archivedAt
       ? {

@@ -86,6 +86,10 @@ pub struct ProjectView {
     navigation: NavigationView,
     /// Unread notifications in this project's inbox for the caller.
     attention_count: u32,
+    /// AWD-75: Projects is off for the caller here (the workspace's switch,
+    /// or their role), so the rail leaves its tile out.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    projects_off: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -328,7 +332,7 @@ async fn list_projects(
     .fetch_all(&state.pool)
     .await?;
     let attention = crate::notifications::attention_counts(&state.pool, principal.actor_id).await?;
-    let projects = rows
+    let mut projects = rows
         .into_iter()
         .map(|row| {
             let mut view = project_view(row)?;
@@ -336,6 +340,17 @@ async fn list_projects(
             Ok(view)
         })
         .collect::<Result<Vec<_>, AppError>>()?;
+    // AWD-75: each project says whether Projects is off for the caller there.
+    let ids = projects.iter().map(|view| view.id).collect::<Vec<_>>();
+    let on = {
+        let mut connection = state.pool.acquire().await?;
+        crate::modules::state::ProjectModules::load(&mut connection, principal.actor_id, &ids)
+            .await?
+            .keep(&ids, |set, _| set.contains("projects"))
+    };
+    for view in &mut projects {
+        view.projects_off = !on.contains(&view.id);
+    }
     Ok(Json(ProjectsResponse { projects }))
 }
 
@@ -511,6 +526,7 @@ async fn create_project(
             version: 1,
         },
         attention_count: 0,
+        projects_off: false,
     };
     insert_audit_event(
         &mut transaction,
@@ -1349,6 +1365,7 @@ fn project_view(row: ProjectRow) -> Result<ProjectView, AppError> {
         },
         navigation,
         attention_count: 0,
+        projects_off: false,
     })
 }
 

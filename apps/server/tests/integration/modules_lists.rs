@@ -10,7 +10,7 @@ use super::{
     mcp_task_board::seed_pull_request,
     mcp_tasks::{add_member, space},
     message_edits::create_channel,
-    modules::switch,
+    modules::{narrow_in_project, switch},
 };
 use axum::http::StatusCode;
 use serde_json::{Value, json};
@@ -164,6 +164,14 @@ async fn code_and_run_lists_leave_out_a_workspace_where_code_is_off() {
     };
     let app = &setup.app;
     second_workspace(&setup.pool, seed.human_actor_id).await;
+    // A run needs a prepared repository, as in mcp_code's tests.
+    sqlx::query(
+        "UPDATE repositories SET preparation_state = 'ready', prepared_at = now(), version = version + 1 WHERE id = $1",
+    )
+    .bind(seed.repository_id)
+    .execute(&setup.pool)
+    .await
+    .expect("prepared");
     let thread_id = thread(&setup.pool, &seed, seed.channel_id, "awd75-runs").await;
     let (run_id, _) = run(&setup.pool, &seed, thread_id, "awd75-runs").await;
     let token = connect_app(app, &setup.browser, "Owner's app", "full").await;
@@ -442,4 +450,90 @@ async fn code_lists_keep_the_messages_space_while_code_is_on() {
         !each(&pull_requests["value"]["pullRequests"], "id").contains(&pull_request),
         "{pull_requests}"
     );
+}
+
+#[tokio::test]
+async fn an_anchored_agent_s_lists_span_the_projects_it_reaches() {
+    let Some(setup) = setup("awd75_anchored").await else {
+        return;
+    };
+    let app = &setup.app;
+    let home = create_project(&setup, "HOME", "Home base").await;
+    let other = create_project(&setup, "OTHER", "Other work").await;
+    // Ada is anchored in Home base, where her role turns Tasks off, and is a
+    // member of Other work, where it's on.
+    let (ada, ada_token) = create_agent(app, &setup.browser, &home, "Ada", "ada").await;
+    add_member(&setup, &other, ada, "member").await;
+    narrow_in_project(&setup, &home, ada, &["tasks"], "awd75-anchor").await;
+    let owner = connect_app(app, &setup.browser, "Owner's app", "full").await;
+    let owner_session = initialize(app, &owner).await.expect("owner app");
+    for (project, title) in [("HOME", "Anchored errand"), ("OTHER", "Elsewhere errand")] {
+        let created = tool(
+            app,
+            &owner,
+            &owner_session,
+            "task_create",
+            json!({"projectId": project, "title": title}),
+        )
+        .await;
+        assert_eq!(created["outcome"], "applied", "{created}");
+    }
+    let session = initialize(app, &ada_token).await.expect("agent");
+    // A list naming no project spans both and leaves out Home base's tasks.
+    let listed = tool(app, &ada_token, &session, "task_list", json!({})).await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    let text = listed.to_string();
+    assert!(text.contains("Elsewhere errand"), "{listed}");
+    assert!(!text.contains("Anchored errand"), "{listed}");
+    // Naming Home base, Tasks is still off for her there.
+    let here = tool(
+        app,
+        &ada_token,
+        &session,
+        "task_list",
+        json!({"projectId": "HOME"}),
+    )
+    .await;
+    assert_eq!(here["outcome"], "permission_denied", "{here}");
+    assert_eq!(here["retryCategory"], "module", "{here}");
+}
+
+#[tokio::test]
+async fn the_projects_list_marks_where_projects_is_off() {
+    let Some(setup) = setup("awd75_projects_off").await else {
+        return;
+    };
+    let work = create_project(&setup, "AAA", "A work").await;
+    let flag = |listed: &Value| {
+        listed["projects"]
+            .as_array()
+            .expect("projects")
+            .iter()
+            .find(|project| project["id"] == work.as_str())
+            .map(|project| project["projectsOff"].clone())
+            .expect("the project")
+    };
+    let (status, listed) = send(
+        &setup.app,
+        setup
+            .browser
+            .request("GET", "/api/v1/projects", None, Value::Null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_eq!(flag(&listed), Value::Null, "{listed}");
+    switched_off(
+        &setup,
+        json!({"switches": {"projects": false, "tasks": false, "agents": false}}),
+    )
+    .await;
+    let (status, listed) = send(
+        &setup.app,
+        setup
+            .browser
+            .request("GET", "/api/v1/projects", None, Value::Null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_eq!(flag(&listed), json!(true), "{listed}");
 }
