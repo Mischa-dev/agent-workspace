@@ -219,15 +219,31 @@ pub(crate) async fn route(state: &AppState, payload: &RoutePayload) -> Result<us
         return Ok(0);
     }
     for event in &events {
-        if crate::modules::manifest::of_event(&event.event_type)
-            .is_some_and(|module| !modules.contains(&module.id))
-        {
+        let direct =
+            sqlx::query_scalar::<_, bool>("SELECT kind = 'direct' FROM projects WHERE id = $1")
+                .bind(event.project_id)
+                .fetch_one(&state.pool)
+                .await?;
+        if shut_out(modules, &event.event_type, direct) {
             continue;
         }
         crate::webhooks::fan_out(state, event).await?;
         crate::automations::on_event(state, event).await?;
     }
     Ok(events.len())
+}
+
+/// AWD-75: whether `modules` leave an event out: Automations (which holds
+/// webhooks too) is off, or the event's own module is. A conversation's
+/// event follows Channels in a project and Messages in the direct space, as
+/// conversations do everywhere else.
+pub(crate) fn shut_out(modules: crate::modules::ModuleSet, event_type: &str, direct: bool) -> bool {
+    !modules.contains("automations")
+        || crate::automations::in_project_kind(
+            crate::modules::manifest::of_event(event_type),
+            direct,
+        )
+        .is_some_and(|module| !modules.contains(&module.id))
 }
 
 // ---------------------------------------------------------------------------
@@ -618,5 +634,21 @@ mod tests {
         }
         assert!(!is_event_type("task"));
         assert!(!is_event_type("*"));
+    }
+
+    #[test]
+    fn events_follow_automations_and_their_own_module() {
+        use crate::modules::ModuleSet;
+        let all_on = ModuleSet::from_switches(|_| false);
+        assert!(!super::shut_out(all_on, "task.updated", false));
+        assert!(!super::shut_out(all_on, "message.created", false));
+        let automations_off = ModuleSet::from_switches(|module| module == "automations");
+        assert!(super::shut_out(automations_off, "task.updated", false));
+        let tasks_off = ModuleSet::from_switches(|module| module == "tasks");
+        assert!(super::shut_out(tasks_off, "task.updated", false));
+        // A channel's message follows Channels; a DM's, Messages.
+        let channels_off = ModuleSet::from_switches(|module| module == "channels");
+        assert!(super::shut_out(channels_off, "message.created", false));
+        assert!(!super::shut_out(channels_off, "message.created", true));
     }
 }

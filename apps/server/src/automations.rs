@@ -581,7 +581,7 @@ async fn module_off(
 /// AWD-75: the module a trigger or action of `module` needs where its rule
 /// lives: conversations follow Channels in a project and Messages in the
 /// direct space, as they do everywhere else.
-fn in_project_kind(
+pub(crate) fn in_project_kind(
     module: Option<&'static crate::modules::Manifest>,
     direct: bool,
 ) -> Option<&'static crate::modules::Manifest> {
