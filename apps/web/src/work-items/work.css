@@ -2116,3 +2116,21 @@ span.aw-taskstart__fix {
   gap: var(--space-2);
 }
 
+
+/* A custom field's list cell (AWD-89): one line, clipped, like the other cells. */
+.aw-tasks__field {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.aw-tasks__field .aw-labels {
+  flex-wrap: nowrap;
+}
+
+.aw-tasks__field .aw-prop__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

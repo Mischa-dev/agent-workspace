@@ -39,6 +39,7 @@ use crate::{
     AppState,
     auth::AuthenticatedActor,
     error::{ApiJson, ApiPath, ApiQuery, AppError},
+    fields::{self, FieldDefinition, FieldType, FieldView},
     idempotency::resource_bound_scope,
     jobs::{JobContext, JobError, JobRegistry, NewJob, enqueue},
     policy::{
@@ -50,6 +51,7 @@ use crate::{
         CreateWorkItemOutcome, NewTaskFields, authorize_mutation, create_work_item,
         lock_membership, normalize_description, normalize_title, record_audit_for, valid_estimate,
     },
+    work_item_fields::{self, FieldValueChanges, Writer},
     work_item_labels::{self, default_color},
     work_item_planning,
 };
@@ -211,6 +213,8 @@ struct ProjectContext {
     members: Vec<(Uuid, String, Option<String>)>,
     /// external ID to task key, for this import's source
     linked: HashMap<String, i64>,
+    /// The project's active custom fields, which columns match by name.
+    fields: Vec<FieldDefinition>,
 }
 
 async fn load_context(
@@ -274,6 +278,7 @@ async fn load_context(
     .await?
     .into_iter()
     .collect();
+    let fields = work_item_fields::definitions(&mut *connection, project_id, false).await?;
     Ok(ProjectContext {
         project_key,
         estimate_unit,
@@ -283,6 +288,7 @@ async fn load_context(
         milestones,
         members,
         linked,
+        fields,
     })
 }
 
@@ -306,6 +312,9 @@ struct Resolved {
     due_date: Option<NaiveDate>,
     estimate: Option<f64>,
     notes: Vec<String>,
+    /// Custom field values as written, by field name, that passed the type
+    /// check; people and links are looked up when the task is made.
+    field_inputs: Vec<(String, Value)>,
 }
 
 fn resolve(
@@ -501,7 +510,82 @@ fn resolve(
                 .push(format!("Couldn't read the estimate “{value}”")),
         }
     }
+    // Columns named after a custom field fill it; other columns are ignored.
+    for (header, raw) in &row.fields {
+        let Some(field) = column_field(&context.fields, header) else {
+            continue;
+        };
+        // A multiple choice exported here is a JSON list of option names,
+        // read exactly; any other cell (another tool's "A, B") is read as
+        // written, a best effort (see fields::normalize_value). A custom
+        // field's value (text, a URL, a person's @handle, an option, a link)
+        // comes back without the apostrophe the export put before a formula
+        // character.
+        let input = match field.field_type {
+            FieldType::MultipleChoice => {
+                exported_choices(raw).unwrap_or_else(|| Value::String(unguarded(raw).to_owned()))
+            }
+            FieldType::SingleChoice
+            | FieldType::Person
+            | FieldType::Link
+            | FieldType::Text
+            | FieldType::Url => Value::String(unguarded(raw).to_owned()),
+            _ => Value::String(raw.clone()),
+        };
+        match fields::normalize_value(field, &input) {
+            Ok(fields::Normalized::Clear) => {}
+            Ok(_) => resolved.field_inputs.push((field.name.clone(), input)),
+            Err(message) => resolved
+                .notes
+                .push(format!("{message} “{raw}” is left out")),
+        }
+    }
     resolved
+}
+
+/// An imported row's custom field values. A person or link the project
+/// can't use is left out rather than losing the row.
+async fn import_field_values(
+    transaction: &mut Transaction<'_, Postgres>,
+    context: &ProjectContext,
+    actor: &CommandActor,
+    inputs: &[(String, Value)],
+) -> Result<Option<FieldValueChanges>, AppError> {
+    if inputs.is_empty() {
+        return Ok(None);
+    }
+    let writer = Writer {
+        actor_id: actor.actor_id,
+        project_key: &context.project_key,
+    };
+    if let Ok(values) = work_item_fields::resolve(
+        transaction,
+        actor.project_id,
+        writer,
+        &context.fields,
+        "fields",
+        inputs,
+    )
+    .await?
+    {
+        return Ok(Some(values));
+    }
+    let mut kept = FieldValueChanges::default();
+    for input in inputs {
+        if let Ok(values) = work_item_fields::resolve(
+            transaction,
+            actor.project_id,
+            writer,
+            &context.fields,
+            "fields",
+            std::slice::from_ref(input),
+        )
+        .await?
+        {
+            kept.entries.extend(values.entries);
+        }
+    }
+    Ok((!kept.is_empty()).then_some(kept))
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1745,6 +1829,8 @@ async fn create_chunk(
             due_date: resolved.due_date,
             estimate: resolved.estimate,
         };
+        let field_values =
+            import_field_values(transaction, &context, actor, &resolved.field_inputs).await?;
         // A value the project refuses is dropped rather than losing the row.
         let mut attempts = 0;
         let work_item_id = loop {
@@ -1753,6 +1839,7 @@ async fn create_chunk(
                 transaction,
                 actor,
                 CreateWorkItemCommand {
+                    field_values: field_values.as_ref(),
                     title: &title,
                     description: &description,
                     type_id: resolved.type_id,
@@ -1849,6 +1936,12 @@ struct ExportTask {
     archived: bool,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+    #[serde(skip)]
+    field_values: Value,
+    /// Custom field values by field name, as task_open reads them.
+    #[sqlx(skip)]
+    #[serde(skip_serializing_if = "serde_json::Map::is_empty")]
+    fields: serde_json::Map<String, Value>,
 }
 
 async fn export_tasks(
@@ -1856,7 +1949,7 @@ async fn export_tasks(
     project_id: Uuid,
     include_archived: bool,
 ) -> Result<Vec<ExportTask>, AppError> {
-    Ok(sqlx::query_as::<_, ExportTask>(
+    let tasks = sqlx::query_as::<_, ExportTask>(
         r#"
         SELECT project.project_key || '-' || item.number AS key, item.number, item.title,
                item.description, status.name AS status,
@@ -1886,7 +1979,8 @@ async fn export_tasks(
                    WHERE criterion.project_id = item.project_id
                      AND criterion.work_item_id = item.id
                ), ARRAY[]::text[]) AS acceptance_criteria,
-               item.archived_at IS NOT NULL AS archived, item.created_at, item.updated_at
+               item.archived_at IS NOT NULL AS archived, item.created_at, item.updated_at,
+               item.field_values
         FROM work_items item
         JOIN projects project ON project.id = item.project_id
         JOIN work_item_statuses status
@@ -1908,7 +2002,42 @@ async fn export_tasks(
     .bind(include_archived)
     .bind(MAX_EXPORT_TASKS)
     .fetch_all(&mut *connection)
-    .await?)
+    .await?;
+    Ok(tasks)
+}
+
+/// Each task's custom field values by name, for the export.
+async fn name_field_values(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    definitions: &[FieldDefinition],
+    tasks: &mut [ExportTask],
+) -> Result<(), AppError> {
+    if definitions.is_empty() {
+        return Ok(());
+    }
+    let mut references = work_item_fields::references(
+        connection,
+        project_id,
+        definitions,
+        tasks.iter().map(|task| &task.field_values),
+    )
+    .await?;
+    // A page link keeps its page's link beside the title, so an import of
+    // this file can find the page again; tasks go by key, people by @handle.
+    for reference in references.values_mut() {
+        if reference.kind == "page" {
+            reference.label =
+                work_item_fields::exported_page(project_id, reference.id, &reference.label);
+        }
+    }
+    for task in tasks {
+        task.fields = work_item_fields::named_values(definitions, &task.field_values, &references)
+            .into_iter()
+            .map(|(field, value)| (field.name, value))
+            .collect();
+    }
+    Ok(())
 }
 
 fn csv_field(value: &str) -> String {
@@ -1918,7 +2047,9 @@ fn csv_field(value: &str) -> String {
     } else {
         value.to_owned()
     };
-    if value.contains([',', '"', '\n', '\r']) {
+    // Semicolons and tabs are quoted too, so a name full of them can't make
+    // the import read the file as semicolon- or tab-separated.
+    if value.contains([',', '"', '\n', '\r', ';', '\t']) {
         format!("\"{}\"", value.replace('"', "\"\""))
     } else {
         value
@@ -1944,9 +2075,92 @@ const CSV_HEADERS: [&str; 15] = [
     "Updated",
 ];
 
-fn tasks_csv(tasks: &[ExportTask]) -> String {
+/// A custom field's CSV cell. A multiple choice is a JSON list of its
+/// option names (`["A","B"]`), since an option's own name may hold a comma
+/// ("A, B" could be one option or two); the rest read as the app shows them.
+/// A value (text, a URL, a person, an option, a link) that itself starts
+/// with an apostrophe gets one more, so `unguarded` can tell it from the guard
+/// `csv_field` puts before a formula character: "=Plan" is written
+/// "'=Plan" and "'=Plan" is written "''=Plan".
+fn field_cell(field: &FieldDefinition, value: &Value) -> String {
+    match (field.field_type, value) {
+        (FieldType::MultipleChoice, Value::Array(_)) => value.to_string(),
+        (
+            FieldType::SingleChoice
+            | FieldType::Person
+            | FieldType::Link
+            | FieldType::Text
+            | FieldType::Url,
+            Value::String(name),
+        ) if name.starts_with('\'') => {
+            format!("'{name}")
+        }
+        _ => fields::display_text(value),
+    }
+}
+
+/// A multiple choice's cell as `field_cell` writes it: a JSON list of
+/// option names, read exactly. None for any other cell, which is read as
+/// written.
+fn exported_choices(raw: &str) -> Option<Value> {
+    let names = serde_json::from_str::<Vec<String>>(raw.trim()).ok()?;
+    Some(Value::Array(names.into_iter().map(Value::String).collect()))
+}
+
+/// A custom field value's cell as it was before the export guarded it: one
+/// leading apostrophe comes off when another apostrophe or a formula
+/// character (= + - @) follows, undoing `csv_field`'s guard ("'@ana" is
+/// "@ana") or `field_cell`'s extra one ("''=Plan" is "'=Plan"). Custom fields
+/// only (a multiple choice reads its JSON list instead); the built-in
+/// columns, such as the title, keep what the file says.
+///
+/// Exports from before `field_cell` added that extra apostrophe wrote a
+/// value like "'=Plan" as "'=Plan" too, the same cell as "=Plan" guarded;
+/// those read as "=Plan", and nothing in such a file can tell them apart.
+fn unguarded(raw: &str) -> &str {
+    match raw.strip_prefix('\'') {
+        Some(rest) if rest.starts_with(['\'', '=', '+', '-', '@']) => rest,
+        _ => raw,
+    }
+}
+
+/// How a custom field's CSV column starts, so a field named like a built-in
+/// column (Priority, Status) or one of its aliases isn't read as that column.
+const FIELD_COLUMN_PREFIX: &str = "Field: ";
+
+/// The custom field a CSV column names: by what follows "Field:" first, as
+/// exports write it, else by the whole header (other tools, and exports
+/// from before the prefix). So with fields "Risk" and "Field: Risk", the
+/// columns "Field: Risk" and "Field: Field: Risk" fill one each. An older
+/// export's bare "Field: Risk" column now reads as the prefix too, filling
+/// "Risk" when the project has it.
+fn column_field<'a>(
+    definitions: &'a [FieldDefinition],
+    header: &str,
+) -> Option<&'a FieldDefinition> {
+    let header = header.trim();
+    let prefix = FIELD_COLUMN_PREFIX.trim();
+    header
+        .split_at_checked(prefix.len())
+        .filter(|(head, _)| head.eq_ignore_ascii_case(prefix))
+        .and_then(|(_, name)| fields::find(definitions, name))
+        .or_else(|| fields::find(definitions, header))
+}
+
+/// The CSV: the built-in columns, then one per custom field ("Field: " and
+/// its name), so importing it into a project with the same fields fills them.
+fn tasks_csv(tasks: &[ExportTask], definitions: &[FieldDefinition]) -> String {
     let mut out = String::from("\u{feff}");
-    out.push_str(&CSV_HEADERS.join(","));
+    let headers = CSV_HEADERS
+        .iter()
+        .map(|header| (*header).to_owned())
+        .chain(
+            definitions
+                .iter()
+                .map(|field| csv_field(&format!("{FIELD_COLUMN_PREFIX}{}", field.name))),
+        )
+        .collect::<Vec<_>>();
+    out.push_str(&headers.join(","));
     out.push_str("\r\n");
     for task in tasks {
         let date =
@@ -1970,10 +2184,17 @@ fn tasks_csv(tasks: &[ExportTask]) -> String {
             task.created_at.to_rfc3339(),
             task.updated_at.to_rfc3339(),
         ];
+        let custom = definitions.iter().map(|field| {
+            task.fields
+                .get(&field.name)
+                .map(|value| field_cell(field, value))
+                .unwrap_or_default()
+        });
         out.push_str(
             &cells
-                .iter()
-                .map(|cell| csv_field(cell))
+                .into_iter()
+                .chain(custom)
+                .map(|cell| csv_field(&cell))
                 .collect::<Vec<_>>()
                 .join(","),
         );
@@ -1988,7 +2209,8 @@ pub(crate) async fn export_json(
     include_archived: bool,
 ) -> Result<Value, AppError> {
     let context = load_context(connection, project_id, "").await?;
-    let tasks = export_tasks(connection, project_id, include_archived).await?;
+    let mut tasks = export_tasks(connection, project_id, include_archived).await?;
+    name_field_values(connection, project_id, &context.fields, &mut tasks).await?;
     let truncated = tasks.len() as i64 >= MAX_EXPORT_TASKS;
     Ok(json!({
         "project": { "key": context.project_key },
@@ -2000,6 +2222,7 @@ pub(crate) async fn export_json(
         "types": context.types.iter().map(|kind| json!({ "name": kind.1, "isDefault": kind.2 })).collect::<Vec<_>>(),
         "labels": context.labels.iter().map(|label| label.1.clone()).collect::<Vec<_>>(),
         "milestones": context.milestones.iter().map(|milestone| milestone.1.clone()).collect::<Vec<_>>(),
+        "fields": context.fields.iter().map(FieldView::from).collect::<Vec<_>>(),
         "tasks": tasks,
         "truncated": truncated,
     }))
@@ -2029,11 +2252,18 @@ pub(super) async fn export_project(
             "application/json",
             "json",
         ),
-        "csv" => (
-            tasks_csv(&export_tasks(&mut connection, project_id, query.include_archived).await?),
-            "text/csv; charset=utf-8",
-            "csv",
-        ),
+        "csv" => {
+            let definitions =
+                work_item_fields::definitions(&mut *connection, project_id, false).await?;
+            let mut tasks =
+                export_tasks(&mut connection, project_id, query.include_archived).await?;
+            name_field_values(&mut connection, project_id, &definitions, &mut tasks).await?;
+            (
+                tasks_csv(&tasks, &definitions),
+                "text/csv; charset=utf-8",
+                "csv",
+            )
+        }
         _ => return Ok(invalid("format", "Use json or csv.")),
     };
     let disposition = format!(
@@ -2079,6 +2309,7 @@ mod tests {
             milestones: vec![],
             members: vec![(Uuid::now_v7(), "Ana".to_owned(), Some("ana".to_owned()))],
             linked: HashMap::from([("7".to_owned(), 12)]),
+            fields: Vec::new(),
         }
     }
 
@@ -2203,8 +2434,31 @@ mod tests {
             archived: false,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            field_values: Value::Null,
+            fields: serde_json::Map::from_iter([
+                ("Risk".to_owned(), json!("High")),
+                ("Field: Risk".to_owned(), json!("Low")),
+                ("Priority".to_owned(), json!("Customer first")),
+            ]),
         };
-        let text = tasks_csv(&[task]);
+        let text_field = |name: &str| FieldDefinition {
+            id: Uuid::now_v7(),
+            name: name.to_owned(),
+            description: String::new(),
+            field_type: FieldType::Text,
+            config: fields::FieldConfig::default(),
+            position: 0,
+            archived: false,
+            version: 1,
+        };
+        // A custom field named like a built-in column keeps its own column,
+        // and so does one whose name starts with the prefix itself.
+        let definitions = vec![
+            text_field("Risk"),
+            text_field("Field: Risk"),
+            text_field("Priority"),
+        ];
+        let text = tasks_csv(&[task], &definitions);
         let records = parse_csv(&text).expect("test input is valid");
         let mapping = auto_mapping(&records[0]);
         let rows = csv_rows(&records, &mapping).expect("test input is valid");
@@ -2217,5 +2471,332 @@ mod tests {
             priority_of(rows[0].priority.as_deref().expect("test input is valid")),
             Some("no_priority")
         );
+        // A custom field's column comes back by name and fills the field.
+        assert_eq!(
+            rows[0].fields.get("Field: Risk").map(String::as_str),
+            Some("High")
+        );
+        assert_eq!(
+            rows[0].fields.get("Field: Field: Risk").map(String::as_str),
+            Some("Low")
+        );
+        let mut project = context();
+        project.fields = definitions;
+        let resolved = resolve(&project, &ImportOptions::default(), 0, &rows[0]);
+        // Each value lands in its own field: "Field: Risk" and "Risk" don't
+        // trade or overwrite each other.
+        assert_eq!(
+            resolved.field_inputs,
+            vec![
+                ("Field: Risk".to_owned(), json!("Low")),
+                ("Priority".to_owned(), json!("Customer first")),
+                ("Risk".to_owned(), json!("High")),
+            ]
+        );
+        let named =
+            |header: &str| column_field(&project.fields, header).map(|field| field.name.clone());
+        // A column named after the field alone still fills it, as other
+        // tools and earlier exports write it; the prefix reading comes first,
+        // so an older bare "Field: Risk" column now fills "Risk".
+        assert_eq!(named("risk").as_deref(), Some("Risk"));
+        assert_eq!(named("Field: Risk").as_deref(), Some("Risk"));
+        assert_eq!(
+            named("field:   Field: Risk").as_deref(),
+            Some("Field: Risk")
+        );
+        assert_eq!(named("Fields: Risk"), None);
+    }
+
+    /// A multiple choice field "Areas" with these options.
+    fn areas_field(names: &[&str]) -> FieldDefinition {
+        let options = names
+            .iter()
+            .map(|name| fields::OptionInput {
+                id: None,
+                name: (*name).to_owned(),
+                color: None,
+            })
+            .collect::<Vec<_>>();
+        FieldDefinition {
+            id: Uuid::now_v7(),
+            name: "Areas".to_owned(),
+            description: String::new(),
+            field_type: FieldType::MultipleChoice,
+            config: fields::normalize_config(FieldType::MultipleChoice, None, Some(&options), None)
+                .expect("test options"),
+            position: 0,
+            archived: false,
+            version: 1,
+        }
+    }
+
+    /// A plain exported task whose "Areas" reads `chosen` (option names).
+    fn areas_task(index: usize, chosen: &[&str]) -> ExportTask {
+        ExportTask {
+            key: format!("AW-{}", index + 1),
+            number: index as i64 + 1,
+            title: format!("Task {}", index + 1),
+            description: String::new(),
+            status: "Todo".to_owned(),
+            status_category: "unstarted".to_owned(),
+            type_name: "Task".to_owned(),
+            priority: "no_priority".to_owned(),
+            labels: vec![],
+            assignee: None,
+            milestone: None,
+            start_date: None,
+            due_date: None,
+            estimate: None,
+            parent: None,
+            blocked_by: vec![],
+            acceptance_criteria: vec![],
+            archived: false,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            field_values: Value::Null,
+            fields: serde_json::Map::from_iter([("Areas".to_owned(), json!(chosen))]),
+        }
+    }
+
+    /// A multiple choice exports as a JSON list of option names, so names
+    /// holding "," ";" "|", quotes or brackets come back exactly, and "A"
+    /// plus "B" stays distinct from the one option "A, B". A plain cell from
+    /// another tool is still read as written, a best effort.
+    #[test]
+    fn exported_multiple_choices_read_back_exactly() {
+        let areas = areas_field(&["A", "B", "A, B", "x; y | z", "say \"hi\"", "[draft]"]);
+        let id = |name: &str| {
+            areas
+                .config
+                .options
+                .iter()
+                .find(|option| option.name == name)
+                .map(|option| Value::String(option.id.to_string()))
+                .expect("test option")
+        };
+        let selections: [&[&str]; 3] = [
+            &["A", "B"],
+            &["A, B"],
+            &["x; y | z", "say \"hi\"", "[draft]"],
+        ];
+        let tasks = selections
+            .iter()
+            .enumerate()
+            .map(|(index, chosen)| areas_task(index, chosen))
+            .collect::<Vec<_>>();
+        let text = tasks_csv(&tasks, std::slice::from_ref(&areas));
+        let records = parse_csv(&text).expect("test input is valid");
+        let rows = csv_rows(&records, &auto_mapping(&records[0])).expect("test input is valid");
+        assert_eq!(rows.len(), 3);
+        let mut project = context();
+        project.fields = vec![areas.clone()];
+        for (row, chosen) in rows.iter().zip(selections) {
+            let resolved = resolve(&project, &ImportOptions::default(), 0, row);
+            let [(name, input)] = resolved.field_inputs.as_slice() else {
+                panic!("{:?}", resolved.field_inputs);
+            };
+            assert_eq!(name, "Areas");
+            assert_eq!(input, &json!(chosen));
+            // Stored in the field's option order.
+            let expected = areas
+                .config
+                .options
+                .iter()
+                .filter(|option| chosen.contains(&option.name.as_str()))
+                .map(|option| Value::String(option.id.to_string()))
+                .collect();
+            assert_eq!(
+                fields::normalize_value(&areas, input),
+                Ok(fields::Normalized::Value(Value::Array(expected)))
+            );
+        }
+        // Another tool's plain cell, read as written: a whole option name
+        // first, else split at "," ";" or "|".
+        assert_eq!(
+            fields::normalize_value(&areas, &json!("A, B")),
+            Ok(fields::Normalized::Value(json!([id("A, B")])))
+        );
+        assert_eq!(
+            fields::normalize_value(&areas, &json!("A; B")),
+            Ok(fields::Normalized::Value(json!([id("A"), id("B")])))
+        );
+        assert_eq!(exported_choices("A, B"), None);
+        assert_eq!(exported_choices(" [\"A, B\"] "), Some(json!(["A, B"])));
+    }
+
+    /// The largest selection a field holds (every option, each name as
+    /// long as allowed and every character escaped in JSON) fits one cell
+    /// and comes back whole, though its JSON is far longer than its text.
+    #[test]
+    fn the_largest_escaped_selection_reads_back_whole() {
+        let names = (0..fields::MAX_OPTIONS)
+            .map(|index| format!("{index:02}{}", "\"\\".repeat(29)))
+            .collect::<Vec<_>>();
+        assert!(
+            names
+                .iter()
+                .all(|name| name.chars().count() == fields::MAX_OPTION_NAME_CHARACTERS)
+        );
+        let names = names.iter().map(String::as_str).collect::<Vec<_>>();
+        let areas = areas_field(&names);
+        let text = tasks_csv(&[areas_task(0, &names)], std::slice::from_ref(&areas));
+        let records = parse_csv(&text).expect("test input is valid");
+        let rows = csv_rows(&records, &auto_mapping(&records[0])).expect("test input is valid");
+        let cell = rows[0].fields["Field: Areas"].chars().count();
+        assert!(cell > fields::MAX_TEXT_CHARACTERS, "{cell} characters");
+        let mut project = context();
+        project.fields = vec![areas.clone()];
+        let resolved = resolve(&project, &ImportOptions::default(), 0, &rows[0]);
+        assert_eq!(
+            resolved.field_inputs,
+            vec![("Areas".to_owned(), json!(names))]
+        );
+        let Ok(fields::Normalized::Value(Value::Array(ids))) =
+            fields::normalize_value(&areas, &resolved.field_inputs[0].1)
+        else {
+            panic!("the selection didn't read back");
+        };
+        assert_eq!(ids.len(), fields::MAX_OPTIONS);
+    }
+
+    /// The export still guards cells against spreadsheet formulas, and a
+    /// person's @handle or an option named "=Plan" still reads back as
+    /// itself, and so does a text field's "=SUM(A1)" or "'quoted".
+    #[test]
+    fn formula_guarded_names_read_back() {
+        let definition = |name: &str, field_type: FieldType, options: &[&str]| FieldDefinition {
+            id: Uuid::now_v7(),
+            name: name.to_owned(),
+            description: String::new(),
+            field_type,
+            config: if options.is_empty() {
+                fields::FieldConfig::default()
+            } else {
+                let options = options
+                    .iter()
+                    .map(|name| fields::OptionInput {
+                        id: None,
+                        name: (*name).to_owned(),
+                        color: None,
+                    })
+                    .collect::<Vec<_>>();
+                fields::normalize_config(field_type, None, Some(&options), None)
+                    .expect("test options")
+            },
+            position: 0,
+            archived: false,
+            version: 1,
+        };
+        // "=Plan" and "'=Plan" are different options; "''x" starts with two
+        // apostrophes of its own.
+        let definitions = vec![
+            definition("Owner", FieldType::Person, &[]),
+            definition(
+                "Stage",
+                FieldType::SingleChoice,
+                &["=Plan", "'=Plan", "''x", "Ship"],
+            ),
+            definition("Note", FieldType::Text, &[]),
+        ];
+        let task = |index: usize, fields: serde_json::Map<String, Value>| {
+            let mut task = areas_task(index, &[]);
+            task.fields = fields;
+            task
+        };
+        let tasks = [
+            task(
+                0,
+                serde_json::Map::from_iter([
+                    ("Owner".to_owned(), json!("@ana")),
+                    ("Stage".to_owned(), json!("=Plan")),
+                    ("Note".to_owned(), json!("=SUM(A1)")),
+                ]),
+            ),
+            task(
+                1,
+                serde_json::Map::from_iter([
+                    ("Stage".to_owned(), json!("'=Plan")),
+                    ("Note".to_owned(), json!("'quoted")),
+                ]),
+            ),
+            task(
+                2,
+                serde_json::Map::from_iter([("Stage".to_owned(), json!("''x"))]),
+            ),
+        ];
+        let text = tasks_csv(&tasks, &definitions);
+        let records = parse_csv(&text).expect("test input is valid");
+        // The cells as the file holds them: guarded before formula
+        // characters, and one more apostrophe before a name's own.
+        let stage = records[0]
+            .iter()
+            .position(|header| header == "Field: Stage")
+            .expect("Stage column");
+        let cells = records[1..]
+            .iter()
+            .map(|record| record[stage].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(cells, vec!["'=Plan", "''=Plan", "'''x"]);
+        for guarded in ["'@ana", "'=SUM(A1)", "''quoted"] {
+            assert!(text.contains(guarded), "{guarded} in {text}");
+        }
+        let rows = csv_rows(&records, &auto_mapping(&records[0])).expect("test input is valid");
+        let mut project = context();
+        project.fields = definitions;
+        let read =
+            |row: usize| resolve(&project, &ImportOptions::default(), row, &rows[row]).field_inputs;
+        assert_eq!(
+            read(0),
+            vec![
+                ("Note".to_owned(), json!("=SUM(A1)")),
+                ("Owner".to_owned(), json!("@ana")),
+                ("Stage".to_owned(), json!("=Plan")),
+            ]
+        );
+        assert_eq!(
+            read(1),
+            vec![
+                ("Note".to_owned(), json!("'quoted")),
+                ("Stage".to_owned(), json!("'=Plan")),
+            ]
+        );
+        assert_eq!(read(2), vec![("Stage".to_owned(), json!("''x"))]);
+        // And each names its own option.
+        let stage = &project.fields[1];
+        let chosen = |input: Value| match fields::normalize_value(stage, &input) {
+            Ok(fields::Normalized::Value(id)) => id,
+            other => panic!("{other:?}"),
+        };
+        assert_ne!(chosen(json!("=Plan")), chosen(json!("'=Plan")));
+        assert_eq!(unguarded("'Not a formula"), "'Not a formula");
+    }
+
+    /// A field named with more semicolons than the file has columns still
+    /// exports a file the import reads as comma-separated: titles and the
+    /// field's value come back.
+    #[test]
+    fn a_field_named_with_semicolons_keeps_the_file_comma_separated() {
+        let name = ";".repeat(16);
+        let field = FieldDefinition {
+            id: Uuid::now_v7(),
+            name: name.clone(),
+            description: String::new(),
+            field_type: FieldType::Text,
+            config: fields::FieldConfig::default(),
+            position: 0,
+            archived: false,
+            version: 1,
+        };
+        let mut task = areas_task(0, &[]);
+        task.fields = serde_json::Map::from_iter([(name.clone(), json!("a;b"))]);
+        let text = tasks_csv(&[task], std::slice::from_ref(&field));
+        let records = parse_csv(&text).expect("test input is valid");
+        assert_eq!(records[0].len(), CSV_HEADERS.len() + 1, "{:?}", records[0]);
+        let rows = csv_rows(&records, &auto_mapping(&records[0])).expect("test input is valid");
+        assert_eq!(rows[0].title, "Task 1");
+        let mut project = context();
+        project.fields = vec![field];
+        let resolved = resolve(&project, &ImportOptions::default(), 0, &rows[0]);
+        assert_eq!(resolved.field_inputs, vec![(name, json!("a;b"))]);
     }
 }

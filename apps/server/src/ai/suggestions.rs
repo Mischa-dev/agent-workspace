@@ -1106,6 +1106,7 @@ async fn update_task(
         actor,
         current,
         UpdateWorkItemCommand {
+            field_values: None,
             expected_version,
             title: None,
             description: None,

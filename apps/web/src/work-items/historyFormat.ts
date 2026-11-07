@@ -113,7 +113,7 @@ export function formatChanges(changes: ActivityChanges | null | undefined, unit:
     const from = formatValue(field, change.from, unit)
     const to = formatValue(field, change.to, unit)
     if (from === to) return []
-    return [{ kind: 'field', field, label: fieldLabel(field), from, to }]
+    return [{ kind: 'field', field, label: change.label ?? fieldLabel(field), from, to }]
   })
 }
 

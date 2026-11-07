@@ -429,6 +429,7 @@ pub(super) async fn task_move(
                 &mut transaction,
                 &target_actor,
                 CreateWorkItemCommand {
+                    field_values: None,
                     title: &task.title,
                     description: &task.description,
                     type_id,

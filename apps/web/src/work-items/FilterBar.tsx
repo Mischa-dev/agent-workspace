@@ -2,6 +2,8 @@ import { ListFilter, SlidersHorizontal } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
 import { useProjectExperience, type Experience } from '../experience/layout'
+import { useFields } from '../fields/api'
+import { canGroup, fieldKey, type FieldClause } from '../fields/fieldModel'
 import type { PartId } from '../experience/parts'
 import { Avatar, Button, Icon, Menu, SegmentedControl, SelectField, TextField, actorKind, type MenuEntry } from '../ui'
 import { Calendar, ComboboxList, Popover, formatDateLabel, type ComboboxOption } from '../ui/pickers'
@@ -24,6 +26,8 @@ import {
   type FilterOperator,
   type ListField,
 } from './filterModel'
+import { clausesFit, fieldClauses, placeClause, withClauses } from './fieldFilterModel'
+import { FieldFilterChips, FieldFilterEditor } from './FieldFilters'
 import { useAssignableActors, useNamedActors, useWorkItem } from './hooks'
 import {
   COLUMN_FIELDS,
@@ -119,6 +123,15 @@ export function FilterBar({
   )
   const lookups = { workflow, labels: labels.data, milestones: milestones.data, actorNames, parentKey: parent.data?.key ?? null }
   const chips = filterChips(state.filters, lookups)
+  // Custom fields (AWD-89): filters of their own, and sorts and groups beside the built-in ones.
+  const projectFields = useFields({ projectId })
+  const customFields = experience.shows('task.custom_fields') ? (projectFields.data?.fields ?? []) : []
+  const clauses = fieldClauses(state)
+  const [fieldOpen, setFieldOpen] = useState<{ fieldId: string; index: number | null; anchor: HTMLElement } | null>(null)
+  const openField = fieldOpen ? customFields.find((entry) => entry.id === fieldOpen.fieldId) : undefined
+  const applyClause = (clause: FieldClause) =>
+    update((current) => withClauses(current, placeClause(fieldClauses(current), fieldOpen?.index ?? null, clause)))
+  const clauseFits = (clause: FieldClause) => clausesFit(placeClause(clauses, fieldOpen?.index ?? null, clause))
   const apply = (field: FilterField, values: Partial<FilterValues>) => update((current) => setField(current, field, values))
   const change = (next: (filters: FilterValues) => FilterValues) => update((current) => ({ ...current, filters: next(current.filters) }))
   /** Opens a field's choices: a list field where its chip already matches, or "is". */
@@ -153,6 +166,14 @@ export function FilterBar({
               {sort.label}
             </option>
           ))}
+          {customFields.flatMap((field) => [
+            <option key={fieldKey(field.id)} value={fieldKey(field.id)}>
+              {field.name}
+            </option>,
+            <option key={`${fieldKey(field.id)}:desc`} value={`${fieldKey(field.id)}:desc`}>
+              {field.name}, reversed
+            </option>,
+          ])}
         </SelectField>
         <SelectField
           aria-label="Group by"
@@ -168,6 +189,13 @@ export function FilterBar({
               By {grouping.label.toLocaleLowerCase()}
             </option>
           ))}
+          {customFields
+            .filter((field) => canGroup(field.type))
+            .map((field) => (
+              <option key={fieldKey(field.id)} value={fieldKey(field.id)}>
+                By {field.name}
+              </option>
+            ))}
         </SelectField>
       </>
     ) : (
@@ -238,8 +266,14 @@ export function FilterBar({
         <div className="aw-filterbar__view">{viewControls}</div>
         <ShortcutHelp shortcuts={state.view === 'list' ? LIST_SHORTCUTS : BOARD_SHORTCUTS} />
       </div>
-      {chips.length ? (
+      {chips.length || clauses.length ? (
         <ul aria-label="Active filters" className="aw-filterbar__chips">
+          <FieldFilterChips
+            fields={customFields}
+            onEdit={(index, anchor) => setFieldOpen({ fieldId: clauses[index].field, index, anchor })}
+            state={state}
+            update={update}
+          />
           {chips.map((chip) => (
             <li className="aw-chipfilter" key={chip.kind === 'list' ? chip.key : chip.field}>
               <ChipFace chip={chip} filters={state.filters} onChange={change} onOpen={(anchor) => (chip.kind === 'list' ? setOpen({ field: chip.field, operator: chip.operator, anchor }) : setOpen({ field: chip.field as Exclude<FilterField, ListField>, anchor }))} />
@@ -275,6 +309,11 @@ export function FilterBar({
               <ComboboxList
                 label="Add a filter"
                 onSelect={(value) => {
+                  if (value.startsWith('field:')) {
+                    setOpen(null)
+                    setFieldOpen({ fieldId: value.slice('field:'.length), index: null, anchor: open.anchor })
+                    return
+                  }
                   const field = value as FilterField
                   const toggle = TOGGLE_FIELDS[field]
                   if (toggle) {
@@ -282,10 +321,13 @@ export function FilterBar({
                     setOpen(null)
                   } else choose(field, open.anchor)
                 }}
-                options={MENU_FIELDS.filter((entry) => offered(experience, entry.field, chips.find((chip) => chip.field === entry.field)?.field)).map((entry) => ({
-                  value: entry.field,
-                  label: entry.label,
-                }))}
+                options={[
+                  ...MENU_FIELDS.filter((entry) => offered(experience, entry.field, chips.find((chip) => chip.field === entry.field)?.field)).map((entry) => ({
+                    value: entry.field as string,
+                    label: entry.label,
+                  })),
+                  ...customFields.map((field) => ({ value: fieldKey(field.id), label: field.name })),
+                ]}
                 placeholder="Filter by…"
                 selected={chips.map((chip) => chip.field)}
               />
@@ -316,6 +358,17 @@ export function FilterBar({
             )}
           </div>
         </Popover>
+      ) : null}
+      {fieldOpen && openField ? (
+        <FieldFilterEditor
+          anchor={fieldOpen.anchor}
+          clause={fieldOpen.index === null ? null : (clauses[fieldOpen.index] ?? null)}
+          field={openField}
+          fits={clauseFits}
+          onApply={applyClause}
+          onClose={() => setFieldOpen(null)}
+          projectId={projectId}
+        />
       ) : null}
       <TaskSearchPicker
         allowTypedKey={false}

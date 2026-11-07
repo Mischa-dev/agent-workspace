@@ -210,6 +210,19 @@ export function activityChanges(value: unknown): ActivityChanges | null {
       continue
     }
     if (!('from' in change) && !('to' in change)) continue
+    if (field.startsWith('field:')) {
+      // A custom field: values are display text, numbers, yes/no or lists of option names.
+      const shown = (raw: unknown) =>
+        Array.isArray(raw)
+          ? raw.filter((item) => typeof item === 'string').join(', ') || null
+          : typeof raw === 'boolean'
+            ? raw
+              ? 'Yes'
+              : null
+            : changeValue(raw)
+      changes[field] = { from: shown(change.from), to: shown(change.to), label: string(change.field, 'A field') }
+      continue
+    }
     changes[field] = { from: changeValue(change.from), to: changeValue(change.to) }
   }
   return Object.keys(changes).length ? changes : null

@@ -1689,6 +1689,7 @@ async fn update_many(
                     &actor,
                     current,
                     UpdateWorkItemCommand {
+                        field_values: None,
                         expected_version: 0,
                         title: None,
                         description: None,

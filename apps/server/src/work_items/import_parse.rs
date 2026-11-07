@@ -6,6 +6,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::fields;
+
 /// Most rows one import reads.
 pub(crate) const MAX_ROWS: usize = 5_000;
 const MAX_FIELD_CHARACTERS: usize = 20_000;
@@ -52,7 +54,29 @@ pub(crate) struct ImportRow {
     /// rows are read.
     #[serde(skip)]
     pub parent_reference: Option<String>,
+    /// Columns no built-in field took, by header, for the project's custom
+    /// fields to pick up by name (AWD-89).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub fields: BTreeMap<String, String>,
 }
+
+/// Most extra columns a row keeps for custom fields.
+const MAX_EXTRA_COLUMNS: usize = 60;
+/// The longest extra cell kept: the longest text a custom field holds, or
+/// a multiple choice's whole selection as exports write it, a JSON list of
+/// up to `MAX_OPTIONS` names whose every character may be escaped (`\"`):
+/// two quotes, the escaped name and a comma each, plus the brackets.
+pub(crate) const MAX_EXTRA_CHARACTERS: usize = {
+    let choices = 2 + fields::MAX_OPTIONS * (2 * fields::MAX_OPTION_NAME_CHARACTERS + 3);
+    if choices > fields::MAX_TEXT_CHARACTERS {
+        choices
+    } else {
+        fields::MAX_TEXT_CHARACTERS
+    }
+};
+/// All of one row's extra cells together: what 60 cells of 5,000
+/// characters held before, so a longer cell doesn't let a row grow.
+const MAX_EXTRA_ROW_CHARACTERS: usize = 300_000;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -150,13 +174,27 @@ pub(crate) fn parse_csv(text: &str) -> Result<Vec<Vec<String>>, String> {
 }
 
 /// Comma unless the header line has more semicolons or tabs, as
-/// spreadsheets in some locales write.
+/// spreadsheets in some locales write. Only those outside quotes count: a
+/// quoted column name such as "Field: ;;;" holds them as text.
 fn sniff_delimiter(text: &str) -> char {
     let header = text.lines().next().unwrap_or_default();
-    [',', ';', '\t']
+    let mut counts = [(',', 0usize), (';', 0), ('\t', 0)];
+    let mut quoted = false;
+    for character in header.chars() {
+        if character == '"' {
+            quoted = !quoted;
+        } else if !quoted
+            && let Some(count) = counts
+                .iter_mut()
+                .find(|(delimiter, _)| *delimiter == character)
+        {
+            count.1 += 1;
+        }
+    }
+    counts
         .into_iter()
-        .max_by_key(|delimiter| (header.matches(*delimiter).count(), *delimiter == ','))
-        .unwrap_or(',')
+        .max_by_key(|(delimiter, count)| (*count, *delimiter == ','))
+        .map_or(',', |(delimiter, _)| delimiter)
 }
 
 /// The task fields a column can fill.
@@ -283,8 +321,32 @@ pub(crate) fn csv_rows(
             .filter_map(|index| record.get(index))
             .find_map(|value| present(value))
     };
+    let mapped = FIELDS
+        .iter()
+        .flat_map(|field| columns(field))
+        .collect::<Vec<_>>();
+    let extra = headers
+        .iter()
+        .enumerate()
+        .filter(|(index, header)| !mapped.contains(index) && !header.trim().is_empty())
+        .take(MAX_EXTRA_COLUMNS)
+        .map(|(index, header)| (index, header.trim().to_owned()))
+        .collect::<Vec<_>>();
     let mut rows = Vec::with_capacity(body.len());
     for record in body {
+        let mut room = MAX_EXTRA_ROW_CHARACTERS;
+        let fields = extra
+            .iter()
+            .filter_map(|(index, header)| {
+                let value = present(record.get(*index)?)?;
+                let kept = value
+                    .chars()
+                    .take(MAX_EXTRA_CHARACTERS.min(room))
+                    .collect::<String>();
+                room -= kept.chars().count();
+                (!kept.is_empty()).then(|| (header.clone(), kept))
+            })
+            .collect::<BTreeMap<_, _>>();
         let mut labels = Vec::<LabelValue>::new();
         for index in columns("labels") {
             let Some(value) = record.get(index) else {
@@ -320,6 +382,7 @@ pub(crate) fn csv_rows(
             estimate: first(record, "estimate"),
             parent: None,
             parent_reference: first(record, "parent"),
+            fields,
         });
     }
     link_parents(&mut rows);
@@ -588,6 +651,7 @@ pub(crate) fn github_rows(issues: Vec<GitHubIssue>) -> Vec<ImportRow> {
                 estimate: None,
                 parent: None,
                 parent_reference: None,
+                fields: BTreeMap::new(),
             }
         })
         .collect()
@@ -646,6 +710,19 @@ mod tests {
         let semicolons = parse_csv("Title;Status\nA;Done\n").expect("test input is valid");
         assert_eq!(semicolons[1], vec!["A", "Done"]);
         assert!(parse_csv("Title\n\"open").is_err());
+    }
+
+    /// Delimiters inside a quoted column name don't count: a comma file with
+    /// a column named ";;;;" stays a comma file, and a semicolon file whose
+    /// names hold commas (as spreadsheets in some locales write) stays one.
+    #[test]
+    fn quoted_names_dont_choose_the_delimiter() {
+        assert_eq!(sniff_delimiter("Title,Status,\"Field: ;;;;;;\"\n"), ',');
+        assert_eq!(sniff_delimiter("Title;\"Labels, tags\";Status\n"), ';');
+        assert_eq!(sniff_delimiter("Title\tStatus\tDue\n"), '\t');
+        let records =
+            parse_csv("Title,\"Field: ;;;;\"\nShip it,\"a;b\"\n").expect("test input is valid");
+        assert_eq!(records[1], vec!["Ship it", "a;b"]);
     }
 
     #[test]

@@ -19,6 +19,9 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 
+/// What work_item_activity.payload holds at most, as PostgreSQL stores it
+/// (`octet_length(payload::text)`, migration 0015).
+const MAX_PAYLOAD_BYTES: usize = 8_192;
 /// Longest text kept on each side of a one-line change (title, blocker).
 const MAX_TEXT_CHARACTERS: usize = 300;
 /// Most bytes a description diff may take in a payload.
@@ -34,7 +37,15 @@ const MAX_DIFF_CELLS: usize = 2_000_000;
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FieldChanges {
     fields: Map<String, Value>,
+    /// Bytes custom field changes have taken, against CUSTOM_BUDGET_BYTES.
+    custom_bytes: usize,
 }
+
+/// Most bytes custom field changes may take in one payload, beside a
+/// description diff and the one-line fields, under its 8 KB limit.
+const CUSTOM_BUDGET_BYTES: usize = 1_800;
+/// Longest text kept on each side of a custom field change.
+const MAX_CUSTOM_CHARACTERS: usize = 80;
 
 impl FieldChanges {
     pub fn is_empty(&self) -> bool {
@@ -66,6 +77,42 @@ impl FieldChanges {
         );
     }
 
+    /// A custom field (work_item_fields), keyed `field:<id>`, with how the
+    /// value read before and after and the field's name. `label_changes`
+    /// gives the field's current name.
+    pub fn custom_field(&mut self, field_id: Uuid, name: &str, from: Value, to: Value) {
+        if from == to {
+            return;
+        }
+        let cut = |value: Value| match value {
+            Value::String(text) => Value::String(cut_to(&text, MAX_CUSTOM_CHARACTERS)),
+            Value::Array(items) => Value::String(cut_to(
+                &items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                MAX_CUSTOM_CHARACTERS,
+            )),
+            other => other,
+        };
+        let key = format!("{CUSTOM_FIELD_PREFIX}{field_id}");
+        // Past the budget a change still says which field changed, if that
+        // fits; past that it's left out, and `changedFields` still says
+        // "fields". The whole entry counts, key and all, so the budget holds
+        // however many fields change together.
+        let full = json!({ "field": name, "from": cut(from), "to": cut(to) });
+        let named = json!({ "field": name, "from": null, "to": "…" });
+        for change in [full, named] {
+            let size = custom_entry_bytes(&key, &change);
+            if self.custom_bytes + size <= CUSTOM_BUDGET_BYTES {
+                self.custom_bytes += size;
+                self.fields.insert(key, change);
+                return;
+            }
+        }
+    }
+
     pub fn id(&mut self, field: &str, from: Option<Uuid>, to: Option<Uuid>) {
         if from != to {
             self.value(field, json!(from), json!(to));
@@ -84,14 +131,112 @@ impl FieldChanges {
     }
 }
 
+/// Bytes one custom field entry takes in the stored payload, as the 8 KB
+/// check reads it (`payload::text`, which puts a space after every ":" and
+/// ","): its key, its value and the ", " before the next entry.
+fn custom_entry_bytes(key: &str, change: &Value) -> usize {
+    Value::String(key.to_owned()).to_string().len()
+        + ": ".len()
+        + jsonb_text_len(change)
+        + ", ".len()
+}
+
+/// Length of a value as PostgreSQL writes jsonb as text, at most: a space
+/// after every ":" and ",", and numbers written out in full (1e-300 is 302
+/// bytes). Size checks against a column's `octet_length(x::text)` limit
+/// use this, not the compact JSON.
+pub(crate) fn jsonb_text_len(value: &Value) -> usize {
+    if let Value::Number(number) = value {
+        return expanded_number_len(&number.to_string());
+    }
+    let separators = |count: usize| 2 * count.saturating_sub(1);
+    match value {
+        Value::Object(map) => {
+            2 + separators(map.len())
+                + map
+                    .iter()
+                    .map(|(key, value)| {
+                        Value::String(key.clone()).to_string().len() + 2 + jsonb_text_len(value)
+                    })
+                    .sum::<usize>()
+        }
+        Value::Array(items) => {
+            2 + separators(items.len()) + items.iter().map(jsonb_text_len).sum::<usize>()
+        }
+        other => other.to_string().len(),
+    }
+}
+
+/// At most how long a JSON number is once PostgreSQL writes it out: jsonb
+/// keeps numbers as numeric, which prints every digit and never an
+/// exponent, so 1e-300 becomes "0.000…1", 302 bytes. The digits as written,
+/// one more per power of ten, and room for "0.".
+fn expanded_number_len(written: &str) -> usize {
+    match written.split_once(['e', 'E']) {
+        Some((digits, exponent)) => {
+            let power = exponent
+                .trim_start_matches(['+', '-'])
+                .parse::<usize>()
+                .unwrap_or(usize::MAX / 4);
+            digits.len().saturating_add(power).saturating_add(2)
+        }
+        None => written.len(),
+    }
+}
+
+/// Shrinks a change's whole activity payload until PostgreSQL will store it
+/// (`MAX_PAYLOAD_BYTES`), each part's own budget aside: custom field
+/// changes keep only the field's name, then leave; then the description
+/// keeps only that it changed; then the before and after go altogether.
+/// `changedFields` still says what changed.
+pub fn fit_payload(payload: &mut Value) {
+    let fits = |payload: &Value| jsonb_text_len(payload) <= MAX_PAYLOAD_BYTES;
+    if fits(payload) {
+        return;
+    }
+    if let Some(changes) = changes_mut(payload) {
+        for (key, change) in changes.iter_mut() {
+            if key.starts_with(CUSTOM_FIELD_PREFIX) {
+                let name = change.get("field").cloned().unwrap_or(Value::Null);
+                *change = json!({ "field": name, "from": null, "to": "…" });
+            }
+        }
+    }
+    if fits(payload) {
+        return;
+    }
+    if let Some(changes) = changes_mut(payload) {
+        changes.retain(|key, _| !key.starts_with(CUSTOM_FIELD_PREFIX));
+    }
+    if fits(payload) {
+        return;
+    }
+    if let Some(description) =
+        changes_mut(payload).and_then(|changes| changes.get_mut("description"))
+    {
+        *description = json!({ "diff": "", "truncated": true });
+    }
+    if fits(payload) {
+        return;
+    }
+    if let Some(payload) = payload.as_object_mut() {
+        payload.remove("changes");
+    }
+}
+
+fn changes_mut(payload: &mut Value) -> Option<&mut Map<String, Value>> {
+    payload.get_mut("changes")?.as_object_mut()
+}
+
 fn cut_text(text: &str) -> String {
-    if text.chars().count() <= MAX_TEXT_CHARACTERS {
+    cut_to(text, MAX_TEXT_CHARACTERS)
+}
+
+fn cut_to(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
         return text.to_owned();
     }
-    let mut cut = text
-        .chars()
-        .take(MAX_TEXT_CHARACTERS - 1)
-        .collect::<String>();
+    let mut cut = text.chars().take(max - 1).collect::<String>();
     cut.push('…');
     cut
 }
@@ -200,6 +345,9 @@ fn middle_operations<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<(char, &'a str
     operations
 }
 
+/// How a custom field's change is keyed in `changes`.
+pub const CUSTOM_FIELD_PREFIX: &str = "field:";
+
 /// The fields whose `changes` hold IDs, and what each names.
 const ID_FIELDS: [(&str, IdKind); 5] = [
     ("assignee", IdKind::Member),
@@ -246,6 +394,7 @@ pub async fn label_changes(
             }
         }
     }
+    name_custom_fields(pool, project_id, payloads).await?;
     let mut wanted: HashMap<IdKind, BTreeSet<Uuid>> = HashMap::new();
     for payload in payloads.iter() {
         let Some(changes) = payload.get("changes") else {
@@ -312,6 +461,55 @@ pub async fn label_changes(
     Ok(())
 }
 
+/// Gives each custom field change its field's current name, so a renamed
+/// field reads the same through its whole history.
+async fn name_custom_fields(
+    pool: &PgPool,
+    project_id: Uuid,
+    payloads: &mut [&mut Value],
+) -> Result<(), AppError> {
+    let mut ids = BTreeSet::new();
+    for payload in payloads.iter() {
+        if let Some(changes) = payload.get("changes").and_then(Value::as_object) {
+            ids.extend(
+                changes
+                    .keys()
+                    .filter_map(|key| key.strip_prefix(CUSTOM_FIELD_PREFIX)?.parse::<Uuid>().ok()),
+            );
+        }
+    }
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let ids = ids.into_iter().collect::<Vec<_>>();
+    let names: HashMap<Uuid, String> = sqlx::query_as::<_, (Uuid, String)>(
+        "SELECT id, name FROM field_definitions WHERE project_id = $1 AND id = ANY($2)",
+    )
+    .bind(project_id)
+    .bind(&ids)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .collect();
+    for payload in payloads.iter_mut() {
+        let Some(changes) = payload.get_mut("changes").and_then(Value::as_object_mut) else {
+            continue;
+        };
+        for (key, change) in changes.iter_mut() {
+            let Some(id) = key
+                .strip_prefix(CUSTOM_FIELD_PREFIX)
+                .and_then(|id| id.parse::<Uuid>().ok())
+            else {
+                continue;
+            };
+            if let (Some(name), Some(change)) = (names.get(&id), change.as_object_mut()) {
+                change.insert("field".to_owned(), Value::String(name.clone()));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn uuid_at(value: &Value, key: &str) -> Option<Uuid> {
     value.get(key)?.as_str()?.parse().ok()
 }
@@ -321,7 +519,95 @@ mod tests {
     use serde_json::json;
     use uuid::Uuid;
 
-    use super::{FieldChanges, line_diff};
+    use super::{
+        CUSTOM_BUDGET_BYTES, FieldChanges, MAX_PAYLOAD_BYTES, fit_payload, jsonb_text_len,
+        line_diff,
+    };
+
+    /// A long title, a long description and custom fields changing together
+    /// fit the whole payload's 8 KB: the custom changes give way first, and
+    /// the title's before and after stay.
+    #[test]
+    fn a_whole_change_fits_the_payload() {
+        let mut changes = FieldChanges::default();
+        let (old_title, new_title) = ("😀".repeat(300), "😁".repeat(300));
+        changes.text("title", Some(&old_title), Some(&new_title));
+        changes.description(&"a".repeat(2_248), &"b".repeat(2_248));
+        for index in 0..8 {
+            changes.custom_field(
+                Uuid::now_v7(),
+                &format!("F{index}"),
+                json!("😀".repeat(80)),
+                json!("😁".repeat(80)),
+            );
+        }
+        let mut payload = json!({
+            "changedFields": ["title", "description", "fields"],
+            "changes": serde_json::Value::Object(changes.into_map()),
+        });
+        assert!(jsonb_text_len(&payload) > MAX_PAYLOAD_BYTES);
+        fit_payload(&mut payload);
+        assert!(jsonb_text_len(&payload) <= MAX_PAYLOAD_BYTES);
+        assert_eq!(payload["changes"]["title"]["to"], json!(new_title));
+        assert_eq!(
+            payload["changedFields"],
+            json!(["title", "description", "fields"])
+        );
+
+        // Small payloads are left as they are.
+        let small =
+            json!({"changedFields": ["title"], "changes": {"title": {"from": "a", "to": "b"}}});
+        let mut same = small.clone();
+        fit_payload(&mut same);
+        assert_eq!(same, small);
+    }
+
+    /// Many custom fields changing at once stay inside their share of the
+    /// payload's 8 KB, counted as PostgreSQL stores it, keys included.
+    #[test]
+    fn custom_field_changes_hold_their_budget() {
+        // PostgreSQL's jsonb text: a space after every ":" and ",".
+        assert_eq!(
+            jsonb_text_len(&json!({"a": 1, "b": [1, 2]})),
+            r#"{"a": 1, "b": [1, 2]}"#.len()
+        );
+        let name = "é".repeat(60);
+        let mut changes = FieldChanges::default();
+        let first = Uuid::now_v7();
+        changes.custom_field(first, "Points", json!(1), json!(2));
+        for _ in 0..50 {
+            changes.custom_field(Uuid::now_v7(), &name, json!("a"), json!("b"));
+        }
+        let map = changes.into_map();
+        assert!(map.len() > 1 && map.len() < 51, "{} entries", map.len());
+        assert!(jsonb_text_len(&serde_json::Value::Object(map.clone())) <= CUSTOM_BUDGET_BYTES + 2);
+        assert_eq!(
+            map[&format!("field:{first}")],
+            json!({"field": "Points", "from": 1, "to": 2})
+        );
+    }
+
+    /// PostgreSQL writes 1e-300 out in full, so tiny numbers count at that
+    /// length: short in JSON, about 300 bytes each when stored.
+    #[test]
+    fn tiny_numbers_count_as_postgresql_writes_them() {
+        let expanded = format!("0.{}1", "0".repeat(299));
+        assert!(jsonb_text_len(&json!(1e-300)) >= expanded.len());
+        assert!(jsonb_text_len(&json!(-1.5e-7)) >= "-0.00000015".len());
+        assert_eq!(jsonb_text_len(&json!(2.5)), 3);
+        let mut changes = FieldChanges::default();
+        for number in 0..20 {
+            changes.custom_field(
+                Uuid::now_v7(),
+                &format!("N{number}"),
+                json!(1e-300),
+                json!(2e-300),
+            );
+        }
+        let map = changes.into_map();
+        assert!(!map.is_empty() && map.len() < 20, "{} entries", map.len());
+        assert!(jsonb_text_len(&serde_json::Value::Object(map)) <= CUSTOM_BUDGET_BYTES + 2);
+    }
 
     #[test]
     fn records_only_fields_that_changed() {

@@ -2,7 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, typ
 
 import { useProjectExperience } from '../experience/layout'
 import { Button, EmptyState, ErrorState, Icon, ListSkeleton, countLabel } from '../ui'
-import { Table, type TableRow } from '../ui/pickers'
+import { Table, type TableColumn, type TableRow } from '../ui/pickers'
+import { useFields } from '../fields/api'
+import { FieldValueView } from '../fields/FieldValueView'
+import { fieldIdOf } from '../fields/fieldModel'
 import { FieldPicker, type PickerField, type PickResult } from './FieldPicker'
 import { pickerShown, useCardFields, type CardFields } from './cardFields'
 import { AssigneeMark, DoneToggle, DueDate, GroupHeader, PickerCell, TaskBadges } from './ListCells'
@@ -27,6 +30,18 @@ const PICKER_KEYS: Record<string, PickerField> = { s: 'status', a: 'assignee', l
 
 function editTarget(card: WorkItemCard): EditTarget {
   return { id: card.id, projectId: card.projectId, version: card.version, key: card.key }
+}
+
+/**
+ * Custom field columns go just before the assignee, which ends the row, or
+ * at the end without it. Beside them the details column gives up some room,
+ * so the title keeps enough to read.
+ */
+function withCustomColumns(columns: TableColumn[], custom: TableColumn[]): TableColumn[] {
+  if (!custom.length) return columns
+  const narrowed = columns.map((column) => (column.id === 'details' ? { ...column, width: 'minmax(0, min(160px, 15%))' } : column))
+  const at = narrowed.findIndex((column) => column.id === 'assignee')
+  return at < 0 ? [...narrowed, ...custom] : [...narrowed.slice(0, at), ...custom, ...narrowed.slice(at)]
 }
 
 type PickerState = { field: PickerField; anchor: HTMLElement; targets: WorkItemCard[] }
@@ -157,6 +172,12 @@ export function WorkItemList({
   const groups = useWorkItemGroups(projectId, query, Boolean(state.groupBy))
   const fields = useCardFields(projectId)
   const experience = useProjectExperience(projectId)
+  // Custom fields (AWD-89) a view shows as columns, by `field:<id>`, before the assignee.
+  const projectFields = useFields({ projectId })
+  const customColumns = (experience.shows('task.custom_fields') ? (state.fields ?? []) : []).flatMap((key) => {
+    const field = projectFields.data?.fields.find((entry) => entry.id === fieldIdOf(key))
+    return field ? [{ key, field }] : []
+  })
   const doneCount = useDoneCount(projectId, state.filters, workflow, tucked)
   const done = useDoneItems(projectId, query, tucked && state.showDone)
   const [collapsedState, setCollapsedState] = useState<{ groupBy: string | null; keys: Set<string> }>({ groupBy: null, keys: new Set() })
@@ -237,7 +258,7 @@ export function WorkItemList({
       if (index >= 0) windowed.scrollToIndex(index)
       focusWanted.current = focus
     },
-    [rows, windowed],
+    [rows, setActiveKey, windowed],
   )
 
   const toggleGroup = (groupKey: string) => {
@@ -421,27 +442,37 @@ export function WorkItemList({
       selected,
       className: card.id === openTaskId ? 'is-open' : undefined,
       label: `${card.key} ${card.title}`,
-      cells: taskCells({
-        card,
-        disabled,
-        fields,
-        twoLine: phone,
-        selected,
-        onOpen: (target, event: MouseEvent<HTMLAnchorElement>) => {
-          if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return
-          event.preventDefault()
-          setActiveKey(row.key)
-          openNow(target.id)
-        },
-        onPick: (target, field, anchor) => {
-          setActiveKey(row.key)
-          openPicker(field, anchor, target)
-        },
-        onSelect: (target, event) => {
-          setActiveKey(row.key)
-          onRowSelect(target, { shiftKey: event.shiftKey, metaKey: true, ctrlKey: false })
-        },
-      }),
+      cells: {
+        ...taskCells({
+          card,
+          disabled,
+          fields,
+          twoLine: phone,
+          selected,
+          onOpen: (target, event: MouseEvent<HTMLAnchorElement>) => {
+            if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return
+            event.preventDefault()
+            setActiveKey(row.key)
+            openNow(target.id)
+          },
+          onPick: (target, field, anchor) => {
+            setActiveKey(row.key)
+            openPicker(field, anchor, target)
+          },
+          onSelect: (target, event) => {
+            setActiveKey(row.key)
+            onRowSelect(target, { shiftKey: event.shiftKey, metaKey: true, ctrlKey: false })
+          },
+        }),
+        ...Object.fromEntries(
+          customColumns.map(({ key, field }) => [
+            key,
+            <span className="aw-tasks__field" key={key}>
+              <FieldValueView field={field} references={card.fieldReferences} value={card.fieldValues[field.id]} />
+            </span>,
+          ]),
+        ),
+      },
     }
   }
 
@@ -456,13 +487,16 @@ export function WorkItemList({
         ariaMultiselectable
         bodyRef={bodyRef}
         className="aw-tasks__table"
-        columns={LIST_COLUMNS.filter(
-          (column) =>
-            (column.id === 'select' || column.id === 'title' || !state.fields || state.fields.includes(column.id)) &&
-            // The layout's hidden fields stay out whatever the view asks for.
-            !(column.id === 'priority' && !fields.priority) &&
-            !(column.id === 'key' && !fields.keys) &&
-            !(column.id === 'due' && !fields.dates),
+        columns={withCustomColumns(
+          LIST_COLUMNS.filter(
+            (column) =>
+              (column.id === 'select' || column.id === 'title' || !state.fields || state.fields.includes(column.id)) &&
+              // The layout's hidden fields stay out whatever the view asks for.
+              !(column.id === 'priority' && !fields.priority) &&
+              !(column.id === 'key' && !fields.keys) &&
+              !(column.id === 'due' && !fields.dates),
+          ),
+          customColumns.map(({ key, field }) => ({ id: key, header: field.name, width: 'minmax(0, 120px)', hideOnPhone: true })),
         )}
         label="Tasks"
         onActivate={(key) => {

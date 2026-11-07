@@ -97,6 +97,10 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("task_link", Some(TasksEdit)),
     ("label_list", Some(TasksView)),
     ("label_write", Some(TasksEdit)),
+    // Custom fields (AWD-89): reading them is seeing tasks; defining them
+    // is the workflow's permission. Values are set through task_update.
+    ("field_list", Some(TasksView)),
+    ("field_write", Some(TasksWorkflow)),
     ("task_move", Some(TasksEdit)),
     ("search", None),
     ("thing_open", None),

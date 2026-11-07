@@ -6,8 +6,11 @@ import { useProjectExperience } from '../experience/layout'
 import { Button, ConfirmDialog, Dialog, Menu, describeError, showToast, Switch, TextField, type MenuEntry } from '../ui'
 import { createView, deleteView, listViews, pinView, updateView, viewKeys, type SavedView, type ViewDraft } from '../views/api'
 import { COLUMN_PARTS, viewName, viewShown } from '../views/layoutViews'
+import { useFields } from '../fields/api'
+import { fieldKey } from '../fields/fieldModel'
 import { VIEW_FIELDS, readListState, writeListState, type ListState } from './listModel'
 import type { UpdateListState } from './useListState'
+import { draftFrom } from './viewDraft'
 
 const FIELD_LABELS: Record<string, string> = {
   priority: 'Priority',
@@ -16,17 +19,6 @@ const FIELD_LABELS: Record<string, string> = {
   details: 'Labels and details',
   due: 'Due date',
   assignee: 'Assignee',
-}
-
-/** The view as it would be saved: filters, sort, grouping and board setup, without the open task. */
-function draftFrom(state: ListState, actorId: string): Omit<ViewDraft, 'name' | 'shared'> {
-  const parameters = writeListState({ ...state, task: null, savedView: null, fields: null, view: 'list', showDone: false })
-  const query = Object.fromEntries(parameters.entries())
-  // "Me" follows whoever opens the view, so a shared "assigned to me" view works for everyone.
-  for (const key of ['assigneeActorId', 'notAssigneeActorId']) {
-    if (query[key]) query[key] = query[key].split(',').map((id) => (id === actorId ? 'me' : id)).join(',')
-  }
-  return { query, layout: state.view, fields: state.fields }
 }
 
 /** A query as the list reads it, so an older spelling of the same filters still matches. */
@@ -60,10 +52,11 @@ export default function ViewsMenu({
   const queryClient = useQueryClient()
   const views = useQuery({ queryKey: viewKeys.views(projectId), queryFn: () => listViews(projectId) })
   const experience = useProjectExperience(projectId)
+  const projectFields = useFields({ projectId })
   const [saving, setSaving] = useState<'new' | 'rename' | null>(null)
   const [deleting, setDeleting] = useState<SavedView | null>(null)
   const current = views.data?.views.find((view) => view.id === state.savedView) ?? null
-  const draft = draftFrom(state, actorId)
+  const draft = draftFrom(state, actorId, projectFields.data?.fields ?? [])
   const changed = current ? !sameQuery(current, draft) : false
   const refresh = () => queryClient.invalidateQueries({ queryKey: viewKeys.views(projectId) })
   const failed = (title: string) => (reason: unknown) => showToast({ tone: 'danger', title, description: describeError(reason).message })
@@ -106,8 +99,19 @@ export default function ViewsMenu({
   }
   if (!readOnly) {
     items.push({ separator: true })
-    if (current?.canEdit && changed) items.push({ label: `Save changes to “${current.name}”`, icon: 'check', onSelect: () => save.mutate(current) })
-    items.push({ label: 'Save as new view…', icon: 'plus', onSelect: () => setSaving('new') })
+    // Saving field filters turns the person's ID into "me" only in person
+    // fields, so it waits until the project's fields are known; a view
+    // without field filters saves straight away.
+    if (state.filters.fieldFilters && !projectFields.isSuccess) {
+      items.push(
+        projectFields.isError
+          ? { label: 'Fields didn’t load, so the view can’t be saved. Try again', icon: 'retry', keepOpen: true, onSelect: () => void projectFields.refetch() }
+          : { label: 'Loading fields to save this view…', disabled: true, onSelect: () => undefined },
+      )
+    } else {
+      if (current?.canEdit && changed) items.push({ label: `Save changes to “${current.name}”`, icon: 'check', onSelect: () => save.mutate(current) })
+      items.push({ label: 'Save as new view…', icon: 'plus', onSelect: () => setSaving('new') })
+    }
   }
   if (current) {
     items.push({ label: current.pinned ? 'Unpin from sidebar' : 'Pin to sidebar', icon: 'star', onSelect: () => pin.mutate(current) })
@@ -125,10 +129,28 @@ export default function ViewsMenu({
         checked: shown.includes(field),
         keepOpen: true,
         onSelect: () => {
-          const next = shown.includes(field) ? shown.filter((entry) => entry !== field) : VIEW_FIELDS.filter((entry) => entry === field || shown.includes(entry))
-          update((state) => ({ ...state, fields: next.length === VIEW_FIELDS.length ? null : next }), { replace: true })
+          const custom = shown.filter((entry) => entry.startsWith('field:'))
+          const builtIn = shown.includes(field) ? shown.filter((entry) => entry !== field && !entry.startsWith('field:')) : VIEW_FIELDS.filter((entry) => entry === field || shown.includes(entry))
+          const next = [...builtIn, ...custom]
+          update((state) => ({ ...state, fields: next.length === VIEW_FIELDS.length && !custom.length ? null : next }), { replace: true })
         },
       })
+    }
+    // Custom fields (AWD-89) show as columns only when a view asks for them.
+    if (experience.shows('task.custom_fields')) {
+      for (const field of projectFields.data?.fields ?? []) {
+        const key = fieldKey(field.id)
+        items.push({
+          label: field.name,
+          checked: shown.includes(key),
+          keepOpen: true,
+          onSelect: () => {
+            const next = shown.includes(key) ? shown.filter((entry) => entry !== key) : [...shown, key]
+            const builtInOnly = next.filter((entry) => !entry.startsWith('field:'))
+            update((state) => ({ ...state, fields: builtInOnly.length === next.length && next.length === VIEW_FIELDS.length ? null : next }), { replace: true })
+          },
+        })
+      }
     }
   }
 

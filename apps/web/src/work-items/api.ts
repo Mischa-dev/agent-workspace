@@ -24,6 +24,7 @@ import {
   taskRef,
   taskRefs,
 } from './wire'
+import { normalizeReferences, normalizeValues } from '../fields/fieldModel'
 import type {
   AssignableActor,
   CommentRevisions,
@@ -190,6 +191,8 @@ export function normalizeWorkItem(value: unknown): WorkItem {
     watchers: actorRefs(item.watchers),
     watching: boolean(item.watching),
     estimateUnit: estimateUnit(item.estimateUnit),
+    fieldValues: normalizeValues(item.fieldValues),
+    fieldReferences: normalizeReferences(item.fieldReferences),
   }
 }
 
@@ -224,6 +227,8 @@ export function normalizeCard(value: unknown): WorkItemCard {
     dueDate: item.dueDate,
     estimate: item.estimate,
     ready: item.ready,
+    fieldValues: item.fieldValues,
+    fieldReferences: item.fieldReferences,
     parentId: nullableString(wire.parentId),
     blockedReason: nullableString(wire.blockedReason),
     openBlockerCount: number(wire.openBlockerCount),

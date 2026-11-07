@@ -2,6 +2,7 @@
 //! compiled and linked for tests once rather than once per file.
 
 mod agent_interface;
+mod awd89_custom_fields;
 mod backbone;
 mod bug_report_links;
 mod bug_sweep;

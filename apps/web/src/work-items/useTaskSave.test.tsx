@@ -101,4 +101,70 @@ describe('useTaskSave', () => {
     expect(result.current.pending('title')).toBeNull()
     expect(mutateAsync).not.toHaveBeenCalled()
   })
+
+  it('saves a custom field put back to what the task held, while the first change is on its way', async () => {
+    let finish: () => void = () => undefined
+    const first = new Promise<void>((resolve) => {
+      finish = resolve
+    })
+    const mutateAsync = vi.fn().mockReturnValueOnce(first).mockResolvedValue(undefined)
+    const { client, result } = setup(mutateAsync)
+
+    act(() => result.current.save('field:areas', { fieldValues: { areas: ['research'] } }))
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1))
+    // The person sees their own change on its way, not the task's empty value,
+    // so clearing the field again is a change of its own (TaskCustomFields).
+    expect(result.current.baseFor('field:areas')).toBe(JSON.stringify(['research']))
+
+    act(() => result.current.save('field:areas', { fieldValues: { areas: null } }))
+    act(() => {
+      client.setQueryData(queryKeys.workItem(task.projectId, task.id), { ...task, fieldValues: { areas: ['research'] }, version: 2 })
+      finish()
+    })
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(2))
+    expect(mutateAsync).toHaveBeenLastCalledWith(expect.objectContaining({ patch: { expectedVersion: 2, fieldValues: { areas: null } } }))
+  })
+
+  it('takes its own normalized value as its own, not as someone else’s change', async () => {
+    let finish: (saved: WorkItem) => void = () => undefined
+    const first = new Promise<WorkItem>((resolve) => {
+      finish = resolve
+    })
+    const mutateAsync = vi.fn().mockReturnValueOnce(first).mockResolvedValue({ ...task, version: 3 })
+    const { client, result } = setup(mutateAsync)
+
+    act(() => result.current.save('field:site', { fieldValues: { site: 'example.com' } }))
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1))
+    act(() => result.current.save('field:site', { fieldValues: { site: 'other.com' } }))
+    // The server stores the first as https://example.com.
+    const stored = { ...task, fieldValues: { site: 'https://example.com' }, version: 2 }
+    act(() => {
+      client.setQueryData(queryKeys.workItem(task.projectId, task.id), stored)
+      finish(stored)
+    })
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(2))
+    expect(mutateAsync).toHaveBeenLastCalledWith(expect.objectContaining({ patch: { expectedVersion: 2, fieldValues: { site: 'other.com' } } }))
+    await waitFor(() => expect(result.current.pending('field:site')).toBeNull())
+  })
+
+  it('still stops when someone else changed the field after its own save', async () => {
+    let finish: (saved: WorkItem) => void = () => undefined
+    const first = new Promise<WorkItem>((resolve) => {
+      finish = resolve
+    })
+    const mutateAsync = vi.fn().mockReturnValueOnce(first)
+    const { client, result } = setup(mutateAsync)
+
+    act(() => result.current.save('field:site', { fieldValues: { site: 'example.com' } }))
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1))
+    act(() => result.current.save('field:site', { fieldValues: { site: 'other.com' } }))
+    const stored = { ...task, fieldValues: { site: 'https://example.com' }, version: 2 }
+    act(() => {
+      // A live update brings someone else's value before the queued save goes.
+      client.setQueryData(queryKeys.workItem(task.projectId, task.id), { ...task, fieldValues: { site: 'https://theirs.com' }, version: 3 })
+      finish(stored)
+    })
+    await waitFor(() => expect(result.current.pending('field:site')?.state).toBe('conflict'))
+    expect(mutateAsync).toHaveBeenCalledTimes(1)
+  })
 })

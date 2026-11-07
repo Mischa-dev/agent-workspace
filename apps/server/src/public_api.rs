@@ -143,7 +143,7 @@ pub(crate) fn tag_for(tool: &str) -> &'static str {
             "Conversations"
         }
         "reply" | "session" | "agent" => "Agents and replies",
-        "task" | "label" | "milestone" | "view" | "my" | "template" => "Tasks",
+        "task" | "label" | "field" | "milestone" | "view" | "my" | "template" => "Tasks",
         "page" | "skill" | "decision" | "search" => "Pages and search",
         "run" | "approval" | "environment" | "external" | "usage" => "Runs and launching",
         "repository" | "pull" => "Code",

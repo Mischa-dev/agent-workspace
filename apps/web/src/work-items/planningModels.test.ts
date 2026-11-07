@@ -29,6 +29,8 @@ function card(id: string): WorkItemCard {
     dueDate: null,
     estimate: null,
     ready: true,
+    fieldValues: {},
+    fieldReferences: [],
     parentId: null,
     blockedReason: null,
     openBlockerCount: 0,

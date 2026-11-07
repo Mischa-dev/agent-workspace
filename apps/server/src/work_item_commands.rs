@@ -20,6 +20,7 @@ use crate::{
         Action, ActorKind, Decision, Membership, ProjectScope, Resource, RoleGrant, Subject,
         authorize,
     },
+    work_item_fields::FieldValueChanges,
     work_item_history::FieldChanges,
     work_item_labels::{self, LabelDelta, LabelPlan, MAX_LABELS_PER_TASK},
 };
@@ -103,12 +104,14 @@ pub struct LockedWorkItem {
     pub start_date: Option<NaiveDate>,
     pub due_date: Option<NaiveDate>,
     pub estimate: Option<f64>,
+    /// Custom field values by field ID (work_item_fields).
+    pub field_values: serde_json::Value,
 }
 
 /// The columns `LockedWorkItem` reads, for every query that locks a task.
 pub const LOCKED_WORK_ITEM_COLUMNS: &str = "id, number, version, title, description, type_id, status_id, priority, \
     assignee_actor_id, parent_work_item_id, board_rank, archived_at IS NOT NULL AS archived, \
-    blocked_reason, milestone_id, start_date, due_date, estimate";
+    blocked_reason, milestone_id, start_date, due_date, estimate, field_values";
 
 /// Planning fields a new task can start with.
 #[derive(Clone, Copy, Debug, Default)]
@@ -183,6 +186,9 @@ pub struct CreateWorkItemCommand<'a> {
     /// locking the column, as creates always have.
     pub board_placement: Option<BoardPlacement>,
     pub fields: NewTaskFields,
+    /// Custom field values, already resolved in this transaction
+    /// (work_item_fields::resolve).
+    pub field_values: Option<&'a FieldValueChanges>,
     pub activity_summary: &'a str,
     pub activity_metadata: serde_json::Value,
     pub activity_number_metadata: AllocatedNumberMetadata,
@@ -205,7 +211,7 @@ pub enum CreateWorkItemOutcome {
     },
     InvalidAssignee,
     ParentNotFound,
-    ParentArchived(LockedWorkItem),
+    ParentArchived(Box<LockedWorkItem>),
     /// The subtask would sit deeper than MAX_SUBTASK_LEVELS.
     ParentTooDeep,
     InvalidPlacement(PlacementProblem),
@@ -231,6 +237,9 @@ pub struct UpdateWorkItemCommand<'a> {
     pub board_placement: Option<BoardPlacement>,
     pub labels: Option<LabelDelta<'a>>,
     pub fields: TaskFieldChanges,
+    /// Custom field values to set or clear, already resolved in this
+    /// transaction (work_item_fields::resolve).
+    pub field_values: Option<&'a FieldValueChanges>,
     pub summary: &'a str,
     pub audit_action: &'a str,
     pub audit_version_metadata: AuditVersionMetadata,
@@ -466,7 +475,7 @@ pub async fn create_work_item(
             return Ok(CreateWorkItemOutcome::ParentNotFound);
         };
         if parent.archived {
-            return Ok(CreateWorkItemOutcome::ParentArchived(parent));
+            return Ok(CreateWorkItemOutcome::ParentArchived(Box::new(parent)));
         }
         let parent_levels = subtask_level(transaction, actor.project_id, parent_id).await?;
         if parent_levels + 1 > MAX_SUBTASK_LEVELS {
@@ -526,8 +535,9 @@ pub async fn create_work_item(
         INSERT INTO work_items (
             id, project_id, number, title, description, type_id, status_id,
             priority, assignee_actor_id, created_by_actor_id, board_rank,
-            parent_work_item_id, milestone_id, start_date, due_date, estimate
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+            parent_work_item_id, milestone_id, start_date, due_date, estimate,
+            field_values
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
         "#,
     )
     .bind(work_item_id)
@@ -546,6 +556,15 @@ pub async fn create_work_item(
     .bind(command.fields.start_date)
     .bind(command.fields.due_date)
     .bind(command.fields.estimate)
+    .bind({
+        let values = command
+            .field_values
+            .map_or_else(|| serde_json::json!({}), FieldValueChanges::initial);
+        if !crate::work_item_fields::values_fit(&values) {
+            return Err(crate::work_item_fields::too_large());
+        }
+        values
+    })
     .execute(&mut **transaction)
     .await?;
     add_watcher(transaction, actor.project_id, work_item_id, actor.actor_id).await?;
@@ -597,6 +616,19 @@ pub async fn create_work_item(
         }
         if let Some(milestone_id) = command.fields.milestone_id {
             metadata.insert("milestoneId".to_owned(), serde_json::json!(milestone_id));
+        }
+        if let Some(values) = command.field_values.filter(|values| !values.is_empty()) {
+            metadata.insert(
+                "fieldsSet".to_owned(),
+                serde_json::json!(
+                    values
+                        .entries
+                        .iter()
+                        .filter(|entry| entry.value.is_some())
+                        .map(|entry| entry.field.id)
+                        .collect::<Vec<_>>()
+                ),
+            );
         }
     }
     let mut audit_metadata = command.audit_metadata;
@@ -734,6 +766,13 @@ pub async fn update_locked_work_item(
             would_have: plan.resulting_count,
         });
     }
+    let field_values = match command.field_values.filter(|values| !values.is_empty()) {
+        Some(values) => values.applied_to(&current.field_values),
+        None => current.field_values.clone(),
+    };
+    if !crate::work_item_fields::values_fit(&field_values) {
+        return Err(crate::work_item_fields::too_large());
+    }
     let parent_work_item_id = match command.parent_work_item_id {
         Some(parent) if parent != current.parent_work_item_id => {
             if let Some(parent_id) = parent
@@ -835,8 +874,28 @@ pub async fn update_locked_work_item(
     if blocked_reason != current.blocked_reason {
         changed_fields.push("blockedReason".to_owned());
     }
+    if field_values != current.field_values {
+        changed_fields.push("fields".to_owned());
+    }
     if changed_fields.is_empty() {
         return Ok(UpdateWorkItemOutcome::Noop(current));
+    }
+    let mut changes = FieldChanges::default();
+    if let Some(values) = command.field_values {
+        for entry in &values.entries {
+            let before = current.field_values.get(entry.field.id.to_string());
+            if before == entry.value.as_ref() {
+                continue;
+            }
+            let from = crate::work_item_fields::shown_before(
+                transaction,
+                actor.project_id,
+                &entry.field,
+                before,
+            )
+            .await?;
+            changes.custom_field(entry.field.id, &entry.field.name, from, entry.shown.clone());
+        }
     }
     if let Some(plan) = &label_plan {
         work_item_labels::apply(
@@ -870,7 +929,7 @@ pub async fn update_locked_work_item(
         SET title = $3, description = $4, type_id = $5, status_id = $6,
             priority = $7, assignee_actor_id = $8, parent_work_item_id = $10,
             board_rank = $11, milestone_id = $12, start_date = $13, due_date = $14,
-            estimate = $15,
+            estimate = $15, field_values = $18,
             blocked_reason = $16,
             blocked_at = CASE WHEN $16::text IS NULL THEN NULL
                               WHEN blocked_reason IS NOT DISTINCT FROM $16 THEN blocked_at
@@ -899,6 +958,7 @@ pub async fn update_locked_work_item(
     .bind(estimate)
     .bind(blocked_reason.as_deref())
     .bind(actor.actor_id)
+    .bind(&field_values)
     .execute(&mut **transaction)
     .await?;
     if updated.rows_affected() != 1 {
@@ -906,7 +966,6 @@ pub async fn update_locked_work_item(
             "locked Work Item update lost its version",
         ));
     }
-    let mut changes = FieldChanges::default();
     changes.text("title", Some(&current.title), Some(title));
     changes.description(&current.description, description);
     changes.id("type", Some(current.type_id), Some(type_id));
@@ -2469,7 +2528,9 @@ impl ChangePayload {
                 serde_json::Value::Object(self.changes.clone().into_map()),
             );
         }
-        serde_json::Value::Object(payload)
+        let mut payload = serde_json::Value::Object(payload);
+        crate::work_item_history::fit_payload(&mut payload);
+        payload
     }
 
     /// The activity payload plus the version the change produced.

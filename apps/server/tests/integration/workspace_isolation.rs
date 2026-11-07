@@ -169,6 +169,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{project_id}/integrations/github/connection",
     "/api/v1/projects/{project_id}/invitations",
     "/api/v1/projects/{project_id}/labels",
+    "/api/v1/projects/{project_id}/fields",
     "/api/v1/projects/{project_id}/launches",
     "/api/v1/projects/{project_id}/layout",
     "/api/v1/projects/{project_id}/member-candidates",
@@ -1047,6 +1048,24 @@ async fn build_workspace(
     )
     .await;
     call(
+        "field_write",
+        json!({
+            "projectId": "WORK",
+            "name": format!("Risk{m}"),
+            "type": "single_choice",
+            "options": [{"name": format!("High{m}")}],
+        }),
+    )
+    .await;
+    call(
+        "field_write",
+        json!({"projectId": "WORK", "name": format!("Owner{m}"), "type": "person"}),
+    )
+    .await;
+    let mut task_fields = serde_json::Map::new();
+    task_fields.insert(format!("Risk{m}"), json!(format!("High{m}")));
+    task_fields.insert(format!("Owner{m}"), json!("@rook"));
+    call(
         "task_create",
         json!({
             "projectId": "WORK",
@@ -1055,6 +1074,7 @@ async fn build_workspace(
             "assignee": "@rook",
             "labels": [format!("Launch{m}")],
             "acceptanceCriteria": [format!("Launch checklist{m}")],
+            "fields": task_fields,
             "clientRequestId": "task-1"
         }),
     )
@@ -2605,6 +2625,7 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             vec![],
         ),
         project_route("/api/v1/projects/{project_id}/labels", "/labels"),
+        project_route("/api/v1/projects/{project_id}/fields", "/fields"),
         project_route("/api/v1/projects/{project_id}/launches", "/launches"),
         project_route(
             "/api/v1/projects/{project_id}/agent-profiles",
@@ -3250,6 +3271,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "file_read",
     "inbox_list",
     "label_list",
+    "field_list",
     "later_list",
     "launch_list",
     "message_history",
@@ -3361,6 +3383,7 @@ fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         by_project("label_list"),
+        by_project("field_list"),
         by_project("launch_list"),
         by_project("agent_profile_list"),
         by_project("environment_list"),

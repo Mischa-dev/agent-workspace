@@ -1,5 +1,7 @@
 import { memo, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react'
 
+import { FieldValueView } from '../fields/FieldValueView'
+import { isEmpty, type FieldDefinition } from '../fields/fieldModel'
 import { Icon } from '../ui'
 import type { CardFields } from './cardFields'
 import { AssigneeMark, DueDate, TaskBadges } from './ListCells'
@@ -109,6 +111,7 @@ export const BoardCard = memo(function BoardCard({
       >
         {card.title}
       </a>
+      <CardCustomFields card={card} fields={fields.custom} />
       <div className="aw-tcard__meta">
         {!fields.priority ? null : editable ? (
           <button
@@ -143,3 +146,22 @@ export const BoardCard = memo(function BoardCard({
     </li>
   )
 })
+
+/** Most custom fields a card shows, in the project's order, so cards stay small. */
+const CARD_FIELDS = 4
+
+/** The custom fields a card has values for (AWD-89), each with its name, wrapping onto more lines; nothing when it has none. */
+function CardCustomFields({ card, fields }: { card: WorkItemCard; fields: readonly FieldDefinition[] }) {
+  const set = fields.filter((field) => field.type !== 'text' && !isEmpty(card.fieldValues[field.id])).slice(0, CARD_FIELDS)
+  if (!set.length) return null
+  return (
+    <ul aria-label="Fields" className="aw-tcard__fields">
+      {set.map((field) => (
+        <li className="aw-taskmeta__item" key={field.id} title={field.name}>
+          <span className="aw-taskmeta__text">{field.name}</span>
+          <FieldValueView field={field} references={card.fieldReferences} value={card.fieldValues[field.id]} />
+        </li>
+      ))}
+    </ul>
+  )
+}

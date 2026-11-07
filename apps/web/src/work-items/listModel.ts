@@ -1,3 +1,4 @@
+import { clausesWithinLimits, parseClauses } from '../fields/fieldModel'
 import { workItemPriorities } from './constants'
 import type { BoardColumnsBy, WorkItemFilters, WorkItemGroupBy, WorkItemSort } from './types'
 
@@ -123,6 +124,10 @@ export const FILTER_RULES: Record<keyof FilterValues, Rule> = {
   overdue: isTrue,
   includeDone: (value) => value === 'false',
   archived: isTrue,
+  fieldFilters: (value) => {
+    const clauses = parseClauses(value)
+    return clauses.length > 0 && clausesWithinLimits(clauses)
+  },
 }
 
 export const FILTER_KEYS = Object.keys(FILTER_RULES) as Array<keyof FilterValues>
@@ -155,6 +160,10 @@ function canonicalList(value: string) {
   return canonicalValues(value.split(',')).join(',')
 }
 
+/** A custom field's sort (`field:<id>`, or `…:desc`), group or column (`field:<id>`). */
+const FIELD_SORT = /^field:[A-Za-z0-9-]{1,64}(:desc)?$/
+const FIELD_KEY = /^field:[A-Za-z0-9-]{1,64}$/
+
 function oneOf<T extends string>(value: string | null, options: Array<{ value: T }>, fallback: T): T {
   return options.some((option) => option.value === value) ? (value as T) : fallback
 }
@@ -185,14 +194,14 @@ export function readListState(parameters: URLSearchParams): ListState {
   return {
     view: parameters.get('view') === 'board' ? 'board' : 'list',
     filters: filters as FilterValues,
-    sort: oneOf(parameters.get('sort'), SORTS, 'newest'),
-    groupBy: GROUPINGS.some((option) => option.value === groupBy) ? (groupBy as WorkItemGroupBy) : null,
+    sort: FIELD_SORT.test(parameters.get('sort') ?? '') ? (parameters.get('sort') as WorkItemSort) : oneOf(parameters.get('sort'), SORTS, 'newest'),
+    groupBy: GROUPINGS.some((option) => option.value === groupBy) || FIELD_KEY.test(groupBy ?? '') ? (groupBy as WorkItemGroupBy) : null,
     columnsBy,
     // Lanes by the column field would leave only the diagonal cells.
     lanes: lanes === columnsBy ? 'none' : lanes,
     task: task && task.length <= 100 ? task : null,
     savedView: savedView && ID.test(savedView) ? savedView : null,
-    fields: fields === null ? null : fields.split(',').filter((field) => VIEW_FIELDS.includes(field)),
+    fields: fields === null ? null : fields.split(',').filter((field) => VIEW_FIELDS.includes(field) || FIELD_KEY.test(field)),
     showDone: parameters.get('showDone') === 'true',
   }
 }

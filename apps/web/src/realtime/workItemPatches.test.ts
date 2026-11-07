@@ -33,6 +33,8 @@ function card(n: number, status = todo, version = 1): WorkItemCard {
     dueDate: null,
     estimate: null,
     ready: false,
+    fieldValues: {},
+    fieldReferences: [],
     parentId: null,
     blockedReason: null,
     openBlockerCount: 0,

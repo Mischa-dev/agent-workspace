@@ -355,7 +355,7 @@ pub const PERMISSIONS: [PermissionInfo; 27] = [
         "tasks.workflow",
         "tasks",
         "Change the workflow",
-        "Add, rename and reorder the statuses tasks move through.",
+        "Add, rename and reorder the statuses tasks move through, and the fields every task has.",
         PermissionScope::Project,
         MANAGERS,
     ),
