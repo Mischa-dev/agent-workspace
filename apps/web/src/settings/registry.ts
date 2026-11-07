@@ -10,7 +10,7 @@ import { ArrowDownUp, Bell, Blocks, BookOpen, Bug, Cpu, LayoutTemplate, Mail, Pa
 import settingsClaims from 'virtual:modules/slots/settings'
 
 import type { PartId } from '../experience/parts'
-import { ownerOf } from '../modules/ownership'
+import { moduleSwitchable, ownerOf } from '../modules/ownership'
 import type { IconGlyph } from '../ui'
 import type { SettingsGroup, SettingsPageProps, SettingsVisibility } from './types'
 
@@ -110,7 +110,7 @@ export function pagesIn(group: SettingsGroup, context: SettingsVisibility) {
       entry.group === group &&
       (entry.visible?.(context) ?? true) &&
       (!entry.part || (context.experience?.shows(entry.part) ?? true)) &&
-      moduleShows(context, `${group}/${entry.id}`),
+      pageModule(context, group, entry.id)?.state !== 'off',
   )
 }
 
@@ -118,8 +118,14 @@ export function findPage(group: SettingsGroup, id: string) {
   return SETTINGS_PAGES.find((entry) => entry.group === group && entry.id === id) ?? null
 }
 
-/** AWD-75: a page of a module that's off for the person leaves the nav. */
-function moduleShows(context: SettingsVisibility, page: string) {
-  const module = ownerOf(settingsClaims, page)
-  return !module || (context.experience?.moduleOn(module) ?? true)
+/** AWD-75: a settings page's module that can be off, while the person's settings load or once they say it's off; null when it's on (or where the settings couldn't load). */
+export type PageModuleState = { module: string; state: 'loading' | 'off' } | null
+
+/** AWD-75: the nav and search leave out a page whose module is off; opening one waits while the settings load, then says it's turned off. */
+export function pageModule(context: SettingsVisibility, group: SettingsGroup, id: string): PageModuleState {
+  const module = ownerOf(settingsClaims, `${group}/${id}`)
+  const settings = context.modules ?? context.experience
+  if (!module || !settings || !moduleSwitchable(module)) return null
+  if (settings.modules === 'loading') return { module, state: 'loading' }
+  return settings.moduleOn(module) ? null : { module, state: 'off' }
 }

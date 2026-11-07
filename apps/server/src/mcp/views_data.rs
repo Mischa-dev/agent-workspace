@@ -256,6 +256,17 @@ pub(super) async fn my_work(
     }
     let result = async {
         let projects = scope_projects(state, principal).await?;
+        // AWD-75: only projects where Tasks is on for the caller, as task_list.
+        let projects = {
+            let mut connection = state.pool.acquire().await?;
+            crate::modules::state::ProjectModules::load(
+                &mut connection,
+                principal.actor_id,
+                &projects,
+            )
+            .await?
+            .with(&projects, "tasks")
+        };
         let work = views::my_work(&state.pool, principal.actor_id, &projects).await?;
         let value = to_value(work)?;
         Ok::<_, AppError>(ToolResult::ok(MyWorkValue {

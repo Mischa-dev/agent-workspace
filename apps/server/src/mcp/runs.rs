@@ -22,6 +22,30 @@ use crate::{
 
 const NOT_FOR_AGENTS: &str = "Agents ask a person to start Codex with run_request; run_start spends a person's own Codex account.";
 
+/// AWD-75: the projects the caller belongs to where `module` is off for
+/// them, for lists that reach projects through membership rather than a
+/// list of projects; they leave these out before counting or limiting.
+pub(super) async fn projects_with_module_off(
+    state: &AppState,
+    actor_id: Uuid,
+    module: &str,
+) -> Result<Vec<Uuid>, AppError> {
+    let mut connection = state.pool.acquire().await?;
+    let projects = sqlx::query_scalar::<_, Uuid>(
+        "SELECT project_id FROM project_memberships WHERE actor_id = $1 AND enabled",
+    )
+    .bind(actor_id)
+    .fetch_all(&mut *connection)
+    .await?;
+    let on = crate::modules::state::ProjectModules::load(&mut connection, actor_id, &projects)
+        .await?
+        .keep(&projects, |set, _| set.contains(module));
+    Ok(projects
+        .into_iter()
+        .filter(|project| !on.contains(project))
+        .collect())
+}
+
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct RunStartArguments {
@@ -474,9 +498,14 @@ pub(super) async fn run_list(
         }
     };
     let limit = i64::from(arguments.limit.unwrap_or(20).clamp(1, 100));
+    let off = match projects_with_module_off(state, principal.actor_id, "runs").await {
+        Ok(off) => off,
+        Err(error) => return ToolResult::from_error(error, "run_list"),
+    };
     let result = sqlx::query_as::<_, RunRow>(&format!(
         r#"{RUN_SELECT}
           AND ($3::uuid IS NULL OR thread.project_id = $3)
+          AND NOT (thread.project_id = ANY($7))
           AND (cardinality($4::text[]) = 0 OR run.state = ANY($4))
           AND (NOT $5 OR run.requesting_actor_id = $1)
         ORDER BY run.created_at DESC, run.id DESC
@@ -488,6 +517,7 @@ pub(super) async fn run_list(
     .bind(states)
     .bind(arguments.mine.unwrap_or(false))
     .bind(limit)
+    .bind(&off)
     .fetch_all(&state.pool)
     .await;
     let rows = match result {

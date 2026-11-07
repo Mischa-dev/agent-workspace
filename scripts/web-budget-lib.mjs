@@ -24,8 +24,14 @@ export const WEB_ASSET_LIMITS = Object.freeze({
   // widths set before the first paint, offline sends from any page and more
   // remembered places bring it to 428,622 / 138,911; the resize edges and
   // the dialogs for comments, labels and decisions load when first used.
+  // Modules (AWD-75) put module gating in the shell: the page gate, the
+  // shortcut check, settings navigation and the rail, each reading only its
+  // own kind of manifest claims (vite.config.ts moduleProjections), with the
+  // turned-off page and the palette's claims loading lazily. That measured
+  // 433,897 / 140,611 (November 2026), so the gzip limit went from 136 to
+  // 138 KB by decision; the raw limit is unchanged.
   initialJavascriptRawBytes: 424 * 1024,
-  initialJavascriptGzipBytes: 136 * 1024,
+  initialJavascriptGzipBytes: 138 * 1024,
   // index.html's stylesheets: the design system's five theme presets,
   // components and page layouts. Measured 101,925 raw bytes; the UI kit
   // (toasts, command menu, shortcut sheet, skeletons) and Markdown styles

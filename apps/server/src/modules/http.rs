@@ -285,17 +285,24 @@ async fn open_thing(
         return Err(AppError::NotFound("thing"));
     }
     let projects = crate::search::browser_projects(&state.pool, principal.actor_id).await?;
+    let task_projects =
+        crate::search::projects_showing_tasks(&state.pool, principal.actor_id, &projects).await?;
     let mut connection = state.pool.acquire().await?;
     let modules = state::anywhere(&mut connection, principal.actor_id).await?;
+    let workspaces = state::by_workspace(&mut connection, principal.actor_id).await?;
     let viewer = things::Viewer {
         actor_id: principal.actor_id,
         projects: &projects,
+        task_projects: &task_projects,
         modules,
+        workspaces: &workspaces,
+        workspace_boards: true,
     };
     let thing = things::get(&mut connection, &viewer, &kind, id)
         .await?
         .ok_or(AppError::NotFound("thing"))?;
-    // Links are read in the thing's own workspace's modules.
+    // The thing and its links follow its own project's modules (the person's
+    // role there narrowing them), not every workspace's at once.
     let viewer = match thing.project_id {
         Some(project_id) => things::Viewer {
             modules: state::for_project(&mut connection, project_id, principal.actor_id)
@@ -305,6 +312,9 @@ async fn open_thing(
         },
         None => viewer,
     };
+    let thing = things::get(&mut connection, &viewer, &kind, id)
+        .await?
+        .ok_or(AppError::NotFound("thing"))?;
     let links = things::links(&mut connection, &viewer, &thing).await?;
     Ok(Json(ThingResponse { thing, links }))
 }

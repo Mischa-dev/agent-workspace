@@ -140,6 +140,37 @@ async fn within(state: &AppState, principal: &McpPrincipal) -> Result<Option<Vec
     accessible_project_ids(state, principal).await.map(Some)
 }
 
+/// AWD-75: of `within` (or, when it's everywhere, every project the caller
+/// has saved or scheduled something in), the projects where Inbox is on for
+/// them. Later follows Inbox in each item's own project.
+async fn inbox_within(
+    state: &AppState,
+    actor_id: Uuid,
+    within: Option<Vec<Uuid>>,
+) -> Result<Vec<Uuid>, AppError> {
+    let mut connection = state.pool.acquire().await?;
+    let projects = match within {
+        Some(projects) => projects,
+        None => {
+            sqlx::query_scalar::<_, Uuid>(
+                r#"
+                SELECT project_id FROM saved_items WHERE actor_id = $1
+                UNION
+                SELECT project_id FROM scheduled_messages WHERE author_actor_id = $1
+                "#,
+            )
+            .bind(actor_id)
+            .fetch_all(&mut *connection)
+            .await?
+        }
+    };
+    Ok(
+        crate::modules::state::ProjectModules::load(&mut connection, actor_id, &projects)
+            .await?
+            .keep(&projects, |modules, _| modules.contains("inbox")),
+    )
+}
+
 pub(super) async fn later_list(
     state: &AppState,
     principal: &McpPrincipal,
@@ -150,6 +181,9 @@ pub(super) async fn later_list(
     }
     let result = async {
         let within = within(state, principal).await?;
+        // AWD-75: items, scheduled messages and the open count leave out
+        // projects where Inbox is off for the caller.
+        let within = Some(inbox_within(state, principal.actor_id, within).await?);
         let view = arguments.view.as_deref().unwrap_or("open");
         let (items, scheduled) = match view {
             "open" | "done" => {
@@ -236,7 +270,16 @@ pub(super) async fn later_save(
         let work_item_id = match arguments.task.as_deref() {
             None => None,
             Some(task) => match resolve_task(state, principal, task).await? {
-                Some((id, _)) => Some(id),
+                Some((id, project_id)) => {
+                    // AWD-75: the task's own project decides, not the call's.
+                    if inbox_within(state, principal.actor_id, Some(vec![project_id]))
+                        .await?
+                        .is_empty()
+                    {
+                        return Ok(ToolResult::module_off("later_save", "Inbox"));
+                    }
+                    Some(id)
+                }
                 None => return Ok(ToolResult::not_found("That task")),
             },
         };
@@ -250,6 +293,32 @@ pub(super) async fn later_save(
             }
             if arguments.at.is_none() {
                 return Ok(ToolResult::invalid("at", "Say when, as RFC 3339."));
+            }
+            // AWD-75: a person's plain reminder is kept in their home
+            // workspace, so Inbox must be on there, not only somewhere. With
+            // no home workspace, saving answers as it always has.
+            if human {
+                let home = match crate::notification_settings::home_workspace(
+                    &state.pool,
+                    principal.actor_id,
+                    None,
+                )
+                .await
+                {
+                    Ok(home) => Some(home),
+                    Err(AppError::NotFound(_)) => None,
+                    Err(error) => return Err(error),
+                };
+                if let Some(home) = home {
+                    let mut connection = state.pool.acquire().await?;
+                    if crate::modules::state::by_workspace(&mut connection, principal.actor_id)
+                        .await?
+                        .get(&home)
+                        .is_some_and(|modules| !modules.contains("inbox"))
+                    {
+                        return Ok(ToolResult::module_off("later_save", "Inbox"));
+                    }
+                }
             }
         }
         let saver = Saver {
@@ -340,6 +409,13 @@ pub(super) async fn later_update(
             && !projects.contains(&item.project_id)
         {
             return Ok(ToolResult::not_found("That item"));
+        }
+        // AWD-75: the item's own project decides whether Inbox is on.
+        if inbox_within(state, principal.actor_id, Some(vec![item.project_id]))
+            .await?
+            .is_empty()
+        {
+            return Ok(ToolResult::module_off("later_update", "Inbox"));
         }
         if arguments.remove == Some(true) {
             later::remove(&state.pool, principal.actor_id, id).await?;
@@ -514,6 +590,14 @@ pub(super) async fn scheduled_message_update(
             && !projects.contains(&existing.project_id)
         {
             return Ok(ToolResult::not_found("That scheduled message"));
+        }
+        // AWD-75: the conversation's own project decides: Messages for a DM
+        // or group, Channels for a project's channel or thread.
+        if let Some(module) =
+            super::talk::conversation_module_off(state, principal.actor_id, existing.project_id)
+                .await?
+        {
+            return Ok(ToolResult::module_off("scheduled_message_update", module));
         }
         if arguments.cancel == Some(true) {
             return match scheduled_messages::cancel(&state.pool, principal.actor_id, id).await {

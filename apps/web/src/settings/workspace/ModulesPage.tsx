@@ -50,8 +50,10 @@ function WorkspaceModules({ name, organizationId }: { name: string; organization
       requestJson<ModulesResponse>(modulesPath(organizationId), { method: 'PUT', json: body }),
     onSuccess: (response) => {
       queryClient.setQueryData(modulesKey(organizationId), response)
-      // What everyone sees follows from the layouts, which carry the modules.
+      // What everyone sees follows from the layouts, which carry the modules,
+      // and the rail and the command menu from each project's modulesOff.
       void refreshLayouts(queryClient)
+      void queryClient.invalidateQueries({ queryKey: ['projects'] })
       showToast({ tone: 'success', title: 'Modules saved', description: 'Everyone in the workspace sees the change.' })
     },
     onError: (error) => {

@@ -380,6 +380,14 @@ pub(super) async fn projects_list(
                 .await?,
             );
         }
+        // AWD-75: a project shows only where Projects is on for the caller;
+        // the Messages space stays, as it always has.
+        let projects = {
+            let mut connection = state.pool.acquire().await?;
+            ProjectModules::load(&mut connection, principal.actor_id, &projects)
+                .await?
+                .keep(&projects, |set, direct| direct || set.contains("projects"))
+        };
         let mut rows = sqlx::query_as::<_, ProjectLine>(
             r#"
             SELECT project.id::text AS id, project.project_key AS key,

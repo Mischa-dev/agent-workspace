@@ -59,6 +59,81 @@ fn id_argument(value: Option<&str>, field: &'static str) -> Result<uuid::Uuid, T
 // ---------------------------------------------------------------------------
 // Webhooks
 
+/// AWD-75: whether Automations, which holds webhooks, is on for the caller
+/// where a webhook acts: the project it's limited to, else its workspace.
+async fn automations_on(
+    state: &AppState,
+    actor_id: uuid::Uuid,
+    organization_id: uuid::Uuid,
+    project_id: Option<uuid::Uuid>,
+) -> Result<bool, AppError> {
+    let mut connection = state.pool.acquire().await?;
+    Ok(match project_id {
+        Some(project_id) => {
+            crate::modules::state::for_project(&mut connection, project_id, actor_id)
+                .await?
+                .unwrap_or_default()
+                .contains("automations")
+        }
+        None => crate::modules::state::by_workspace(&mut connection, actor_id)
+            .await?
+            .get(&organization_id)
+            .is_none_or(|modules| modules.contains("automations")),
+    })
+}
+
+/// AWD-75: the caller's own webhook, refused when Automations is off where
+/// it acts. One they can't reach is left to the operation's own answer.
+async fn webhook_module_off(
+    state: &AppState,
+    caller: &Caller,
+    webhook_id: uuid::Uuid,
+) -> Result<bool, AppError> {
+    match webhooks::scope(state, caller, webhook_id).await {
+        Ok((organization_id, project_id)) => {
+            Ok(!automations_on(state, caller.actor_id, organization_id, project_id).await?)
+        }
+        Err(AppError::NotFound(_)) => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+/// AWD-75: the projects and workspaces where Automations is off for the
+/// caller, among their own webhooks' projects and the projects they're in.
+async fn automations_off(
+    state: &AppState,
+    actor_id: uuid::Uuid,
+) -> Result<(Vec<uuid::Uuid>, Vec<uuid::Uuid>), AppError> {
+    let mut connection = state.pool.acquire().await?;
+    let workspaces = crate::modules::state::by_workspace(&mut connection, actor_id)
+        .await?
+        .into_iter()
+        .filter(|(_, modules)| !modules.contains("automations"))
+        .map(|(organization_id, _)| organization_id)
+        .collect();
+    let projects = sqlx::query_scalar::<_, uuid::Uuid>(
+        r#"
+        SELECT project_id FROM webhook_subscriptions
+        WHERE owner_actor_id = $1 AND project_id IS NOT NULL
+        UNION
+        SELECT project_id FROM project_memberships WHERE actor_id = $1 AND enabled
+        "#,
+    )
+    .bind(actor_id)
+    .fetch_all(&mut *connection)
+    .await?;
+    let on = crate::modules::state::ProjectModules::load(&mut connection, actor_id, &projects)
+        .await?
+        .keep(&projects, |modules, _| modules.contains("automations"));
+    Ok((
+        projects
+            .into_iter()
+            .filter(|project| !on.contains(project))
+            .collect(),
+        workspaces,
+    ))
+}
+
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct WebhookListArguments {}
@@ -73,7 +148,13 @@ pub(super) async fn webhook_list(
     }
     let caller = Caller::mcp(principal);
     finish(
-        async { to_value(webhooks::list(state, &caller).await?) }.await,
+        async {
+            // AWD-75: only webhooks (and projects to limit one to) where
+            // Automations is on for the caller, left out before the limit.
+            let (off_projects, off_workspaces) = automations_off(state, caller.actor_id).await?;
+            to_value(webhooks::list_in(state, &caller, &off_projects, &off_workspaces).await?)
+        }
+        .await,
         "webhook_list",
     )
 }
@@ -136,6 +217,30 @@ pub(super) async fn webhook_write(
             Some(_) => return ToolResult::not_found("That project"),
             None => None,
         };
+        // AWD-75: a webhook across a workspace goes to the person's first
+        // one, so Automations must be on there, not only where the call was
+        // checked. (One limited to a project was checked in that project.)
+        if project_id.is_none()
+            && caller.token_project_id.is_none()
+            && caller.actor_kind == crate::policy::ActorKind::Human
+        {
+            let off = async {
+                Ok::<_, AppError>(
+                    match webhooks::default_workspace(&state.pool, caller.actor_id, None).await? {
+                        Some(organization_id) => {
+                            !automations_on(state, caller.actor_id, organization_id, None).await?
+                        }
+                        None => false,
+                    },
+                )
+            }
+            .await;
+            match off {
+                Ok(true) => return ToolResult::module_off("webhook_write", "Automations"),
+                Ok(false) => {}
+                Err(error) => return refusal(error, "webhook_write"),
+            }
+        }
         return finish(
             async {
                 to_value(
@@ -161,6 +266,11 @@ pub(super) async fn webhook_write(
         Ok(id) => id,
         Err(refused) => return refused,
     };
+    match webhook_module_off(state, &caller, webhook_id).await {
+        Ok(true) => return ToolResult::module_off("webhook_write", "Automations"),
+        Ok(false) => {}
+        Err(error) => return refusal(error, "webhook_write"),
+    }
     let result = async {
         match operation {
             WebhookOperation::Create => unreachable!("handled above"),
@@ -231,6 +341,11 @@ pub(super) async fn webhook_deliveries(
         Err(refused) => return refused,
     };
     let caller = Caller::mcp(principal);
+    match webhook_module_off(state, &caller, webhook_id).await {
+        Ok(true) => return ToolResult::module_off("webhook_deliveries", "Automations"),
+        Ok(false) => {}
+        Err(error) => return refusal(error, "webhook_deliveries"),
+    }
     finish(
         async {
             to_value(

@@ -944,8 +944,8 @@ async fn output_schema(app: &axum::Router, token: &str, session: &str, name: &st
 }
 
 /// Checks the parts of JSON Schema our generated schemas use: `$ref`,
-/// `required`, `properties`, `items`, `const`, `type`, and the `oneOf`/`anyOf`
-/// /`allOf` combinators. Returns the path of the first mismatch.
+/// `required`, `properties`, `items`, `const`, `enum`, `type`, and the
+/// `oneOf`/`anyOf`/`allOf` combinators. Returns the path of the first mismatch.
 fn conforms(root: &Value, schema: &Value, value: &Value, path: &str) -> Result<(), String> {
     if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
         let target = reference
@@ -983,6 +983,13 @@ fn conforms(root: &Value, schema: &Value, value: &Value, path: &str) -> Result<(
         && expected != value
     {
         return Err(format!("{path} (expected {expected})"));
+    }
+    // A unit enum's undocumented variants come as one `enum` branch beside
+    // its documented ones (AWD-75's LinkKind).
+    if let Some(allowed) = schema.get("enum").and_then(Value::as_array)
+        && !allowed.contains(value)
+    {
+        return Err(format!("{path} (not one of {allowed:?})"));
     }
     if let Some(types) = schema.get("type") {
         let types = types

@@ -64,7 +64,7 @@ async fn workspace_of(
     state: &AppState,
     principal: &McpPrincipal,
     project: Option<&str>,
-) -> Result<Option<Uuid>, AppError> {
+) -> Result<Option<(Uuid, Uuid)>, AppError> {
     let project_id = match project {
         Some(project) => match parse_id(project) {
             Some(id) => id,
@@ -82,7 +82,8 @@ async fn workspace_of(
         sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
             .bind(project_id)
             .fetch_optional(&state.pool)
-            .await?,
+            .await?
+            .map(|organization_id| (organization_id, project_id)),
     )
 }
 
@@ -112,14 +113,23 @@ pub(super) async fn module_list(
         None => None,
     };
     let result = async {
-        let Some(organization_id) =
+        let Some((organization_id, project_id)) =
             workspace_of(state, principal, arguments.project_id.as_deref()).await?
         else {
             return Ok(ToolResult::not_found("That project"));
         };
         let mut connection = state.pool.acquire().await?;
         let switches = state::switches(&mut connection, organization_id).await?;
-        let set = state::for_member(&mut connection, organization_id, principal.actor_id).await?;
+        // In a project the caller names, their role there narrows the
+        // workspace's switches, as tool calls there are checked; otherwise
+        // their workspace role does.
+        let set = if arguments.project_id.is_some() {
+            state::for_project(&mut connection, project_id, principal.actor_id)
+                .await?
+                .unwrap_or_default()
+        } else {
+            state::for_member(&mut connection, organization_id, principal.actor_id).await?
+        };
         Ok::<_, AppError>(ToolResult::ok(ModuleListValue {
             workspace_id: organization_id,
             modules: manifest::core()
@@ -179,12 +189,21 @@ pub(super) async fn thing_open(
     };
     let result = async {
         let projects = accessible_project_ids(state, principal).await?;
+        let task_projects =
+            crate::search::projects_showing_tasks(&state.pool, principal.actor_id, &projects)
+                .await?;
         let mut connection = state.pool.acquire().await?;
         let anywhere = state::anywhere(&mut connection, principal.actor_id).await?;
+        let workspaces = state::by_workspace(&mut connection, principal.actor_id).await?;
         let viewer = modules::things::Viewer {
             actor_id: principal.actor_id,
             projects: &projects,
+            task_projects: &task_projects,
             modules: anywhere,
+            workspaces: &workspaces,
+            // An older credential confined to one project reaches no board
+            // across a workspace, as whiteboards::access has it.
+            workspace_boards: super::common::confined_project(principal).is_none(),
         };
         let Some(thing) = modules::things::get(&mut connection, &viewer, &kind, id).await? else {
             return Ok(ToolResult::not_found("That thing"));
@@ -195,10 +214,13 @@ pub(super) async fn thing_open(
                 .unwrap_or_default(),
             None => anywhere,
         };
-        if !modules.contains(&thing.module) {
-            return Ok(ToolResult::not_found("That thing"));
-        }
+        // The thing and its links follow its own project's modules (the
+        // caller's role there narrowing them), as `shown` reads them: a
+        // conversation by its project's kind, so a DM thread follows Messages.
         let viewer = modules::things::Viewer { modules, ..viewer };
+        let Some(thing) = modules::things::get(&mut connection, &viewer, &kind, id).await? else {
+            return Ok(ToolResult::not_found("That thing"));
+        };
         let links = modules::things::links(&mut connection, &viewer, &thing).await?;
         Ok::<_, AppError>(ToolResult::ok(ThingOpenValue { thing, links }))
     }

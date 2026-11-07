@@ -1816,6 +1816,36 @@ async fn reads_naming_tasks_or_repositories_follow_the_role_and_limit() {
     )
     .await;
     assert_eq!(listed(&overview, "repositories").len(), 1, "{overview}");
+    // Things (AWD-75) name tasks too: both open, for her app and in the browser.
+    let open_thing = |task: Uuid| {
+        let token = bea_app.clone();
+        let session = session.clone();
+        async move {
+            tool(
+                app,
+                &token,
+                &session,
+                "thing_open",
+                json!({"kind": "task", "id": task}),
+            )
+            .await
+        }
+    };
+    let browse_thing = |task: Uuid| {
+        let request = bea_browser.request(
+            "GET",
+            &format!("/api/v1/things/task/{task}"),
+            None,
+            Value::Null,
+        );
+        async move { send(app, request).await }
+    };
+    for task in [in_work, in_other] {
+        let opened = open_thing(task).await;
+        assert_eq!(opened["outcome"], "ok", "{opened}");
+        let (status, thing) = browse_thing(task).await;
+        assert_eq!(status, StatusCode::OK, "{thing}");
+    }
 
     // In Other, Bea's role no longer sees tasks: its task leaves the task
     // list (though the gate opens on Work), saved items and notifications.
@@ -1854,6 +1884,15 @@ async fn reads_naming_tasks_or_repositories_follow_the_role_and_limit() {
     let inbox = tool(app, &bea_app, &session, "notification_list", json!({})).await;
     assert_eq!(listed(&inbox, "notifications").len(), 1, "{inbox}");
     assert!(!inbox.to_string().contains("Hidden plan"), "{inbox}");
+    // Nor is it a thing for her any more, by MCP or in the browser.
+    let opened = open_thing(in_other).await;
+    assert_eq!(opened["outcome"], "not_found", "{opened}");
+    assert!(!opened.to_string().contains("Hidden plan"), "{opened}");
+    let (status, thing) = browse_thing(in_other).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{thing}");
+    assert!(!thing.to_string().contains("Hidden plan"), "{thing}");
+    let opened = open_thing(in_work).await;
+    assert_eq!(opened["outcome"], "ok", "{opened}");
     let (status, page) = send(
         app,
         bea_browser.request("GET", "/api/v1/later", None, Value::Null),
@@ -1892,6 +1931,11 @@ async fn reads_naming_tasks_or_repositories_follow_the_role_and_limit() {
     .await;
     assert_eq!(overview["outcome"], "ok", "{overview}");
     assert_eq!(listed(&overview, "repositories").len(), 0, "{overview}");
+    // Work's task isn't a thing for her app now, but still is in her browser.
+    let opened = open_thing(in_work).await;
+    assert_eq!(opened["outcome"], "not_found", "{opened}");
+    let (status, thing) = browse_thing(in_work).await;
+    assert_eq!(status, StatusCode::OK, "{thing}");
     // Bea herself still has Work's in the browser.
     let (_, page) = send(
         app,

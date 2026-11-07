@@ -225,12 +225,20 @@ fn is_zero(value: &i64) -> bool {
 // Shared helpers
 
 /// The projects among `projects` where the caller's role lets them see
-/// repositories and pull requests.
+/// repositories and pull requests, and Code is on for them (AWD-75), so
+/// the lists, and a task's pull requests across projects, leave out
+/// projects where it's off.
 async fn repository_projects(
     state: &AppState,
     principal: &McpPrincipal,
     projects: &[Uuid],
 ) -> Result<Vec<Uuid>, AppError> {
+    let projects = {
+        let mut connection = state.pool.acquire().await?;
+        crate::modules::state::ProjectModules::load(&mut connection, principal.actor_id, projects)
+            .await?
+            .keep(projects, |set, _| set.contains("code"))
+    };
     let roles = sqlx::query_as::<_, (Uuid, String, Option<Vec<String>>)>(
         r#"
         SELECT membership.project_id, membership.role,
@@ -242,7 +250,7 @@ async fn repository_projects(
         "#,
     )
     .bind(principal.actor_id)
-    .bind(projects)
+    .bind(&projects)
     .fetch_all(&state.pool)
     .await?;
     Ok(roles

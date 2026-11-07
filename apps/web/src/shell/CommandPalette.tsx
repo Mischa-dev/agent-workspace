@@ -1,18 +1,18 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
 import paletteClaims from 'virtual:modules/slots/palette'
-import shortcutClaims from 'virtual:modules/slots/shortcuts'
 import slashClaims from 'virtual:modules/slots/slash'
 
 import { clearAuthenticatedQueryCache, logout, useAuthenticatedSession } from '../auth/session'
 import { useProjectConversationSidebar } from '../conversations/hooks'
-import { useHomeExperience, useProjectExperience } from '../experience/layout'
+import { useHomeExperience, useHomeWorkspaceId, useProjectExperience, type Experience } from '../experience/layout'
 import { conversationTitle, openDm, useDirectOverview } from '../direct/api'
 import { projectLocationHref } from '../projects/locations'
 import { projectSettingsHref } from '../settings/paths'
 import { useProjectSearch, useProjects, useSwitchProject, useUpdateProjectNavigation } from '../projects/hooks'
 import { moduleSwitchable, ownerOf } from '../modules/ownership'
+import { moduleOfPath } from '../modules/pageOwners'
 import { ProjectInitials } from '../projects/ProjectInitials'
 import type { Project } from '../projects/types'
 import { THEME_PRESETS } from '../theme/slots'
@@ -27,6 +27,7 @@ import { closeCommandMenu, openMarkAllRead, openShortcutSheet, pageCommands, use
 import { markAllRead } from './markAllRead'
 import { pauseChoices, pausedUntilLabel, useNotificationPause } from './notificationPause'
 import { placeIcon, readRecentPlaces } from './recentPlaces'
+import { shortcutOn } from './shortcutModules'
 import { SHORTCUTS } from './shortcutSheet'
 import { parseTaskKey } from './shortcuts'
 import { useProjectByKey } from './useProjectByKey'
@@ -55,7 +56,7 @@ function useTaskResults(query: string, current: Project | null) {
     queryFn: async () => {
       if (!target) return []
       const results = await searchWorkItemReferences(target.id, settled)
-      return results.map((result) => ({ ...result, projectName: target.name }))
+      return results.map((result) => ({ ...result, projectName: target.name, projectId: target.id }))
     },
     enabled,
     staleTime: 15_000,
@@ -88,7 +89,7 @@ export function CommandPalette() {
   // those of a module that can be off while the person's settings load.
   const projectExperience = useProjectExperience(current?.id)
   const homeExperience = useHomeExperience()
-  const experience = current ? projectExperience : homeExperience
+  const homeId = useHomeWorkspaceId()
   const direct = useDirectOverview()
   const { mutateAsync: updateNavigation } = useUpdateProjectNavigation()
   const { mutateAsync: switchProject } = useSwitchProject()
@@ -117,7 +118,7 @@ export function CommandPalette() {
     if (!query.trim()) {
       const here = location.pathname
       for (const place of readRecentPlaces(session.user.actorId).filter((place) => place.path !== here).slice(0, 6)) {
-        list.push({ id: `r:${place.path}`, group: 'Recent', label: place.title, icon: placeIcon(place.path), onSelect: go(place.path) })
+        list.push({ id: `r:${place.path}`, group: 'Recent', label: place.title, icon: placeIcon(place.path), onSelect: go(place.path), ...destination(place.path, queryClient, homeId) })
       }
     }
 
@@ -167,6 +168,7 @@ export function CommandPalette() {
     for (const task of tasks.data ?? []) {
       list.push({
         id: `w:${task.id}`,
+        project: task.projectId,
         group: 'Tasks',
         label: task.title,
         hint: `${task.key} · ${task.projectName}`,
@@ -216,6 +218,7 @@ export function CommandPalette() {
       if (project.id === current?.id) continue
       list.push({
         id: `a:create-task:${project.id}`,
+        project: project.id,
         group: 'Actions',
         label: `Create task in ${project.name}`,
         icon: 'plus',
@@ -259,6 +262,8 @@ export function CommandPalette() {
         hint: `/${command.name}`,
         keywords: [`/${command.name}`, command.name],
         onSelect: go(command.paletteHref),
+        // AWD-75: these lead to Later, so they follow Home's Inbox, not the open project.
+        ...destination(command.paletteHref, queryClient, homeId),
       })
     }
     list.push({
@@ -340,6 +345,7 @@ export function CommandPalette() {
     for (const project of [...projects, ...found]) {
       list.push({
         id: `pr:${project.id}`,
+        project: project.id,
         group: 'Projects',
         label: project.name,
         hint: project.key,
@@ -409,17 +415,23 @@ export function CommandPalette() {
       })
     }
     return list
-  }, [current, direct.data, location.pathname, navigate, notificationPause, projectSearch.data, projects, query, queryClient, session.user, sidebar.data, state.open, state.page, switchProject, tasks.data, theme, updateNavigation])
+  }, [current, direct.data, homeId, location.pathname, navigate, notificationPause, projectSearch.data, projects, query, queryClient, session.user, sidebar.data, state.open, state.page, switchProject, tasks.data, theme, updateNavigation])
 
-  const shownItems = useMemo(
-    () =>
-      items.filter((item) => {
-        const module = paletteModule(item.id)
-        if (!module || !moduleSwitchable(module)) return true
-        return experience.modules !== 'loading' && experience.moduleOn(module)
-      }),
-    [experience, items],
-  )
+  // AWD-75: an entry follows the module of where it leads, there: in another
+  // project, that project's modules off (from the projects lists, so no
+  // request per project); the open project's own entries, its settings; and
+  // the rest, Home's. Not while those settings load. A typed task key opens
+  // its task's project, whose own page decides.
+  const shownItems = useMemo(() => {
+    const listed = new Map([...(projectSearch.data?.projects ?? []), ...projects].map((project) => [project.id, project]))
+    return items.filter((item) => {
+      const module = item.module ?? paletteModule(item.id)
+      if (!module || !moduleSwitchable(module) || item.ownerUnknown || item.id.startsWith('k:')) return true
+      if (item.project && item.project !== current?.id) return !listed.get(item.project)?.modulesOff?.includes(module)
+      const there = current && (item.project || IN_PROJECT.test(item.id)) ? projectExperience : homeExperience
+      return there.modules !== 'loading' && there.moduleOn(module)
+    })
+  }, [current, homeExperience, items, projectExperience, projectSearch.data, projects])
 
   // With nothing typed, show where you'd most likely go; everything else is a search away.
   const visibleItems = useMemo(() => {
@@ -458,9 +470,11 @@ export function CommandPalette() {
         />
       ) : null}
       <ShortcutSheet
+        home={homeExperience}
         inProject={Boolean(current)}
         onClose={closeCommandMenu}
         open={state.open === 'shortcuts'}
+        project={current ? projectExperience : null}
         taskView={taskViewAt(location.pathname, location.search)}
       />
       <MarkAllReadDialog onClose={closeCommandMenu} open={state.open === 'mark-all-read'} projectIds={projects.map((project) => project.id)} />
@@ -474,15 +488,25 @@ function taskViewAt(pathname: string, search: string): 'list' | 'board' | null {
   return new URLSearchParams(search).get('view') === 'board' ? 'board' : 'list'
 }
 
-function ShortcutSheet({ inProject, onClose, open, taskView }: { inProject: boolean; onClose: () => void; open: boolean; taskView: 'list' | 'board' | null }) {
+function ShortcutSheet({
+  home,
+  inProject,
+  onClose,
+  open,
+  project,
+  taskView,
+}: {
+  /** AWD-75: the settings the keys follow (shortcutOn), so the sheet lists what they do. */
+  home: Experience
+  inProject: boolean
+  onClose: () => void
+  open: boolean
+  project: Experience | null
+  taskView: 'list' | 'board' | null
+}) {
   const groups = ['General', 'Go to', 'Conversations'] as const
   // The sheet already says how to open itself.
   const taskKeys = (taskView === 'board' ? BOARD_SHORTCUTS : LIST_SHORTCUTS).filter((shortcut) => shortcut.keys.join() !== '?')
-  const experience = useHomeExperience()
-  const shortcutOn = (action: string) => {
-    const module = ownerOf(shortcutClaims, action)
-    return !module || experience.moduleOn(module)
-  }
   return (
     <Dialog
       description={
@@ -520,7 +544,7 @@ function ShortcutSheet({ inProject, onClose, open, taskView }: { inProject: bool
           <section key={group}>
             <h3>{group}</h3>
             <dl>
-              {SHORTCUTS.filter((shortcut) => shortcut.group === group && shortcutOn(shortcut.action)).map((shortcut) => (
+              {SHORTCUTS.filter((shortcut) => shortcut.group === group && shortcutOn(shortcut.action, project, home)).map((shortcut) => (
                 <div className="aw-shortcuts__row" key={shortcut.action} style={{ display: 'contents' }}>
                   <dt>{shortcut.label}</dt>
                   <dd aria-label={shortcut.keys.length === 2 && shortcut.keys[0] === 'G' ? `G then ${shortcut.keys[1]}` : shortcut.keys.map(spokenKey).join(' ')}>
@@ -590,6 +614,31 @@ function MarkAllReadDialog({ onClose, open, projectIds }: { onClose: () => void;
       title="Mark all messages read?"
     />
   )
+}
+
+/** AWD-75: entries that act in the open project; the rest lead across the workspace. */
+const IN_PROJECT = /^(p:|c:|t:|s:project$|a:create-task$|a:pin$)/
+
+/** Where a board or run is, as its page's cached answer says. */
+type Owner = { projectId?: string | null; organizationId?: string; whiteboard?: Owner }
+
+/**
+ * AWD-75: where a place leads: its page's module, and its project. A run's
+ * or a board's comes from its page's cached answer (no request here); a
+ * board across Home's workspace follows Home; one not known here is left to
+ * its own page.
+ */
+function destination(href: string, queryClient: QueryClient, homeId: string | null): Pick<CommandItem, 'module' | 'project' | 'ownerUnknown'> {
+  const path = href.split(/[?#]/)[0]
+  const module = moduleOfPath(path) ?? undefined
+  const project = /^\/projects\/([^/]+)/.exec(path)?.[1]
+  if (project) return { module, project }
+  const [, kind, id] = /^\/(runs|whiteboards)\/([^/]+)/.exec(path) ?? []
+  if (!kind) return { module }
+  const cached = queryClient.getQueryData<Owner>([kind, 'detail', id])
+  const owner = cached?.whiteboard ?? cached
+  if (owner?.projectId) return { module, project: owner.projectId }
+  return owner?.organizationId && owner.organizationId === homeId ? { module } : { module, ownerUnknown: true }
 }
 
 /** The module a palette entry belongs to; slash commands follow their own. */
