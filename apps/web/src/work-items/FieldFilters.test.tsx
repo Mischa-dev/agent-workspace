@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { FieldDefinition } from '../fields/fieldModel'
@@ -21,7 +21,10 @@ const risk: FieldDefinition = {
   version: 1,
 }
 
-afterEach(() => vi.clearAllMocks())
+afterEach(() => {
+  cleanup()
+  vi.clearAllMocks()
+})
 
 describe('FieldFilterEditor', () => {
   it('says so and leaves the list alone when the filters would be too long to keep', () => {
@@ -35,7 +38,7 @@ describe('FieldFilterEditor', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
     expect(onApply).not.toHaveBeenCalled()
     expect(onClose).not.toHaveBeenCalled()
-    expect(screen.getByText(/Too many filter values/)).toBeTruthy()
+    expect(screen.getByText(/Too many field filters or values/)).toBeTruthy()
   })
 
   it('applies a filter that fits', () => {

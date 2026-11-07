@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -44,7 +44,10 @@ function menu(state: ListState) {
   )
 }
 
-afterEach(() => vi.clearAllMocks())
+afterEach(() => {
+  cleanup()
+  vi.clearAllMocks()
+})
 
 describe('ViewsMenu', () => {
   it('waits for the project fields before saving field filters, then saves "me" for a person field', async () => {

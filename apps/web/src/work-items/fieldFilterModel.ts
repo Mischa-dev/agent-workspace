@@ -1,4 +1,4 @@
-import { MAX_FIELD_FILTERS_CHARACTERS, clausesParam, parseClauses, type FieldClause } from '../fields/fieldModel'
+import { clausesParam, clausesWithinLimits, parseClauses, type FieldClause } from '../fields/fieldModel'
 import { withFilter, type ListState } from './listModel'
 
 /** The list's custom field filters (AWD-89), read from its URL. */
@@ -12,7 +12,7 @@ export function fieldClauses(state: ListState): FieldClause[] {
  * the list would then read as no filters at all.
  */
 export function clausesFit(clauses: readonly FieldClause[]): boolean {
-  return (clausesParam(clauses)?.length ?? 0) <= MAX_FIELD_FILTERS_CHARACTERS
+  return clausesWithinLimits(clauses)
 }
 
 /** The list's field filters with the one at `index` replaced, or `clause` added (index null). */

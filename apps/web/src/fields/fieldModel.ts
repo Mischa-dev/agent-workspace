@@ -253,6 +253,28 @@ export function parseClauses(param: string | undefined | null): FieldClause[] {
  * any filter the list applies can be read back and saved.
  */
 export const MAX_FIELD_FILTERS_CHARACTERS = 1000
+/** The server's limits on one list request's field filters (fields.rs: MAX_CLAUSES, MAX_CLAUSE_VALUES, MAX_CLAUSE_VALUE_CHARACTERS). */
+export const MAX_FIELD_CLAUSES = 8
+export const MAX_CLAUSE_VALUES = 20
+export const MAX_CLAUSE_VALUE_CHARACTERS = 200
+
+/**
+ * Whether field filters are ones the list can keep and the server takes:
+ * at most MAX_FIELD_CLAUSES of them, each with at most MAX_CLAUSE_VALUES
+ * values of at most MAX_CLAUSE_VALUE_CHARACTERS characters, and
+ * MAX_FIELD_FILTERS_CHARACTERS as the URL writes them.
+ */
+export function clausesWithinLimits(clauses: readonly FieldClause[]): boolean {
+  return (
+    clauses.length <= MAX_FIELD_CLAUSES &&
+    clauses.every(
+      (clause) =>
+        (clause.values?.length ?? 0) <= MAX_CLAUSE_VALUES &&
+        (clause.values ?? []).every((value) => [...value].length <= MAX_CLAUSE_VALUE_CHARACTERS),
+    ) &&
+    (clausesParam(clauses)?.length ?? 0) <= MAX_FIELD_FILTERS_CHARACTERS
+  )
+}
 
 export function clausesParam(clauses: readonly FieldClause[]): string | undefined {
   const kept = clauses.filter((clause) => !opTakesValues(clause.op) || (clause.values?.length ?? 0) > 0)

@@ -148,7 +148,7 @@ export function FieldFilterEditor({
         </SelectField>
         {chooser}
         {tooMany ? (
-          <Banner tone="danger">Too many filter values for this list to keep. Choose fewer, or remove another field filter.</Banner>
+          <Banner tone="danger">Too many field filters or values for this list to keep. Choose fewer, or remove another field filter.</Banner>
         ) : null}
         <Button disabled={!ready} size="sm" type="submit">
           Apply

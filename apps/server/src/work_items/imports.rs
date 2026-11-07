@@ -517,10 +517,15 @@ fn resolve(
         };
         // A multiple choice exported here is a JSON list of option names,
         // read exactly; any other cell (another tool's "A, B") is read as
-        // written, a best effort (see fields::normalize_value).
+        // written, a best effort (see fields::normalize_value). A value that
+        // names something (a person's @handle, an option, a link) comes back
+        // without the apostrophe the export put before a formula character.
         let input = match field.field_type {
             FieldType::MultipleChoice => {
-                exported_choices(raw).unwrap_or_else(|| Value::String(raw.clone()))
+                exported_choices(raw).unwrap_or_else(|| Value::String(unguarded(raw).to_owned()))
+            }
+            FieldType::SingleChoice | FieldType::Person | FieldType::Link => {
+                Value::String(unguarded(raw).to_owned())
             }
             _ => Value::String(raw.clone()),
         };
@@ -2083,6 +2088,17 @@ fn exported_choices(raw: &str) -> Option<Value> {
     Some(Value::Array(names.into_iter().map(Value::String).collect()))
 }
 
+/// A cell as it was before `csv_field` guarded it against spreadsheet
+/// formulas: "'@ana" is "@ana" again. Only for values that name something
+/// (a person, an option, a link), where a leading apostrophe before = + -
+/// or @ can't be meant; text keeps what the file says.
+fn unguarded(raw: &str) -> &str {
+    match raw.strip_prefix('\'') {
+        Some(rest) if rest.starts_with(['=', '+', '-', '@']) => rest,
+        _ => raw,
+    }
+}
+
 /// How a custom field's CSV column starts, so a field named like a built-in
 /// column (Priority, Status) or one of its aliases isn't read as that column.
 const FIELD_COLUMN_PREFIX: &str = "Field: ";
@@ -2616,5 +2632,65 @@ mod tests {
             panic!("the selection didn't read back");
         };
         assert_eq!(ids.len(), fields::MAX_OPTIONS);
+    }
+
+    /// The export still guards cells against spreadsheet formulas, and a
+    /// person's @handle or an option named "=Plan" still reads back as
+    /// itself; a text field keeps what the file says.
+    #[test]
+    fn formula_guarded_names_read_back() {
+        let definition = |name: &str, field_type: FieldType, options: &[&str]| FieldDefinition {
+            id: Uuid::now_v7(),
+            name: name.to_owned(),
+            description: String::new(),
+            field_type,
+            config: if options.is_empty() {
+                fields::FieldConfig::default()
+            } else {
+                let options = options
+                    .iter()
+                    .map(|name| fields::OptionInput {
+                        id: None,
+                        name: (*name).to_owned(),
+                        color: None,
+                    })
+                    .collect::<Vec<_>>();
+                fields::normalize_config(field_type, None, Some(&options), None)
+                    .expect("test options")
+            },
+            position: 0,
+            archived: false,
+            version: 1,
+        };
+        let definitions = vec![
+            definition("Owner", FieldType::Person, &[]),
+            definition("Stage", FieldType::SingleChoice, &["=Plan", "Ship"]),
+            definition("Note", FieldType::Text, &[]),
+        ];
+        let mut task = areas_task(0, &[]);
+        task.fields = serde_json::Map::from_iter([
+            ("Owner".to_owned(), json!("@ana")),
+            ("Stage".to_owned(), json!("=Plan")),
+            ("Note".to_owned(), json!("=SUM(A1)")),
+        ]);
+        let text = tasks_csv(&[task], &definitions);
+        // Every one of them is guarded in the file.
+        for guarded in ["'@ana", "'=Plan", "'=SUM(A1)"] {
+            assert!(text.contains(guarded), "{guarded} in {text}");
+        }
+        let records = parse_csv(&text).expect("test input is valid");
+        let rows = csv_rows(&records, &auto_mapping(&records[0])).expect("test input is valid");
+        let mut project = context();
+        project.fields = definitions;
+        let resolved = resolve(&project, &ImportOptions::default(), 0, &rows[0]);
+        assert_eq!(
+            resolved.field_inputs,
+            vec![
+                ("Note".to_owned(), json!("'=SUM(A1)")),
+                ("Owner".to_owned(), json!("@ana")),
+                ("Stage".to_owned(), json!("=Plan")),
+            ]
+        );
+        assert_eq!(unguarded("'Not a formula"), "'Not a formula");
     }
 }

@@ -56,4 +56,20 @@ describe('field filter budget', () => {
     // Two filters of twelve IDs each: about 1,077 characters, over the 1,000 a saved view keeps.
     expect(clausesFit([first, second])).toBe(false)
   })
+
+  it('holds to the server’s limits: eight filters, twenty values, 200 characters a value', () => {
+    const empty = (at: number) => ({ field: `01a1b5c0-0000-7000-8000-${String(at).padStart(12, '0')}`, op: 'empty' as const })
+    const nine = Array.from({ length: 9 }, (_, at) => empty(at))
+    expect(clausesFit(nine.slice(0, 8))).toBe(true)
+    // Nine short filters fit in 1,000 characters but not the server's eight.
+    expect(clausesFit(nine)).toBe(false)
+    const values = Array.from({ length: 21 }, (_, at) => `01a1b5c0-0000-7000-8000-${String(at).padStart(12, '0')}`)
+    expect(clausesFit([{ field: owner.id, op: 'is', values: values.slice(0, 20) }])).toBe(true)
+    expect(clausesFit([{ field: owner.id, op: 'is', values }])).toBe(false)
+    expect(clausesFit([{ field: note.id, op: 'contains', values: ['x'.repeat(200)] }])).toBe(true)
+    expect(clausesFit([{ field: note.id, op: 'contains', values: ['x'.repeat(201)] }])).toBe(false)
+    // A URL holding nine filters reads as none, as the server would refuse it.
+    const url = new URLSearchParams({ fieldFilters: JSON.stringify(nine) })
+    expect(fieldClauses(readListState(url))).toEqual([])
+  })
 })
