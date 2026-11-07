@@ -1420,18 +1420,25 @@ async fn a_receipt_is_returned_only_with_access_now() {
             .expect("membership");
         }
     };
-    for lost in [w.dst.clone(), w.src.clone()] {
+    // Each loss is refused where it's first seen, and only that way:
+    // - the target: the request gate (which scopes task_move by the task's
+    //   own project, the source) lets it through, and the move's access
+    //   check finds no enabled membership there: not_found.
+    // - the source: the request gate itself refuses the call, an HTTP 403,
+    //   before any tool code runs (mcp.rs scoped_project).
+    // Neither answer, read raw, carries anything from the receipt.
+    for (lost, status, outcome) in [
+        (w.dst.clone(), StatusCode::OK, Some("not_found")),
+        (w.src.clone(), StatusCode::FORBIDDEN, None),
+    ] {
         set_enabled(lost.clone(), false).await;
-        let refused = tool(app, &token, &agent_session, "task_move", request.clone()).await;
-        assert_ne!(refused["outcome"], "ok", "{refused}");
-        assert!(
-            refused["outcome"] == "not_found" || refused["outcome"] == "permission_denied",
-            "{refused}"
-        );
-        assert!(
-            !refused.to_string().contains(&new_root),
-            "the receipt leaked: {refused}"
-        );
+        let (answered, body) =
+            call_tool(app, &token, &agent_session, "task_move", request.clone()).await;
+        assert_eq!(answered, status, "{body}");
+        if let Some(outcome) = outcome {
+            assert_eq!(structured(&body)["outcome"], outcome, "{body}");
+        }
+        assert!(!body.contains(&new_root), "the receipt leaked: {body}");
         assert_eq!(
             moves_made(&setup).await,
             after,
