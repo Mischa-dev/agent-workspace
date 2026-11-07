@@ -720,12 +720,17 @@ async fn a_stale_preview_or_lost_access_moves_nothing() {
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
     assert_eq!(footprint(&setup).await, before);
 
-    // Two identical requests at once make one move.
+    // Two identical requests at once make one move: the same person and
+    // request ID from two MCP sessions, as two tabs or retries would send
+    // them. (Two concurrent calls on one session never reached the move in
+    // this harness: run local1794091998_3834933 timed out after both had
+    // authenticated, with no database wait.)
     let fresh = preview("third").await;
     let request = confirm(&fresh, "move-twice");
+    let other_session = initialize(app, &codex).await.expect("second Codex session");
     let (first, second) = tokio::join!(
         tool(app, &codex, &session, "task_move", request.clone()),
-        tool(app, &codex, &session, "task_move", request.clone()),
+        tool(app, &codex, &other_session, "task_move", request.clone()),
     );
     assert_eq!(first["outcome"], "ok", "{first}");
     assert_eq!(second["outcome"], "ok", "{second}");
@@ -1368,4 +1373,74 @@ async fn removing_an_agent_never_waits_on_its_waiting_move() {
     let moved = structured(&moving.await.expect("move").1);
     assert_eq!(moved["outcome"], "not_found", "{moved}");
     assert_eq!(moves_made(&setup).await, before, "nothing moved");
+}
+
+/// A stored receipt is the move's original result, but it is only ever
+/// returned with access now: a caller who has lost the target or the
+/// source gets a refusal that names nothing of it, and the receipt is still
+/// there for when access comes back.
+#[tokio::test]
+async fn a_receipt_is_returned_only_with_access_now() {
+    let Some(setup) = setup("awd102_move_receipt_access").await else {
+        return;
+    };
+    let app = &setup.app;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let w = world(&setup, &codex, &session).await;
+    let (agent, token) =
+        create_agent(app, &setup.browser, &space(&setup).await, "Mover", "mover").await;
+    add_member(&setup, &w.src, agent, "member").await;
+    add_member(&setup, &w.dst, agent, "member").await;
+    let agent_session = initialize(app, &token).await.expect("agent MCP");
+    // By ID, so the move's own checks answer, not key resolution.
+    let request = json!({"taskId": w.root, "toProjectId": w.dst, "clientRequestId": "agent-move"});
+    let moved = tool(app, &token, &agent_session, "task_move", request.clone()).await;
+    assert_eq!(moved["outcome"], "ok", "{moved}");
+    assert_eq!(moved["value"]["created"], true, "{moved}");
+    let new_root = moved["value"]["moved"][0]["id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+    let after = moves_made(&setup).await;
+    let again = tool(app, &token, &agent_session, "task_move", request.clone()).await;
+    assert_eq!(again["value"]["replayed"], true, "{again}");
+
+    let set_enabled = |project: String, enabled: bool| {
+        let pool = setup.pool.clone();
+        async move {
+            sqlx::query(
+                "UPDATE project_memberships SET enabled = $3 WHERE project_id = $1::uuid AND actor_id = $2",
+            )
+            .bind(project)
+            .bind(agent)
+            .bind(enabled)
+            .execute(&pool)
+            .await
+            .expect("membership");
+        }
+    };
+    for lost in [w.dst.clone(), w.src.clone()] {
+        set_enabled(lost.clone(), false).await;
+        let refused = tool(app, &token, &agent_session, "task_move", request.clone()).await;
+        assert_ne!(refused["outcome"], "ok", "{refused}");
+        assert!(
+            refused["outcome"] == "not_found" || refused["outcome"] == "permission_denied",
+            "{refused}"
+        );
+        assert!(
+            !refused.to_string().contains(&new_root),
+            "the receipt leaked: {refused}"
+        );
+        assert_eq!(
+            moves_made(&setup).await,
+            after,
+            "a refused replay changes nothing"
+        );
+        set_enabled(lost, true).await;
+    }
+    // Access back: the same original result.
+    let restored = tool(app, &token, &agent_session, "task_move", request).await;
+    assert_eq!(restored["value"]["replayed"], true, "{restored}");
+    assert_eq!(restored["value"]["moved"], moved["value"]["moved"]);
 }
