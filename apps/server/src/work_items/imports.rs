@@ -2071,22 +2071,23 @@ const CSV_HEADERS: [&str; 15] = [
 /// column (Priority, Status) or one of its aliases isn't read as that column.
 const FIELD_COLUMN_PREFIX: &str = "Field: ";
 
-/// The custom field a CSV column names: by the whole header (other tools,
-/// earlier exports), else by what follows "Field:".
+/// The custom field a CSV column names: by what follows "Field:" first, as
+/// exports write it, else by the whole header (other tools, and exports
+/// from before the prefix). So with fields "Risk" and "Field: Risk", the
+/// columns "Field: Risk" and "Field: Field: Risk" fill one each. An older
+/// export's bare "Field: Risk" column now reads as the prefix too, filling
+/// "Risk" when the project has it.
 fn column_field<'a>(
     definitions: &'a [FieldDefinition],
     header: &str,
 ) -> Option<&'a FieldDefinition> {
-    if let Some(field) = fields::find(definitions, header) {
-        return Some(field);
-    }
-    let (head, name) = header
-        .trim()
-        .split_at_checked(FIELD_COLUMN_PREFIX.trim().len())?;
-    if !head.eq_ignore_ascii_case(FIELD_COLUMN_PREFIX.trim()) {
-        return None;
-    }
-    fields::find(definitions, name)
+    let header = header.trim();
+    let prefix = FIELD_COLUMN_PREFIX.trim();
+    header
+        .split_at_checked(prefix.len())
+        .filter(|(head, _)| head.eq_ignore_ascii_case(prefix))
+        .and_then(|(_, name)| fields::find(definitions, name))
+        .or_else(|| fields::find(definitions, header))
 }
 
 /// The CSV: the built-in columns, then one per custom field ("Field: " and
@@ -2379,6 +2380,7 @@ mod tests {
             field_values: Value::Null,
             fields: serde_json::Map::from_iter([
                 ("Risk".to_owned(), json!("High")),
+                ("Field: Risk".to_owned(), json!("Low")),
                 ("Priority".to_owned(), json!("Customer first")),
             ]),
         };
@@ -2392,8 +2394,13 @@ mod tests {
             archived: false,
             version: 1,
         };
-        // A custom field named like a built-in column keeps its own column.
-        let definitions = vec![text_field("Risk"), text_field("Priority")];
+        // A custom field named like a built-in column keeps its own column,
+        // and so does one whose name starts with the prefix itself.
+        let definitions = vec![
+            text_field("Risk"),
+            text_field("Field: Risk"),
+            text_field("Priority"),
+        ];
         let text = tasks_csv(&[task], &definitions);
         let records = parse_csv(&text).expect("test input is valid");
         let mapping = auto_mapping(&records[0]);
@@ -2412,22 +2419,34 @@ mod tests {
             rows[0].fields.get("Field: Risk").map(String::as_str),
             Some("High")
         );
+        assert_eq!(
+            rows[0].fields.get("Field: Field: Risk").map(String::as_str),
+            Some("Low")
+        );
         let mut project = context();
         project.fields = definitions;
         let resolved = resolve(&project, &ImportOptions::default(), 0, &rows[0]);
+        // Each value lands in its own field: "Field: Risk" and "Risk" don't
+        // trade or overwrite each other.
         assert_eq!(
             resolved.field_inputs,
             vec![
+                ("Field: Risk".to_owned(), json!("Low")),
                 ("Priority".to_owned(), json!("Customer first")),
                 ("Risk".to_owned(), json!("High")),
             ]
         );
+        let named =
+            |header: &str| column_field(&project.fields, header).map(|field| field.name.clone());
         // A column named after the field alone still fills it, as other
-        // tools and earlier exports write it.
+        // tools and earlier exports write it; the prefix reading comes first,
+        // so an older bare "Field: Risk" column now fills "Risk".
+        assert_eq!(named("risk").as_deref(), Some("Risk"));
+        assert_eq!(named("Field: Risk").as_deref(), Some("Risk"));
         assert_eq!(
-            column_field(&project.fields, "risk").map(|field| field.name.as_str()),
-            Some("Risk")
+            named("field:   Field: Risk").as_deref(),
+            Some("Field: Risk")
         );
-        assert!(column_field(&project.fields, "Fields: Risk").is_none());
+        assert_eq!(named("Fields: Risk"), None);
     }
 }
