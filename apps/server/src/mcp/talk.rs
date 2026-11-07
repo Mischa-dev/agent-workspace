@@ -532,10 +532,23 @@ pub(super) async fn conversation_list(
             },
             None => None,
         };
+        // AWD-75: only where conversations show: Messages on in the direct
+        // project, Channels in the others, so pages and cursors count only
+        // those.
+        let listed = {
+            let mut connection = state.pool.acquire().await?;
+            crate::modules::state::ProjectModules::load(
+                &mut connection,
+                principal.actor_id,
+                &projects,
+            )
+            .await?
+            .with_conversations(&projects)
+        };
         let rows = list_rows(
             state,
             principal.actor_id,
-            &projects,
+            &listed,
             ListFilter {
                 kinds: kinds.map(|kinds| kinds.into_iter().map(str::to_owned).collect()),
                 with_person,

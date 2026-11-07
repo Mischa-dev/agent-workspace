@@ -573,6 +573,19 @@ async fn conversation_tools_follow_the_module_where_the_conversation_lives() {
         async move { tool(app, &token, &session, name, arguments).await }
     };
 
+    let listed_ids = |listed: &Value| -> Vec<String> {
+        listed["conversations"]
+            .as_array()
+            .expect("conversations")
+            .iter()
+            .filter_map(|conversation| conversation["id"].as_str().map(str::to_owned))
+            .collect()
+    };
+    let listed = call("conversation_list", json!({})).await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    assert!(listed_ids(&listed).contains(&channel), "{listed}");
+    assert!(listed_ids(&listed).contains(&dm), "{listed}");
+
     // Channels off, Messages on: a project's channel and its thread are
     // turned off for the conversation tools, which say so.
     let (status, changed) = switch(
@@ -628,6 +641,18 @@ async fn conversation_tools_follow_the_module_where_the_conversation_lives() {
     assert_eq!(hidden["outcome"], "not_found", "{hidden}");
     let shown = call("thing_open", json!({"kind": "thread", "id": dm_thread})).await;
     assert_eq!(shown["outcome"], "ok", "{shown}");
+
+    // And conversation_list leaves the project.s channels and threads out,
+    // previews and all, while DMs stay.
+    let listed = call("conversation_list", json!({})).await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    let ids = listed_ids(&listed);
+    assert!(ids.contains(&dm), "{listed}");
+    assert!(
+        !ids.contains(&channel) && !ids.contains(&channel_thread),
+        "{listed}"
+    );
+    assert!(!listed.to_string().contains("Release notes"), "{listed}");
 
     // DMs and their threads follow Messages, which is on.
     let read = call("conversation_read", json!({"conversationId": dm})).await;
