@@ -979,6 +979,10 @@ async fn archiving_an_agents_home_while_its_move_waits_stops_the_move() {
         .execute(&mut *held)
         .await
         .expect("hold the source");
+    let holder = sqlx::query_scalar::<_, i64>("SELECT txid_current() % 4294967296")
+        .fetch_one(&mut *held)
+        .await
+        .expect("holder");
     let moving = tool(
         app,
         &token,
@@ -987,7 +991,7 @@ async fn archiving_an_agents_home_while_its_move_waits_stops_the_move() {
         json!({"taskId": w.root, "toProjectId": w.dst}),
     );
     let archiving = async {
-        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        a_move_is_waiting(&setup, holder).await;
         let (status, body) = send(
             app,
             setup.browser.request(
@@ -1198,17 +1202,20 @@ async fn a_changed_default_type_makes_the_preview_stale() {
     .fetch_one(&setup.pool)
     .await
     .expect("another type");
-    for statement in [
-        "UPDATE work_item_types SET is_default = false WHERE project_id = $1::uuid",
+    // One default at a time (work_item_types_one_default): clear, then set.
+    sqlx::query("UPDATE work_item_types SET is_default = false WHERE project_id = $1::uuid")
+        .bind(&w.dst)
+        .execute(&setup.pool)
+        .await
+        .expect("clear the default");
+    sqlx::query(
         "UPDATE work_item_types SET is_default = true WHERE project_id = $1::uuid AND id = $2",
-    ] {
-        sqlx::query(statement)
-            .bind(&w.dst)
-            .bind(other)
-            .execute(&setup.pool)
-            .await
-            .expect("switch the default");
-    }
+    )
+    .bind(&w.dst)
+    .bind(other)
+    .execute(&setup.pool)
+    .await
+    .expect("set the default");
     let before = moves_made(&setup).await;
     let refused = tool(
         app,
@@ -1249,15 +1256,17 @@ async fn a_changed_default_type_makes_the_preview_stale() {
     assert_eq!(landed, other);
 }
 
-/// Waits until some backend is waiting for a row lock on a project.
-async fn a_move_is_waiting(setup: &Setup) {
+/// Waits until some backend is waiting on `holder`, this test's own open
+/// transaction (by its transaction ID), so no other test's waits count.
+async fn a_move_is_waiting(setup: &Setup, holder: i64) {
     for _ in 0..200 {
         let waiting = sqlx::query_scalar::<_, i64>(
-            "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%FROM projects WHERE id = $1 FOR%'",
+            "SELECT count(*) FROM pg_locks WHERE locktype = 'transactionid' AND NOT granted AND transactionid::text::bigint = $1",
         )
+        .bind(holder)
         .fetch_one(&setup.pool)
         .await
-        .expect("activity");
+        .expect("locks");
         if waiting > 0 {
             return;
         }
@@ -1301,6 +1310,10 @@ async fn removing_an_agent_never_waits_on_its_waiting_move() {
         .execute(&mut *held)
         .await
         .expect("hold the source");
+    let holder = sqlx::query_scalar::<_, i64>("SELECT txid_current() % 4294967296")
+        .fetch_one(&mut *held)
+        .await
+        .expect("holder");
     let moving = tokio::spawn({
         let app = app.clone();
         let root = w.root.clone();
@@ -1316,7 +1329,7 @@ async fn removing_an_agent_never_waits_on_its_waiting_move() {
             .await
         }
     });
-    a_move_is_waiting(&setup).await;
+    a_move_is_waiting(&setup, holder).await;
     // The removal finishes while the move still waits.
     let (status, removed) = tokio::time::timeout(
         std::time::Duration::from_secs(20),

@@ -100,6 +100,8 @@ export async function sendMove(
   projectId: string,
   taskId: string,
   move?: Omit<PendingMove, 'actorId' | 'state'>,
+  /** Called with the result, if it's still this session's when it arrives (even with the dialog closed). */
+  onDone?: (done: MoveDone) => void,
 ): Promise<void> {
   const key = id(actorId, projectId, taskId)
   const current = pending.get(key)
@@ -114,13 +116,14 @@ export async function sendMove(
   changed()
   const settle = (state: PendingMove['state']) => {
     // Signed out or in as someone else since: this answer is no one's now.
-    if (generation !== started || pending.get(key) !== sending) return
+    if (generation !== started || pending.get(key) !== sending) return false
     pending.set(key, { ...sending, state })
     changed()
+    return true
   }
   try {
     const done = await moveTask(projectId, taskId, sending.body, sending.key)
-    settle({ kind: 'done', done })
+    if (settle({ kind: 'done', done })) onDone?.(done)
   } catch (error) {
     settle(
       outcomeOf(error, retry) === 'refused'

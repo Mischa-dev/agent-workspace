@@ -260,7 +260,7 @@ describe('MoveTaskDialog (AWD-102)', () => {
       new ApiError({ status: 409, code: 'conflict', message: 'Something changed since the preview.' }),
     )
     fireEvent.click(screen.getByRole('button', { name: 'Check again' }))
-    await screen.findByRole('heading', { name: 'SRC-1 didn’t move' })
+    await screen.findByRole('heading', { name: 'That move request wasn’t carried out' })
     fireEvent.click(screen.getByRole('button', { name: 'Start over' }))
     expect(screen.getByLabelText('Project')).toBeTruthy()
   })
@@ -365,7 +365,7 @@ describe('MoveTaskDialog (AWD-102)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Leave all unresolved' }))
     fireEvent.click(confirmButton())
     await screen.findByRole('heading', { name: 'Did SRC-1 move to DST?' })
-    expect(screen.queryByRole('heading', { name: 'SRC-1 didn’t move' })).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'That move request wasn’t carried out' })).toBeNull()
   })
 
   it('stays unsure when a check is refused for lost access', async () => {
@@ -421,5 +421,28 @@ describe('MoveTaskDialog (AWD-102)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Move to project…' }))
     await screen.findByLabelText('Project')
     expect(screen.queryByRole('heading', { name: 'Did SRC-1 move to DST?' })).toBeNull()
+  })
+
+  it('after a move finishes with the dialog closed, reads both projects again and stays on the page', async () => {
+    let answer!: (done: MoveDone) => void
+    vi.mocked(moveTask).mockReturnValueOnce(new Promise<MoveDone>((resolve) => (answer = resolve)))
+    const { client } = renderHost()
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    await openReview()
+    fireEvent.click(screen.getByRole('button', { name: 'Leave all unresolved' }))
+    fireEvent.click(confirmButton())
+    await screen.findByRole('heading', { name: 'Moving SRC-1 to DST…' })
+    fireEvent.click(screen.getAllByRole('button', { name: 'Close' })[0])
+    await act(async () => answer(done))
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['project', 'src', 'work-items'] })
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['project', 'dst', 'work-items'] })
+    expect(screen.getByTestId('where').textContent).toBe('/projects/src/work-items/root')
+    // Opening it again says where it went, and goes there only if asked.
+    fireEvent.click(screen.getByRole('button', { name: 'Move to project…' }))
+    await screen.findByRole('heading', { name: 'SRC-1 moved to DST-1' })
+    expect(screen.getByTestId('where').textContent).toBe('/projects/src/work-items/root')
+    fireEvent.click(screen.getByRole('button', { name: 'Open DST-1' }))
+    await waitFor(() => expect(screen.getByTestId('where').textContent).toBe('/projects/dst/work-items/new-root'))
+    expect(moveTask).toHaveBeenCalledTimes(1)
   })
 })

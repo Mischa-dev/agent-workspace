@@ -39,6 +39,10 @@ export default function MoveTaskDialog({ onClose, projectId, task }: { onClose: 
   // A confirmation belongs to whoever sent it.
   const actorId = useAuthenticatedSession().user.actorId
   const pending = useSyncExternalStore(subscribeMoves, () => pendingMove(actorId, projectId, task.id))
+  // A move that finished while this was closed is shown, not followed: opening
+  // the dialog again doesn't take anyone to another page.
+  const [finishedBefore] = useState(() => pendingMove(actorId, projectId, task.id)?.state.kind === 'done')
+  const navigate = useNavigate()
   const [target, setTarget] = useState<string | null>(null)
   const [picked, setPicked] = useState('')
   const [refusal, setRefusal] = useState<Refusal | null>(null)
@@ -60,12 +64,56 @@ export default function MoveTaskDialog({ onClose, projectId, task }: { onClose: 
       setRefusal({ status: pending.state.status, message: pending.state.message })
       setTarget((current) => current ?? pending.targetProjectId)
       settleMove(actorId, projectId, task.id)
-    } else if (pending.state.kind === 'done') {
+    } else if (pending.state.kind === 'done' && !finishedBefore) {
       const done = pending.state.done
       settleMove(actorId, projectId, task.id)
       moved(done, pending.targetProjectId)
     }
-  }, [actorId, moved, pending, projectId, task.id])
+  }, [actorId, finishedBefore, moved, pending, projectId, task.id])
+
+  if (pending?.state.kind === 'done' && finishedBefore) {
+    const first = pending.state.done.moved[0]
+    const target = pending.targetProjectId
+    const forget = () => settleMove(actorId, projectId, task.id)
+    return (
+      <Dialog
+        footer={
+          <>
+            <Button
+              onClick={() => {
+                forget()
+                onClose()
+              }}
+              variant="ghost"
+            >
+              Close
+            </Button>
+            {first ? (
+              <Button
+                onClick={() => {
+                  forget()
+                  onClose()
+                  navigate(workItemHref(target, first.id))
+                }}
+                variant="primary"
+              >
+                Open {first.to}
+              </Button>
+            ) : null}
+          </>
+        }
+        onClose={() => {
+          forget()
+          onClose()
+        }}
+        open
+        returnFocus={opener}
+        title={first ? `${task.key} moved to ${first.to}` : `${task.key} was already moved`}
+      >
+        <p className="aw-move__lede">The move finished after this dialog was closed.</p>
+      </Dialog>
+    )
+  }
 
   if (pending && pending.state.kind !== 'done' && !(pending.state.kind === 'refused' && !pending.state.retry)) {
     return (
@@ -139,6 +187,16 @@ export default function MoveTaskDialog({ onClose, projectId, task }: { onClose: 
   )
 }
 
+/** Reads both projects' tasks again after a move, whether or not the dialog is still open. */
+function useInvalidateMoved() {
+  const queryClient = useQueryClient()
+  const [invalidate] = useState(() => (source: string, target: string) => {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.workItemsRoot(source) })
+    void queryClient.invalidateQueries({ queryKey: queryKeys.workItemsRoot(target) })
+  })
+  return invalidate
+}
+
 function useMoved(projectId: string, task: MovingTask, onClose: () => void) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
@@ -181,6 +239,7 @@ function MoveRecovery({
 }) {
   // What the task looks like now: a hint only; Check again gets the answer.
   const current = useWorkItem(projectId, task.id)
+  const invalidate = useInvalidateMoved()
   const state = move.state
   const sending = state.kind === 'sending'
   if (state.kind === 'refused') {
@@ -199,7 +258,7 @@ function MoveRecovery({
         onClose={onClose}
         open
         returnFocus={opener}
-        title={`${task.key} didn’t move`}
+        title="That move request wasn’t carried out"
       >
         <Banner title={state.message} tone="warning" />
       </Dialog>
@@ -222,7 +281,7 @@ function MoveRecovery({
           <Button disabled={sending} onClick={onClose} variant="ghost">
             Close
           </Button>
-          <Button busy={sending} onClick={() => void sendMove(actorId, projectId, task.id)} variant="primary">
+          <Button busy={sending} onClick={() => void sendMove(actorId, projectId, task.id, undefined, () => invalidate(projectId, move.targetProjectId))} variant="primary">
             Check again
           </Button>
         </>
@@ -279,6 +338,7 @@ function MoveReview({
   task: MovingTask
 }) {
   const queryClient = useQueryClient()
+  const invalidate = useInvalidateMoved()
   const previewKey = ['task-move-preview', projectId, task.id, task.version, targetProjectId] as const
   const preview = useQuery({
     queryKey: previewKey,
@@ -332,7 +392,13 @@ function MoveReview({
           return [{ issue: issue.id, action: 'set', targetField: choice.targetField, ...(choice.value === undefined ? {} : { value: choice.value }) }]
         }),
       }
-    void sendMove(actorId, projectId, task.id, { targetProjectId, targetProjectKey: current.targetProjectKey, body, key: crypto.randomUUID() })
+    void sendMove(
+      actorId,
+      projectId,
+      task.id,
+      { targetProjectId, targetProjectKey: current.targetProjectKey, body, key: crypto.randomUUID() },
+      () => invalidate(projectId, targetProjectId),
+    )
   }
 
   const refresh = () => {

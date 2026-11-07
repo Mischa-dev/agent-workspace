@@ -252,7 +252,7 @@ pub struct MoveDone {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
     /// False when the task had already been moved; `moved` says where it
-    /// went, and nothing changed now.
+    /// went; this request changed nothing.
     pub created: bool,
     /// True when this is the stored result of the same request, sent again.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -1614,7 +1614,7 @@ pub async fn execute(
             transaction.rollback().await?;
             if receipt.request_hash.as_slice() != request_hash.as_bytes() {
                 return Ok(Err(Refusal::Conflict(
-                    "That request ID was already used to move this task with a different target or different choices. Nothing changed. Use a new request ID for a new request."
+                    "That request ID was already used for a move of this task with a different target or different choices, so this request wasn't carried out. Use a new request ID for a new request."
                         .to_owned(),
                 )));
             }
@@ -1629,7 +1629,7 @@ pub async fn execute(
                 moved,
                 notes: if snapshot.is_some() {
                     vec![
-                        "This task was already moved, so nothing changed now, and the choices sent weren't applied."
+                        "This task had already been moved, so this request wasn't carried out and its choices weren't applied. moved says where the task went."
                             .to_owned(),
                     ]
                 } else {
@@ -1661,13 +1661,13 @@ pub async fn execute(
     if let Some(snapshot) = snapshot {
         if !access.sees_target {
             return Ok(Err(Refusal::Denied(format!(
-                "You can't see tasks in {} any more, so these choices can't be checked there. Nothing moved.",
+                "You can't see tasks in {} any more, so these choices can't be checked there. This request wasn't carried out.",
                 access.target_key
             ))));
         }
         if snapshot != plan.snapshot {
             return Ok(Err(Refusal::Conflict(
-                "Something changed since the preview (the tasks, either project's fields, or who can hold tasks there). Nothing moved; preview again."
+                "Something changed since the preview (the tasks, either project's fields, or who can hold tasks there). This request wasn't carried out; preview again."
                     .to_owned(),
             )));
         }
