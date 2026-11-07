@@ -75,9 +75,10 @@ export function clearPendingMoves() {
  * How an error answers a move request. On a first attempt any refusal
  * (4xx) is reliable: the move is one transaction, so a refused request wrote
  * nothing. On a retry of a request that may have happened, only a 409 or 422
- * shows it didn't: the server answers a moved task's same request from its
- * receipt before it checks the preview or the choices, so those mean the task
- * was never moved. A 401, 403 or 404 then may just mean access was lost since.
+ * shows that this request wasn't carried out: the server answers the same
+ * request from its receipt, if it was, before it checks the preview or the
+ * choices. It says nothing about the task itself, which another request may
+ * have moved. A 401, 403 or 404 then may just mean access was lost since.
  * No answer, a server failure, or an answer that can't be read (even a 200)
  * says nothing either way.
  */

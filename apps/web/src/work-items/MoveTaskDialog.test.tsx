@@ -9,6 +9,7 @@ import { AuthenticatedSessionProvider, clearAuthenticatedQueryCache, type Authen
 import MoveTaskDialog from './MoveTaskDialog'
 import { listMoveDestinations, moveTask, previewMove, type MoveDone, type MovePlan } from './moveApi'
 import { clearPendingMoves } from './moveRecovery'
+import { clearToasts, useToasts } from '../ui/toastStore'
 
 const { owner, plan, risk } = vi.hoisted(() => {
   const risk = {
@@ -89,10 +90,26 @@ vi.mock('./moveApi', async (importOriginal) => ({
   moveTask: vi.fn(),
 }))
 
-const done: MoveDone = { moved: [{ from: 'SRC-1', to: 'DST-1', id: 'new-root', title: 'Root', url: '' }], created: true, leftBehind: 2 }
+const done: MoveDone = {
+  moved: [{ from: 'SRC-1', to: 'DST-1', id: 'new-root', title: 'Root', url: 'http://localhost/projects/dst/work-items/new-root' }],
+  created: true,
+  leftBehind: 2,
+}
 
 function Where() {
   return <output data-testid="where">{useLocation().pathname}</output>
+}
+
+function Toasts() {
+  return (
+    <ul data-testid="toasts">
+      {useToasts().map((toast) => (
+        <li key={toast.id}>
+          {toast.title} {toast.description}
+        </li>
+      ))}
+    </ul>
+  )
 }
 
 /** The task page's part: a button that opens the dialog, which unmounts when it closes. */
@@ -105,6 +122,7 @@ function Host({ version = 1 }: { version?: number }) {
       </button>
       {open ? <MoveTaskDialog onClose={() => setOpen(false)} projectId="src" task={{ id: 'root', key: 'SRC-1', title: 'Root', version }} /> : null}
       <Where />
+      <Toasts />
     </>
   )
 }
@@ -162,6 +180,7 @@ afterEach(() => {
   vi.mocked(previewMove).mockReset()
   vi.mocked(moveTask).mockReset()
   clearPendingMoves()
+  clearToasts()
 })
 
 describe('MoveTaskDialog (AWD-102)', () => {
@@ -444,5 +463,38 @@ describe('MoveTaskDialog (AWD-102)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open DST-1' }))
     await waitFor(() => expect(screen.getByTestId('where').textContent).toBe('/projects/dst/work-items/new-root'))
     expect(moveTask).toHaveBeenCalledTimes(1)
+  })
+
+  it('follows a task that was already moved elsewhere to where it really is, and says the choices were not applied', async () => {
+    vi.mocked(moveTask).mockResolvedValueOnce({
+      moved: [{ from: 'SRC-1', to: 'CCC-4', id: 'c-copy', title: '', url: 'http://localhost/projects/ccc/work-items/c-copy' }],
+      created: false,
+      notes: ['This task had already been moved, so this request wasn’t carried out and its choices weren’t applied.'],
+    })
+    const { client } = renderHost()
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    await openReview()
+    fireEvent.click(screen.getByRole('button', { name: 'Leave all unresolved' }))
+    fireEvent.click(confirmButton())
+    // Asked for DST; it went to CCC before: that's where it opens, not a made-up DST page.
+    await waitFor(() => expect(screen.getByTestId('where').textContent).toBe('/projects/ccc/work-items/c-copy'))
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['project', 'ccc', 'work-items'] })
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ['project', 'dst', 'work-items'] })
+    const toasts = screen.getByTestId('toasts').textContent ?? ''
+    expect(toasts).toContain('SRC-1 was already moved to CCC-4')
+    expect(toasts).toContain('its choices weren’t applied')
+  })
+
+  it('opens nothing when the answer has no link to a task page', async () => {
+    vi.mocked(moveTask).mockResolvedValueOnce({
+      moved: [{ from: 'SRC-1', to: 'CCC-4', id: 'c-copy', title: '', url: '' }],
+      created: false,
+    })
+    renderHost()
+    await openReview()
+    fireEvent.click(screen.getByRole('button', { name: 'Leave all unresolved' }))
+    fireEvent.click(confirmButton())
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(screen.getByTestId('where').textContent).toBe('/projects/src/work-items/root')
   })
 })

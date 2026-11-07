@@ -83,3 +83,19 @@ export type MoveDestination = { id: string; key: string; name: string }
 export function listMoveDestinations(projectId: string, taskId: string) {
   return requestJson<{ projects: MoveDestination[] }>(`${movePath(projectId, taskId)}/destinations`)
 }
+
+/**
+ * Where a moved task is, from the link the server returned for it: only a
+ * project it let you reach, and possibly not the one you asked for (the
+ * task may have been moved there already by another request). Null when
+ * the link isn't one of this app's task pages.
+ */
+export function movedTo(task: MoveDone['moved'][number]): { projectId: string; path: string } | null {
+  try {
+    const path = new URL(task.url, window.location.origin).pathname
+    const match = /^\/projects\/([^/]+)\/work-items\/([^/]+)$/.exec(path)
+    return match ? { projectId: decodeURIComponent(match[1]), path } : null
+  } catch {
+    return null
+  }
+}

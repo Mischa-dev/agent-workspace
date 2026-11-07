@@ -9,8 +9,7 @@ import { useFields } from '../fields/api'
 import type { FieldDefinition, FieldValue } from '../fields/fieldModel'
 import { Banner, Button, Dialog, SelectField, countLabel, describeError, showToast } from '../ui'
 import { useWorkItem } from './hooks'
-import { workItemHref } from './links'
-import { listMoveDestinations, previewMove, type MoveDone, type MoveIssue, type MovePlan, type MoveResolution } from './moveApi'
+import { listMoveDestinations, movedTo, previewMove, type MoveDone, type MoveIssue, type MovePlan, type MoveResolution } from './moveApi'
 import { pendingMove, sendMove, settleMove, subscribeMoves, type PendingMove } from './moveRecovery'
 import { FieldEditor } from './TaskCustomFields'
 import './moveTask.css'
@@ -72,8 +71,10 @@ export default function MoveTaskDialog({ onClose, projectId, task }: { onClose: 
   }, [actorId, finishedBefore, moved, pending, projectId, task.id])
 
   if (pending?.state.kind === 'done' && finishedBefore) {
-    const first = pending.state.done.moved[0]
-    const target = pending.targetProjectId
+    const done = pending.state.done
+    const first = done.moved[0]
+    // The returned link: where the task really is, maybe not where it was asked to go.
+    const where = first ? movedTo(first) : null
     const forget = () => settleMove(actorId, projectId, task.id)
     return (
       <Dialog
@@ -88,12 +89,12 @@ export default function MoveTaskDialog({ onClose, projectId, task }: { onClose: 
             >
               Close
             </Button>
-            {first ? (
+            {first && where ? (
               <Button
                 onClick={() => {
                   forget()
                   onClose()
-                  navigate(workItemHref(target, first.id))
+                  navigate(where.path)
                 }}
                 variant="primary"
               >
@@ -108,9 +109,14 @@ export default function MoveTaskDialog({ onClose, projectId, task }: { onClose: 
         }}
         open
         returnFocus={opener}
-        title={first ? `${task.key} moved to ${first.to}` : `${task.key} was already moved`}
+        title={!first ? `${task.key} was already moved` : done.created ? `${task.key} moved to ${first.to}` : `${task.key} was already moved to ${first.to}`}
       >
-        <p className="aw-move__lede">The move finished after this dialog was closed.</p>
+        <p className="aw-move__lede">The answer came after this dialog was closed.</p>
+        {done.notes?.map((note) => (
+          <p className="aw-move__lede" key={note}>
+            {note}
+          </p>
+        ))}
       </Dialog>
     )
   }
@@ -203,19 +209,23 @@ function useMoved(projectId: string, task: MovingTask, onClose: () => void) {
   const latest = useRef({ projectId, task, onClose })
   latest.current = { projectId, task, onClose }
   // Stable, so effects that call it don't run again on every render.
-  const [moved] = useState(() => (done: MoveDone, targetProjectId: string) => {
+  const [moved] = useState(() => (done: MoveDone, requested: string) => {
     const { projectId: source, task: moving, onClose: close } = latest.current
-    // Both projects' lists, boards and task pages, the original's included.
-    void queryClient.invalidateQueries({ queryKey: queryKeys.workItemsRoot(source) })
-    void queryClient.invalidateQueries({ queryKey: queryKeys.workItemsRoot(targetProjectId) })
     const first = done.moved[0]
+    // Where it really is: the returned link, which may not be the project
+    // asked for when another request had already moved it.
+    const where = first ? movedTo(first) : null
+    void queryClient.invalidateQueries({ queryKey: queryKeys.workItemsRoot(source) })
+    void queryClient.invalidateQueries({ queryKey: queryKeys.workItemsRoot(where?.projectId ?? requested) })
     showToast({
-      tone: 'success',
-      title: first ? `Moved ${first.from} to ${first.to}` : `${moving.key} was already moved`,
-      description: done.leftBehind ? `${countLabel(done.leftBehind, 'field value')} stayed on the original.` : undefined,
+      tone: done.created ? 'success' : 'info',
+      title: !first ? `${moving.key} was already moved` : done.created ? `Moved ${first.from} to ${first.to}` : `${first.from} was already moved to ${first.to}`,
+      description:
+        [...(done.notes ?? []), ...(done.leftBehind ? [`${countLabel(done.leftBehind, 'field value')} stayed on the original.`] : [])].join(' ') ||
+        undefined,
     })
     close()
-    if (first) navigate(workItemHref(targetProjectId, first.id))
+    if (where) navigate(where.path)
   })
   return moved
 }
@@ -281,7 +291,11 @@ function MoveRecovery({
           <Button disabled={sending} onClick={onClose} variant="ghost">
             Close
           </Button>
-          <Button busy={sending} onClick={() => void sendMove(actorId, projectId, task.id, undefined, () => invalidate(projectId, move.targetProjectId))} variant="primary">
+          <Button busy={sending} onClick={() =>
+              void sendMove(actorId, projectId, task.id, undefined, (done) =>
+                invalidate(projectId, (done.moved[0] && movedTo(done.moved[0])?.projectId) ?? move.targetProjectId),
+              )
+            } variant="primary">
             Check again
           </Button>
         </>
@@ -397,7 +411,7 @@ function MoveReview({
       projectId,
       task.id,
       { targetProjectId, targetProjectKey: current.targetProjectKey, body, key: crypto.randomUUID() },
-      () => invalidate(projectId, targetProjectId),
+      (done) => invalidate(projectId, (done.moved[0] && movedTo(done.moved[0])?.projectId) ?? targetProjectId),
     )
   }
 
