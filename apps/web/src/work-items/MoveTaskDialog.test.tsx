@@ -185,8 +185,10 @@ describe('MoveTaskDialog (AWD-102)', () => {
     expect(screen.getByText('Dee Lane (@dee)')).toBeTruthy()
     await waitFor(() => expect(confirmButton().disabled).toBe(false))
 
-    fireEvent.click(confirmButton())
-    fireEvent.click(confirmButton())
+    // A second click lands on nothing: the move is already on its way.
+    const button = confirmButton()
+    fireEvent.click(button)
+    fireEvent.click(button)
     await waitFor(() => expect(moveTask).toHaveBeenCalledTimes(1))
     const [projectId, taskId, body, key] = calls()[0]
     expect([projectId, taskId]).toEqual(['src', 'root'])
@@ -354,5 +356,70 @@ describe('MoveTaskDialog (AWD-102)', () => {
     await screen.findByLabelText('Project')
     expect(screen.queryByRole('heading', { name: 'Did SRC-1 move to DST?' })).toBeNull()
     expect(moveTask).toHaveBeenCalledTimes(1)
+  })
+
+  it('treats an unreadable answer, even a 200, as unknown', async () => {
+    vi.mocked(moveTask).mockRejectedValueOnce(new ApiError({ status: 200, code: 'invalid_response', message: 'The server response was not valid.' }))
+    renderHost()
+    await openReview()
+    fireEvent.click(screen.getByRole('button', { name: 'Leave all unresolved' }))
+    fireEvent.click(confirmButton())
+    await screen.findByRole('heading', { name: 'Did SRC-1 move to DST?' })
+    expect(screen.queryByRole('heading', { name: 'SRC-1 didn’t move' })).toBeNull()
+  })
+
+  it('stays unsure when a check is refused for lost access', async () => {
+    vi.mocked(moveTask).mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    renderHost()
+    await openReview()
+    fireEvent.click(screen.getByRole('button', { name: 'Leave all unresolved' }))
+    fireEvent.click(confirmButton())
+    await screen.findByRole('heading', { name: 'Did SRC-1 move to DST?' })
+    for (const status of [401, 403, 404]) {
+      vi.mocked(moveTask).mockRejectedValueOnce(new ApiError({ status, code: 'forbidden', message: 'You can’t change tasks there.' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Check again' }))
+      await screen.findByText('Last answer: You can’t change tasks there.')
+      expect(screen.getByRole('heading', { name: 'Did SRC-1 move to DST?' })).toBeTruthy()
+    }
+    expect(moveTask).toHaveBeenCalledTimes(4)
+    expect(calls().every((call) => call[3] === calls()[0][3])).toBe(true)
+  })
+
+  it('sends one move while it is on its way, even when the task changes underneath', async () => {
+    let answer!: (done: MoveDone) => void
+    vi.mocked(moveTask).mockReturnValueOnce(new Promise<MoveDone>((resolve) => (answer = resolve)))
+    const { rerender } = renderHost()
+    await openReview()
+    fireEvent.click(screen.getByRole('button', { name: 'Leave all unresolved' }))
+    fireEvent.click(confirmButton())
+    await screen.findByRole('heading', { name: 'Moving SRC-1 to DST…' })
+    rerender(2)
+    expect(screen.getByRole('heading', { name: 'Moving SRC-1 to DST…' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Move 2 tasks' })).toBeNull()
+    // Closing and reopening still shows it on its way.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Close' })[0])
+    fireEvent.click(screen.getByRole('button', { name: 'Move to project…' }))
+    await screen.findByRole('heading', { name: 'Moving SRC-1 to DST…' })
+    expect(moveTask).toHaveBeenCalledTimes(1)
+    await act(async () => answer(done))
+    await waitFor(() => expect(screen.getByTestId('where').textContent).toBe('/projects/dst/work-items/new-root'))
+    expect(moveTask).toHaveBeenCalledTimes(1)
+  })
+
+  it('lets an answer that comes after signing out change nothing', async () => {
+    let fail!: (error: unknown) => void
+    vi.mocked(moveTask).mockReturnValueOnce(new Promise<MoveDone>((_, reject) => (fail = reject)))
+    const { client } = renderHost()
+    await openReview()
+    fireEvent.click(screen.getByRole('button', { name: 'Leave all unresolved' }))
+    fireEvent.click(confirmButton())
+    await screen.findByRole('heading', { name: 'Moving SRC-1 to DST…' })
+    act(() => clearAuthenticatedQueryCache(client))
+    await act(async () => fail(new TypeError('Failed to fetch')))
+    expect(screen.queryByRole('heading', { name: 'Did SRC-1 move to DST?' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Move to project…' }))
+    await screen.findByLabelText('Project')
+    expect(screen.queryByRole('heading', { name: 'Did SRC-1 move to DST?' })).toBeNull()
   })
 })

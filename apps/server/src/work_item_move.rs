@@ -423,23 +423,23 @@ async fn check_access(
             "The task is already in that project.",
         )));
     }
-    // Both projects' rows and the mover's memberships first (locked for a
-    // move): a role change or removal waits for the move, or the move reads
-    // it once it has committed. An agent's reach also rests on its
-    // connection's home project and its membership there
-    // (agent_connection_can_access), so a move shares those too, in the
-    // same ascending order as the others so moves never wait on each other
-    // in a circle: archiving the home project, or taking the agent out of
-    // it, waits for the move, or the move reads it once it has committed.
-    // The mover's actor row first: removing an agent locks it first too
-    // (then its memberships and connection), so the two take turns there
-    // instead of each holding a row the other needs.
-    if lock {
-        sqlx::query("SELECT 1 FROM actors WHERE id = $1 FOR SHARE")
-            .bind(mover.actor_id)
-            .execute(&mut **transaction)
-            .await?;
-    }
+    // A move locks in the order the other writers that change who may act
+    // here do, so none of them waits on another in a circle:
+    //
+    // 1. Project rows, ascending: the source and target to change, and an
+    //    agent's home project (its connection's, which its reach rests on,
+    //    agent_connection_can_access) to share. Archiving a project locks
+    //    its row first, and changing or removing an agent's connection
+    //    locks its home project's row first (external_agents.rs,
+    //    mutate_connection: load_access_tx).
+    // 2. The agent's connection, then its membership of the home project,
+    //    shared: that mutation locks those next (load_connection_tx).
+    // 3. Only then the mover's memberships of the source and target,
+    //    which also share their workspace membership and actor row: that
+    //    mutation updates the actor and memberships last.
+    //
+    // So a role change, removal or archive either waits for the move, or
+    // the move reads it once it has committed.
     let anchor = match mover.external_agent_connection_id {
         Some(connection) => sqlx::query_scalar::<_, Uuid>(
             "SELECT project_id FROM external_agent_connections WHERE id = $1",
@@ -451,26 +451,40 @@ async fn check_access(
         None => None,
     };
     let mut order = vec![source_project_id, target_project_id];
-    order.extend(anchor);
     order.sort();
-    let mut memberships: HashMap<Uuid, ProjectMembership> = HashMap::new();
-    for project in order {
-        if Some(project) == anchor {
-            if lock {
-                sqlx::query("SELECT 1 FROM projects WHERE id = $1 FOR SHARE")
-                    .bind(project)
-                    .execute(&mut **transaction)
-                    .await?;
-                sqlx::query(
-                    "SELECT 1 FROM project_memberships WHERE project_id = $1 AND actor_id = $2 FOR SHARE",
-                )
+    if lock {
+        let mut rows = order.clone();
+        rows.extend(anchor);
+        rows.sort();
+        for project in rows {
+            let statement = if Some(project) == anchor {
+                "SELECT 1 FROM projects WHERE id = $1 FOR SHARE"
+            } else {
+                "SELECT 1 FROM projects WHERE id = $1 FOR UPDATE"
+            };
+            sqlx::query(statement)
                 .bind(project)
-                .bind(mover.actor_id)
                 .execute(&mut **transaction)
                 .await?;
-            }
-            continue;
         }
+        if let Some(connection) = mover.external_agent_connection_id {
+            sqlx::query("SELECT 1 FROM external_agent_connections WHERE id = $1 FOR SHARE")
+                .bind(connection)
+                .execute(&mut **transaction)
+                .await?;
+        }
+        if let Some(home) = anchor {
+            sqlx::query(
+                "SELECT 1 FROM project_memberships WHERE project_id = $1 AND actor_id = $2 FOR SHARE",
+            )
+            .bind(home)
+            .bind(mover.actor_id)
+            .execute(&mut **transaction)
+            .await?;
+        }
+    }
+    let mut memberships: HashMap<Uuid, ProjectMembership> = HashMap::new();
+    for project in order {
         let membership = if lock {
             lock_membership(transaction, mover.actor_id, project).await?
         } else {
@@ -483,13 +497,6 @@ async fn check_access(
             return Ok(Err(Refusal::NotFound("That project")));
         }
         memberships.insert(project, membership);
-    }
-    // The connection itself: revoking it waits for the move, or is read.
-    if lock && let Some(connection) = mover.external_agent_connection_id {
-        sqlx::query("SELECT 1 FROM external_agent_connections WHERE id = $1 FOR SHARE")
-            .bind(connection)
-            .execute(&mut **transaction)
-            .await?;
     }
     // Membership alone isn't reach: an agent's connection limits the
     // projects it may act in. Read after the locks, so a connection changed
@@ -838,6 +845,22 @@ async fn plan(
     let same_unit = source_unit == target_unit;
 
     let mut notes = Vec::new();
+    // A task with no matching status or type takes the target's default,
+    // resolved here (not when it's created) so the snapshot holds the very
+    // record it lands on, and a default changed since the preview is a
+    // change.
+    let default_status = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM work_item_statuses WHERE project_id = $1 AND enabled AND is_default",
+    )
+    .bind(target_project_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    let default_type = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM work_item_types WHERE project_id = $1 AND enabled AND is_default",
+    )
+    .bind(target_project_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
     let mut settings = Vec::with_capacity(tasks.len());
     for task in &tasks {
         let status_id = sqlx::query_scalar::<_, Uuid>(
@@ -909,8 +932,8 @@ async fn plan(
             ));
         }
         settings.push(TaskSettings {
-            status_id,
-            type_id,
+            status_id: status_id.or(default_status),
+            type_id: type_id.or(default_type),
             assignee,
             milestone_id,
             estimate: if same_unit { task.estimate } else { None },

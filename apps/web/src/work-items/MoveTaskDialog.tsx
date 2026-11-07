@@ -1,18 +1,18 @@
-import { useMemo, useRef, useState, useSyncExternalStore, type RefObject } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
+import { useAuthenticatedSession } from '../auth/session'
 import { useFields } from '../fields/api'
 import type { FieldDefinition, FieldValue } from '../fields/fieldModel'
-import { useAuthenticatedSession } from '../auth/session'
 import { Banner, Button, Dialog, SelectField, countLabel, describeError, showToast } from '../ui'
-import { workItemHref } from './links'
-import { listMoveDestinations, moveTask, previewMove, type MoveDone, type MoveIssue, type MovePlan, type MoveResolution } from './moveApi'
-import { pendingMove, rememberMove, settleMove, subscribeMoves, type PendingMove } from './moveRecovery'
-import { FieldEditor } from './TaskCustomFields'
 import { useWorkItem } from './hooks'
+import { workItemHref } from './links'
+import { listMoveDestinations, previewMove, type MoveDone, type MoveIssue, type MovePlan, type MoveResolution } from './moveApi'
+import { pendingMove, sendMove, settleMove, subscribeMoves, type PendingMove } from './moveRecovery'
+import { FieldEditor } from './TaskCustomFields'
 import './moveTask.css'
 
 /** What the mover chose for one issue; `label` is how a picked person, task or page reads. */
@@ -20,27 +20,29 @@ type Choice = { kind: 'leave' } | { kind: 'set'; targetField: string; value?: Fi
 
 type MovingTask = { id: string; key: string; title: string; version: number }
 
-/** An answer that doesn't say whether the move happened: no response, or the server failing. */
-function unknownOutcome(error: unknown) {
-  return !isApiError(error) || error.status >= 500
-}
+type Refusal = { status: number; message: string }
 
 /**
  * Moving a task, with its subtasks, to another project (AWD-102): pick the
  * project, read a private preview of what carries over and what needs a
  * choice, settle each issue (put it in a target field, or leave it on the
- * original), then confirm once. Nothing moves until then. If the answer to
- * the confirmation never arrives, the dialog only offers to send that same
- * request again, until it's settled.
+ * original), then confirm once. Nothing moves until then.
+ *
+ * A confirmation is recorded and sent outside this dialog (moveRecovery),
+ * which only shows where it stands: being sent, its result, a refusal, or an
+ * answer that never came, when the only thing it offers is to send that same
+ * request again.
  */
 export default function MoveTaskDialog({ onClose, projectId, task }: { onClose: () => void; projectId: string; task: MovingTask }) {
   // Every step is its own dialog: focus goes back to whatever opened the first.
   const [opener] = useState<RefObject<HTMLElement | null>>(() => ({ current: document.activeElement as HTMLElement | null }))
-  // A move whose answer never arrived belongs to whoever sent it.
+  // A confirmation belongs to whoever sent it.
   const actorId = useAuthenticatedSession().user.actorId
   const pending = useSyncExternalStore(subscribeMoves, () => pendingMove(actorId, projectId, task.id))
   const [target, setTarget] = useState<string | null>(null)
   const [picked, setPicked] = useState('')
+  const [refusal, setRefusal] = useState<Refusal | null>(null)
+  const moved = useMoved(projectId, task, onClose)
   // Worked out by the server from your actual permissions in each project.
   const projects = useQuery({
     queryKey: ['task-move-destinations', actorId, projectId, task.id] as const,
@@ -50,7 +52,38 @@ export default function MoveTaskDialog({ onClose, projectId, task }: { onClose: 
   })
   const destinations = projects.data?.projects ?? []
 
-  if (pending) return <MoveRecovery actorId={actorId} move={pending} onClose={onClose} opener={opener} onStartOver={() => setTarget(null)} projectId={projectId} task={task} />
+  // A first confirmation's clear refusal goes back to the review (nothing
+  // moved); a result is shown once, then forgotten.
+  useEffect(() => {
+    if (!pending) return
+    if (pending.state.kind === 'refused' && !pending.state.retry) {
+      setRefusal({ status: pending.state.status, message: pending.state.message })
+      setTarget((current) => current ?? pending.targetProjectId)
+      settleMove(actorId, projectId, task.id)
+    } else if (pending.state.kind === 'done') {
+      const done = pending.state.done
+      settleMove(actorId, projectId, task.id)
+      moved(done, pending.targetProjectId)
+    }
+  }, [actorId, moved, pending, projectId, task.id])
+
+  if (pending && pending.state.kind !== 'done' && !(pending.state.kind === 'refused' && !pending.state.retry)) {
+    return (
+      <MoveRecovery
+        actorId={actorId}
+        move={pending}
+        onClose={onClose}
+        onStartOver={() => {
+          settleMove(actorId, projectId, task.id)
+          setTarget(null)
+        }}
+        opener={opener}
+        projectId={projectId}
+        task={task}
+      />
+    )
+  }
+  if (pending) return null
   if (!target) {
     return (
       <Dialog
@@ -66,8 +99,8 @@ export default function MoveTaskDialog({ onClose, projectId, task }: { onClose: 
         }
         onClose={onClose}
         open
-        title={`Move ${task.key} to another project`}
         returnFocus={opener}
+        title={`Move ${task.key} to another project`}
       >
         <p className="aw-move__lede">It moves with its subtasks. You’ll see what carries over before anything changes.</p>
         <SelectField label="Project" onChange={(event) => setPicked(event.target.value)} value={picked}>
@@ -78,19 +111,28 @@ export default function MoveTaskDialog({ onClose, projectId, task }: { onClose: 
             </option>
           ))}
         </SelectField>
-        {projects.isError ? <Banner tone="danger" title={isApiError(projects.error) && projects.error.status < 500 ? projects.error.message : describeError(projects.error).message} /> : null}
+        {projects.isError ? (
+          <Banner
+            tone="danger"
+            title={isApiError(projects.error) && projects.error.status < 500 ? projects.error.message : describeError(projects.error).message}
+          />
+        ) : null}
       </Dialog>
     )
   }
   return (
     <MoveReview
+      actorId={actorId}
       // A different task, a new version of it, or another project: a new review.
       key={`${task.id}:${task.version}:${target}`}
-      onBack={() => setTarget(null)}
+      onBack={() => {
+        setRefusal(null)
+        setTarget(null)
+      }}
       onClose={onClose}
-      actorId={actorId}
       opener={opener}
       projectId={projectId}
+      refusal={refusal}
       targetProjectId={target}
       task={task}
     />
@@ -100,19 +142,24 @@ export default function MoveTaskDialog({ onClose, projectId, task }: { onClose: 
 function useMoved(projectId: string, task: MovingTask, onClose: () => void) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
-  return (done: MoveDone, targetProjectId: string) => {
+  const latest = useRef({ projectId, task, onClose })
+  latest.current = { projectId, task, onClose }
+  // Stable, so effects that call it don't run again on every render.
+  const [moved] = useState(() => (done: MoveDone, targetProjectId: string) => {
+    const { projectId: source, task: moving, onClose: close } = latest.current
     // Both projects' lists, boards and task pages, the original's included.
-    void queryClient.invalidateQueries({ queryKey: queryKeys.workItemsRoot(projectId) })
+    void queryClient.invalidateQueries({ queryKey: queryKeys.workItemsRoot(source) })
     void queryClient.invalidateQueries({ queryKey: queryKeys.workItemsRoot(targetProjectId) })
     const first = done.moved[0]
     showToast({
       tone: 'success',
-      title: first ? `Moved ${first.from} to ${first.to}` : `${task.key} was already moved`,
+      title: first ? `Moved ${first.from} to ${first.to}` : `${moving.key} was already moved`,
       description: done.leftBehind ? `${countLabel(done.leftBehind, 'field value')} stayed on the original.` : undefined,
     })
-    onClose()
+    close()
     if (first) navigate(workItemHref(targetProjectId, first.id))
-  }
+  })
+  return moved
 }
 
 function MoveRecovery({
@@ -127,29 +174,16 @@ function MoveRecovery({
   actorId: string
   move: PendingMove
   onClose: () => void
-  opener: RefObject<HTMLElement | null>
   onStartOver: () => void
+  opener: RefObject<HTMLElement | null>
   projectId: string
   task: MovingTask
 }) {
-  const moved = useMoved(projectId, task, onClose)
-  const [settled, setSettled] = useState<string | null>(null)
   // What the task looks like now: a hint only; Check again gets the answer.
   const current = useWorkItem(projectId, task.id)
-  const check = useMutation({
-    mutationFn: () => moveTask(projectId, task.id, move.body, move.key),
-    onSuccess: (done) => {
-      settleMove(actorId, projectId, task.id)
-      moved(done, move.targetProjectId)
-    },
-    onError: (error) => {
-      // A clear refusal means nothing moved: it's settled, and a new move can start.
-      if (!unknownOutcome(error)) {
-        setSettled(isApiError(error) ? error.message : describeError(error).message)
-      }
-    },
-  })
-  if (settled) {
+  const state = move.state
+  const sending = state.kind === 'sending'
+  if (state.kind === 'refused') {
     return (
       <Dialog
         footer={
@@ -157,23 +191,27 @@ function MoveRecovery({
             <Button onClick={onClose} variant="ghost">
               Close
             </Button>
-            <Button
-              onClick={() => {
-                settleMove(actorId, projectId, task.id)
-                onStartOver()
-              }}
-              variant="primary"
-            >
+            <Button onClick={onStartOver} variant="primary">
               Start over
             </Button>
           </>
         }
         onClose={onClose}
         open
-        title={`${task.key} didn’t move`}
         returnFocus={opener}
+        title={`${task.key} didn’t move`}
       >
-        <Banner title={settled} tone="warning" />
+        <Banner title={state.message} tone="warning" />
+      </Dialog>
+    )
+  }
+  if (sending && !state.retry) {
+    return (
+      <Dialog onClose={onClose} open returnFocus={opener} title={`Moving ${task.key} to ${move.targetProjectKey}…`}>
+        <p className="aw-move__lede">This dialog can close; the move carries on, and opening it again shows how it went.</p>
+        <Button onClick={onClose} variant="ghost">
+          Close
+        </Button>
       </Dialog>
     )
   }
@@ -181,38 +219,41 @@ function MoveRecovery({
     <Dialog
       footer={
         <>
-          <Button disabled={check.isPending} onClick={onClose} variant="ghost">
+          <Button disabled={sending} onClick={onClose} variant="ghost">
             Close
           </Button>
-          <Button busy={check.isPending} onClick={() => check.mutate()} variant="primary">
+          <Button busy={sending} onClick={() => void sendMove(actorId, projectId, task.id)} variant="primary">
             Check again
           </Button>
         </>
       }
       onClose={() => {
-        if (!check.isPending) onClose()
+        if (!sending) onClose()
       }}
       open
-      title={`Did ${task.key} move to ${move.targetProjectKey}?`}
       returnFocus={opener}
+      title={`Did ${task.key} move to ${move.targetProjectKey}?`}
     >
       <p className="aw-move__lede">
-        The answer to that move never arrived, so it may or may not have happened. Check again sends that same move: if it
-        happened, you get its result, and it can’t happen twice. Until it’s settled, nothing else can be sent for {task.key}.
+        The answer to that move never arrived, or didn’t say whether it happened, so it may or may not have. Check again sends
+        that same move: if it happened, you get its result, and it can’t happen twice. Until it’s settled, nothing else can be sent
+        for {task.key}.
       </p>
       <p className="aw-move__lede">
         Only this tab remembers it, and only while you stay signed in: closing this and coming back keeps it, but reloading or
         signing out forgets it, and then it can’t be sent again from here. If that happens, open {task.key}: if it moved, it’s
         archived with a link to its new task; if it didn’t, you can start a new move, which can’t move it twice.
       </p>
+      {state.kind === 'unknown' ? <Banner title={`Last answer: ${state.message}`} tone="danger" /> : null}
       {current.data?.archivedAt ? (
-        <Banner tone="info" title={`${task.key} is archived now, so it most likely moved.`}>Check again to see where it went.</Banner>
+        <Banner tone="info" title={`${task.key} is archived now, so it most likely moved.`}>
+          Check again to see where it went.
+        </Banner>
       ) : current.data ? (
         <Banner tone="info" title={`${task.key} is still here and not archived, so it most likely didn’t move.`}>
           Check again to be sure before moving it another way.
         </Banner>
       ) : null}
-      {check.isError ? <Banner title={describeError(check.error).message} tone="danger" /> : null}
     </Dialog>
   )
 }
@@ -223,6 +264,7 @@ function MoveReview({
   onClose,
   opener,
   projectId,
+  refusal,
   targetProjectId,
   task,
 }: {
@@ -231,11 +273,12 @@ function MoveReview({
   onClose: () => void
   opener: RefObject<HTMLElement | null>
   projectId: string
+  /** The answer to the last confirmation, when it refused: nothing moved. */
+  refusal: Refusal | null
   targetProjectId: string
   task: MovingTask
 }) {
   const queryClient = useQueryClient()
-  const moved = useMoved(projectId, task, onClose)
   const previewKey = ['task-move-preview', projectId, task.id, task.version, targetProjectId] as const
   const preview = useQuery({
     queryKey: previewKey,
@@ -251,7 +294,9 @@ function MoveReview({
   const targetFields = useFields({ projectId: targetProjectId })
   // Choices belong to the preview they were made in; another preview starts over.
   const [choices, setChoices] = useState<{ snapshot: string; byIssue: Record<string, Choice> }>({ snapshot: '', byIssue: {} })
-  const [stale, setStale] = useState(false)
+  // The answer to the last confirmation, when it was a refusal: nothing moved.
+  const [refused, setRefused] = useState(refusal)
+  const stale = refused?.status === 409
 
   // Only a finished, successful preview can be moved on.
   const plan = preview.isSuccess && !preview.isFetching ? preview.data : undefined
@@ -274,9 +319,9 @@ function MoveReview({
   }
   const unresolved = issues.filter((issue) => !settled(issue)).length
 
-  const move = useMutation({
-    mutationFn: async (current: MovePlan) => {
-      const body = {
+  // Recorded, then sent, outside this dialog: see moveRecovery.
+  const send = (current: MovePlan) => {
+    const body = {
         targetProjectId,
         snapshot: current.snapshot,
         leaveUnresolved: false,
@@ -287,24 +332,11 @@ function MoveReview({
           return [{ issue: issue.id, action: 'set', targetField: choice.targetField, ...(choice.value === undefined ? {} : { value: choice.value }) }]
         }),
       }
-      const key = crypto.randomUUID()
-      try {
-        return await moveTask(projectId, task.id, body, key)
-      } catch (error) {
-        // No answer: keep this exact request until it's settled.
-        if (unknownOutcome(error)) rememberMove(projectId, task.id, { actorId, targetProjectId, targetProjectKey: current.targetProjectKey, body, key })
-        throw error
-      }
-    },
-    onSuccess: (done) => moved(done, targetProjectId),
-    onError: (error) => {
-      if (isApiError(error) && error.status === 409) setStale(true)
-    },
-  })
+    void sendMove(actorId, projectId, task.id, { targetProjectId, targetProjectKey: current.targetProjectKey, body, key: crypto.randomUUID() })
+  }
 
   const refresh = () => {
-    setStale(false)
-    move.reset()
+    setRefused(null)
     // Drop the old plan before asking again, so nothing is sent against it.
     void queryClient.resetQueries({ queryKey: previewKey, exact: true })
   }
@@ -313,27 +345,25 @@ function MoveReview({
     for (const issue of issues) if (!settled(issue)) choose(issue.id, { kind: 'leave' })
   }
 
-  const moveError = move.error && !unknownOutcome(move.error) ? (isApiError(move.error) ? move.error.message : describeError(move.error).message) : null
+  const moveError = refused?.message ?? null
   const previewError = preview.error ? (isApiError(preview.error) && preview.error.status !== 404 ? preview.error.message : describeError(preview.error).message) : null
 
   return (
     <Dialog
       footer={
         <>
-          <Button disabled={move.isPending} onClick={onBack} variant="ghost">
+          <Button onClick={onBack} variant="ghost">
             Back
           </Button>
-          <Button disabled={move.isPending} onClick={onClose} variant="ghost">
+          <Button onClick={onClose} variant="ghost">
             Cancel
           </Button>
-          <Button disabled={!plan || unresolved > 0 || move.isPending || stale} onClick={() => plan && move.mutate(plan)} variant="primary">
-            {move.isPending ? 'Moving…' : plan && plan.tasks.length > 1 ? `Move ${plan.tasks.length} tasks` : 'Move task'}
+          <Button disabled={!plan || unresolved > 0 || stale} onClick={() => plan && send(plan)} variant="primary">
+            {plan && plan.tasks.length > 1 ? `Move ${plan.tasks.length} tasks` : 'Move task'}
           </Button>
         </>
       }
-      onClose={() => {
-        if (!move.isPending) onClose()
-      }}
+      onClose={onClose}
       open
       title={plan ? `Move ${task.key} to ${plan.targetProjectKey}` : `Move ${task.key}`}
       returnFocus={opener}
@@ -374,7 +404,7 @@ function MoveReview({
                 {issues.map((issue) => (
                   <IssueRow
                     choice={chosen[issue.id]}
-                    disabled={move.isPending}
+                    disabled={false}
                     issue={issue}
                     key={issue.id}
                     onChoose={(choice) => choose(issue.id, choice)}

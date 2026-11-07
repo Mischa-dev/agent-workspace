@@ -1162,3 +1162,179 @@ async fn only_projects_the_mover_can_add_tasks_to_are_offered() {
     let (status, refused) = send(app, destinations(&mo_browser, &w.root)).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
 }
+
+/// A task whose type has no match in the target lands on the target's
+/// default type. Switching that default after the preview is a change: the
+/// preview is out of date, and nothing moves.
+#[tokio::test]
+async fn a_changed_default_type_makes_the_preview_stale() {
+    let Some(setup) = setup("awd102_move_default").await else {
+        return;
+    };
+    let app = &setup.app;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let w = world(&setup, &codex, &session).await;
+    // No type of DST shares a name with SRC's, so the default is used.
+    sqlx::query("UPDATE work_item_types SET name = 'DST ' || name WHERE project_id = $1::uuid")
+        .bind(&w.dst)
+        .execute(&setup.pool)
+        .await
+        .expect("rename");
+    let previewed = tool(
+        app,
+        &codex,
+        &session,
+        "task_move",
+        json!({"taskId": "SRC-1", "toProjectId": "DST", "preview": true}),
+    )
+    .await;
+    assert_eq!(previewed["outcome"], "ok", "{previewed}");
+    let snapshot = previewed["value"]["preview"]["snapshot"].clone();
+    let other = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM work_item_types WHERE project_id = $1::uuid AND enabled AND NOT is_default ORDER BY position LIMIT 1",
+    )
+    .bind(&w.dst)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("another type");
+    for statement in [
+        "UPDATE work_item_types SET is_default = false WHERE project_id = $1::uuid",
+        "UPDATE work_item_types SET is_default = true WHERE project_id = $1::uuid AND id = $2",
+    ] {
+        sqlx::query(statement)
+            .bind(&w.dst)
+            .bind(other)
+            .execute(&setup.pool)
+            .await
+            .expect("switch the default");
+    }
+    let before = moves_made(&setup).await;
+    let refused = tool(
+        app,
+        &codex,
+        &session,
+        "task_move",
+        json!({"taskId": "SRC-1", "toProjectId": "DST", "snapshot": snapshot,
+               "leaveUnresolved": true, "clientRequestId": "move-default"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "conflict", "{refused}");
+    assert_eq!(moves_made(&setup).await, before);
+    // A fresh preview moves onto the new default.
+    let fresh = tool(
+        app,
+        &codex,
+        &session,
+        "task_move",
+        json!({"taskId": "SRC-1", "toProjectId": "DST", "preview": true}),
+    )
+    .await;
+    let moved = tool(
+        app,
+        &codex,
+        &session,
+        "task_move",
+        json!({"taskId": "SRC-1", "toProjectId": "DST", "snapshot": fresh["value"]["preview"]["snapshot"],
+               "leaveUnresolved": true, "clientRequestId": "move-default-2"}),
+    )
+    .await;
+    assert_eq!(moved["outcome"], "ok", "{moved}");
+    let landed =
+        sqlx::query_scalar::<_, Uuid>("SELECT type_id FROM work_items WHERE id = $1::uuid")
+            .bind(moved["value"]["moved"][0]["id"].as_str().expect("id"))
+            .fetch_one(&setup.pool)
+            .await
+            .expect("type");
+    assert_eq!(landed, other);
+}
+
+/// Waits until some backend is waiting for a row lock on a project.
+async fn a_move_is_waiting(setup: &Setup) {
+    for _ in 0..200 {
+        let waiting = sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%FROM projects WHERE id = $1 FOR%'",
+        )
+        .fetch_one(&setup.pool)
+        .await
+        .expect("activity");
+        if waiting > 0 {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("the move never waited for the held project");
+}
+
+/// Removing an agent takes its home project, then its connection and
+/// membership, then its actor. A move by that agent takes project rows
+/// first and its actor last, so a removal that starts while the move waits
+/// never waits on the move: it finishes, and the move then finds the agent
+/// gone and moves nothing.
+#[tokio::test]
+async fn removing_an_agent_never_waits_on_its_waiting_move() {
+    let Some(setup) = setup("awd102_move_remove_agent").await else {
+        return;
+    };
+    let app = &setup.app;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let w = world(&setup, &codex, &session).await;
+    let home = create_project(&setup, "HOME", "Home").await;
+    let (agent, token) = create_agent(app, &setup.browser, &home, "Mover", "mover").await;
+    add_member(&setup, &w.src, agent, "member").await;
+    add_member(&setup, &w.dst, agent, "member").await;
+    let agent_session = initialize(app, &token).await.expect("agent MCP");
+    let (connection, version) = sqlx::query_as::<_, (Uuid, i64)>(
+        "SELECT id, version FROM external_agent_connections WHERE actor_id = $1",
+    )
+    .bind(agent)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("connection");
+    let before = moves_made(&setup).await;
+
+    // Another write holds the source project's row; the move waits for it.
+    let mut held = setup.pool.begin().await.expect("begin");
+    sqlx::query("SELECT 1 FROM projects WHERE id = $1::uuid FOR UPDATE")
+        .bind(&w.src)
+        .execute(&mut *held)
+        .await
+        .expect("hold the source");
+    let moving = tokio::spawn({
+        let app = app.clone();
+        let root = w.root.clone();
+        let dst = w.dst.clone();
+        async move {
+            tool(
+                &app,
+                &token,
+                &agent_session,
+                "task_move",
+                json!({"taskId": root, "toProjectId": dst}),
+            )
+            .await
+        }
+    });
+    a_move_is_waiting(&setup).await;
+    // The removal finishes while the move still waits.
+    let (status, removed) = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        send(
+            app,
+            setup.browser.request(
+                "POST",
+                &format!("/api/v1/projects/{home}/external-agents/{connection}/remove"),
+                Some("remove-mover"),
+                json!({"expectedVersion": version}),
+            ),
+        ),
+    )
+    .await
+    .expect("the removal doesn't wait on the move");
+    assert_eq!(status, StatusCode::OK, "{removed}");
+    held.commit().await.expect("release");
+    let moved = moving.await.expect("move");
+    assert_eq!(moved["outcome"], "not_found", "{moved}");
+    assert_eq!(moves_made(&setup).await, before, "nothing moved");
+}
