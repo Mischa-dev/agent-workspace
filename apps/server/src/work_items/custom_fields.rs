@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::{
-    authorize_work_item, capabilities,
+    authorize_work_item,
     planning::{
         IncludeArchivedQuery, Started, begin, invalid, may_change_workflow, refusal, start_write,
     },
@@ -51,10 +51,9 @@ pub(super) async fn list_fields(
         query.include_archived.unwrap_or(false),
     )
     .await?;
-    // Defining fields is the workflow's permission (AWD-74 roles).
-    let can_manage = may_change_workflow(&membership)?
-        && capabilities(&membership)?.edit
-        && membership.project_archived_at.is_none();
+    // Defining fields is the workflow's permission (AWD-74 roles), as the
+    // writes below and field_write check it; editing tasks isn't needed.
+    let can_manage = may_change_workflow(&membership)? && membership.project_archived_at.is_none();
     Ok(Json(json!({
         "fields": definitions.iter().map(FieldView::from).collect::<Vec<_>>(),
         "canManage": can_manage,

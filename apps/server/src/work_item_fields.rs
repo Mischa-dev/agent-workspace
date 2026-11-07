@@ -478,6 +478,13 @@ pub async fn references<'a>(
     Ok(found)
 }
 
+/// A page link as an export writes it: the page's title, then its link, so
+/// importing the file into the same project finds the page again (`find_link`
+/// reads the last ID in a link).
+pub fn exported_page(project_id: Uuid, page_id: Uuid, title: &str) -> String {
+    format!("{title} (/projects/{project_id}/pages/{page_id})")
+}
+
 /// What a person, task or page reference reads as for agents and exports:
 /// a person's @handle (or name), a task's key, a page's title.
 pub fn reference_text(references: &HashMap<Uuid, ValueReference>, id: &str) -> Option<String> {
@@ -555,7 +562,18 @@ pub async fn shown_before(
 mod tests {
     use uuid::Uuid;
 
-    use super::{task_key, uuid_in};
+    use super::{exported_page, task_key, uuid_in};
+
+    /// An exported page link reads back as the same page, even when its
+    /// title holds an ID of its own.
+    #[test]
+    fn exported_page_links_import_as_the_same_page() {
+        let (project, page) = (Uuid::now_v7(), Uuid::now_v7());
+        let title = format!("Notes on {}", Uuid::now_v7());
+        let written = exported_page(project, page, &title);
+        assert!(written.starts_with(&title));
+        assert_eq!(uuid_in(&written), Some(page));
+    }
 
     #[test]
     fn links_are_read_from_ids_links_and_keys() {

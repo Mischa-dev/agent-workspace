@@ -419,6 +419,9 @@ pub(crate) async fn check_view_query(
         return Err(AppError::Validation("query"));
     }
     let mut spec = list::saved_query_spec(query, reader)?;
+    spec.filters
+        .resolve_field_me(pool, project_id, reader)
+        .await?;
     list::validate_filter_ids(pool, project_id, &spec.filters).await?;
     spec.resolve_fields(pool, project_id).await
 }

@@ -897,6 +897,24 @@ pub fn clauses_param(clauses: &[FieldClause]) -> String {
     serde_json::to_string(clauses).unwrap_or_else(|_| "[]".to_owned())
 }
 
+/// "me" in a person field's clause as `reader`. Other fields keep "me" as
+/// written: in a text or URL field it's the word.
+pub fn resolve_me(clauses: &mut [FieldClause], definitions: &[FieldDefinition], reader: Uuid) {
+    for clause in clauses {
+        let person = definitions
+            .iter()
+            .any(|field| field.id == clause.field && field.field_type == FieldType::Person);
+        if !person {
+            continue;
+        }
+        for value in &mut clause.values {
+            if value == "me" {
+                *value = reader.to_string();
+            }
+        }
+    }
+}
+
 /// Checks a clause against its field: the operation suits the type, and
 /// the values are what the type stores. The message says what would work.
 pub fn check_clause(field: &FieldDefinition, clause: &FieldClause) -> Result<(), String> {
@@ -1725,6 +1743,32 @@ mod tests {
         )
         .expect("test value");
         field
+    }
+
+    /// "me" is the reader only in a person field; a text or URL field's
+    /// filter keeps the word.
+    #[test]
+    fn me_is_the_reader_only_in_person_fields() {
+        let reader = Uuid::now_v7();
+        let person = field(FieldType::Person);
+        let text = field(FieldType::Text);
+        let url = field(FieldType::Url);
+        let clause = |field: &FieldDefinition, op| FieldClause {
+            field: field.id,
+            op,
+            values: vec!["me".to_owned()],
+        };
+        let mut clauses = vec![
+            clause(&person, FieldOp::Is),
+            clause(&text, FieldOp::Is),
+            clause(&text, FieldOp::Contains),
+            clause(&url, FieldOp::Contains),
+        ];
+        resolve_me(&mut clauses, &[person, text, url], reader);
+        assert_eq!(clauses[0].values, vec![reader.to_string()]);
+        for clause in &clauses[1..] {
+            assert_eq!(clause.values, vec!["me".to_owned()]);
+        }
     }
 
     /// The modules contract (AWD-75) names field types as task fields

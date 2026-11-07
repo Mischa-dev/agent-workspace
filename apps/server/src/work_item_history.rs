@@ -93,15 +93,21 @@ impl FieldChanges {
             )),
             other => other,
         };
-        let mut change = json!({ "field": name, "from": cut(from), "to": cut(to) });
-        let size = change.to_string().len();
-        if self.custom_bytes + size > CUSTOM_BUDGET_BYTES {
-            // Past the budget a change still says which field changed.
-            change = json!({ "field": name, "from": null, "to": "…" });
+        let key = format!("{CUSTOM_FIELD_PREFIX}{field_id}");
+        // Past the budget a change still says which field changed, if that
+        // fits; past that it's left out, and `changedFields` still says
+        // "fields". The whole entry counts, key and all, so the budget holds
+        // however many fields change together.
+        let full = json!({ "field": name, "from": cut(from), "to": cut(to) });
+        let named = json!({ "field": name, "from": null, "to": "…" });
+        for change in [full, named] {
+            let size = custom_entry_bytes(&key, &change);
+            if self.custom_bytes + size <= CUSTOM_BUDGET_BYTES {
+                self.custom_bytes += size;
+                self.fields.insert(key, change);
+                return;
+            }
         }
-        self.custom_bytes += change.to_string().len();
-        self.fields
-            .insert(format!("{CUSTOM_FIELD_PREFIX}{field_id}"), change);
     }
 
     pub fn id(&mut self, field: &str, from: Option<Uuid>, to: Option<Uuid>) {
@@ -119,6 +125,36 @@ impl FieldChanges {
             "description".to_owned(),
             json!({ "diff": diff, "truncated": truncated }),
         );
+    }
+}
+
+/// Bytes one custom field entry takes in the stored payload, as the 8 KB
+/// check reads it (`payload::text`, which puts a space after every ":" and
+/// ","): its key, its value and the ", " before the next entry.
+fn custom_entry_bytes(key: &str, change: &Value) -> usize {
+    Value::String(key.to_owned()).to_string().len()
+        + ": ".len()
+        + jsonb_text_len(change)
+        + ", ".len()
+}
+
+/// Length of a value as PostgreSQL writes jsonb as text.
+fn jsonb_text_len(value: &Value) -> usize {
+    let separators = |count: usize| 2 * count.saturating_sub(1);
+    match value {
+        Value::Object(map) => {
+            2 + separators(map.len())
+                + map
+                    .iter()
+                    .map(|(key, value)| {
+                        Value::String(key.clone()).to_string().len() + 2 + jsonb_text_len(value)
+                    })
+                    .sum::<usize>()
+        }
+        Value::Array(items) => {
+            2 + separators(items.len()) + items.iter().map(jsonb_text_len).sum::<usize>()
+        }
+        other => other.to_string().len(),
     }
 }
 
@@ -413,7 +449,32 @@ mod tests {
     use serde_json::json;
     use uuid::Uuid;
 
-    use super::{FieldChanges, line_diff};
+    use super::{CUSTOM_BUDGET_BYTES, FieldChanges, jsonb_text_len, line_diff};
+
+    /// Many custom fields changing at once stay inside their share of the
+    /// payload's 8 KB, counted as PostgreSQL stores it, keys included.
+    #[test]
+    fn custom_field_changes_hold_their_budget() {
+        // PostgreSQL's jsonb text: a space after every ":" and ",".
+        assert_eq!(
+            jsonb_text_len(&json!({"a": 1, "b": [1, 2]})),
+            r#"{"a": 1, "b": [1, 2]}"#.len()
+        );
+        let name = "é".repeat(60);
+        let mut changes = FieldChanges::default();
+        let first = Uuid::now_v7();
+        changes.custom_field(first, "Points", json!(1), json!(2));
+        for _ in 0..50 {
+            changes.custom_field(Uuid::now_v7(), &name, json!("a"), json!("b"));
+        }
+        let map = changes.into_map();
+        assert!(map.len() > 1 && map.len() < 51, "{} entries", map.len());
+        assert!(jsonb_text_len(&serde_json::Value::Object(map.clone())) <= CUSTOM_BUDGET_BYTES + 2);
+        assert_eq!(
+            map[&format!("field:{first}")],
+            json!({"field": "Points", "from": 1, "to": 2})
+        );
+    }
 
     #[test]
     fn records_only_fields_that_changed() {

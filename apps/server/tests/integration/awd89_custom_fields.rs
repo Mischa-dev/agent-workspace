@@ -634,4 +634,71 @@ async fn defining_fields_follows_the_workflow_permission_and_values_follow_task_
     assert_eq!(count, 1);
     let high = risk["options"][1]["id"].as_str().expect("High");
     assert_eq!(values[&risk_id], high);
+
+    // Cam keeps the workflow without editing tasks: defining fields is the
+    // workflow's permission, so the page offers it to her and the server
+    // takes it, and she still can't set a value.
+    let (cam, cam_browser) = add_person(&setup, &[&work], "cam").await;
+    let (status, keeper) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/organizations/{}/roles", setup.organization_id),
+            None,
+            json!({"name": "Workflow keeper", "baseRole": "member", "permissions": ["tasks.view", "tasks.workflow"]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{keeper}");
+    let membership_version = sqlx::query_scalar::<_, i64>(
+        "SELECT version FROM organization_memberships WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(setup.organization_id)
+    .bind(cam)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("membership version");
+    let (status, assigned) = send(
+        app,
+        setup.browser.request(
+            "PUT",
+            &format!(
+                "/api/v1/organizations/{}/members/{cam}/role",
+                setup.organization_id
+            ),
+            None,
+            json!({"roleId": keeper["id"], "applyToProjects": true, "expectedVersion": membership_version}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {assigned}");
+    let (status, listed) = send(
+        app,
+        cam_browser.request("GET", &fields_path, None, Value::Null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_eq!(listed["canManage"], true, "{listed}");
+    let (status, made) = send(
+        app,
+        cam_browser.request(
+            "POST",
+            &fields_path,
+            Some("cam-field"),
+            json!({"name": "Area", "type": "text"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{made}");
+    let (status, refused) = send(
+        app,
+        cam_browser.request(
+            "PATCH",
+            &task_path,
+            Some("cam-value"),
+            json!({"expectedVersion": task_version(&setup.pool, &task_id).await, "fieldValues": {risk_id.clone(): "Low"}}),
+        ),
+    )
+    .await;
+    assert!(status.is_client_error(), "{status}: {refused}");
 }

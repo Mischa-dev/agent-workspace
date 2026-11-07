@@ -672,22 +672,9 @@ fn resolve_grouping(
 const LANES: [&str; 5] = ["none", "assignee", "priority", "milestone", "type"];
 
 /// A view's parameter with "me" (alone or among other assignees) replaced
-/// by `reader`, whoever opens the view.
+/// by `reader`, whoever opens the view. A person field's "me" waits for the
+/// field's type (`Filters::resolve_field_me`): in a text field it's the word.
 pub(super) fn resolve_me(key: &str, value: &str, reader: Uuid) -> String {
-    if key == "fieldFilters" {
-        // A person field's "me" is whoever opens the view, too.
-        let Some(mut clauses) = fields::parse_clauses(value) else {
-            return value.to_owned();
-        };
-        for clause in &mut clauses {
-            for value in &mut clause.values {
-                if value == "me" {
-                    *value = reader.to_string();
-                }
-            }
-        }
-        return fields::clauses_param(&clauses);
-    }
     if !matches!(key, "assigneeActorId" | "notAssigneeActorId") {
         return value.to_owned();
     }
@@ -758,6 +745,19 @@ impl ViewFilters {
         })
     }
 
+    /// "me" in a person field's filter as `reader`, once the fields' types
+    /// are known.
+    pub(crate) async fn resolve_field_me(
+        &mut self,
+        pool: &PgPool,
+        project_id: Uuid,
+        reader: Uuid,
+    ) -> Result<(), AppError> {
+        self.filters
+            .resolve_field_me(pool, project_id, reader)
+            .await
+    }
+
     /// The caller says whether archived tasks are listed, not the view.
     pub(crate) fn leave_archived_to_caller(&mut self) {
         self.archived_rule = false;
@@ -802,6 +802,27 @@ fn parse_one_or_none(
 }
 
 impl Filters {
+    /// "me" in a person field's filter stands for `reader`, whoever reads
+    /// the list; in a text or URL field's filter it's the word itself. Reads
+    /// the fields only when a filter says "me".
+    pub(super) async fn resolve_field_me(
+        &mut self,
+        pool: &PgPool,
+        project_id: Uuid,
+        reader: Uuid,
+    ) -> Result<(), AppError> {
+        if !self
+            .fields
+            .iter()
+            .any(|clause| clause.values.iter().any(|value| value == "me"))
+        {
+            return Ok(());
+        }
+        let definitions = work_item_fields::definitions(pool, project_id, true).await?;
+        fields::resolve_me(&mut self.fields, &definitions, reader);
+        Ok(())
+    }
+
     fn parse(query: &TaskListQuery) -> Result<Self, AppError> {
         let id = |part: &str| Uuid::parse_str(part).ok();
         let priority = |part: &str| validate_priority(part).is_ok().then(|| part.to_owned());
@@ -1505,7 +1526,10 @@ pub(crate) async fn matching_tasks(
     work_item_ids: Option<&[Uuid]>,
     limit: i64,
 ) -> Result<Vec<Uuid>, AppError> {
-    let spec = saved_query_spec(params, reader)?;
+    let mut spec = saved_query_spec(params, reader)?;
+    spec.filters
+        .resolve_field_me(pool, project_id, reader)
+        .await?;
     let mut builder = QueryBuilder::<Postgres>::new(format!(
         "SELECT item.id {BASE_FROM} WHERE item.project_id = "
     ));
@@ -2085,7 +2109,7 @@ pub(super) async fn list_work_items(
     State(state): State<AppState>,
     principal: AuthenticatedActor,
     ApiPath(project_id): ApiPath<Uuid>,
-    ApiQuery(mut query): ApiQuery<TaskListQuery>,
+    ApiQuery(query): ApiQuery<TaskListQuery>,
 ) -> Result<Json<TaskListResponse>, AppError> {
     state
         .rate_limits
@@ -2094,10 +2118,6 @@ pub(super) async fn list_work_items(
         .await?
         .ok_or(AppError::NotFound("project"))?;
     authorize_work_item(&principal, &membership, Action::WorkItemView, None)?;
-    // "me" in a person field's filter is whoever is reading.
-    query.field_filters = query
-        .field_filters
-        .map(|value| resolve_me("fieldFilters", &value, principal.actor_id));
     if query.columns_by.is_some() {
         return Err(AppError::Validation("columnsBy"));
     }
@@ -2111,6 +2131,10 @@ pub(super) async fn list_work_items(
             .transpose()?,
         sort_field: None,
     };
+    // "me" in a person field's filter is whoever is reading.
+    spec.filters
+        .resolve_field_me(&state.pool, project_id, principal.actor_id)
+        .await?;
     validate_filter_ids(&state.pool, project_id, &spec.filters).await?;
     spec.resolve_fields(&state.pool, project_id).await?;
     let page = page(
@@ -2145,7 +2169,7 @@ pub(super) async fn list_work_item_groups(
     State(state): State<AppState>,
     principal: AuthenticatedActor,
     ApiPath(project_id): ApiPath<Uuid>,
-    ApiQuery(mut query): ApiQuery<TaskListQuery>,
+    ApiQuery(query): ApiQuery<TaskListQuery>,
 ) -> Result<Json<GroupsResponse>, AppError> {
     state
         .rate_limits
@@ -2154,10 +2178,6 @@ pub(super) async fn list_work_item_groups(
         .await?
         .ok_or(AppError::NotFound("project"))?;
     authorize_work_item(&principal, &membership, Action::WorkItemView, None)?;
-    // "me" in a person field's filter is whoever is reading.
-    query.field_filters = query
-        .field_filters
-        .map(|value| resolve_me("fieldFilters", &value, principal.actor_id));
     if query.cursor.is_some() || query.columns_by.is_some() {
         return Err(AppError::Validation("groups query"));
     }
@@ -2168,7 +2188,11 @@ pub(super) async fn list_work_item_groups(
             .ok_or(AppError::Validation("groupBy"))?,
         false,
     )?;
-    let filters = Filters::parse(&query)?;
+    let mut filters = Filters::parse(&query)?;
+    // "me" in a person field's filter is whoever is reading.
+    filters
+        .resolve_field_me(&state.pool, project_id, principal.actor_id)
+        .await?;
     validate_filter_ids(&state.pool, project_id, &filters).await?;
     let grouping = if matches!(grouping, Grouping::Field(..)) {
         resolve_grouping(
@@ -2212,7 +2236,7 @@ pub(super) async fn get_work_item_board(
     State(state): State<AppState>,
     principal: AuthenticatedActor,
     ApiPath(project_id): ApiPath<Uuid>,
-    ApiQuery(mut query): ApiQuery<TaskListQuery>,
+    ApiQuery(query): ApiQuery<TaskListQuery>,
 ) -> Result<Json<BoardResponse>, AppError> {
     state
         .rate_limits
@@ -2221,10 +2245,6 @@ pub(super) async fn get_work_item_board(
         .await?
         .ok_or(AppError::NotFound("project"))?;
     authorize_work_item(&principal, &membership, Action::WorkItemView, None)?;
-    // "me" in a person field's filter is whoever is reading.
-    query.field_filters = query
-        .field_filters
-        .map(|value| resolve_me("fieldFilters", &value, principal.actor_id));
     if query.cursor.is_some() {
         return Err(AppError::Invalid("board cursor"));
     }
@@ -2232,7 +2252,11 @@ pub(super) async fn get_work_item_board(
         return Err(AppError::Validation("board query"));
     }
     let grouping = Grouping::parse(query.columns_by.as_deref().unwrap_or("status"), true)?;
-    let filters = Filters::parse(&query)?;
+    let mut filters = Filters::parse(&query)?;
+    // "me" in a person field's filter is whoever is reading.
+    filters
+        .resolve_field_me(&state.pool, project_id, principal.actor_id)
+        .await?;
     validate_filter_ids(&state.pool, project_id, &filters).await?;
     let limit = limit(query.limit);
     let counts = group_counts(&state.pool, project_id, &filters, grouping).await?;

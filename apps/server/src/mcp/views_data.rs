@@ -214,6 +214,9 @@ pub(super) async fn apply_view(
             ),
         )));
     };
+    filters
+        .resolve_field_me(&state.pool, principal.project_id, principal.actor_id)
+        .await?;
     // The task list shows finished tasks unless the view hides them.
     arguments.include_done.get_or_insert(true);
     match arguments.include_archived {

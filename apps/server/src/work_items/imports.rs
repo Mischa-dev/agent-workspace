@@ -2010,13 +2010,21 @@ async fn name_field_values(
     if definitions.is_empty() {
         return Ok(());
     }
-    let references = work_item_fields::references(
+    let mut references = work_item_fields::references(
         connection,
         project_id,
         definitions,
         tasks.iter().map(|task| &task.field_values),
     )
     .await?;
+    // A page link keeps its page's link beside the title, so an import of
+    // this file can find the page again; tasks go by key, people by @handle.
+    for reference in references.values_mut() {
+        if reference.kind == "page" {
+            reference.label =
+                work_item_fields::exported_page(project_id, reference.id, &reference.label);
+        }
+    }
     for task in tasks {
         task.fields = work_item_fields::named_values(definitions, &task.field_values, &references)
             .into_iter()
