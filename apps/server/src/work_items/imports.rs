@@ -517,16 +517,19 @@ fn resolve(
         };
         // A multiple choice exported here is a JSON list of option names,
         // read exactly; any other cell (another tool's "A, B") is read as
-        // written, a best effort (see fields::normalize_value). A value that
-        // names something (a person's @handle, an option, a link) comes back
-        // without the apostrophe the export put before a formula character.
+        // written, a best effort (see fields::normalize_value). A custom
+        // field's value (text, a URL, a person's @handle, an option, a link)
+        // comes back without the apostrophe the export put before a formula
+        // character.
         let input = match field.field_type {
             FieldType::MultipleChoice => {
                 exported_choices(raw).unwrap_or_else(|| Value::String(unguarded(raw).to_owned()))
             }
-            FieldType::SingleChoice | FieldType::Person | FieldType::Link => {
-                Value::String(unguarded(raw).to_owned())
-            }
+            FieldType::SingleChoice
+            | FieldType::Person
+            | FieldType::Link
+            | FieldType::Text
+            | FieldType::Url => Value::String(unguarded(raw).to_owned()),
             _ => Value::String(raw.clone()),
         };
         match fields::normalize_value(field, &input) {
@@ -2073,16 +2076,21 @@ const CSV_HEADERS: [&str; 15] = [
 /// A custom field's CSV cell. A multiple choice is a JSON list of its
 /// option names (`["A","B"]`), since an option's own name may hold a comma
 /// ("A, B" could be one option or two); the rest read as the app shows them.
-/// A name (a person, an option, a link) that itself starts with an
-/// apostrophe gets one more, so `unguarded` can tell it from the guard
+/// A value (text, a URL, a person, an option, a link) that itself starts
+/// with an apostrophe gets one more, so `unguarded` can tell it from the guard
 /// `csv_field` puts before a formula character: "=Plan" is written
 /// "'=Plan" and "'=Plan" is written "''=Plan".
 fn field_cell(field: &FieldDefinition, value: &Value) -> String {
     match (field.field_type, value) {
         (FieldType::MultipleChoice, Value::Array(_)) => value.to_string(),
-        (FieldType::SingleChoice | FieldType::Person | FieldType::Link, Value::String(name))
-            if name.starts_with('\'') =>
-        {
+        (
+            FieldType::SingleChoice
+            | FieldType::Person
+            | FieldType::Link
+            | FieldType::Text
+            | FieldType::Url,
+            Value::String(name),
+        ) if name.starts_with('\'') => {
             format!("'{name}")
         }
         _ => fields::display_text(value),
@@ -2097,15 +2105,15 @@ fn exported_choices(raw: &str) -> Option<Value> {
     Some(Value::Array(names.into_iter().map(Value::String).collect()))
 }
 
-/// A named value's cell as it was before the export guarded it: one
+/// A custom field value's cell as it was before the export guarded it: one
 /// leading apostrophe comes off when another apostrophe or a formula
 /// character (= + - @) follows, undoing `csv_field`'s guard ("'@ana" is
-/// "@ana") or `field_cell`'s extra one ("''=Plan" is "'=Plan"). Only for
-/// values that name something (a person, an option, a link); text keeps
-/// what the file says.
+/// "@ana") or `field_cell`'s extra one ("''=Plan" is "'=Plan"). Custom fields
+/// only (a multiple choice reads its JSON list instead); the built-in
+/// columns, such as the title, keep what the file says.
 ///
 /// Exports from before `field_cell` added that extra apostrophe wrote a
-/// name like "'=Plan" as "'=Plan" too, the same cell as "=Plan" guarded;
+/// value like "'=Plan" as "'=Plan" too, the same cell as "=Plan" guarded;
 /// those read as "=Plan", and nothing in such a file can tell them apart.
 fn unguarded(raw: &str) -> &str {
     match raw.strip_prefix('\'') {
@@ -2651,7 +2659,7 @@ mod tests {
 
     /// The export still guards cells against spreadsheet formulas, and a
     /// person's @handle or an option named "=Plan" still reads back as
-    /// itself; a text field keeps what the file says.
+    /// itself, and so does a text field's "=SUM(A1)" or "'quoted".
     #[test]
     fn formula_guarded_names_read_back() {
         let definition = |name: &str, field_type: FieldType, options: &[&str]| FieldDefinition {
@@ -2704,7 +2712,10 @@ mod tests {
             ),
             task(
                 1,
-                serde_json::Map::from_iter([("Stage".to_owned(), json!("'=Plan"))]),
+                serde_json::Map::from_iter([
+                    ("Stage".to_owned(), json!("'=Plan")),
+                    ("Note".to_owned(), json!("'quoted")),
+                ]),
             ),
             task(
                 2,
@@ -2724,7 +2735,7 @@ mod tests {
             .map(|record| record[stage].as_str())
             .collect::<Vec<_>>();
         assert_eq!(cells, vec!["'=Plan", "''=Plan", "'''x"]);
-        for guarded in ["'@ana", "'=SUM(A1)"] {
+        for guarded in ["'@ana", "'=SUM(A1)", "''quoted"] {
             assert!(text.contains(guarded), "{guarded} in {text}");
         }
         let rows = csv_rows(&records, &auto_mapping(&records[0])).expect("test input is valid");
@@ -2735,12 +2746,18 @@ mod tests {
         assert_eq!(
             read(0),
             vec![
-                ("Note".to_owned(), json!("'=SUM(A1)")),
+                ("Note".to_owned(), json!("=SUM(A1)")),
                 ("Owner".to_owned(), json!("@ana")),
                 ("Stage".to_owned(), json!("=Plan")),
             ]
         );
-        assert_eq!(read(1), vec![("Stage".to_owned(), json!("'=Plan"))]);
+        assert_eq!(
+            read(1),
+            vec![
+                ("Note".to_owned(), json!("'quoted")),
+                ("Stage".to_owned(), json!("'=Plan")),
+            ]
+        );
         assert_eq!(read(2), vec![("Stage".to_owned(), json!("''x"))]);
         // And each names its own option.
         let stage = &project.fields[1];
