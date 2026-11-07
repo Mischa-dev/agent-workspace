@@ -332,9 +332,31 @@ pub(super) async fn inbox_list(
         Ok(value) => value,
         Err(failure) => return ReplyToolResult::from_failure(failure),
     };
+    // AWD-75: only requests where their conversations show (Messages on for
+    // DMs, Channels in a project), before the limit.
+    let shown = async {
+        let projects = sqlx::query_scalar::<_, Uuid>(
+            "SELECT DISTINCT project_id FROM reply_requests WHERE agent_actor_id = $1 AND status IN ('pending', 'claimed')",
+        )
+        .bind(principal.actor_id)
+        .fetch_all(&mut *transaction)
+        .await?;
+        let modules = crate::modules::state::ProjectModules::load(
+            &mut *transaction,
+            principal.actor_id,
+            &projects,
+        )
+        .await?;
+        Ok::<_, AppError>(modules.with_conversations(&projects))
+    }
+    .await;
+    let Ok(shown) = shown else {
+        return ReplyToolResult::from_failure(ReadFailure::Database("inbox_list"));
+    };
     let requests = sqlx::query_as::<_, InboxItem>(&format!(
         r#"{INBOX_ITEM_SELECT}
         WHERE agent_connection_can_access($1, request.project_id)
+          AND request.project_id = ANY($4)
           AND request.agent_actor_id = $2
           AND request.status IN ('pending', 'claimed')
           AND conversation.archived_at IS NULL
@@ -346,6 +368,7 @@ pub(super) async fn inbox_list(
     .bind(principal.external_agent_connection_id)
     .bind(principal.actor_id)
     .bind(limit)
+    .bind(&shown)
     .fetch_all(&mut *transaction)
     .await;
     let requests = match requests {

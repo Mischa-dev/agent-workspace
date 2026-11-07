@@ -581,6 +581,10 @@ pub struct UsageQuery {
     pub group_by: Option<String>,
     /// How many days back, today included (30 when left out).
     pub days: Option<i64>,
+    /// AWD-75: projects to leave out: the MCP tool passes those where Runs
+    /// is off for the caller. Never read from a request.
+    #[serde(skip)]
+    pub without_projects: Vec<Uuid>,
 }
 
 #[derive(Clone, Debug, FromRow, Serialize)]
@@ -644,6 +648,7 @@ pub async fn usage_report(
           AND usage.usage_date >= $2
           AND ($3::uuid IS NULL OR usage.organization_id = $3)
           AND ($4::uuid IS NULL OR usage.project_id = $4)
+          AND NOT (usage.project_id = ANY($5))
     "#;
     let rows = sqlx::query_as::<_, UsageRow>(&format!(
         r#"
@@ -665,6 +670,7 @@ pub async fn usage_report(
     .bind(since)
     .bind(query.organization_id)
     .bind(query.project_id)
+    .bind(&query.without_projects)
     .fetch_all(&state.pool)
     .await?;
     let (runs, totals) = {
@@ -681,6 +687,7 @@ pub async fn usage_report(
         .bind(since)
         .bind(query.organization_id)
         .bind(query.project_id)
+        .bind(&query.without_projects)
         .fetch_one(&state.pool)
         .await?;
         (total.runs, total.usage)

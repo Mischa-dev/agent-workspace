@@ -2892,14 +2892,18 @@ async fn caller_modules_anywhere(
     crate::modules::state::anywhere(&mut connection, principal.actor_id).await
 }
 
-/// The modules on for the caller where a call acts: the project it names
-/// (or the connection's own), narrowed by their role there. An app
-/// connected for a person's whole account that names no project follows
-/// every workspace they're in.
-async fn caller_modules_here(
+/// The name of `module` when it's off for the caller where a call acts: the
+/// project it names (or the connection's own), narrowed by their role there.
+/// An app connected for a person's whole account that names no project
+/// follows every workspace they're in. The conversation tools (Messages and
+/// Channels) follow the kind of project they act in, as conversations do:
+/// Messages in the direct project, Channels in the others, where the call
+/// names its target.
+async fn module_off_here(
     state: &AppState,
     principal: &McpPrincipal,
-) -> Result<crate::modules::ModuleSet, AppError> {
+    module: &crate::modules::manifest::Manifest,
+) -> Result<Option<String>, AppError> {
     let mut connection = state.pool.acquire().await?;
     if (principal.project_explicit || !principal.account_wide)
         && let Some(modules) = crate::modules::state::for_project(
@@ -2909,9 +2913,23 @@ async fn caller_modules_here(
         )
         .await?
     {
-        return Ok(modules);
+        // Only for a project the call names (or a conversation, message or
+        // request it names): a connection's own project isn't where an
+        // unscoped list acts, and those lists leave out what's off themselves.
+        if principal.project_explicit && matches!(module.id.as_str(), "messages" | "channels") {
+            let direct =
+                sqlx::query_scalar::<_, bool>("SELECT kind = 'direct' FROM projects WHERE id = $1")
+                    .bind(principal.project_id)
+                    .fetch_one(&mut *connection)
+                    .await?;
+            let on = modules.allows_conversations_in(if direct { "direct" } else { "standard" });
+            let name = if direct { "Messages" } else { "Channels" };
+            return Ok((!on).then(|| name.to_owned()));
+        }
+        return Ok((!modules.contains(&module.id)).then(|| module.name.clone()));
     }
-    crate::modules::state::anywhere(&mut connection, principal.actor_id).await
+    let modules = crate::modules::state::anywhere(&mut connection, principal.actor_id).await?;
+    Ok((!modules.contains(&module.id)).then(|| module.name.clone()))
 }
 
 /// A call to a tool of a module that's off, in the shape `refusal` uses.
@@ -3014,10 +3032,10 @@ async fn run_tool(
     if let Some(module) = crate::modules::manifest::of_tool(&request.name)
         && module.switchable
     {
-        match caller_modules_here(&server.state, &principal).await {
-            Ok(modules) if modules.contains(&module.id) => {}
-            Ok(_) => {
-                return Ok(module_refusal(&request.name, &module.name));
+        match module_off_here(&server.state, &principal, module).await {
+            Ok(None) => {}
+            Ok(Some(name)) => {
+                return Ok(module_refusal(&request.name, &name));
             }
             Err(error) => {
                 tracing::error!(category = error.log_category(), "MCP module lookup failed");

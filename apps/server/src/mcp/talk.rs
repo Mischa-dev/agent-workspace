@@ -805,7 +805,7 @@ async fn readable_conversation(
 /// it's in: Messages in the direct space (DMs, groups and their threads),
 /// Channels in a project. Its name when that's off for the caller there, else
 /// None. The caller has already checked they may read the conversation.
-async fn conversation_module_off(
+pub(super) async fn conversation_module_off(
     state: &AppState,
     actor_id: Uuid,
     project_id: Uuid,

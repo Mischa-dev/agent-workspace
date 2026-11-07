@@ -91,7 +91,11 @@ async fn whiteboards_on(state: &AppState, principal: &McpPrincipal) -> Result<On
 /// boards they can't reach: when access is refused it answers false and
 /// leaves that answer to the tool, which checks access itself. A failed
 /// module lookup is an error, never "on".
-async fn board_module_off(state: &AppState, caller: &Caller, id: Uuid) -> Result<bool, AppError> {
+pub(super) async fn board_module_off(
+    state: &AppState,
+    caller: &Caller,
+    id: Uuid,
+) -> Result<bool, AppError> {
     let mut connection = state.pool.acquire().await?;
     // A board the caller can't reach is left to the tool's own refusal, so
     // the answer says nothing more about it; any other failure (the database)
@@ -623,6 +627,30 @@ pub(super) async fn whiteboard_create(
         Ok(link) => link,
         Err((field, message)) => return ToolResult::invalid(field, message),
     };
+    // AWD-75: a board across a workspace needs Whiteboards on in that
+    // workspace; the gate saw a project, or every workspace, not this one.
+    // Only for someone create would let in (an active member, not confined
+    // to a project); anyone else gets create's own refusal.
+    if let Placement::Workspace(organization_id) = placement
+        && caller.confined_project.is_none()
+    {
+        let modules: Result<_, AppError> = async {
+            let mut connection = state.pool.acquire().await?;
+            crate::modules::state::by_workspace(&mut connection, caller.actor_id).await
+        }
+        .await;
+        match modules {
+            Ok(modules) => {
+                if modules
+                    .get(&organization_id)
+                    .is_some_and(|set| !set.contains("whiteboards"))
+                {
+                    return ToolResult::module_off("whiteboard_create", "Whiteboards");
+                }
+            }
+            Err(error) => return refused(error, "whiteboard_create"),
+        }
+    }
     let result = async {
         let mut transaction = state.pool.begin().await?;
         let id =
@@ -922,7 +950,8 @@ pub(super) async fn whiteboard_link(
     }
 }
 
-/// Links or unlinks a board, for whiteboard_link and task_link.
+/// Links or unlinks a board, for whiteboard_link and task_link; both check
+/// board_module_off first (AWD-75).
 pub(super) async fn set_link(
     state: &AppState,
     principal: &McpPrincipal,

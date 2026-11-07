@@ -386,7 +386,30 @@ async fn owned(
     Ok(row)
 }
 
+/// AWD-75: where the caller's own webhook acts: its workspace, and the
+/// project it's limited to. Not found exactly as `owned` says.
+pub(crate) async fn scope(
+    state: &AppState,
+    caller: &Caller,
+    webhook_id: Uuid,
+) -> Result<(Uuid, Option<Uuid>), AppError> {
+    let row = owned(&state.pool, caller, webhook_id).await?;
+    Ok((row.organization_id, row.project_id))
+}
+
 pub(crate) async fn list(state: &AppState, caller: &Caller) -> Result<WebhookList, AppError> {
+    list_in(state, caller, &[], &[]).await
+}
+
+/// `list`, leaving out webhooks limited to one of `off_projects` or across
+/// one of `off_workspaces`, and not offering those projects (AWD-75: the
+/// tools pass where Automations is off for the caller).
+pub(crate) async fn list_in(
+    state: &AppState,
+    caller: &Caller,
+    off_projects: &[Uuid],
+    off_workspaces: &[Uuid],
+) -> Result<WebhookList, AppError> {
     let rows = sqlx::query_as::<_, SubscriptionRow>(&format!(
         r#"{SUBSCRIPTION_SELECT}
         WHERE subscription.owner_actor_id = $1
@@ -396,11 +419,15 @@ pub(crate) async fn list(state: &AppState, caller: &Caller) -> Result<WebhookLis
               WHERE membership.organization_id = subscription.organization_id
                 AND membership.actor_id = $1 AND membership.enabled
           )
+          AND NOT (subscription.project_id IS NOT NULL AND subscription.project_id = ANY($3))
+          AND NOT (subscription.project_id IS NULL AND subscription.organization_id = ANY($4))
         ORDER BY subscription.created_at DESC, subscription.id DESC
         LIMIT 200"#
     ))
     .bind(caller.actor_id)
     .bind(caller.token_project_id)
+    .bind(off_projects)
+    .bind(off_workspaces)
     .fetch_all(&state.pool)
     .await?;
     let projects = sqlx::query_as::<_, WebhookProject>(
@@ -411,12 +438,14 @@ pub(crate) async fn list(state: &AppState, caller: &Caller) -> Result<WebhookLis
         WHERE membership.actor_id = $1 AND membership.enabled
           AND ($2::uuid IS NULL OR project.id = $2)
           AND actor_can_access_project($1, NULL, project.id)
+          AND NOT (project.id = ANY($3))
         ORDER BY (project.kind = 'direct'), lower(project.name), project.id
         LIMIT 300
         "#,
     )
     .bind(caller.actor_id)
     .bind(caller.token_project_id)
+    .bind(off_projects)
     .fetch_all(&state.pool)
     .await?;
     Ok(WebhookList {
@@ -428,6 +457,30 @@ pub(crate) async fn list(state: &AppState, caller: &Caller) -> Result<WebhookLis
         projects,
         signing: SIGNING_HELP,
     })
+}
+
+/// The workspace a webhook across one goes to: the one asked for, else the
+/// caller's first.
+pub(crate) async fn default_workspace(
+    pool: &PgPool,
+    actor_id: Uuid,
+    requested: Option<Uuid>,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT membership.organization_id
+        FROM organization_memberships membership
+        JOIN actors actor ON actor.id = membership.actor_id AND actor.status = 'active'
+        WHERE membership.actor_id = $1 AND membership.enabled
+          AND ($2::uuid IS NULL OR membership.organization_id = $2)
+        ORDER BY membership.created_at, membership.organization_id
+        LIMIT 1
+        "#,
+    )
+    .bind(actor_id)
+    .bind(requested)
+    .fetch_optional(pool)
+    .await?)
 }
 
 pub(crate) async fn create(
@@ -460,21 +513,8 @@ pub(crate) async fn create(
                 // A token for one project can't hear the whole workspace.
                 return Err(AppError::Validation("projectId"));
             }
-            let chosen = sqlx::query_scalar::<_, Uuid>(
-                r#"
-                SELECT membership.organization_id
-                FROM organization_memberships membership
-                JOIN actors actor ON actor.id = membership.actor_id AND actor.status = 'active'
-                WHERE membership.actor_id = $1 AND membership.enabled
-                  AND ($2::uuid IS NULL OR membership.organization_id = $2)
-                ORDER BY membership.created_at, membership.organization_id
-                LIMIT 1
-                "#,
-            )
-            .bind(caller.actor_id)
-            .bind(request.organization_id)
-            .fetch_optional(&state.pool)
-            .await?;
+            let chosen =
+                default_workspace(&state.pool, caller.actor_id, request.organization_id).await?;
             chosen.ok_or(AppError::NotFound("workspace"))?
         }
     };

@@ -42,6 +42,23 @@ pub async fn ready_tasks(
     account_id: Uuid,
     limit: Option<i64>,
 ) -> Result<ReadyTasks, AppError> {
+    ready_tasks_in(connection, viewer, account_id, limit, false).await
+}
+
+/// `ready_tasks`; with `runs_only` (the tools, AWD-75) only in projects
+/// where Runs is on for the viewer, in the list and the count.
+pub async fn ready_tasks_in(
+    connection: &mut PgConnection,
+    viewer: Uuid,
+    account_id: Uuid,
+    limit: Option<i64>,
+    runs_only: bool,
+) -> Result<ReadyTasks, AppError> {
+    let off = if runs_only {
+        runs_off(connection, viewer, account_id).await?
+    } else {
+        Vec::new()
+    };
     let limit = limit.unwrap_or(MAX_READY_TASKS).clamp(1, MAX_READY_TASKS);
     let mut tasks = sqlx::query_as::<_, ReadyTask>(&format!(
         r#"
@@ -54,6 +71,7 @@ pub async fn ready_tasks(
               AND project.archived_at IS NULL
               AND project.kind = 'standard'
               AND actor_can_access_project($2, NULL, project.id)
+              AND NOT (project.id = ANY($4))
         )
         SELECT item.id, item.project_id, project.name AS project_name,
                project.project_key || '-' || item.number::text AS key,
@@ -89,6 +107,7 @@ pub async fn ready_tasks(
     .bind(account_id)
     .bind(viewer)
     .bind(limit)
+    .bind(&off)
     .fetch_all(&mut *connection)
     .await?;
     for task in &mut tasks {
@@ -104,14 +123,47 @@ pub async fn ready_tasks(
           AND project.archived_at IS NULL
           AND project.kind = 'standard'
           AND actor_can_access_project($2, NULL, project.id)
+          AND NOT (project.id = ANY($3))
         "#,
     )
     .bind(account_id)
     .bind(viewer)
+    .bind(&off)
     .fetch_one(&mut *connection)
     .await?;
     Ok(ReadyTasks {
         tasks,
         project_count,
     })
+}
+
+/// AWD-75: the projects the account serves where Runs is off for `viewer`.
+async fn runs_off(
+    connection: &mut PgConnection,
+    viewer: Uuid,
+    account_id: Uuid,
+) -> Result<Vec<Uuid>, AppError> {
+    let served = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT DISTINCT profile.project_id
+        FROM execution_profiles profile
+        JOIN projects project ON project.id = profile.project_id
+        WHERE profile.provider_account_id = $1
+          AND profile.status <> 'disabled'
+          AND project.archived_at IS NULL
+          AND project.kind = 'standard'
+          AND actor_can_access_project($2, NULL, project.id)
+        "#,
+    )
+    .bind(account_id)
+    .bind(viewer)
+    .fetch_all(&mut *connection)
+    .await?;
+    let on = crate::modules::state::ProjectModules::load(connection, viewer, &served)
+        .await?
+        .keep(&served, |modules, _| modules.contains("runs"));
+    Ok(served
+        .into_iter()
+        .filter(|project| !on.contains(project))
+        .collect())
 }

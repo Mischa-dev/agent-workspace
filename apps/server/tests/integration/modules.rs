@@ -38,7 +38,7 @@ fn module<'a>(listed: &'a Value, id: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("{id} in {listed}"))
 }
 
-async fn switch(setup: &Setup, browser: &Browser, body: Value) -> (StatusCode, Value) {
+pub(super) async fn switch(setup: &Setup, browser: &Browser, body: Value) -> (StatusCode, Value) {
     send(
         &setup.app,
         browser.request("PUT", &modules_path(setup), None, body),
@@ -574,7 +574,7 @@ async fn conversation_tools_follow_the_module_where_the_conversation_lives() {
     };
 
     let listed_ids = |listed: &Value| -> Vec<String> {
-        listed["conversations"]
+        listed["value"]["conversations"]
             .as_array()
             .expect("conversations")
             .iter()
@@ -665,6 +665,30 @@ async fn conversation_tools_follow_the_module_where_the_conversation_lives() {
     )
     .await;
     assert_eq!(sent["outcome"], "ok", "{sent}");
+
+    // The conversation tools follow the conversation's project whichever
+    // module lists them: editing a message in the channel needs Channels,
+    // and starting a thread in the DM needs only Messages.
+    let edited = call(
+        "message_edit",
+        json!({"messageId": in_channel, "text": "Release notes, edited", "clientRequestId": "awd75-off-3"}),
+    )
+    .await;
+    assert_eq!(edited["outcome"], "permission_denied", "{edited}");
+    assert_eq!(edited["retryCategory"], "module", "{edited}");
+    assert!(
+        edited["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("Channels")),
+        "{edited}"
+    );
+    let in_dm_again = say(&setup, &setup.browser, &dm, "awd75-d2", text("And Friday?")).await;
+    let threaded = call(
+        "thread_start",
+        json!({"conversationId": dm, "fromMessageId": in_dm_again}),
+    )
+    .await;
+    assert_eq!(threaded["outcome"], "ok", "{threaded}");
 
     // A channel that is there, in a project Bea isn't in, with Channels off:
     // her app is refused as before (the tool gate answers "forbidden" for a
@@ -848,7 +872,7 @@ async fn task_lists_leave_out_projects_where_tasks_is_off() {
 
 /// A role with these modules off, as the member role otherwise is, put on
 /// `actor` in `project`.
-async fn narrow_in_project(
+pub(super) async fn narrow_in_project(
     setup: &Setup,
     project: &str,
     actor: Uuid,

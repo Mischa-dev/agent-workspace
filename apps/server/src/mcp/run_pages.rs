@@ -116,11 +116,18 @@ pub(super) async fn run_usage(
     ) {
         return ToolResult::invalid("groupBy", "Use day, project, account or model.");
     }
+    // AWD-75: not projects where Runs is off for the caller.
+    let without_projects =
+        match super::runs::projects_with_module_off(state, principal.actor_id, "runs").await {
+            Ok(off) => off,
+            Err(error) => return ToolResult::from_error(error, "run_usage"),
+        };
     let query = crate::run_views::UsageQuery {
         organization_id: None,
         project_id: project_is_chosen(principal).then_some(principal.project_id),
         group_by: arguments.group_by,
         days: arguments.days,
+        without_projects,
     };
     match crate::run_views::usage_report(state, principal.actor_id, &query).await {
         Ok(report) => match serde_json::to_value(report) {

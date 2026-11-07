@@ -742,6 +742,15 @@ pub(super) async fn project_create(
         {
             return Ok(ToolResult::denied(PROJECT_CREATE_ONLY));
         }
+        // AWD-75: the project goes into this workspace, so Projects must be on
+        // there for the caller; the gate saw their project, or every workspace.
+        if crate::modules::state::by_workspace(&mut *transaction, principal.actor_id)
+            .await?
+            .get(&organization_id)
+            .is_some_and(|modules| !modules.contains("projects"))
+        {
+            return Ok(ToolResult::module_off("project_create", "Projects"));
+        }
         let created = crate::projects::insert_new_project(
             &mut transaction,
             organization_id,
