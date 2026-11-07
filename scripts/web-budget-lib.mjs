@@ -30,7 +30,15 @@ export const WEB_ASSET_LIMITS = Object.freeze({
   // turned-off page and the palette's claims loading lazily. That measured
   // 433,897 / 140,611 (November 2026), so the gzip limit went from 136 to
   // 138 KB by decision; the raw limit is unchanged.
-  initialJavascriptRawBytes: 424 * 1024,
+  // Moving tasks between projects (AWD-102) must forget an unsent or
+  // unanswered move at once on every sign-in and sign-out, so that small
+  // store (moveStore.ts) is in the shell; sending and checking moves load
+  // with the Move dialog. Measured from the built assets (not a browser's
+  // network transfer): 433,999 / 140,955 before it; 435,731 / 141,719 with
+  // the move code in the shell; 434,232 / 141,081 once split, 1,499 raw /
+  // 638 gzip bytes less, still 56 raw bytes over 424 KB. The raw limit went
+  // up 256 bytes by decision (November 2026); gzip is unchanged.
+  initialJavascriptRawBytes: 424 * 1024 + 256,
   initialJavascriptGzipBytes: 138 * 1024,
   // index.html's stylesheets: the design system's five theme presets,
   // components and page layouts. Measured 101,925 raw bytes; the UI kit
