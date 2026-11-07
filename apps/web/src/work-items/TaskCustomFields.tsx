@@ -6,7 +6,7 @@ import { FieldValueView } from '../fields/FieldValueView'
 import { displayText, isEmpty, type FieldDefinition, type FieldReference, type FieldValue } from '../fields/fieldModel'
 import { listPages, memoryKeys } from '../memory/api'
 import { Avatar, Button, Icon, TextArea, TextField, actorKind } from '../ui'
-import { ComboboxList, DatePicker, Popover } from '../ui/pickers'
+import { Calendar, ComboboxList, DatePicker, Popover } from '../ui/pickers'
 import { useAssignableActors } from './hooks'
 import { useDebouncedValue } from './pickerModel'
 import { TaskSearchPicker } from './TaskSearchPicker'
@@ -175,6 +175,10 @@ export function FieldEditor({
       break
     case 'link':
       body = <PageEditor field={field} onClose={onClose} onSet={pick} projectId={projectId} value={value} />
+      break
+    // The task page edits a date with its own DatePicker; here (the bulk bar) it's the same calendar.
+    case 'date':
+      body = <Calendar label={field.name} onSelect={pick} value={typeof value === 'string' ? value : null} />
       break
     default:
       body = <TypedEditor field={field} onSet={pick} references={references} value={value} />

@@ -2106,6 +2106,7 @@ mod tests {
                 archived: None,
                 milestone: None,
                 due_date: None,
+                fields: None,
             })
             .expect("hash")
         };

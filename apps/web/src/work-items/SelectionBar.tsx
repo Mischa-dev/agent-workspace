@@ -111,7 +111,9 @@ export function SelectionBar({
     setEditing(null)
     const value = chosen.current
     chosen.current = null
-    if (done && value) void setField(done.field, value.value)
+    // "Set" never clears: a selection toggled back to empty, or an editor
+    // closed without a choice, changes nothing ("Clear" is its own entry).
+    if (done && value && value.value !== null) void setField(done.field, value.value)
   }
 
   const setDueDate = async (value: string | null) => {
