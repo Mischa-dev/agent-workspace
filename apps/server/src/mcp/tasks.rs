@@ -1093,11 +1093,16 @@ async fn list_tasks(
     let field_clauses = match arguments.field_filters.as_deref() {
         None | Some([]) => Vec::new(),
         Some(filters) => {
+            const ONE_PROJECT: &str =
+                "Fields belong to one project: pass projectId with fieldFilters.";
+            // The caller names the project (or its credential is scoped to
+            // one), as with a saved view: a list that happens to reach only
+            // one project with Tasks on didn't choose it.
+            if !principal.project_explicit && arguments.project_id.is_none() {
+                return Ok(Err(ToolResult::invalid("fieldFilters", ONE_PROJECT)));
+            }
             let [project] = projects.as_slice() else {
-                return Ok(Err(ToolResult::invalid(
-                    "fieldFilters",
-                    "Fields belong to one project: pass projectId with fieldFilters.",
-                )));
+                return Ok(Err(ToolResult::invalid("fieldFilters", ONE_PROJECT)));
             };
             let mut connection = state.pool.acquire().await?;
             match field_tools::filter_clauses(&mut connection, principal, *project, &place, filters)
