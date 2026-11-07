@@ -138,8 +138,11 @@ fn custom_entry_bytes(key: &str, change: &Value) -> usize {
         + ", ".len()
 }
 
-/// Length of a value as PostgreSQL writes jsonb as text, at most.
-fn jsonb_text_len(value: &Value) -> usize {
+/// Length of a value as PostgreSQL writes jsonb as text, at most: a space
+/// after every ":" and ",", and numbers written out in full (1e-300 is 302
+/// bytes). Size checks against a column's `octet_length(x::text)` limit
+/// use this, not the compact JSON.
+pub(crate) fn jsonb_text_len(value: &Value) -> usize {
     if let Value::Number(number) = value {
         return expanded_number_len(&number.to_string());
     }

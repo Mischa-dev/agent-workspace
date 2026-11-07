@@ -26,8 +26,15 @@ use crate::{
 pub const KIND: RecordKind = RecordKind::Task;
 /// Field values one change can set.
 pub const MAX_VALUES_PER_CHANGE: usize = 50;
-/// The most a task's values may take, as JSON, under the column's 64 KB limit.
+/// The most a task's values may take as PostgreSQL stores them
+/// (`work_item_history::jsonb_text_len`: numbers in full, spaces after
+/// ":" and ","), under the column's 64 KB limit.
 pub const MAX_VALUES_BYTES: usize = 60_000;
+
+/// Whether a task's values fit `MAX_VALUES_BYTES` as PostgreSQL stores them.
+pub fn values_fit(values: &Value) -> bool {
+    crate::work_item_history::jsonb_text_len(values) <= MAX_VALUES_BYTES
+}
 
 /// The project's task fields.
 pub async fn definitions(

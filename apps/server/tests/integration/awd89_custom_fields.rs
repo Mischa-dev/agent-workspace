@@ -917,3 +917,67 @@ async fn the_largest_choice_field_saves() {
     .expect("config");
     assert!(stored > 16_384, "{stored} bytes");
 }
+
+/// A task's values are measured as PostgreSQL stores them: long text with
+/// tiny numbers (short in JSON, about 300 bytes each when stored) is
+/// refused as too large, with the task untouched, rather than failing the
+/// column's 64 KB check.
+#[tokio::test]
+async fn values_too_large_as_stored_are_refused_not_failed() {
+    let Some(setup) = setup("awd89_values_size").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let fields_path = format!("/api/v1/projects/{work}/fields");
+    let mut values = serde_json::Map::new();
+    for index in 0..50 {
+        let (kind, value) = if index < 3 {
+            ("text", json!("𝄞".repeat(4_600)))
+        } else {
+            ("number", json!(1e-300))
+        };
+        let (status, field) = send(
+            app,
+            setup.browser.request(
+                "POST",
+                &fields_path,
+                Some(&format!("size-field-{index}")),
+                json!({"name": format!("F{index}"), "type": kind}),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{field}");
+        values.insert(field["id"].as_str().expect("field").to_owned(), value);
+    }
+    let (status, task) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/work-items"),
+            Some("size-task"),
+            json!({"title": "Big values"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{task}");
+    let task_id = task["id"].as_str().expect("task").to_owned();
+    let (status, body) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            &format!("/api/v1/projects/{work}/work-items/{task_id}"),
+            Some("size-values"),
+            json!({"expectedVersion": task_version(&setup.pool, &task_id).await, "fieldValues": values}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let stored =
+        sqlx::query_scalar::<_, Value>("SELECT field_values FROM work_items WHERE id = $1::uuid")
+            .bind(&task_id)
+            .fetch_one(&setup.pool)
+            .await
+            .expect("values");
+    assert_eq!(stored, json!({}));
+}
