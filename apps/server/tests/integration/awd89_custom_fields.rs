@@ -882,3 +882,38 @@ async fn number_filters_compare_by_value_and_text_filters_as_written() {
         assert_eq!(keys, expected, "{op} {values}: {page}");
     }
 }
+
+/// The largest choice field the app accepts saves: 100 options, each name
+/// 60 characters of four-byte text, well past the 16 KB the config column
+/// once allowed.
+#[tokio::test]
+async fn the_largest_choice_field_saves() {
+    let Some(setup) = setup("awd89_large_config").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let options = (0..100)
+        .map(|index| json!({"name": format!("{index:02}{}", "𝄞".repeat(58))}))
+        .collect::<Vec<_>>();
+    let (status, field) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/fields"),
+            Some("large-config"),
+            json!({"name": "Areas", "type": "multiple_choice", "options": options}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{field}");
+    assert_eq!(field["options"].as_array().map(Vec::len), Some(100));
+    let stored = sqlx::query_scalar::<_, i32>(
+        "SELECT octet_length(config::text) FROM field_definitions WHERE id = $1::uuid",
+    )
+    .bind(field["id"].as_str().expect("field"))
+    .fetch_one(&setup.pool)
+    .await
+    .expect("config");
+    assert!(stored > 16_384, "{stored} bytes");
+}

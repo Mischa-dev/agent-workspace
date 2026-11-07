@@ -42,8 +42,9 @@ export function TaskCustomFields({
   const definitions = fields.data?.fields ?? []
   if (!definitions.length) return null
   const set = (field: FieldDefinition, value: FieldValue | null) => {
-    const current = item.fieldValues[field.id]
-    if (JSON.stringify(current ?? null) === JSON.stringify(value)) return
+    // Against what the person sees now, their own change on its way
+    // included, so putting a field back before that change lands still saves.
+    if (save.baseFor(`field:${field.id}`) === JSON.stringify(value)) return
     save.save(`field:${field.id}`, { fieldValues: { [field.id]: value } })
   }
   return (

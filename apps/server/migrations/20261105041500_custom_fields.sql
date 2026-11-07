@@ -37,8 +37,11 @@ CREATE TABLE field_definitions (
     ),
     -- Choice options ({"options": [{"id", "name", "color", "archived"}]}) or
     -- a link's target ({"target": "task" | "page"}); see crate::fields.
+    -- The largest the app accepts, 100 options whose 60-character names are
+    -- all four-byte characters, archived, with a color, is about 34 KB as
+    -- text; the limit leaves room, as field_values' does.
     config JSONB NOT NULL DEFAULT '{}'::jsonb CHECK (
-        jsonb_typeof(config) = 'object' AND octet_length(config::text) <= 16384
+        jsonb_typeof(config) = 'object' AND octet_length(config::text) <= 65536
     ),
     position INTEGER NOT NULL CHECK (position >= 0),
     created_by_actor_id UUID NOT NULL,
