@@ -86,6 +86,16 @@ pub struct ProjectView {
     navigation: NavigationView,
     /// Unread notifications in this project's inbox for the caller.
     attention_count: u32,
+    /// AWD-75: the modules off for the caller here (the workspace's switches
+    /// and their role), so the rail and the command menu leave out what
+    /// they'd lead to without a request per project.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    modules_off: Vec<String>,
+}
+
+/// AWD-75: a module set's off modules, by id.
+fn off_ids(modules: crate::modules::ModuleSet) -> Vec<String> {
+    modules.off().map(|module| module.id.clone()).collect()
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -328,7 +338,7 @@ async fn list_projects(
     .fetch_all(&state.pool)
     .await?;
     let attention = crate::notifications::attention_counts(&state.pool, principal.actor_id).await?;
-    let projects = rows
+    let mut projects = rows
         .into_iter()
         .map(|row| {
             let mut view = project_view(row)?;
@@ -336,6 +346,16 @@ async fn list_projects(
             Ok(view)
         })
         .collect::<Result<Vec<_>, AppError>>()?;
+    // AWD-75: each project says which modules are off for the caller there.
+    let ids = projects.iter().map(|view| view.id).collect::<Vec<_>>();
+    let modules = {
+        let mut connection = state.pool.acquire().await?;
+        crate::modules::state::ProjectModules::load(&mut connection, principal.actor_id, &ids)
+            .await?
+    };
+    for view in &mut projects {
+        view.modules_off = off_ids(modules.of(view.id));
+    }
     Ok(Json(ProjectsResponse { projects }))
 }
 
@@ -511,6 +531,7 @@ async fn create_project(
             version: 1,
         },
         attention_count: 0,
+        modules_off: Vec::new(),
     };
     insert_audit_event(
         &mut transaction,
@@ -1149,6 +1170,14 @@ async fn fetch_project(
         .get(&project_id)
         .copied()
         .unwrap_or(0);
+    // AWD-75: as the list says it, so a project opened or switched to keeps
+    // what's off for the caller there (its rail tile too, with Projects off).
+    let mut connection = state.pool.acquire().await?;
+    view.modules_off =
+        crate::modules::state::for_project(&mut connection, project_id, principal.actor_id)
+            .await?
+            .map(off_ids)
+            .unwrap_or_default();
     Ok(view)
 }
 
@@ -1349,6 +1378,7 @@ fn project_view(row: ProjectRow) -> Result<ProjectView, AppError> {
         },
         navigation,
         attention_count: 0,
+        modules_off: Vec::new(),
     })
 }
 

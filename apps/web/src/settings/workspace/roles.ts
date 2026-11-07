@@ -56,6 +56,8 @@ export type WorkspaceRoleView = {
   /** What apps and agents acting for holders may do; null is the same as the holder. */
   agentLimit: PermissionKey[] | null
   defaults: RoleDefaults
+  /** Modules holders don't get, on top of what the workspace has off (AWD-75). */
+  modulesOff: string[]
   isDefault: boolean
   version: number
   updatedAt: string
@@ -102,6 +104,7 @@ export type RoleInput = {
   permissions: PermissionKey[]
   agentLimit: PermissionKey[] | null
   defaults: RoleDefaults
+  modulesOff: string[]
   isDefault: boolean
 }
 

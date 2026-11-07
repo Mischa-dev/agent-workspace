@@ -120,6 +120,7 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/organizations/{organization_id}/invitations",
     "PUT /api/v1/organizations/{organization_id}/layout",
     "PUT /api/v1/organizations/{organization_id}/layout/mine",
+    "PUT /api/v1/organizations/{organization_id}/modules",
     "POST /api/v1/organizations/{organization_id}/layout/presets",
     "DELETE /api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
     "PATCH /api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
@@ -3552,6 +3553,13 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             "PUT /api/v1/organizations/{organization_id}/layout/mine",
             &[organization()],
             json_body(json!({"hidden": [], "showHidden": true})),
+        ),
+        // Modules: switching one on that is on changes nothing in A, so the
+        // rest of the run keeps every module.
+        path_case(
+            "PUT /api/v1/organizations/{organization_id}/modules",
+            &[organization()],
+            json_body(json!({"switches": {"whiteboards": true}})),
         ),
         path_case(
             "POST /api/v1/organizations/{organization_id}/layout/presets",

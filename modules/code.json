@@ -1,0 +1,68 @@
+{
+  "id": "code",
+  "name": "Code",
+  "description": "Connected repositories, branches and pull requests, through GitHub.",
+  "version": 1,
+  "kind": "core",
+  "switchable": true,
+  "needs": ["projects"],
+  "worksWith": ["tasks", "runs"],
+  "permissions": ["code.view", "code.publish", "code.manage"],
+  "tools": {
+    "repository_list": "query",
+    "repository_get": "describe",
+    "pull_request_list": "query",
+    "pull_request_get": "describe",
+    "task_link_pull_request": "change"
+  },
+  "routes": [
+    "/api/v1/integrations/github/*",
+    "/api/v1/projects/{project_id}/integrations/github*",
+    "/api/v1/projects/{project_id}/repositories*",
+    "/api/v1/projects/{project_id}/pull-requests/*",
+    "/api/v1/projects/{project_id}/agent-runs/{run_id}/publish",
+    "/api/v1/projects/{project_id}/agent-runs/{run_id}/pull-request",
+    "/api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/*"
+  ],
+  "events": {
+    "emits": ["pull_request.checks_failed", "pull_request.checks_passed", "pull_request.merged", "pull_request.closed"],
+    "listens": ["run.finished"]
+  },
+  "notifications": ["checks_failed", "review_requested"],
+  "search": [],
+  "automations": { "triggers": ["pull_request_checks_failed"], "actions": [] },
+  "things": [
+    {
+      "kind": "repository",
+      "one": "Repository",
+      "many": "Repositories",
+      "href": "/settings/projects/{projectId}/repositories",
+      "fields": [{ "id": "defaultBranch", "label": "Default branch", "type": "text" }]
+    },
+    {
+      "kind": "pull_request",
+      "one": "Pull request",
+      "many": "Pull requests",
+      "href": "{url}",
+      "fields": [
+        { "id": "checks", "label": "Checks", "type": "single_choice", "options": ["pending", "passed", "failed"] },
+        { "id": "branch", "label": "Branch", "type": "text" }
+      ]
+    }
+  ],
+  "links": [{ "kind": "about", "from": "pull_request", "to": "task" }],
+  "embeds": [],
+  "slots": {
+    "pages": [],
+    "parts": ["area.code", "task.pull_requests"],
+    "sidebar": [],
+    "home": [],
+    "settings": ["workspace/github", "project/repositories"],
+    "palette": [],
+    "shortcuts": [],
+    "slash": [],
+    "setup": ["github", "repository"]
+  },
+  "settings": [],
+  "nouns": []
+}

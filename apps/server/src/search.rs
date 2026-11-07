@@ -17,6 +17,7 @@ use crate::{
     AppState,
     auth::AuthenticatedActor,
     error::{ApiQuery, AppError},
+    modules::state::ProjectModules,
 };
 
 pub const MAX_QUERY_CHARACTERS: usize = 200;
@@ -44,6 +45,18 @@ impl SearchKind {
         Self::Messages,
         Self::Files,
     ];
+
+    /// The kind's name, as search results and module manifests use it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Messages => "messages",
+            Self::Threads => "threads",
+            Self::Tasks => "tasks",
+            Self::Pages => "pages",
+            Self::Decisions => "decisions",
+            Self::Files => "files",
+        }
+    }
 
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
@@ -106,16 +119,45 @@ pub async fn search(
     } else {
         kinds
     };
+    // AWD-75: each kind searches only where its module is on.
+    let modules = {
+        let mut connection = pool.acquire().await?;
+        ProjectModules::load(&mut connection, viewer, projects).await?
+    };
     // Tasks, and files attached to tasks, come only from projects where the
-    // viewer (and an app's limit) still sees tasks.
+    // viewer (and an app's limit) still sees tasks, and Tasks is on.
     let task_projects = if kinds.contains(&SearchKind::Tasks) || kinds.contains(&SearchKind::Files)
     {
-        projects_showing_tasks(pool, viewer, projects).await?
+        modules.with(
+            &projects_showing_tasks(pool, viewer, projects).await?,
+            "tasks",
+        )
+    } else {
+        Vec::new()
+    };
+    // Files sent in a conversation come only from projects whose conversations
+    // show: DMs with Messages on, a project's channels with Channels on.
+    let conversation_projects = if kinds.contains(&SearchKind::Files) {
+        modules.with_conversations(projects)
     } else {
         Vec::new()
     };
     let mut hits = Vec::new();
     for kind in kinds {
+        let projects = match kind {
+            SearchKind::Messages | SearchKind::Threads => modules.with_conversations(projects),
+            SearchKind::Tasks => task_projects.clone(),
+            SearchKind::Pages | SearchKind::Decisions => modules.with(projects, "pages"),
+            // Files hang off messages and tasks.
+            SearchKind::Files => modules.keep(projects, |set, direct| {
+                set.allows_conversations_in(if direct { "direct" } else { "standard" })
+                    || (!direct && set.contains("tasks"))
+            }),
+        };
+        if projects.is_empty() {
+            continue;
+        }
+        let projects = projects.as_slice();
         let sql = match kind {
             SearchKind::Messages => MESSAGES_SQL,
             SearchKind::Threads => THREADS_SQL,
@@ -126,11 +168,7 @@ pub async fn search(
         };
         let mut query = sqlx::query_as::<_, SearchHit>(sql)
             .bind(viewer)
-            .bind(if *kind == SearchKind::Tasks {
-                &task_projects[..]
-            } else {
-                projects
-            })
+            .bind(projects)
             .bind(text)
             .bind(filter.conversation_id)
             .bind(filter.author_id)
@@ -138,7 +176,9 @@ pub async fn search(
             .bind(filter.until)
             .bind(limit);
         if *kind == SearchKind::Files {
-            query = query.bind(&task_projects[..]);
+            query = query
+                .bind(&task_projects[..])
+                .bind(&conversation_projects[..]);
         }
         let rows = query.fetch_all(pool).await?;
         hits.extend(rows);
@@ -158,7 +198,9 @@ pub async fn search(
 // $1 viewer, $2 projects, $3 text, $4 conversation, $5 author, $6 since,
 // $7 until, $8 limit. Unused ones are compared against NULL so the planner
 // drops them. The files query also takes $9, the projects where the viewer
-// still sees tasks (`projects_showing_tasks`), for files attached to tasks.
+// still sees tasks (`projects_showing_tasks`), for files attached to tasks,
+// and $10, the projects whose conversations show with the modules on for
+// the viewer, for files sent in a conversation.
 
 const MESSAGES_SQL: &str = r#"
     WITH query AS (SELECT websearch_to_tsquery('english', $3) AS q)
@@ -361,6 +403,10 @@ const FILES_SQL: &str = r#"
       -- $9 (files only): projects where the viewer still sees tasks, so a
       -- task's file never names a task they can't open.
       AND (file.work_item_id IS NULL OR file.project_id = ANY($9))
+      -- $10 (files only): projects whose conversations show (Messages for DMs,
+      -- Channels for a project), so a file never names a conversation whose
+      -- module is off.
+      AND (file.conversation_id IS NULL OR file.project_id = ANY($10))
       AND ($4::uuid IS NULL OR conversation.id = $4 OR conversation.parent_channel_id = $4)
       AND ($5::uuid IS NULL OR file.uploaded_by_actor_id = $5)
       AND ($6::timestamptz IS NULL OR file.created_at >= $6)

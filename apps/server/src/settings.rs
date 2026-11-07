@@ -482,11 +482,38 @@ pub const REGISTRY: &[SettingDef] = &[
         launch_override: false,
         default: "false",
     },
+    // AWD-75: one switch per module that can be turned off, written through
+    // the Modules routes (crate::modules), which apply presets and audit.
+    module_switch("modules.messages", "Messages"),
+    module_switch("modules.projects", "Projects"),
+    module_switch("modules.channels", "Channels"),
+    module_switch("modules.tasks", "Tasks"),
+    module_switch("modules.pages", "Pages"),
+    module_switch("modules.whiteboards", "Whiteboards"),
+    module_switch("modules.runs", "Runs"),
+    module_switch("modules.code", "Code"),
+    module_switch("modules.agents", "Agents"),
+    module_switch("modules.inbox", "Inbox"),
+    module_switch("modules.automations", "Automations"),
+    module_switch("modules.suggestions", "Suggestions"),
 ];
+
+/// A module's switch: on unless the workspace turns it off.
+const fn module_switch(key: &'static str, label: &'static str) -> SettingDef {
+    SettingDef {
+        key,
+        label,
+        description: "Whether this module is on in the workspace. Off hides it everywhere without deleting anything.",
+        kind: SettingType::Bool,
+        scopes: &[Scope::Workspace],
+        launch_override: false,
+        default: "true",
+    }
+}
 
 /// Settings written only through their own routes, never the generic ones.
 fn has_own_routes(key: &str) -> bool {
-    key.starts_with("layout.")
+    key.starts_with("layout.") || key.starts_with("modules.")
 }
 
 pub fn definition(key: &str) -> Option<&'static SettingDef> {

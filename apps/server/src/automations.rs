@@ -175,6 +175,21 @@ fn one() -> u32 {
     1
 }
 
+/// Every trigger kind, as [`Trigger::kind`] names them (AWD-75: each names
+/// its module in a manifest).
+pub const TRIGGER_KINDS: &[&str] = &[
+    "task_created",
+    "task_matches",
+    "run_finished",
+    "pull_request_checks_failed",
+    "message_posted",
+    "schedule",
+    "capacity_window",
+];
+
+/// Every action kind, as [`Action::kind`] names them.
+pub const ACTION_KINDS: &[&str] = &["launch", "set_field", "notify", "post_message"];
+
 impl Trigger {
     pub fn kind(&self) -> &'static str {
         match self {
@@ -521,6 +536,62 @@ const RULE_SELECT: &str = r#"
     LEFT JOIN users person ON person.actor_id = rule.owner_actor_id
     LEFT JOIN saved_views view ON view.project_id = rule.project_id AND view.id = rule.view_id
 "#;
+
+/// AWD-75: a module a rule needs (Automations, its trigger's and its
+/// actions') that's off in its workspace for its maker. Such a rule doesn't
+/// fire, and comes back when the module does.
+async fn module_off(
+    pool: &PgPool,
+    rule: &RuleRow,
+) -> Result<Option<&'static crate::modules::Manifest>, AppError> {
+    use crate::modules::manifest;
+    let mut connection = pool.acquire().await?;
+    let Some(modules) =
+        crate::modules::state::for_project(&mut connection, rule.project_id, rule.owner_actor_id)
+            .await?
+    else {
+        return Ok(None);
+    };
+    if modules.is_all() {
+        return Ok(None);
+    }
+    // A conversation trigger or action in a project needs Channels; in the
+    // direct space, Messages.
+    let direct =
+        sqlx::query_scalar::<_, bool>("SELECT kind = 'direct' FROM projects WHERE id = $1")
+            .bind(rule.project_id)
+            .fetch_one(&mut *connection)
+            .await?;
+    let mut needed = vec![manifest::get("automations")];
+    if let Ok(trigger) = rule.trigger() {
+        needed.push(in_project_kind(
+            manifest::of_trigger(trigger.kind()),
+            direct,
+        ));
+    }
+    for action in rule.actions().unwrap_or_default() {
+        needed.push(in_project_kind(manifest::of_action(action.kind()), direct));
+    }
+    Ok(needed
+        .into_iter()
+        .flatten()
+        .find(|module| !modules.contains(&module.id)))
+}
+
+/// AWD-75: the module a trigger or action of `module` needs where its rule
+/// lives: conversations follow Channels in a project and Messages in the
+/// direct space, as they do everywhere else.
+pub(crate) fn in_project_kind(
+    module: Option<&'static crate::modules::Manifest>,
+    direct: bool,
+) -> Option<&'static crate::modules::Manifest> {
+    match module {
+        Some(module) if module.id == "messages" && !direct => {
+            crate::modules::manifest::get("channels")
+        }
+        other => other,
+    }
+}
 
 impl RuleRow {
     fn trigger(&self) -> Result<Trigger, AppError> {
@@ -1352,6 +1423,10 @@ pub async fn on_event(state: &AppState, event: &Event) -> Result<usize, AppError
             disable(state, &rule, &reason).await?;
             continue;
         }
+        // A rule that needs a module that's off waits until it's back on.
+        if module_off(pool, &rule).await?.is_some() {
+            continue;
+        }
         // Only what its maker could see fires it, and for a rule made through
         // an app, only what that app's current limit lets it see.
         if !crate::webhooks::visible_to(pool, rule.owner_actor_id, rule.project_id, subject).await?
@@ -1872,6 +1947,10 @@ async fn fire(state: &AppState, run_id: Uuid) -> Result<(), AppError> {
     };
     if !rule.enabled {
         return finish(pool, run_id, "skipped", Some("The rule is off."), &[]).await;
+    }
+    if let Some(module) = module_off(pool, &rule).await? {
+        let reason = format!("{} is turned off in this workspace.", module.name);
+        return finish(pool, run_id, "skipped", Some(reason.as_str()), &[]).await;
     }
     let recent = sqlx::query_scalar::<_, i64>(
         r#"
@@ -2657,6 +2736,31 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     use super::{Action, Conditions, Recipients, Trigger, check_shape, next_run_after};
+
+    #[test]
+    fn conversation_triggers_and_actions_follow_their_project_s_kind() {
+        use crate::modules::manifest;
+        let id = |module: Option<&crate::modules::Manifest>| module.map(|module| module.id.clone());
+        let posted = manifest::of_trigger("message_posted");
+        let post = manifest::of_action("post_message");
+        assert_eq!(
+            id(super::in_project_kind(posted, false)),
+            Some("channels".to_owned())
+        );
+        assert_eq!(
+            id(super::in_project_kind(post, false)),
+            Some("channels".to_owned())
+        );
+        assert_eq!(
+            id(super::in_project_kind(posted, true)),
+            Some("messages".to_owned())
+        );
+        let tasks = manifest::get("tasks");
+        assert_eq!(
+            id(super::in_project_kind(tasks, false)),
+            Some("tasks".to_owned())
+        );
+    }
 
     fn notify() -> Action {
         Action::Notify {

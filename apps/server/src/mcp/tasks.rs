@@ -977,8 +977,17 @@ async fn list_tasks(
     };
     // The tool gate takes "see tasks" in any project; list only those where
     // the caller's role (and an app's limit) keeps it.
-    let mut projects =
+    let projects =
         crate::search::projects_showing_tasks(&state.pool, principal.actor_id, &projects).await?;
+    // The tool gate takes Tasks being on anywhere the caller is (AWD-75); list
+    // only projects where it's on for them, their role narrowing it, before
+    // anything is counted or paged.
+    let modules = {
+        let mut connection = state.pool.acquire().await?;
+        crate::modules::state::ProjectModules::load(&mut connection, principal.actor_id, &projects)
+            .await?
+    };
+    let mut projects = modules.with(&projects, "tasks");
     projects.sort_unstable();
     projects.dedup();
     let place = if let [only] = projects.as_slice() {
@@ -2713,6 +2722,11 @@ async fn task_reorder_inner(
     if let Some(refused) = lock_for_task_write(&mut transaction, principal, project_id).await? {
         return Ok(refused);
     }
+    // AWD-75: the tasks were named by ID, so the gate couldn't see their
+    // project; Tasks must be on there.
+    if !tasks_on(&mut transaction, project_id, principal.actor_id).await? {
+        return Ok(ToolResult::module_off("task_reorder", "Tasks"));
+    }
     let locked = lock_work_items(&mut transaction, project_id, &ids).await?;
     if locked.len() != ids.len() {
         return Ok(ToolResult::not_found("One of those tasks"));
@@ -2992,6 +3006,21 @@ async fn lock_for_task_write<T>(
                 "You can't change tasks in that project.",
             )),
         },
+    )
+}
+
+/// AWD-75: whether Tasks is on for the actor in a project (their role there
+/// included), for a tool whose project the module gate couldn't see.
+pub(super) async fn tasks_on(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    actor_id: Uuid,
+) -> Result<bool, AppError> {
+    Ok(
+        crate::modules::state::for_project(connection, project_id, actor_id)
+            .await?
+            .unwrap_or_default()
+            .contains("tasks"),
     )
 }
 
@@ -3527,6 +3556,18 @@ async fn task_whiteboard_link(
         else {
             return Ok(ToolResult::not_found("That task"));
         };
+        // AWD-75: the gate checked Tasks for the task; the link also changes
+        // the board, so Whiteboards must be on where the board is, as for
+        // whiteboard_link. A board the caller can't reach is left to set_link.
+        if super::whiteboard_tools::board_module_off(
+            state,
+            &super::whiteboard_tools::caller(principal),
+            whiteboard_id,
+        )
+        .await?
+        {
+            return Ok(ToolResult::module_off("task_link", "Whiteboards"));
+        }
         let linked = !arguments.remove.unwrap_or(false);
         let outcome = super::whiteboard_tools::set_link(
             state,

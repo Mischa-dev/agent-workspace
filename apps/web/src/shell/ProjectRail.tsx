@@ -6,6 +6,7 @@ import { isApiError } from '../api/errors'
 import { toastError } from '../app/toastError'
 import { clearAuthenticatedQueryCache, logout, type SessionUser } from '../auth/session'
 import { useDirectOverview } from '../direct/api'
+import { useHomeExperience } from '../experience/layout'
 import { projectLocationHref } from '../projects/locations'
 import { useProjects, useSetRailOrder, useSwitchProject } from '../projects/hooks'
 import type { Project } from '../projects/types'
@@ -117,8 +118,12 @@ export function ProjectRail({
   const presence = connection === 'live' ? 'online' : connection ? 'away' : undefined
   const commandMenuOpen = useCommandState().open === 'commands'
   const pausedUntil = usePausedUntil()
-  const projects = (projectsQuery.data?.projects ?? []).filter((project) => !project.archivedAt)
+  // AWD-75: no tile for a project where Projects is off for you.
+  const projects = (projectsQuery.data?.projects ?? []).filter((project) => !project.archivedAt && !project.modulesOff?.includes('projects'))
   const inboxUnread = useInboxUnread() ?? 0
+  // AWD-75: no Messages tile with Messages off, and no New project tile
+  // with Projects off at Home, where a new project goes.
+  const experience = useHomeExperience()
   const visibleProjects = railProjects(projects, currentProjectId)
   // Tiles drag into your own order (not on phones, where the rail is a drawer).
   const setRailOrder = useSetRailOrder()
@@ -194,14 +199,16 @@ export function ProjectRail({
           onClick={onSpaceSelected}
           to="/home"
         />
-        <UtilityTile
-          active={inMessages}
-          badge={unreadConversations}
-          icon="message"
-          label="Messages"
-          onClick={onSpaceSelected}
-          to="/messages"
-        />
+        {experience.moduleOn('messages') ? (
+          <UtilityTile
+            active={inMessages}
+            badge={unreadConversations}
+            icon="message"
+            label="Messages"
+            onClick={onSpaceSelected}
+            to="/messages"
+          />
+        ) : null}
         <span className="aw-rail__divider" role="separator" />
         <div
           aria-label="Pinned and recent projects"
@@ -239,7 +246,7 @@ export function ProjectRail({
             )
           })}
         </div>
-        {user.capabilities.createProject ? (
+        {user.capabilities.createProject && experience.moduleOn('projects') ? (
           <UtilityTile icon="plus" label="New project" onClick={onNavigate} to="/projects/new" />
         ) : null}
         <span className="aw-rail__spacer" />

@@ -20,6 +20,7 @@ import { MobileNavigationProvider } from '../shell/MobileNavigationProvider'
 import { ThemeProvider } from '../theme/ThemeProvider'
 import { Button, EmptyState, PageSkeleton, ToastViewport } from '../ui'
 import { AppErrorBoundary } from './AppErrorBoundary'
+import { ModuleGate } from '../modules/ModuleGate'
 
 const SettingsArea = lazy(() => import('../settings/SettingsArea'))
 const SignInPage = lazy(() => import('../auth/SignInPage').then((module) => ({ default: module.SignInPage })))
@@ -60,6 +61,7 @@ const LaterPage = lazy(() => import('../later/LaterPage').then((module) => ({ de
 const QuickAddPage = lazy(() => import('../quick-add/QuickAddPage').then((module) => ({ default: module.QuickAddPage })))
 const TaskKeyRedirect = lazy(() => import('./TaskKeyRedirect').then((module) => ({ default: module.TaskKeyRedirect })))
 const DesignSystemPage = lazy(() => import('../design/DesignSystemPage').then((module) => ({ default: module.DesignSystemPage })))
+const PieceGallery = lazy(() => import('../modules/pieces/PieceGallery').then((module) => ({ default: module.PieceGallery })))
 const SearchPage = lazy(() => import('../memory/SearchPage').then((module) => ({ default: module.SearchPage })))
 
 function createQueryClient() {
@@ -338,6 +340,7 @@ export function App() {
                     path="/search"
                   />
                   <Route element={<AuthenticatedRouteBoundary><DesignSystemPage /></AuthenticatedRouteBoundary>} path="/design-system" />
+                  <Route element={<AuthenticatedRouteBoundary><PieceGallery /></AuthenticatedRouteBoundary>} path="/design-system/pieces" />
                   <Route element={<AuthenticatedRouteBoundary><TaskKeyRedirect /></AuthenticatedRouteBoundary>} path="/:taskKey" />
                   <Route element={<NotFoundPage />} path="*" />
                 </Route>
@@ -368,7 +371,7 @@ export function AuthenticatedRouteBoundary({
 }) {
   return (
     <Suspense fallback={<AuthenticatedRouteFallback />}>
-      {children}
+      <ModuleGate waiting={<AuthenticatedRouteFallback />}>{children}</ModuleGate>
     </Suspense>
   )
 }

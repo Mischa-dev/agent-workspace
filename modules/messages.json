@@ -1,0 +1,74 @@
+{
+  "id": "messages",
+  "name": "Messages",
+  "description": "Direct messages and group conversations with people and agents, with reactions, replies, scheduling and agents answering on their own.",
+  "version": 1,
+  "kind": "core",
+  "switchable": true,
+  "needs": [],
+  "worksWith": ["agents", "inbox"],
+  "permissions": [],
+  "tools": {
+    "conversation_list": "query",
+    "conversation_open": "describe",
+    "conversation_read": "query",
+    "conversation_start": "create",
+    "conversation_continue": "create",
+    "conversation_members": "query",
+    "conversation_update": "change",
+    "message_send": "create",
+    "message_edit": "change",
+    "message_delete": "change",
+    "message_history": "query",
+    "message_react": "change",
+    "message_schedule": "create",
+    "scheduled_message_update": "change",
+    "mark_read": "change",
+    "pin_set": "change",
+    "inbox_list": "query",
+    "reply_claim": "change",
+    "reply_send": "create",
+    "reply_progress": "change",
+    "reply_pass": "change",
+    "reply_release": "change",
+    "reply_stop": "change"
+  },
+  "routes": [
+    "/api/v1/direct*",
+    "/api/v1/conversations/*",
+    "/api/v1/messages/*",
+    "/api/v1/scheduled-messages*",
+    "/api/v1/reply-requests/*"
+  ],
+  "events": { "emits": ["message.created"], "listens": [] },
+  "notifications": ["mention", "conversation_message", "scheduled_send_failed"],
+  "search": ["messages"],
+  "automations": { "triggers": ["message_posted"], "actions": ["post_message"] },
+  "things": [
+    {
+      "kind": "conversation",
+      "one": "Conversation",
+      "many": "Conversations",
+      "href": "/messages/{id}",
+      "fields": [
+        { "id": "members", "label": "Members", "type": "people" },
+        { "id": "lastMessageAt", "label": "Last message", "type": "date" }
+      ]
+    }
+  ],
+  "links": [],
+  "embeds": [],
+  "slots": {
+    "pages": ["/messages", "/messages/:conversationId"],
+    "parts": ["talk.slash_commands", "talk.scheduling", "talk.replies"],
+    "sidebar": ["rail.messages"],
+    "home": [],
+    "settings": [],
+    "palette": ["a:new-message", "a:mark-all-read", "g:messages", "d:*", "u:*"],
+    "shortcuts": ["previous-conversation", "next-conversation", "previous-unread", "next-unread", "mark-all-read", "go-messages"],
+    "slash": ["schedule", "mute", "unmute", "notify"],
+    "setup": []
+  },
+  "settings": ["messages.*"],
+  "nouns": []
+}

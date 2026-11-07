@@ -532,10 +532,23 @@ pub(super) async fn conversation_list(
             },
             None => None,
         };
+        // AWD-75: only where conversations show: Messages on in the direct
+        // project, Channels in the others, so pages and cursors count only
+        // those.
+        let listed = {
+            let mut connection = state.pool.acquire().await?;
+            crate::modules::state::ProjectModules::load(
+                &mut connection,
+                principal.actor_id,
+                &projects,
+            )
+            .await?
+            .with_conversations(&projects)
+        };
         let rows = list_rows(
             state,
             principal.actor_id,
-            &projects,
+            &listed,
             ListFilter {
                 kinds: kinds.map(|kinds| kinds.into_iter().map(str::to_owned).collect()),
                 with_person,
@@ -787,6 +800,31 @@ async fn readable_conversation(
     Ok(Ok(row))
 }
 
+/// AWD-75: the module a readable conversation needs where it lives, by its
+/// project's kind, not the conversation's, so a thread follows the place
+/// it's in: Messages in the direct space (DMs, groups and their threads),
+/// Channels in a project. Its name when that's off for the caller there, else
+/// None. The caller has already checked they may read the conversation.
+pub(super) async fn conversation_module_off(
+    state: &AppState,
+    actor_id: Uuid,
+    project_id: Uuid,
+) -> Result<Option<&'static str>, AppError> {
+    let mut connection = state.pool.acquire().await?;
+    let kind = sqlx::query_scalar::<_, String>("SELECT kind FROM projects WHERE id = $1")
+        .bind(project_id)
+        .fetch_one(&mut *connection)
+        .await?;
+    let modules = crate::modules::state::for_project(&mut connection, project_id, actor_id)
+        .await?
+        .unwrap_or_default();
+    let direct = kind == "direct";
+    Ok(
+        (!modules.allows_conversations_in(if direct { "direct" } else { "standard" }))
+            .then_some(if direct { "Messages" } else { "Channels" }),
+    )
+}
+
 fn retype<T, U>(result: ToolResult<U>) -> ToolResult<T> {
     match result {
         ToolResult::Ok { .. } => ToolResult::unavailable(),
@@ -794,7 +832,13 @@ fn retype<T, U>(result: ToolResult<U>) -> ToolResult<T> {
         ToolResult::InvalidRequest { field, message } => {
             ToolResult::InvalidRequest { field, message }
         }
-        ToolResult::PermissionDenied { message } => ToolResult::PermissionDenied { message },
+        ToolResult::PermissionDenied {
+            message,
+            retry_category,
+        } => ToolResult::PermissionDenied {
+            message,
+            retry_category,
+        },
         ToolResult::Conflict { message } => ToolResult::Conflict { message },
         ToolResult::TemporarilyUnavailable { message } => {
             ToolResult::TemporarilyUnavailable { message }
@@ -816,6 +860,11 @@ pub(super) async fn conversation_open(
                 Ok(row) => row,
                 Err(result) => return Ok(retype(result)),
             };
+        if let Some(module) =
+            conversation_module_off(state, principal.actor_id, conversation.project_id).await?
+        {
+            return Ok(ToolResult::module_off("conversation_open", module));
+        }
         let highest = conversation.next_entry_sequence - 1;
         let last_read = read_sequence(state, conversation.id, principal.actor_id).await?;
         let from = (highest - limit + 1).max(1);
@@ -863,6 +912,11 @@ pub(super) async fn conversation_read(
                 Ok(row) => row,
                 Err(result) => return Ok(retype(result)),
             };
+        if let Some(module) =
+            conversation_module_off(state, principal.actor_id, conversation.project_id).await?
+        {
+            return Ok(ToolResult::module_off("conversation_read", module));
+        }
         let highest = conversation.next_entry_sequence - 1;
         let (from, to) = if let Some(around) = arguments.around_message_id.as_deref() {
             let Some(message_id) = parse_message_id(around) else {
@@ -1456,6 +1510,20 @@ pub(super) async fn message_send(
         } else {
             super::file_tools::blank_content()
         };
+    // A conversation the caller can read whose module is off here says so;
+    // anything else is left to `send`, which answers as it always has, so
+    // this says nothing about conversations they can't see.
+    match readable_conversation(state, principal, &arguments.conversation_id).await {
+        Ok(Ok(row)) => {
+            match conversation_module_off(state, principal.actor_id, row.project_id).await {
+                Ok(Some(module)) => return ToolResult::module_off("message_send", module),
+                Ok(None) => {}
+                Err(error) => return ToolResult::from_error(error, "message_send"),
+            }
+        }
+        Ok(Err(_)) => {}
+        Err(error) => return ToolResult::from_error(error, "message_send"),
+    }
     send(
         state,
         principal,

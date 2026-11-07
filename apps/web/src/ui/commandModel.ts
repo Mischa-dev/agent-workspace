@@ -17,6 +17,11 @@ export type CommandItem = {
   shortcut?: string
   /** Already matched by the server (a search result): listed without local filtering. */
   matched?: boolean
+  /** AWD-75: where it leads, when that isn't the open project or Home: the project, and the module of the page (otherwise its id's). */
+  project?: string
+  module?: string
+  /** AWD-75: where it leads is a page whose owner isn't known here (a run or board not opened lately): that page decides, not Home. */
+  ownerUnknown?: boolean
   onSelect: () => void
 }
 

@@ -125,10 +125,13 @@ fn settings_href(project_id: Uuid) -> String {
 }
 
 /// Where the account can run for `viewer`, and where it can't and why.
+/// With `runs_only` (the tools, AWD-75), a project where Runs is off for
+/// them can't either.
 async fn places(
     state: &AppState,
     viewer: Uuid,
     account: &UsageAccount,
+    runs_only: bool,
 ) -> Result<Places, AppError> {
     let projects = sqlx::query_as::<_, (Uuid, String)>(
         r#"
@@ -172,6 +175,19 @@ async fn places(
             result
                 .skipped
                 .push(skip("You can't launch runs in this project.".to_owned()));
+            continue;
+        }
+        let runs_off = runs_only && {
+            let mut connection = state.pool.acquire().await?;
+            !crate::modules::state::for_project(&mut connection, project_id, viewer)
+                .await?
+                .unwrap_or_default()
+                .contains("runs")
+        };
+        if runs_off {
+            result
+                .skipped
+                .push(skip("Runs is turned off in this project.".to_owned()));
             continue;
         }
         // The batch names and ranks tasks: only where the role (and an app's
@@ -328,8 +344,20 @@ pub(crate) async fn suggest(
     account: &UsageAccount,
     window_key: Option<&str>,
 ) -> Result<Batch, AppError> {
+    suggest_in(state, viewer, account, window_key, false).await
+}
+
+/// `suggest`; with `runs_only` (the tools, AWD-75) only from projects where
+/// Runs is on for the viewer.
+pub(crate) async fn suggest_in(
+    state: &AppState,
+    viewer: Uuid,
+    account: &UsageAccount,
+    window_key: Option<&str>,
+    runs_only: bool,
+) -> Result<Batch, AppError> {
     let now = Utc::now();
-    let places = places(state, viewer, account).await?;
+    let places = places(state, viewer, account, runs_only).await?;
     let project_ids = places
         .runnable
         .iter()
@@ -489,11 +517,14 @@ pub(crate) async fn launch_batch(
     let suggested = request.tasks.is_none();
     let picks = match request.tasks {
         Some(picks) => picks,
-        None => suggest(
+        // AWD-75: a tool's batch follows Runs in each project; the app's
+        // route is unchanged until server routes follow modules.
+        None => suggest_in(
             state,
             caller.actor_id,
             account,
             request.window_key.as_deref(),
+            caller.mcp,
         )
         .await?
         .tasks
@@ -511,7 +542,7 @@ pub(crate) async fn launch_batch(
     if picks.is_empty() || picks.len() > launch::MAX_TASKS_PER_LAUNCH {
         return Err(AppError::Validation("tasks"));
     }
-    let places = places(state, caller.actor_id, account).await?;
+    let places = places(state, caller.actor_id, account, caller.mcp).await?;
     // Keep the order the batch was ranked in, project by project.
     let mut order = Vec::new();
     let mut by_project: BTreeMap<Uuid, Vec<Uuid>> = BTreeMap::new();

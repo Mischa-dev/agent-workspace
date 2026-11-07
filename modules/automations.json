@@ -1,0 +1,61 @@
+{
+  "id": "automations",
+  "name": "Automations",
+  "description": "Rules that act on their own when something happens or on a schedule, and webhooks that tell other apps.",
+  "version": 1,
+  "kind": "core",
+  "switchable": true,
+  "needs": ["projects"],
+  "worksWith": ["tasks", "runs", "messages"],
+  "permissions": [],
+  "tools": {
+    "automation_list": "query",
+    "automation_write": "change",
+    "automation_runs": "query",
+    "webhook_list": "query",
+    "webhook_write": "change",
+    "webhook_deliveries": "query"
+  },
+  "routes": ["/api/v1/projects/{project_id}/automations*", "/api/v1/webhooks*"],
+  "events": {
+    "emits": [],
+    "listens": [
+      "task.created",
+      "task.updated",
+      "run.updated",
+      "run.finished",
+      "pull_request.checks_failed",
+      "pull_request.checks_passed",
+      "pull_request.merged",
+      "pull_request.closed",
+      "message.created"
+    ]
+  },
+  "notifications": ["automation", "automation_disabled"],
+  "search": [],
+  "automations": { "triggers": ["schedule"], "actions": ["notify"] },
+  "things": [
+    {
+      "kind": "automation",
+      "one": "Automation",
+      "many": "Automations",
+      "href": "/settings/projects/{projectId}/automations",
+      "fields": [{ "id": "trigger", "label": "When", "type": "text" }]
+    }
+  ],
+  "links": [],
+  "embeds": [],
+  "slots": {
+    "pages": [],
+    "parts": ["area.automations"],
+    "sidebar": [],
+    "home": [],
+    "settings": ["account/webhooks", "project/automations"],
+    "palette": [],
+    "shortcuts": [],
+    "slash": [],
+    "setup": []
+  },
+  "settings": [],
+  "nouns": []
+}

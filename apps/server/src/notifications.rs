@@ -229,6 +229,16 @@ pub async fn deliver(
     if !first {
         return Ok(false);
     }
+    // AWD-75: a module that's off sends nothing, not even a push.
+    let modules = crate::modules::state::ProjectModules::load(
+        transaction,
+        notification.recipient_actor_id,
+        &[notification.project_id],
+    )
+    .await?;
+    if !modules.allows_notification(notification.project_id, notification.kind) {
+        return Ok(false);
+    }
     // N4: a muted project or group writes nothing; in-app off but push on
     // writes the row straight to the archive, for the push to open.
     let decision = crate::notification_settings::decide(
@@ -1368,6 +1378,8 @@ struct NotificationRow {
 }
 
 fn list_sql(view_condition: &str, extra: &str) -> String {
+    // AWD-75: nothing from a module that's switched off.
+    let switches = crate::modules::state::notification_switches_sql();
     format!(
         r#"
         SELECT n.id, n.kind, n.subject_kind, n.subject_id, n.project_id,
@@ -1424,6 +1436,7 @@ fn list_sql(view_condition: &str, extra: &str) -> String {
           AND ($3::uuid IS NULL OR n.project_id = $3)
           AND ($4::uuid[] IS NULL OR n.project_id = ANY($4))
           AND {VISIBLE}
+          AND {switches}
           {extra}
         "#
     )
@@ -1535,6 +1548,8 @@ pub async fn unread_count(
     viewer: Uuid,
     within: Option<&[Uuid]>,
 ) -> Result<i64, AppError> {
+    // AWD-75: nothing from a module that's switched off.
+    let switches = crate::modules::state::notification_switches_sql();
     Ok(sqlx::query_scalar::<_, i64>(&format!(
         r#"
         SELECT count(*) FROM notifications n
@@ -1542,6 +1557,7 @@ pub async fn unread_count(
           AND {view}
           AND ($2::uuid[] IS NULL OR n.project_id = ANY($2))
           AND {VISIBLE}
+          AND {switches}
         "#,
         view = View::Unread.condition(),
     ))
@@ -1556,12 +1572,15 @@ pub async fn attention_counts(
     executor: impl sqlx::PgExecutor<'_>,
     viewer: Uuid,
 ) -> Result<HashMap<Uuid, u32>, AppError> {
+    // AWD-75: nothing from a module that's switched off.
+    let switches = crate::modules::state::notification_switches_sql();
     let rows = sqlx::query_as::<_, (Uuid, i64)>(&format!(
         r#"
         SELECT n.project_id, count(*) FROM notifications n
         WHERE n.recipient_actor_id = $1
           AND {view}
           AND {VISIBLE}
+          AND {switches}
         GROUP BY n.project_id
         "#,
         view = View::Unread.condition(),
@@ -1926,6 +1945,8 @@ pub async fn update(
         UpdateAction::Unsnooze => "n.snoozed_until IS NOT NULL",
     };
     let all_condition = if all { View::Inbox.condition() } else { "true" };
+    // AWD-75: nothing from a module that's switched off.
+    let switches = crate::modules::state::notification_switches_sql();
     let sql = format!(
         r#"
         UPDATE notifications n
@@ -1939,6 +1960,7 @@ pub async fn update(
           AND {applies}
           AND ($6::timestamptz IS NULL OR true)
           AND {VISIBLE}
+          AND {switches}
         RETURNING n.id, n.project_id
         "#
     );

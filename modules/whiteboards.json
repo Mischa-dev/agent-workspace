@@ -1,0 +1,62 @@
+{
+  "id": "whiteboards",
+  "name": "Whiteboards",
+  "description": "Sketches and diagrams that people and agents draw together, linked to projects, tasks and pages.",
+  "version": 1,
+  "kind": "core",
+  "switchable": true,
+  "needs": ["projects"],
+  "worksWith": ["tasks", "pages"],
+  "permissions": ["whiteboards.edit"],
+  "tools": {
+    "whiteboard_list": "query",
+    "whiteboard_read": "describe",
+    "whiteboard_render": "describe",
+    "whiteboard_create": "create",
+    "whiteboard_edit": "change",
+    "whiteboard_update": "change",
+    "whiteboard_duplicate": "create",
+    "whiteboard_link": "change"
+  },
+  "routes": ["/api/v1/whiteboards*", "/api/v1/whiteboard-links", "/api/v1/whiteboard-trash/*"],
+  "events": { "emits": [], "listens": [] },
+  "notifications": [],
+  "search": [],
+  "automations": { "triggers": [], "actions": [] },
+  "things": [
+    {
+      "kind": "whiteboard",
+      "one": "Whiteboard",
+      "many": "Whiteboards",
+      "href": "/whiteboards/{id}",
+      "fields": [{ "id": "updatedAt", "label": "Edited", "type": "date" }]
+    }
+  ],
+  "links": [
+    { "kind": "about", "from": "whiteboard", "to": "project" },
+    { "kind": "about", "from": "whiteboard", "to": "task" },
+    { "kind": "about", "from": "whiteboard", "to": "page" }
+  ],
+  "embeds": [
+    {
+      "id": "whiteboards.card",
+      "label": "Whiteboard",
+      "description": "A whiteboard's preview and title.",
+      "thing": "whiteboard",
+      "piece": { "type": "card", "thing": "whiteboard", "fields": ["owner", "updatedAt"], "actions": ["open"] }
+    }
+  ],
+  "slots": {
+    "pages": ["/whiteboards", "/whiteboards/:whiteboardId"],
+    "parts": ["area.whiteboards"],
+    "sidebar": [],
+    "home": [],
+    "settings": [],
+    "palette": ["g:whiteboards"],
+    "shortcuts": [],
+    "slash": [],
+    "setup": []
+  },
+  "settings": [],
+  "nouns": []
+}

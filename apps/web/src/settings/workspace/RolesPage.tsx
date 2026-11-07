@@ -2,8 +2,9 @@ import { useMemo, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { describeError } from '../../app/mutations'
-import { useWorkspaceLayout } from '../../experience/api'
+import { refreshLayouts, useWorkspaceLayout } from '../../experience/api'
 import { REGISTRY } from '../../experience/registry'
+import { MODULE_IDS, moduleName } from '../../modules/names'
 import {
   Banner,
   Button,
@@ -44,6 +45,9 @@ import {
 } from './roles'
 import './roles.css'
 
+// AWD-75: the modules a role can turn off for its holders.
+const SWITCHABLE_MODULES = MODULE_IDS.filter((module) => module !== 'workspace')
+
 const BASE_LABELS: Record<BaseRole, string> = { owner: 'Owner', admin: 'Admin', member: 'Member', viewer: 'Viewer' }
 const PINNABLE_VIEWS = [
   { key: 'my_tasks', label: 'My tasks' },
@@ -68,7 +72,15 @@ export default function RolesPage({ workspace }: SettingsPageProps) {
     queryFn: () => listRoles(organizationId),
     enabled: Boolean(organizationId),
   })
-  const refresh = () => queryClient.invalidateQueries({ queryKey: ['organization', organizationId] })
+  // A role's modules (AWD-75) change what holders see where they hold it,
+  // you included: each project's layout, and the Projects flag the rail
+  // reads from the projects list.
+  const refresh = () =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['organization', organizationId] }),
+      refreshLayouts(queryClient),
+      queryClient.invalidateQueries({ queryKey: ['projects'] }),
+    ])
   const remove = useMutation({
     mutationFn: (role: WorkspaceRoleView) => removeRole(organizationId, role),
     onSuccess: (_, role) => {
@@ -224,6 +236,7 @@ function initialInput(editing: Editing, data: RolesResponse): RoleInput {
       permissions: role.permissions,
       agentLimit: role.agentLimit,
       defaults: role.defaults,
+      modulesOff: role.modulesOff ?? [],
       isDefault: role.isDefault,
     }
   }
@@ -236,6 +249,7 @@ function initialInput(editing: Editing, data: RolesResponse): RoleInput {
       permissions: point.permissions,
       agentLimit: point.agentLimit,
       defaults: point.defaults,
+      modulesOff: [],
       isDefault: false,
     }
   }
@@ -248,6 +262,7 @@ function initialInput(editing: Editing, data: RolesResponse): RoleInput {
     permissions: copy?.permissions ?? builtInPermissions(data.permissions, baseRole),
     agentLimit: copy?.agentLimit ?? null,
     defaults: copy?.defaults ?? {},
+    modulesOff: copy?.modulesOff ?? [],
     isDefault: false,
   }
 }
@@ -299,6 +314,7 @@ function RoleEditor({
           ...(role.builtIn ? {} : { permissions: input.permissions }),
           ...(isOwnerRole ? {} : { agentLimit: input.agentLimit }),
           defaults,
+          ...(isOwnerRole ? {} : { modulesOff: input.modulesOff }),
           ...(isOwnerRole ? {} : { isDefault: input.isDefault }),
         })
       }
@@ -464,6 +480,27 @@ function RoleEditor({
             ) : null}
           </fieldset>
         ) : null}
+
+        {isOwnerRole ? null : (
+          <fieldset className="aw-roles__group">
+            <legend className="aw-roles__legend">Modules</legend>
+            <p className="aw-quiet">Holders don't get the modules turned off here, for themselves or their agents. Modules the workspace has off stay off.</p>
+            {SWITCHABLE_MODULES.map((module) => (
+              <Checkbox
+                checked={!input.modulesOff.includes(module)}
+                disabled={readOnly}
+                key={module}
+                label={moduleName(module)}
+                onChange={(on) =>
+                  setInput((current) => ({
+                    ...current,
+                    modulesOff: on ? current.modulesOff.filter((entry) => entry !== module) : [...new Set([...current.modulesOff, module])],
+                  }))
+                }
+              />
+            ))}
+          </fieldset>
+        )}
 
         <fieldset className="aw-roles__group">
           <legend className="aw-roles__legend">Where holders start</legend>

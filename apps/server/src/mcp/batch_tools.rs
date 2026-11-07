@@ -168,11 +168,13 @@ pub(super) async fn usage_batch(
         let Some(account) = account(state, principal, account_id).await? else {
             return Ok(ToolResult::not_found("provider account"));
         };
-        let suggestion = batch::suggest(
+        // AWD-75: only from projects where Runs is on for the caller.
+        let suggestion = batch::suggest_in(
             state,
             principal.actor_id,
             &account,
             arguments.window_key.as_deref(),
+            true,
         )
         .await?;
         Ok::<_, AppError>(ToolResult::ok(UsageBatchValue {

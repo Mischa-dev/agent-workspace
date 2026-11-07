@@ -20,8 +20,8 @@ use super::{
     talk::{ConversationSummary, ListFilter, list_rows, summary},
 };
 use crate::{
-    AppState, error::AppError, layouts, memory, policy::ActorKind, work_item_labels,
-    work_item_planning::HAS_OPEN_BLOCKER,
+    AppState, error::AppError, layouts, memory, modules::state::ProjectModules, policy::ActorKind,
+    work_item_labels, work_item_planning::HAS_OPEN_BLOCKER,
 };
 
 const GUIDE_CHARACTERS: usize = 20_000;
@@ -132,6 +132,13 @@ pub(super) async fn briefing(
         } else {
             accessible_project_ids(state, principal).await?
         };
+        // AWD-75: each section reads only where its module is on.
+        let modules = {
+            let mut connection = state.pool.acquire().await?;
+            ProjectModules::load(&mut connection, principal.actor_id, &projects).await?
+        };
+        let talk_projects = modules.with_conversations(&projects);
+        let task_projects = modules.with(&projects, "tasks");
         let (name, handle) = sqlx::query_as::<_, (String, String)>(
             "SELECT display_name, handle FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
         )
@@ -181,13 +188,13 @@ pub(super) async fn briefing(
             "#,
         )
         .bind(principal.actor_id)
-        .bind(&projects)
+        .bind(&talk_projects)
         .fetch_all(&state.pool)
         .await?;
         let unread = list_rows(
             state,
             principal.actor_id,
-            &projects,
+            &talk_projects,
             ListFilter {
                 kinds: None,
                 with_person: None,
@@ -205,8 +212,8 @@ pub(super) async fn briefing(
         .collect();
         let notifications =
             super::notifications::unread_lines(state, principal, &projects).await?;
-        let tasks = task_lines(state, &projects, principal.actor_id, TaskFilter::Assigned).await?;
-        let claims = task_lines(state, &projects, principal.actor_id, TaskFilter::Claimed).await?;
+        let tasks = task_lines(state, &task_projects, principal.actor_id, TaskFilter::Assigned).await?;
+        let claims = task_lines(state, &task_projects, principal.actor_id, TaskFilter::Claimed).await?;
         let thread_updates = sqlx::query_as::<_, ThreadUpdate>(
             r#"
             SELECT thread.id::text AS thread_id, thread.name, thread.thread_status AS status,
@@ -230,7 +237,7 @@ pub(super) async fn briefing(
             "#,
         )
         .bind(principal.actor_id)
-        .bind(&projects)
+        .bind(&talk_projects)
         .fetch_all(&state.pool)
         .await?;
         Ok::<_, AppError>(ToolResult::ok(Briefing {
@@ -373,6 +380,14 @@ pub(super) async fn projects_list(
                 .await?,
             );
         }
+        // AWD-75: a project shows only where Projects is on for the caller;
+        // the Messages space stays, as it always has.
+        let projects = {
+            let mut connection = state.pool.acquire().await?;
+            ProjectModules::load(&mut connection, principal.actor_id, &projects)
+                .await?
+                .keep(&projects, |set, direct| direct || set.contains("projects"))
+        };
         let mut rows = sqlx::query_as::<_, ProjectLine>(
             r#"
             SELECT project.id::text AS id, project.project_key AS key,
@@ -455,6 +470,10 @@ pub(super) struct ProjectOverview {
     /// nobody chose one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub layout: Option<LayoutLine>,
+    /// Modules that are off here (AWD-75); what they hold is left out, and
+    /// their tools say they're off. module_list says why.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modules_off: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -729,6 +748,31 @@ pub(super) async fn project_open(
                 .await?
                 .map(LayoutLine::from)
         };
+        // AWD-75: leave out what belongs to modules that are off here.
+        let modules = {
+            let mut connection = state.pool.acquire().await?;
+            crate::modules::state::for_project(&mut connection, project_id, principal.actor_id)
+                .await?
+                .unwrap_or_default()
+        };
+        let on = |module: &str| modules.contains(module);
+        let (guide, skills, pages, decisions) = if on("pages") {
+            (guide, skills, pages, decisions)
+        } else {
+            Default::default()
+        };
+        let (by_status, next, blocked, claimed, labels) = if on("tasks") {
+            (by_status, next, blocked, claimed, labels)
+        } else {
+            Default::default()
+        };
+        let (channels, open_threads) = if on("channels") {
+            (channels, open_threads)
+        } else {
+            Default::default()
+        };
+        let repositories = if on("code") { repositories } else { Vec::new() };
+        let modules_off = modules.off().map(|module| module.id.clone()).collect();
         Ok::<_, AppError>(ToolResult::ok(ProjectOverview {
             project: ProjectHeader {
                 id: project_id.to_string(),
@@ -763,6 +807,7 @@ pub(super) async fn project_open(
             repositories,
             labels,
             layout,
+            modules_off,
         }))
     }
     .await;

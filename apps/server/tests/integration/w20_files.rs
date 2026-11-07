@@ -33,7 +33,7 @@ pub(super) async fn with_data_root(prefix: &str) -> Option<(Setup, tempfile::Tem
     Some((setup, root))
 }
 
-async fn upload(
+pub(super) async fn upload(
     setup: &Setup,
     browser: &Browser,
     uri: &str,
@@ -52,7 +52,12 @@ async fn upload(
     send(&setup.app, request).await
 }
 
-async fn upload_to(setup: &Setup, browser: &Browser, conversation: &str, name: &str) -> String {
+pub(super) async fn upload_to(
+    setup: &Setup,
+    browser: &Browser,
+    conversation: &str,
+    name: &str,
+) -> String {
     let (status, file) = upload(
         setup,
         browser,
@@ -93,7 +98,7 @@ pub(super) async fn read(
     }
 }
 
-async fn send_with(
+pub(super) async fn send_with(
     setup: &Setup,
     browser: &Browser,
     conversation: &str,

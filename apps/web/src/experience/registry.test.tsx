@@ -75,7 +75,7 @@ const sidebarData = {
 }
 
 function layout(hidden: readonly string[]): { effective: EffectiveLayout } {
-  return { effective: { source: 'project', preset: null, hidden: [...hidden], layoutHidden: [...hidden], words: {}, lead: [], showingHidden: false } }
+  return { effective: { source: 'project', preset: null, hidden: [...hidden], layoutHidden: [...hidden], words: {}, lead: [], showingHidden: false, modulesOff: [] } }
 }
 
 function renderWith(hidden: readonly string[], children: ReactNode) {

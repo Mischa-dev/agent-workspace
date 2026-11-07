@@ -1,0 +1,37 @@
+{
+  "id": "inbox",
+  "name": "Inbox",
+  "description": "One place for what needs you, plus Later: things saved to come back to, and reminders.",
+  "version": 1,
+  "kind": "core",
+  "switchable": true,
+  "needs": [],
+  "worksWith": ["messages", "tasks"],
+  "permissions": [],
+  "tools": {
+    "later_list": "query",
+    "later_save": "create",
+    "later_update": "change"
+  },
+  "routes": ["/api/v1/inbox*", "/api/v1/later*"],
+  "events": { "emits": [], "listens": [] },
+  "notifications": ["reminder"],
+  "search": [],
+  "automations": { "triggers": [], "actions": [] },
+  "things": [],
+  "links": [],
+  "embeds": [],
+  "slots": {
+    "pages": ["/inbox", "/later"],
+    "parts": ["workspace.later"],
+    "sidebar": ["home.inbox"],
+    "home": ["needsYou"],
+    "settings": [],
+    "palette": ["g:inbox", "g:later"],
+    "shortcuts": ["go-inbox", "go-later"],
+    "slash": ["remind", "later"],
+    "setup": []
+  },
+  "settings": [],
+  "nouns": []
+}

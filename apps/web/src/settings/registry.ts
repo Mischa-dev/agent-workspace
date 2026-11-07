@@ -6,9 +6,11 @@
 // same name in two groups (General, Members, Runs and models) shares one. A renamed
 // page's old id redirects in ./route.ts.
 import { lazy, type ComponentType, type LazyExoticComponent } from 'react'
-import { ArrowDownUp, Bell, BookOpen, Bug, Cpu, LayoutTemplate, Mail, PanelsTopLeft, Plug, ScrollText, Server, User, UserCog, Webhook, Zap } from 'lucide-react'
+import { ArrowDownUp, Bell, Blocks, BookOpen, Bug, Cpu, LayoutTemplate, Mail, PanelsTopLeft, Plug, ScrollText, Server, User, UserCog, Webhook, Zap } from 'lucide-react'
+import settingsClaims from 'virtual:modules/slots/settings'
 
 import type { PartId } from '../experience/parts'
+import { moduleSwitchable, ownerOf } from '../modules/ownership'
 import type { IconGlyph } from '../ui'
 import type { SettingsGroup, SettingsPageProps, SettingsVisibility } from './types'
 
@@ -74,6 +76,7 @@ export const SETTINGS_PAGES: SettingsPage[] = [
   page('workspace', 'harnesses', 'Harnesses', 'terminal', ['custom harness', 'adapter', 'manifest', 'runner', 'command', 'agents'], () => import('./workspace/HarnessesPage')),
   page('workspace', 'project-templates', 'Project templates', LayoutTemplate, ['templates', 'new project', 'setup', 'starter'], () => import('./workspace/ProjectTemplatesPage')),
   page('workspace', 'layout', 'Layout', PanelsTopLeft, ['layout', 'presets', 'hide', 'show', 'simplify', 'personal', 'words', 'rename', 'sidebar', 'my view', 'hidden parts', 'default layout'], () => import('./workspace/LayoutPage')),
+  page('workspace', 'modules', 'Modules', Blocks, ['modules', 'features', 'turn off', 'switch off', 'presets', 'projects', 'pages only', 'dms only', 'chat with my agents'], () => import('./workspace/ModulesPage')),
   page('workspace', 'github', 'GitHub', 'pull-request', ['installation', 'app', 'repositories'], () => import('./workspace/GitHubPage'), { visible: manager }),
   page('workspace', 'audit-log', 'Audit log', ScrollText, ['history', 'activity', 'who changed', 'events'], () => import('./workspace/AuditLogPage'), { visible: manager }),
   page('workspace', 'server', 'Server', Server, ['version', 'commit', 'backup', 'backups', 'health', 'preflight', 'disk', 'migrations', 'self-hosting'], () => import('./workspace/ServerPage'), { visible: serverOperator }),
@@ -102,10 +105,26 @@ export const GROUP_LABELS: Record<SettingsGroup, string> = {
 
 export function pagesIn(group: SettingsGroup, context: SettingsVisibility) {
   return SETTINGS_PAGES.filter(
-    (entry) => entry.group === group && (entry.visible?.(context) ?? true) && (!entry.part || (context.experience?.shows(entry.part) ?? true)),
+    (entry) =>
+      entry.group === group &&
+      (entry.visible?.(context) ?? true) &&
+      (!entry.part || (context.experience?.shows(entry.part) ?? true)) &&
+      pageModule(context, group, entry.id)?.state !== 'off',
   )
 }
 
 export function findPage(group: SettingsGroup, id: string) {
   return SETTINGS_PAGES.find((entry) => entry.group === group && entry.id === id) ?? null
+}
+
+/** AWD-75: a settings page's module that can be off, while the person's settings load or once they say it's off; null when it's on (or where the settings couldn't load). */
+export type PageModuleState = { module: string; state: 'loading' | 'off' } | null
+
+/** AWD-75: the nav and search leave out a page whose module is off; opening one waits while the settings load, then says it's turned off. */
+export function pageModule(context: SettingsVisibility, group: SettingsGroup, id: string): PageModuleState {
+  const module = ownerOf(settingsClaims, `${group}/${id}`)
+  const settings = context.modules ?? context.experience
+  if (!module || !settings || !moduleSwitchable(module)) return null
+  if (settings.modules === 'loading') return { module, state: 'loading' }
+  return settings.moduleOn(module) ? null : { module, state: 'off' }
 }

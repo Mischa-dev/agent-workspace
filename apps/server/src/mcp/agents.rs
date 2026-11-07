@@ -209,6 +209,15 @@ pub(super) async fn agent_list(
     let include_disabled = arguments.include_disabled.unwrap_or(false);
     let result = async {
         let projects = scope_projects(state, principal).await?;
+        // AWD-75: agents met only where Agents is on for the caller (the
+        // Messages space too, as its workspace says), before the limit; their
+        // memberships below are shown from those projects only.
+        let projects = {
+            let mut connection = state.pool.acquire().await?;
+            crate::modules::state::ProjectModules::load(&mut connection, principal.actor_id, &projects)
+                .await?
+                .keep(&projects, |set, _| set.contains("agents"))
+        };
         let agents = sqlx::query_as::<_, AgentRow>(
             r#"
             SELECT * FROM (

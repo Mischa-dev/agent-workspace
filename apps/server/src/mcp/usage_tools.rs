@@ -85,11 +85,13 @@ pub(super) async fn usage_windows(
             .into_iter()
             .filter(|account| account_id.is_none_or(|id| id == account.account_id))
         {
-            let ready = usage::ready::ready_tasks(
+            // AWD-75: counted only where Runs is on for the caller.
+            let ready = usage::ready::ready_tasks_in(
                 &mut connection,
                 principal.actor_id,
                 account.account_id,
                 None,
+                true,
             )
             .await?;
             lines.push(AccountLine {

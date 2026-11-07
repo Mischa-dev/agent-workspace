@@ -1,0 +1,109 @@
+{
+  "id": "runs",
+  "name": "Runs",
+  "description": "Handing tasks to agents on harnesses (Codex, Claude Code and others), following their runs, approvals and usage.",
+  "version": 1,
+  "kind": "core",
+  "switchable": true,
+  "needs": ["tasks", "channels", "code"],
+  "worksWith": ["agents", "automations"],
+  "permissions": ["runs.launch", "runs.approve", "runs.interrupt", "runs.accounts"],
+  "tools": {
+    "run_start": "create",
+    "task_launch": "create",
+    "run_get": "describe",
+    "run_list": "query",
+    "run_steps": "query",
+    "run_usage": "query",
+    "run_request": "create",
+    "launch_list": "query",
+    "environment_list": "query",
+    "approval_list": "query",
+    "approval_get": "describe",
+    "approval_respond": "change",
+    "usage_windows": "query",
+    "usage_batch": "query",
+    "usage_batch_launch": "create"
+  },
+  "routes": [
+    "/api/v1/runs*",
+    "/api/v1/agent-runs/*",
+    "/api/v1/agent-approvals/*",
+    "/api/v1/usage*",
+    "/api/v1/threads/{id}/agent-runs",
+    "/api/v1/projects/{id}/execution-profiles",
+    "/api/v1/projects/{id}/execution-workers",
+    "/api/v1/projects/{id}/harnesses*",
+    "/api/v1/projects/{project_id}/execution-profiles/*",
+    "/api/v1/projects/{project_id}/provider-accounts*",
+    "/api/v1/projects/{project_id}/environments*",
+    "/api/v1/projects/{project_id}/launches*",
+    "/api/v1/projects/{project_id}/external-execution-requests",
+    "/api/v1/projects/{project_id}/work-items/{work_item_id}/launch",
+    "/api/v1/projects/{project_id}/work-items/{work_item_id}/work-with-worker",
+    "/api/v1/organizations/{organization_id}/harnesses*",
+    "/api/v1/organizations/{organization_id}/model-catalog*"
+  ],
+  "events": { "emits": ["run.updated", "run.finished"], "listens": ["task.created", "task.updated"] },
+  "notifications": [
+    "approval_requested",
+    "run_waiting",
+    "run_completed",
+    "run_failed",
+    "capacity_reset_soon",
+    "capacity_high_usage",
+    "capacity_limit_reached",
+    "capacity_reset_credit"
+  ],
+  "search": [],
+  "automations": { "triggers": ["run_finished", "capacity_window"], "actions": ["launch"] },
+  "things": [
+    {
+      "kind": "run",
+      "one": "Run",
+      "many": "Runs",
+      "href": "/runs/{id}",
+      "fields": [
+        { "id": "harness", "label": "Harness", "type": "text" },
+        { "id": "startedAt", "label": "Started", "type": "date" }
+      ]
+    }
+  ],
+  "links": [{ "kind": "about", "from": "run", "to": "task" }],
+  "embeds": [
+    {
+      "id": "runs.card",
+      "label": "Run",
+      "description": "A run with its state, harness and who started it.",
+      "thing": "run",
+      "piece": { "type": "card", "thing": "run", "fields": ["status", "harness", "owner", "startedAt"], "actions": ["open"] }
+    },
+    {
+      "id": "runs.list",
+      "label": "Runs",
+      "description": "Runs working now or finished lately.",
+      "thing": "run",
+      "piece": { "type": "list", "thing": "run", "fields": ["status", "harness", "owner"] }
+    }
+  ],
+  "slots": {
+    "pages": ["/runs", "/runs/:runId", "/projects/:projectId/launches"],
+    "parts": ["area.runs", "task.runs", "tech.run_usage", "home.working_now", "home.capacity", "workspace.runs"],
+    "sidebar": [],
+    "home": ["working", "capacity"],
+    "settings": [
+      "account/provider-accounts",
+      "account/usage",
+      "workspace/runs",
+      "workspace/harnesses",
+      "project/runs",
+      "project/run-requests"
+    ],
+    "palette": ["p:runs", "g:runs"],
+    "shortcuts": [],
+    "slash": ["launch"],
+    "setup": ["account", "environment", "launch"]
+  },
+  "settings": ["run.*", "launch.*"],
+  "nouns": []
+}

@@ -135,6 +135,16 @@ pub struct ListFilter {
     pub query: Option<String>,
     pub deleted: bool,
     pub limit: i64,
+    /// AWD-75: when set, only boards in these projects, or across these
+    /// workspaces, before the limit (where Whiteboards is on for the caller).
+    pub on_in: Option<OnIn>,
+}
+
+/// The projects, and the workspaces for boards across one, where a module is on.
+#[derive(Clone, Debug, Default)]
+pub struct OnIn {
+    pub projects: Vec<Uuid>,
+    pub workspaces: Vec<Uuid>,
 }
 
 /// Boards the caller can see, most recently changed first.
@@ -157,6 +167,8 @@ pub async fn list(
           AND ($4::uuid IS NULL OR board.organization_id = $4)
           AND ($5::uuid IS NULL OR board.project_id = $5)
           AND ((board.deleted_at IS NOT NULL) = $6)
+          AND (NOT $9 OR (board.project_id IS NOT NULL AND board.project_id = ANY($10))
+               OR (board.project_id IS NULL AND board.organization_id = ANY($11)))
           AND ($7::text IS NULL
                OR board.search_vector @@ plainto_tsquery('simple', $7)
                OR board.title ILIKE '%' || replace(replace(replace($7, '\', '\\'), '%', '\%'), '_', '\_') || '%')
@@ -172,6 +184,9 @@ pub async fn list(
     .bind(filter.deleted)
     .bind(query)
     .bind(filter.limit.clamp(1, 200))
+    .bind(filter.on_in.is_some())
+    .bind(filter.on_in.as_ref().map(|on| on.projects.clone()).unwrap_or_default())
+    .bind(filter.on_in.as_ref().map(|on| on.workspaces.clone()).unwrap_or_default())
     .fetch_all(pool)
     .await?)
 }

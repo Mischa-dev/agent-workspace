@@ -827,6 +827,8 @@ pub async fn list(
         None => None,
     };
     let result = async {
+        // AWD-75: not from projects where Runs is off for the caller.
+        let off = super::runs::projects_with_module_off(state, principal.actor_id, "runs").await?;
         let rows = sqlx::query_as::<_, ApprovalContext>(
             r#"
             SELECT approval.id, approval.agent_run_id AS run_id,
@@ -860,6 +862,7 @@ pub async fn list(
                   )
               )
               AND ($2::uuid IS NULL OR project.id = $2)
+              AND NOT (project.id = ANY($3))
               AND conversation_visible_to(conversation.id, $1)
               AND actor_can_access_project($1, NULL, project.id)
             ORDER BY approval.created_at, approval.id
@@ -868,6 +871,7 @@ pub async fn list(
         )
         .bind(principal.actor_id)
         .bind(project)
+        .bind(&off)
         .fetch_all(&state.pool)
         .await?;
         let in_web_app = rows.iter().filter(|row| row.human_required).count();

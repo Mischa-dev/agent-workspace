@@ -23,4 +23,6 @@ export type SettingsVisibility = {
   projects: Project[]
   /** What the person sees there: a page for a part the layout hides stays out of the nav, though links and search still reach it. */
   experience?: Experience
+  /** AWD-75: which modules are on there, for a group without a layout of its own (account, workspace): its pages of an off module leave the nav. */
+  modules?: Pick<Experience, 'moduleOn' | 'modules'>
 }
