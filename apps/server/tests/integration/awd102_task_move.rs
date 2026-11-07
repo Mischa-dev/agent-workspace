@@ -1444,3 +1444,151 @@ async fn a_receipt_is_returned_only_with_access_now() {
     assert_eq!(restored["value"]["replayed"], true, "{restored}");
     assert_eq!(restored["value"]["moved"], moved["value"]["moved"]);
 }
+
+/// The receipt table's lifecycle (migration 20261107204000): a receipt
+/// belongs to its moved task's original and goes when that row is deleted
+/// (ON DELETE CASCADE), and no other receipt does.
+///
+/// This checks the schema with test-only rows. The app itself never deletes
+/// a task: a moved original is archived and kept, with its key alias, so in
+/// practice a receipt lasts as long as the original does. This test deletes
+/// a task only through SQL, after clearing that test task's own dependent
+/// rows, and claims nothing about a delete path in the app.
+#[tokio::test]
+async fn a_receipt_is_deleted_with_its_original_and_only_then() {
+    let Some(setup) = setup("awd102_move_receipt_lifecycle").await else {
+        return;
+    };
+    let app = &setup.app;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let src = create_project(&setup, "SRC", "Source").await;
+    let dst = create_project(&setup, "DST", "Destination").await;
+    let made = tool(
+        app,
+        &codex,
+        &session,
+        "task_create_many",
+        json!({"projectId": "SRC", "clientRequestId": "lifecycle-make",
+               "tasks": [{"title": "Goes"}, {"title": "Stays"}]}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let goes = task_id(&setup, &src, 1).await;
+    let stays = task_id(&setup, &src, 2).await;
+    let actor = sqlx::query_scalar::<_, Uuid>(
+        "SELECT actor_id FROM project_memberships WHERE project_id = $1::uuid AND role = 'owner' LIMIT 1",
+    )
+    .bind(&src)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("owner");
+    for (task, key) in [(&goes, "lifecycle-goes"), (&stays, "lifecycle-stays")] {
+        sqlx::query(
+            r#"
+            INSERT INTO work_item_move_receipts (
+                id, organization_id, source_project_id, source_work_item_id,
+                target_project_id, actor_id, request_key_hash, request_hash,
+                moved, left_behind
+            ) VALUES ($1, $2, $3::uuid, $4::uuid, $5::uuid, $6, $7, $8, $9, 0)
+            "#,
+        )
+        .bind(Uuid::now_v7())
+        .bind(setup.organization_id)
+        .bind(&src)
+        .bind(task)
+        .bind(&dst)
+        .bind(actor)
+        .bind(
+            key.as_bytes()
+                .iter()
+                .cycle()
+                .take(32)
+                .copied()
+                .collect::<Vec<u8>>(),
+        )
+        .bind(vec![7_u8; 32])
+        .bind(json!([{"from": "SRC-1", "to": "DST-1", "id": Uuid::now_v7()}]))
+        .execute(&setup.pool)
+        .await
+        .expect("receipt");
+    }
+    let receipts_for = |task: String| {
+        let pool = setup.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM work_item_move_receipts WHERE source_work_item_id = $1::uuid",
+            )
+            .bind(task)
+            .fetch_one(&pool)
+            .await
+            .expect("receipts")
+        }
+    };
+    assert_eq!(receipts_for(goes.clone()).await, 1);
+
+    // The test task's own dependent rows (its creation's history), found
+    // from the catalog's foreign keys to work_items that don't cascade; the
+    // receipt's own key does, and is what's under test.
+    let keys = sqlx::query_as::<_, (String, Vec<String>, Vec<String>)>(
+        r#"
+        SELECT constraint_row.conrelid::regclass::text,
+               array_agg(referencing.attname ORDER BY position.n),
+               array_agg(referenced.attname ORDER BY position.n)
+        FROM pg_constraint constraint_row
+        CROSS JOIN LATERAL unnest(constraint_row.conkey, constraint_row.confkey)
+             WITH ORDINALITY AS position(conkey, confkey, n)
+        JOIN pg_attribute referencing
+          ON referencing.attrelid = constraint_row.conrelid AND referencing.attnum = position.conkey
+        JOIN pg_attribute referenced
+          ON referenced.attrelid = constraint_row.confrelid AND referenced.attnum = position.confkey
+        WHERE constraint_row.contype = 'f'
+          AND constraint_row.confrelid = 'work_items'::regclass
+          AND constraint_row.confdeltype <> 'c'
+        GROUP BY constraint_row.oid, constraint_row.conrelid
+        "#,
+    )
+    .fetch_all(&setup.pool)
+    .await
+    .expect("foreign keys");
+    // A few passes, as some of those rows refer to each other (a timeline
+    // entry to its activity row); each delete is only of rows about the
+    // test task.
+    for _ in 0..5 {
+        for (table, referencing, referenced) in &keys {
+            let predicate = referencing
+                .iter()
+                .zip(referenced)
+                .map(|(column, target)| match target.as_str() {
+                    "id" => format!("\"{column}\" = $1::uuid"),
+                    "project_id" => format!("\"{column}\" = $2::uuid"),
+                    other => panic!("unexpected referenced column {other}"),
+                })
+                .collect::<Vec<_>>()
+                .join(" AND ");
+            let _ = sqlx::query(&format!("DELETE FROM {table} WHERE {predicate}"))
+                .bind(&goes)
+                .bind(&src)
+                .execute(&setup.pool)
+                .await;
+        }
+    }
+    sqlx::query("DELETE FROM work_items WHERE id = $1::uuid")
+        .bind(&goes)
+        .execute(&setup.pool)
+        .await
+        .expect("delete the test task");
+    assert_eq!(receipts_for(goes).await, 0, "its receipt went with it");
+    assert_eq!(
+        receipts_for(stays.clone()).await,
+        1,
+        "the other receipt stays"
+    );
+    let stays_still =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM work_items WHERE id = $1::uuid")
+            .bind(&stays)
+            .fetch_one(&setup.pool)
+            .await
+            .expect("task");
+    assert_eq!(stays_still, 1);
+}
