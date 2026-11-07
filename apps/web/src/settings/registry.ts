@@ -120,5 +120,5 @@ export function findPage(group: SettingsGroup, id: string) {
 /** AWD-75: a page of a module that's off for the person leaves the nav. */
 function moduleShows(context: SettingsVisibility, page: string) {
   const module = ownerOf(settingsClaims, page)
-  return !module || (context.experience?.moduleOn(module) ?? true)
+  return !module || ((context.modules ?? context.experience)?.moduleOn(module) ?? true)
 }

@@ -256,6 +256,20 @@ describe('modules that are off', () => {
     expect(await screen.findByRole('heading', { name: 'Pages is turned off' })).toBeVisible()
   })
 
+  it('account and workspace settings leave out pages of modules that are off', async () => {
+    withModulesOff([])
+    window.history.replaceState({}, '', '/settings/account/profile')
+    const first = render(<App />)
+    expect(await screen.findByRole('link', { name: 'Webhooks' })).toBeVisible()
+    expect(screen.getByRole('link', { name: 'Runs and models' })).toBeVisible()
+    first.unmount()
+    withModulesOff(['automations', 'runs'])
+    render(<App />)
+    expect(await screen.findByRole('link', { name: 'Profile' })).toBeVisible()
+    await waitFor(() => expect(screen.queryByRole('link', { name: 'Webhooks' })).toBeNull())
+    expect(screen.queryByRole('link', { name: 'Runs and models' })).toBeNull()
+  })
+
   it('switching to a project where Projects is off keeps its tile out of the rail', async () => {
     // Projects on at Home, off in Beta.
     withModulesOff([], [], [projectBId])

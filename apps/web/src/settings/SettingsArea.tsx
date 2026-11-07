@@ -2,7 +2,7 @@ import { Suspense, useEffect, useId, useMemo, useRef, useState, type KeyboardEve
 import { Link, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom'
 
 import { useAuthenticatedSession, type AuthenticatedSession } from '../auth/session'
-import { useProjectExperience } from '../experience/layout'
+import { useProjectExperience, useWorkspaceExperience } from '../experience/layout'
 import { ProjectPageError } from '../projects/ProjectPageStates'
 import { useProject, useProjects } from '../projects/hooks'
 import { projectLocationHref } from '../projects/locations'
@@ -81,9 +81,13 @@ export default function SettingsArea() {
     null
 
   const projectExperience = useProjectExperience(pickerProject?.id)
+  // AWD-75: account pages follow your own workspace's modules; workspace
+  // pages, the workspace you're looking at.
+  const accountModules = useWorkspaceExperience(workspace?.id)
+  const workspaceModules = useWorkspaceExperience(viewedWorkspace?.id)
   const contexts: Record<SettingsGroup, SettingsVisibility> = {
-    account: { session, workspace, project: null, projects },
-    workspace: { session, workspace: viewedWorkspace, project: null, projects },
+    account: { session, workspace, project: null, projects, modules: accountModules },
+    workspace: { session, workspace: viewedWorkspace, project: null, projects, modules: workspaceModules },
     project: { session, workspace: organizationFor(session, pickerProject), project: pickerProject, projects, experience: projectExperience },
   }
 
