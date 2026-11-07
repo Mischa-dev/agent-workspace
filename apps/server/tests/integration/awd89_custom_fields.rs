@@ -781,3 +781,104 @@ async fn tiny_numbers_changing_together_keep_history_under_its_limit() {
     assert_eq!(updates, 2);
     assert!(largest <= 8192, "{largest} bytes");
 }
+
+/// "is" and "is not" compare a number field by value, however the number is
+/// written (1e-7, 0.00000010, 12.0, 0012) and however PostgreSQL writes it
+/// back (1e-7 as 0.0000001); a text field's "0012" stays the text it is.
+#[tokio::test]
+async fn number_filters_compare_by_value_and_text_filters_as_written() {
+    let Some(setup) = setup("awd89_numbers").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let fields_path = format!("/api/v1/projects/{work}/fields");
+    let mut ids = Vec::new();
+    for (name, kind) in [("Size", "number"), ("Code", "text")] {
+        let (status, field) = send(
+            app,
+            setup.browser.request(
+                "POST",
+                &fields_path,
+                Some(&format!("numbers-field-{name}")),
+                json!({"name": name, "type": kind}),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{field}");
+        ids.push(field["id"].as_str().expect("field").to_owned());
+    }
+    let (size, code) = (ids[0].clone(), ids[1].clone());
+    // WORK-1: Size 1e-7. WORK-2: Size 12. WORK-3: Code "0012". WORK-4: Code "12".
+    for (index, (field, value)) in [
+        (&size, json!(1e-7)),
+        (&size, json!(12)),
+        (&code, json!("0012")),
+        (&code, json!("12")),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (status, task) = send(
+            app,
+            setup.browser.request(
+                "POST",
+                &format!("/api/v1/projects/{work}/work-items"),
+                Some(&format!("numbers-task-{index}")),
+                json!({"title": format!("Task {index}"), "fieldValues": {field.clone(): value}}),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{task}");
+    }
+    for (field, op, values, expected) in [
+        (&size, "is", json!(["1e-7"]), vec!["WORK-1"]),
+        (&size, "is", json!(["0.00000010"]), vec!["WORK-1"]),
+        (&size, "is", json!(["0012"]), vec!["WORK-2"]),
+        (
+            &size,
+            "is",
+            json!(["12.0", "1e-7"]),
+            vec!["WORK-1", "WORK-2"],
+        ),
+        (
+            &size,
+            "isNot",
+            json!(["1E-7"]),
+            vec!["WORK-2", "WORK-3", "WORK-4"],
+        ),
+        (&code, "is", json!(["0012"]), vec!["WORK-3"]),
+        (&code, "is", json!(["12"]), vec!["WORK-4"]),
+        (
+            &code,
+            "isNot",
+            json!(["12"]),
+            vec!["WORK-1", "WORK-2", "WORK-3"],
+        ),
+    ] {
+        let filter = serde_urlencoded::to_string([(
+            "fieldFilters",
+            json!([{"field": field, "op": op, "values": values}]).to_string(),
+        )])
+        .expect("query");
+        let (status, page) = send(
+            app,
+            setup.browser.request(
+                "GET",
+                &format!("/api/v1/projects/{work}/work-items?{filter}"),
+                None,
+                Value::Null,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{op} {values}: {page}");
+        let mut keys = page["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .map(|item| item["key"].as_str().unwrap_or_default().to_owned())
+            .collect::<Vec<_>>();
+        keys.sort();
+        assert_eq!(keys, expected, "{op} {values}: {page}");
+    }
+}

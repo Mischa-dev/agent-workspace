@@ -6,6 +6,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::fields;
+
 /// Most rows one import reads.
 pub(crate) const MAX_ROWS: usize = 5_000;
 const MAX_FIELD_CHARACTERS: usize = 20_000;
@@ -58,9 +60,23 @@ pub(crate) struct ImportRow {
     pub fields: BTreeMap<String, String>,
 }
 
-/// Most extra columns a row keeps for custom fields, and the longest value.
+/// Most extra columns a row keeps for custom fields.
 const MAX_EXTRA_COLUMNS: usize = 60;
-const MAX_EXTRA_CHARACTERS: usize = 5_000;
+/// The longest extra cell kept: the longest text a custom field holds, or
+/// a multiple choice's whole selection as exports write it, a JSON list of
+/// up to `MAX_OPTIONS` names whose every character may be escaped (`\"`):
+/// two quotes, the escaped name and a comma each, plus the brackets.
+pub(crate) const MAX_EXTRA_CHARACTERS: usize = {
+    let choices = 2 + fields::MAX_OPTIONS * (2 * fields::MAX_OPTION_NAME_CHARACTERS + 3);
+    if choices > fields::MAX_TEXT_CHARACTERS {
+        choices
+    } else {
+        fields::MAX_TEXT_CHARACTERS
+    }
+};
+/// All of one row's extra cells together: what 60 cells of 5,000
+/// characters held before, so a longer cell doesn't let a row grow.
+const MAX_EXTRA_ROW_CHARACTERS: usize = 300_000;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -304,14 +320,17 @@ pub(crate) fn csv_rows(
         .collect::<Vec<_>>();
     let mut rows = Vec::with_capacity(body.len());
     for record in body {
+        let mut room = MAX_EXTRA_ROW_CHARACTERS;
         let fields = extra
             .iter()
             .filter_map(|(index, header)| {
                 let value = present(record.get(*index)?)?;
-                Some((
-                    header.clone(),
-                    value.chars().take(MAX_EXTRA_CHARACTERS).collect(),
-                ))
+                let kept = value
+                    .chars()
+                    .take(MAX_EXTRA_CHARACTERS.min(room))
+                    .collect::<String>();
+                room -= kept.chars().count();
+                (!kept.is_empty()).then(|| (header.clone(), kept))
             })
             .collect::<BTreeMap<_, _>>();
         let mut labels = Vec::<LabelValue>::new();

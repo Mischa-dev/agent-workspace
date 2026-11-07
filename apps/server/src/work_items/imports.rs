@@ -2466,23 +2466,8 @@ mod tests {
         assert_eq!(named("Fields: Risk"), None);
     }
 
-    /// A multiple choice exports as a JSON list of option names, so names
-    /// holding "," ";" "|", quotes or brackets come back exactly, and "A"
-    /// plus "B" stays distinct from the one option "A, B". A plain cell from
-    /// another tool is still read as written, a best effort.
-    #[test]
-    fn exported_multiple_choices_read_back_exactly() {
-        let names = ["A", "B", "A, B", "x; y | z", "say \"hi\"", "[draft]"];
-        let mut areas = FieldDefinition {
-            id: Uuid::now_v7(),
-            name: "Areas".to_owned(),
-            description: String::new(),
-            field_type: FieldType::MultipleChoice,
-            config: fields::FieldConfig::default(),
-            position: 0,
-            archived: false,
-            version: 1,
-        };
+    /// A multiple choice field "Areas" with these options.
+    fn areas_field(names: &[&str]) -> FieldDefinition {
         let options = names
             .iter()
             .map(|name| fields::OptionInput {
@@ -2491,9 +2476,54 @@ mod tests {
                 color: None,
             })
             .collect::<Vec<_>>();
-        areas.config =
-            fields::normalize_config(FieldType::MultipleChoice, None, Some(&options), None)
-                .expect("test options");
+        FieldDefinition {
+            id: Uuid::now_v7(),
+            name: "Areas".to_owned(),
+            description: String::new(),
+            field_type: FieldType::MultipleChoice,
+            config: fields::normalize_config(FieldType::MultipleChoice, None, Some(&options), None)
+                .expect("test options"),
+            position: 0,
+            archived: false,
+            version: 1,
+        }
+    }
+
+    /// A plain exported task whose "Areas" reads `chosen` (option names).
+    fn areas_task(index: usize, chosen: &[&str]) -> ExportTask {
+        ExportTask {
+            key: format!("AW-{}", index + 1),
+            number: index as i64 + 1,
+            title: format!("Task {}", index + 1),
+            description: String::new(),
+            status: "Todo".to_owned(),
+            status_category: "unstarted".to_owned(),
+            type_name: "Task".to_owned(),
+            priority: "no_priority".to_owned(),
+            labels: vec![],
+            assignee: None,
+            milestone: None,
+            start_date: None,
+            due_date: None,
+            estimate: None,
+            parent: None,
+            blocked_by: vec![],
+            acceptance_criteria: vec![],
+            archived: false,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            field_values: Value::Null,
+            fields: serde_json::Map::from_iter([("Areas".to_owned(), json!(chosen))]),
+        }
+    }
+
+    /// A multiple choice exports as a JSON list of option names, so names
+    /// holding "," ";" "|", quotes or brackets come back exactly, and "A"
+    /// plus "B" stays distinct from the one option "A, B". A plain cell from
+    /// another tool is still read as written, a best effort.
+    #[test]
+    fn exported_multiple_choices_read_back_exactly() {
+        let areas = areas_field(&["A", "B", "A, B", "x; y | z", "say \"hi\"", "[draft]"]);
         let id = |name: &str| {
             areas
                 .config
@@ -2511,30 +2541,7 @@ mod tests {
         let tasks = selections
             .iter()
             .enumerate()
-            .map(|(index, chosen)| ExportTask {
-                key: format!("AW-{}", index + 1),
-                number: index as i64 + 1,
-                title: format!("Task {}", index + 1),
-                description: String::new(),
-                status: "Todo".to_owned(),
-                status_category: "unstarted".to_owned(),
-                type_name: "Task".to_owned(),
-                priority: "no_priority".to_owned(),
-                labels: vec![],
-                assignee: None,
-                milestone: None,
-                start_date: None,
-                due_date: None,
-                estimate: None,
-                parent: None,
-                blocked_by: vec![],
-                acceptance_criteria: vec![],
-                archived: false,
-                created_at: Utc::now(),
-                updated_at: Utc::now(),
-                field_values: Value::Null,
-                fields: serde_json::Map::from_iter([("Areas".to_owned(), json!(chosen))]),
-            })
+            .map(|(index, chosen)| areas_task(index, chosen))
             .collect::<Vec<_>>();
         let text = tasks_csv(&tasks, std::slice::from_ref(&areas));
         let records = parse_csv(&text).expect("test input is valid");
@@ -2574,5 +2581,40 @@ mod tests {
         );
         assert_eq!(exported_choices("A, B"), None);
         assert_eq!(exported_choices(" [\"A, B\"] "), Some(json!(["A, B"])));
+    }
+
+    /// The largest selection a field holds (every option, each name as
+    /// long as allowed and every character escaped in JSON) fits one cell
+    /// and comes back whole, though its JSON is far longer than its text.
+    #[test]
+    fn the_largest_escaped_selection_reads_back_whole() {
+        let names = (0..fields::MAX_OPTIONS)
+            .map(|index| format!("{index:02}{}", "\"\\".repeat(29)))
+            .collect::<Vec<_>>();
+        assert!(
+            names
+                .iter()
+                .all(|name| name.chars().count() == fields::MAX_OPTION_NAME_CHARACTERS)
+        );
+        let names = names.iter().map(String::as_str).collect::<Vec<_>>();
+        let areas = areas_field(&names);
+        let text = tasks_csv(&[areas_task(0, &names)], std::slice::from_ref(&areas));
+        let records = parse_csv(&text).expect("test input is valid");
+        let rows = csv_rows(&records, &auto_mapping(&records[0])).expect("test input is valid");
+        let cell = rows[0].fields["Field: Areas"].chars().count();
+        assert!(cell > fields::MAX_TEXT_CHARACTERS, "{cell} characters");
+        let mut project = context();
+        project.fields = vec![areas.clone()];
+        let resolved = resolve(&project, &ImportOptions::default(), 0, &rows[0]);
+        assert_eq!(
+            resolved.field_inputs,
+            vec![("Areas".to_owned(), json!(names))]
+        );
+        let Ok(fields::Normalized::Value(Value::Array(ids))) =
+            fields::normalize_value(&areas, &resolved.field_inputs[0].1)
+        else {
+            panic!("the selection didn't read back");
+        };
+        assert_eq!(ids.len(), fields::MAX_OPTIONS);
     }
 }
