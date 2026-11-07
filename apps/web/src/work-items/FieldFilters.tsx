@@ -85,6 +85,17 @@ export function FieldFilterEditor({
   const toggle = (value: string) => setValues(values.includes(value) ? values.filter((entry) => entry !== value) : [...values, value])
   const needsValues = opTakesValues(op) && field.type !== 'checkbox'
   const ready = !needsValues || values.some((value) => value.trim())
+  // A typed value box (not a list of options or people) takes one value for
+  // these, and several separated by commas for a text field's "is".
+  const typed = field.type !== 'single_choice' && field.type !== 'multiple_choice' && field.type !== 'person' && field.type !== 'checkbox'
+  const oneValue = (next: FieldOp) => next === 'contains' || next === 'gt' || next === 'gte' || next === 'lt' || next === 'lte' || field.type !== 'text'
+  const single = oneValue(op)
+  const changeOp = (next: FieldOp) => {
+    setOp(next)
+    // Several values typed for "is" become one, written as the box showed
+    // them, rather than staying several that a one-value match can't take.
+    if (typed && oneValue(next) && values.length > 1) setValues([values.join(',')])
+  }
   const apply = () => {
     if (!ready) return
     const stored = field.type === 'checkbox' && op === 'is' ? ['true'] : needsValues ? values.map((value) => value.trim()).filter(Boolean) : []
@@ -116,7 +127,6 @@ export function FieldFilterEditor({
         </div>
       )
     } else {
-      const single = op === 'contains' || op === 'gt' || op === 'gte' || op === 'lt' || op === 'lte' || field.type !== 'text'
       chooser = (
         <TextField
           aria-label={`${field.name} value`}
@@ -139,7 +149,7 @@ export function FieldFilterEditor({
           apply()
         }}
       >
-        <SelectField aria-label={`How ${field.name} matches`} compact onChange={(event) => setOp(event.target.value as FieldOp)} value={op}>
+        <SelectField aria-label={`How ${field.name} matches`} compact onChange={(event) => changeOp(event.target.value as FieldOp)} value={op}>
           {ops.map((entry) => (
             <option key={entry} value={entry}>
               {field.name} {opLabel(entry, field.type)}

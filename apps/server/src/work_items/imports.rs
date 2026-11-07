@@ -2047,7 +2047,9 @@ fn csv_field(value: &str) -> String {
     } else {
         value.to_owned()
     };
-    if value.contains([',', '"', '\n', '\r']) {
+    // Semicolons and tabs are quoted too, so a name full of them can't make
+    // the import read the file as semicolon- or tab-separated.
+    if value.contains([',', '"', '\n', '\r', ';', '\t']) {
         format!("\"{}\"", value.replace('"', "\"\""))
     } else {
         value
@@ -2767,5 +2769,34 @@ mod tests {
         };
         assert_ne!(chosen(json!("=Plan")), chosen(json!("'=Plan")));
         assert_eq!(unguarded("'Not a formula"), "'Not a formula");
+    }
+
+    /// A field named with more semicolons than the file has columns still
+    /// exports a file the import reads as comma-separated: titles and the
+    /// field's value come back.
+    #[test]
+    fn a_field_named_with_semicolons_keeps_the_file_comma_separated() {
+        let name = ";".repeat(16);
+        let field = FieldDefinition {
+            id: Uuid::now_v7(),
+            name: name.clone(),
+            description: String::new(),
+            field_type: FieldType::Text,
+            config: fields::FieldConfig::default(),
+            position: 0,
+            archived: false,
+            version: 1,
+        };
+        let mut task = areas_task(0, &[]);
+        task.fields = serde_json::Map::from_iter([(name.clone(), json!("a;b"))]);
+        let text = tasks_csv(&[task], std::slice::from_ref(&field));
+        let records = parse_csv(&text).expect("test input is valid");
+        assert_eq!(records[0].len(), CSV_HEADERS.len() + 1, "{:?}", records[0]);
+        let rows = csv_rows(&records, &auto_mapping(&records[0])).expect("test input is valid");
+        assert_eq!(rows[0].title, "Task 1");
+        let mut project = context();
+        project.fields = vec![field];
+        let resolved = resolve(&project, &ImportOptions::default(), 0, &rows[0]);
+        assert_eq!(resolved.field_inputs, vec![(name, json!("a;b"))]);
     }
 }

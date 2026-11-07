@@ -232,12 +232,21 @@ export function useTaskSave(item: WorkItem) {
       }
       change(id, { state: 'saving' })
       try {
-        await update.mutateAsync({
+        const saved = await update.mutateAsync({
           projectId: task.projectId,
           workItemId: task.id,
           idempotencyKey: crypto.randomUUID(),
           patch: { expectedVersion: task.version, ...entry.patch },
         })
+        // A change queued behind this one started from what this one sent,
+        // but the server may have stored it written its own way (a URL gains
+        // https://). That's still the person's own change, not someone
+        // else's, so the queued one starts from what the task holds now.
+        const holds = fieldValue(saved ?? current(), entry.field)
+        const queued = entries.current.get(entry.field)
+        if (queued && queued.id !== id && entry.mine !== null && queued.base === entry.mine && holds !== entry.mine) {
+          entries.current.set(entry.field, { ...queued, base: holds })
+        }
         change(id, null)
         return
       } catch (error) {

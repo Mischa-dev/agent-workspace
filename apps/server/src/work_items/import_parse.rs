@@ -174,13 +174,27 @@ pub(crate) fn parse_csv(text: &str) -> Result<Vec<Vec<String>>, String> {
 }
 
 /// Comma unless the header line has more semicolons or tabs, as
-/// spreadsheets in some locales write.
+/// spreadsheets in some locales write. Only those outside quotes count: a
+/// quoted column name such as "Field: ;;;" holds them as text.
 fn sniff_delimiter(text: &str) -> char {
     let header = text.lines().next().unwrap_or_default();
-    [',', ';', '\t']
+    let mut counts = [(',', 0usize), (';', 0), ('\t', 0)];
+    let mut quoted = false;
+    for character in header.chars() {
+        if character == '"' {
+            quoted = !quoted;
+        } else if !quoted
+            && let Some(count) = counts
+                .iter_mut()
+                .find(|(delimiter, _)| *delimiter == character)
+        {
+            count.1 += 1;
+        }
+    }
+    counts
         .into_iter()
-        .max_by_key(|delimiter| (header.matches(*delimiter).count(), *delimiter == ','))
-        .unwrap_or(',')
+        .max_by_key(|(delimiter, count)| (*count, *delimiter == ','))
+        .map_or(',', |(delimiter, _)| delimiter)
 }
 
 /// The task fields a column can fill.
@@ -696,6 +710,19 @@ mod tests {
         let semicolons = parse_csv("Title;Status\nA;Done\n").expect("test input is valid");
         assert_eq!(semicolons[1], vec!["A", "Done"]);
         assert!(parse_csv("Title\n\"open").is_err());
+    }
+
+    /// Delimiters inside a quoted column name don't count: a comma file with
+    /// a column named ";;;;" stays a comma file, and a semicolon file whose
+    /// names hold commas (as spreadsheets in some locales write) stays one.
+    #[test]
+    fn quoted_names_dont_choose_the_delimiter() {
+        assert_eq!(sniff_delimiter("Title,Status,\"Field: ;;;;;;\"\n"), ',');
+        assert_eq!(sniff_delimiter("Title;\"Labels, tags\";Status\n"), ';');
+        assert_eq!(sniff_delimiter("Title\tStatus\tDue\n"), '\t');
+        let records =
+            parse_csv("Title,\"Field: ;;;;\"\nShip it,\"a;b\"\n").expect("test input is valid");
+        assert_eq!(records[1], vec!["Ship it", "a;b"]);
     }
 
     #[test]

@@ -51,4 +51,28 @@ describe('FieldFilterEditor', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
     expect(onApply).toHaveBeenCalledWith({ field: 'risk', op: 'is', values: ['high'] })
   })
+
+  it('turns several typed values into the one a "contains" takes, as the box shows it', () => {
+    const note: FieldDefinition = { ...risk, id: 'note', name: 'Note', type: 'text', options: [] }
+    const onApply = vi.fn()
+    const anchor = document.createElement('button')
+    document.body.append(anchor)
+    render(
+      <FieldFilterEditor
+        anchor={anchor}
+        clause={{ field: 'note', op: 'is', values: ['a', 'b'] }}
+        field={note}
+        fits={() => true}
+        onApply={onApply}
+        onClose={vi.fn()}
+        projectId="project-a"
+      />,
+    )
+
+    expect((screen.getByRole('textbox', { name: 'Note value' }) as HTMLInputElement).value).toBe('a,b')
+    fireEvent.change(screen.getByRole('combobox', { name: 'How Note matches' }), { target: { value: 'contains' } })
+    expect((screen.getByRole('textbox', { name: 'Note value' }) as HTMLInputElement).value).toBe('a,b')
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+    expect(onApply).toHaveBeenCalledWith({ field: 'note', op: 'contains', values: ['a,b'] })
+  })
 })
