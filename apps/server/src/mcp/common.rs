@@ -44,12 +44,28 @@ pub(super) fn archived_task_message(task: &str) -> String {
     rename_all_fields = "camelCase"
 )]
 pub(super) enum ToolResult<T> {
-    Ok { value: T },
-    NotFound { message: String },
-    InvalidRequest { field: String, message: String },
-    PermissionDenied { message: String },
-    Conflict { message: String },
-    TemporarilyUnavailable { message: String },
+    Ok {
+        value: T,
+    },
+    NotFound {
+        message: String,
+    },
+    InvalidRequest {
+        field: String,
+        message: String,
+    },
+    PermissionDenied {
+        message: String,
+        /// "module" when a module that's off here refused it (AWD-75).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        retry_category: Option<String>,
+    },
+    Conflict {
+        message: String,
+    },
+    TemporarilyUnavailable {
+        message: String,
+    },
 }
 
 impl<T> ToolResult<T> {
@@ -73,6 +89,18 @@ impl<T> ToolResult<T> {
     pub(super) fn denied(message: impl Into<String>) -> Self {
         Self::PermissionDenied {
             message: message.into(),
+            retry_category: None,
+        }
+    }
+
+    /// A call refused because a module it needs is off where it acts
+    /// (AWD-75), as `run_tool` refuses a tool of a module that's off.
+    pub(super) fn module_off(tool: &str, module: &str) -> Self {
+        Self::PermissionDenied {
+            message: format!(
+                "{tool} needs {module} here, which is turned off (for this workspace, or for your role). module_list says which modules are on and why."
+            ),
+            retry_category: Some("module".to_owned()),
         }
     }
 

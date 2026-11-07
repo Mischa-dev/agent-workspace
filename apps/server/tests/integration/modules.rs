@@ -7,12 +7,13 @@ use super::{
     agent_interface::{Browser, connect_app, initialize, send, tool},
     mcp_admin::{Setup, create_project, setup},
     mcp_tasks::space,
-    message_edits::add_person,
+    message_edits::{add_person, create_channel, direct_space, say, text},
     roles_and_access::{listed_tools, public_call},
     w20_files::{send_with, upload, upload_to, with_data_root},
 };
 use axum::http::StatusCode;
 use serde_json::{Value, json};
+use uuid::Uuid;
 
 fn modules_path(setup: &Setup) -> String {
     format!("/api/v1/organizations/{}/modules", setup.organization_id)
@@ -512,4 +513,266 @@ async fn file_search_follows_the_module_each_file_came_from() {
     let mut found = found_files(&setup, owner, "ledger").await;
     found.sort();
     assert_eq!(found, all);
+}
+
+/// A thread in `conversation` started from `origin`, as its owner.
+async fn start_thread(setup: &Setup, conversation: &str, origin: &str, key: &str) -> String {
+    let (status, thread) = send(
+        &setup.app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/conversations/{conversation}/threads"),
+            Some(key),
+            json!({"name": "Follow-up", "originMessageId": origin}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{thread}");
+    thread["conversation"]["id"]
+        .as_str()
+        .expect("thread")
+        .to_owned()
+}
+
+#[tokio::test]
+async fn conversation_tools_follow_the_module_where_the_conversation_lives() {
+    let Some(setup) = setup("awd75_conversation_tools").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let direct = direct_space(&setup).await;
+    let (bea, _bea_browser) = add_person(&setup, &[&work, &direct], "bea").await;
+    let channel = create_channel(&setup, &work, "general").await;
+    let in_channel = say(
+        &setup,
+        &setup.browser,
+        &channel,
+        "awd75-c1",
+        text("Release notes"),
+    )
+    .await;
+    let channel_thread = start_thread(&setup, &channel, &in_channel, "awd75-ct").await;
+    let (status, dm) = send(
+        app,
+        setup
+            .browser
+            .request("POST", "/api/v1/direct/dms", None, json!({"actorId": bea})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{dm}");
+    let dm = dm["conversation"]["id"].as_str().expect("dm").to_owned();
+    let in_dm = say(&setup, &setup.browser, &dm, "awd75-d1", text("Lunch?")).await;
+    let dm_thread = start_thread(&setup, &dm, &in_dm, "awd75-dt").await;
+
+    let token = connect_app(app, &setup.browser, "Owner's app", "full").await;
+    let session = initialize(app, &token).await.expect("app");
+    let call = |name: &'static str, arguments: Value| {
+        let token = token.clone();
+        let session = session.clone();
+        async move { tool(app, &token, &session, name, arguments).await }
+    };
+
+    // Channels off, Messages on: a project's channel and its thread are
+    // turned off for the conversation tools, which say so.
+    let (status, changed) = switch(
+        &setup,
+        &setup.browser,
+        json!({"switches": {"channels": false}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    for (name, arguments) in [
+        ("conversation_read", json!({"conversationId": channel})),
+        (
+            "conversation_open",
+            json!({"conversationId": channel_thread}),
+        ),
+        (
+            "message_send",
+            json!({"conversationId": channel, "text": "Still here?", "clientRequestId": "awd75-off-1"}),
+        ),
+        (
+            "message_send",
+            json!({"conversationId": channel_thread, "text": "Still here?", "clientRequestId": "awd75-off-2"}),
+        ),
+    ] {
+        let refused = call(name, arguments).await;
+        assert_eq!(refused["outcome"], "permission_denied", "{name}: {refused}");
+        assert_eq!(refused["retryCategory"], "module", "{name}: {refused}");
+        assert!(
+            refused["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("Channels")),
+            "{name}: {refused}"
+        );
+        assert!(
+            !refused.to_string().contains("Release notes"),
+            "{name}: {refused}"
+        );
+    }
+    let posted = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM messages WHERE plain_text = 'Still here?'",
+    )
+    .fetch_one(&setup.pool)
+    .await
+    .expect("count");
+    assert_eq!(posted, 0, "a message went into a channel that's off");
+
+    // DMs and their threads follow Messages, which is on.
+    let read = call("conversation_read", json!({"conversationId": dm})).await;
+    assert_eq!(read["outcome"], "ok", "{read}");
+    let opened = call("conversation_open", json!({"conversationId": dm_thread})).await;
+    assert_eq!(opened["outcome"], "ok", "{opened}");
+    let sent = call(
+        "message_send",
+        json!({"conversationId": dm_thread, "text": "Noon works", "clientRequestId": "awd75-on-1"}),
+    )
+    .await;
+    assert_eq!(sent["outcome"], "ok", "{sent}");
+
+    // A conversation that isn't there still says only that.
+    let nowhere = Uuid::now_v7().to_string();
+    for (name, arguments) in [
+        ("conversation_read", json!({"conversationId": nowhere})),
+        (
+            "message_send",
+            json!({"conversationId": nowhere, "text": "Hello", "clientRequestId": "awd75-none"}),
+        ),
+    ] {
+        let missing = call(name, arguments).await;
+        assert_eq!(missing["outcome"], "not_found", "{name}: {missing}");
+    }
+
+    // Off means hidden, never deleted: Channels on again, the channel reads.
+    let (status, changed) = switch(
+        &setup,
+        &setup.browser,
+        json!({"switches": {"channels": true}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let read = call("conversation_read", json!({"conversationId": channel})).await;
+    assert_eq!(read["outcome"], "ok", "{read}");
+    assert!(read.to_string().contains("Release notes"), "{read}");
+}
+
+#[tokio::test]
+async fn task_lists_leave_out_projects_where_tasks_is_off() {
+    let Some(setup) = setup("awd75_task_lists").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let other = create_project(&setup, "OTHER", "Other").await;
+    let (bea, bea_browser) = add_person(&setup, &[&work, &other], "bea").await;
+    for (project, title, key) in [
+        (&work, "Lantern repair", "awd75-t1"),
+        (&other, "Harbour survey", "awd75-t2"),
+    ] {
+        let (status, made) = send(
+            app,
+            setup.browser.request(
+                "POST",
+                &format!("/api/v1/projects/{project}/work-items"),
+                Some(key),
+                json!({"title": title}),
+            ),
+        )
+        .await;
+        assert!(status.is_success(), "{status}: {made}");
+    }
+    let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
+    let session = initialize(app, &bea_app).await.expect("Bea's app");
+    let titles = |result: &Value| {
+        let mut titles = result["value"]["tasks"]
+            .as_array()
+            .unwrap_or_else(|| panic!("tasks: {result}"))
+            .iter()
+            .map(|task| task["title"].as_str().expect("title").to_owned())
+            .collect::<Vec<_>>();
+        titles.sort();
+        titles
+    };
+    let mixed = json!({"projectIds": [work, other]});
+    let listed = tool(app, &bea_app, &session, "task_list", json!({})).await;
+    assert_eq!(
+        titles(&listed),
+        ["Harbour survey", "Lantern repair"],
+        "{listed}"
+    );
+
+    // In Other only, Bea's role leaves Tasks out; she still may see tasks.
+    let roles_path = format!("/api/v1/organizations/{}/roles", setup.organization_id);
+    let (status, roles) = send(
+        app,
+        setup.browser.request("GET", &roles_path, None, Value::Null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{roles}");
+    let member = roles["roles"]
+        .as_array()
+        .expect("roles")
+        .iter()
+        .find(|role| role["key"] == "member")
+        .cloned()
+        .expect("member");
+    let (status, made) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &roles_path,
+            None,
+            json!({"name": "No tasks module", "baseRole": "member", "permissions": member["permissions"], "modulesOff": ["tasks"]}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {made}");
+    let version = sqlx::query_scalar::<_, i64>(
+        "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(other.parse::<Uuid>().expect("project"))
+    .bind(bea)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("version");
+    let (status, changed) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            &format!("/api/v1/projects/{other}/members/{bea}"),
+            Some("awd75-bea-other"),
+            json!({"expectedVersion": version, "roleId": made["id"]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+
+    // Unscoped and with both projects named, only Work's task is listed; the
+    // tool still works, since Tasks is on in Work.
+    for arguments in [json!({}), mixed] {
+        let listed = tool(app, &bea_app, &session, "task_list", arguments.clone()).await;
+        assert_eq!(listed["outcome"], "ok", "{arguments}: {listed}");
+        assert_eq!(titles(&listed), ["Lantern repair"], "{arguments}: {listed}");
+        assert!(
+            !listed.to_string().contains("Harbour survey"),
+            "{arguments}: {listed}"
+        );
+    }
+    // The owner's role doesn't narrow modules: she still lists both.
+    let token = connect_app(app, &setup.browser, "Owner's app", "full").await;
+    let owner_session = initialize(app, &token).await.expect("owner app");
+    let listed = tool(
+        app,
+        &token,
+        &owner_session,
+        "task_list",
+        json!({"projectIds": [work, other]}),
+    )
+    .await;
+    assert_eq!(
+        titles(&listed),
+        ["Harbour survey", "Lantern repair"],
+        "{listed}"
+    );
 }

@@ -977,8 +977,17 @@ async fn list_tasks(
     };
     // The tool gate takes "see tasks" in any project; list only those where
     // the caller's role (and an app's limit) keeps it.
-    let mut projects =
+    let projects =
         crate::search::projects_showing_tasks(&state.pool, principal.actor_id, &projects).await?;
+    // The tool gate takes Tasks being on anywhere the caller is (AWD-75); list
+    // only projects where it's on for them, their role narrowing it, before
+    // anything is counted or paged.
+    let modules = {
+        let mut connection = state.pool.acquire().await?;
+        crate::modules::state::ProjectModules::load(&mut connection, principal.actor_id, &projects)
+            .await?
+    };
+    let mut projects = modules.with(&projects, "tasks");
     projects.sort_unstable();
     projects.dedup();
     let place = if let [only] = projects.as_slice() {
