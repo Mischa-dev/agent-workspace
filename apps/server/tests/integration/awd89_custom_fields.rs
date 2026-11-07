@@ -962,22 +962,55 @@ async fn values_too_large_as_stored_are_refused_not_failed() {
     .await;
     assert_eq!(status, StatusCode::CREATED, "{task}");
     let task_id = task["id"].as_str().expect("task").to_owned();
+    let before = task_version(&setup.pool, &task_id).await;
     let (status, body) = send(
         app,
         setup.browser.request(
             "PATCH",
             &format!("/api/v1/projects/{work}/work-items/{task_id}"),
             Some("size-values"),
-            json!({"expectedVersion": task_version(&setup.pool, &task_id).await, "fieldValues": values}),
+            json!({"expectedVersion": before, "fieldValues": values}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-    let stored =
-        sqlx::query_scalar::<_, Value>("SELECT field_values FROM work_items WHERE id = $1::uuid")
-            .bind(&task_id)
-            .fetch_one(&setup.pool)
-            .await
-            .expect("values");
-    assert_eq!(stored, json!({}));
+    // The size refusal itself, not some other validation failure.
+    let too_large = |status: StatusCode, body: &Value| {
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"]["code"], "validation_failed", "{body}");
+        assert_eq!(
+            body["error"]["message"],
+            agent_workspace_server::work_item_fields::TOO_LARGE,
+            "{body}"
+        );
+    };
+    too_large(status, &body);
+    let (version, stored) = sqlx::query_as::<_, (i64, Value)>(
+        "SELECT version, field_values FROM work_items WHERE id = $1::uuid",
+    )
+    .bind(&task_id)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("values");
+    assert_eq!((version, stored), (before, json!({})));
+
+    // A new task with the same values is refused the same way, and isn't made.
+    let (status, body) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/work-items"),
+            Some("size-create"),
+            json!({"title": "Too big from the start", "fieldValues": values}),
+        ),
+    )
+    .await;
+    too_large(status, &body);
+    let made = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM work_items WHERE project_id = $1::uuid AND title = 'Too big from the start'",
+    )
+    .bind(&work)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("count");
+    assert_eq!(made, 0);
 }

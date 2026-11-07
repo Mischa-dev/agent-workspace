@@ -36,6 +36,19 @@ pub fn values_fit(values: &Value) -> bool {
     crate::work_item_history::jsonb_text_len(values) <= MAX_VALUES_BYTES
 }
 
+/// What a task's values too large together are refused with.
+pub const TOO_LARGE: &str =
+    "These field values are too large together. Shorten the longest ones and try again.";
+
+/// The refusal for values that don't fit `MAX_VALUES_BYTES`: the web's
+/// `fieldValues` (MCP's `fields`) with `TOO_LARGE`.
+pub fn too_large() -> AppError {
+    AppError::Refused {
+        field: "fieldValues",
+        message: TOO_LARGE,
+    }
+}
+
 /// The project's task fields.
 pub async fn definitions(
     executor: impl sqlx::PgExecutor<'_>,

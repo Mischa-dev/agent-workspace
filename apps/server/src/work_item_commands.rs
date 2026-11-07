@@ -561,7 +561,7 @@ pub async fn create_work_item(
             .field_values
             .map_or_else(|| serde_json::json!({}), FieldValueChanges::initial);
         if !crate::work_item_fields::values_fit(&values) {
-            return Err(AppError::Validation("fieldValues"));
+            return Err(crate::work_item_fields::too_large());
         }
         values
     })
@@ -771,7 +771,7 @@ pub async fn update_locked_work_item(
         None => current.field_values.clone(),
     };
     if !crate::work_item_fields::values_fit(&field_values) {
-        return Err(AppError::Validation("fieldValues"));
+        return Err(crate::work_item_fields::too_large());
     }
     let parent_work_item_id = match command.parent_work_item_id {
         Some(parent) if parent != current.parent_work_item_id => {
