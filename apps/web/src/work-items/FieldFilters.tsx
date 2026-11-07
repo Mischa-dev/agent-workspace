@@ -9,7 +9,7 @@ import {
   type FieldDefinition,
   type FieldOp,
 } from '../fields/fieldModel'
-import { Button, Checkbox, Icon, SelectField, TextField } from '../ui'
+import { Banner, Button, Checkbox, Icon, SelectField, TextField } from '../ui'
 import { Popover } from '../ui/pickers'
 import { useAssignableActors } from './hooks'
 import { fieldClauses, withClauses } from './fieldFilterModel'
@@ -62,6 +62,7 @@ export function FieldFilterEditor({
   anchor,
   clause,
   field,
+  fits,
   onApply,
   onClose,
   projectId,
@@ -69,10 +70,13 @@ export function FieldFilterEditor({
   anchor: HTMLElement
   clause: FieldClause | null
   field: FieldDefinition
+  /** Whether the list's field filters, with this one applied, fit its URL and a saved view. */
+  fits: (clause: FieldClause) => boolean
   onApply: (clause: FieldClause) => void
   onClose: () => void
   projectId: string
 }) {
+  const [tooMany, setTooMany] = useState(false)
   // Linked tasks and pages filter by whether they're set; the rest by value too.
   const ops = field.type === 'link' ? (['notEmpty', 'empty'] as FieldOp[]) : opsFor(field.type)
   const [op, setOp] = useState<FieldOp>(clause?.op ?? ops[0])
@@ -84,7 +88,10 @@ export function FieldFilterEditor({
   const apply = () => {
     if (!ready) return
     const stored = field.type === 'checkbox' && op === 'is' ? ['true'] : needsValues ? values.map((value) => value.trim()).filter(Boolean) : []
-    onApply(opTakesValues(op) ? { field: field.id, op, values: stored } : { field: field.id, op })
+    const next: FieldClause = opTakesValues(op) ? { field: field.id, op, values: stored } : { field: field.id, op }
+    // Said here, before the list changes, rather than dropping every filter later.
+    if (!fits(next)) return setTooMany(true)
+    onApply(next)
     onClose()
   }
   let chooser = null
@@ -140,6 +147,9 @@ export function FieldFilterEditor({
           ))}
         </SelectField>
         {chooser}
+        {tooMany ? (
+          <Banner tone="danger">Too many filter values for this list to keep. Choose fewer, or remove another field filter.</Banner>
+        ) : null}
         <Button disabled={!ready} size="sm" type="submit">
           Apply
         </Button>

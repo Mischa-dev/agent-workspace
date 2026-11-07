@@ -1,4 +1,4 @@
-import { parseClauses } from '../fields/fieldModel'
+import { MAX_FIELD_FILTERS_CHARACTERS, parseClauses } from '../fields/fieldModel'
 import { workItemPriorities } from './constants'
 import type { BoardColumnsBy, WorkItemFilters, WorkItemGroupBy, WorkItemSort } from './types'
 
@@ -124,7 +124,7 @@ export const FILTER_RULES: Record<keyof FilterValues, Rule> = {
   overdue: isTrue,
   includeDone: (value) => value === 'false',
   archived: isTrue,
-  fieldFilters: (value) => value.length <= 1000 && parseClauses(value).length > 0,
+  fieldFilters: (value) => value.length <= MAX_FIELD_FILTERS_CHARACTERS && parseClauses(value).length > 0,
 }
 
 export const FILTER_KEYS = Object.keys(FILTER_RULES) as Array<keyof FilterValues>

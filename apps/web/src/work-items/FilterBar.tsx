@@ -26,7 +26,7 @@ import {
   type FilterOperator,
   type ListField,
 } from './filterModel'
-import { fieldClauses, withClauses } from './fieldFilterModel'
+import { clausesFit, fieldClauses, placeClause, withClauses } from './fieldFilterModel'
 import { FieldFilterChips, FieldFilterEditor } from './FieldFilters'
 import { useAssignableActors, useNamedActors, useWorkItem } from './hooks'
 import {
@@ -130,11 +130,8 @@ export function FilterBar({
   const [fieldOpen, setFieldOpen] = useState<{ fieldId: string; index: number | null; anchor: HTMLElement } | null>(null)
   const openField = fieldOpen ? customFields.find((entry) => entry.id === fieldOpen.fieldId) : undefined
   const applyClause = (clause: FieldClause) =>
-    update((current) => {
-      const existing = fieldClauses(current)
-      const index = fieldOpen?.index ?? null
-      return withClauses(current, index === null ? [...existing, clause] : existing.map((entry, at) => (at === index ? clause : entry)))
-    })
+    update((current) => withClauses(current, placeClause(fieldClauses(current), fieldOpen?.index ?? null, clause)))
+  const clauseFits = (clause: FieldClause) => clausesFit(placeClause(clauses, fieldOpen?.index ?? null, clause))
   const apply = (field: FilterField, values: Partial<FilterValues>) => update((current) => setField(current, field, values))
   const change = (next: (filters: FilterValues) => FilterValues) => update((current) => ({ ...current, filters: next(current.filters) }))
   /** Opens a field's choices: a list field where its chip already matches, or "is". */
@@ -367,6 +364,7 @@ export function FilterBar({
           anchor={fieldOpen.anchor}
           clause={fieldOpen.index === null ? null : (clauses[fieldOpen.index] ?? null)}
           field={openField}
+          fits={clauseFits}
           onApply={applyClause}
           onClose={() => setFieldOpen(null)}
           projectId={projectId}

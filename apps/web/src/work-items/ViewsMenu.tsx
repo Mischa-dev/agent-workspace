@@ -7,9 +7,10 @@ import { Button, ConfirmDialog, Dialog, Menu, describeError, showToast, Switch, 
 import { createView, deleteView, listViews, pinView, updateView, viewKeys, type SavedView, type ViewDraft } from '../views/api'
 import { COLUMN_PARTS, viewName, viewShown } from '../views/layoutViews'
 import { useFields } from '../fields/api'
-import { clausesParam, fieldKey, parseClauses } from '../fields/fieldModel'
+import { fieldKey } from '../fields/fieldModel'
 import { VIEW_FIELDS, readListState, writeListState, type ListState } from './listModel'
 import type { UpdateListState } from './useListState'
+import { draftFrom } from './viewDraft'
 
 const FIELD_LABELS: Record<string, string> = {
   priority: 'Priority',
@@ -18,23 +19,6 @@ const FIELD_LABELS: Record<string, string> = {
   details: 'Labels and details',
   due: 'Due date',
   assignee: 'Assignee',
-}
-
-/** The view as it would be saved: filters, sort, grouping and board setup, without the open task. */
-function draftFrom(state: ListState, actorId: string): Omit<ViewDraft, 'name' | 'shared'> {
-  const parameters = writeListState({ ...state, task: null, savedView: null, fields: null, view: 'list', showDone: false })
-  const query = Object.fromEntries(parameters.entries())
-  // "Me" follows whoever opens the view, so a shared "assigned to me" view works for everyone.
-  for (const key of ['assigneeActorId', 'notAssigneeActorId']) {
-    if (query[key]) query[key] = query[key].split(',').map((id) => (id === actorId ? 'me' : id)).join(',')
-  }
-  if (query.fieldFilters) {
-    const clauses = parseClauses(query.fieldFilters).map((clause) =>
-      clause.values ? { ...clause, values: clause.values.map((value) => (value === actorId ? 'me' : value)) } : clause,
-    )
-    query.fieldFilters = clausesParam(clauses) ?? ''
-  }
-  return { query, layout: state.view, fields: state.fields }
 }
 
 /** A query as the list reads it, so an older spelling of the same filters still matches. */
@@ -72,7 +56,7 @@ export default function ViewsMenu({
   const [saving, setSaving] = useState<'new' | 'rename' | null>(null)
   const [deleting, setDeleting] = useState<SavedView | null>(null)
   const current = views.data?.views.find((view) => view.id === state.savedView) ?? null
-  const draft = draftFrom(state, actorId)
+  const draft = draftFrom(state, actorId, projectFields.data?.fields ?? [])
   const changed = current ? !sameQuery(current, draft) : false
   const refresh = () => queryClient.invalidateQueries({ queryKey: viewKeys.views(projectId) })
   const failed = (title: string) => (reason: unknown) => showToast({ tone: 'danger', title, description: describeError(reason).message })

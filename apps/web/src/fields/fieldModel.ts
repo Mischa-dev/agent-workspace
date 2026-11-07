@@ -247,6 +247,13 @@ export function parseClauses(param: string | undefined | null): FieldClause[] {
   }
 }
 
+/**
+ * The longest a list's field filters may be as their URL writes them: what
+ * a saved view keeps of one setting (the server's check_view_query), so
+ * any filter the list applies can be read back and saved.
+ */
+export const MAX_FIELD_FILTERS_CHARACTERS = 1000
+
 export function clausesParam(clauses: readonly FieldClause[]): string | undefined {
   const kept = clauses.filter((clause) => !opTakesValues(clause.op) || (clause.values?.length ?? 0) > 0)
   return kept.length ? JSON.stringify(kept) : undefined
