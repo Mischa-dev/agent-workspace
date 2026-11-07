@@ -257,17 +257,25 @@ describe('modules that are off', () => {
   })
 
   it('account and workspace settings leave out pages of modules that are off', async () => {
+    // The account's Webhooks page and the workspace's Runs and models page
+    // (a project has a page of that name too, which follows the project).
+    const webhooks = 'a[href="/settings/account/webhooks"]'
+    const runs = 'a[href="/settings/workspace/runs"]'
     withModulesOff([])
     window.history.replaceState({}, '', '/settings/account/profile')
     const first = render(<App />)
-    expect(await screen.findByRole('link', { name: 'Webhooks' })).toBeVisible()
-    expect(screen.getByRole('link', { name: 'Runs and models' })).toBeVisible()
+    await waitFor(() => {
+      expect(first.container.querySelector(webhooks)).toBeTruthy()
+      expect(first.container.querySelector(runs)).toBeTruthy()
+    })
     first.unmount()
     withModulesOff(['automations', 'runs'])
-    render(<App />)
+    const second = render(<App />)
     expect(await screen.findByRole('link', { name: 'Profile' })).toBeVisible()
-    await waitFor(() => expect(screen.queryByRole('link', { name: 'Webhooks' })).toBeNull())
-    expect(screen.queryByRole('link', { name: 'Runs and models' })).toBeNull()
+    await waitFor(() => {
+      expect(second.container.querySelector(webhooks)).toBeNull()
+      expect(second.container.querySelector(runs)).toBeNull()
+    })
   })
 
   it('switching to a project where Projects is off keeps its tile out of the rail', async () => {
