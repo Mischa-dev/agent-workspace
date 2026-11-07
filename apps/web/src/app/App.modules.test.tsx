@@ -276,6 +276,16 @@ describe('modules that are off', () => {
       expect(second.container.querySelector(webhooks)).toBeNull()
       expect(second.container.querySelector(runs)).toBeNull()
     })
+    // Search doesn't offer it either: Profile still matches, Webhooks doesn't.
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search settings' }), { target: { value: 'webhooks' } })
+    expect(second.container.querySelector('a.aw-settings__result[href="/settings/account/webhooks"]')).toBeNull()
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search settings' }), { target: { value: 'profile' } })
+    expect(await screen.findByRole('list', { name: 'Matching settings' })).toBeVisible()
+    second.unmount()
+    // And a link straight to it says Automations is turned off.
+    window.history.replaceState({}, '', '/settings/account/webhooks')
+    render(<App />)
+    expect(await screen.findByRole('heading', { name: 'Automations is turned off' })).toBeVisible()
   })
 
   it('switching to a project where Projects is off keeps its tile out of the rail', async () => {

@@ -109,7 +109,7 @@ export function pagesIn(group: SettingsGroup, context: SettingsVisibility) {
       entry.group === group &&
       (entry.visible?.(context) ?? true) &&
       (!entry.part || (context.experience?.shows(entry.part) ?? true)) &&
-      moduleShows(context, `${group}/${entry.id}`),
+      !pageModuleOff(context, group, entry.id),
   )
 }
 
@@ -117,8 +117,8 @@ export function findPage(group: SettingsGroup, id: string) {
   return SETTINGS_PAGES.find((entry) => entry.group === group && entry.id === id) ?? null
 }
 
-/** AWD-75: a page of a module that's off for the person leaves the nav. */
-function moduleShows(context: SettingsVisibility, page: string) {
-  const module = ownerOf(settingsClaims, page)
-  return !module || ((context.modules ?? context.experience)?.moduleOn(module) ?? true)
+/** AWD-75: the module a settings page belongs to when it's off for the person, else null; search leaves the page out and opening it says the module is turned off. */
+export function pageModuleOff(context: SettingsVisibility, group: SettingsGroup, id: string) {
+  const module = ownerOf(settingsClaims, `${group}/${id}`)
+  return module && !((context.modules ?? context.experience)?.moduleOn(module) ?? true) ? module : null
 }

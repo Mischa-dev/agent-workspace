@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { lazy, Suspense, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { Link, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom'
 
 import { useAuthenticatedSession, type AuthenticatedSession } from '../auth/session'
@@ -14,7 +14,7 @@ import { isArchiving } from './archiving'
 import { accountSettingsHref, projectSettingsHref, workspaceSettingsHref } from './paths'
 import { GitHubReturnBanner } from './GitHubReturnBanner'
 import { parseSettingsPath } from './route'
-import { GROUP_LABELS, SETTINGS_PAGES, findPage, pagesIn, type SettingsPage } from './registry'
+import { GROUP_LABELS, SETTINGS_PAGES, findPage, pageModuleOff, pagesIn, type SettingsPage } from './registry'
 import type { SettingsGroup, SettingsPageProps, SettingsVisibility } from './types'
 import { defaultWorkspace, useViewedWorkspace } from './workspaceChoice'
 import './settings.css'
@@ -35,6 +35,19 @@ function rememberProject(projectId: string) {
   } catch {
     // Only a convenience: settings open on the first project without it.
   }
+}
+
+// AWD-75: a settings page of a module that's off says so, as other pages do.
+const TurnedOffPage = lazy(() => import('../modules/TurnedOffPage').then((module) => ({ default: module.TurnedOffPage })))
+
+/** The page, or the turned-off page when its module is off for the person. */
+function OrTurnedOff({ module, children }: { module: string | null; children: ReactNode }) {
+  if (!module) return children
+  return (
+    <Suspense fallback={<SettingsSkeleton label="Loading settings" />}>
+      <TurnedOffPage module={module} />
+    </Suspense>
+  )
 }
 
 function hrefFor(entry: SettingsPage, projectId: string | null) {
@@ -152,7 +165,11 @@ export default function SettingsArea() {
       return <Navigate replace to={first ? (hrefFor(first, null) ?? accountSettingsHref('profile')) : accountSettingsHref('profile')} />
     } else {
       // A new page for each workspace, so nothing typed for one is saved to the next.
-      content = <PageBody entry={entry} key={context.workspace?.id} props={{ ...context, project: null }} />
+      content = (
+        <OrTurnedOff module={pageModuleOff(context, group, entry.id)}>
+          <PageBody entry={entry} key={context.workspace?.id} props={{ ...context, project: null }} />
+        </OrTurnedOff>
+      )
     }
   }
 
@@ -238,6 +255,7 @@ function ProjectScope({
   section: string
   session: AuthenticatedSession
 }) {
+  const experience = useProjectExperience(query.data?.id)
   const project = query.data ?? null
   if (query.isPending) return <SettingsSkeleton label="Loading project" />
   if (query.isError || !project) return <ProjectPageError error={query.error ?? undefined} onRetry={() => void query.refetch()} />
@@ -251,7 +269,9 @@ function ProjectScope({
     return <Navigate replace to={projectSettingsHref(project.id)} />
   }
   return (
-    <PageBody entry={entry} key={project.id} props={{ session, workspace, project, projects }} />
+    <OrTurnedOff module={pageModuleOff({ ...context, experience }, 'project', entry.id)}>
+      <PageBody entry={entry} key={project.id} props={{ session, workspace, project, projects }} />
+    </OrTurnedOff>
   )
 }
 
@@ -391,7 +411,10 @@ function SettingsSearch({
   const results = useMemo<SearchResult[]>(() => {
     if (!terms.length) return []
     const visible = SETTINGS_PAGES.filter(
-      (entry) => (entry.visible?.(contexts[entry.group]) ?? true) && hrefFor(entry, pickerProjectId),
+      (entry) =>
+        (entry.visible?.(contexts[entry.group]) ?? true) &&
+        !pageModuleOff(contexts[entry.group], entry.group, entry.id) &&
+        hrefFor(entry, pickerProjectId),
     )
     const found: SearchResult[] = visible
       .filter((entry) => matches([entry.label, GROUP_LABELS[entry.group], ...entry.keywords].join(' '), terms))
