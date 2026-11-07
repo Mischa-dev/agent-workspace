@@ -42,10 +42,14 @@ function withModulesOff(
   vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
     if (path.endsWith('/layout')) return jsonResponse({ effective: effectiveWith(modulesOff, hidden) })
-    if (path.startsWith('/api/v1/projects?')) {
-      return jsonResponse({
-        projects: [projectA, projectB].map((project) => ({ ...project, projectsOff: projectsOff.includes(project.id) })),
-      })
+    const flagged = (project: typeof projectA) => ({ ...project, projectsOff: projectsOff.includes(project.id) })
+    if (path.startsWith('/api/v1/projects?')) return jsonResponse({ projects: [projectA, projectB].map(flagged) })
+    // A single project, opened or switched to, carries it too.
+    for (const project of [projectA, projectB]) {
+      if (path.endsWith(`/projects/${project.id}`)) return jsonResponse(flagged(project))
+      if (path.endsWith(`/projects/${project.id}/switch`)) {
+        return jsonResponse({ project: flagged(project), navigation: project.navigation, href: project.navigation.href })
+      }
     }
     return standard(input, init)
   })
@@ -109,9 +113,178 @@ describe('modules that are off', () => {
     // Projects on at Home but off in Agent Workspace.
     withModulesOff([], [], [projectAId])
     const second = render(<App />)
-    // Home lists its recent projects once the list has loaded.
-    expect(await screen.findByRole('heading', { name: 'Recent projects' })).toBeVisible()
+    // Once the list has loaded, Home lists Agent Workspace; the rail doesn't.
+    await waitFor(() =>
+      expect(
+        screen
+          .getAllByRole('link', { name: /^Agent Workspace/ })
+          .some((link) => link.classList.contains('aw-row__link')),
+      ).toBe(true),
+    )
     expect(second.container.querySelector(tile)).toBeNull()
+  })
+
+  it('turning Projects off in Modules takes its project tiles out of the rail', async () => {
+    let off = false
+    const standard = installStandardApi()
+    const modules = () => ({
+      organizationId: organization.id,
+      canManage: true,
+      preset: null,
+      presets: [],
+      modules: [{ id: 'projects', name: 'Projects', description: 'Projects', switchable: true, on: !off, switchedOn: !off, needs: [] }],
+    })
+    vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      if (path.endsWith('/layout')) return jsonResponse({ effective: effectiveWith(off ? ['projects'] : []) })
+      if (path.endsWith(`/organizations/${organization.id}/modules`)) {
+        if (init?.method === 'PUT') off = true
+        return jsonResponse(modules())
+      }
+      if (path.startsWith('/api/v1/projects?')) {
+        return jsonResponse({ projects: [projectA, projectB].map((project) => ({ ...project, projectsOff: off })) })
+      }
+      return standard(input, init)
+    })
+    window.history.replaceState({}, '', '/settings/workspace/modules')
+    const { container } = render(<App />)
+    const tile = `[data-rail-project="${projectAId}"]`
+    await waitFor(() => expect(container.querySelector(tile)).toBeTruthy())
+    fireEvent.click(await screen.findByRole('switch', { name: 'Projects' }))
+    await waitFor(() => expect(container.querySelector(tile)).toBeNull())
+  })
+
+  it('turning Projects off for a role you hold takes its project tiles out of the rail', async () => {
+    let off = false
+    const standard = installStandardApi()
+    const role = () => ({
+      id: '019fb600-0000-7000-8000-0000000000c0',
+      key: 'member',
+      builtIn: true,
+      baseRole: 'member',
+      name: 'Member',
+      description: '',
+      permissions: [],
+      agentLimit: null,
+      defaults: {},
+      modulesOff: off ? ['projects'] : [],
+      isDefault: true,
+      version: off ? 2 : 1,
+      updatedAt: '2026-11-01T00:00:00Z',
+      workspaceHolders: 0,
+      projectHolders: 1,
+      capabilities: { edit: true, editPermissions: false, remove: false, assign: true, invite: true },
+    })
+    vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      if (path.endsWith('/layout')) return jsonResponse({ effective: effectiveWith([]) })
+      if (path.endsWith(`/organizations/${organization.id}/roles`)) {
+        return jsonResponse({ roles: [role()], modules: [], permissions: [], startingPoints: [], canManage: true, yourPermissions: [] })
+      }
+      if (path.includes(`/organizations/${organization.id}/roles/`) && init?.method === 'PATCH') {
+        off = true
+        return jsonResponse(role())
+      }
+      // You hold Member in Agent Workspace: with Projects off for it, so is
+      // that project for you.
+      if (path.startsWith('/api/v1/projects?')) {
+        return jsonResponse({
+          projects: [projectA, projectB].map((project) => ({ ...project, projectsOff: off && project.id === projectAId })),
+        })
+      }
+      return standard(input, init)
+    })
+    window.history.replaceState({}, '', '/settings/workspace/roles')
+    const { container } = render(<App />)
+    const tile = `[data-rail-project="${projectAId}"]`
+    await waitFor(() => expect(container.querySelector(tile)).toBeTruthy())
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Projects' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save role' }))
+    await waitFor(() => expect(container.querySelector(tile)).toBeNull())
+  })
+
+  it('turning a module off for a role you hold reaches a project you had open', async () => {
+    let off = false
+    const standard = installStandardApi()
+    const role = () => ({
+      id: '019fb600-0000-7000-8000-0000000000c1',
+      key: 'member',
+      builtIn: true,
+      baseRole: 'member',
+      name: 'Member',
+      description: '',
+      permissions: [],
+      agentLimit: null,
+      defaults: {},
+      modulesOff: off ? ['pages'] : [],
+      isDefault: true,
+      version: off ? 2 : 1,
+      updatedAt: '2026-11-01T00:00:00Z',
+      workspaceHolders: 0,
+      projectHolders: 1,
+      capabilities: { edit: true, editPermissions: false, remove: false, assign: true, invite: true },
+    })
+    vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      // You hold Member in Agent Workspace, so its layout carries the role's modules.
+      if (path.endsWith(`/projects/${projectAId}/layout`)) return jsonResponse({ effective: effectiveWith(off ? ['pages'] : []) })
+      if (path.endsWith('/layout')) return jsonResponse({ effective: effectiveWith([]) })
+      if (path.endsWith(`/organizations/${organization.id}/roles`)) {
+        return jsonResponse({ roles: [role()], modules: [], permissions: [], startingPoints: [], canManage: true, yourPermissions: [] })
+      }
+      if (path.includes(`/organizations/${organization.id}/roles/`) && init?.method === 'PATCH') {
+        off = true
+        return jsonResponse(role())
+      }
+      return standard(input, init)
+    })
+    const go = (to: string) =>
+      act(() => {
+        window.history.pushState({}, '', to)
+        window.dispatchEvent(new PopStateEvent('popstate'))
+      })
+    window.history.replaceState({}, '', `/projects/${projectAId}/pages`)
+    render(<App />)
+    expect(await screen.findByRole('heading', { level: 1, name: 'Pages' })).toBeVisible()
+    go('/settings/workspace/roles')
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Pages' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save role' }))
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Save role' })).toBeNull())
+    go(`/projects/${projectAId}/pages`)
+    expect(await screen.findByRole('heading', { name: 'Pages is turned off' })).toBeVisible()
+  })
+
+  it('switching to a project where Projects is off keeps its tile out of the rail', async () => {
+    // Projects on at Home, off in Beta.
+    withModulesOff([], [], [projectBId])
+    window.history.replaceState({}, '', '/home')
+    const { container } = render(<App />)
+    // Home's recent projects row for Beta, once the list has loaded.
+    const beta = await waitFor(() => {
+      const link = screen
+        .getAllByRole('link', { name: 'Beta Project' })
+        .find((candidate) => candidate.classList.contains('aw-row__link'))
+      expect(link).toBeTruthy()
+      return link as HTMLElement
+    })
+    // The tile must never come back, not even until the list is next fetched.
+    const tile = `[data-rail-project="${projectBId}"]`
+    let appeared = false
+    const watch = new MutationObserver(() => {
+      if (container.querySelector(tile)) appeared = true
+    })
+    watch.observe(container, { childList: true, subtree: true })
+    fireEvent.click(beta)
+    await waitFor(() => expect(window.location.pathname).toContain(projectBId))
+    // Let the switch's answer land in the cached list.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    })
+    watch.disconnect()
+    expect(appeared).toBe(false)
+    expect(container.querySelector(tile)).toBeNull()
   })
 
   it('a link into an off module waits for the settings and never shows the page first', async () => {

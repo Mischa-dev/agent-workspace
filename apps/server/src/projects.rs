@@ -1165,6 +1165,13 @@ async fn fetch_project(
         .get(&project_id)
         .copied()
         .unwrap_or(0);
+    // AWD-75: as the list says it, so a project opened or switched to keeps
+    // its tile out of the rail when Projects is off for the caller there.
+    let mut connection = state.pool.acquire().await?;
+    view.projects_off =
+        crate::modules::state::for_project(&mut connection, project_id, principal.actor_id)
+            .await?
+            .is_some_and(|modules| !modules.contains("projects"));
     Ok(view)
 }
 

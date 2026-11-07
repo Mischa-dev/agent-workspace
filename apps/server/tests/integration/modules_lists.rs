@@ -536,4 +536,18 @@ async fn the_projects_list_marks_where_projects_is_off() {
     .await;
     assert_eq!(status, StatusCode::OK, "{listed}");
     assert_eq!(flag(&listed), json!(true), "{listed}");
+    // The project on its own (as opening or switching to it answers) says
+    // so too, so the rail doesn't get its tile back.
+    let (status, single) = send(
+        &setup.app,
+        setup.browser.request(
+            "GET",
+            &format!("/api/v1/projects/{work}"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{single}");
+    assert_eq!(single["projectsOff"], json!(true), "{single}");
 }

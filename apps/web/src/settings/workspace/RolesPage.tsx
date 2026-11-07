@@ -1,8 +1,9 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
+import { queryKeys } from '../../api/queryKeys'
 import { describeError } from '../../app/mutations'
-import { useWorkspaceLayout } from '../../experience/api'
+import { refreshLayouts, useWorkspaceLayout } from '../../experience/api'
 import { REGISTRY } from '../../experience/registry'
 import { MODULE_IDS, moduleName } from '../../modules/names'
 import {
@@ -72,7 +73,15 @@ export default function RolesPage({ workspace }: SettingsPageProps) {
     queryFn: () => listRoles(organizationId),
     enabled: Boolean(organizationId),
   })
-  const refresh = () => queryClient.invalidateQueries({ queryKey: ['organization', organizationId] })
+  // A role's modules (AWD-75) change what holders see where they hold it,
+  // you included: each project's layout, and the Projects flag the rail
+  // reads from the projects list.
+  const refresh = () =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['organization', organizationId] }),
+      refreshLayouts(queryClient),
+      queryClient.invalidateQueries({ queryKey: queryKeys.projects }),
+    ])
   const remove = useMutation({
     mutationFn: (role: WorkspaceRoleView) => removeRole(organizationId, role),
     onSuccess: (_, role) => {

@@ -555,17 +555,42 @@ async fn module_off(
     if modules.is_all() {
         return Ok(None);
     }
+    // A conversation trigger or action in a project needs Channels; in the
+    // direct space, Messages.
+    let direct =
+        sqlx::query_scalar::<_, bool>("SELECT kind = 'direct' FROM projects WHERE id = $1")
+            .bind(rule.project_id)
+            .fetch_one(&mut *connection)
+            .await?;
     let mut needed = vec![manifest::get("automations")];
     if let Ok(trigger) = rule.trigger() {
-        needed.push(manifest::of_trigger(trigger.kind()));
+        needed.push(in_project_kind(
+            manifest::of_trigger(trigger.kind()),
+            direct,
+        ));
     }
     for action in rule.actions().unwrap_or_default() {
-        needed.push(manifest::of_action(action.kind()));
+        needed.push(in_project_kind(manifest::of_action(action.kind()), direct));
     }
     Ok(needed
         .into_iter()
         .flatten()
         .find(|module| !modules.contains(&module.id)))
+}
+
+/// AWD-75: the module a trigger or action of `module` needs where its rule
+/// lives: conversations follow Channels in a project and Messages in the
+/// direct space, as they do everywhere else.
+fn in_project_kind(
+    module: Option<&'static crate::modules::Manifest>,
+    direct: bool,
+) -> Option<&'static crate::modules::Manifest> {
+    match module {
+        Some(module) if module.id == "messages" && !direct => {
+            crate::modules::manifest::get("channels")
+        }
+        other => other,
+    }
 }
 
 impl RuleRow {
@@ -2711,6 +2736,31 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     use super::{Action, Conditions, Recipients, Trigger, check_shape, next_run_after};
+
+    #[test]
+    fn conversation_triggers_and_actions_follow_their_project_s_kind() {
+        use crate::modules::manifest;
+        let id = |module: Option<&crate::modules::Manifest>| module.map(|module| module.id.clone());
+        let posted = manifest::of_trigger("message_posted");
+        let post = manifest::of_action("post_message");
+        assert_eq!(
+            id(super::in_project_kind(posted, false)),
+            Some("channels".to_owned())
+        );
+        assert_eq!(
+            id(super::in_project_kind(post, false)),
+            Some("channels".to_owned())
+        );
+        assert_eq!(
+            id(super::in_project_kind(posted, true)),
+            Some("messages".to_owned())
+        );
+        let tasks = manifest::get("tasks");
+        assert_eq!(
+            id(super::in_project_kind(tasks, false)),
+            Some("tasks".to_owned())
+        );
+    }
 
     fn notify() -> Action {
         Action::Notify {
