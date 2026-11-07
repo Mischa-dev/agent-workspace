@@ -1044,6 +1044,7 @@ async fn task_lists_count_and_page_only_workspaces_with_tasks_on() {
     .await;
     assert_eq!(status, StatusCode::CREATED, "{made}");
     let second_project = made["id"].as_str().expect("project").to_owned();
+    let mut first_tasks = Vec::new();
     for (project, title) in [
         (&first_project, "A one"),
         (&first_project, "A two"),
@@ -1063,6 +1064,9 @@ async fn task_lists_count_and_page_only_workspaces_with_tasks_on() {
         )
         .await;
         assert!(status.is_success(), "{status}: {made}");
+        if project == &first_project {
+            first_tasks.push(made["id"].as_str().expect("task").to_owned());
+        }
     }
     let token = connect_app(app, &setup.browser, "Owner's app", "full").await;
     let session = initialize(app, &token).await.expect("owner app");
@@ -1120,6 +1124,25 @@ async fn task_lists_count_and_page_only_workspaces_with_tasks_on() {
             "{arguments}: {totals:?}"
         );
     }
+    // A batch change of the first's tasks, naming no project, is refused as
+    // Tasks being off there, and changes nothing.
+    let refused = tool(
+        app,
+        &token,
+        &session,
+        "task_update_many",
+        json!({"taskIds": first_tasks, "priority": "urgent"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    assert_eq!(refused["retryCategory"], "module", "{refused}");
+    let urgent =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM work_items WHERE priority = 'urgent'")
+            .fetch_one(&setup.pool)
+            .await
+            .expect("count");
+    assert_eq!(urgent, 0, "a batch changed tasks where Tasks is off");
+
     // Only the first's project named: nothing, and a total of none.
     let listed = tool(
         app,
@@ -1372,7 +1395,7 @@ async fn boards_across_a_workspace_follow_its_modules_and_credential_scope() {
         .iter()
         .map(|board| board["id"].as_str().expect("id").to_owned())
         .collect::<Vec<_>>();
-    assert_eq!(ids, [in_second.clone()], "{listed}");
+    assert_eq!(ids, vec![in_second.clone()], "{listed}");
     assert!(
         !ids.contains(&across) && !ids.contains(&in_work),
         "{listed}"

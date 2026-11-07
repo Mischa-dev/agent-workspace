@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
-import { installAppShellLifecycle, installStandardApi, jsonResponse, projectAId } from '../test/appHarness'
+import { installAppShellLifecycle, installStandardApi, jsonResponse, organization, projectAId } from '../test/appHarness'
 import { App } from './App'
 
 // AWD-75: a link into a module that's off shows a turned-off page, not a 404,
@@ -151,5 +151,38 @@ describe('modules that are off', () => {
       fireEvent.keyDown(document, { key: 'p' })
       expect(window.location.pathname).toBe(`/projects/${projectAId}/pages`)
     })
+  })
+
+  // A whiteboard's address has no project in it: the board's own project, or
+  // its own workspace, decides, not Home's.
+  function withBoard(board: { projectId: string | null; organizationId: string }, offAt: string) {
+    const standard = installStandardApi()
+    vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      if (path.endsWith('/layout')) {
+        return jsonResponse({ effective: effectiveWith(path.endsWith(`${offAt}/layout`) ? ['whiteboards'] : []) })
+      }
+      if (path.endsWith(`/api/v1/whiteboards/${boardId}`)) {
+        return jsonResponse({ whiteboard: { id: boardId, title: 'Plans', deleted: false, ...board }, links: [], canEdit: true, revisions: [] })
+      }
+      return standard(input, init)
+    })
+  }
+  const boardId = '019fb600-0000-7000-8000-0000000000b0'
+
+  it('a project’s whiteboard follows that project’s modules, not Home’s', async () => {
+    withBoard({ projectId: projectAId, organizationId: organization.id }, `/projects/${projectAId}`)
+    window.history.replaceState({}, '', `/whiteboards/${boardId}`)
+    render(<App />)
+    expect(await screen.findByRole('heading', { name: 'Whiteboards is turned off' })).toBeVisible()
+    expect(window.location.pathname).toBe(`/whiteboards/${boardId}`)
+  })
+
+  it('a whiteboard across another workspace follows that workspace’s modules', async () => {
+    const other = '019fb600-0000-7000-8000-0000000000b1'
+    withBoard({ projectId: null, organizationId: other }, `/organizations/${other}`)
+    window.history.replaceState({}, '', `/whiteboards/${boardId}`)
+    render(<App />)
+    expect(await screen.findByRole('heading', { name: 'Whiteboards is turned off' })).toBeVisible()
   })
 })

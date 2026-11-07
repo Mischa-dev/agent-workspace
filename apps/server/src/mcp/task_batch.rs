@@ -96,6 +96,10 @@ pub(super) enum BatchResult<T> {
     },
     PermissionDenied {
         message: String,
+        /// "module" when a module that's off where the batch acts refused it
+        /// (AWD-75).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        retry_category: Option<String>,
     },
     Conflict {
         message: String,
@@ -152,6 +156,18 @@ impl<T> BatchResult<T> {
     pub(super) fn denied(message: impl Into<String>) -> Self {
         Self::PermissionDenied {
             message: message.into(),
+            retry_category: None,
+        }
+    }
+
+    /// A batch refused because Tasks is off where it acts (AWD-75), as
+    /// `run_tool` refuses a tool of a module that's off.
+    fn module_off(tool: &str) -> Self {
+        Self::PermissionDenied {
+            message: format!(
+                "{tool} needs Tasks in that project, which is turned off (for this workspace, or for your role). module_list says which modules are on and why."
+            ),
+            retry_category: Some("module".to_owned()),
         }
     }
 
@@ -194,7 +210,13 @@ impl<T> BatchResult<T> {
                 ToolResult::InvalidRequest { field, message } => {
                     Self::InvalidRequest { field, message }
                 }
-                ToolResult::PermissionDenied { message, .. } => Self::PermissionDenied { message },
+                ToolResult::PermissionDenied {
+                    message,
+                    retry_category,
+                } => Self::PermissionDenied {
+                    message,
+                    retry_category,
+                },
                 ToolResult::Conflict { message } => Self::Conflict { message },
             },
         }
@@ -1238,6 +1260,18 @@ async fn update_many(
         return Ok(update_rejected(total, problems, &[]));
     }
     let project_id = project.ok_or(AppError::Internal("a batch has a task"))?;
+    // The tool gate can't tell the project from taskIds, so it took Tasks
+    // being on anywhere (AWD-75); the batch acts in this one project.
+    let tasks_on = {
+        let mut connection = state.pool.acquire().await?;
+        crate::modules::state::for_project(&mut connection, project_id, principal.actor_id)
+            .await?
+            .unwrap_or_default()
+            .contains("tasks")
+    };
+    if !tasks_on {
+        return Ok(BatchResult::module_off("task_update_many"));
+    }
     let task_ids = found
         .iter()
         .flatten()

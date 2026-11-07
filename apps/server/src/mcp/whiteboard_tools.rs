@@ -93,8 +93,13 @@ async fn whiteboards_on(state: &AppState, principal: &McpPrincipal) -> Result<On
 /// module lookup is an error, never "on".
 async fn board_module_off(state: &AppState, caller: &Caller, id: Uuid) -> Result<bool, AppError> {
     let mut connection = state.pool.acquire().await?;
-    let Ok(board) = whiteboards::access(&mut connection, caller, id, false).await else {
-        return Ok(false);
+    // A board the caller can't reach is left to the tool's own refusal, so
+    // the answer says nothing more about it; any other failure (the database)
+    // stops here instead of skipping the module check.
+    let board = match whiteboards::access(&mut connection, caller, id, false).await {
+        Ok(board) => board,
+        Err(AppError::NotFound(_) | AppError::Forbidden) => return Ok(false),
+        Err(error) => return Err(error),
     };
     let modules = match board.project_id {
         Some(project) => {
