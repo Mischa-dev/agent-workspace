@@ -32,7 +32,7 @@ function effectiveWith(modulesOff: string[], hidden: string[] = []) {
   }
 }
 
-/** These modules off in every layout; the projects list marks `projectsOff` as the server does. */
+/** These modules off in every layout and project; Projects is off in the projects listed in `projectsOff` (the default: all of them when it's off), as the server says it in `modulesOff`. */
 function withModulesOff(
   modulesOff: string[],
   hidden: string[] = [],
@@ -42,7 +42,10 @@ function withModulesOff(
   vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
     if (path.endsWith('/layout')) return jsonResponse({ effective: effectiveWith(modulesOff, hidden) })
-    const flagged = (project: typeof projectA) => ({ ...project, projectsOff: projectsOff.includes(project.id) })
+    const flagged = (project: typeof projectA) => ({
+      ...project,
+      modulesOff: [...modulesOff.filter((module) => module !== 'projects'), ...(projectsOff.includes(project.id) ? ['projects'] : [])],
+    })
     if (path.startsWith('/api/v1/projects?')) return jsonResponse({ projects: [projectA, projectB].map(flagged) })
     // A single project, opened or switched to, carries it too.
     for (const project of [projectA, projectB]) {
@@ -142,7 +145,7 @@ describe('modules that are off', () => {
         return jsonResponse(modules())
       }
       if (path.startsWith('/api/v1/projects?')) {
-        return jsonResponse({ projects: [projectA, projectB].map((project) => ({ ...project, projectsOff: off })) })
+        return jsonResponse({ projects: [projectA, projectB].map((project) => ({ ...project, modulesOff: off ? ['projects'] : [] })) })
       }
       return standard(input, init)
     })
@@ -189,7 +192,7 @@ describe('modules that are off', () => {
       // that project for you.
       if (path.startsWith('/api/v1/projects?')) {
         return jsonResponse({
-          projects: [projectA, projectB].map((project) => ({ ...project, projectsOff: off && project.id === projectAId })),
+          projects: [projectA, projectB].map((project) => ({ ...project, modulesOff: off && project.id === projectAId ? ['projects'] : [] })),
         })
       }
       return standard(input, init)

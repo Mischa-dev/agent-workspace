@@ -1,7 +1,6 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { queryKeys } from '../../api/queryKeys'
 import { describeError } from '../../app/mutations'
 import { refreshLayouts, useWorkspaceLayout } from '../../experience/api'
 import { REGISTRY } from '../../experience/registry'
@@ -80,7 +79,7 @@ export default function RolesPage({ workspace }: SettingsPageProps) {
     Promise.all([
       queryClient.invalidateQueries({ queryKey: ['organization', organizationId] }),
       refreshLayouts(queryClient),
-      queryClient.invalidateQueries({ queryKey: queryKeys.projects }),
+      queryClient.invalidateQueries({ queryKey: ['projects'] }),
     ])
   const remove = useMutation({
     mutationFn: (role: WorkspaceRoleView) => removeRole(organizationId, role),

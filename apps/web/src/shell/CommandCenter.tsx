@@ -1,15 +1,14 @@
 import { lazy, Suspense, useEffect, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import shortcutClaims from 'virtual:modules/slots/shortcuts'
 
 import { useHomeExperience, useProjectExperience } from '../experience/layout'
-import { moduleSwitchable, ownerOf } from '../modules/ownership'
 import { useProjects } from '../projects/hooks'
 import { projectSettingsHref } from '../settings/paths'
 import { createTaskHref } from '../work-items/links'
 import { closeCommandMenu, openCommandMenu, openMarkAllRead, openShortcutSheet, useCommandState } from './commandStore'
 import { loadShellLazy } from './loadShellLazy'
 import { createShortcutMatcher, type ShortcutAction } from './shortcuts'
+import { shortcutOn } from './shortcutModules'
 import { projectPath, useRouteProject } from './useRouteProject'
 
 const loadPalette = () => import('./CommandPalette')
@@ -35,19 +34,17 @@ export function CommandCenter() {
   )
   const current = useRouteProject(projects)
   const currentRef = useRef(current)
-  // AWD-75: shortcuts of modules that are off for the person do nothing, nor
-  // those of a module that can be off while the person's settings load. This
-  // hides in the app; the server checks access on its own.
+  // AWD-75: shortcuts of modules that are off where they act do nothing, nor
+  // while those settings load (shortcutOn). This hides in the app; the
+  // server checks access on its own.
   const projectExperience = useProjectExperience(current?.id)
   const homeExperience = useHomeExperience()
-  const experience = current ? projectExperience : homeExperience
-  const experienceRef = useRef(experience)
+  const experiences = { project: current ? projectExperience : null, home: homeExperience }
+  const experienceRef = useRef(experiences)
   useEffect(() => {
     currentRef.current = current
-  }, [current])
-  useEffect(() => {
-    experienceRef.current = experience
-  }, [experience])
+    experienceRef.current = experiences
+  })
 
   useEffect(() => {
     const prefetch = () => void loadPalette().catch(() => undefined)
@@ -101,11 +98,8 @@ export function CommandCenter() {
       if (event.defaultPrevented) return
       const action = press(event)
       if (!action) return
-      const module = ownerOf(shortcutClaims, action)
-      if (module && moduleSwitchable(module)) {
-        const experience = experienceRef.current
-        if (experience.modules === 'loading' || !experience.moduleOn(module)) return
-      }
+      const { project, home } = experienceRef.current
+      if (!shortcutOn(action, project, home)) return
       event.preventDefault()
       // One sheet: it lists the task list and board keys too, so a page's own
       // "?" listener (on window, after this one) doesn't open a second.

@@ -44,8 +44,8 @@ export type Project = {
   role: string
   version: number
   attentionCount: number
-  /** AWD-75: Projects is off for you in this project (its workspace, or your role there). */
-  projectsOff?: boolean
+  /** AWD-75: the modules off for you in this project (its workspace, or your role there). */
+  modulesOff?: string[]
   capabilities: ProjectCapabilities
   navigation: ProjectNavigation
 }

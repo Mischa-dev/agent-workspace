@@ -119,7 +119,7 @@ export function ProjectRail({
   const commandMenuOpen = useCommandState().open === 'commands'
   const pausedUntil = usePausedUntil()
   // AWD-75: no tile for a project where Projects is off for you.
-  const projects = (projectsQuery.data?.projects ?? []).filter((project) => !project.archivedAt && !project.projectsOff)
+  const projects = (projectsQuery.data?.projects ?? []).filter((project) => !project.archivedAt && !project.modulesOff?.includes('projects'))
   const inboxUnread = useInboxUnread() ?? 0
   // AWD-75: no Messages tile with Messages off, and no New project tile
   // with Projects off at Home, where a new project goes.

@@ -499,7 +499,7 @@ async fn an_anchored_agent_s_lists_span_the_projects_it_reaches() {
 }
 
 #[tokio::test]
-async fn the_projects_list_marks_where_projects_is_off() {
+async fn the_projects_list_says_which_modules_are_off_in_each_project() {
     let Some(setup) = setup("awd75_projects_off").await else {
         return;
     };
@@ -510,7 +510,7 @@ async fn the_projects_list_marks_where_projects_is_off() {
             .expect("projects")
             .iter()
             .find(|project| project["id"] == work.as_str())
-            .map(|project| project["projectsOff"].clone())
+            .map(|project| project["modulesOff"].clone())
             .expect("the project")
     };
     let (status, listed) = send(
@@ -535,7 +535,14 @@ async fn the_projects_list_marks_where_projects_is_off() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{listed}");
-    assert_eq!(flag(&listed), json!(true), "{listed}");
+    let off = flag(&listed);
+    for module in ["projects", "tasks", "agents"] {
+        assert!(
+            off.as_array()
+                .is_some_and(|off| off.iter().any(|entry| entry == module)),
+            "{module}: {listed}"
+        );
+    }
     // The project on its own (as opening or switching to it answers) says
     // so too, so the rail doesn't get its tile back.
     let (status, single) = send(
@@ -549,5 +556,5 @@ async fn the_projects_list_marks_where_projects_is_off() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{single}");
-    assert_eq!(single["projectsOff"], json!(true), "{single}");
+    assert_eq!(single["modulesOff"], off, "{single}");
 }
