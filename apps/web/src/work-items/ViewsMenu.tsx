@@ -99,8 +99,19 @@ export default function ViewsMenu({
   }
   if (!readOnly) {
     items.push({ separator: true })
-    if (current?.canEdit && changed) items.push({ label: `Save changes to “${current.name}”`, icon: 'check', onSelect: () => save.mutate(current) })
-    items.push({ label: 'Save as new view…', icon: 'plus', onSelect: () => setSaving('new') })
+    // Saving field filters turns the person's ID into "me" only in person
+    // fields, so it waits until the project's fields are known; a view
+    // without field filters saves straight away.
+    if (state.filters.fieldFilters && !projectFields.isSuccess) {
+      items.push(
+        projectFields.isError
+          ? { label: 'Fields didn’t load, so the view can’t be saved. Try again', icon: 'retry', keepOpen: true, onSelect: () => void projectFields.refetch() }
+          : { label: 'Loading fields to save this view…', disabled: true, onSelect: () => undefined },
+      )
+    } else {
+      if (current?.canEdit && changed) items.push({ label: `Save changes to “${current.name}”`, icon: 'check', onSelect: () => save.mutate(current) })
+      items.push({ label: 'Save as new view…', icon: 'plus', onSelect: () => setSaving('new') })
+    }
   }
   if (current) {
     items.push({ label: current.pinned ? 'Unpin from sidebar' : 'Pin to sidebar', icon: 'star', onSelect: () => pin.mutate(current) })
