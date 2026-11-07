@@ -33,6 +33,9 @@ pub struct Viewer<'a> {
     pub actor_id: Uuid,
     /// Projects they can open right now.
     pub projects: &'a [Uuid],
+    /// Of those, the ones where they (and an app acting for them) may see
+    /// tasks (`search::projects_showing_tasks`): a task is a thing only there.
+    pub task_projects: &'a [Uuid],
     /// Modules on for them.
     pub modules: ModuleSet,
 }
@@ -202,7 +205,11 @@ async fn resolve(
     }
     let rows = sqlx::query_as::<_, ThingRow>(sql)
         .bind(ids)
-        .bind(viewer.projects)
+        .bind(if kind == "task" {
+            viewer.task_projects
+        } else {
+            viewer.projects
+        })
         .bind(viewer.actor_id)
         .fetch_all(&mut *connection)
         .await?;

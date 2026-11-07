@@ -179,11 +179,15 @@ pub(super) async fn thing_open(
     };
     let result = async {
         let projects = accessible_project_ids(state, principal).await?;
+        let task_projects =
+            crate::search::projects_showing_tasks(&state.pool, principal.actor_id, &projects)
+                .await?;
         let mut connection = state.pool.acquire().await?;
         let anywhere = state::anywhere(&mut connection, principal.actor_id).await?;
         let viewer = modules::things::Viewer {
             actor_id: principal.actor_id,
             projects: &projects,
+            task_projects: &task_projects,
             modules: anywhere,
         };
         let Some(thing) = modules::things::get(&mut connection, &viewer, &kind, id).await? else {

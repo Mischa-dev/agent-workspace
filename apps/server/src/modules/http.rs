@@ -285,11 +285,14 @@ async fn open_thing(
         return Err(AppError::NotFound("thing"));
     }
     let projects = crate::search::browser_projects(&state.pool, principal.actor_id).await?;
+    let task_projects =
+        crate::search::projects_showing_tasks(&state.pool, principal.actor_id, &projects).await?;
     let mut connection = state.pool.acquire().await?;
     let modules = state::anywhere(&mut connection, principal.actor_id).await?;
     let viewer = things::Viewer {
         actor_id: principal.actor_id,
         projects: &projects,
+        task_projects: &task_projects,
         modules,
     };
     let thing = things::get(&mut connection, &viewer, &kind, id)
