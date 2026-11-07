@@ -14,6 +14,7 @@ use super::{
     mcp_admin::{Setup, create_project, setup},
     mcp_tasks::{add_member, space},
     message_edits::add_person,
+    workspace_isolation::{call_tool, structured},
 };
 
 /// Values that must never reach the target project: a person who isn't
@@ -437,7 +438,8 @@ async fn a_move_previews_privately_then_moves_once_with_the_choices_made() {
         );
     }
     assert!(
-        rows.contains("3 custom field values stayed on SRC-1"),
+        rows.contains("2 custom field values stayed on SRC-1")
+            && rows.contains("1 custom field value stayed on SRC-2"),
         "{rows}"
     );
     let after = footprint(&setup).await;
@@ -641,7 +643,7 @@ async fn a_stale_preview_or_lost_access_moves_nothing() {
     assert_eq!(restored["outcome"], "applied", "{restored}");
 
     // Someone who loses the right to create in the target after previewing.
-    let (mo, mo_browser) = add_person(&setup, &[&w.src, &w.dst], "mo").await;
+    let (mo, mo_browser) = add_person(&setup, &[&w.src, &w.dst], "moira").await;
     let mo_preview = |browser: &super::agent_interface::Browser| {
         browser.request(
             "GET",
@@ -983,7 +985,9 @@ async fn archiving_an_agents_home_while_its_move_waits_stops_the_move() {
         .fetch_one(&mut *held)
         .await
         .expect("holder");
-    let moving = tool(
+    // The raw call: the result's schema check would ask again with the agent's
+    // credential, which archiving its home has made useless by then.
+    let moving = call_tool(
         app,
         &token,
         &agent_session,
@@ -1005,7 +1009,8 @@ async fn archiving_an_agents_home_while_its_move_waits_stops_the_move() {
         assert_eq!(status, StatusCode::OK, "{body}");
         held.commit().await.expect("release");
     };
-    let (moved, ()) = tokio::join!(moving, archiving);
+    let ((_, moved), ()) = tokio::join!(moving, archiving);
+    let moved = structured(&moved);
     assert_eq!(moved["outcome"], "not_found", "{moved}");
     assert_eq!(moves_made(&setup).await, before, "nothing moved");
 }
@@ -1026,8 +1031,12 @@ async fn only_projects_the_mover_can_add_tasks_to_are_offered() {
     let editors = create_project(&setup, "EDIT", "Editors only").await;
     let looking = create_project(&setup, "LOOK", "Look only").await;
     let closed = create_project(&setup, "SHUT", "Shut").await;
-    let (mo, mo_browser) =
-        add_person(&setup, &[&w.src, &w.dst, &editors, &looking, &closed], "mo").await;
+    let (mo, mo_browser) = add_person(
+        &setup,
+        &[&w.src, &w.dst, &editors, &looking, &closed],
+        "moira",
+    )
+    .await;
     let roles = format!("/api/v1/organizations/{}/roles", setup.organization_id);
     let mut role_ids = Vec::new();
     for (name, permissions) in [
@@ -1318,8 +1327,10 @@ async fn removing_an_agent_never_waits_on_its_waiting_move() {
         let app = app.clone();
         let root = w.root.clone();
         let dst = w.dst.clone();
+        // The raw call: the result's schema check would ask again with the
+        // agent's credential, which removing the agent has revoked by then.
         async move {
-            tool(
+            call_tool(
                 &app,
                 &token,
                 &agent_session,
@@ -1347,7 +1358,7 @@ async fn removing_an_agent_never_waits_on_its_waiting_move() {
     .expect("the removal doesn't wait on the move");
     assert_eq!(status, StatusCode::OK, "{removed}");
     held.commit().await.expect("release");
-    let moved = moving.await.expect("move");
+    let moved = structured(&moving.await.expect("move").1);
     assert_eq!(moved["outcome"], "not_found", "{moved}");
     assert_eq!(moves_made(&setup).await, before, "nothing moved");
 }
