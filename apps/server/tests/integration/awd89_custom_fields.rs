@@ -1521,7 +1521,8 @@ async fn fields_are_renamed_and_reordered() {
 /// none. An archived option one task holds doesn't let another take it; a
 /// change that overflows one task's stored values rolls back every task;
 /// a preview changes nothing; a replay adds no history; and the same
-/// request ID with other values is a conflict.
+/// request ID with other values is a conflict. The preview, replay and
+/// conflict cases cover task_update_many only, not task_create_many's fields.
 #[tokio::test]
 async fn bulk_field_changes_hold_task_by_task() {
     let Some(setup) = setup("awd101_bulk_per_task").await else {
@@ -1683,26 +1684,65 @@ async fn bulk_field_changes_hold_task_by_task() {
     assert_eq!(conflict["outcome"], "conflict", "{conflict}");
     assert_eq!(snapshot().await, after);
 
-    // 3. WORK-1 sits near the 60,000-byte bound for stored values; a change
-    // that fits WORK-2 but not WORK-1 changes neither, by MCP or the web.
+    // 3. One task sits near the 60,000-byte bound for stored values; a change
+    // that fits the other but not it changes neither, by MCP or the web. The
+    // size is checked as each task is written, the web writes tasks in ID
+    // order (planning::bulk_update) and MCP in the order given, so the full
+    // task goes last in both: the other task's change is written first, then
+    // rolled back with the batch.
+    let by_id = sqlx::query_scalar::<_, i64>(
+        // PostgreSQL compares UUIDs byte by byte, as Rust's Uuid does.
+        "SELECT number FROM work_items WHERE project_id = $1::uuid ORDER BY id",
+    )
+    .bind(&work)
+    .fetch_all(&setup.pool)
+    .await
+    .expect("tasks by ID");
+    let [early, late] = by_id[..] else {
+        panic!("two tasks: {by_id:?}")
+    };
+    let (early_key, late_key) = (format!("WORK-{early}"), format!("WORK-{late}"));
+    let task_state = |number: i64| {
+        let pool = setup.pool.clone();
+        let work = work.clone();
+        async move {
+            sqlx::query_as::<_, (i64, Value, i64)>(
+                "SELECT item.version, item.field_values, \
+                        (SELECT count(*) FROM work_item_activity activity \
+                         WHERE activity.work_item_id = item.id) \
+                 FROM work_items item WHERE item.project_id = $1::uuid AND item.number = $2",
+            )
+            .bind(&work)
+            .bind(number)
+            .fetch_one(&pool)
+            .await
+            .expect("task")
+        }
+    };
     let big = "😀".repeat(4_000);
     let filled = owner(
         "task_update_many",
-        json!({"projectId": "WORK", "taskIds": ["WORK-1"],
+        json!({"projectId": "WORK", "taskIds": [late_key],
                "fields": {"N2": big, "N3": big, "N4": big}, "clientRequestId": "per-task-fill"}),
     )
     .await;
     assert_eq!(filled["outcome"], "ok", "{filled}");
     let before = snapshot().await;
+    let early_before = task_state(early).await;
     let overflow = "😁".repeat(3_500);
     let refused = owner(
         "task_update_many",
-        json!({"projectId": "WORK", "taskIds": ["WORK-1", "WORK-2"],
+        json!({"projectId": "WORK", "taskIds": [early_key, late_key],
                "fields": {"N1": overflow}, "clientRequestId": "per-task-overflow"}),
     )
     .await;
     assert_eq!(refused["outcome"], "invalid_request", "{refused}");
     assert_eq!(refused["field"], "fieldValues", "{refused}");
+    assert_eq!(
+        task_state(early).await,
+        early_before,
+        "{early_key}'s values, version and history roll back"
+    );
     assert_eq!(snapshot().await, before);
     let n1 = sqlx::query_scalar::<_, String>(
         "SELECT id::text FROM field_definitions WHERE project_id = $1::uuid AND name = 'N1'",
@@ -1725,6 +1765,11 @@ async fn bulk_field_changes_hold_task_by_task() {
         body["error"]["message"],
         agent_workspace_server::work_item_fields::TOO_LARGE,
         "{body}"
+    );
+    assert_eq!(
+        task_state(early).await,
+        early_before,
+        "{early_key}'s values, version and history roll back"
     );
     assert_eq!(snapshot().await, before);
     // A change that fits both lands, and each task's history stays within
@@ -1826,7 +1871,9 @@ async fn field_tools_and_bulk_arguments_refuse_without_the_role() {
             arguments.clone(),
         )
         .await;
-        assert_ne!(refused["outcome"], "ok", "{arguments}: {refused}");
+        // Refused for the role (field_tools: Action::WorkflowManage), not
+        // for anything else about the call.
+        assert_eq!(refused["outcome"], "permission_denied", "{arguments}: {refused}");
     }
     assert_eq!(state().await, fields_before);
 
@@ -1854,6 +1901,7 @@ async fn field_tools_and_bulk_arguments_refuse_without_the_role() {
                "tasks": [{"title": "Two", "fields": {"Risk": "High"}}]}),
     )
     .await;
-    assert_ne!(refused["outcome"], "ok", "{refused}");
+    // Refused for the role (Action::WorkItemCreate), checked before any value.
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
     assert_eq!(tasks().await, tasks_before);
 }
