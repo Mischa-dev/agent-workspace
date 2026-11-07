@@ -19,6 +19,9 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 
+/// What work_item_activity.payload holds at most, as PostgreSQL stores it
+/// (`octet_length(payload::text)`, migration 0015).
+const MAX_PAYLOAD_BYTES: usize = 8_192;
 /// Longest text kept on each side of a one-line change (title, blocker).
 const MAX_TEXT_CHARACTERS: usize = 300;
 /// Most bytes a description diff may take in a payload.
@@ -179,6 +182,50 @@ fn expanded_number_len(written: &str) -> usize {
         }
         None => written.len(),
     }
+}
+
+/// Shrinks a change's whole activity payload until PostgreSQL will store it
+/// (`MAX_PAYLOAD_BYTES`), each part's own budget aside: custom field
+/// changes keep only the field's name, then leave; then the description
+/// keeps only that it changed; then the before and after go altogether.
+/// `changedFields` still says what changed.
+pub fn fit_payload(payload: &mut Value) {
+    let fits = |payload: &Value| jsonb_text_len(payload) <= MAX_PAYLOAD_BYTES;
+    if fits(payload) {
+        return;
+    }
+    if let Some(changes) = changes_mut(payload) {
+        for (key, change) in changes.iter_mut() {
+            if key.starts_with(CUSTOM_FIELD_PREFIX) {
+                let name = change.get("field").cloned().unwrap_or(Value::Null);
+                *change = json!({ "field": name, "from": null, "to": "…" });
+            }
+        }
+    }
+    if fits(payload) {
+        return;
+    }
+    if let Some(changes) = changes_mut(payload) {
+        changes.retain(|key, _| !key.starts_with(CUSTOM_FIELD_PREFIX));
+    }
+    if fits(payload) {
+        return;
+    }
+    if let Some(description) =
+        changes_mut(payload).and_then(|changes| changes.get_mut("description"))
+    {
+        *description = json!({ "diff": "", "truncated": true });
+    }
+    if fits(payload) {
+        return;
+    }
+    if let Some(payload) = payload.as_object_mut() {
+        payload.remove("changes");
+    }
+}
+
+fn changes_mut(payload: &mut Value) -> Option<&mut Map<String, Value>> {
+    payload.get_mut("changes")?.as_object_mut()
 }
 
 fn cut_text(text: &str) -> String {
@@ -472,7 +519,48 @@ mod tests {
     use serde_json::json;
     use uuid::Uuid;
 
-    use super::{CUSTOM_BUDGET_BYTES, FieldChanges, jsonb_text_len, line_diff};
+    use super::{
+        CUSTOM_BUDGET_BYTES, FieldChanges, MAX_PAYLOAD_BYTES, fit_payload, jsonb_text_len,
+        line_diff,
+    };
+
+    /// A long title, a long description and custom fields changing together
+    /// fit the whole payload's 8 KB: the custom changes give way first, and
+    /// the title's before and after stay.
+    #[test]
+    fn a_whole_change_fits_the_payload() {
+        let mut changes = FieldChanges::default();
+        let (old_title, new_title) = ("😀".repeat(300), "😁".repeat(300));
+        changes.text("title", Some(&old_title), Some(&new_title));
+        changes.description(&"a".repeat(2_248), &"b".repeat(2_248));
+        for index in 0..8 {
+            changes.custom_field(
+                Uuid::now_v7(),
+                &format!("F{index}"),
+                json!("😀".repeat(80)),
+                json!("😁".repeat(80)),
+            );
+        }
+        let mut payload = json!({
+            "changedFields": ["title", "description", "fields"],
+            "changes": serde_json::Value::Object(changes.into_map()),
+        });
+        assert!(jsonb_text_len(&payload) > MAX_PAYLOAD_BYTES);
+        fit_payload(&mut payload);
+        assert!(jsonb_text_len(&payload) <= MAX_PAYLOAD_BYTES);
+        assert_eq!(payload["changes"]["title"]["to"], json!(new_title));
+        assert_eq!(
+            payload["changedFields"],
+            json!(["title", "description", "fields"])
+        );
+
+        // Small payloads are left as they are.
+        let small =
+            json!({"changedFields": ["title"], "changes": {"title": {"from": "a", "to": "b"}}});
+        let mut same = small.clone();
+        fit_payload(&mut same);
+        assert_eq!(same, small);
+    }
 
     /// Many custom fields changing at once stay inside their share of the
     /// payload's 8 KB, counted as PostgreSQL stores it, keys included.

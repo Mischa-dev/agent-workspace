@@ -358,6 +358,48 @@ async fn fields_are_typed_checked_recorded_and_filtered_the_same_for_agents_and_
     .await;
     assert_eq!(status, StatusCode::OK, "{page}");
     assert_eq!(page["total"], 1, "{page}");
+
+    // A field filter passed with a saved view replaces the view's filter on
+    // that field, rather than adding to it.
+    let high = sqlx::query_scalar::<_, String>(
+        "SELECT option ->> 'id' FROM field_definitions, jsonb_array_elements(config -> 'options') option \
+         WHERE id = $1::uuid AND option ->> 'name' = 'High'",
+    )
+    .bind(&risk)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("high option");
+    let (status, view) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/views"),
+            Some("high-risk-view"),
+            json!({"name": "High risk", "shared": true, "query": {
+                "fieldFilters": json!([{"field": risk, "op": "is", "values": [high]}]).to_string(),
+            }}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{view}");
+    for (arguments, expected) in [
+        (json!({"projectId": "WORK", "view": "High risk"}), vec![]),
+        (
+            json!({"projectId": "WORK", "view": "High risk",
+                   "fieldFilters": [{"field": "Risk", "op": "is", "values": ["Low"]}]}),
+            vec!["WORK-2"],
+        ),
+    ] {
+        let listed = agent("task_list", arguments.clone()).await;
+        assert_eq!(listed["outcome"], "ok", "{arguments}: {listed}");
+        let keys = listed["value"]["tasks"]
+            .as_array()
+            .expect("tasks")
+            .iter()
+            .map(|task| task["key"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>();
+        assert_eq!(keys, expected, "{arguments}: {listed}");
+    }
     let (status, groups) = send(
         app,
         setup.browser.request(
@@ -1013,4 +1055,73 @@ async fn values_too_large_as_stored_are_refused_not_failed() {
     .await
     .expect("count");
     assert_eq!(made, 0);
+}
+
+/// A long title, a long description and eight custom fields changing in one
+/// update still save, and their history fits work_item_activity's 8 KB:
+/// the custom changes give way first, so the update isn't rolled back.
+#[tokio::test]
+async fn a_large_change_keeps_its_history_within_the_payload_limit() {
+    let Some(setup) = setup("awd89_whole_payload").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let mut ids = Vec::new();
+    for index in 0..8 {
+        let (status, field) = send(
+            app,
+            setup.browser.request(
+                "POST",
+                &format!("/api/v1/projects/{work}/fields"),
+                Some(&format!("payload-field-{index}")),
+                json!({"name": format!("F{index}"), "type": "text"}),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{field}");
+        ids.push(field["id"].as_str().expect("field").to_owned());
+    }
+    let values = |text: &str| {
+        ids.iter()
+            .map(|id| (id.clone(), json!(text.repeat(80))))
+            .collect::<serde_json::Map<_, _>>()
+    };
+    let (status, task) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/work-items"),
+            Some("payload-task"),
+            json!({"title": "😀".repeat(240), "description": "a".repeat(2_248), "fieldValues": values("😀")}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{task}");
+    let task_id = task["id"].as_str().expect("task").to_owned();
+    let (status, body) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            &format!("/api/v1/projects/{work}/work-items/{task_id}"),
+            Some("payload-update"),
+            json!({"expectedVersion": task_version(&setup.pool, &task_id).await,
+                   "title": "😁".repeat(240), "description": "b".repeat(2_248),
+                   "fieldValues": values("😁")}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (updates, largest, title) = sqlx::query_as::<_, (i64, i32, Option<String>)>(
+        "SELECT count(*), max(octet_length(payload::text)), \
+                max(payload -> 'changes' -> 'title' ->> 'to') FROM work_item_activity \
+         WHERE work_item_id = $1::uuid AND kind = 'work_item_updated'",
+    )
+    .bind(&task_id)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("history");
+    assert_eq!(updates, 1);
+    assert!(largest <= 8192, "{largest} bytes");
+    assert_eq!(title.as_deref(), Some("😁".repeat(240).as_str()));
 }

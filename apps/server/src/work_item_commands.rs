@@ -2528,7 +2528,9 @@ impl ChangePayload {
                 serde_json::Value::Object(self.changes.clone().into_map()),
             );
         }
-        serde_json::Value::Object(payload)
+        let mut payload = serde_json::Value::Object(payload);
+        crate::work_item_history::fit_payload(&mut payload);
+        payload
     }
 
     /// The activity payload plus the version the change produced.

@@ -1113,6 +1113,16 @@ async fn list_tasks(
             }
         }
     };
+    // A field filter passed with a view replaces the view's filter on that
+    // field, as every other filter passed with a view does.
+    let mut view = view;
+    if let Some(view) = view.as_mut() {
+        let passed = field_clauses
+            .iter()
+            .map(|clause| clause.field)
+            .collect::<Vec<_>>();
+        view.replace_fields(&passed);
+    }
 
     // Cursors made before lists keep fitting: one value sits where it
     // always did, and anything newer goes in `more`.

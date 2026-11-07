@@ -758,6 +758,14 @@ impl ViewFilters {
             .await
     }
 
+    /// Leaves out the view's filters on these custom fields: the caller
+    /// passed its own for them, which replace the view's.
+    pub(crate) fn replace_fields(&mut self, fields: &[Uuid]) {
+        self.filters
+            .fields
+            .retain(|clause| !fields.contains(&clause.field));
+    }
+
     /// The caller says whether archived tasks are listed, not the view.
     pub(crate) fn leave_archived_to_caller(&mut self) {
         self.archived_rule = false;
