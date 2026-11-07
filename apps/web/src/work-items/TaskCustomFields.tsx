@@ -126,8 +126,8 @@ export function TaskCustomFields({
   )
 }
 
-/** The popover that changes one field's value, shaped by its type. */
-function FieldEditor({
+/** The popover that changes one field's value, shaped by its type. The bulk bar uses it too, for many tasks at once. */
+export function FieldEditor({
   anchor,
   field,
   onClose,

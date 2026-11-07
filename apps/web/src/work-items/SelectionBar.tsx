@@ -1,13 +1,17 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import { useProjectExperience } from '../experience/layout'
+import { useFields } from '../fields/api'
+import type { FieldDefinition, FieldValue } from '../fields/fieldModel'
 import { LazyLaunchDialog as LaunchDialog } from '../launch/LazyLaunchDialog'
 import { launchSummary, launchesHref } from '../launch/launchModel'
 import { countLabel } from '../ui'
+import { ComboboxList, Popover } from '../ui/pickers'
 import { BulkBar } from './BulkBar'
 import { useCardFields } from './cardFields'
 import type { PickerField } from './FieldPicker'
+import { FieldEditor } from './TaskCustomFields'
 import type { Notice } from './notice'
 import { bulkUpdateWorkItems } from './planningApi'
 import { useInvalidateWorkItems } from './planningHooks'
@@ -36,10 +40,19 @@ export function SelectionBar({
 }) {
   const invalidate = useInvalidateWorkItems()
   const fields = useCardFields(projectId)
-  const launch = useProjectExperience(projectId).shows('task.runs')
+  const experience = useProjectExperience(projectId)
+  const launch = experience.shows('task.runs')
+  const projectFields = useFields({ projectId })
+  const customFields = experience.shows('task.custom_fields') ? (projectFields.data?.fields ?? []).filter((field) => !field.archived) : []
   const navigate = useNavigate()
   const [saving, setSaving] = useState(false)
   const [launching, setLaunching] = useState<WorkItemCard[] | null>(null)
+  // Custom fields (AWD-101): pick "Set" or "Clear" for a field, then set
+  // it in the field's own editor.
+  const [choosing, setChoosing] = useState<HTMLElement | null>(null)
+  const [editing, setEditing] = useState<{ field: FieldDefinition; anchor: HTMLElement } | null>(null)
+  // A multiple choice reports each toggle; the last one is sent when its editor closes.
+  const chosen = useRef<{ value: FieldValue | null } | null>(null)
 
   const run = async (changes: BulkChanges, cards: readonly WorkItemCard[]) => {
     setSaving(true)
@@ -74,6 +87,33 @@ export function SelectionBar({
     notify({ tone: 'success', title: `Restored ${countLabel(cards.length, 'task')}` })
   }
 
+  const setField = async (field: FieldDefinition, value: FieldValue | null) => {
+    const cards = [...selected]
+    if (!(await run({ fieldValues: { [field.id]: value } }, cards))) return
+    notify({ tone: 'success', title: value === null ? `Cleared ${field.name} on ${countLabel(cards.length, 'task')}` : `Set ${field.name} on ${countLabel(cards.length, 'task')}` })
+  }
+
+  const chooseField = (choice: string) => {
+    const anchor = choosing
+    setChoosing(null)
+    const [mode, id] = choice.split(':')
+    const field = customFields.find((entry) => entry.id === id)
+    if (!field || !anchor) return
+    if (mode === 'clear') return void setField(field, null)
+    // A checkbox has one value to set.
+    if (field.type === 'checkbox') return void setField(field, true)
+    chosen.current = null
+    setEditing({ field, anchor })
+  }
+
+  const finishEditing = () => {
+    const done = editing
+    setEditing(null)
+    const value = chosen.current
+    chosen.current = null
+    if (done && value) void setField(done.field, value.value)
+  }
+
   const setDueDate = async (value: string | null) => {
     const cards = [...selected]
     if (!(await run({ dueDate: value }, cards))) return
@@ -90,10 +130,39 @@ export function SelectionBar({
         onArchive={() => void archive()}
         onClear={onClear}
         onDueDate={(value) => void setDueDate(value)}
+        onField={customFields.length ? setChoosing : undefined}
         onLaunch={launch ? () => setLaunching(selected.filter((card) => !card.archivedAt)) : undefined}
         onPick={onPick}
         onRestore={() => void restore()}
       />
+      {choosing ? (
+        <Popover anchor={choosing} label="Change a field on the selected tasks" onClose={() => setChoosing(null)} open width={300}>
+          <ComboboxList
+            label="Field"
+            onClose={() => setChoosing(null)}
+            onSelect={chooseField}
+            options={customFields.flatMap((field) => [
+              { value: `set:${field.id}`, label: `Set ${field.name}`, keywords: field.name },
+              { value: `clear:${field.id}`, label: `Clear ${field.name}`, keywords: field.name },
+            ])}
+            placeholder="Find a field"
+          />
+        </Popover>
+      ) : null}
+      {editing ? (
+        <FieldEditor
+          anchor={editing.anchor}
+          field={editing.field}
+          onClose={finishEditing}
+          onSet={(value) => {
+            chosen.current = { value }
+          }}
+          projectId={projectId}
+          references={[]}
+          taskId=""
+          value={undefined}
+        />
+      ) : null}
       {launching ? (
         <LaunchDialog
           onClose={() => setLaunching(null)}

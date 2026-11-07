@@ -338,6 +338,8 @@ export type BulkChanges = {
   removeLabelIds?: string[]
   archived?: boolean
   dueDate?: string | null
+  /** Custom fields by ID; null clears one (AWD-101). */
+  fieldValues?: Record<string, FieldValue | null>
 }
 
 export type BulkProblem = { id: string; key: string | null; code: string; message: string }
