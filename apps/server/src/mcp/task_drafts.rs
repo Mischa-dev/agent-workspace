@@ -508,7 +508,7 @@ pub(super) async fn prepare(
             None
         } else {
             let resolved = crate::work_item_fields::resolve(
-                &mut **transaction,
+                transaction,
                 project_id,
                 crate::work_item_fields::Writer {
                     actor_id: principal.actor_id,
