@@ -512,7 +512,7 @@ fn resolve(
     }
     // Columns named after a custom field fill it; other columns are ignored.
     for (header, raw) in &row.fields {
-        let Some(field) = fields::find(&context.fields, header) else {
+        let Some(field) = column_field(&context.fields, header) else {
             continue;
         };
         let input = if field.field_type == FieldType::MultipleChoice {
@@ -2067,14 +2067,40 @@ const CSV_HEADERS: [&str; 15] = [
     "Updated",
 ];
 
-/// The CSV: the built-in columns, then one per custom field, named after
-/// it, so importing it into a project with the same fields fills them.
+/// How a custom field's CSV column starts, so a field named like a built-in
+/// column (Priority, Status) or one of its aliases isn't read as that column.
+const FIELD_COLUMN_PREFIX: &str = "Field: ";
+
+/// The custom field a CSV column names: by the whole header (other tools,
+/// earlier exports), else by what follows "Field:".
+fn column_field<'a>(
+    definitions: &'a [FieldDefinition],
+    header: &str,
+) -> Option<&'a FieldDefinition> {
+    if let Some(field) = fields::find(definitions, header) {
+        return Some(field);
+    }
+    let (head, name) = header
+        .trim()
+        .split_at_checked(FIELD_COLUMN_PREFIX.trim().len())?;
+    if !head.eq_ignore_ascii_case(FIELD_COLUMN_PREFIX.trim()) {
+        return None;
+    }
+    fields::find(definitions, name)
+}
+
+/// The CSV: the built-in columns, then one per custom field ("Field: " and
+/// its name), so importing it into a project with the same fields fills them.
 fn tasks_csv(tasks: &[ExportTask], definitions: &[FieldDefinition]) -> String {
     let mut out = String::from("\u{feff}");
     let headers = CSV_HEADERS
         .iter()
         .map(|header| (*header).to_owned())
-        .chain(definitions.iter().map(|field| csv_field(&field.name)))
+        .chain(
+            definitions
+                .iter()
+                .map(|field| csv_field(&format!("{FIELD_COLUMN_PREFIX}{}", field.name))),
+        )
         .collect::<Vec<_>>();
     out.push_str(&headers.join(","));
     out.push_str("\r\n");
@@ -2351,11 +2377,14 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
             field_values: Value::Null,
-            fields: serde_json::Map::from_iter([("Risk".to_owned(), json!("High"))]),
+            fields: serde_json::Map::from_iter([
+                ("Risk".to_owned(), json!("High")),
+                ("Priority".to_owned(), json!("Customer first")),
+            ]),
         };
-        let risk = FieldDefinition {
+        let text_field = |name: &str| FieldDefinition {
             id: Uuid::now_v7(),
-            name: "Risk".to_owned(),
+            name: name.to_owned(),
             description: String::new(),
             field_type: FieldType::Text,
             config: fields::FieldConfig::default(),
@@ -2363,7 +2392,9 @@ mod tests {
             archived: false,
             version: 1,
         };
-        let text = tasks_csv(&[task], std::slice::from_ref(&risk));
+        // A custom field named like a built-in column keeps its own column.
+        let definitions = vec![text_field("Risk"), text_field("Priority")];
+        let text = tasks_csv(&[task], &definitions);
         let records = parse_csv(&text).expect("test input is valid");
         let mapping = auto_mapping(&records[0]);
         let rows = csv_rows(&records, &mapping).expect("test input is valid");
@@ -2377,13 +2408,26 @@ mod tests {
             Some("no_priority")
         );
         // A custom field's column comes back by name and fills the field.
-        assert_eq!(rows[0].fields.get("Risk").map(String::as_str), Some("High"));
+        assert_eq!(
+            rows[0].fields.get("Field: Risk").map(String::as_str),
+            Some("High")
+        );
         let mut project = context();
-        project.fields = vec![risk];
+        project.fields = definitions;
         let resolved = resolve(&project, &ImportOptions::default(), 0, &rows[0]);
         assert_eq!(
             resolved.field_inputs,
-            vec![("Risk".to_owned(), json!("High"))]
+            vec![
+                ("Priority".to_owned(), json!("Customer first")),
+                ("Risk".to_owned(), json!("High")),
+            ]
         );
+        // A column named after the field alone still fills it, as other
+        // tools and earlier exports write it.
+        assert_eq!(
+            column_field(&project.fields, "risk").map(|field| field.name.as_str()),
+            Some("Risk")
+        );
+        assert!(column_field(&project.fields, "Fields: Risk").is_none());
     }
 }

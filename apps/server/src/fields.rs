@@ -1054,7 +1054,11 @@ pub fn push_clause(builder: &mut QueryBuilder<'_, Postgres>, column: &str, claus
             builder.push(format!(" AND {value} IS NOT NULL"));
         }
         FieldOp::Is | FieldOp::IsNot => {
-            let values = match_values(&clause.values);
+            let written = clause
+                .values
+                .iter()
+                .map(|value| value.trim().to_owned())
+                .collect::<Vec<_>>();
             builder.push(if clause.op == FieldOp::Is {
                 " AND EXISTS (SELECT 1 FROM "
             } else {
@@ -1064,8 +1068,14 @@ pub fn push_clause(builder: &mut QueryBuilder<'_, Postgres>, column: &str, claus
                 "{} AS element(value) WHERE element.value = ANY(",
                 elements(column, field)
             ));
-            builder.push_bind(values);
-            builder.push("))");
+            builder.push_bind(written);
+            // "3.0" is 3 only where a number is stored (a number field):
+            // a text field's "0012" stays the text it is.
+            builder.push(format!(
+                ") OR (jsonb_typeof({value}) = 'number' AND element.value = ANY("
+            ));
+            builder.push_bind(match_values(&clause.values));
+            builder.push(")))");
         }
         FieldOp::Contains => {
             let needle = clause.values.first().cloned().unwrap_or_default();
@@ -1743,6 +1753,28 @@ mod tests {
         )
         .expect("test value");
         field
+    }
+
+    /// "is" compares what was written; "0012" also matches 12 only where a
+    /// number is stored, so a text field's "0012" doesn't match its "12".
+    #[test]
+    fn numbers_match_as_numbers_only_where_numbers_are_stored() {
+        let clause = FieldClause {
+            field: Uuid::now_v7(),
+            op: FieldOp::Is,
+            values: vec![" 0012 ".to_owned()],
+        };
+        let mut builder = QueryBuilder::<Postgres>::new("SELECT 1 FROM work_items item WHERE true");
+        push_clause(&mut builder, "item.field_values", &clause);
+        let sql = builder.sql();
+        let stored = format!("(item.field_values -> '{}')", clause.field);
+        assert!(
+            sql.contains(&format!(
+                "element.value = ANY($1) OR (jsonb_typeof({stored}) = 'number' AND element.value = ANY($2)))"
+            )),
+            "{sql}"
+        );
+        assert_eq!(match_values(&clause.values), vec!["0012", "12"]);
     }
 
     /// "me" is the reader only in a person field; a text or URL field's
