@@ -1112,7 +1112,7 @@ pub fn push_clause(builder: &mut QueryBuilder<'_, Postgres>, column: &str, claus
                 ") OR CASE WHEN jsonb_typeof({value}) = 'number' THEN element.value::numeric = ANY("
             ));
             builder.push_bind(filter_numbers(&clause.values));
-            builder.push("::numeric[]) ELSE false END))");
+            builder.push("::numeric[]) ELSE false END)");
         }
         FieldOp::Contains => {
             let needle = clause.values.first().cloned().unwrap_or_default();
@@ -1800,12 +1800,14 @@ mod tests {
         let sql = builder.sql();
         let stored = format!("(item.field_values -> '{}')", clause.field);
         assert!(
-            sql.contains(&format!(
+            sql.ends_with(&format!(
                 "element.value = ANY($1) OR CASE WHEN jsonb_typeof({stored}) = 'number' \
-                 THEN element.value::numeric = ANY($2::numeric[]) ELSE false END))"
+                 THEN element.value::numeric = ANY($2::numeric[]) ELSE false END)"
             )),
             "{sql}"
         );
+        // Every bracket closes (the integration test runs it for real).
+        assert_eq!(sql.matches('(').count(), sql.matches(')').count(), "{sql}");
         let numbers = |values: &[&str]| {
             filter_numbers(
                 &values
