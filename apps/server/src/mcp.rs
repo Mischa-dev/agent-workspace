@@ -1618,7 +1618,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Move a task, with its subtasks, to another project. The new task gets the title, description, priority, status and type (matched by name), the assignee if they're in that project, acceptance criteria, labels (by name; missing ones are created there), and every comment quoted with its author and date. The original is archived with its full history and links, and its old key (such as AW-7) opens the new task. Moving it again returns where it went.",
+        description = "Move a task, with its subtasks, to another project. The new task gets the title, description, priority, status and type (matched by name), the assignee if they're in that project, acceptance criteria, labels (by name; missing ones are created there), and every comment quoted with its author and date. The original is archived with its full history and links, and its old key (such as AW-7) opens the new task. Custom field values carry over into a field of the same name and type when they fit there; the rest stay on the original. Call first with preview: true to see what carries over and what needs a choice, then move with its snapshot, one resolution per issue (set it in a target field, or leave it) and a clientRequestId. Moving it again returns where it went.",
         annotations(
             title = "Move task",
             read_only_hint = false,

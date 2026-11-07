@@ -89,6 +89,7 @@ mod custom_fields;
 pub(crate) mod import_parse;
 pub(crate) mod imports;
 pub(crate) mod list;
+mod moves;
 mod planning;
 pub(crate) mod project_templates;
 pub(crate) mod templates;
@@ -119,6 +120,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/move",
             axum::routing::post(move_work_item),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/project-move",
+            get(moves::preview_move).post(moves::move_to_project),
         )
         .route(
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/work-with-worker",

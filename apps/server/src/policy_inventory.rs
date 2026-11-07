@@ -1297,6 +1297,14 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/projects/{project_id}/work-items/{work_item_id}/move",
         WorkItemEdit
     ),
+    // AWD-102: moving a task to another project archives it here (and
+    // creates in the target, checked there).
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/work-items/{work_item_id}/project-move",
+        WorkItemArchive
+    ),
     policy_route!(
         "work_items",
         Post,

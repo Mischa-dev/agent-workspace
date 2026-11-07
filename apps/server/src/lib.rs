@@ -93,6 +93,7 @@ pub mod work_item_commands;
 pub mod work_item_fields;
 pub mod work_item_history;
 pub mod work_item_labels;
+pub mod work_item_move;
 pub mod work_item_planning;
 pub mod work_item_workflow;
 pub mod work_items;

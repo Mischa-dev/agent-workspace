@@ -338,12 +338,9 @@ pub fn validate_priority(value: &str) -> Result<(), AppError> {
     }
 }
 
-pub async fn lock_membership(
-    transaction: &mut Transaction<'_, Postgres>,
-    actor_id: Uuid,
-    project_id: Uuid,
-) -> Result<Option<ProjectMembership>, AppError> {
-    Ok(sqlx::query_as::<_, ProjectMembership>(
+/// Someone's membership of a project, as the write checks read it.
+macro_rules! membership_select {
+    () => {
         r#"
         SELECT project.id AS project_id,
                project.archived_at::text AS project_archived_at,
@@ -359,14 +356,37 @@ pub async fn lock_membership(
         JOIN actors actor ON actor.id = membership.actor_id
         WHERE project.id = $1 AND membership.actor_id = $2
           AND actor.status = 'active'
-        FOR UPDATE OF project, membership
-        FOR SHARE OF organization_membership, actor
-        "#,
-    )
+        "#
+    };
+}
+
+pub async fn lock_membership(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    project_id: Uuid,
+) -> Result<Option<ProjectMembership>, AppError> {
+    Ok(sqlx::query_as::<_, ProjectMembership>(concat!(
+        membership_select!(),
+        "FOR UPDATE OF project, membership\n        FOR SHARE OF organization_membership, actor"
+    ))
     .bind(project_id)
     .bind(actor_id)
     .fetch_optional(&mut **transaction)
     .await?)
+}
+
+/// `lock_membership` without its locks, for a check that writes nothing
+/// (a move's preview).
+pub async fn read_membership(
+    connection: &mut PgConnection,
+    actor_id: Uuid,
+    project_id: Uuid,
+) -> Result<Option<ProjectMembership>, AppError> {
+    Ok(sqlx::query_as::<_, ProjectMembership>(membership_select!())
+        .bind(project_id)
+        .bind(actor_id)
+        .fetch_optional(&mut *connection)
+        .await?)
 }
 
 pub fn authorize_mutation(
@@ -447,6 +467,18 @@ pub async fn create_work_item(
     actor: &CommandActor,
     command: CreateWorkItemCommand<'_>,
 ) -> Result<CreateWorkItemOutcome, AppError> {
+    create_work_item_with_id(transaction, actor, Uuid::now_v7(), command).await
+}
+
+/// `create_work_item` with the new task's ID chosen up front, so a task
+/// moved with its subtasks can link to their new copies as it is made
+/// (work_item_move).
+pub async fn create_work_item_with_id(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    work_item_id: Uuid,
+    command: CreateWorkItemCommand<'_>,
+) -> Result<CreateWorkItemOutcome, AppError> {
     if command.label_ids.len() > MAX_LABELS_PER_TASK {
         return Err(AppError::Validation("labels"));
     }
@@ -496,7 +528,6 @@ pub async fn create_work_item(
         command.status_id,
     )
     .await?;
-    let work_item_id = Uuid::now_v7();
     let board_rank = match command.board_placement {
         None => {
             sqlx::query_scalar::<_, i64>(
