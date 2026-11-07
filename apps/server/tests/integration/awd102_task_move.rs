@@ -683,8 +683,10 @@ async fn a_stale_preview_or_lost_access_moves_nothing() {
         .execute(&setup.pool)
         .await
         .expect("remove");
+    let before = footprint(&setup).await;
     let (status, body) = send(app, mo_preview(&mo_browser)).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(footprint(&setup).await, before);
 
     // An agent in SRC only reaches no DST; one that only reads DST can't
     // move into it.
@@ -692,6 +694,9 @@ async fn a_stale_preview_or_lost_access_moves_nothing() {
         create_agent(app, &setup.browser, &space(&setup).await, "Mover", "mover").await;
     add_member(&setup, &w.src, agent, "member").await;
     let agent_session = initialize(app, &agent_token).await.expect("agent MCP");
+    // Each refusal is measured from just before it: making the agent and its
+    // memberships legitimately writes audit rows and events.
+    let before = footprint(&setup).await;
     let refused = tool(
         app,
         &agent_token,
@@ -701,7 +706,9 @@ async fn a_stale_preview_or_lost_access_moves_nothing() {
     )
     .await;
     assert_eq!(refused["outcome"], "not_found", "{refused}");
+    assert_eq!(footprint(&setup).await, before);
     add_member(&setup, &w.dst, agent, "viewer").await;
+    let before = footprint(&setup).await;
     let refused = tool(
         app,
         &agent_token,
