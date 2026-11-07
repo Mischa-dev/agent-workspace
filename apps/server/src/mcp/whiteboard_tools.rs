@@ -20,7 +20,7 @@ use crate::{
     AppState,
     error::AppError,
     whiteboards::{
-        self, BoardChange, BoardSummary, Caller, LinkView, ListFilter, Placement, TargetKind,
+        self, BoardChange, BoardSummary, Caller, LinkView, ListFilter, OnIn, Placement, TargetKind,
         edit::{self, EditError, EditOutcome},
         render,
         scene::{self, ElementSummary, Operation, Scene},
@@ -63,32 +63,52 @@ fn refused<T>(error: AppError, operation: &'static str) -> ToolResult<T> {
     }
 }
 
+/// AWD-75: where Whiteboards is on for the caller: the projects they reach,
+/// their role in each narrowing it, and the workspaces they're in, for
+/// boards across one.
+async fn whiteboards_on(state: &AppState, principal: &McpPrincipal) -> Result<OnIn, AppError> {
+    let projects = super::common::accessible_project_ids(state, principal).await?;
+    let mut connection = state.pool.acquire().await?;
+    let in_projects =
+        crate::modules::state::ProjectModules::load(&mut connection, principal.actor_id, &projects)
+            .await?;
+    let workspaces = crate::modules::state::by_workspace(&mut connection, principal.actor_id)
+        .await?
+        .into_iter()
+        .filter(|(_, set)| set.contains("whiteboards"))
+        .map(|(workspace, _)| workspace)
+        .collect();
+    Ok(OnIn {
+        projects: in_projects.with(&projects, "whiteboards"),
+        workspaces,
+    })
+}
+
 /// AWD-75: whether Whiteboards is off for the caller where whiteboard `id`
 /// lives: its project, their role there narrowing it, or for a board across
 /// the workspace, the workspace and their workspace role. Asked only once
 /// `whiteboards::access` lets them at the board, so it says nothing about
-/// boards they can't reach; anything that fails leaves the answer to the
-/// tool, which checks access itself.
-async fn board_module_off(state: &AppState, caller: &Caller, id: Uuid) -> bool {
-    let checked = async {
-        let mut connection = state.pool.acquire().await?;
-        let board = whiteboards::access(&mut connection, caller, id, false).await?;
-        let modules = match board.project_id {
-            Some(project) => {
-                crate::modules::state::for_project(&mut connection, project, caller.actor_id)
-                    .await?
-                    .unwrap_or_default()
-            }
-            None => crate::modules::state::by_workspace(&mut connection, caller.actor_id)
+/// boards they can't reach: when access is refused it answers false and
+/// leaves that answer to the tool, which checks access itself. A failed
+/// module lookup is an error, never "on".
+async fn board_module_off(state: &AppState, caller: &Caller, id: Uuid) -> Result<bool, AppError> {
+    let mut connection = state.pool.acquire().await?;
+    let Ok(board) = whiteboards::access(&mut connection, caller, id, false).await else {
+        return Ok(false);
+    };
+    let modules = match board.project_id {
+        Some(project) => {
+            crate::modules::state::for_project(&mut connection, project, caller.actor_id)
                 .await?
-                .get(&board.organization_id)
-                .copied()
-                .unwrap_or_default(),
-        };
-        Ok::<_, AppError>(!modules.contains("whiteboards"))
-    }
-    .await;
-    checked.unwrap_or(false)
+                .unwrap_or_default()
+        }
+        None => crate::modules::state::by_workspace(&mut connection, caller.actor_id)
+            .await?
+            .get(&board.organization_id)
+            .copied()
+            .unwrap_or_default(),
+    };
+    Ok(!modules.contains("whiteboards"))
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -179,8 +199,18 @@ pub(super) async fn whiteboard_list(
         }
     };
     let result = async {
+        // Only boards where Whiteboards is on for the caller (AWD-75); the
+        // tool gate takes it being on anywhere.
+        let on_in = whiteboards_on(state, principal).await?;
         let boards = match linked {
-            Some((kind, id)) => whiteboards::linked_to(&state.pool, &caller, kind, id).await?,
+            Some((kind, id)) => whiteboards::linked_to(&state.pool, &caller, kind, id)
+                .await?
+                .into_iter()
+                .filter(|board| match board.project_id {
+                    Some(project) => on_in.projects.contains(&project),
+                    None => on_in.workspaces.contains(&board.organization_id),
+                })
+                .collect(),
             None => {
                 whiteboards::list(
                     &state.pool,
@@ -191,6 +221,7 @@ pub(super) async fn whiteboard_list(
                         query: arguments.query.clone(),
                         deleted: arguments.deleted.unwrap_or(false),
                         limit: i64::from(arguments.limit.unwrap_or(50)),
+                        on_in: Some(on_in),
                     },
                 )
                 .await?
@@ -257,8 +288,10 @@ pub(super) async fn whiteboard_read(
         return ToolResult::invalid("whiteboardId", "Pass a whiteboard ID or link.");
     };
     let caller = caller(principal);
-    if board_module_off(state, &caller, id).await {
-        return ToolResult::module_off("whiteboard_read", "Whiteboards");
+    match board_module_off(state, &caller, id).await {
+        Ok(true) => return ToolResult::module_off("whiteboard_read", "Whiteboards"),
+        Ok(false) => {}
+        Err(error) => return refused(error, "whiteboard_read"),
     }
     match read(
         state,
@@ -405,11 +438,15 @@ pub(super) async fn whiteboard_render(
         );
     }
     let caller = caller(principal);
-    if board_module_off(state, &caller, id).await {
-        return render_result(
-            ToolResult::module_off("whiteboard_render", "Whiteboards"),
-            None,
-        );
+    match board_module_off(state, &caller, id).await {
+        Ok(true) => {
+            return render_result(
+                ToolResult::module_off("whiteboard_render", "Whiteboards"),
+                None,
+            );
+        }
+        Ok(false) => {}
+        Err(error) => return render_result(refused(error, "whiteboard_render"), None),
     }
     let drawn = async {
         let mut connection = state.pool.acquire().await?;
@@ -647,8 +684,10 @@ pub(super) async fn whiteboard_edit(
         return ToolResult::invalid("whiteboardId", "Pass a whiteboard ID or link.");
     };
     let caller = caller(principal);
-    if board_module_off(state, &caller, id).await {
-        return ToolResult::module_off("whiteboard_edit", "Whiteboards");
+    match board_module_off(state, &caller, id).await {
+        Ok(true) => return ToolResult::module_off("whiteboard_edit", "Whiteboards"),
+        Ok(false) => {}
+        Err(error) => return refused(error, "whiteboard_edit"),
     }
     let result = async {
         let mut transaction = state.pool.begin().await?;
@@ -743,8 +782,10 @@ pub(super) async fn whiteboard_update(
         expected_version: arguments.expected_version,
     };
     let caller = caller(principal);
-    if board_module_off(state, &caller, id).await {
-        return ToolResult::module_off("whiteboard_update", "Whiteboards");
+    match board_module_off(state, &caller, id).await {
+        Ok(true) => return ToolResult::module_off("whiteboard_update", "Whiteboards"),
+        Ok(false) => {}
+        Err(error) => return refused(error, "whiteboard_update"),
     }
     let result = async {
         let mut transaction = state.pool.begin().await?;
@@ -799,8 +840,10 @@ pub(super) async fn whiteboard_duplicate(
         return ToolResult::invalid("whiteboardId", "Pass a whiteboard ID or link.");
     };
     let caller = caller(principal);
-    if board_module_off(state, &caller, id).await {
-        return ToolResult::module_off("whiteboard_duplicate", "Whiteboards");
+    match board_module_off(state, &caller, id).await {
+        Ok(true) => return ToolResult::module_off("whiteboard_duplicate", "Whiteboards"),
+        Ok(false) => {}
+        Err(error) => return refused(error, "whiteboard_duplicate"),
     }
     let result = async {
         let mut transaction = state.pool.begin().await?;
@@ -863,8 +906,10 @@ pub(super) async fn whiteboard_link(
         return ToolResult::invalid("targetId", "Pass an ID or link.");
     };
     let linked = !arguments.remove.unwrap_or(false);
-    if board_module_off(state, &caller(principal), id).await {
-        return ToolResult::module_off("whiteboard_link", "Whiteboards");
+    match board_module_off(state, &caller(principal), id).await {
+        Ok(true) => return ToolResult::module_off("whiteboard_link", "Whiteboards"),
+        Ok(false) => {}
+        Err(error) => return refused(error, "whiteboard_link"),
     }
     match set_link(state, principal, id, kind, target_id, linked).await {
         Ok(value) => ToolResult::ok(value),

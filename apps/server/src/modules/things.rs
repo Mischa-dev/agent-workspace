@@ -12,7 +12,7 @@
 //! whiteboards through `whiteboard_visible_to`, and nothing from a module
 //! that's off for them.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use sqlx::{FromRow, PgConnection};
 use uuid::Uuid;
@@ -39,6 +39,13 @@ pub struct Viewer<'a> {
     pub task_projects: &'a [Uuid],
     /// Modules on for them.
     pub modules: ModuleSet,
+    /// The modules on for them in each workspace they're in (their workspace
+    /// role narrowing it), for things across a workspace, which no project's
+    /// modules decide.
+    pub workspaces: &'a BTreeMap<Uuid, ModuleSet>,
+    /// Whether things across a workspace (boards with no project) can show:
+    /// not for a credential confined to one project.
+    pub workspace_boards: bool,
 }
 
 /// The kinds this server can open as things.
@@ -62,6 +69,8 @@ struct ThingRow {
     owner_id: Option<Uuid>,
     owner_name: Option<String>,
     project_id: Option<Uuid>,
+    /// For a thing across a workspace (no project): that workspace.
+    organization_id: Option<Uuid>,
     /// For conversations: whether they're in the hidden direct project.
     direct: bool,
 }
@@ -97,7 +106,7 @@ const TASKS_SQL: &str = r#"
     SELECT item.id, 'task' AS kind,
            project.project_key || '-' || item.number::text || ' ' || item.title AS title,
            status.name AS status, item.assignee_actor_id AS owner_id,
-           owner.display_name AS owner_name, item.project_id, false AS direct
+           owner.display_name AS owner_name, item.project_id, NULL::uuid AS organization_id, false AS direct
     FROM work_items item
     JOIN projects project ON project.id = item.project_id
     JOIN work_item_statuses status
@@ -110,7 +119,7 @@ const TASKS_SQL: &str = r#"
 const PAGES_SQL: &str = r#"
     SELECT page.id, 'page' AS kind, page.title, NULL::text AS status,
            page.updated_by_actor_id AS owner_id, editor.display_name AS owner_name,
-           page.project_id, false AS direct
+           page.project_id, NULL::uuid AS organization_id, false AS direct
     FROM project_pages page
     LEFT JOIN project_memberships editor
       ON editor.project_id = page.project_id AND editor.actor_id = page.updated_by_actor_id
@@ -120,7 +129,7 @@ const PAGES_SQL: &str = r#"
 const DECISIONS_SQL: &str = r#"
     SELECT decision.id, 'decision' AS kind, decision.title, decision.status,
            decision.decided_by_actor_id AS owner_id, decider.display_name AS owner_name,
-           decision.project_id, false AS direct
+           decision.project_id, NULL::uuid AS organization_id, false AS direct
     FROM project_decisions decision
     LEFT JOIN project_memberships decider
       ON decider.project_id = decision.project_id
@@ -133,11 +142,13 @@ const DECISIONS_SQL: &str = r#"
 const WHITEBOARDS_SQL: &str = r#"
     SELECT board.id, 'whiteboard' AS kind, board.title, NULL::text AS status,
            board.created_by_actor_id AS owner_id, maker.display_name AS owner_name,
-           board.project_id, false AS direct
+           board.project_id, board.organization_id, false AS direct
     FROM whiteboards board
     LEFT JOIN users maker ON maker.actor_id = board.created_by_actor_id
     WHERE board.id = ANY($1) AND board.deleted_at IS NULL
-      AND (board.project_id IS NULL OR board.project_id = ANY($2))
+      -- A board across a workspace only for a viewer not confined to one
+      -- project ($4), as whiteboards::access has it.
+      AND ((board.project_id IS NULL AND $4) OR board.project_id = ANY($2))
       AND whiteboard_visible_to(board.id, $3)
 "#;
 
@@ -152,7 +163,8 @@ const CONVERSATIONS_SQL: &str = r#"
                 ELSE conversation.name END AS title,
            CASE WHEN conversation.kind = 'thread' THEN conversation.thread_status END AS status,
            NULL::uuid AS owner_id, NULL::text AS owner_name,
-           conversation.project_id, project.kind = 'direct' AS direct
+           conversation.project_id, NULL::uuid AS organization_id,
+           project.kind = 'direct' AS direct
     FROM conversations conversation
     JOIN projects project ON project.id = conversation.project_id
     WHERE conversation.id = ANY($1) AND conversation.project_id = ANY($2)
@@ -163,7 +175,7 @@ const CONVERSATIONS_SQL: &str = r#"
 const PROJECTS_SQL: &str = r#"
     SELECT project.id, 'project' AS kind, project.name AS title, NULL::text AS status,
            NULL::uuid AS owner_id, NULL::text AS owner_name, project.id AS project_id,
-           false AS direct
+           NULL::uuid AS organization_id, false AS direct
     FROM projects project
     WHERE project.id = ANY($1) AND project.id = ANY($2) AND project.kind = 'standard'
 "#;
@@ -182,7 +194,16 @@ fn resolver(kind: &str) -> Option<&'static str> {
 
 /// Whether the viewer's modules show this thing.
 fn shown(viewer: &Viewer<'_>, row: &ThingRow) -> bool {
-    shown_in(viewer.modules, &row.kind, row.direct)
+    // A thing across a workspace follows that workspace's modules for them.
+    let modules = match (row.project_id, row.organization_id) {
+        (None, Some(workspace)) => viewer
+            .workspaces
+            .get(&workspace)
+            .copied()
+            .unwrap_or_default(),
+        _ => viewer.modules,
+    };
+    shown_in(modules, &row.kind, row.direct)
 }
 
 /// Whether a thing of `kind` shows with `modules` on: a conversation by
@@ -219,6 +240,7 @@ async fn resolve(
             viewer.projects
         })
         .bind(viewer.actor_id)
+        .bind(viewer.workspace_boards)
         .fetch_all(&mut *connection)
         .await?;
     Ok(rows
@@ -352,13 +374,15 @@ pub async fn links(
         .collect::<Vec<_>>();
     // Each linked thing follows the modules of its own project (the viewer's
     // role there narrowing them), not the thing it's linked from: resolve
-    // them all, then keep those whose module is on where they are. One with
-    // no project keeps the viewer's set, as before.
+    // them all, then keep those whose module is on where they are. One across
+    // a workspace was already held to that workspace's modules.
     let unfiltered = Viewer {
         actor_id: viewer.actor_id,
         projects: viewer.projects,
         task_projects: viewer.task_projects,
         modules: ModuleSet::all(),
+        workspaces: viewer.workspaces,
+        workspace_boards: viewer.workspace_boards,
     };
     let mut others = Vec::new();
     for kind in KINDS {
@@ -382,7 +406,7 @@ pub async fn links(
         Some(project) => !in_places
             .keep(&[project], |set, direct| shown_in(set, &other.kind, direct))
             .is_empty(),
-        None => shown_in(viewer.modules, &other.kind, false),
+        None => true,
     });
     Ok(rows
         .into_iter()

@@ -194,11 +194,16 @@ pub(super) async fn thing_open(
                 .await?;
         let mut connection = state.pool.acquire().await?;
         let anywhere = state::anywhere(&mut connection, principal.actor_id).await?;
+        let workspaces = state::by_workspace(&mut connection, principal.actor_id).await?;
         let viewer = modules::things::Viewer {
             actor_id: principal.actor_id,
             projects: &projects,
             task_projects: &task_projects,
             modules: anywhere,
+            workspaces: &workspaces,
+            // An older credential confined to one project reaches no board
+            // across a workspace, as whiteboards::access has it.
+            workspace_boards: super::common::confined_project(principal).is_none(),
         };
         let Some(thing) = modules::things::get(&mut connection, &viewer, &kind, id).await? else {
             return Ok(ToolResult::not_found("That thing"));

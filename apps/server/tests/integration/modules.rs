@@ -1251,3 +1251,130 @@ async fn a_project_role_s_modules_reach_boards_links_and_module_list() {
     let listed = call("module_list", json!({})).await;
     assert_eq!(module(&listed["value"], "tasks")["on"], true, "{listed}");
 }
+
+#[tokio::test]
+async fn boards_across_a_workspace_follow_its_modules_and_credential_scope() {
+    use agent_workspace_server::mcp::{IssueCredentialCommand, issue_credential};
+    let Some(setup) = setup("awd75_workspace_boards").await else {
+        return;
+    };
+    let app = &setup.app;
+    let owner =
+        sqlx::query_scalar::<_, Uuid>("SELECT actor_id FROM users WHERE login_name = 'owner'")
+            .fetch_one(&setup.pool)
+            .await
+            .expect("owner");
+    let work = create_project(&setup, "WORK", "Work").await;
+    // A second workspace the owner is also in, where Whiteboards stays on.
+    let second = Uuid::now_v7();
+    sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, 'Second', $2)")
+        .bind(second)
+        .bind(format!("second-{}", second.simple()))
+        .execute(&setup.pool)
+        .await
+        .expect("second workspace");
+    sqlx::query(
+        "INSERT INTO organization_memberships (organization_id, actor_id, role, enabled) VALUES ($1, $2, 'owner', true)",
+    )
+    .bind(second)
+    .bind(owner)
+    .execute(&setup.pool)
+    .await
+    .expect("second membership");
+    let token = connect_app(app, &setup.browser, "Owner's app", "full").await;
+    let session = initialize(app, &token).await.expect("owner app");
+    let call = |name: &'static str, arguments: Value| {
+        let token = token.clone();
+        let session = session.clone();
+        async move { tool(app, &token, &session, name, arguments).await }
+    };
+    let mut made = Vec::new();
+    for arguments in [
+        json!({"title": "Team board", "workspaceId": setup.organization_id}),
+        json!({"title": "Work board", "projectId": work}),
+        json!({"title": "Second board", "workspaceId": second}),
+    ] {
+        let board = call("whiteboard_create", arguments.clone()).await;
+        assert_eq!(board["outcome"], "ok", "{arguments}: {board}");
+        made.push(
+            board["value"]["whiteboard"]["id"]
+                .as_str()
+                .expect("board")
+                .to_owned(),
+        );
+    }
+    let (across, in_work, in_second) = (made[0].clone(), made[1].clone(), made[2].clone());
+
+    // An older credential confined to Work opens Work's board but never one
+    // across the workspace, as whiteboards::access has it.
+    let confined = issue_credential(
+        &setup.pool,
+        IssueCredentialCommand {
+            actor_id: owner,
+            project_id: work.parse().expect("work"),
+            client_name: "Confined".to_owned(),
+            scopes: vec!["read".to_owned()],
+            expires_in_days: 1,
+        },
+    )
+    .await
+    .expect("credential");
+    let confined_session = initialize(app, &confined.token).await.expect("session");
+    let opened = tool(
+        app,
+        &confined.token,
+        &confined_session,
+        "thing_open",
+        json!({"kind": "whiteboard", "id": in_work}),
+    )
+    .await;
+    assert_eq!(opened["outcome"], "ok", "{opened}");
+    let refused = tool(
+        app,
+        &confined.token,
+        &confined_session,
+        "thing_open",
+        json!({"kind": "whiteboard", "id": across}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "not_found", "{refused}");
+    assert!(!refused.to_string().contains("Team board"), "{refused}");
+
+    // Whiteboards off in this workspace, on in the second: this workspace's
+    // boards, across it or in a project, are hidden as things and in lists.
+    let (status, changed) = switch(
+        &setup,
+        &setup.browser,
+        json!({"switches": {"whiteboards": false}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let hidden = call("thing_open", json!({"kind": "whiteboard", "id": across})).await;
+    assert_eq!(hidden["outcome"], "not_found", "{hidden}");
+    let (status, body) = send(
+        app,
+        setup.browser.request(
+            "GET",
+            &format!("/api/v1/things/whiteboard/{across}"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    let shown = call("thing_open", json!({"kind": "whiteboard", "id": in_second})).await;
+    assert_eq!(shown["outcome"], "ok", "{shown}");
+    let listed = call("whiteboard_list", json!({})).await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    let ids = listed["value"]["whiteboards"]
+        .as_array()
+        .expect("whiteboards")
+        .iter()
+        .map(|board| board["id"].as_str().expect("id").to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, [in_second.clone()], "{listed}");
+    assert!(
+        !ids.contains(&across) && !ids.contains(&in_work),
+        "{listed}"
+    );
+}
