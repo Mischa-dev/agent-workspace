@@ -78,6 +78,9 @@ pub(super) struct NewTask {
     /// An existing task in the same project (ID, link, or key such as
     /// AWD-12), to make this a subtask of it.
     pub parent_id: Option<String>,
+    /// Custom fields by name or ID (see field_list), such as {"Risk":
+    /// "High"}, typed and checked as task_create's fields are. At most 50.
+    pub fields: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 /// Where a new task goes in the task tree.
@@ -111,6 +114,10 @@ pub(super) struct Draft {
     /// parentId as the call wrote it, until it's resolved into `parent`.
     #[serde(skip)]
     pub parent_written: Option<String>,
+    /// Custom fields as written. Left out of the hash when there are none,
+    /// so earlier batches still match on a retry.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<(String, serde_json::Value)>,
 }
 
 impl Draft {
@@ -262,6 +269,21 @@ pub(super) fn check_shapes(tasks: &[NewTask]) -> (Vec<Draft>, Vec<BatchProblem>)
                 Vec::new()
             }
         };
+        let fields = task
+            .fields
+            .iter()
+            .flatten()
+            .map(|(field, value)| (field.clone(), value.clone()))
+            .collect::<Vec<_>>();
+        if fields.len() > crate::work_item_fields::MAX_VALUES_PER_CHANGE {
+            found.push((
+                "fields",
+                format!(
+                    "Set at most {} fields at a time.",
+                    crate::work_item_fields::MAX_VALUES_PER_CHANGE
+                ),
+            ));
+        }
         for (field, message) in found {
             problems.push(BatchProblem::new(index, field, message).with_ref(reference.clone()));
         }
@@ -281,6 +303,7 @@ pub(super) fn check_shapes(tasks: &[NewTask]) -> (Vec<Draft>, Vec<BatchProblem>)
             acceptance_criteria,
             parent,
             parent_written,
+            fields,
         });
     }
     (drafts, problems)
@@ -301,6 +324,8 @@ pub(super) struct PreparedTask {
     pub acceptance_criteria: Vec<String>,
     pub parent: ParentChoice,
     pub parent_field: &'static str,
+    /// Custom field values, checked; None when the task sets none.
+    pub field_values: Option<crate::work_item_fields::FieldValueChanges>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -378,6 +403,11 @@ pub(super) async fn prepare(
     )
     .await?;
 
+    let definitions = if drafts.iter().any(|draft| !draft.fields.is_empty()) {
+        crate::work_item_fields::definitions(&mut **transaction, project_id, true).await?
+    } else {
+        Vec::new()
+    };
     let default_status = workflow.default_status().map(|status| status.id);
     let default_type = workflow.default_type().map(|kind| kind.id);
     let mut levels = vec![1_usize; drafts.len()];
@@ -474,6 +504,34 @@ pub(super) async fn prepare(
                 parent_problem_text(&ParentProblem::TooDeep, &HashMap::new()),
             ));
         }
+        let field_values = if draft.fields.is_empty() {
+            None
+        } else {
+            let resolved = crate::work_item_fields::resolve(
+                transaction,
+                project_id,
+                crate::work_item_fields::Writer {
+                    actor_id: principal.actor_id,
+                    project_key: &project_key,
+                },
+                &definitions,
+                "fields",
+                &draft.fields,
+            )
+            .await?;
+            match resolved {
+                Ok(values) => Some(values),
+                Err(value_problem) => {
+                    problems.push(problem(
+                        draft,
+                        index,
+                        &value_problem.field,
+                        value_problem.message,
+                    ));
+                    None
+                }
+            }
+        };
         tasks.push(PreparedTask {
             index,
             reference: draft.reference.clone(),
@@ -487,6 +545,7 @@ pub(super) async fn prepare(
             acceptance_criteria: draft.acceptance_criteria.clone(),
             parent: draft.parent,
             parent_field: field,
+            field_values,
         });
     }
     Ok(Prepared {
@@ -698,7 +757,7 @@ pub(super) async fn create(
             transaction,
             actor,
             CreateWorkItemCommand {
-                field_values: None,
+                field_values: task.field_values.as_ref(),
                 title: &task.title,
                 description: &task.description,
                 type_id: Some(task.type_id),

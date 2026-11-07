@@ -21,6 +21,7 @@ export function BulkBar({
   onArchive,
   onClear,
   onDueDate,
+  onField,
   onLaunch,
   onPick,
   onRestore,
@@ -34,6 +35,8 @@ export function BulkBar({
   onArchive: () => void
   onClear: () => void
   onDueDate: (value: string | null) => void
+  /** Set or clear a custom field on each selected task; left out where the project has none to show. */
+  onField?: (anchor: HTMLElement) => void
   /** Start an agent on each selected task; left out where launching isn't offered. */
   onLaunch?: () => void
   onPick: (field: PickerField, anchor: HTMLElement) => void
@@ -67,6 +70,11 @@ export function BulkBar({
                 {action.label}
               </Button>
             ))}
+            {onField ? (
+              <Button aria-haspopup="dialog" disabled={busy} onClick={(event) => onField(event.currentTarget)} size="sm">
+                Field
+              </Button>
+            ) : null}
             {onLaunch ? (
               <Button disabled={busy} icon="play" onClick={onLaunch} size="sm">
                 Launch

@@ -1159,6 +1159,10 @@ pub(super) struct BulkChanges {
     archived: Option<bool>,
     #[serde(default, deserialize_with = "super::deserialize_optional_field")]
     due_date: Option<Option<String>>,
+    /// Custom fields ({field ID or name: value}; null clears one), checked
+    /// for each task as a single edit's fieldValues are (AWD-101).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    field_values: Option<serde_json::Map<String, Value>>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1185,6 +1189,19 @@ impl BulkChanges {
             || !self.add_label_ids.is_empty()
             || !self.remove_label_ids.is_empty()
             || self.due_date.is_some()
+            || self
+                .field_values
+                .as_ref()
+                .is_some_and(|fields| !fields.is_empty())
+    }
+
+    /// The custom fields as written, by field ID or name.
+    fn written_fields(&self) -> Vec<(String, Value)> {
+        self.field_values
+            .iter()
+            .flatten()
+            .map(|(field, value)| (field.clone(), value.clone()))
+            .collect()
     }
 }
 
@@ -1227,6 +1244,10 @@ pub(super) async fn bulk_update(
         .as_ref()
         .map(|date| parse_task_date(date.as_deref(), "dueDate"))
         .transpose()?;
+    let written_fields = changes.written_fields();
+    if written_fields.len() > crate::work_item_fields::MAX_VALUES_PER_CHANGE {
+        return Err(AppError::Validation("fieldValues"));
+    }
     let mut write = begin!(
         start_write(
             &state,
@@ -1266,6 +1287,19 @@ pub(super) async fn bulk_update(
     .await?
     .into_iter()
     .collect::<std::collections::HashMap<_, _>>();
+    // Custom fields are checked for each task against its own values, so an
+    // archived option a task already holds may stay.
+    let (definitions, project_key) = if written_fields.is_empty() {
+        (Vec::new(), String::new())
+    } else {
+        (
+            crate::work_item_fields::definitions(&mut *write.transaction, project_id, true).await?,
+            sqlx::query_scalar::<_, String>("SELECT project_key FROM projects WHERE id = $1")
+                .bind(project_id)
+                .fetch_one(&mut *write.transaction)
+                .await?,
+        )
+    };
 
     // One task at a time in ID order, so two bulk changes over the same
     // tasks lock them in the same order.
@@ -1322,12 +1356,47 @@ pub(super) async fn bulk_update(
             }
             continue;
         }
+        let field_values = if written_fields.is_empty() {
+            None
+        } else {
+            let current = crate::work_item_fields::current_values(
+                &mut write.transaction,
+                project_id,
+                item.id,
+            )
+            .await?;
+            let resolved = crate::work_item_fields::resolve_for(
+                &mut write.transaction,
+                project_id,
+                crate::work_item_fields::Writer {
+                    actor_id: principal.actor_id,
+                    project_key: &project_key,
+                },
+                &definitions,
+                "fieldValues",
+                &written_fields,
+                current.as_ref(),
+            )
+            .await?;
+            match resolved {
+                Ok(values) => Some(values),
+                Err(value_problem) => {
+                    problems.push(BulkProblem {
+                        id: item.id,
+                        key: key.clone(),
+                        code: "invalid_field",
+                        message: value_problem.message,
+                    });
+                    continue;
+                }
+            }
+        };
         let outcome = update_work_item_by_id(
             &mut write.transaction,
             &actor,
             item.id,
             UpdateWorkItemCommand {
-                field_values: None,
+                field_values: field_values.as_ref(),
                 expected_version: item.expected_version,
                 title: None,
                 description: None,

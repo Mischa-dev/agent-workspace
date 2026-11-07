@@ -762,6 +762,7 @@ pub(crate) async fn create_for_import(
             acceptance_criteria: task.criteria.clone(),
             parent_ref: task.parent_in_batch.clone(),
             parent_id: None,
+            fields: None,
         })
         .collect::<Vec<_>>();
     let (mut drafts, mut problems) = task_drafts::check_shapes(&new_tasks);
@@ -883,6 +884,11 @@ pub(super) struct TaskUpdateManyArguments {
     pub milestone: Option<String>,
     /// Their due date: YYYY-MM-DD, or "" to clear it.
     pub due_date: Option<String>,
+    /// Custom fields to set on every one of them, by name or ID (see
+    /// field_list), such as {"Risk": "High", "Points": 3}. Values are typed
+    /// and checked as task_update's fields are, for each task; null clears
+    /// one. At most 50.
+    pub fields: Option<serde_json::Map<String, serde_json::Value>>,
     /// true archives them (their claims are released); false restores them.
     /// Pass it on its own.
     pub archived: Option<bool>,
@@ -954,6 +960,8 @@ struct UpdateManyFingerprint<'a> {
     milestone: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     due_date: Option<Option<NaiveDate>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fields: Option<&'a serde_json::Map<String, serde_json::Value>>,
 }
 
 /// The change one task_update_many call asks for, checked.
@@ -969,6 +977,8 @@ struct Change {
     /// As written; "none" or "" takes them out of their milestone.
     milestone: Option<String>,
     due_date: Option<Option<NaiveDate>>,
+    /// Custom fields by name or ID, as written; checked for each task.
+    fields: Vec<(String, serde_json::Value)>,
 }
 
 impl Change {
@@ -1009,7 +1019,22 @@ impl Change {
                 },
                 None => None,
             },
+            fields: arguments
+                .fields
+                .iter()
+                .flatten()
+                .map(|(field, value)| (field.clone(), value.clone()))
+                .collect(),
         };
+        if change.fields.len() > crate::work_item_fields::MAX_VALUES_PER_CHANGE {
+            return Err((
+                "fields",
+                format!(
+                    "Set at most {} fields at a time.",
+                    crate::work_item_fields::MAX_VALUES_PER_CHANGE
+                ),
+            ));
+        }
         let changes_fields = change.status.is_some()
             || change.priority.is_some()
             || change.assignee.is_some()
@@ -1018,11 +1043,12 @@ impl Change {
             || !change.add_labels.is_empty()
             || !change.remove_labels.is_empty()
             || change.milestone.is_some()
-            || change.due_date.is_some();
+            || change.due_date.is_some()
+            || !change.fields.is_empty();
         if !changes_fields && change.archived.is_none() {
             return Err((
                 "status",
-                "Say what to change: status, priority, assignee, clearAssignee, type, addLabels, removeLabels, milestone, dueDate, or archived.".to_owned(),
+                "Say what to change: status, priority, assignee, clearAssignee, type, addLabels, removeLabels, milestone, dueDate, fields, or archived.".to_owned(),
             ));
         }
         if change
@@ -1370,6 +1396,10 @@ async fn update_many(
                 archived: change.archived,
                 milestone: milestone.as_deref(),
                 due_date: change.due_date,
+                fields: arguments
+                    .fields
+                    .as_ref()
+                    .filter(|fields| !fields.is_empty()),
             })?;
             match reserve(&mut transaction, principal.actor_id, &scope, key, hash).await? {
                 IdempotencyOutcome::Replay(replay) => {
@@ -1452,6 +1482,14 @@ async fn update_many(
         }
         None => None,
     };
+    // Custom fields are checked for each task below, against its own values,
+    // so an archived option a task already holds may stay.
+    let definitions = if change.fields.is_empty() {
+        Vec::new()
+    } else {
+        crate::work_item_fields::definitions(&mut *transaction, project_id, true).await?
+    };
+    let mut field_changes = HashMap::new();
 
     // Lock every task, in id order so two batches never deadlock, then check
     // each against the change.
@@ -1598,6 +1636,29 @@ async fn update_many(
                 );
             }
         }
+        if !change.fields.is_empty() {
+            let resolved = crate::work_item_fields::resolve_for(
+                &mut transaction,
+                project_id,
+                crate::work_item_fields::Writer {
+                    actor_id: principal.actor_id,
+                    project_key: &project_key,
+                },
+                &definitions,
+                "fields",
+                &change.fields,
+                Some(&current.field_values),
+            )
+            .await?;
+            match resolved {
+                Ok(values) => {
+                    field_changes.insert(*task_id, values);
+                }
+                Err(problem) => problems.push(
+                    BatchProblem::new(index, &problem.field, problem.message).with_task(&key),
+                ),
+            }
+        }
     }
     if !problems.is_empty() {
         transaction.rollback().await?;
@@ -1670,7 +1731,7 @@ async fn update_many(
             .remove(task_id)
             .ok_or(AppError::Internal("a batch task is locked once"))?;
         let key = key_of(task_id);
-        let before = serde_json::json!({
+        let mut before = serde_json::json!({
             "statusId": current.status_id,
             "priority": current.priority,
             "assigneeActorId": current.assignee_actor_id,
@@ -1679,6 +1740,8 @@ async fn update_many(
             "milestoneId": current.milestone_id,
             "dueDate": current.due_date,
         });
+        // Custom field values aren't kept here: each task's history has
+        // their before and after, and this row holds IDs, not content.
         let outcome = match change.archived {
             Some(archived) => {
                 apply_archive(&mut transaction, &actor, current, archived, index, &key).await?
@@ -1689,7 +1752,7 @@ async fn update_many(
                     &actor,
                     current,
                     UpdateWorkItemCommand {
-                        field_values: None,
+                        field_values: field_changes.get(task_id),
                         expected_version: 0,
                         title: None,
                         description: None,
@@ -1724,7 +1787,6 @@ async fn update_many(
             }
         };
         if !outcome.changed_fields.is_empty() {
-            let mut before = before;
             if !delta.is_empty() {
                 before["labelIds"] =
                     serde_json::json!(labels_before.get(task_id).cloned().unwrap_or_default());
@@ -2044,6 +2106,7 @@ mod tests {
                 archived: None,
                 milestone: None,
                 due_date: None,
+                fields: None,
             })
             .expect("hash")
         };

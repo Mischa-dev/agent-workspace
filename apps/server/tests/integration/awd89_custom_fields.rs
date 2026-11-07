@@ -1125,3 +1125,786 @@ async fn a_large_change_keeps_its_history_within_the_payload_limit() {
     assert!(largest <= 8192, "{largest} bytes");
     assert_eq!(title.as_deref(), Some("😁".repeat(240).as_str()));
 }
+
+/// AWD-101: the bulk tools and the web's bulk route set custom fields on
+/// every task or none, typed and checked as a single edit's are, with one
+/// history entry per task; someone who can only read tasks can't.
+#[tokio::test]
+async fn bulk_tools_set_fields_on_every_task_or_none() {
+    let Some(setup) = setup("awd101_bulk_fields").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let owner = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+    for (name, extra) in [
+        (
+            "Risk",
+            json!({"type": "single_choice", "options": [{"name": "Low"}, {"name": "High"}]}),
+        ),
+        ("Points", json!({"type": "number"})),
+    ] {
+        let mut arguments = json!({"projectId": "WORK", "name": name});
+        for (key, value) in extra.as_object().expect("extra") {
+            arguments[key] = value.clone();
+        }
+        let written = owner("field_write", arguments).await;
+        assert_eq!(written["outcome"], "ok", "{written}");
+    }
+    let field = |name: &'static str| {
+        let pool = setup.pool.clone();
+        let work = work.clone();
+        async move {
+            sqlx::query_scalar::<_, String>(
+                "SELECT id::text FROM field_definitions WHERE project_id = $1::uuid AND name = $2",
+            )
+            .bind(&work)
+            .bind(name)
+            .fetch_one(&pool)
+            .await
+            .expect("field")
+        }
+    };
+    let (risk, points) = (field("Risk").await, field("Points").await);
+    let option = |name: &'static str| {
+        let pool = setup.pool.clone();
+        let risk = risk.clone();
+        async move {
+            sqlx::query_scalar::<_, String>(
+                "SELECT option ->> 'id' FROM field_definitions, jsonb_array_elements(config -> 'options') option \
+                 WHERE id = $1::uuid AND option ->> 'name' = $2",
+            )
+            .bind(&risk)
+            .bind(name)
+            .fetch_one(&pool)
+            .await
+            .expect("option")
+        }
+    };
+    let (low, high) = (option("Low").await, option("High").await);
+    let values = || {
+        let pool = setup.pool.clone();
+        let work = work.clone();
+        async move {
+            sqlx::query_as::<_, (i64, i64, Value)>(
+                "SELECT number, version, field_values FROM work_items \
+                 WHERE project_id = $1::uuid ORDER BY number",
+            )
+            .bind(&work)
+            .fetch_all(&pool)
+            .await
+            .expect("tasks")
+        }
+    };
+
+    // task_create_many: each task's own fields, typed; one bad value and
+    // none of the batch is made.
+    let refused = owner(
+        "task_create_many",
+        json!({"projectId": "WORK", "clientRequestId": "bulk-make-bad", "tasks": [
+            {"title": "Four", "fields": {"Risk": "Low"}},
+            {"title": "Five", "fields": {"Risk": "Nope"}},
+        ]}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "rejected", "{refused}");
+    assert!(values().await.is_empty());
+    let made = owner(
+        "task_create_many",
+        json!({"projectId": "WORK", "clientRequestId": "bulk-make", "tasks": [
+            {"title": "One", "fields": {"Risk": "Low"}},
+            {"title": "Two", "fields": {"Points": "2"}},
+            {"title": "Three"},
+        ]}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let tasks = values().await;
+    assert_eq!(tasks.len(), 3);
+    assert_eq!(tasks[0].2[&risk], json!(low));
+    assert_eq!(tasks[1].2[&points], json!(2));
+    assert_eq!(tasks[2].2, json!({}));
+
+    // task_update_many: the same fields on every task, all or nothing.
+    let versions = tasks.iter().map(|task| task.1).collect::<Vec<_>>();
+    let refused = owner(
+        "task_update_many",
+        json!({"projectId": "WORK", "taskIds": ["WORK-1", "WORK-2", "WORK-3"],
+               "fields": {"Risk": "High", "Points": "lots"}, "clientRequestId": "bulk-set-bad"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "rejected", "{refused}");
+    assert_eq!(
+        values().await.iter().map(|task| task.1).collect::<Vec<_>>(),
+        versions,
+        "nothing changed"
+    );
+    let updated = owner(
+        "task_update_many",
+        json!({"projectId": "WORK", "taskIds": ["WORK-1", "WORK-2", "WORK-3"],
+               "fields": {"Risk": "High", "Points": 5}, "clientRequestId": "bulk-set"}),
+    )
+    .await;
+    assert_eq!(updated["outcome"], "ok", "{updated}");
+    assert_eq!(updated["value"]["changedCount"], 3, "{updated}");
+    for task in values().await {
+        assert_eq!(task.2[&risk], json!(high), "WORK-{}", task.0);
+        assert_eq!(task.2[&points], json!(5), "WORK-{}", task.0);
+    }
+    // One history entry per task, with the field's before and after.
+    let entries = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM work_item_activity \
+         WHERE project_id = $1::uuid AND kind = 'work_item_updated' AND payload -> 'changes' ? $2",
+    )
+    .bind(&work)
+    .bind(format!("field:{risk}"))
+    .fetch_one(&setup.pool)
+    .await
+    .expect("history");
+    assert_eq!(entries, 3);
+
+    // The web's bulk route: clear a field on two tasks; a bad value changes none.
+    let tasks = values().await;
+    let items = |tasks: &[(i64, i64, Value)]| -> Value {
+        let ids = ["WORK-1", "WORK-2"];
+        Value::Array(
+            tasks
+                .iter()
+                .filter(|task| ids.contains(&format!("WORK-{}", task.0).as_str()))
+                .map(|task| json!({"number": task.0, "expectedVersion": task.1}))
+                .collect(),
+        )
+    };
+    let ids = sqlx::query_as::<_, (i64, String)>(
+        "SELECT number, id::text FROM work_items WHERE project_id = $1::uuid ORDER BY number",
+    )
+    .bind(&work)
+    .fetch_all(&setup.pool)
+    .await
+    .expect("ids");
+    let bulk_items = items(&tasks)
+        .as_array()
+        .expect("items")
+        .iter()
+        .map(|item| {
+            let id = &ids
+                .iter()
+                .find(|(number, _)| json!(number) == item["number"])
+                .expect("id")
+                .1;
+            json!({"id": id, "expectedVersion": item["expectedVersion"]})
+        })
+        .collect::<Vec<_>>();
+    let bulk = |key: &'static str, changes: Value| {
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/work-items/bulk"),
+            Some(key),
+            json!({"items": bulk_items, "changes": changes}),
+        )
+    };
+    let (status, body) = send(
+        app,
+        bulk("bulk-bad", json!({"fieldValues": {risk.clone(): "nope"}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(values().await, tasks, "nothing changed");
+    let (status, body) = send(
+        app,
+        bulk("bulk-clear", json!({"fieldValues": {risk.clone(): null}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let after = values().await;
+    assert!(after[0].2.get(&risk).is_none() && after[1].2.get(&risk).is_none());
+    assert_eq!(after[2].2[&risk], json!(high), "WORK-3 wasn't selected");
+
+    // Someone who only reads tasks can't set fields in bulk.
+    let (pat, pat_browser) = add_person(&setup, &[&work], "pat").await;
+    sqlx::query("UPDATE project_memberships SET role = 'viewer' WHERE actor_id = $1")
+        .bind(pat)
+        .execute(&setup.pool)
+        .await
+        .expect("make Pat a viewer");
+    let after_items = after
+        .iter()
+        .take(1)
+        .map(|task| {
+            json!({"id": ids.iter().find(|(number, _)| *number == task.0).expect("id").1, "expectedVersion": task.1})
+        })
+        .collect::<Vec<_>>();
+    let (status, body) = send(
+        app,
+        pat_browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/work-items/bulk"),
+            Some("bulk-viewer"),
+            json!({"items": after_items, "changes": {"fieldValues": {risk.clone(): low}}}),
+        ),
+    )
+    .await;
+    assert!(status.is_client_error(), "{status}: {body}");
+    assert_eq!(values().await, after, "nothing changed");
+}
+
+/// AWD-89: an owner renames and reorders fields, on the web and through
+/// MCP; values stay with the field, and someone who can't change the
+/// workflow can't do either.
+#[tokio::test]
+async fn fields_are_renamed_and_reordered() {
+    let Some(setup) = setup("awd89_rename_reorder").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let fields_path = format!("/api/v1/projects/{work}/fields");
+    let mut ids = Vec::new();
+    for name in ["Alpha", "Beta", "Gamma"] {
+        let (status, field) = send(
+            app,
+            setup.browser.request(
+                "POST",
+                &fields_path,
+                Some(&format!("reorder-{name}")),
+                json!({"name": name, "type": "text"}),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{field}");
+        ids.push(field["id"].as_str().expect("field").to_owned());
+    }
+    let fields_of = |status: StatusCode, body: Value| {
+        assert_eq!(status, StatusCode::OK, "{body}");
+        body["fields"]
+            .as_array()
+            .expect("fields")
+            .iter()
+            .map(|field| {
+                (
+                    field["id"].as_str().unwrap_or_default().to_owned(),
+                    field["name"].as_str().unwrap_or_default().to_owned(),
+                    field["version"].as_i64().unwrap_or_default(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let browser = &setup.browser;
+    let listed = || {
+        let request = browser.request("GET", &fields_path, None, Value::Null);
+        async move {
+            let (status, body) = send(app, request).await;
+            fields_of(status, body)
+        }
+    };
+    let names = |fields: &[(String, String, i64)]| {
+        fields
+            .iter()
+            .map(|field| field.1.clone())
+            .collect::<Vec<_>>()
+    };
+    let version_of = |fields: &[(String, String, i64)], id: &str| {
+        fields.iter().find(|field| field.0 == id).expect("field").2
+    };
+
+    // A value set on Alpha stays with it through a rename.
+    let (status, task) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/work-items"),
+            Some("reorder-task"),
+            json!({"title": "Keeps its value", "fieldValues": {ids[0].clone(): "kept"}}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{task}");
+    let task_id = task["id"].as_str().expect("task").to_owned();
+
+    // The web: move Gamma to the top, then rename Alpha.
+    let fields = listed().await;
+    let (status, body) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            &format!("{fields_path}/{}", ids[2]),
+            Some("reorder-gamma"),
+            json!({"expectedVersion": version_of(&fields, &ids[2]), "position": 1}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(names(&listed().await), ["Gamma", "Alpha", "Beta"]);
+    let fields = listed().await;
+    let (status, body) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            &format!("{fields_path}/{}", ids[0]),
+            Some("rename-alpha"),
+            json!({"expectedVersion": version_of(&fields, &ids[0]), "name": "First"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(names(&listed().await), ["Gamma", "First", "Beta"]);
+
+    // MCP: rename Beta and move it to the top.
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let renamed = tool(
+        app,
+        &codex,
+        &session,
+        "field_write",
+        json!({"projectId": "WORK", "field": "Beta", "name": "Second", "position": 1}),
+    )
+    .await;
+    assert_eq!(renamed["outcome"], "ok", "{renamed}");
+    assert_eq!(names(&listed().await), ["Second", "Gamma", "First"]);
+    let listed_by_agent = tool(
+        app,
+        &codex,
+        &session,
+        "field_list",
+        json!({"projectId": "WORK"}),
+    )
+    .await;
+    let agent_names = listed_by_agent["value"]["fields"]
+        .as_array()
+        .expect("fields")
+        .iter()
+        .map(|field| field["name"].as_str().unwrap_or_default().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(agent_names, ["Second", "Gamma", "First"]);
+
+    // The value stayed with its field, under the new name.
+    let stored =
+        sqlx::query_scalar::<_, Value>("SELECT field_values FROM work_items WHERE id = $1::uuid")
+            .bind(&task_id)
+            .fetch_one(&setup.pool)
+            .await
+            .expect("values");
+    assert_eq!(stored[&ids[0]], json!("kept"));
+
+    // A member can do neither.
+    let (_, member_browser) = add_person(&setup, &[&work], "pat").await;
+    let fields = listed().await;
+    for (key, change) in [
+        ("member-rename", json!({"name": "Mine"})),
+        ("member-reorder", json!({"position": 1})),
+    ] {
+        let mut body = change;
+        body["expectedVersion"] = json!(version_of(&fields, &ids[1]));
+        let (status, refused) = send(
+            app,
+            member_browser.request(
+                "PATCH",
+                &format!("{fields_path}/{}", ids[1]),
+                Some(key),
+                body,
+            ),
+        )
+        .await;
+        assert!(status.is_client_error(), "{status}: {refused}");
+    }
+    assert_eq!(names(&listed().await), ["Second", "Gamma", "First"]);
+}
+
+/// AWD-101: bulk field changes are checked task by task and land on all or
+/// none. An archived option one task holds doesn't let another take it; a
+/// change that overflows one task's stored values rolls back every task;
+/// a preview changes nothing; a replay adds no history; and the same
+/// request ID with other values is a conflict. The preview, replay and
+/// conflict cases cover task_update_many only, not task_create_many's fields.
+#[tokio::test]
+async fn bulk_field_changes_hold_task_by_task() {
+    let Some(setup) = setup("awd101_bulk_per_task").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let owner = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+    for (name, extra) in [
+        (
+            "Areas",
+            json!({"type": "multiple_choice", "options": [{"name": "X"}, {"name": "Y"}]}),
+        ),
+        ("N1", json!({"type": "text"})),
+        ("N2", json!({"type": "text"})),
+        ("N3", json!({"type": "text"})),
+        ("N4", json!({"type": "text"})),
+    ] {
+        let mut arguments = json!({"projectId": "WORK", "name": name});
+        for (key, value) in extra.as_object().expect("extra") {
+            arguments[key] = value.clone();
+        }
+        let written = owner("field_write", arguments).await;
+        assert_eq!(written["outcome"], "ok", "{written}");
+    }
+    let made = owner(
+        "task_create_many",
+        json!({"projectId": "WORK", "clientRequestId": "per-task-make", "tasks": [
+            {"title": "Holds X", "fields": {"Areas": ["X"]}},
+            {"title": "Holds nothing"},
+        ]}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let (areas, x, y) = sqlx::query_as::<_, (String, String, String)>(
+        "SELECT field.id::text, x.value ->> 'id', y.value ->> 'id' \
+         FROM field_definitions field, \
+              jsonb_array_elements(field.config -> 'options') x, \
+              jsonb_array_elements(field.config -> 'options') y \
+         WHERE field.project_id = $1::uuid AND field.name = 'Areas' \
+           AND x.value ->> 'name' = 'X' AND y.value ->> 'name' = 'Y'",
+    )
+    .bind(&work)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("areas");
+    // X is archived: WORK-1 keeps it, nobody can newly choose it.
+    let archived = owner(
+        "field_write",
+        json!({"projectId": "WORK", "field": "Areas", "options": [{"id": y, "name": "Y"}]}),
+    )
+    .await;
+    assert_eq!(archived["outcome"], "ok", "{archived}");
+    let snapshot = || {
+        let pool = setup.pool.clone();
+        let work = work.clone();
+        async move {
+            let tasks = sqlx::query_as::<_, (i64, i64, Value)>(
+                "SELECT number, version, field_values FROM work_items \
+                 WHERE project_id = $1::uuid ORDER BY number",
+            )
+            .bind(&work)
+            .fetch_all(&pool)
+            .await
+            .expect("tasks");
+            let history = sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM work_item_activity WHERE project_id = $1::uuid",
+            )
+            .bind(&work)
+            .fetch_one(&pool)
+            .await
+            .expect("history");
+            (tasks, history)
+        }
+    };
+    let ids = sqlx::query_scalar::<_, String>(
+        "SELECT id::text FROM work_items WHERE project_id = $1::uuid ORDER BY number",
+    )
+    .bind(&work)
+    .fetch_all(&setup.pool)
+    .await
+    .expect("ids");
+    let bulk = |key: &'static str, tasks: &[(i64, i64, Value)], changes: Value| {
+        let items = ids
+            .iter()
+            .zip(tasks)
+            .map(|(id, task)| json!({"id": id, "expectedVersion": task.1}))
+            .collect::<Vec<_>>();
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/work-items/bulk"),
+            Some(key),
+            json!({"items": items, "changes": changes}),
+        )
+    };
+
+    // 1. Setting [X, Y] on both: WORK-2 doesn't hold X, so neither changes.
+    let before = snapshot().await;
+    let refused = owner(
+        "task_update_many",
+        json!({"projectId": "WORK", "taskIds": ["WORK-1", "WORK-2"],
+               "fields": {"Areas": ["X", "Y"]}, "clientRequestId": "per-task-archived"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "rejected", "{refused}");
+    assert_eq!(refused["problems"][0]["task"], "WORK-2", "{refused}");
+    assert_eq!(snapshot().await, before);
+    let (status, body) = send(
+        app,
+        bulk(
+            "per-task-archived-web",
+            &before.0,
+            json!({"fieldValues": {areas.clone(): [x.clone(), y.clone()]}}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(snapshot().await, before);
+    // WORK-1 alone may keep the X it holds.
+    let kept = owner(
+        "task_update_many",
+        json!({"projectId": "WORK", "taskIds": ["WORK-1"],
+               "fields": {"Areas": ["X", "Y"]}, "clientRequestId": "per-task-kept"}),
+    )
+    .await;
+    assert_eq!(kept["outcome"], "ok", "{kept}");
+
+    // 4. A preview changes nothing; a replay adds no history; the same
+    // request ID with other values is a conflict.
+    let before = snapshot().await;
+    let previewed = owner(
+        "task_update_many",
+        json!({"projectId": "WORK", "taskIds": ["WORK-1", "WORK-2"],
+               "fields": {"N1": "draft"}, "preview": true}),
+    )
+    .await;
+    assert_eq!(previewed["outcome"], "ok", "{previewed}");
+    assert_eq!(previewed["value"]["preview"], true, "{previewed}");
+    assert_eq!(snapshot().await, before);
+    let once = json!({"projectId": "WORK", "taskIds": ["WORK-1", "WORK-2"],
+                      "fields": {"N1": "one"}, "clientRequestId": "per-task-once"});
+    let applied = owner("task_update_many", once.clone()).await;
+    assert_eq!(applied["outcome"], "ok", "{applied}");
+    let after = snapshot().await;
+    assert_eq!(after.1, before.1 + 2, "one history entry per task");
+    let replayed = owner("task_update_many", once.clone()).await;
+    assert_eq!(replayed["outcome"], "ok", "{replayed}");
+    assert_eq!(replayed["value"]["idempotentReplay"], true, "{replayed}");
+    assert_eq!(snapshot().await, after);
+    let mut other = once;
+    other["fields"] = json!({"N1": "two"});
+    let conflict = owner("task_update_many", other).await;
+    assert_eq!(conflict["outcome"], "conflict", "{conflict}");
+    assert_eq!(snapshot().await, after);
+
+    // 3. One task sits near the 60,000-byte bound for stored values; a change
+    // that fits the other but not it changes neither, by MCP or the web. The
+    // size is checked as each task is written, the web writes tasks in ID
+    // order (planning::bulk_update) and MCP in the order given, so the full
+    // task goes last in both: the other task's change is written first, then
+    // rolled back with the batch.
+    let by_id = sqlx::query_scalar::<_, i64>(
+        // PostgreSQL compares UUIDs byte by byte, as Rust's Uuid does.
+        "SELECT number FROM work_items WHERE project_id = $1::uuid ORDER BY id",
+    )
+    .bind(&work)
+    .fetch_all(&setup.pool)
+    .await
+    .expect("tasks by ID");
+    let [early, late] = by_id[..] else {
+        panic!("two tasks: {by_id:?}")
+    };
+    let (early_key, late_key) = (format!("WORK-{early}"), format!("WORK-{late}"));
+    let task_state = |number: i64| {
+        let pool = setup.pool.clone();
+        let work = work.clone();
+        async move {
+            sqlx::query_as::<_, (i64, Value, i64)>(
+                "SELECT item.version, item.field_values, \
+                        (SELECT count(*) FROM work_item_activity activity \
+                         WHERE activity.work_item_id = item.id) \
+                 FROM work_items item WHERE item.project_id = $1::uuid AND item.number = $2",
+            )
+            .bind(&work)
+            .bind(number)
+            .fetch_one(&pool)
+            .await
+            .expect("task")
+        }
+    };
+    let big = "😀".repeat(4_000);
+    let filled = owner(
+        "task_update_many",
+        json!({"projectId": "WORK", "taskIds": [late_key],
+               "fields": {"N2": big, "N3": big, "N4": big}, "clientRequestId": "per-task-fill"}),
+    )
+    .await;
+    assert_eq!(filled["outcome"], "ok", "{filled}");
+    let before = snapshot().await;
+    let early_before = task_state(early).await;
+    let overflow = "😁".repeat(3_500);
+    let refused = owner(
+        "task_update_many",
+        json!({"projectId": "WORK", "taskIds": [early_key, late_key],
+               "fields": {"N1": overflow}, "clientRequestId": "per-task-overflow"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "invalid_request", "{refused}");
+    assert_eq!(refused["field"], "fieldValues", "{refused}");
+    assert_eq!(
+        task_state(early).await,
+        early_before,
+        "{early_key}'s values, version and history roll back"
+    );
+    assert_eq!(snapshot().await, before);
+    let n1 = sqlx::query_scalar::<_, String>(
+        "SELECT id::text FROM field_definitions WHERE project_id = $1::uuid AND name = 'N1'",
+    )
+    .bind(&work)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("N1");
+    let (status, body) = send(
+        app,
+        bulk(
+            "per-task-overflow-web",
+            &before.0,
+            json!({"fieldValues": {n1.clone(): overflow}}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(
+        body["error"]["message"],
+        agent_workspace_server::work_item_fields::TOO_LARGE,
+        "{body}"
+    );
+    assert_eq!(
+        task_state(early).await,
+        early_before,
+        "{early_key}'s values, version and history roll back"
+    );
+    assert_eq!(snapshot().await, before);
+    // A change that fits both lands, and each task's history stays within
+    // work_item_activity's 8 KB.
+    let fits = owner(
+        "task_update_many",
+        json!({"projectId": "WORK", "taskIds": ["WORK-1", "WORK-2"],
+               "fields": {"N1": "😁".repeat(2_000)}, "clientRequestId": "per-task-fits"}),
+    )
+    .await;
+    assert_eq!(fits["outcome"], "ok", "{fits}");
+    let largest = sqlx::query_scalar::<_, Option<i32>>(
+        "SELECT max(octet_length(payload::text)) FROM work_item_activity \
+         WHERE project_id = $1::uuid AND kind = 'work_item_updated'",
+    )
+    .bind(&work)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("history")
+    .unwrap_or_default();
+    assert!(largest <= 8192, "{largest} bytes");
+}
+
+/// Fields' definitions and the new bulk arguments need the same roles
+/// through MCP as on the web: a member can't rename or reorder a field, and
+/// someone who only reads tasks can't set values in bulk.
+#[tokio::test]
+async fn field_tools_and_bulk_arguments_refuse_without_the_role() {
+    let Some(setup) = setup("awd101_mcp_roles").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    for name in ["Risk", "Size"] {
+        let written = tool(
+            app,
+            &codex,
+            &session,
+            "field_write",
+            json!({"projectId": "WORK", "name": name, "type": "text"}),
+        )
+        .await;
+        assert_eq!(written["outcome"], "ok", "{written}");
+    }
+    let made = tool(
+        app,
+        &codex,
+        &session,
+        "task_create_many",
+        json!({"projectId": "WORK", "clientRequestId": "roles-make", "tasks": [{"title": "One"}]}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let state = || {
+        let pool = setup.pool.clone();
+        let work = work.clone();
+        async move {
+            sqlx::query_as::<_, (String, i32, i64)>(
+                "SELECT name, position, version FROM field_definitions \
+                 WHERE project_id = $1::uuid ORDER BY position",
+            )
+            .bind(&work)
+            .fetch_all(&pool)
+            .await
+            .expect("fields")
+        }
+    };
+    let tasks = || {
+        let pool = setup.pool.clone();
+        let work = work.clone();
+        async move {
+            sqlx::query_as::<_, (i64, Value)>(
+                "SELECT version, field_values FROM work_items WHERE project_id = $1::uuid ORDER BY number",
+            )
+            .bind(&work)
+            .fetch_all(&pool)
+            .await
+            .expect("tasks")
+        }
+    };
+    let (fields_before, tasks_before) = (state().await, tasks().await);
+
+    // Mara is a member: she edits tasks but doesn't change the workflow.
+    let (mara, mara_token) =
+        create_agent(app, &setup.browser, &space(&setup).await, "Mara", "mara").await;
+    add_member(&setup, &work, mara, "member").await;
+    let mara_session = initialize(app, &mara_token).await.expect("Mara MCP");
+    for arguments in [
+        json!({"projectId": "WORK", "field": "Risk", "name": "Hazard"}),
+        json!({"projectId": "WORK", "field": "Size", "position": 1}),
+    ] {
+        let refused = tool(
+            app,
+            &mara_token,
+            &mara_session,
+            "field_write",
+            arguments.clone(),
+        )
+        .await;
+        // Refused for the role (field_tools: Action::WorkflowManage), not
+        // for anything else about the call.
+        assert_eq!(
+            refused["outcome"], "permission_denied",
+            "{arguments}: {refused}"
+        );
+    }
+    assert_eq!(state().await, fields_before);
+
+    // Vic only reads tasks: neither bulk tool sets values for him.
+    let (vic, vic_token) =
+        create_agent(app, &setup.browser, &space(&setup).await, "Vic", "vic").await;
+    add_member(&setup, &work, vic, "viewer").await;
+    let vic_session = initialize(app, &vic_token).await.expect("Vic MCP");
+    let refused = tool(
+        app,
+        &vic_token,
+        &vic_session,
+        "task_update_many",
+        json!({"projectId": "WORK", "taskIds": ["WORK-1"], "fields": {"Risk": "High"},
+               "clientRequestId": "roles-viewer-update"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    let refused = tool(
+        app,
+        &vic_token,
+        &vic_session,
+        "task_create_many",
+        json!({"projectId": "WORK", "clientRequestId": "roles-viewer-make",
+               "tasks": [{"title": "Two", "fields": {"Risk": "High"}}]}),
+    )
+    .await;
+    // Refused for the role (Action::WorkItemCreate), checked before any value.
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    assert_eq!(tasks().await, tasks_before);
+}

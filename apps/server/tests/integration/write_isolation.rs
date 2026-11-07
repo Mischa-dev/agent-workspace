@@ -4568,6 +4568,14 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
                 "items": [{"id": a.subtask, "expectedVersion": version("work_items", a.subtask)}],
                 "changes": {"addLabelIds": [bx.label]},
             }),
+            json!({
+                "items": [{"id": a.subtask, "expectedVersion": version("work_items", a.subtask)}],
+                "changes": {"fieldValues": keyed(bx.field, json!("Net"))},
+            }),
+            json!({
+                "items": [{"id": a.subtask, "expectedVersion": version("work_items", a.subtask)}],
+                "changes": {"fieldValues": keyed(ax.person_field, json!(b.rook))},
+            }),
         ]),
         path_case(
             "PATCH /api/v1/projects/{project_id}/work-items/{work_item_id}",
@@ -5500,11 +5508,23 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "tasks": [{"title": "Net many"}], "clientRequestId": "net-many-own"}),
             vec![json!({"projectId": b.project, "tasks": [{"title": "Net many"}], "clientRequestId": "net-many-b"})],
         )
-        .rejecting(vec![json!({
-            "projectId": a.project,
-            "tasks": [{"title": "Net many", "parentId": b.task}],
-            "clientRequestId": "net-many-mixed",
-        })]),
+        .rejecting(vec![
+            json!({
+                "projectId": a.project,
+                "tasks": [{"title": "Net many", "parentId": b.task}],
+                "clientRequestId": "net-many-mixed",
+            }),
+            json!({
+                "projectId": a.project,
+                "tasks": [{"title": "Net many", "fields": keyed(bx.field, json!("Net"))}],
+                "clientRequestId": "net-many-field",
+            }),
+            json!({
+                "projectId": a.project,
+                "tasks": [{"title": "Net many", "fields": keyed(ax.person_field, json!(b.rook))}],
+                "clientRequestId": "net-many-person",
+            }),
+        ]),
         mcp_case(
             "task_update_many",
             json!({"projectId": a.project, "taskIds": [a.subtask], "priority": "high", "clientRequestId": "net-update-many-own"}),
@@ -5517,6 +5537,8 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "taskIds": [a.subtask, b.task], "priority": "high", "clientRequestId": "net-update-many-m1"}),
             json!({"projectId": a.project, "taskIds": [a.subtask], "milestone": bx.milestone, "clientRequestId": "net-update-many-m2"}),
             json!({"projectId": a.project, "taskIds": [a.subtask], "assignee": b.rook, "clientRequestId": "net-update-many-m3"}),
+            json!({"projectId": a.project, "taskIds": [a.subtask], "fields": keyed(bx.field, json!("Net")), "clientRequestId": "net-update-many-m4"}),
+            json!({"projectId": a.project, "taskIds": [a.subtask], "fields": keyed(ax.person_field, json!(b.rook)), "clientRequestId": "net-update-many-m5"}),
         ]),
         mcp_case(
             "task_criteria",
