@@ -213,7 +213,7 @@ pub(super) async fn task_move(
         }
         // AWD-75: the gate checked Tasks in this task's project; the move also
         // creates in the target, so Tasks must be on there too.
-        if !super::tasks::tasks_on(&mut *transaction, target_project_id, principal.actor_id).await? {
+        if !super::tasks::tasks_on(&mut transaction, target_project_id, principal.actor_id).await? {
             return Ok(ToolResult::module_off("task_move", "Tasks"));
         }
 

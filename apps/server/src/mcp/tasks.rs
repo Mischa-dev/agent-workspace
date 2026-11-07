@@ -2724,7 +2724,7 @@ async fn task_reorder_inner(
     }
     // AWD-75: the tasks were named by ID, so the gate couldn't see their
     // project; Tasks must be on there.
-    if !tasks_on(&mut *transaction, project_id, principal.actor_id).await? {
+    if !tasks_on(&mut transaction, project_id, principal.actor_id).await? {
         return Ok(ToolResult::module_off("task_reorder", "Tasks"));
     }
     let locked = lock_work_items(&mut transaction, project_id, &ids).await?;

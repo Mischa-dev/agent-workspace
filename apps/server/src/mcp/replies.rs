@@ -342,7 +342,7 @@ pub(super) async fn inbox_list(
         .fetch_all(&mut *transaction)
         .await?;
         let modules = crate::modules::state::ProjectModules::load(
-            &mut *transaction,
+            &mut transaction,
             principal.actor_id,
             &projects,
         )
