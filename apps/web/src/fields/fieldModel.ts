@@ -139,8 +139,18 @@ export function chosenOptions(field: FieldDefinition, value: FieldValue | undefi
   return field.options.filter((option) => ids.includes(option.id))
 }
 
+/**
+ * A number as the app shows it. Six decimals would round a small value
+ * such as 1e-7 to 0, so below 1 it keeps six significant digits, and below
+ * one millionth it reads in scientific notation ("1e-7") rather than a
+ * long run of zeros.
+ */
 function formatNumber(value: number) {
-  return Number.isInteger(value) ? value.toLocaleString() : value.toLocaleString(undefined, { maximumFractionDigits: 6 })
+  if (Number.isInteger(value)) return value.toLocaleString()
+  const size = Math.abs(value)
+  if (size < 1e-6) return Number(value.toPrecision(6)).toExponential()
+  if (size < 1) return value.toLocaleString(undefined, { maximumSignificantDigits: 6 })
+  return value.toLocaleString(undefined, { maximumFractionDigits: 6 })
 }
 
 /** A date as "Nov 4", with the year when it isn't this year. */

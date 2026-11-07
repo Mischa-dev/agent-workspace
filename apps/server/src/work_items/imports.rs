@@ -2073,9 +2073,18 @@ const CSV_HEADERS: [&str; 15] = [
 /// A custom field's CSV cell. A multiple choice is a JSON list of its
 /// option names (`["A","B"]`), since an option's own name may hold a comma
 /// ("A, B" could be one option or two); the rest read as the app shows them.
+/// A name (a person, an option, a link) that itself starts with an
+/// apostrophe gets one more, so `unguarded` can tell it from the guard
+/// `csv_field` puts before a formula character: "=Plan" is written
+/// "'=Plan" and "'=Plan" is written "''=Plan".
 fn field_cell(field: &FieldDefinition, value: &Value) -> String {
     match (field.field_type, value) {
         (FieldType::MultipleChoice, Value::Array(_)) => value.to_string(),
+        (FieldType::SingleChoice | FieldType::Person | FieldType::Link, Value::String(name))
+            if name.starts_with('\'') =>
+        {
+            format!("'{name}")
+        }
         _ => fields::display_text(value),
     }
 }
@@ -2088,13 +2097,19 @@ fn exported_choices(raw: &str) -> Option<Value> {
     Some(Value::Array(names.into_iter().map(Value::String).collect()))
 }
 
-/// A cell as it was before `csv_field` guarded it against spreadsheet
-/// formulas: "'@ana" is "@ana" again. Only for values that name something
-/// (a person, an option, a link), where a leading apostrophe before = + -
-/// or @ can't be meant; text keeps what the file says.
+/// A named value's cell as it was before the export guarded it: one
+/// leading apostrophe comes off when another apostrophe or a formula
+/// character (= + - @) follows, undoing `csv_field`'s guard ("'@ana" is
+/// "@ana") or `field_cell`'s extra one ("''=Plan" is "'=Plan"). Only for
+/// values that name something (a person, an option, a link); text keeps
+/// what the file says.
+///
+/// Exports from before `field_cell` added that extra apostrophe wrote a
+/// name like "'=Plan" as "'=Plan" too, the same cell as "=Plan" guarded;
+/// those read as "=Plan", and nothing in such a file can tell them apart.
 fn unguarded(raw: &str) -> &str {
     match raw.strip_prefix('\'') {
-        Some(rest) if rest.starts_with(['=', '+', '-', '@']) => rest,
+        Some(rest) if rest.starts_with(['\'', '=', '+', '-', '@']) => rest,
         _ => raw,
     }
 }
@@ -2662,35 +2677,78 @@ mod tests {
             archived: false,
             version: 1,
         };
+        // "=Plan" and "'=Plan" are different options; "''x" starts with two
+        // apostrophes of its own.
         let definitions = vec![
             definition("Owner", FieldType::Person, &[]),
-            definition("Stage", FieldType::SingleChoice, &["=Plan", "Ship"]),
+            definition(
+                "Stage",
+                FieldType::SingleChoice,
+                &["=Plan", "'=Plan", "''x", "Ship"],
+            ),
             definition("Note", FieldType::Text, &[]),
         ];
-        let mut task = areas_task(0, &[]);
-        task.fields = serde_json::Map::from_iter([
-            ("Owner".to_owned(), json!("@ana")),
-            ("Stage".to_owned(), json!("=Plan")),
-            ("Note".to_owned(), json!("=SUM(A1)")),
-        ]);
-        let text = tasks_csv(&[task], &definitions);
-        // Every one of them is guarded in the file.
-        for guarded in ["'@ana", "'=Plan", "'=SUM(A1)"] {
+        let task = |index: usize, fields: serde_json::Map<String, Value>| {
+            let mut task = areas_task(index, &[]);
+            task.fields = fields;
+            task
+        };
+        let tasks = [
+            task(
+                0,
+                serde_json::Map::from_iter([
+                    ("Owner".to_owned(), json!("@ana")),
+                    ("Stage".to_owned(), json!("=Plan")),
+                    ("Note".to_owned(), json!("=SUM(A1)")),
+                ]),
+            ),
+            task(
+                1,
+                serde_json::Map::from_iter([("Stage".to_owned(), json!("'=Plan"))]),
+            ),
+            task(
+                2,
+                serde_json::Map::from_iter([("Stage".to_owned(), json!("''x"))]),
+            ),
+        ];
+        let text = tasks_csv(&tasks, &definitions);
+        let records = parse_csv(&text).expect("test input is valid");
+        // The cells as the file holds them: guarded before formula
+        // characters, and one more apostrophe before a name's own.
+        let stage = records[0]
+            .iter()
+            .position(|header| header == "Field: Stage")
+            .expect("Stage column");
+        let cells = records[1..]
+            .iter()
+            .map(|record| record[stage].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(cells, vec!["'=Plan", "''=Plan", "'''x"]);
+        for guarded in ["'@ana", "'=SUM(A1)"] {
             assert!(text.contains(guarded), "{guarded} in {text}");
         }
-        let records = parse_csv(&text).expect("test input is valid");
         let rows = csv_rows(&records, &auto_mapping(&records[0])).expect("test input is valid");
         let mut project = context();
         project.fields = definitions;
-        let resolved = resolve(&project, &ImportOptions::default(), 0, &rows[0]);
+        let read =
+            |row: usize| resolve(&project, &ImportOptions::default(), row, &rows[row]).field_inputs;
         assert_eq!(
-            resolved.field_inputs,
+            read(0),
             vec![
                 ("Note".to_owned(), json!("'=SUM(A1)")),
                 ("Owner".to_owned(), json!("@ana")),
                 ("Stage".to_owned(), json!("=Plan")),
             ]
         );
+        assert_eq!(read(1), vec![("Stage".to_owned(), json!("'=Plan"))]);
+        assert_eq!(read(2), vec![("Stage".to_owned(), json!("''x"))]);
+        // And each names its own option.
+        let stage = &project.fields[1];
+        let chosen = |input: Value| match fields::normalize_value(stage, &input) {
+            Ok(fields::Normalized::Value(id)) => id,
+            other => panic!("{other:?}"),
+        };
+        assert_ne!(chosen(json!("=Plan")), chosen(json!("'=Plan")));
         assert_eq!(unguarded("'Not a formula"), "'Not a formula");
     }
 }

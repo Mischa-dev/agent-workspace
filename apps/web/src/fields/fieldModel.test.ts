@@ -45,6 +45,16 @@ describe('custom fields', () => {
     expect(isEmpty(0)).toBe(false)
   })
 
+  it('shows small numbers as nonzero', () => {
+    const points = { ...risk, type: 'number' as const }
+    expect(displayText(points, 1e-7)).toBe('1e-7')
+    expect(displayText(points, -1e-7)).toBe('-1e-7')
+    expect(displayText(points, 1.234567e-300)).toBe('1.23457e-300')
+    expect(displayText(points, 0.0000015)).toBe('0.0000015')
+    expect(displayText(points, 2.5)).toBe('2.5')
+    expect(displayText(points, 3)).toBe('3')
+  })
+
   it('keeps filters as the server reads them', () => {
     const clauses = [
       { field: 'f1', op: 'is' as const, values: ['o1'] },
