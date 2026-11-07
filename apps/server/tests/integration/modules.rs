@@ -642,8 +642,9 @@ async fn conversation_tools_follow_the_module_where_the_conversation_lives() {
     assert_eq!(sent["outcome"], "ok", "{sent}");
 
     // A channel that is there, in a project Bea isn't in, with Channels off:
-    // her app hears only "not found", as for one that isn't there, never
-    // that its module is off.
+    // her app is refused as before (the tool gate answers "forbidden" for a
+    // project she isn't in, before any module check), and never told that
+    // the module is off or anything about the channel.
     let elsewhere = create_project(&setup, "ELSE", "Elsewhere").await;
     let unseen = create_channel(&setup, &elsewhere, "private-plans").await;
     let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
@@ -661,11 +662,11 @@ async fn conversation_tools_follow_the_module_where_the_conversation_lives() {
     for name in ["conversation_read", "conversation_open", "message_send"] {
         let hidden = ask(name, unseen.clone(), "awd75-unseen").await;
         let missing = ask(name, Uuid::now_v7().to_string(), "awd75-missing").await;
-        assert_ne!(hidden["outcome"], "ok", "{name}: {hidden}");
-        assert_eq!(
-            hidden["outcome"], missing["outcome"],
-            "{name}: {hidden} vs {missing}"
+        assert!(
+            hidden["outcome"] == "forbidden" || hidden["outcome"] == "not_found",
+            "{name}: {hidden}"
         );
+        assert_eq!(missing["outcome"], "not_found", "{name}: {missing}");
         assert_ne!(hidden["retryCategory"], "module", "{name}: {hidden}");
         let said = hidden.to_string();
         assert!(
