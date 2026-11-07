@@ -48,7 +48,8 @@ export function SelectionBar({
   const [saving, setSaving] = useState(false)
   const [launching, setLaunching] = useState<WorkItemCard[] | null>(null)
   // Custom fields (AWD-101): pick "Set" or "Clear" for a field, then set
-  // it in the field's own editor.
+  // it in the field's own editor. The chooser lists actions, not values, so
+  // none of its options is ever selected.
   const [choosing, setChoosing] = useState<HTMLElement | null>(null)
   const [editing, setEditing] = useState<{ field: FieldDefinition; anchor: HTMLElement } | null>(null)
   // A multiple choice reports each toggle; the last one is sent when its editor closes.
@@ -148,6 +149,7 @@ export function SelectionBar({
               { value: `clear:${field.id}`, label: `Clear ${field.name}`, keywords: field.name },
             ])}
             placeholder="Find a field"
+            selected={[]}
           />
         </Popover>
       ) : null}
