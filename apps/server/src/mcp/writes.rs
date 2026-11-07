@@ -636,6 +636,7 @@ async fn create_task(
                 principal,
                 principal.project_id,
                 written,
+                None,
             )
             .await?
             {
@@ -1138,6 +1139,7 @@ async fn update_work_item_inner(
                 principal,
                 principal.project_id,
                 written,
+                Some(work_item_id),
             )
             .await?
             {

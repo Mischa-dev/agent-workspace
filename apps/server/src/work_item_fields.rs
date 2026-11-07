@@ -118,6 +118,46 @@ pub async fn resolve(
     argument: &str,
     written: &[(String, Value)],
 ) -> Result<Result<FieldValueChanges, ValueProblem>, AppError> {
+    resolve_for(
+        connection,
+        project_id,
+        writer,
+        definitions,
+        argument,
+        written,
+        None,
+    )
+    .await
+}
+
+/// A task's stored values (`field_values`), for `resolve_for`. None when no
+/// such task is in the project; the write that follows refuses it then.
+pub async fn current_values(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    task: Uuid,
+) -> Result<Option<Value>, AppError> {
+    Ok(sqlx::query_scalar::<_, Value>(
+        "SELECT field_values FROM work_items WHERE project_id = $1 AND id = $2",
+    )
+    .bind(project_id)
+    .bind(task)
+    .fetch_optional(&mut *connection)
+    .await?)
+}
+
+/// `resolve` for an existing task whose values are `current` (its
+/// `field_values`): an archived choice option it already holds may stay
+/// chosen while the rest of the selection changes.
+pub async fn resolve_for(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    writer: Writer<'_>,
+    definitions: &[FieldDefinition],
+    argument: &str,
+    written: &[(String, Value)],
+    current: Option<&Value>,
+) -> Result<Result<FieldValueChanges, ValueProblem>, AppError> {
     if written.len() > MAX_VALUES_PER_CHANGE {
         return Ok(Err(value_problem(
             argument,
@@ -154,7 +194,8 @@ pub async fn resolve(
                 format!("\"{}\" is set twice. Set each field once.", field.name),
             )));
         }
-        let normalized = match fields::normalize_value(field, input) {
+        let kept = current.and_then(|values| values.get(field.id.to_string()));
+        let normalized = match fields::normalize_value_keeping(field, input, kept) {
             Ok(normalized) => normalized,
             Err(message) => return Ok(Err(value_problem(&at, message))),
         };

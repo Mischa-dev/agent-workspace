@@ -515,16 +515,14 @@ fn resolve(
         let Some(field) = column_field(&context.fields, header) else {
             continue;
         };
-        let input = if field.field_type == FieldType::MultipleChoice {
-            Value::Array(
-                raw.split([',', ';', '|'])
-                    .map(str::trim)
-                    .filter(|part| !part.is_empty())
-                    .map(|part| Value::String(part.to_owned()))
-                    .collect(),
-            )
-        } else {
-            Value::String(raw.clone())
+        // A multiple choice exported here is a JSON list of option names,
+        // read exactly; any other cell (another tool's "A, B") is read as
+        // written, a best effort (see fields::normalize_value).
+        let input = match field.field_type {
+            FieldType::MultipleChoice => {
+                exported_choices(raw).unwrap_or_else(|| Value::String(raw.clone()))
+            }
+            _ => Value::String(raw.clone()),
         };
         match fields::normalize_value(field, &input) {
             Ok(fields::Normalized::Clear) => {}
@@ -2067,6 +2065,24 @@ const CSV_HEADERS: [&str; 15] = [
     "Updated",
 ];
 
+/// A custom field's CSV cell. A multiple choice is a JSON list of its
+/// option names (`["A","B"]`), since an option's own name may hold a comma
+/// ("A, B" could be one option or two); the rest read as the app shows them.
+fn field_cell(field: &FieldDefinition, value: &Value) -> String {
+    match (field.field_type, value) {
+        (FieldType::MultipleChoice, Value::Array(_)) => value.to_string(),
+        _ => fields::display_text(value),
+    }
+}
+
+/// A multiple choice's cell as `field_cell` writes it: a JSON list of
+/// option names, read exactly. None for any other cell, which is read as
+/// written.
+fn exported_choices(raw: &str) -> Option<Value> {
+    let names = serde_json::from_str::<Vec<String>>(raw.trim()).ok()?;
+    Some(Value::Array(names.into_iter().map(Value::String).collect()))
+}
+
 /// How a custom field's CSV column starts, so a field named like a built-in
 /// column (Priority, Status) or one of its aliases isn't read as that column.
 const FIELD_COLUMN_PREFIX: &str = "Field: ";
@@ -2130,7 +2146,7 @@ fn tasks_csv(tasks: &[ExportTask], definitions: &[FieldDefinition]) -> String {
         let custom = definitions.iter().map(|field| {
             task.fields
                 .get(&field.name)
-                .map(fields::display_text)
+                .map(|value| field_cell(field, value))
                 .unwrap_or_default()
         });
         out.push_str(
@@ -2448,5 +2464,115 @@ mod tests {
             Some("Field: Risk")
         );
         assert_eq!(named("Fields: Risk"), None);
+    }
+
+    /// A multiple choice exports as a JSON list of option names, so names
+    /// holding "," ";" "|", quotes or brackets come back exactly, and "A"
+    /// plus "B" stays distinct from the one option "A, B". A plain cell from
+    /// another tool is still read as written, a best effort.
+    #[test]
+    fn exported_multiple_choices_read_back_exactly() {
+        let names = ["A", "B", "A, B", "x; y | z", "say \"hi\"", "[draft]"];
+        let mut areas = FieldDefinition {
+            id: Uuid::now_v7(),
+            name: "Areas".to_owned(),
+            description: String::new(),
+            field_type: FieldType::MultipleChoice,
+            config: fields::FieldConfig::default(),
+            position: 0,
+            archived: false,
+            version: 1,
+        };
+        let options = names
+            .iter()
+            .map(|name| fields::OptionInput {
+                id: None,
+                name: (*name).to_owned(),
+                color: None,
+            })
+            .collect::<Vec<_>>();
+        areas.config =
+            fields::normalize_config(FieldType::MultipleChoice, None, Some(&options), None)
+                .expect("test options");
+        let id = |name: &str| {
+            areas
+                .config
+                .options
+                .iter()
+                .find(|option| option.name == name)
+                .map(|option| Value::String(option.id.to_string()))
+                .expect("test option")
+        };
+        let selections: [&[&str]; 3] = [
+            &["A", "B"],
+            &["A, B"],
+            &["x; y | z", "say \"hi\"", "[draft]"],
+        ];
+        let tasks = selections
+            .iter()
+            .enumerate()
+            .map(|(index, chosen)| ExportTask {
+                key: format!("AW-{}", index + 1),
+                number: index as i64 + 1,
+                title: format!("Task {}", index + 1),
+                description: String::new(),
+                status: "Todo".to_owned(),
+                status_category: "unstarted".to_owned(),
+                type_name: "Task".to_owned(),
+                priority: "no_priority".to_owned(),
+                labels: vec![],
+                assignee: None,
+                milestone: None,
+                start_date: None,
+                due_date: None,
+                estimate: None,
+                parent: None,
+                blocked_by: vec![],
+                acceptance_criteria: vec![],
+                archived: false,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                field_values: Value::Null,
+                fields: serde_json::Map::from_iter([("Areas".to_owned(), json!(chosen))]),
+            })
+            .collect::<Vec<_>>();
+        let text = tasks_csv(&tasks, std::slice::from_ref(&areas));
+        let records = parse_csv(&text).expect("test input is valid");
+        let rows = csv_rows(&records, &auto_mapping(&records[0])).expect("test input is valid");
+        assert_eq!(rows.len(), 3);
+        let mut project = context();
+        project.fields = vec![areas.clone()];
+        for (row, chosen) in rows.iter().zip(selections) {
+            let resolved = resolve(&project, &ImportOptions::default(), 0, row);
+            let [(name, input)] = resolved.field_inputs.as_slice() else {
+                panic!("{:?}", resolved.field_inputs);
+            };
+            assert_eq!(name, "Areas");
+            assert_eq!(input, &json!(chosen));
+            // Stored in the field's option order.
+            let expected = areas
+                .config
+                .options
+                .iter()
+                .filter(|option| chosen.contains(&option.name.as_str()))
+                .map(|option| Value::String(option.id.to_string()))
+                .collect();
+            assert_eq!(
+                fields::normalize_value(&areas, input),
+                Ok(fields::Normalized::Value(Value::Array(expected)))
+            );
+        }
+        // Another tool's plain cell, read as written: a whole option name
+        // first, else split at "," ";" or "|".
+        assert_eq!(
+            fields::normalize_value(&areas, &json!("A, B")),
+            Ok(fields::Normalized::Value(json!([id("A, B")])))
+        );
+        assert_eq!(
+            fields::normalize_value(&areas, &json!("A; B")),
+            Ok(fields::Normalized::Value(json!([id("A"), id("B")])))
+        );
+        assert_eq!(exported_choices("A, B"), None);
+        assert_eq!(exported_choices(" [\"A, B\"] "), Some(json!(["A, B"])));
     }
 }

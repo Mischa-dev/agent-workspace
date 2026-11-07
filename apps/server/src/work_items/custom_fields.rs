@@ -344,12 +344,15 @@ pub(super) async fn update_field(
 }
 
 /// The web app's `fieldValues` ({field ID or name: value}), checked and
-/// resolved in this transaction, or the refusal to send.
+/// resolved in this transaction, or the refusal to send. `task` is the
+/// task being changed (None for a new one), so archived options it already
+/// holds may stay chosen.
 pub(super) async fn web_field_values(
     connection: &mut sqlx::PgConnection,
     project_id: Uuid,
     actor_id: Uuid,
     written: &serde_json::Map<String, Value>,
+    task: Option<Uuid>,
 ) -> Result<Result<work_item_fields::FieldValueChanges, Response>, AppError> {
     let project_key =
         sqlx::query_scalar::<_, String>("SELECT project_key FROM projects WHERE id = $1")
@@ -361,7 +364,11 @@ pub(super) async fn web_field_values(
         .iter()
         .map(|(field, value)| (field.clone(), value.clone()))
         .collect::<Vec<_>>();
-    Ok(work_item_fields::resolve(
+    let current = match task {
+        Some(task) => work_item_fields::current_values(&mut *connection, project_id, task).await?,
+        None => None,
+    };
+    Ok(work_item_fields::resolve_for(
         connection,
         project_id,
         work_item_fields::Writer {
@@ -371,6 +378,7 @@ pub(super) async fn web_field_values(
         &definitions,
         "fieldValues",
         &written,
+        current.as_ref(),
     )
     .await?
     .map_err(|problem| invalid(&problem.field, problem.message)))

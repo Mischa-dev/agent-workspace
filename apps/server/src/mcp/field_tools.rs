@@ -587,12 +587,15 @@ pub(super) async fn fill_summary_fields(
 }
 
 /// What task_create and task_update's `fields` wrote, checked and resolved
-/// in this transaction, as the web app's `fieldValues` are.
+/// in this transaction, as the web app's `fieldValues` are. `task` is the
+/// task being changed (None for a new one), so archived options it already
+/// holds may stay chosen.
 pub(super) async fn written_values(
     connection: &mut PgConnection,
     principal: &McpPrincipal,
     project_id: Uuid,
     written: &Map<String, Value>,
+    task: Option<Uuid>,
 ) -> Result<Result<FieldValueChanges, ValueProblem>, AppError> {
     let project_key =
         sqlx::query_scalar::<_, String>("SELECT project_key FROM projects WHERE id = $1")
@@ -604,7 +607,11 @@ pub(super) async fn written_values(
         .iter()
         .map(|(field, value)| (field.clone(), value.clone()))
         .collect::<Vec<_>>();
-    work_item_fields::resolve(
+    let current = match task {
+        Some(task) => work_item_fields::current_values(&mut *connection, project_id, task).await?,
+        None => None,
+    };
+    work_item_fields::resolve_for(
         connection,
         project_id,
         Writer {
@@ -614,6 +621,7 @@ pub(super) async fn written_values(
         &definitions,
         "fields",
         &written,
+        current.as_ref(),
     )
     .await
 }

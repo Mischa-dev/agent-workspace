@@ -230,6 +230,29 @@ impl FieldDefinition {
         })
     }
 
+    /// An option someone may choose: an active one, or an archived one the
+    /// record already holds (`kept`, its current value for this field), so
+    /// editing the rest of a selection doesn't drop it. Newly choosing an
+    /// archived option stays refused.
+    fn choosable_option(&self, reference: &str, kept: Option<&Value>) -> Option<&ChoiceOption> {
+        if let Some(option) = self.active_option(reference) {
+            return Some(option);
+        }
+        let reference = reference.trim().to_ascii_lowercase();
+        let by_name = collapse(&reference).to_lowercase();
+        let held = |id: &str| match kept {
+            Some(Value::String(kept)) => kept == id,
+            Some(Value::Array(items)) => items.iter().any(|item| item.as_str() == Some(id)),
+            _ => false,
+        };
+        self.config.options.iter().find(|option| {
+            let id = option.id.to_string();
+            option.archived
+                && held(&id)
+                && (id == reference || option.name.to_lowercase() == by_name)
+        })
+    }
+
     fn active_option_names(&self) -> String {
         let names = self
             .config
@@ -611,6 +634,16 @@ pub fn normalize_url(value: &str) -> Option<String> {
 
 /// Checks a value written for `field`. The message says what would work.
 pub fn normalize_value(field: &FieldDefinition, input: &Value) -> Result<Normalized, String> {
+    normalize_value_keeping(field, input, None)
+}
+
+/// `normalize_value` for a record whose current value for `field` is
+/// `kept`: archived choice options it already holds may stay chosen.
+pub fn normalize_value_keeping(
+    field: &FieldDefinition,
+    input: &Value,
+    kept: Option<&Value>,
+) -> Result<Normalized, String> {
     if input.is_null() {
         return Ok(Normalized::Clear);
     }
@@ -657,7 +690,7 @@ pub fn normalize_value(field: &FieldDefinition, input: &Value) -> Result<Normali
             }
             let reference = input.as_str().unwrap_or_default();
             field
-                .active_option(reference)
+                .choosable_option(reference, kept)
                 .map(|option| Normalized::Value(Value::String(option.id.to_string())))
                 .ok_or_else(|| {
                     format!(
@@ -670,8 +703,10 @@ pub fn normalize_value(field: &FieldDefinition, input: &Value) -> Result<Normali
             let references = match input {
                 Value::Array(items) => items.clone(),
                 Value::String(text) if text.trim().is_empty() => Vec::new(),
-                // One option, or several written "A, B" (imports, rules).
-                Value::String(text) if field.active_option(text).is_none() => text
+                // One option, or several written "A, B" (rules, and plain
+                // spreadsheet cells): a best effort, since an option's own
+                // name may hold a comma. Exports write a JSON list instead.
+                Value::String(text) if field.choosable_option(text, kept).is_none() => text
                     .split([',', ';', '|'])
                     .map(|part| Value::String(part.trim().to_owned()))
                     .filter(|part| part.as_str().is_some_and(|part| !part.is_empty()))
@@ -688,7 +723,7 @@ pub fn normalize_value(field: &FieldDefinition, input: &Value) -> Result<Normali
             for reference in &references {
                 let option = reference
                     .as_str()
-                    .and_then(|text| field.active_option(text))
+                    .and_then(|text| field.choosable_option(text, kept))
                     .ok_or_else(|| {
                         format!(
                             "\"{name}\" takes a list of its options: {}.",
@@ -1069,13 +1104,15 @@ pub fn push_clause(builder: &mut QueryBuilder<'_, Postgres>, column: &str, claus
                 elements(column, field)
             ));
             builder.push_bind(written);
-            // "3.0" is 3 only where a number is stored (a number field):
-            // a text field's "0012" stays the text it is.
+            // A stored number (a number field) compares as a number, so
+            // "3.0", "0012" and "1e-7" match 3, 12 and 0.0000001, however
+            // PostgreSQL writes them; a text field's "0012" stays the text
+            // it is. CASE keeps the cast away from anything but numbers.
             builder.push(format!(
-                ") OR (jsonb_typeof({value}) = 'number' AND element.value = ANY("
+                ") OR CASE WHEN jsonb_typeof({value}) = 'number' THEN element.value::numeric = ANY("
             ));
-            builder.push_bind(match_values(&clause.values));
-            builder.push(")))");
+            builder.push_bind(filter_numbers(&clause.values));
+            builder.push("::numeric[]) ELSE false END))");
         }
         FieldOp::Contains => {
             let needle = clause.values.first().cloned().unwrap_or_default();
@@ -1120,24 +1157,16 @@ pub fn push_clause(builder: &mut QueryBuilder<'_, Postgres>, column: &str, claus
     }
 }
 
-/// What `Is` compares a stored element with. A number filter's "3" must
-/// match a stored 3 or 3.0, so numbers are matched as JSON writes them.
-fn match_values(values: &[String]) -> Vec<String> {
-    let mut out = Vec::with_capacity(values.len());
-    for value in values {
-        let value = value.trim();
-        out.push(value.to_owned());
-        if let Some(number) = value
-            .parse::<f64>()
-            .ok()
-            .and_then(number_value)
-            .map(|number| number.to_string())
-            && number != value
-        {
-            out.push(number);
-        }
-    }
-    out
+/// The filter values that are numbers, written out in full as decimals
+/// (Rust never writes an f64 with an exponent), so PostgreSQL reads each as
+/// `numeric` and compares it with a stored number by value.
+fn filter_numbers(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .filter_map(|value| value.trim().parse::<f64>().ok())
+        .filter(|number| number.is_finite())
+        .map(|number| number.to_string())
+        .collect()
 }
 
 pub fn push_clauses(
@@ -1755,8 +1784,10 @@ mod tests {
         field
     }
 
-    /// "is" compares what was written; "0012" also matches 12 only where a
-    /// number is stored, so a text field's "0012" doesn't match its "12".
+    /// "is" compares what was written, and compares by value only where a
+    /// number is stored, so a text field's "0012" doesn't match its "12",
+    /// while a number field's 1e-7 (stored, and written by PostgreSQL, as
+    /// 0.0000001) matches "1e-7" and "0.00000010".
     #[test]
     fn numbers_match_as_numbers_only_where_numbers_are_stored() {
         let clause = FieldClause {
@@ -1770,11 +1801,28 @@ mod tests {
         let stored = format!("(item.field_values -> '{}')", clause.field);
         assert!(
             sql.contains(&format!(
-                "element.value = ANY($1) OR (jsonb_typeof({stored}) = 'number' AND element.value = ANY($2)))"
+                "element.value = ANY($1) OR CASE WHEN jsonb_typeof({stored}) = 'number' \
+                 THEN element.value::numeric = ANY($2::numeric[]) ELSE false END))"
             )),
             "{sql}"
         );
-        assert_eq!(match_values(&clause.values), vec!["0012", "12"]);
+        let numbers = |values: &[&str]| {
+            filter_numbers(
+                &values
+                    .iter()
+                    .map(|value| (*value).to_owned())
+                    .collect::<Vec<_>>(),
+            )
+        };
+        assert_eq!(
+            numbers(&[" 0012 ", "3.0", "abc", "NaN", "inf"]),
+            vec!["12", "3"]
+        );
+        // Written in full, never with an exponent, so `numeric` reads them.
+        assert_eq!(
+            numbers(&["1e-7", "0.00000010"]),
+            vec!["0.0000001", "0.0000001"]
+        );
     }
 
     /// "me" is the reader only in a person field; a text or URL field's
@@ -2044,10 +2092,34 @@ mod tests {
         assert!(clause_from_written(&number, FieldOp::Gt, &["lots".to_owned()]).is_err());
     }
 
+    /// An archived option a task already holds stays chosen when the rest
+    /// of the selection changes; newly choosing it is still refused.
     #[test]
-    fn numbers_match_however_json_writes_them() {
-        assert_eq!(match_values(&["3.0".to_owned()]), vec!["3.0", "3"]);
-        assert_eq!(match_values(&["3".to_owned()]), vec!["3"]);
+    fn archived_options_stay_only_where_they_are_held() {
+        let mut multiple = choice(FieldType::MultipleChoice);
+        multiple.config.options[0].archived = true;
+        let low = multiple.config.options[0].id.to_string();
+        let high = multiple.config.options[1].id.to_string();
+        let both = json!([low, high]);
+        assert!(normalize_value(&multiple, &both).is_err());
+        assert_eq!(
+            normalize_value_keeping(&multiple, &both, Some(&json!([low]))),
+            Ok(Normalized::Value(both.clone()))
+        );
+        assert_eq!(
+            normalize_value_keeping(&multiple, &json!(["Low", "High"]), Some(&json!([low]))),
+            Ok(Normalized::Value(both))
+        );
+        assert!(normalize_value_keeping(&multiple, &json!([low]), Some(&json!([high]))).is_err());
+
+        let mut single = choice(FieldType::SingleChoice);
+        single.config.options[0].archived = true;
+        let low = single.config.options[0].id.to_string();
+        assert!(normalize_value(&single, &json!(low)).is_err());
+        assert_eq!(
+            normalize_value_keeping(&single, &json!(low), Some(&json!(low))),
+            Ok(Normalized::Value(json!(low)))
+        );
     }
 
     #[test]

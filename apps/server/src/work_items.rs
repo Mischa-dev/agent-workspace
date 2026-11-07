@@ -1154,6 +1154,7 @@ async fn update_work_item(
                 project_id,
                 principal.actor_id,
                 written,
+                Some(work_item_id),
             )
             .await?
             {
@@ -2354,6 +2355,7 @@ async fn create_work_item(
                         project_id,
                         principal.actor_id,
                         written,
+                        None,
                     )
                     .await?
                     {
