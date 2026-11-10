@@ -2,7 +2,7 @@
 
 ## Production contract
 
-- Server SDK: official Rust SDK `rmcp` `3.0.1`
+- Server SDK: official Rust SDK `rmcp` `3.9.0` (from `3.0.1` for RUSTSEC-2026-0457, -0461 and -0462)
 - Verified client: `codex-cli 0.146.0`
 - Negotiated protocol: MCP `2025-06-18`
 - Transport: Streamable HTTP at `http://127.0.0.1:3100/api/v1/mcp`
