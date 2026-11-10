@@ -1,0 +1,204 @@
+{
+  "about": "Top-level blocks that parse.ts and the server's page_blocks.rs (AWD-53) must agree on. Each case gives its Markdown, or builds it as repeat x count + then, and lists the top-level blocks both parsers find. blockParity.test.ts checks the web parser; page_blocks.rs checks the server.",
+  "cases": [
+    {
+      "name": "heading levels, and seven #s is a paragraph",
+      "markdown": "# One\n## Two\n###### Six\n####### Seven",
+      "blocks": [
+        { "type": "heading", "level": 1 },
+        { "type": "heading", "level": 2 },
+        { "type": "heading", "level": 6 },
+        { "type": "paragraph" }
+      ]
+    },
+    {
+      "name": "closing hashes, an empty heading, and no space after #",
+      "markdown": "## Title ##\n#\n#no space",
+      "blocks": [
+        { "type": "heading", "level": 2 },
+        { "type": "heading", "level": 1 },
+        { "type": "paragraph" }
+      ]
+    },
+    {
+      "name": "three spaces before a heading; four make code",
+      "markdown": "   ### three\n    # four spaces",
+      "blocks": [
+        { "type": "heading", "level": 3 },
+        { "type": "code", "lang": null }
+      ]
+    },
+    {
+      "name": "a paragraph ends where a block starts",
+      "markdown": "one\ntwo\n# three\nfour\n> five",
+      "blocks": [
+        { "type": "paragraph" },
+        { "type": "heading", "level": 1 },
+        { "type": "paragraph" },
+        { "type": "quote" }
+      ]
+    },
+    {
+      "name": "a closed fence, then a tilde fence the backticks can't close",
+      "markdown": "```TS\nconst a = 1\n```\n~~~\nopen to the end\n```\nstill code",
+      "blocks": [
+        { "type": "code", "lang": "ts" },
+        { "type": "code", "lang": null }
+      ]
+    },
+    {
+      "name": "a closing fence must be at least as long",
+      "markdown": "````\nx\n```\n````\nafter",
+      "blocks": [
+        { "type": "code", "lang": null },
+        { "type": "paragraph" }
+      ]
+    },
+    {
+      "name": "a backtick after a tilde fence means it isn't one",
+      "markdown": "~~~ a`b\ntext",
+      "blocks": [{ "type": "paragraph" }]
+    },
+    {
+      "name": "rules win over list items",
+      "markdown": "- - -\n* * *\n___\n- item",
+      "blocks": [
+        { "type": "hr" },
+        { "type": "hr" },
+        { "type": "hr" },
+        { "type": "list", "ordered": false, "start": 1, "items": 1, "tasks": 0 }
+      ]
+    },
+    {
+      "name": "a list with tasks, blank lines and a nested list",
+      "markdown": "- [ ] one\n- [x] two\n\n- three\n  - nested\n\n  more of three\n\nafter",
+      "blocks": [
+        { "type": "list", "ordered": false, "start": 1, "items": 3, "tasks": 2 },
+        { "type": "paragraph" }
+      ]
+    },
+    {
+      "name": "a new marker kind starts a new list",
+      "markdown": "3. three\n4) four\n- dash\n+ plus",
+      "blocks": [
+        { "type": "list", "ordered": true, "start": 3, "items": 1, "tasks": 0 },
+        { "type": "list", "ordered": true, "start": 4, "items": 1, "tasks": 0 },
+        { "type": "list", "ordered": false, "start": 1, "items": 1, "tasks": 0 },
+        { "type": "list", "ordered": false, "start": 1, "items": 1, "tasks": 0 }
+      ]
+    },
+    {
+      "name": "nine digits make a marker; ten are a lazy line",
+      "markdown": "123456789. nine digits\n1234567890. ten digits",
+      "blocks": [{ "type": "list", "ordered": true, "start": 123456789, "items": 1, "tasks": 0 }]
+    },
+    {
+      "name": "a lazy line continues an item, but not after a blank line",
+      "markdown": "- item\ncontinues here\n\nnot lazy after a blank",
+      "blocks": [
+        { "type": "list", "ordered": false, "start": 1, "items": 1, "tasks": 0 },
+        { "type": "paragraph" }
+      ]
+    },
+    {
+      "name": "blank lines stay in an item only before indented content",
+      "markdown": "- a\n\n  still a\n\n b?\n",
+      "blocks": [
+        { "type": "list", "ordered": false, "start": 1, "items": 1, "tasks": 0 },
+        { "type": "paragraph" }
+      ]
+    },
+    {
+      "name": "an item with nothing after its marker",
+      "markdown": "-\n  under",
+      "blocks": [{ "type": "list", "ordered": false, "start": 1, "items": 1, "tasks": 0 }]
+    },
+    {
+      "name": "a quote and a fence inside an item, then a quote holding a list",
+      "markdown": "- item\n  > quoted\n  ```\n  code\n  ```\n> - in a quote\n> > deeper",
+      "blocks": [
+        { "type": "list", "ordered": false, "start": 1, "items": 1, "tasks": 0 },
+        { "type": "quote" }
+      ]
+    },
+    {
+      "name": "a quote takes only lines that start with >",
+      "markdown": "> one\n> two\nlazy\n> three",
+      "blocks": [{ "type": "quote" }, { "type": "paragraph" }, { "type": "quote" }]
+    },
+    {
+      "name": "indented code runs over blank lines and tabs",
+      "markdown": "    code\n\n    more\n\n\tafter tab\ntext",
+      "blocks": [{ "type": "code", "lang": null }, { "type": "paragraph" }]
+    },
+    {
+      "name": "a table needs a delimiter row with as many cells",
+      "markdown": "| a | b |\n|---|:-:|\n| 1 | 2 |\n| 3 |\n\na | b\n--- | --- | ---\n",
+      "blocks": [
+        { "type": "table", "columns": 2, "rows": 2 },
+        { "type": "paragraph" }
+      ]
+    },
+    {
+      "name": "escaped pipes and pipes in code don't split cells",
+      "markdown": "| a \\| b | `c | d` |\n| --- | --- |\n| x | y |",
+      "blocks": [{ "type": "table", "columns": 2, "rows": 1 }]
+    },
+    {
+      "name": "HTML, footnotes and front matter stay as text",
+      "markdown": "<div>\nhello\n</div>\n\n[^1]: note\n\n---\ntitle: x\n---",
+      "blocks": [
+        { "type": "paragraph" },
+        { "type": "paragraph" },
+        { "type": "hr" },
+        { "type": "paragraph" },
+        { "type": "hr" }
+      ]
+    },
+    {
+      "name": "a setext underline is text, and --- under text is a rule",
+      "markdown": "Title\n=====\n\nText\n---",
+      "blocks": [{ "type": "paragraph" }, { "type": "paragraph" }, { "type": "hr" }]
+    },
+    {
+      "name": "Windows and old Mac line endings",
+      "markdown": "# A\r\n\r\npara\r- x\r\n",
+      "blocks": [
+        { "type": "heading", "level": 1 },
+        { "type": "paragraph" },
+        { "type": "list", "ordered": false, "start": 1, "items": 1, "tasks": 0 }
+      ]
+    },
+    {
+      "name": "Unicode text",
+      "markdown": "# Ünïcode 🎉\n\n中文段落\n\né combining",
+      "blocks": [{ "type": "heading", "level": 1 }, { "type": "paragraph" }, { "type": "paragraph" }]
+    },
+    {
+      "name": "equal blocks stay separate blocks",
+      "markdown": "Same text\n\nSame text\n\n- same\n\n- same",
+      "blocks": [
+        { "type": "paragraph" },
+        { "type": "paragraph" },
+        { "type": "list", "ordered": false, "start": 1, "items": 2, "tasks": 0 }
+      ]
+    },
+    { "name": "an empty page", "markdown": "", "blocks": [] },
+    { "name": "only blank lines", "markdown": "  \n\t\n", "blocks": [] },
+    {
+      "name": "exactly at the parse limit",
+      "generate": { "repeat": "a", "count": 100000, "then": "" },
+      "blocks": [{ "type": "paragraph" }]
+    },
+    {
+      "name": "the limit counts \\r\\n as one",
+      "generate": { "repeat": "a\r\n", "count": 50000, "then": "b" },
+      "blocks": [{ "type": "paragraph" }, { "type": "overflow" }]
+    },
+    {
+      "name": "a two-unit character across the limit",
+      "generate": { "repeat": "a", "count": 99999, "then": "😀tail" },
+      "blocks": [{ "type": "paragraph" }, { "type": "overflow" }]
+    }
+  ]
+}
