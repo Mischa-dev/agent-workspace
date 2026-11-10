@@ -183,6 +183,41 @@
         { "type": "list", "ordered": false, "start": 1, "items": 2, "tasks": 0 }
       ]
     },
+    {
+      "name": "U+2028 in a heading line makes it text (JavaScript's . stops there)",
+      "markdown": "# A B\ntext",
+      "blocks": [{ "type": "paragraph" }]
+    },
+    {
+      "name": "U+2029 in a list line makes it text",
+      "markdown": "- A B\ntext",
+      "blocks": [{ "type": "paragraph" }]
+    },
+    {
+      "name": "such lines don't end a paragraph either",
+      "markdown": "para\n# A B\n- C D",
+      "blocks": [{ "type": "paragraph" }]
+    },
+    {
+      "name": "U+FEFF is space to JavaScript, so it ends a fence's language",
+      "markdown": "```﻿rust\nx\n```",
+      "blocks": [{ "type": "code", "lang": null }]
+    },
+    {
+      "name": "U+0085 isn't space to JavaScript, so it stays in a fence's language",
+      "markdown": "```\u0085X\nx\n```",
+      "blocks": [{ "type": "code", "lang": "\u0085x" }]
+    },
+    {
+      "name": "trim() removes U+FEFF before a table row",
+      "markdown": "﻿|a|b|\n|---|---|",
+      "blocks": [{ "type": "table", "columns": 2, "rows": 0 }]
+    },
+    {
+      "name": "trim() keeps U+0085, which then makes a third cell",
+      "markdown": "\u0085|a|b|\n|---|---|",
+      "blocks": [{ "type": "paragraph" }]
+    },
     { "name": "an empty page", "markdown": "", "blocks": [] },
     { "name": "only blank lines", "markdown": "  \n\t\n", "blocks": [] },
     {

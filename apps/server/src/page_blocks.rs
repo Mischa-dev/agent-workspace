@@ -9,7 +9,9 @@
 //!   and the source past the parser's limit (`overflow`). It isn't a
 //!   CommonMark parser, and it looks only at the top level: a list's items
 //!   and a quote's contents stay inside their block. `blockParity.json`, next
-//!   to parse.ts, holds the cases both parsers are tested against.
+//!   to parse.ts, holds the cases both parsers are tested against. Where
+//!   parse.ts relies on JavaScript's `\s`, `trim()` or `.`, this follows
+//!   JavaScript's character rules, not Rust's (U+FEFF, U+0085, U+2028, U+2029).
 //! - **Nothing is lost or rewritten.** Each block is a byte range of the page
 //!   body exactly as stored (line endings, tabs, trailing spaces and all),
 //!   running from its first line to its last non-blank one; between blocks
@@ -489,6 +491,30 @@ fn top_level_blocks(source: &str) -> Vec<Block> {
     blocks
 }
 
+/// ECMAScript's WhiteSpace and LineTerminator characters: what JavaScript's
+/// `\s` matches and `trim()` removes. Unlike Rust's `char::is_whitespace`, it
+/// takes U+FEFF and leaves out U+0085.
+fn is_js_space(character: char) -> bool {
+    matches!(
+        character,
+        '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | ' ' | '\u{a0}' | '\u{1680}' | '\u{2000}'
+            ..='\u{200a}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{202f}'
+                | '\u{205f}'
+                | '\u{3000}'
+                | '\u{feff}'
+    )
+}
+
+/// JavaScript's `.` (without the `s` flag) stops at line terminators. Lines
+/// never hold `\n` or `\r`, but they can hold these two, and then a pattern's
+/// `.*` can't reach the `$` after them.
+fn has_js_line_terminator(text: &str) -> bool {
+    text.contains(['\u{2028}', '\u{2029}'])
+}
+
 /// `/^[ \t]*$/`
 fn is_blank(line: &str) -> bool {
     line.bytes().all(|byte| byte == b' ' || byte == b'\t')
@@ -551,7 +577,7 @@ fn fence_open(line: &str) -> Option<Fence> {
     let info: String = tail
         .trim_start_matches([' ', '\t'])
         .chars()
-        .take_while(|character| !character.is_whitespace())
+        .take_while(|&character| !is_js_space(character))
         .collect();
     Some(Fence {
         marker,
@@ -582,7 +608,8 @@ fn heading(line: &str) -> Option<(u8, String)> {
     if tail.is_empty() {
         return Some((level as u8, String::new()));
     }
-    if !tail.starts_with([' ', '\t']) {
+    // `.*?` can't cross U+2028 or U+2029, so no part of the pattern matches them.
+    if !tail.starts_with([' ', '\t']) || has_js_line_terminator(tail) {
         return None;
     }
     let content = tail
@@ -650,7 +677,8 @@ fn list_item(line: &str) -> Option<ListItem<'_>> {
         .bytes()
         .take_while(|&byte| byte == b' ' || byte == b'\t')
         .count();
-    if !after.is_empty() && spaces == 0 {
+    // `(.*)$` can't cross U+2028 or U+2029.
+    if (!after.is_empty() && spaces == 0) || has_js_line_terminator(after) {
         return None;
     }
     Some(ListItem {
@@ -799,7 +827,8 @@ fn is_table_delimiter(line: &str) -> bool {
 
 /// splitRow's cell count, up to 40: `\|` and pipes in code spans don't split.
 fn cell_count(line: &str) -> usize {
-    let mut row = line.trim();
+    // JavaScript's trim(): it removes a leading U+FEFF and keeps U+0085.
+    let mut row = line.trim_matches(is_js_space);
     row = row.strip_prefix('|').unwrap_or(row);
     if row.ends_with('|') && !row.ends_with("\\|") {
         row = &row[..row.len() - 1];
@@ -968,7 +997,7 @@ mod tests {
 
     #[test]
     fn generated_documents_stay_lossless() {
-        const PIECES: [&str; 24] = [
+        const PIECES: [&str; 28] = [
             "# h",
             "## h ##",
             "text",
@@ -993,6 +1022,10 @@ mod tests {
             "- [x] done",
             "😀",
             "a\u{301}",
+            "# A\u{2028}B",
+            "- A\u{2029}B",
+            "\u{feff}| a | b |",
+            "```\u{85}X",
         ];
         const ENDINGS: [&str; 3] = ["\n", "\r\n", "\r"];
         // A small fixed generator, so a failure always reproduces.
