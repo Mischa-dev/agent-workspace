@@ -1016,7 +1016,8 @@ mod tests {
     #[test]
     fn the_parse_limit_counts_utf16_units_after_line_endings_become_one() {
         // Exactly the limit: nothing overflows.
-        let page = assert_lossless(&"a".repeat(PARSE_LIMIT));
+        let exact = "a".repeat(PARSE_LIMIT);
+        let page = assert_lossless(&exact);
         assert_eq!(page.blocks().len(), 1);
 
         // `\r\n` counts once: 50,000 of them are 100,000 units, so only "b" is past it.
