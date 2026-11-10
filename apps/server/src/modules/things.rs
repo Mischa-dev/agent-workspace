@@ -228,6 +228,58 @@ fn shown_in(modules: ModuleSet, kind: &str, direct: bool) -> bool {
     }
 }
 
+/// The highest `$n` placeholder a resolver query declares, ignoring
+/// placeholders mentioned in `--` comments and string literals. Every
+/// resolver query declares a prefix of the shared binds (see `resolve`),
+/// so this is also the number of values `resolve` must bind: Postgres
+/// rejects both a missing bind and an extra one.
+fn declared_params(sql: &str) -> usize {
+    let bytes = sql.as_bytes();
+    let mut highest = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            // A line comment runs to the newline.
+            b'-' if bytes.get(i + 1) == Some(&b'-') => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            // A string literal runs to its closing quote ('' escapes one).
+            b'\'' => {
+                i += 1;
+                while i < bytes.len() {
+                    if bytes[i] == b'\'' {
+                        if bytes.get(i + 1) == Some(&b'\'') {
+                            i += 2;
+                            continue;
+                        }
+                        i += 1;
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+            b'$' => {
+                let start = i + 1;
+                let mut end = start;
+                while end < bytes.len() && bytes[end].is_ascii_digit() {
+                    end += 1;
+                }
+                if end > start {
+                    let n: usize = sql[start..end].parse().unwrap_or(0);
+                    highest = highest.max(n);
+                    i = end;
+                } else {
+                    i += 1;
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    highest
+}
+
 /// Things of one kind, by id, that the viewer can see. Unknown kinds and
 /// hidden things are left out.
 async fn resolve(
@@ -242,17 +294,29 @@ async fn resolve(
     if ids.is_empty() {
         return Ok(Vec::new());
     }
-    let rows = sqlx::query_as::<_, ThingRow>(sql)
+    // The binds are positional and shared by every resolver: $1 the ids,
+    // $2 the viewer's projects, $3 the viewer, $4 whether things across a
+    // workspace show. Each query declares the prefix it uses — tasks,
+    // pages and projects stop at $2 (their visibility is the project
+    // filter itself), decisions and conversations also consult the
+    // viewer at $3, and whiteboards take $4 as well — and Postgres
+    // rejects a bind the query doesn't declare, so bind exactly the
+    // prefix the query asks for.
+    let declared = declared_params(sql);
+    let mut query = sqlx::query_as::<_, ThingRow>(sql)
         .bind(ids)
         .bind(if kind == "task" {
             viewer.task_projects
         } else {
             viewer.projects
-        })
-        .bind(viewer.actor_id)
-        .bind(viewer.workspace_boards)
-        .fetch_all(&mut *connection)
-        .await?;
+        });
+    if declared >= 3 {
+        query = query.bind(viewer.actor_id);
+    }
+    if declared >= 4 {
+        query = query.bind(viewer.workspace_boards);
+    }
+    let rows = query.fetch_all(&mut *connection).await?;
     Ok(rows
         .into_iter()
         // A conversation id can come back as any conversation kind; keep
@@ -455,6 +519,39 @@ mod tests {
             assert!(super::resolver(kind).is_some(), "{kind}");
             assert!(super::links_sql(kind).is_some(), "{kind}");
         }
+    }
+
+    #[test]
+    fn resolver_queries_declare_a_prefix_of_the_shared_binds() {
+        // resolve() binds, in order: the ids, the viewer's projects, the
+        // viewer, and whether workspace boards show. A query must declare
+        // exactly the prefix it uses: Postgres rejects a bind past the
+        // highest placeholder, and a gap would shift the later values
+        // onto the wrong placeholders.
+        let expected = [
+            ("task", 2),
+            ("page", 2),
+            ("decision", 3),
+            ("whiteboard", 4),
+            ("thread", 3),
+            ("channel", 3),
+            ("conversation", 3),
+            ("project", 2),
+        ];
+        for (kind, count) in expected {
+            let sql = super::resolver(kind).expect(kind);
+            assert_eq!(super::declared_params(sql), count, "{kind}");
+            for n in 1..=count {
+                assert!(sql.contains(&format!("${n}")), "{kind} skips ${n}");
+            }
+        }
+    }
+
+    #[test]
+    fn declared_params_ignores_comments_and_literals() {
+        assert_eq!(super::declared_params("SELECT $1, $2 -- not $9\n"), 2);
+        assert_eq!(super::declared_params("SELECT '$7', $1"), 1);
+        assert_eq!(super::declared_params("SELECT $1, $10"), 10);
     }
 
     #[test]
