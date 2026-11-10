@@ -21,7 +21,7 @@ use rmcp::{
     model::{
         CacheScope, ClientCapabilities, GetPromptRequestParams, GetPromptResponse, Implementation,
         InitializeRequestParams, ListPromptsResult, ListToolsResult, PaginatedRequestParams,
-        PromptMessage, ProtocolVersion, Role, ServerCapabilities, ServerInfo,
+        PromptMessage, ProtocolVersion, Role, ServerCapabilities, ServerConfig,
     },
     prompt, prompt_router, schemars,
     service::RequestContext,
@@ -2797,8 +2797,8 @@ impl McpServer {
 
 #[tool_handler(router = Self::tools())]
 impl ServerHandler for McpServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_prompts()
