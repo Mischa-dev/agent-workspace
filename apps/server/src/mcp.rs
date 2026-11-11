@@ -4622,12 +4622,32 @@ async fn project_by_key(
 /// projects the caller belongs to and can access, and for an older
 /// project-scoped credential only its own project, as
 /// `accessible_project_ids` does.
+pub(super) enum TaskKeyResolution {
+    Missing,
+    Unique(Uuid),
+    Ambiguous,
+}
+
 pub(super) async fn task_by_key(
     state: &AppState,
     principal: &McpPrincipal,
     project_key: &str,
     number: i64,
 ) -> Result<Option<Uuid>, AppError> {
+    Ok(
+        match task_key_resolution(state, principal, project_key, number).await? {
+            TaskKeyResolution::Unique(id) => Some(id),
+            TaskKeyResolution::Missing | TaskKeyResolution::Ambiguous => None,
+        },
+    )
+}
+
+pub(super) async fn task_key_resolution(
+    state: &AppState,
+    principal: &McpPrincipal,
+    project_key: &str,
+    number: i64,
+) -> Result<TaskKeyResolution, AppError> {
     let matches = sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT found.id FROM (
@@ -4672,8 +4692,9 @@ pub(super) async fn task_by_key(
     // ambiguous.) Group before limiting so duplicate rows cannot hide a
     // third row naming a different task.
     Ok(match matches.as_slice() {
-        [only] => Some(*only),
-        _ => None,
+        [] => TaskKeyResolution::Missing,
+        [only] => TaskKeyResolution::Unique(*only),
+        _ => TaskKeyResolution::Ambiguous,
     })
 }
 
