@@ -108,12 +108,24 @@ export function useRecordEdits(projectId: string, collectionId: string) {
       return next
         .then((body) => {
           settled()
-          versions.current.set(record.id, body.record.version)
+          versions.current.set(record.id, Math.max(body.record.version, versions.current.get(record.id) ?? 0))
           // The group it's listed under stays until the list refetches. A save
           // answers without history, so an open record keeps its own; the
           // change's entry comes with the refetch collection.updated starts.
-          patch(record.id, (current) => withUnsaved({ ...body.record, group: current.group }), body.references)
-          if (change.archived !== undefined) void refresh()
+          // An answer older than what already loaded (someone changed the
+          // record again meanwhile) never replaces it: that loads again, without
+          // this change shown on top.
+          let overtaken = false
+          patch(
+            record.id,
+            (current) => {
+              if (current.version <= body.record.version) return withUnsaved({ ...body.record, group: current.group })
+              overtaken = true
+              return current
+            },
+            body.references,
+          )
+          if (overtaken || change.archived !== undefined) void refresh()
           return true
         })
         .catch((error: unknown) => {

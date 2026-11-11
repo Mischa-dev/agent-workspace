@@ -82,6 +82,26 @@ describe('useRecordEdits', () => {
     expect(client.getQueryData<RecordBody>(recordKey)).toMatchObject({ record: { values: { platform: 'PC' }, version: 2 }, history: [added] })
   })
 
+  it('keeps a newer version that loaded before the answer, and loads it again', async () => {
+    const pending = answers()
+    const { client, result, listed, opened } = setup()
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+
+    act(() => void result.current.save(record, { title: 'Floaty double jump' }))
+    await waitFor(() => expect(updateRecord).toHaveBeenCalledTimes(1))
+    // Ours saved as version 2, then someone else's change made version 3, which loads first.
+    const newer = { ...record, title: 'Floaty double jump', values: { platform: 'Mac' }, version: 3 }
+    await act(async () => {
+      await client.fetchInfiniteQuery({ queryKey: recordsKey, queryFn: async () => page([newer]), initialPageParam: null })
+      await client.fetchQuery({ queryKey: recordKey, queryFn: async () => body(newer) })
+    })
+    await act(async () => pending[0](body({ ...record, title: 'Floaty double jump', version: 2 })))
+
+    expect(listed()).toMatchObject({ values: { platform: 'Mac' }, version: 3 })
+    expect(opened()).toMatchObject({ values: { platform: 'Mac' }, version: 3 })
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: collectionKeys.one('project-a', 'collection-a') })
+  })
+
   it('shows changes still saving on top of a list or record that loads meanwhile', async () => {
     const pending = answers()
     const { client, result, listed, opened } = setup()
