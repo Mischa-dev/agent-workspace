@@ -213,6 +213,15 @@ const WRITE_ROUTES: &[&str] = &[
     "PATCH /api/v1/projects/{project_id}/labels/{label_id}",
     "POST /api/v1/projects/{project_id}/fields",
     "PATCH /api/v1/projects/{project_id}/fields/{field_id}",
+    "POST /api/v1/projects/{project_id}/collections",
+    "PATCH /api/v1/projects/{project_id}/collections/{collection_id}",
+    "POST /api/v1/projects/{project_id}/collections/{collection_id}/fields",
+    "PATCH /api/v1/projects/{project_id}/collections/{collection_id}/fields/{field_id}",
+    "POST /api/v1/projects/{project_id}/collections/{collection_id}/views",
+    "PATCH /api/v1/projects/{project_id}/collections/{collection_id}/views/{view_id}",
+    "DELETE /api/v1/projects/{project_id}/collections/{collection_id}/views/{view_id}",
+    "POST /api/v1/projects/{project_id}/collections/{collection_id}/records",
+    "PATCH /api/v1/projects/{project_id}/collections/{collection_id}/records/{record_id}",
     "POST /api/v1/projects/{project_id}/launches",
     "POST /api/v1/projects/{project_id}/launches/{launch_id}/cancel",
     "PUT /api/v1/projects/{project_id}/layout",
@@ -412,6 +421,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "file_upload",
     "label_write",
     "field_write",
+    "collection_write",
+    "record_write",
     "later_save",
     "later_update",
     "mark_read",
@@ -1172,6 +1183,8 @@ struct Targets {
     /// A board in the trash. B's is one A's "Delete forever" and "Empty
     /// trash" must leave alone; A's goes when A empties its trash.
     trashed_whiteboard: Uuid,
+    /// The collection's person, task link and page link fields (AWD-90).
+    record_fields: [Uuid; 3],
 }
 
 async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targets {
@@ -1492,7 +1505,7 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         VALUES (gen_random_uuid(), $1, 'net-role', 'member', $2,
                 ARRAY['projects.view', 'tasks.view', 'tasks.create', 'tasks.edit', 'tasks.delete',
                       'channels.post', 'channels.create', 'pages.edit', 'whiteboards.edit',
-                      'runs.launch', 'runs.approve', 'runs.interrupt', 'runs.accounts',
+                      'collections.edit', 'collections.build', 'runs.launch', 'runs.approve', 'runs.interrupt', 'runs.accounts',
                       'code.view', 'code.publish'])
         RETURNING id
         "#,
@@ -1512,11 +1525,11 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         wren,
         label: in_project("SELECT id FROM project_labels WHERE project_id = $1").await,
         field: in_project(
-            "SELECT id FROM field_definitions WHERE project_id = $1 AND field_type = 'single_choice'",
+            "SELECT id FROM field_definitions WHERE project_id = $1 AND collection_id IS NULL AND field_type = 'single_choice'",
         )
         .await,
         person_field: in_project(
-            "SELECT id FROM field_definitions WHERE project_id = $1 AND field_type = 'person'",
+            "SELECT id FROM field_definitions WHERE project_id = $1 AND collection_id IS NULL AND field_type = 'person'",
         )
         .await,
         milestone: in_project("SELECT id FROM project_milestones WHERE project_id = $1").await,
@@ -1627,7 +1640,29 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         failed_run,
         failed_event,
         trashed_whiteboard,
+        record_fields: [
+            collection_field(pool, world.collection, "person").await,
+            collection_field(pool, world.collection, "task").await,
+            collection_field(pool, world.collection, "page").await,
+        ],
     }
+}
+
+/// A collection's person field, or its link field to tasks or pages.
+async fn collection_field(pool: &PgPool, collection: Uuid, kind: &str) -> Uuid {
+    sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT id FROM field_definitions
+        WHERE collection_id = $1
+          AND CASE $2 WHEN 'person' THEN field_type = 'person'
+                      ELSE field_type = 'link' AND config ->> 'target' = $2 END
+        "#,
+    )
+    .bind(collection)
+    .bind(kind)
+    .fetch_one(pool)
+    .await
+    .unwrap_or_else(|error| panic!("collection {kind} field: {error}"))
 }
 
 /// What A's own requests use up: deleted, archived, revoked or answered
@@ -1691,6 +1726,8 @@ struct Spares {
     provider_account: Uuid,
     /// A custom role nobody holds, removed.
     role: Uuid,
+    /// A second view in A's collection, removed (a collection keeps one).
+    collection_view: Uuid,
 }
 
 /// The redirect a hosted OAuth client registers.
@@ -2209,6 +2246,19 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
     )
     .await;
 
+    let view = ok(
+        app,
+        browser,
+        "POST",
+        &format!(
+            "/api/v1/projects/{project}/collections/{}/views",
+            a.collection
+        ),
+        json!({"name": "Net spare view"}),
+    )
+    .await;
+    let collection_view = Uuid::parse_str(&string_at(&view, "/id")).expect("spare collection view");
+
     // Last, so it's the newest of A's sessions: revoked by A's own request.
     login_as(app, "owner").await;
     let session = newest_session(pool, ax.owner).await;
@@ -2249,6 +2299,7 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         trashed_whiteboard,
         agent_profile,
         provider_account,
+        collection_view,
     }
 }
 
@@ -4293,6 +4344,135 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             &[project(), id(ax.field, bx.field)],
             versioned("field_definitions", 1, json!({"description": "Net"})),
         ),
+        // Collections (AWD-90). A view or a record may only name A's fields,
+        // people, tasks and pages.
+        path_case(
+            "POST /api/v1/projects/{project_id}/collections",
+            &[project()],
+            json_body(json!({
+                "name": "Net collection",
+                "fields": [{"name": "Who", "type": "person"}],
+                "views": [{"name": "Mine", "filters": [{"field": "Who", "op": "is", "values": ["me"]}]}],
+            })),
+        )
+        .rejecting(vec![
+            json!({
+                "name": "Net collection",
+                "fields": [{"name": "Who", "type": "person"}],
+                "views": [{"name": "Theirs", "filters": [{"field": "Who", "op": "is", "values": [b.rook]}]}],
+            }),
+            json!({
+                "name": "Net collection",
+                "fields": [{"name": "Built", "type": "link", "target": "task"}],
+                "views": [{"name": "Theirs", "filters": [{"field": "Built", "op": "is", "values": [b.task]}]}],
+            }),
+            json!({
+                "name": "Net collection",
+                "fields": [{"name": "Spec", "type": "link", "target": "page"}],
+                "views": [{"name": "Theirs", "filters": [{"field": "Spec", "op": "is", "values": [b.page]}]}],
+            }),
+            json!({"name": "Net collection", "fields": [{"field": b.collection_field, "name": "Net"}]}),
+        ]),
+        path_case(
+            "PATCH /api/v1/projects/{project_id}/collections/{collection_id}",
+            &[project(), id(a.collection, b.collection)],
+            versioned("collections", 1, json!({"description": "Net"})),
+        ),
+        path_case(
+            "POST /api/v1/projects/{project_id}/collections/{collection_id}/fields",
+            &[project(), id(a.collection, b.collection)],
+            json_body(json!({"name": "Net field", "type": "text"})),
+        ),
+        path_case(
+            "PATCH /api/v1/projects/{project_id}/collections/{collection_id}/fields/{field_id}",
+            &[
+                project(),
+                id(a.collection, b.collection),
+                id(a.collection_field, b.collection_field),
+            ],
+            versioned("field_definitions", 2, json!({"description": "Net"})),
+        )
+        .and(vec![(
+            // A task field isn't one of the collection's.
+            Call::new(
+                "PATCH",
+                format!(
+                    "/api/v1/projects/{}/collections/{}/fields/{}",
+                    a.project, a.collection, ax.field
+                ),
+                Payload::Json(json!({
+                    "description": "Net",
+                    "expectedVersion": version("field_definitions", ax.field),
+                })),
+            ),
+            Expect::Rejected,
+        )]),
+        path_case(
+            "POST /api/v1/projects/{project_id}/collections/{collection_id}/views",
+            &[project(), id(a.collection, b.collection)],
+            json_body(json!({"name": "Net view", "config": {"sort": [{"field": "title"}]}})),
+        )
+        .rejecting(vec![
+            json!({"name": "Net view", "config": {"filters": [{"field": b.collection_field, "op": "notEmpty"}]}}),
+            json!({"name": "Net view", "config": {"groupBy": b.collection_field}}),
+            json!({"name": "Net view", "config": {"sort": [{"field": b.collection_field.to_string()}]}}),
+            json!({"name": "Net view", "config": {"columns": [{"field": b.collection_field}]}}),
+            json!({"name": "Net view", "config": {"filters": [{"field": ax.record_fields[0], "op": "is", "values": [b.rook]}]}}),
+            json!({"name": "Net view", "config": {"filters": [{"field": ax.record_fields[1], "op": "is", "values": [b.task]}]}}),
+            json!({"name": "Net view", "config": {"filters": [{"field": ax.record_fields[2], "op": "is", "values": [b.page]}]}}),
+        ]),
+        path_case(
+            "PATCH /api/v1/projects/{project_id}/collections/{collection_id}/views/{view_id}",
+            &[
+                project(),
+                id(a.collection, b.collection),
+                id(a.collection_view, b.collection_view),
+            ],
+            versioned("collection_views", 2, json!({"name": "Net renamed view"})),
+        )
+        .rejecting(vec![json!({
+            "config": {"groupBy": b.collection_field},
+            "expectedVersion": version("collection_views", a.collection_view),
+        })]),
+        path_case(
+            "DELETE /api/v1/projects/{project_id}/collections/{collection_id}/views/{view_id}",
+            &[
+                project(),
+                id(a.collection, b.collection),
+                id(sp.collection_view, b.collection_view),
+            ],
+            empty(),
+        ),
+        path_case(
+            "POST /api/v1/projects/{project_id}/collections/{collection_id}/records",
+            &[project(), id(a.collection, b.collection)],
+            json_body(json!({"title": "Net record", "values": keyed(ax.record_fields[0], json!("me"))})),
+        )
+        .rejecting(vec![
+            json!({"title": "Net record", "values": keyed(b.collection_field, json!("Net"))}),
+            json!({"title": "Net record", "values": keyed(ax.record_fields[0], json!(b.rook))}),
+            json!({"title": "Net record", "values": keyed(ax.record_fields[1], json!(b.task))}),
+            json!({"title": "Net record", "values": keyed(ax.record_fields[2], json!(b.page))}),
+        ]),
+        path_case(
+            "PATCH /api/v1/projects/{project_id}/collections/{collection_id}/records/{record_id}",
+            &[
+                project(),
+                id(a.collection, b.collection),
+                id(a.record, b.record),
+            ],
+            versioned("collection_records", 2, json!({"title": "Net record title"})),
+        )
+        .rejecting(vec![
+            json!({
+                "values": keyed(ax.record_fields[0], json!(b.rook)),
+                "expectedVersion": version("collection_records", a.record),
+            }),
+            json!({
+                "values": keyed(ax.record_fields[2], json!(b.page)),
+                "expectedVersion": version("collection_records", a.record),
+            }),
+        ]),
         path_case(
             "POST /api/v1/projects/{project_id}/launches",
             &[project()],
@@ -5768,6 +5948,61 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "description": "Net",
             "expectedVersion": version("field_definitions", bx.field),
         })]),
+        mcp_case(
+            "collection_write",
+            json!({
+                "projectId": a.project,
+                "collection": a.collection,
+                "description": "Net mcp",
+                "fields": [{"name": "Net mcp field", "type": "number"}],
+            }),
+            vec![
+                json!({"projectId": a.project, "collection": b.collection, "description": "Net"}),
+                json!({"projectId": b.project, "collection": b.collection, "description": "Net"}),
+                json!({"projectId": b.project, "name": "Net mcp collection"}),
+            ],
+        )
+        .rejecting(vec![
+            json!({"projectId": a.project, "collection": a.collection, "fields": [{"field": b.collection_field, "name": "Net"}]}),
+            json!({"projectId": a.project, "collection": a.collection, "views": [{"view": b.collection_view, "name": "Net"}]}),
+            json!({
+                "projectId": a.project,
+                "collection": a.collection,
+                "views": [{"name": "Net mcp view", "filters": [{"field": "Tester", "op": "is", "values": [b.rook]}]}],
+            }),
+            json!({
+                "projectId": a.project,
+                "collection": a.collection,
+                "views": [{"name": "Net mcp view", "filters": [{"field": "Build", "op": "is", "values": [b.task]}]}],
+            }),
+            json!({
+                "projectId": a.project,
+                "collection": a.collection,
+                "views": [{"name": "Net mcp view", "groupBy": b.collection_field}],
+            }),
+        ]),
+        mcp_case(
+            "record_write",
+            json!({
+                "projectId": a.project,
+                "collection": a.collection,
+                "records": [
+                    {"record": "#1", "fields": {"Notes": "Net mcp"}},
+                    {"title": "Net mcp record", "fields": {"Tester": "me", "Build": a.task, "Spec": a.page}},
+                ],
+            }),
+            vec![
+                json!({"projectId": a.project, "collection": b.collection, "records": [{"title": "Net"}]}),
+                json!({"projectId": b.project, "collection": b.collection, "records": [{"title": "Net"}]}),
+            ],
+        )
+        .rejecting(vec![
+            json!({"projectId": a.project, "collection": a.collection, "records": [{"record": b.record, "title": "Net"}]}),
+            json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": {"Tester": b.rook}}]}),
+            json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": {"Build": b.task}}]}),
+            json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": {"Spec": b.page}}]}),
+            json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": keyed(b.collection_field, json!("Net"))}]}),
+        ]),
         mcp_case(
             "label_write",
             json!({"projectId": a.project, "name": "Net mcp label"}),

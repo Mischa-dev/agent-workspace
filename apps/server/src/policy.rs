@@ -68,6 +68,10 @@ pub enum Action {
     PageEdit,
     /// Draw on a project's whiteboards.
     WhiteboardEdit,
+    /// Add, change, archive and restore a collection's records (AWD-90).
+    CollectionRecordEdit,
+    /// Create collections and change their fields and views (AWD-90).
+    CollectionBuild,
     RepositoryView,
     RepositoryManage,
     RepositoryPublish,
@@ -82,7 +86,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Self; 40] = [
+    pub const ALL: [Self; 42] = [
         Self::OrganizationProjectCreate,
         Self::ProjectView,
         Self::ProjectManage,
@@ -115,6 +119,8 @@ impl Action {
         Self::WorkflowManage,
         Self::PageEdit,
         Self::WhiteboardEdit,
+        Self::CollectionRecordEdit,
+        Self::CollectionBuild,
         Self::RepositoryView,
         Self::RepositoryManage,
         Self::RepositoryPublish,
@@ -157,6 +163,8 @@ impl Action {
             Self::WorkflowManage => Permission::TasksWorkflow,
             Self::PageEdit => Permission::PagesEdit,
             Self::WhiteboardEdit => Permission::WhiteboardsEdit,
+            Self::CollectionRecordEdit => Permission::CollectionsEdit,
+            Self::CollectionBuild => Permission::CollectionsBuild,
             Self::RepositoryView => Permission::CodeView,
             Self::RepositoryManage | Self::GithubIntegrationManage => Permission::CodeManage,
             Self::RepositoryPublish | Self::PullRequestCreate | Self::PullRequestRefresh => {
@@ -190,6 +198,8 @@ pub enum Permission {
     ChannelsModerate,
     PagesEdit,
     WhiteboardsEdit,
+    CollectionsEdit,
+    CollectionsBuild,
     RunsLaunch,
     RunsApprove,
     RunsInterrupt,
@@ -286,7 +296,7 @@ const WORKERS: [bool; 4] = [true, true, true, false];
 const MANAGERS: [bool; 4] = [true, true, false, false];
 
 /// Every permission, in the order the Roles page shows them.
-pub const PERMISSIONS: [PermissionInfo; 27] = [
+pub const PERMISSIONS: [PermissionInfo; 29] = [
     required(permission(
         Permission::ProjectsView,
         "projects.view",
@@ -401,6 +411,24 @@ pub const PERMISSIONS: [PermissionInfo; 27] = [
         "whiteboards",
         "Draw on whiteboards",
         "Change a project's whiteboards. Anyone in the project can still look at them.",
+        PermissionScope::Project,
+        WORKERS,
+    ),
+    permission(
+        Permission::CollectionsEdit,
+        "collections.edit",
+        "collections",
+        "Edit records",
+        "Add, change, archive and restore records in a project's collections. Anyone in the project can still read them.",
+        PermissionScope::Project,
+        WORKERS,
+    ),
+    permission(
+        Permission::CollectionsBuild,
+        "collections.build",
+        "collections",
+        "Build collections",
+        "Create collections and change their fields and views.",
         PermissionScope::Project,
         WORKERS,
     ),
@@ -537,12 +565,13 @@ pub const PERMISSIONS: [PermissionInfo; 27] = [
 ];
 
 /// The modules permissions are grouped by, in order, with their names.
-pub const PERMISSION_MODULES: [(&str, &str); 10] = [
+pub const PERMISSION_MODULES: [(&str, &str); 11] = [
     ("projects", "Projects"),
     ("tasks", "Tasks"),
     ("channels", "Channels"),
     ("pages", "Pages and decisions"),
     ("whiteboards", "Whiteboards"),
+    ("collections", "Collections"),
     ("runs", "Runs"),
     ("code", "Code"),
     ("agents", "Agents"),
@@ -1124,6 +1153,8 @@ pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decis
             | Action::WorkflowManage
             | Action::PageEdit
             | Action::WhiteboardEdit
+            | Action::CollectionRecordEdit
+            | Action::CollectionBuild
             | Action::RepositoryView
             | Action::RepositoryManage
             | Action::RepositoryPublish
@@ -1355,6 +1386,9 @@ mod tests {
                             | Action::WorkItemArchive
                             | Action::PageEdit
                             | Action::WhiteboardEdit
+                            // AWD-90: members build and fill collections.
+                            | Action::CollectionRecordEdit
+                            | Action::CollectionBuild
                     ),
                     MembershipRole::Viewer => {
                         matches!(

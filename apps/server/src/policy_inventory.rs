@@ -1487,6 +1487,60 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         WorkflowManage
     ),
     policy_route!(
+        "collections/http",
+        Post,
+        "/api/v1/projects/{project_id}/collections",
+        CollectionBuild
+    ),
+    policy_route!(
+        "collections/http",
+        Patch,
+        "/api/v1/projects/{project_id}/collections/{collection_id}",
+        CollectionBuild
+    ),
+    policy_route!(
+        "collections/http",
+        Post,
+        "/api/v1/projects/{project_id}/collections/{collection_id}/fields",
+        CollectionBuild
+    ),
+    policy_route!(
+        "collections/http",
+        Patch,
+        "/api/v1/projects/{project_id}/collections/{collection_id}/fields/{field_id}",
+        CollectionBuild
+    ),
+    policy_route!(
+        "collections/http",
+        Post,
+        "/api/v1/projects/{project_id}/collections/{collection_id}/views",
+        CollectionBuild
+    ),
+    policy_route!(
+        "collections/http",
+        Patch,
+        "/api/v1/projects/{project_id}/collections/{collection_id}/views/{view_id}",
+        CollectionBuild
+    ),
+    policy_route!(
+        "collections/http",
+        Delete,
+        "/api/v1/projects/{project_id}/collections/{collection_id}/views/{view_id}",
+        CollectionBuild
+    ),
+    policy_route!(
+        "collections/http",
+        Post,
+        "/api/v1/projects/{project_id}/collections/{collection_id}/records",
+        CollectionRecordEdit
+    ),
+    policy_route!(
+        "collections/http",
+        Patch,
+        "/api/v1/projects/{project_id}/collections/{collection_id}/records/{record_id}",
+        CollectionRecordEdit
+    ),
+    policy_route!(
         "work_items",
         Post,
         "/api/v1/projects/{project_id}/milestones",

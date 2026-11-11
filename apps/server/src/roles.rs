@@ -735,6 +735,7 @@ pub(crate) fn starting_points() -> Vec<StartingPoint> {
                 "channels.post",
                 "pages.edit",
                 "whiteboards.edit",
+                "collections.edit",
                 "runs.launch",
                 "runs.interrupt",
                 "code.view",
@@ -768,6 +769,8 @@ pub(crate) fn starting_points() -> Vec<StartingPoint> {
                 "channels.create",
                 "pages.edit",
                 "whiteboards.edit",
+                "collections.edit",
+                "collections.build",
                 "directory.view",
             ],
             agent_limit: Some(vec![

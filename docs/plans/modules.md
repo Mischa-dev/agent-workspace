@@ -26,6 +26,7 @@ and `name`).
 | `tasks` | projects | Tasks, board, timeline, milestones, planning, views, templates |
 | `pages` | projects | Pages, decisions, skills, the guide |
 | `whiteboards` | projects | Whiteboards |
+| `collections` | projects | Record types a project makes: fields, records and views (AWD-90) |
 | `code` | projects | Repositories and pull requests |
 | `runs` | tasks, channels, code | Runs on harnesses, approvals, usage |
 | `agents` | | The agent directory, profiles, @-mentioning agents |

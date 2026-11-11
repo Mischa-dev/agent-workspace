@@ -19,6 +19,8 @@ export const PERMISSION_KEYS = [
   'channels.moderate',
   'pages.edit',
   'whiteboards.edit',
+  'collections.edit',
+  'collections.build',
   'runs.launch',
   'runs.approve',
   'runs.interrupt',

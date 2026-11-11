@@ -37,6 +37,7 @@ pub enum OutboxResourceKind {
     Notification,
     Whiteboard,
     Page,
+    Collection,
 }
 
 impl OutboxResourceKind {
@@ -51,6 +52,7 @@ impl OutboxResourceKind {
             Self::Notification => "notification",
             Self::Whiteboard => "whiteboard",
             Self::Page => "page",
+            Self::Collection => "collection",
         }
     }
 
@@ -65,6 +67,7 @@ impl OutboxResourceKind {
             "notification" => Ok(Self::Notification),
             "whiteboard" => Ok(Self::Whiteboard),
             "page" => Ok(Self::Page),
+            "collection" => Ok(Self::Collection),
             _ => Err(OutboxEventError::MalformedMetadata),
         }
     }
@@ -225,6 +228,24 @@ pub struct PageUpdatedPayload {
     pub version: i64,
 }
 
+/// A collection, its fields or views, or some of its records changed
+/// (AWD-90). IDs only: open screens fetch what they show over HTTP, so no
+/// record's title or values are stored in the outbox or sent to anyone.
+/// `record_ids` names the records a write changed (at most
+/// `MAX_COLLECTION_EVENT_RECORDS`); none means the collection itself
+/// changed, or more records than that did.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CollectionUpdatedPayload {
+    pub collection_id: Uuid,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub record_ids: Vec<Uuid>,
+}
+
+/// The most records one `collection.updated` names; a larger change names
+/// none, and open screens refetch what they show.
+pub const MAX_COLLECTION_EVENT_RECORDS: usize = 100;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OutboxEventPayload {
     ConversationCreated(ConversationCreatedPayload),
@@ -242,6 +263,7 @@ pub enum OutboxEventPayload {
     NotificationsUpdated(NotificationsUpdatedPayload),
     WhiteboardUpdated(WhiteboardUpdatedPayload),
     PageUpdated(PageUpdatedPayload),
+    CollectionUpdated(CollectionUpdatedPayload),
 }
 
 impl OutboxEventPayload {
@@ -262,6 +284,7 @@ impl OutboxEventPayload {
             Self::NotificationsUpdated(_) => "notifications.updated",
             Self::WhiteboardUpdated(_) => "whiteboard.updated",
             Self::PageUpdated(_) => "page.updated",
+            Self::CollectionUpdated(_) => "collection.updated",
         }
     }
 
@@ -284,7 +307,8 @@ impl OutboxEventPayload {
             | Self::ProjectMembershipUpdated(_)
             | Self::NotificationsUpdated(_)
             | Self::WhiteboardUpdated(_)
-            | Self::PageUpdated(_) => None,
+            | Self::PageUpdated(_)
+            | Self::CollectionUpdated(_) => None,
         }
     }
 
@@ -317,6 +341,7 @@ impl OutboxEventPayload {
             Self::NotificationsUpdated(_) => OutboxResourceKind::Notification,
             Self::WhiteboardUpdated(_) => OutboxResourceKind::Whiteboard,
             Self::PageUpdated(_) => OutboxResourceKind::Page,
+            Self::CollectionUpdated(_) => OutboxResourceKind::Collection,
         }
     }
 
@@ -340,6 +365,7 @@ impl OutboxEventPayload {
             Self::NotificationsUpdated(payload) => payload.actor_id,
             Self::WhiteboardUpdated(payload) => payload.whiteboard_id,
             Self::PageUpdated(payload) => payload.page_id,
+            Self::CollectionUpdated(payload) => payload.collection_id,
         }
     }
 
@@ -394,6 +420,12 @@ impl OutboxEventPayload {
             Self::PageUpdated(payload) if payload.version < 1 => {
                 Err(OutboxEventError::MalformedPayload)
             }
+            Self::CollectionUpdated(payload)
+                if payload.record_ids.len() > MAX_COLLECTION_EVENT_RECORDS
+                    || payload.record_ids.iter().any(Uuid::is_nil) =>
+            {
+                Err(OutboxEventError::MalformedPayload)
+            }
             _ => Ok(()),
         }
     }
@@ -416,6 +448,7 @@ impl OutboxEventPayload {
             Self::NotificationsUpdated(payload) => serde_json::to_value(payload),
             Self::WhiteboardUpdated(payload) => serde_json::to_value(payload),
             Self::PageUpdated(payload) => serde_json::to_value(payload),
+            Self::CollectionUpdated(payload) => serde_json::to_value(payload),
         }
         .map_err(|_| OutboxEventError::MalformedPayload)?;
         validate_payload_size(&value)?;
@@ -468,6 +501,9 @@ impl OutboxEventPayload {
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "page.updated" => Self::PageUpdated(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "collection.updated" => Self::CollectionUpdated(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             _ => return Err(OutboxEventError::UnknownEventType),
@@ -739,6 +775,31 @@ pub async fn enqueue_work_item_updated(
             work_item_id,
             version,
             placement,
+        }),
+    )
+    .await
+}
+
+/// Enqueue `collection.updated` for a collection, naming the records that
+/// changed (none for the collection itself; too many name none).
+pub async fn enqueue_collection_updated(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    collection_id: Uuid,
+    record_ids: &[Uuid],
+) -> Result<Uuid, AppError> {
+    let mut record_ids = record_ids.to_vec();
+    record_ids.sort_unstable();
+    record_ids.dedup();
+    if record_ids.len() > MAX_COLLECTION_EVENT_RECORDS {
+        record_ids.clear();
+    }
+    enqueue_typed(
+        transaction,
+        project_id,
+        OutboxEventPayload::CollectionUpdated(CollectionUpdatedPayload {
+            collection_id,
+            record_ids,
         }),
     )
     .await

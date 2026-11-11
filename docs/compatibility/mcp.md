@@ -122,7 +122,10 @@ Among the task tools, `task_create`, `task_create_many`, `task_comment`,
 marked non-destructive; `task_update`, `task_update_many`, `task_criteria`,
 `task_mark_blocked`, `task_mark_ready_for_review`, `task_link`, `task_move`,
 `label_write` and `field_write` are destructive. Only `task_link` and
-`task_link_pull_request` are open-world.
+`task_link_pull_request` are open-world. The collection tools (AWD-90) follow
+the same rule: `collection_list`, `collection_describe` and `record_query`
+are read-only; `collection_write` and `record_write` are destructive and
+idempotent (a `clientRequestId` makes a retry safe).
 
 ## MCP Phase 2 changes (October 1, 2026)
 

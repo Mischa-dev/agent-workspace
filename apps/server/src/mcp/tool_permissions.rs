@@ -15,9 +15,9 @@
 //! ones, so a new tool must say what it needs.
 
 use crate::policy::Permission::{
-    self, ChannelsCreate, ChannelsPost, CodeView, MembersManage, MembersView, PagesEdit,
-    ProjectsCreate, ProjectsManage, RolesManage, RunsApprove, RunsLaunch, SettingsManage,
-    TasksCreate, TasksDelete, TasksEdit, TasksView, TasksWorkflow, WhiteboardsEdit,
+    self, ChannelsCreate, ChannelsPost, CodeView, CollectionsBuild, CollectionsEdit, MembersManage,
+    MembersView, PagesEdit, ProjectsCreate, ProjectsManage, RolesManage, RunsApprove, RunsLaunch,
+    SettingsManage, TasksCreate, TasksDelete, TasksEdit, TasksView, TasksWorkflow, WhiteboardsEdit,
 };
 
 pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
@@ -102,6 +102,13 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("field_list", Some(TasksView)),
     ("field_write", Some(TasksWorkflow)),
     ("task_move", Some(TasksEdit)),
+    // Collections (AWD-90): anyone in the project reads them; records need
+    // collections.edit, and fields and views collections.build.
+    ("collection_list", None),
+    ("collection_describe", None),
+    ("collection_write", Some(CollectionsBuild)),
+    ("record_query", None),
+    ("record_write", Some(CollectionsEdit)),
     ("search", None),
     ("thing_open", None),
     ("page_list", None),

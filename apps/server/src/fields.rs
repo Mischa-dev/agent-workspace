@@ -1,8 +1,8 @@
 //! Custom fields (AWD-89): the field types every kind of record shares.
 //!
 //! A field belongs to one project and one kind of record (`RecordKind`):
-//! tasks now, collections' records (AWD-90) and modules' records later. This
-//! module knows nothing about tasks. It owns:
+//! tasks, or one collection's records (AWD-90), and modules' records later.
+//! This module knows nothing about tasks or collections. It owns:
 //!
 //! * the types (`FieldType`) and their settings (`FieldConfig`: choice
 //!   options, a link's target);
@@ -143,16 +143,28 @@ impl FieldType {
     }
 }
 
-/// The kind of record a field belongs to. Collections (AWD-90) add theirs.
+/// The kind of record a field belongs to: a project's tasks, or the
+/// records of one of its collections (AWD-90, `crate::collections`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RecordKind {
     Task,
+    /// The records of the collection with this ID.
+    Collection(Uuid),
 }
 
 impl RecordKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Task => "task",
+            Self::Collection(_) => "record",
+        }
+    }
+
+    /// The collection the fields belong to; None for tasks.
+    pub fn collection_id(self) -> Option<Uuid> {
+        match self {
+            Self::Task => None,
+            Self::Collection(id) => Some(id),
         }
     }
 }
@@ -398,7 +410,7 @@ pub fn normalize_description(value: &str) -> Option<String> {
 }
 
 /// A choice option as someone writes it: an existing option keeps its ID.
-#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OptionInput {
     /// An existing option's ID, to keep it (and every value that uses it)
@@ -901,7 +913,10 @@ pub struct FieldClause {
 }
 
 impl FieldClause {
-    fn shape_is_valid(&self) -> bool {
+    /// Whether the clause has the values its operation takes: none for
+    /// empty and notEmpty, one for contains and the comparisons, and 1 to
+    /// `MAX_CLAUSE_VALUES` short ones for is and isNot.
+    pub fn shape_is_valid(&self) -> bool {
         if self.op.takes_values() {
             !self.values.is_empty()
                 && self.values.len() <= MAX_CLAUSE_VALUES
@@ -1387,12 +1402,14 @@ pub async fn list(
 ) -> Result<Vec<FieldDefinition>, AppError> {
     sqlx::query_as::<_, DefinitionRow>(&format!(
         "SELECT {DEFINITION_COLUMNS} FROM field_definitions \
-         WHERE project_id = $1 AND record_kind = $2 AND ($3 OR archived_at IS NULL) \
+         WHERE project_id = $1 AND record_kind = $2 AND collection_id IS NOT DISTINCT FROM $4 \
+           AND ($3 OR archived_at IS NULL) \
          ORDER BY archived_at IS NOT NULL, position, id LIMIT {MAX_FIELD_ROWS}"
     ))
     .bind(project_id)
     .bind(kind.as_str())
     .bind(include_archived)
+    .bind(kind.collection_id())
     .fetch_all(executor)
     .await?
     .into_iter()
@@ -1408,11 +1425,13 @@ async fn definition(
 ) -> Result<Option<FieldDefinition>, AppError> {
     sqlx::query_as::<_, DefinitionRow>(&format!(
         "SELECT {DEFINITION_COLUMNS} FROM field_definitions \
-         WHERE project_id = $1 AND record_kind = $2 AND id = $3"
+         WHERE project_id = $1 AND record_kind = $2 AND id = $3 \
+           AND collection_id IS NOT DISTINCT FROM $4"
     ))
     .bind(project_id)
     .bind(kind.as_str())
     .bind(id)
+    .bind(kind.collection_id())
     .fetch_optional(&mut *connection)
     .await?
     .map(FieldDefinition::try_from)
@@ -1491,10 +1510,12 @@ pub async fn create(
         return Ok(CreateFieldOutcome::NameTaken(taken.clone()));
     }
     let total = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM field_definitions WHERE project_id = $1 AND record_kind = $2",
+        "SELECT count(*) FROM field_definitions WHERE project_id = $1 AND record_kind = $2 \
+         AND collection_id IS NOT DISTINCT FROM $3",
     )
     .bind(project_id)
     .bind(kind.as_str())
+    .bind(kind.collection_id())
     .fetch_one(&mut *connection)
     .await?;
     if existing.len() as i64 >= MAX_ACTIVE_FIELDS || total >= MAX_FIELD_ROWS {
@@ -1507,11 +1528,12 @@ pub async fn create(
         r#"
         INSERT INTO field_definitions (
             id, project_id, record_kind, name, description, field_type, config,
-            position, created_by_actor_id
+            position, created_by_actor_id, collection_id
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7,
                 (SELECT COALESCE(max(position) + 1, 0) FROM field_definitions
-                 WHERE project_id = $2 AND record_kind = $3), $8)
+                 WHERE project_id = $2 AND record_kind = $3
+                   AND collection_id IS NOT DISTINCT FROM $9), $8, $9)
         "#,
     )
     .bind(id)
@@ -1522,6 +1544,7 @@ pub async fn create(
     .bind(new.field_type.as_str())
     .bind(config)
     .bind(actor_id)
+    .bind(kind.collection_id())
     .execute(&mut *connection)
     .await?;
     if let Some(position) = new.position {
@@ -1544,19 +1567,22 @@ async fn move_to(
 ) -> Result<(), AppError> {
     let mut order = sqlx::query_scalar::<_, Uuid>(
         "SELECT id FROM field_definitions WHERE project_id = $1 AND record_kind = $2 \
+         AND collection_id IS NOT DISTINCT FROM $3 \
          ORDER BY archived_at IS NOT NULL, position, id",
     )
     .bind(project_id)
     .bind(kind.as_str())
+    .bind(kind.collection_id())
     .fetch_all(&mut *connection)
     .await?;
     let active = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM field_definitions WHERE project_id = $1 AND record_kind = $2 \
-         AND archived_at IS NULL AND id <> $3",
+         AND archived_at IS NULL AND id <> $3 AND collection_id IS NOT DISTINCT FROM $4",
     )
     .bind(project_id)
     .bind(kind.as_str())
     .bind(id)
+    .bind(kind.collection_id())
     .fetch_one(&mut *connection)
     .await?;
     order.retain(|other| *other != id);
@@ -1571,6 +1597,7 @@ async fn move_to(
         SET position = placed.position
         FROM unnest($3::uuid[], $4::int[]) AS placed(id, position)
         WHERE field.project_id = $1 AND field.record_kind = $2 AND field.id = placed.id
+          AND field.collection_id IS NOT DISTINCT FROM $5
           AND field.position <> placed.position
         "#,
     )
@@ -1578,6 +1605,7 @@ async fn move_to(
     .bind(kind.as_str())
     .bind(&order)
     .bind(&positions)
+    .bind(kind.collection_id())
     .execute(&mut *connection)
     .await?;
     Ok(())
@@ -1627,11 +1655,13 @@ pub async fn change(
     change: FieldChange,
 ) -> Result<ChangeFieldOutcome, AppError> {
     let locked = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM field_definitions WHERE project_id = $1 AND record_kind = $2 AND id = $3 FOR UPDATE",
+        "SELECT id FROM field_definitions WHERE project_id = $1 AND record_kind = $2 AND id = $3 \
+         AND collection_id IS NOT DISTINCT FROM $4 FOR UPDATE",
     )
     .bind(project_id)
     .bind(kind.as_str())
     .bind(field_id)
+    .bind(kind.collection_id())
     .fetch_optional(&mut *connection)
     .await?;
     if locked.is_none() {
@@ -1713,6 +1743,7 @@ pub async fn change(
             archived_by_actor_id = CASE WHEN $7 THEN COALESCE(archived_by_actor_id, $8) END,
             version = version + 1, updated_at = now()
         WHERE project_id = $1 AND record_kind = $2 AND id = $3
+          AND collection_id IS NOT DISTINCT FROM $9
         "#,
     )
     .bind(project_id)
@@ -1723,6 +1754,7 @@ pub async fn change(
     .bind(config_value)
     .bind(archived)
     .bind(actor_id)
+    .bind(kind.collection_id())
     .execute(&mut *connection)
     .await?;
     if moves && let Some(position) = change.position {
