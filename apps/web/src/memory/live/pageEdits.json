@@ -1,0 +1,179 @@
+{
+  "about": "Edits the page editor makes to documents in pageDocuments.json, as the updates it sends (apps/web/src/memory/live/pageDocuments.test.ts writes them, from a fixed client id). The server checks it takes each one and writes the Markdown given. Rewrite with UPDATE_DOC_PARITY=1.",
+  "edits": [
+    {
+      "name": "type into an empty page",
+      "document": "empty",
+      "markdown": "Hello there",
+      "update": "AQKSIQAHAAEABgQAkiEAC0hlbGxvIHRoZXJlAA=="
+    },
+    {
+      "name": "type inside a paragraph",
+      "document": "paragraphs",
+      "markdown": "One line, edited\nand the next.\n\nA second paragraph with a hard  \nbreak.\n",
+      "update": "AQGSIQCEAQoILCBlZGl0ZWQA"
+    },
+    {
+      "name": "make a word bold",
+      "document": "paragraphs",
+      "markdown": "One line\nand the next.\n\nA **second** paragraph with a hard\nbreak.\n",
+      "update": "AQKSIQDGAR4BHwRib2xkAnt9xgEkASUEYm9sZARudWxsAA=="
+    },
+    {
+      "name": "link a word",
+      "document": "paragraphs",
+      "markdown": "One line\nand the next.\n\nA second [paragraph](https://example.org/p) with a hard\nbreak.\n",
+      "update": "AQKSIQDGASUBJgRsaW5rIHsiaHJlZiI6Imh0dHBzOi8vZXhhbXBsZS5vcmcvcCJ9xgEuAS8EbGluawRudWxsAA=="
+    },
+    {
+      "name": "split a paragraph",
+      "document": "paragraphs",
+      "markdown": "One line\nand the next.\n\nA second\n\nparagraph with a hard\nbreak.\n",
+      "update": "AQSSIQDHAQABGgMJcGFyYWdyYXBoBwCSIQAGBACSIQEIQSBzZWNvbmQoAJIhAAJpZAF3BmJsb2NrMQEBAhsBHQk="
+    },
+    {
+      "name": "a new paragraph at the end",
+      "document": "paragraphs",
+      "markdown": "One line\nand the next.\n\nA second paragraph with a hard  \nbreak.\n\nThird.\n",
+      "update": "AQOSIQCHARoDCXBhcmFncmFwaAcAkiEABgQAkiEBBlRoaXJkLgA="
+    },
+    {
+      "name": "Enter at the start of a paragraph",
+      "document": "paragraphs",
+      "markdown": "One line\nand the next.\n\nA second paragraph with a hard  \nbreak.\n",
+      "update": "AQGSIQDHAQABGgMJcGFyYWdyYXBoAA=="
+    },
+    {
+      "name": "make a heading",
+      "document": "paragraphs",
+      "markdown": "## One line and the next.\n\nA second paragraph with a hard  \nbreak.\n",
+      "update": "AQiSIQBHAQADB2hlYWRpbmcHAJIhAAYEAJIhAQhPbmUgbGluZYeSIQEDCWhhcmRCcmVha4eSIQoGBACSIQsNYW5kIHRoZSBuZXh0LigAkiEAAmlkAXcGYmxvY2swKACSIQAFbGV2ZWwBfQIBAQEAGg=="
+    },
+    {
+      "name": "make a list",
+      "document": "headings",
+      "markdown": "# One\n\n- Two\n\n### Three\n\n#### Four\n\n##### Five\n\n###### Six\n",
+      "update": "AQaSIQDHAQABBwMKYnVsbGV0TGlzdAcAkiEAAwhsaXN0SXRlbQcAkiEBAwlwYXJhZ3JhcGgHAJIhAgYEAJIhAwNUd28oAJIhAgJpZAF3BmJsb2NrMQEBAQcH"
+    },
+    {
+      "name": "remove a heading",
+      "document": "headings",
+      "markdown": "# One\n\n### Three\n\n#### Four\n\n##### Five\n\n###### Six\n",
+      "update": "AAEBAQcH"
+    },
+    {
+      "name": "tick a task",
+      "document": "lists",
+      "markdown": "- one\n- two\n  - nested\n\n3. three\n4. four\n\n- [x] to do\n- [x] done\n",
+      "update": "AQGSIQCoAS0BeAEBAS0B"
+    },
+    {
+      "name": "a new task after a done one",
+      "document": "lists",
+      "markdown": "- one\n- two\n  - nested\n\n3. three\n4. four\n\n- [ ] to do\n- [x] done\n- [ ] next\n",
+      "update": "AQWSIQCHATUDCGxpc3RJdGVtBwCSIQADCXBhcmFncmFwaCgAkiEAB2NoZWNrZWQBeQcAkiEBBgQAkiEDBG5leHQA"
+    },
+    {
+      "name": "indent an item",
+      "document": "lists",
+      "markdown": "- one\n- two\n  - nested\n\n3. three\n   1. four\n\n- [ ] to do\n- [x] done\n",
+      "update": "AQaSIQCHARwDC29yZGVyZWRMaXN0BwCSIQADCGxpc3RJdGVtBwCSIQEDCXBhcmFncmFwaAcAkiECBgQAkiEDBGZvdXIoAJIhAAVzdGFydAF9AQEBASMH"
+    },
+    {
+      "name": "a code block",
+      "document": "empty",
+      "markdown": "```\nlet x = 1\n```",
+      "update": "AQSSIQBHAQADCWNvZGVCbG9jaygAkiEAAmlkAXcGYmxvY2swBwCSIQAGBACSIQIJbGV0IHggPSAxAQEBAAI="
+    },
+    {
+      "name": "type in code",
+      "document": "code",
+      "markdown": "```rust\nfn main() { run() }\n```\n\n```\nplain\n```\n",
+      "update": "AQGSIQDEAQ4BDwcgcnVuKCkgAA=="
+    },
+    {
+      "name": "a table",
+      "document": "empty",
+      "markdown": "| a |  |\n| --- | --- |\n|  |  |",
+      "update": "ARWSIQBHAQADBXRhYmxlBwCSIQADCHRhYmxlUm93BwCSIQEDC3RhYmxlSGVhZGVyBwCSIQIDCXBhcmFncmFwaCgAkiECB2NvbHNwYW4BfQEoAJIhAgdyb3dzcGFuAX0Bh5IhAgMLdGFibGVIZWFkZXIHAJIhBgMJcGFyYWdyYXBoKACSIQYHY29sc3BhbgF9ASgAkiEGB3Jvd3NwYW4BfQGHkiEBAwh0YWJsZVJvdwcAkiEKAwl0YWJsZUNlbGwHAJIhCwMJcGFyYWdyYXBoKACSIQsHY29sc3BhbgF9ASgAkiELB3Jvd3NwYW4BfQGHkiELAwl0YWJsZUNlbGwHAJIhDwMJcGFyYWdyYXBoKACSIQ8HY29sc3BhbgF9ASgAkiEPB3Jvd3NwYW4BfQEHAJIhAwYEAJIhEwFhAQEBAAI="
+    },
+    {
+      "name": "type in a cell",
+      "document": "table",
+      "markdown": "| a | b | c |\n| :-- | :-: | --: |\n| 1 | **2** | `3` |\n| 4 | five | 6 |\n",
+      "update": "AQKSIQAHAAE+BgQAkiEABGZpdmUA"
+    },
+    {
+      "name": "add a row",
+      "document": "table",
+      "markdown": "| a | b | c |\n| :-- | :-: | --: |\n| 1 | **2** | `3` |\n| 4 |  | 6 |\n|  |  |  |\n",
+      "update": "AQ2SIQCHATIDCHRhYmxlUm93BwCSIQADCXRhYmxlQ2VsbAcAkiEBAwlwYXJhZ3JhcGgoAJIhAQdjb2xzcGFuAX0BKACSIQEHcm93c3BhbgF9AYeSIQEDCXRhYmxlQ2VsbAcAkiEFAwlwYXJhZ3JhcGgoAJIhBQdjb2xzcGFuAX0BKACSIQUHcm93c3BhbgF9AYeSIQUDCXRhYmxlQ2VsbAcAkiEJAwlwYXJhZ3JhcGgoAJIhCQdjb2xzcGFuAX0BKACSIQkHcm93c3BhbgF9AQA="
+    },
+    {
+      "name": "quote a paragraph",
+      "document": "paragraphs",
+      "markdown": "> One line\n> and the next.\n\nA second paragraph with a hard  \nbreak.\n",
+      "update": "AQiSIQBHAQADCmJsb2NrcXVvdGUHAJIhAAMJcGFyYWdyYXBoBwCSIQEGBACSIQIIT25lIGxpbmWHkiECAwloYXJkQnJlYWuHkiELBgQAkiEMDWFuZCB0aGUgbmV4dC4oAJIhAQJpZAF3BmJsb2NrMAEBAQAa"
+    },
+    {
+      "name": "a rule and a line break",
+      "document": "empty",
+      "markdown": "a\nb\n\n---",
+      "update": "AQeSIQAHAAEABgQAkiEAAWGHkiEAAwloYXJkQnJlYWuHkiECBgQAkiEDAWKHAQADDmhvcml6b250YWxSdWxlh5IhBQMJcGFyYWdyYXBoAA=="
+    },
+    {
+      "name": "type in a quote in an item",
+      "document": "blocks in items",
+      "markdown": "- first\n\n  second paragraph\n\n  ```\n  code in an item\n  ```\n- > a quote in an item, edited\n-\n",
+      "update": "AQGSIQCEAUIILCBlZGl0ZWQA"
+    },
+    {
+      "name": "make tasks of a list",
+      "document": "lists",
+      "markdown": "- [ ] one\n- two\n  - nested\n\n3. three\n4. four\n\n- [ ] to do\n- [x] done\n",
+      "update": "AQGSIQAoAAECB2NoZWNrZWQBeQA="
+    },
+    {
+      "name": "tasks from a paragraph",
+      "document": "paragraphs",
+      "markdown": "- [ ] One line\n  and the next.\n\nA second paragraph with a hard  \nbreak.\n",
+      "update": "AQqSIQBHAQADCmJ1bGxldExpc3QHAJIhAAMIbGlzdEl0ZW0HAJIhAQMJcGFyYWdyYXBoBwCSIQIGBACSIQMIT25lIGxpbmWHkiEDAwloYXJkQnJlYWuHkiEMBgQAkiENDWFuZCB0aGUgbmV4dC4oAJIhAgJpZAF3BmJsb2NrMCgAkiEBB2NoZWNrZWQBeQEBAQAa"
+    },
+    {
+      "name": "type a task box",
+      "document": "empty",
+      "markdown": "- [ ] milk",
+      "update": "AQmSIQAHAAEABgQAkiEABFsgXSBHAQADCmJ1bGxldExpc3QHAJIhBQMIbGlzdEl0ZW0HAJIhBgMJcGFyYWdyYXBoKACSIQcCaWQBdwZibG9jazAoAJIhBgdjaGVja2VkAXkHAJIhBwYEAJIhCgRtaWxrApIhAQAFAQEAAg=="
+    },
+    {
+      "name": "type a list, then a done task",
+      "document": "empty",
+      "markdown": "- [x] done",
+      "update": "AQqSIQAHAAEABgQAkiEAAi0gRwEAAwpidWxsZXRMaXN0BwCSIQMDCGxpc3RJdGVtBwCSIQQDCXBhcmFncmFwaCgAkiEFAmlkAXcGYmxvY2swBwCSIQUGBACSIQcEW3hdICgAkiEEB2NoZWNrZWQBeISSIQsEZG9uZQKSIQIAAwgEAQEAAg=="
+    },
+    {
+      "name": "type a heading",
+      "document": "empty",
+      "markdown": "## Plan",
+      "update": "AQaSIQAHAAEABgQAkiEAAyMjIEcBAAMHaGVhZGluZygAkiEEBWxldmVsAX0CBwCSIQQGBACSIQYEUGxhbgKSIQEABAEBAAI="
+    },
+    {
+      "name": "a table from the toolbar",
+      "document": "paragraphs",
+      "markdown": "One line\nand the next.\n\nA second paragraph with a hard  \nbreak.\n\n|  |  |  |\n| --- | --- | --- |\n|  |  |  |\n|  |  |  |\n",
+      "update": "ASiSIQCHARoDBXRhYmxlBwCSIQADCHRhYmxlUm93BwCSIQEDC3RhYmxlSGVhZGVyBwCSIQIDCXBhcmFncmFwaCgAkiECB2NvbHNwYW4BfQEoAJIhAgdyb3dzcGFuAX0Bh5IhAgMLdGFibGVIZWFkZXIHAJIhBgMJcGFyYWdyYXBoKACSIQYHY29sc3BhbgF9ASgAkiEGB3Jvd3NwYW4BfQGHkiEGAwt0YWJsZUhlYWRlcgcAkiEKAwlwYXJhZ3JhcGgoAJIhCgdjb2xzcGFuAX0BKACSIQoHcm93c3BhbgF9AYeSIQEDCHRhYmxlUm93BwCSIQ4DCXRhYmxlQ2VsbAcAkiEPAwlwYXJhZ3JhcGgoAJIhDwdjb2xzcGFuAX0BKACSIQ8Hcm93c3BhbgF9AYeSIQ8DCXRhYmxlQ2VsbAcAkiETAwlwYXJhZ3JhcGgoAJIhEwdjb2xzcGFuAX0BKACSIRMHcm93c3BhbgF9AYeSIRMDCXRhYmxlQ2VsbAcAkiEXAwlwYXJhZ3JhcGgoAJIhFwdjb2xzcGFuAX0BKACSIRcHcm93c3BhbgF9AYeSIQ4DCHRhYmxlUm93BwCSIRsDCXRhYmxlQ2VsbAcAkiEcAwlwYXJhZ3JhcGgoAJIhHAdjb2xzcGFuAX0BKACSIRwHcm93c3BhbgF9AYeSIRwDCXRhYmxlQ2VsbAcAkiEgAwlwYXJhZ3JhcGgoAJIhIAdjb2xzcGFuAX0BKACSISAHcm93c3BhbgF9AYeSISADCXRhYmxlQ2VsbAcAkiEkAwlwYXJhZ3JhcGgoAJIhJAdjb2xzcGFuAX0BKACSISQHcm93c3BhbgF9AQA="
+    },
+    {
+      "name": "a link with nothing selected",
+      "document": "empty",
+      "markdown": "https://example.org/a",
+      "update": "AQSSIQAHAAEABgYAkiEABGxpbmsgeyJocmVmIjoiaHR0cHM6Ly9leGFtcGxlLm9yZy9hIn2EkiEBFWh0dHBzOi8vZXhhbXBsZS5vcmcvYYaSIRYEbGluawRudWxsAA=="
+    },
+    {
+      "name": "italic inside bold",
+      "document": "marks",
+      "markdown": "Some **_bold_**, _italic_, ~~struck~~, `code`, **bold `code`**, [a link](https://example.com), [a page](/projects) and AWD-12.\n",
+      "update": "AQKSIQDGAUkBCAZpdGFsaWMCe33GAQsBSgZpdGFsaWMEbnVsbAEBAVIB"
+    }
+  ]
+}

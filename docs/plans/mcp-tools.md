@@ -133,6 +133,8 @@ limited by their role in the project.
 |---|---|---|
 | `search` | ✓ | |
 | `page_list`, `page_get`, `page_write` | ✓ | |
+| `page_blocks` | + | A page's outline and blocks (lasting id, position, type, hash); a section or block range exactly as the page's Markdown has it. Positions need the version they came from; ids don't (AWD-53). |
+| `page_edit` | + | Replace, insert, delete or append blocks named by id (or position, with `expectedVersion`) and hash; everything else stays byte for byte, and people typing in the page keep their changes (AWD-53). |
 | `decision_record` | ✓ | |
 | `decision_list` | + | Decisions in a project, with `includeSuperseded`. |
 | `decision_update` | + | Edit the detail, supersede with an existing decision, or withdraw. |
@@ -355,6 +357,20 @@ task's old key opens the new one for anyone who can see it; anyone else gets
 the archived original, which they could always see. This also means
 `taskId`, `workItemId` and `parentId` take task keys in every tool now. Moving
 a task again returns where it went. That brings the count to 50 tools.
+
+AWD-102 added custom fields and a reviewed flow, shared with the web app's
+"Move to project…" (`crate::work_item_move`). A value carries into a target
+field of the same name and type when it means the same there (an option of
+the same name, a person who can hold tasks there, a link to a task moving in
+the same batch, which then points at its copy). `preview: true` shows the
+mover, privately, what carries and what needs a choice; the move then takes
+its `snapshot`, one resolution per issue (set it in a compatible target
+field, or leave it on the original) and a `clientRequestId`. It refuses a
+changed snapshot, checks access and every choice again, and moves all or
+nothing. A receipt (migration `20261107204000`) keeps the original result for
+the same request; the same ID with other choices is a conflict. The target's
+history holds only a count of what stayed. Called with only `taskId` and
+`toProjectId`, it moves at once: what fits carries and the rest stays.
 
 ## Built in Phase 2 (October 1, 2026)
 

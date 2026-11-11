@@ -1,0 +1,50 @@
+{
+  "about": "Documents the server makes from Markdown (apps/server/src/page_docs/parity.rs writes them, with fixed block ids). The web editor's tests open each one and check it shows without a change; pageEdits.json holds the edits they make, which the server checks it takes. Rewrite with UPDATE_DOC_PARITY=1.",
+  "documents": [
+    {
+      "markdown": "",
+      "name": "empty",
+      "state": "AQIBAAcBB2RlZmF1bHQDCXBhcmFncmFwaCgAAQACaWQBdwZibG9jazAA"
+    },
+    {
+      "markdown": "One line\nand the next.\n\nA second paragraph with a hard  \nbreak.\n",
+      "name": "paragraphs",
+      "state": "AQ4BAAcBB2RlZmF1bHQDCXBhcmFncmFwaCgAAQACaWQBdwZibG9jazAHAAEABgQAAQIIT25lIGxpbmWHAQIDCWhhcmRCcmVha4cBCwYEAAEMDWFuZCB0aGUgbmV4dC6HAQADCXBhcmFncmFwaCgAARoCaWQBdwZibG9jazEHAAEaBgQAARweQSBzZWNvbmQgcGFyYWdyYXBoIHdpdGggYSBoYXJkhwEcAwloYXJkQnJlYWuHATsGBAABPAZicmVhay4A"
+    },
+    {
+      "markdown": "Some **bold**, *italic*, ~~struck~~, `code`, **bold `code`**, [a link](https://example.com), [a page](/projects) and AWD-12.\n",
+      "name": "marks",
+      "state": "ASQBAAcBB2RlZmF1bHQDCXBhcmFncmFwaCgAAQACaWQBdwZibG9jazAHAAEABgQAAQIFU29tZSCEAQcEYm9sZIQBCwIsIIQBDQZpdGFsaWOEARMCLCCEARUGc3RydWNrhAEbAiwghAEdBGNvZGWEASECLCCEASMFYm9sZCCEASgEY29kZYQBLAIsIIQBLgZhIGxpbmuEATQCLCCEATYGYSBwYWdlhAE8DCBhbmQgQVdELTEyLsYBBwEIBGJvbGQCe33GAQsBDARib2xkBG51bGzGAQ0BDgZpdGFsaWMCe33GARMBFAZpdGFsaWMEbnVsbMYBFQEWBnN0cmlrZQJ7fcYBGwEcBnN0cmlrZQRudWxsxgEdAR4EY29kZQJ7fcYBIQEiBGNvZGUEbnVsbMYBIwEkBGJvbGQCe33BASgBKQHGASwBLQRib2xkBG51bGzGAVIBKQRjb2RlAnt9xgFTAS0EY29kZQRudWxsxgEuAS8EbGluax57ImhyZWYiOiJodHRwczovL2V4YW1wbGUuY29tIn3GATQBNQRsaW5rBG51bGzGATYBNwRsaW5rFHsiaHJlZiI6Ii9wcm9qZWN0cyJ9xgE8AT0EbGluawRudWxsAQEBUgE="
+    },
+    {
+      "markdown": "# One\n\n## Two\n\n### Three\n\n#### Four\n\n##### Five\n\n###### Six\n",
+      "name": "headings",
+      "state": "AR4BAAcBB2RlZmF1bHQDB2hlYWRpbmcoAAEAAmlkAXcGYmxvY2swKAABAAVsZXZlbAF9AQcAAQAGBAABAwNPbmWHAQADB2hlYWRpbmcoAAEHAmlkAXcGYmxvY2sxKAABBwVsZXZlbAF9AgcAAQcGBAABCgNUd2+HAQcDB2hlYWRpbmcoAAEOAmlkAXcGYmxvY2syKAABDgVsZXZlbAF9AwcAAQ4GBAABEQVUaHJlZYcBDgMHaGVhZGluZygAARcCaWQBdwZibG9jazMoAAEXBWxldmVsAX0EBwABFwYEAAEaBEZvdXKHARcDB2hlYWRpbmcoAAEfAmlkAXcGYmxvY2s0KAABHwVsZXZlbAF9BQcAAR8GBAABIgRGaXZlhwEfAwdoZWFkaW5nKAABJwJpZAF3BmJsb2NrNSgAAScFbGV2ZWwBfQYHAAEnBgQAASoDU2l4AA=="
+    },
+    {
+      "markdown": "- one\n- two\n  - nested\n\n3. three\n4. four\n\n- [ ] to do\n- [x] done\n",
+      "name": "lists",
+      "state": "ASYBAAcBB2RlZmF1bHQDCmJ1bGxldExpc3QoAAEAAmlkAXcGYmxvY2swBwABAAMIbGlzdEl0ZW0HAAECAwlwYXJhZ3JhcGgHAAEDBgQAAQQDb25lhwECAwhsaXN0SXRlbQcAAQgDCXBhcmFncmFwaAcAAQkGBAABCgN0d2+HAQkDCmJ1bGxldExpc3QHAAEOAwhsaXN0SXRlbQcAAQ8DCXBhcmFncmFwaAcAARAGBAABEQZuZXN0ZWSHAQADC29yZGVyZWRMaXN0KAABGAJpZAF3BmJsb2NrMSgAARgFc3RhcnQBfQMHAAEYAwhsaXN0SXRlbQcAARsDCXBhcmFncmFwaAcAARwGBAABHQV0aHJlZYcBGwMIbGlzdEl0ZW0HAAEjAwlwYXJhZ3JhcGgHAAEkBgQAASUEZm91cocBGAMKYnVsbGV0TGlzdCgAASoCaWQBdwZibG9jazIHAAEqAwhsaXN0SXRlbSgAASwHY2hlY2tlZAF5BwABLAMJcGFyYWdyYXBoBwABLgYEAAEvBXRvIGRvhwEsAwhsaXN0SXRlbSgAATUHY2hlY2tlZAF4BwABNQMJcGFyYWdyYXBoBwABNwYEAAE4BGRvbmUA"
+    },
+    {
+      "markdown": "```rust\nfn main() {}\n```\n\n```\nplain\n```\n",
+      "name": "code",
+      "state": "AQkBAAcBB2RlZmF1bHQDCWNvZGVCbG9jaygAAQACaWQBdwZibG9jazAoAAEACGxhbmd1YWdlAXcEcnVzdAcAAQAGBAABAwxmbiBtYWluKCkge32HAQADCWNvZGVCbG9jaygAARACaWQBdwZibG9jazEHAAEQBgQAARIFcGxhaW4A"
+    },
+    {
+      "markdown": "> quoted\n> > deeper\n\n---\n\nafter\n",
+      "name": "quote and rule",
+      "state": "AQ8BAAcBB2RlZmF1bHQDCmJsb2NrcXVvdGUoAAEAAmlkAXcGYmxvY2swBwABAAMJcGFyYWdyYXBoBwABAgYEAAEDBnF1b3RlZIcBAgMKYmxvY2txdW90ZQcAAQoDCXBhcmFncmFwaAcAAQsGBAABDAZkZWVwZXKHAQADDmhvcml6b250YWxSdWxlKAABEwJpZAF3BmJsb2NrMYcBEwMJcGFyYWdyYXBoKAABFQJpZAF3BmJsb2NrMgcAARUGBAABFwVhZnRlcgA="
+    },
+    {
+      "markdown": "| a | b | c |\n|:--|:-:|--:|\n| 1 | **2** | `3` |\n| 4 |  | 6 |\n",
+      "name": "table",
+      "state": "AUYBAAcBB2RlZmF1bHQDBXRhYmxlKAABAAJpZAF3BmJsb2NrMAcAAQADCHRhYmxlUm93BwABAgMLdGFibGVIZWFkZXIoAAEDB2NvbHNwYW4BfQEoAAEDB3Jvd3NwYW4BfQEoAAEDBWFsaWduAXcEbGVmdAcAAQMDCXBhcmFncmFwaAcAAQcGBAABCAFhhwEDAwt0YWJsZUhlYWRlcigAAQoHY29sc3BhbgF9ASgAAQoHcm93c3BhbgF9ASgAAQoFYWxpZ24BdwZjZW50ZXIHAAEKAwlwYXJhZ3JhcGgHAAEOBgQAAQ8BYocBCgMLdGFibGVIZWFkZXIoAAERB2NvbHNwYW4BfQEoAAERB3Jvd3NwYW4BfQEoAAERBWFsaWduAXcFcmlnaHQHAAERAwlwYXJhZ3JhcGgHAAEVBgQAARYBY4cBAgMIdGFibGVSb3cHAAEYAwl0YWJsZUNlbGwoAAEZB2NvbHNwYW4BfQEoAAEZB3Jvd3NwYW4BfQEoAAEZBWFsaWduAXcEbGVmdAcAARkDCXBhcmFncmFwaAcAAR0GBAABHgExhwEZAwl0YWJsZUNlbGwoAAEgB2NvbHNwYW4BfQEoAAEgB3Jvd3NwYW4BfQEoAAEgBWFsaWduAXcGY2VudGVyBwABIAMJcGFyYWdyYXBoBwABJAYEAAElATJGASYEYm9sZAJ7fYYBJgRib2xkBG51bGyHASADCXRhYmxlQ2VsbCgAASkHY29sc3BhbgF9ASgAASkHcm93c3BhbgF9ASgAASkFYWxpZ24BdwVyaWdodAcAASkDCXBhcmFncmFwaAcAAS0GBAABLgEzRgEvBGNvZGUCe32GAS8EY29kZQRudWxshwEYAwh0YWJsZVJvdwcAATIDCXRhYmxlQ2VsbCgAATMHY29sc3BhbgF9ASgAATMHcm93c3BhbgF9ASgAATMFYWxpZ24BdwRsZWZ0BwABMwMJcGFyYWdyYXBoBwABNwYEAAE4ATSHATMDCXRhYmxlQ2VsbCgAAToHY29sc3BhbgF9ASgAAToHcm93c3BhbgF9ASgAAToFYWxpZ24BdwZjZW50ZXIHAAE6AwlwYXJhZ3JhcGiHAToDCXRhYmxlQ2VsbCgAAT8HY29sc3BhbgF9ASgAAT8Hcm93c3BhbgF9ASgAAT8FYWxpZ24BdwVyaWdodAcAAT8DCXBhcmFncmFwaAcAAUMGBAABRAE2AA=="
+    },
+    {
+      "markdown": "- first\n\n  second paragraph\n\n  ```\n  code in an item\n  ```\n- > a quote in an item\n-\n",
+      "name": "blocks in items",
+      "state": "ARMBAAcBB2RlZmF1bHQDCmJ1bGxldExpc3QoAAEAAmlkAXcGYmxvY2swBwABAAMIbGlzdEl0ZW0HAAECAwlwYXJhZ3JhcGgHAAEDBgQAAQQFZmlyc3SHAQMDCXBhcmFncmFwaAcAAQoGBAABCxBzZWNvbmQgcGFyYWdyYXBohwEKAwljb2RlQmxvY2sHAAEcBgQAAR0PY29kZSBpbiBhbiBpdGVthwECAwhsaXN0SXRlbQcAAS0DCmJsb2NrcXVvdGUHAAEuAwlwYXJhZ3JhcGgHAAEvBgQAATASYSBxdW90ZSBpbiBhbiBpdGVthwEtAwhsaXN0SXRlbQcAAUMDCXBhcmFncmFwaAA="
+    }
+  ]
+}

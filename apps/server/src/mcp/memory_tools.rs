@@ -10,7 +10,7 @@ use super::{
     McpPrincipal,
     common::{
         ToolResult, insert_audit, parse_id, parse_message_id, parse_time, project_is_chosen,
-        public_url, scope_projects, truncate_text,
+        public_url, scope_projects, string_or_number, truncate_text,
     },
     talk::can_write_in,
 };
@@ -18,6 +18,12 @@ use crate::{
     AppState,
     error::AppError,
     memory::{self, DecisionInput, PageInput, Writer},
+    page_docs::{
+        edits::{self, Edit, EditError, EditOp, Target},
+        store,
+        tree::{Block, Node, plain_text},
+        ydoc,
+    },
     policy::Action,
     search::{self, SearchFilter, SearchKind},
 };
@@ -543,6 +549,585 @@ pub(super) async fn page_write(
     }
     .await;
     result.unwrap_or_else(|error| ToolResult::from_error(error, "page_write"))
+}
+
+// ---------------------------------------------------------------------------
+// Pages as blocks (AWD-53): read a page's outline and blocks, and change it
+// block by block instead of rewriting the whole page. Every block has a
+// lasting id, kept in the page's stored document, so an edit that names
+// blocks by id needs no version: it lands even while people are typing
+// elsewhere on the page, and a block's hash stops it undoing a change to
+// that block the agent hasn't seen.
+
+/// How much of a block page_blocks shows without includeMarkdown.
+const BLOCK_PREVIEW_CHARACTERS: usize = 120;
+
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PageBlocksArguments {
+    pub page_id: String,
+    /// The version positions came from: needed when section, from or to is
+    /// a position, and the read is then refused if the page has changed
+    /// since. Not needed with block ids.
+    pub version: Option<i64>,
+    /// Read the section under a heading: its id (or position). That's the
+    /// heading and every block up to the next heading at its level or above.
+    #[serde(default, deserialize_with = "string_or_number")]
+    #[schemars(with = "Option<String>")]
+    pub section: Option<String>,
+    /// Read the blocks from this one (an id, or a position)…
+    #[serde(default, deserialize_with = "string_or_number")]
+    #[schemars(with = "Option<String>")]
+    pub from: Option<String>,
+    /// …to this one, both included (defaults to from).
+    #[serde(default, deserialize_with = "string_or_number")]
+    #[schemars(with = "Option<String>")]
+    pub to: Option<String>,
+    /// With no section or range: give each block's whole Markdown instead
+    /// of a short preview.
+    pub include_markdown: Option<bool>,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct PageBlocksValue {
+    pub page_id: String,
+    pub project_id: String,
+    pub title: String,
+    /// The page's version. Block ids last across versions; positions hold
+    /// only within this one.
+    pub version: i64,
+    /// The headings, each with the last block of its section.
+    pub outline: Vec<OutlineLine>,
+    /// Every block, or the ones you selected.
+    pub blocks: Vec<BlockLine>,
+    /// Exactly the page's Markdown for a section or range you asked for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub markdown: Option<String>,
+    /// Some Markdown was left out to keep the answer small; read a range.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
+    pub url: String,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct OutlineLine {
+    pub id: String,
+    pub position: usize,
+    pub level: u8,
+    pub text: String,
+    pub hash: String,
+    /// The position of the last block in the heading's section.
+    pub section_end: usize,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct BlockLine {
+    /// The block's lasting id: it stays the same while the block is edited
+    /// or moved. Pass it to page_edit as blockId.
+    pub id: String,
+    /// Where the block is in this version.
+    pub position: usize,
+    /// heading, paragraph, code, quote, list, hr, or table.
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// A heading's level.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub level: Option<u8>,
+    /// A digest of the block's contents. Pass it to page_edit to replace or
+    /// delete the block; it proves you read the block as it is.
+    pub hash: String,
+    /// The block's start, when its whole Markdown isn't given.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub markdown: Option<String>,
+}
+
+/// The page, with access checked the way page_get checks it.
+async fn readable_page(
+    state: &AppState,
+    principal: &McpPrincipal,
+    page_id: Uuid,
+) -> Result<Option<memory::PageView>, AppError> {
+    let Some(page) = memory::get_page(&state.pool, page_id).await? else {
+        return Ok(None);
+    };
+    if page.project_id != principal.project_id
+        || memory::project_access(
+            &state.pool,
+            principal.actor_id,
+            principal.actor_kind,
+            page.project_id,
+            Action::McpRead,
+        )
+        .await
+        .is_err()
+    {
+        return Ok(None);
+    }
+    Ok(Some(page))
+}
+
+/// One version of a page as blocks: its document's blocks and the page's
+/// Markdown for each.
+struct PageAsBlocks {
+    page_id: Uuid,
+    project_id: Uuid,
+    title: String,
+    version: i64,
+    blocks: Vec<Block>,
+    derived: store::Derived,
+}
+
+impl PageAsBlocks {
+    fn heading_level(&self, position: usize) -> Option<u8> {
+        match &self.blocks[position].node {
+            Node::Heading { level, .. } => Some(*level),
+            _ => None,
+        }
+    }
+
+    /// The last block in the section under the heading at `position`.
+    fn section_end(&self, position: usize, level: u8) -> usize {
+        (position + 1..self.blocks.len())
+            .find(|&next| self.heading_level(next).is_some_and(|other| other <= level))
+            .map_or(self.blocks.len() - 1, |next| next - 1)
+    }
+
+    /// The page's Markdown for blocks `from` to `to`.
+    fn markdown_of(&self, from: usize, to: usize) -> &str {
+        let ranges = &self.derived.ranges[from..=to];
+        match (
+            ranges.iter().flatten().next(),
+            ranges.iter().flatten().next_back(),
+        ) {
+            (Some(first), Some(last)) => &self.derived.markdown[first.start..last.end],
+            _ => "",
+        }
+    }
+
+    fn markdown_of_block(&self, position: usize) -> &str {
+        self.derived.ranges[position]
+            .clone()
+            .map_or("", |range| &self.derived.markdown[range])
+    }
+
+    fn id(&self, position: usize) -> String {
+        self.blocks[position].id.clone().unwrap_or_default()
+    }
+
+    /// A block named by id, or by position (digits) in this version.
+    fn find(&self, reference: &str, field: &str) -> Result<(usize, bool), String> {
+        if !reference.is_empty() && reference.bytes().all(|byte| byte.is_ascii_digit()) {
+            let position = reference
+                .parse::<usize>()
+                .ok()
+                .filter(|&position| position < self.blocks.len())
+                .ok_or_else(|| {
+                    format!(
+                        "{field}: there's no block {reference}; the page has {}",
+                        self.blocks.len()
+                    )
+                })?;
+            return Ok((position, true));
+        }
+        self.blocks
+            .iter()
+            .position(|block| block.id.as_deref() == Some(reference))
+            .map(|position| (position, false))
+            .ok_or_else(|| format!("{field}: there's no block {reference} on the page now"))
+    }
+}
+
+fn block_type(node: &Node) -> &'static str {
+    match node {
+        Node::Paragraph(_) => "paragraph",
+        Node::Heading { .. } => "heading",
+        Node::CodeBlock { .. } => "code",
+        Node::Blockquote(_) => "quote",
+        Node::BulletList(_) | Node::OrderedList { .. } => "list",
+        Node::HorizontalRule => "hr",
+        Node::Table(_) => "table",
+    }
+}
+
+async fn page_as_blocks(
+    state: &AppState,
+    principal: &McpPrincipal,
+    page_id: Uuid,
+) -> Result<Option<PageAsBlocks>, AppError> {
+    let Some(page) = readable_page(state, principal, page_id).await? else {
+        return Ok(None);
+    };
+    let snapshot = store::open(&state.pool, page_id).await?;
+    let blocks = store::read_blocks(&snapshot.state)?;
+    let derived = store::derive_markdown(&snapshot.body, &blocks);
+    Ok(Some(PageAsBlocks {
+        page_id,
+        project_id: page.project_id,
+        title: page.title,
+        version: snapshot.version,
+        blocks,
+        derived,
+    }))
+}
+
+fn blocks_value(
+    state: &AppState,
+    page: &PageAsBlocks,
+    selection: Option<(usize, usize)>,
+    include_markdown: bool,
+) -> PageBlocksValue {
+    let mut budget = PAGE_BODY_CHARACTERS;
+    let mut truncated = false;
+    let (first, last) = selection.unwrap_or((0, page.blocks.len().saturating_sub(1)));
+    let whole = selection.is_some() || include_markdown;
+    let lines = page
+        .blocks
+        .iter()
+        .enumerate()
+        .filter(|(position, _)| *position >= first && *position <= last)
+        .map(|(position, block)| {
+            let text = page.markdown_of_block(position);
+            let (preview, markdown) = if whole {
+                let length = text.chars().count();
+                if length <= budget {
+                    budget -= length;
+                    (None, Some(text.to_owned()))
+                } else {
+                    truncated = true;
+                    let (preview, _) = truncate_text(text, BLOCK_PREVIEW_CHARACTERS);
+                    (Some(preview), None)
+                }
+            } else {
+                let first_line = text.lines().next().unwrap_or_default();
+                let (preview, _) = truncate_text(first_line, BLOCK_PREVIEW_CHARACTERS);
+                (Some(preview), None)
+            };
+            BlockLine {
+                id: page.id(position),
+                position,
+                kind: block_type(&block.node).to_owned(),
+                level: page.heading_level(position),
+                hash: edits::content_hash(block),
+                preview,
+                markdown,
+            }
+        })
+        .collect();
+    let markdown = selection.map(|(from, to)| {
+        let (text, cut) = truncate_text(page.markdown_of(from, to), PAGE_BODY_CHARACTERS);
+        truncated |= cut;
+        text
+    });
+    let outline = page
+        .blocks
+        .iter()
+        .enumerate()
+        .filter_map(|(position, block)| match &block.node {
+            Node::Heading { level, content } => Some(OutlineLine {
+                id: page.id(position),
+                position,
+                level: *level,
+                text: plain_text(content),
+                hash: edits::content_hash(block),
+                section_end: page.section_end(position, *level),
+            }),
+            _ => None,
+        })
+        .collect();
+    PageBlocksValue {
+        url: public_url(
+            state,
+            &format!("/projects/{}/pages/{}", page.project_id, page.page_id),
+        ),
+        page_id: page.page_id.to_string(),
+        project_id: page.project_id.to_string(),
+        title: page.title.clone(),
+        version: page.version,
+        outline,
+        blocks: lines,
+        markdown,
+        truncated,
+    }
+}
+
+pub(super) async fn page_blocks(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: PageBlocksArguments,
+) -> ToolResult<PageBlocksValue> {
+    if !principal.can_read() {
+        return ToolResult::denied("This connection can't read.");
+    }
+    let Some(page_id) = parse_id(&arguments.page_id) else {
+        return ToolResult::invalid("pageId", "Pass a page ID or link.");
+    };
+    if arguments.section.is_some() && (arguments.from.is_some() || arguments.to.is_some()) {
+        return ToolResult::invalid("section", "Pass a section or a range, not both.");
+    }
+    if arguments.to.is_some() && arguments.from.is_none() {
+        return ToolResult::invalid("from", "Pass from with to.");
+    }
+    let result = async {
+        let Some(page) = page_as_blocks(state, principal, page_id).await? else {
+            return Ok(ToolResult::not_found("That page"));
+        };
+        let mut by_position = false;
+        let mut find = |reference: &str, field: &str| {
+            page.find(reference, field).map(|(position, positional)| {
+                by_position |= positional;
+                position
+            })
+        };
+        let selection = match (&arguments.section, &arguments.from, &arguments.to) {
+            (Some(section), _, _) => match find(section, "section") {
+                Ok(position) => match page.heading_level(position) {
+                    Some(level) => Some((position, page.section_end(position, level))),
+                    None => {
+                        return Ok(ToolResult::invalid(
+                            "section",
+                            format!("block {section} isn't a heading"),
+                        ));
+                    }
+                },
+                Err(message) => return Ok(missing_block(message, section)),
+            },
+            (None, Some(from), to) => {
+                let from_position = match find(from, "from") {
+                    Ok(position) => position,
+                    Err(message) => return Ok(missing_block(message, from)),
+                };
+                let to_position = match to.as_deref().map(|to| (to, find(to, "to"))) {
+                    None => from_position,
+                    Some((_, Ok(position))) => position,
+                    Some((to, Err(message))) => return Ok(missing_block(message, to)),
+                };
+                if to_position < from_position {
+                    return Ok(ToolResult::invalid(
+                        "from",
+                        format!("block {from} comes after block {}", to.as_deref().unwrap_or(from)),
+                    ));
+                }
+                Some((from_position, to_position))
+            }
+            _ => None,
+        };
+        if by_position {
+            match arguments.version {
+                None => {
+                    return Ok(ToolResult::invalid(
+                        "version",
+                        "Pass the version your positions came from (page_blocks returns it), or use block ids.",
+                    ));
+                }
+                Some(version) if version != page.version => {
+                    return Ok(ToolResult::conflict(format!(
+                        "block positions are from version {version}, but the page is at version {}; read it again, or use block ids",
+                        page.version
+                    )));
+                }
+                Some(_) => {}
+            }
+        }
+        Ok::<_, AppError>(ToolResult::ok(blocks_value(
+            state,
+            &page,
+            selection,
+            arguments.include_markdown.unwrap_or(false),
+        )))
+    }
+    .await;
+    result.unwrap_or_else(|error| ToolResult::from_error(error, "page_blocks"))
+}
+
+/// A block that isn't there: gone since it was read (an id), or never there.
+fn missing_block<T>(message: String, reference: &str) -> ToolResult<T> {
+    if reference.bytes().all(|byte| byte.is_ascii_digit()) {
+        ToolResult::invalid("from", message)
+    } else {
+        ToolResult::conflict(format!("{message}; read the page again"))
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PageEditArguments {
+    pub page_id: String,
+    /// The version you read. Needed when an edit names a block by position,
+    /// and then the edit is refused if the page has changed since; with
+    /// block ids it's optional.
+    pub expected_version: Option<i64>,
+    /// Up to 100 edits, applied together or not at all. Each names a block
+    /// as the page is now, never as an earlier edit in the same call left it.
+    pub edits: Vec<PageEditInput>,
+    /// A short note on what changed, kept with the version.
+    pub note: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PageEditInput {
+    /// replace, insertBefore, insertAfter, delete, or append (to the end of
+    /// the page; names no block).
+    pub op: String,
+    /// The block's id, from page_blocks.
+    pub block_id: Option<String>,
+    /// Or the block's position in expectedVersion.
+    pub position: Option<usize>,
+    /// The block's hash, from page_blocks: needed to replace or delete, and
+    /// the edit is refused if the block has changed since you read it.
+    pub hash: Option<String>,
+    /// The new Markdown, one or more blocks (not for delete). A replaced
+    /// block keeps its id as the first block of its replacement.
+    pub markdown: Option<String>,
+}
+
+pub(super) async fn page_edit(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: PageEditArguments,
+) -> ToolResult<PageBlocksValue> {
+    if !principal.can_write() {
+        return ToolResult::read_only();
+    }
+    let Some(page_id) = parse_id(&arguments.page_id) else {
+        return ToolResult::invalid("pageId", "Pass a page ID or link.");
+    };
+    let note = match memory::normalize_note(arguments.note.as_deref()) {
+        Ok(note) => note,
+        Err(_) => return ToolResult::invalid("note", "Keep the note under 500 characters."),
+    };
+    let mut edits = Vec::with_capacity(arguments.edits.len());
+    let mut by_position = false;
+    for (index, edit) in arguments.edits.into_iter().enumerate() {
+        let op = match edit.op.as_str() {
+            "replace" => EditOp::Replace,
+            "insertBefore" => EditOp::InsertBefore,
+            "insertAfter" => EditOp::InsertAfter,
+            "delete" => EditOp::Delete,
+            "append" => EditOp::Append,
+            _ => {
+                return ToolResult::invalid(
+                    "edits",
+                    format!(
+                        "edit {index}: op is replace, insertBefore, insertAfter, delete or append"
+                    ),
+                );
+            }
+        };
+        let target = match (edit.block_id, edit.position) {
+            (Some(_), Some(_)) => {
+                return ToolResult::invalid(
+                    "edits",
+                    format!("edit {index}: pass blockId or position, not both"),
+                );
+            }
+            (Some(id), None) => Some(Target::Id(id)),
+            (None, Some(position)) => {
+                by_position = true;
+                Some(Target::Position(position))
+            }
+            (None, None) => None,
+        };
+        edits.push(Edit {
+            op,
+            target,
+            hash: edit.hash,
+            markdown: edit.markdown,
+        });
+    }
+    if by_position && arguments.expected_version.is_none() {
+        return ToolResult::invalid(
+            "expectedVersion",
+            "Pass the version your positions came from (page_blocks returns it), or name blocks by blockId.",
+        );
+    }
+    let result = async {
+        let project_id = principal.project_id;
+        if !can_write_in(state, principal, project_id, Action::PageEdit).await? {
+            return Ok(ToolResult::denied("You can't edit pages in that project."));
+        }
+        let mut transaction = state.pool.begin().await?;
+        let Some(page) = store::lock_page(&mut transaction, page_id).await? else {
+            return Ok(ToolResult::not_found("That page"));
+        };
+        if page.project_id != project_id {
+            return Ok(ToolResult::not_found("That page"));
+        }
+        if page.archived {
+            return Ok(ToolResult::invalid(
+                "pageId",
+                "That page is archived. Bring it back with page_write (archived: false) to edit it.",
+            ));
+        }
+        if let Some(expected) = arguments.expected_version
+            && expected != page.version
+        {
+            return Ok(ToolResult::conflict(format!(
+                "the edits are for version {expected}, but the page is at version {}; read it again{}",
+                page.version,
+                if by_position { "" } else { ", or leave out expectedVersion to edit by block id" }
+            )));
+        }
+        let stored = store::document(&mut transaction, page_id, &page).await?;
+        let current = store::read_blocks(&stored.state)?;
+        let blocks = match edits::apply(&current, &edits) {
+            Ok(blocks) => blocks,
+            Err(
+                error @ (EditError::HashMismatch { .. }
+                | EditError::NoSuchBlock {
+                    target: Target::Id(_),
+                    ..
+                }),
+            ) => return Ok(ToolResult::conflict(error.to_string())),
+            Err(error) => return Ok(ToolResult::invalid("edits", error.to_string())),
+        };
+        // Keep the words of the Markdown sent, for the blocks it says.
+        let sent: Vec<&str> = edits
+            .iter()
+            .filter_map(|edit| edit.markdown.as_deref())
+            .collect();
+        let change = store::change(&stored.state, &page.body, &sent, |doc, _| {
+            ydoc::replace(doc, &blocks);
+            Ok(())
+        })?;
+        let (version, _) = store::save(
+            &mut transaction,
+            writer(principal),
+            page_id,
+            &page,
+            &change,
+            note.as_deref(),
+            store::History::Version,
+        )
+        .await?;
+        insert_audit(
+            &mut transaction,
+            principal,
+            project_id,
+            "page.mcp_block_edited",
+            "page",
+            page_id,
+            serde_json::json!({ "edits": edits.len(), "fromVersion": page.version }),
+        )
+        .await?;
+        transaction.commit().await?;
+        let after = PageAsBlocks {
+            page_id,
+            project_id,
+            title: page.title,
+            version,
+            blocks: change.blocks,
+            derived: change.derived,
+        };
+        Ok::<_, AppError>(ToolResult::ok(blocks_value(state, &after, None, false)))
+    }
+    .await;
+    result.unwrap_or_else(|error| ToolResult::from_error(error, "page_edit"))
 }
 
 // ---------------------------------------------------------------------------

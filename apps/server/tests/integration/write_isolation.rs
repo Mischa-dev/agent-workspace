@@ -46,7 +46,10 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode, header},
 };
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use base64::{
+    Engine as _,
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
@@ -145,6 +148,8 @@ const WRITE_ROUTES: &[&str] = &[
     "PUT /api/v1/organizations/{organization_id}/secrets/{name}",
     "POST /api/v1/organizations/{organization_id}/transfer-ownership",
     "PATCH /api/v1/pages/{id}",
+    "POST /api/v1/pages/{id}/document/sync",
+    "POST /api/v1/pages/{id}/document/updates",
     "POST /api/v1/project-invitations/{invitation_id}/replace",
     "POST /api/v1/project-invitations/{invitation_id}/revoke",
     "POST /api/v1/projects",
@@ -259,6 +264,7 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/dependencies",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/files",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/move",
+    "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/project-move",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/relations",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/release-claim",
     "DELETE /api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}",
@@ -416,6 +422,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "message_send",
     "milestone_write",
     "notification_update",
+    "page_edit",
     "page_write",
     "pin_set",
     "plan_import",
@@ -817,6 +824,32 @@ fn current(table: &str, column: &str, keys: &[(&str, String)], default: i64) -> 
         .collect::<Vec<_>>()
         .join(",");
     Value::String(format!("$current:{table}:{column}:{default}:{keys}"))
+}
+
+/// A browser's change that adds a paragraph to any page document, and its
+/// state vector after it, both base64.
+fn new_paragraph_update() -> (String, String) {
+    use yrs::{
+        Any, ClientID, Doc, OffsetKind, Options, ReadTxn, StateVector, Transact, Xml,
+        XmlElementPrelim, XmlFragment, XmlTextPrelim, updates::encoder::Encode,
+    };
+    let doc = Doc::with_options(Options {
+        client_id: ClientID::new(4_242),
+        offset_kind: OffsetKind::Utf16,
+        ..Options::default()
+    });
+    let fragment = doc.get_or_insert_xml_fragment("default");
+    {
+        let mut txn = doc.transact_mut();
+        let paragraph = fragment.insert(&mut txn, 0, XmlElementPrelim::empty("paragraph"));
+        paragraph.insert_attribute(&mut txn, "id", Any::String("netblock1".into()));
+        paragraph.insert(&mut txn, 0, XmlTextPrelim::new("Net"));
+    }
+    let txn = doc.transact();
+    (
+        STANDARD.encode(txn.encode_state_as_update_v1(&StateVector::default())),
+        STANDARD.encode(txn.state_vector().encode_v1()),
+    )
 }
 
 /// A row's version when the request is sent.
@@ -3758,6 +3791,29 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             &[id(&a.page, &b.page)],
             versioned("project_pages", 0, json!({"title": "Launch page"})),
         ),
+        // A page's live document: its generation is the page's ID (see the
+        // fixture), and the change adds a paragraph to any document.
+        path_case(
+            "POST /api/v1/pages/{id}/document/sync",
+            &[id(&a.page, &b.page)],
+            |values| {
+                Payload::Json(json!({"generation": values[0], "stateVector": STANDARD.encode([0_u8])}))
+            },
+        ),
+        {
+            let (update, state_vector) = new_paragraph_update();
+            path_case(
+                "POST /api/v1/pages/{id}/document/updates",
+                &[id(&a.page, &b.page)],
+                move |values| {
+                    Payload::Json(json!({
+                        "generation": values[0],
+                        "update": update,
+                        "stateVector": state_vector,
+                    }))
+                },
+            )
+        },
         // Project invitations
         path_case(
             "POST /api/v1/project-invitations/{invitation_id}/replace",
@@ -4692,6 +4748,26 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             "targetStatusId": bx.status,
             "targetPosition": 1,
         })]),
+        // AWD-102: moving to another project. A's own request names a spare
+        // project of A's with a made-up preview snapshot, so it passes every
+        // access check and stops at the snapshot (a real move is in
+        // awd102_task_move); B's task, project or target is refused first.
+        path_case(
+            "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/project-move",
+            &[project(), task()],
+            |values| {
+                Payload::Json(json!({
+                    "targetProjectId": if is_a(values, &a.project) { sp.projects[0].clone() } else { a.project.clone() },
+                    "snapshot": "0".repeat(64),
+                }))
+            },
+        )
+        .rejecting(vec![json!({"targetProjectId": b.project, "snapshot": "0".repeat(64)})])
+        .own_reaches(
+            "conflict",
+            "a move needs its own fresh preview; a made-up snapshot stops there, past every access check",
+        )
+        .last(),
         path_case(
             "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/relations",
             &[project(), task()],
@@ -5708,6 +5784,20 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             foreign: vec![
                 (json!({"taskId": b.task, "toProjectId": a.project}), Expect::Refused),
                 (json!({"taskId": sp.task, "toProjectId": b.project}), Expect::Refused),
+                // AWD-102: a preview, and a confirmation, name nothing of B's.
+                (
+                    json!({"taskId": b.task, "toProjectId": a.project, "preview": true}),
+                    Expect::Refused,
+                ),
+                (
+                    json!({"taskId": sp.task, "toProjectId": b.project, "preview": true}),
+                    Expect::Refused,
+                ),
+                (
+                    json!({"taskId": sp.task, "toProjectId": b.project, "snapshot": "0".repeat(64),
+                           "leaveUnresolved": true, "clientRequestId": "net-move-b"}),
+                    Expect::Refused,
+                ),
             ],
             ..mcp_case(
                 "task_move",
@@ -5717,6 +5807,11 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             // The move leaves the task archived here, as moved.
             .last()
         },
+        mcp_case(
+            "page_edit",
+            json!({"pageId": a.page, "expectedVersion": version("project_pages", &a.page), "edits": [{"op": "append", "markdown": "Net block"}]}),
+            vec![json!({"pageId": b.page, "expectedVersion": version("project_pages", &b.page), "edits": [{"op": "append", "markdown": "Net"}]})],
+        ),
         mcp_case(
             "page_write",
             json!({"pageId": a.page, "body": "Launch notes, third draft", "expectedVersion": version("project_pages", &a.page)}),

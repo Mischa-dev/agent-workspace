@@ -10,6 +10,7 @@ import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageSta
 import { useProject } from '../projects/hooks'
 import { RememberPlace } from '../projects/RememberPlace'
 import type { Project, ProjectLocation } from '../projects/types'
+import { useProjectExperience } from '../experience/layout'
 import { AppShell } from '../shell/AppShell'
 import { MemoryTabs } from '../shell/ProjectTabs'
 import { usePageTitle } from '../shell/documentTitleModel'
@@ -56,6 +57,8 @@ import './memory.css'
 const LinkedWhiteboards = lazy(() =>
   import('../whiteboards/LinkedWhiteboards').then((module) => ({ default: module.LinkedWhiteboards })),
 )
+// The live editor (AWD-53) loads in its own chunks when a page opens for writing.
+const LivePage = lazy(() => import('./live/LivePage'))
 
 /** "5 min ago", with the full date on hover. */
 function When({ at }: { at: string }) {
@@ -278,6 +281,7 @@ function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
   const [restoring, setRestoring] = useState(false)
   const viewer = useRef<HTMLDivElement>(null)
   const canEdit = Boolean(pages.data?.canEdit)
+  const experience = useProjectExperience(projectId)
 
   // Opening an old version shows it where the page is, so bring it into view.
   useEffect(() => {
@@ -318,15 +322,32 @@ function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
       .catch((reason: unknown) => toastError('That version wasn’t restored', reason))
       .finally(() => setRestoring(false))
   }
+  // Someone who may edit writes in the page itself, live with everyone who
+  // has it open; Edit details still opens the form for its title, settings
+  // and Markdown.
+  const live = canEdit && !current.archived && experience.shows('page.live_editing')
+  const read = (
+    <Markdown
+      className="aw-doc"
+      empty={live ? 'Nothing here yet.' : canEdit ? 'Nothing here yet. Choose Edit to write it.' : 'Nothing here yet.'}
+      source={current.body}
+    />
+  )
   return (
     <>
       <RememberPlace location={{ kind: 'page', pageId }} project={project} />
       <PageHeader
         actions={
           canEdit && !editing ? (
-            <Button icon="pencil" onClick={() => setEditing(true)} variant="primary">
-              Edit
-            </Button>
+            live ? (
+              <Button icon="settings" onClick={() => setEditing(true)}>
+                Edit details
+              </Button>
+            ) : (
+              <Button icon="pencil" onClick={() => setEditing(true)} variant="primary">
+                Edit
+              </Button>
+            )
           ) : null
         }
         icon="list"
@@ -378,12 +399,12 @@ function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
             <Markdown className="aw-doc" empty="This version was empty." source={viewing.body} />
           </Section>
         </div>
+      ) : live ? (
+        <Suspense fallback={<div className="aw-memory__live-wait">{read}</div>}>
+          <LivePage fallback={read} pageId={pageId} title={current.title} />
+        </Suspense>
       ) : (
-        <Markdown
-          className="aw-doc"
-          empty={canEdit ? 'Nothing here yet. Choose Edit to write it.' : 'Nothing here yet.'}
-          source={current.body}
-        />
+        read
       )}
       <Suspense fallback={null}>
         <LinkedWhiteboards canEdit={canEdit && !current.archived} projectId={projectId} targetId={current.id} targetKind="page" />

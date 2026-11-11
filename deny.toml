@@ -1,5 +1,11 @@
 [advisories]
-ignore = []
+# smallstr is unmaintained (RUSTSEC-2026-0215); no vulnerability is known. It
+# comes with yrs, the server's Yjs library for live pages (AWD-53), and no yrs
+# release has moved off it yet (0.28.1 is the latest, November 2026). Take this
+# out once one has.
+ignore = [
+  { id = "RUSTSEC-2026-0215", reason = "unmaintained, not vulnerable; a dependency of yrs (live pages)" },
+]
 
 [bans]
 multiple-versions = "warn"

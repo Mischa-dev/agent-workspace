@@ -36,6 +36,7 @@ pub enum OutboxResourceKind {
     WorkItem,
     Notification,
     Whiteboard,
+    Page,
 }
 
 impl OutboxResourceKind {
@@ -49,6 +50,7 @@ impl OutboxResourceKind {
             Self::WorkItem => "work_item",
             Self::Notification => "notification",
             Self::Whiteboard => "whiteboard",
+            Self::Page => "page",
         }
     }
 
@@ -62,6 +64,7 @@ impl OutboxResourceKind {
             "work_item" => Ok(Self::WorkItem),
             "notification" => Ok(Self::Notification),
             "whiteboard" => Ok(Self::Whiteboard),
+            "page" => Ok(Self::Page),
             _ => Err(OutboxEventError::MalformedMetadata),
         }
     }
@@ -212,6 +215,16 @@ pub struct WhiteboardUpdatedPayload {
     pub version: i64,
 }
 
+/// A page's content or details changed. The page's ID and version only:
+/// open editors fetch the changes they lack over HTTP, so no page text is
+/// stored in the outbox or sent to anyone.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PageUpdatedPayload {
+    pub page_id: Uuid,
+    pub version: i64,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OutboxEventPayload {
     ConversationCreated(ConversationCreatedPayload),
@@ -228,6 +241,7 @@ pub enum OutboxEventPayload {
     ProjectMembershipUpdated(ProjectMembershipUpdatedPayload),
     NotificationsUpdated(NotificationsUpdatedPayload),
     WhiteboardUpdated(WhiteboardUpdatedPayload),
+    PageUpdated(PageUpdatedPayload),
 }
 
 impl OutboxEventPayload {
@@ -247,6 +261,7 @@ impl OutboxEventPayload {
             Self::ProjectMembershipUpdated(_) => "project.membership.updated",
             Self::NotificationsUpdated(_) => "notifications.updated",
             Self::WhiteboardUpdated(_) => "whiteboard.updated",
+            Self::PageUpdated(_) => "page.updated",
         }
     }
 
@@ -268,7 +283,8 @@ impl OutboxEventPayload {
             | Self::WorkItemUpdated(_)
             | Self::ProjectMembershipUpdated(_)
             | Self::NotificationsUpdated(_)
-            | Self::WhiteboardUpdated(_) => None,
+            | Self::WhiteboardUpdated(_)
+            | Self::PageUpdated(_) => None,
         }
     }
 
@@ -300,6 +316,7 @@ impl OutboxEventPayload {
             Self::ProjectMembershipUpdated(_) => OutboxResourceKind::Project,
             Self::NotificationsUpdated(_) => OutboxResourceKind::Notification,
             Self::WhiteboardUpdated(_) => OutboxResourceKind::Whiteboard,
+            Self::PageUpdated(_) => OutboxResourceKind::Page,
         }
     }
 
@@ -322,6 +339,7 @@ impl OutboxEventPayload {
             // Keyed by recipient, like read state.
             Self::NotificationsUpdated(payload) => payload.actor_id,
             Self::WhiteboardUpdated(payload) => payload.whiteboard_id,
+            Self::PageUpdated(payload) => payload.page_id,
         }
     }
 
@@ -373,6 +391,9 @@ impl OutboxEventPayload {
             Self::WhiteboardUpdated(payload) if payload.scene_seq < 0 || payload.version < 1 => {
                 Err(OutboxEventError::MalformedPayload)
             }
+            Self::PageUpdated(payload) if payload.version < 1 => {
+                Err(OutboxEventError::MalformedPayload)
+            }
             _ => Ok(()),
         }
     }
@@ -394,6 +415,7 @@ impl OutboxEventPayload {
             Self::ProjectMembershipUpdated(payload) => serde_json::to_value(payload),
             Self::NotificationsUpdated(payload) => serde_json::to_value(payload),
             Self::WhiteboardUpdated(payload) => serde_json::to_value(payload),
+            Self::PageUpdated(payload) => serde_json::to_value(payload),
         }
         .map_err(|_| OutboxEventError::MalformedPayload)?;
         validate_payload_size(&value)?;
@@ -443,6 +465,9 @@ impl OutboxEventPayload {
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "whiteboard.updated" => Self::WhiteboardUpdated(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "page.updated" => Self::PageUpdated(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             _ => return Err(OutboxEventError::UnknownEventType),

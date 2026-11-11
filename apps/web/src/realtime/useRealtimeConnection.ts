@@ -26,9 +26,7 @@ import {
   removedConversationId,
   streamDelta,
   terminalAgentRunId,
-  whiteboardChange,
 } from './realtimeModel'
-import { publishWhiteboardChange } from './whiteboardEvents'
 import { workItemChange } from './workItemEvent'
 
 const MAX_RECENT_EVENT_IDS = 512
@@ -295,20 +293,12 @@ export function useRealtimeConnection(): RealtimeContextValue {
             invalidateAroundWorkItem(envelope.projectId, workItem.workItemId)
             return
           }
-          const board = whiteboardChange(envelope)
-          if (board) {
-            // An open board fetches what changed itself; lists and the boards
-            // on tasks and pages refetch, a stroke at a time at most.
-            publishWhiteboardChange(board)
-            if (!invalidationTimers.has('whiteboards')) {
-              invalidationTimers.set(
-                'whiteboards',
-                window.setTimeout(() => {
-                  invalidationTimers.delete('whiteboards')
-                  void queryClient.invalidateQueries({ queryKey: ['whiteboards'] })
-                }, INVALIDATION_DELAY_MS),
-              )
-            }
+          if (envelope.type === 'whiteboard.updated' || envelope.type === 'page.updated') {
+            // An open board or page fetches what changed itself, and lists
+            // refetch; that code loads with the first such event.
+            void import('./liveDocuments')
+              .then(({ documentChanged }) => documentChanged(queryClient, envelope))
+              .catch(() => undefined)
             return
           }
           const removedFrom = removedConversationId(envelope)
