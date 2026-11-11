@@ -264,6 +264,7 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/dependencies",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/files",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/move",
+    "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/project-move",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/relations",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/release-claim",
     "DELETE /api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}",
@@ -4747,6 +4748,26 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             "targetStatusId": bx.status,
             "targetPosition": 1,
         })]),
+        // AWD-102: moving to another project. A's own request names a spare
+        // project of A's with a made-up preview snapshot, so it passes every
+        // access check and stops at the snapshot (a real move is in
+        // awd102_task_move); B's task, project or target is refused first.
+        path_case(
+            "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/project-move",
+            &[project(), task()],
+            |values| {
+                Payload::Json(json!({
+                    "targetProjectId": if is_a(values, &a.project) { sp.projects[0].clone() } else { a.project.clone() },
+                    "snapshot": "0".repeat(64),
+                }))
+            },
+        )
+        .rejecting(vec![json!({"targetProjectId": b.project, "snapshot": "0".repeat(64)})])
+        .own_reaches(
+            "conflict",
+            "a move needs its own fresh preview; a made-up snapshot stops there, past every access check",
+        )
+        .last(),
         path_case(
             "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/relations",
             &[project(), task()],
@@ -5763,6 +5784,20 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             foreign: vec![
                 (json!({"taskId": b.task, "toProjectId": a.project}), Expect::Refused),
                 (json!({"taskId": sp.task, "toProjectId": b.project}), Expect::Refused),
+                // AWD-102: a preview, and a confirmation, name nothing of B's.
+                (
+                    json!({"taskId": b.task, "toProjectId": a.project, "preview": true}),
+                    Expect::Refused,
+                ),
+                (
+                    json!({"taskId": sp.task, "toProjectId": b.project, "preview": true}),
+                    Expect::Refused,
+                ),
+                (
+                    json!({"taskId": sp.task, "toProjectId": b.project, "snapshot": "0".repeat(64),
+                           "leaveUnresolved": true, "clientRequestId": "net-move-b"}),
+                    Expect::Refused,
+                ),
             ],
             ..mcp_case(
                 "task_move",

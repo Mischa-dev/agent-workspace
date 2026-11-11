@@ -1618,7 +1618,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Move a task, with its subtasks, to another project. The new task gets the title, description, priority, status and type (matched by name), the assignee if they're in that project, acceptance criteria, labels (by name; missing ones are created there), and every comment quoted with its author and date. The original is archived with its full history and links, and its old key (such as AW-7) opens the new task. Moving it again returns where it went.",
+        description = "Move a task, with its subtasks, to another project. The new task gets the title, description, priority, status and type (matched by name), the assignee if they're in that project, acceptance criteria, labels (by name; missing ones are created there), and every comment quoted with its author and date. The original is archived with its full history and links, and its old key (such as AW-7) opens the new task. Custom field values carry over into a field of the same name and type when they fit there; the rest stay on the original. Call first with preview: true to see what carries over and what needs a choice, then move with its snapshot, one resolution per issue (set it in a target field, or leave it) and a clientRequestId. Moving it again returns where it went.",
         annotations(
             title = "Move task",
             read_only_hint = false,
@@ -4495,10 +4495,22 @@ async fn keys_to_ids(
         ]
     };
     for field in task_fields {
-        if let Some(key) = unresolved(arguments, field)
-            && let Some((project_key, number)) = split_task_key(&key)
-            && let Some(task_id) = task_by_key(state, principal, project_key, number).await?
-        {
+        let Some(key) = unresolved(arguments, field) else {
+            continue;
+        };
+        let Some((project_key, number)) = split_task_key(&key) else {
+            continue;
+        };
+        // AWD-102: a move is named by the task it moved. Its key opens the
+        // original (archived once moved), not where it went, so the same
+        // request sent again finds its receipt and a changed one conflicts
+        // instead of moving the copy.
+        let task_id = if tool == "task_move" && *field == "taskId" {
+            original_task_by_key(state, principal, project_key, number).await?
+        } else {
+            task_by_key(state, principal, project_key, number).await?
+        };
+        if let Some(task_id) = task_id {
             arguments[*field] = serde_json::Value::String(task_id.to_string());
             changed = true;
         }
@@ -4680,6 +4692,49 @@ pub(super) async fn task_by_key(
             SELECT alias.work_item_id, 1, item.project_id
             FROM work_item_key_aliases alias
             JOIN work_items item ON item.id = alias.work_item_id
+            WHERE upper(alias.project_key) = upper($3) AND alias.number = $4
+        ) found
+        JOIN project_memberships membership
+          ON membership.project_id = found.project_id
+         AND membership.actor_id = $1
+         AND membership.enabled
+        WHERE actor_can_access_project($1, $2, found.project_id)
+          AND ($5::uuid IS NULL OR found.project_id = $5)
+        ORDER BY found.preference
+        LIMIT 1
+        "#,
+    )
+    .bind(principal.actor_id)
+    .bind(principal.external_agent_connection_id)
+    .bind(project_key)
+    .bind(number)
+    .bind(common::confined_project(principal))
+    .fetch_optional(&state.pool)
+    .await?)
+}
+
+/// For `task_move` (AWD-102): the task a key names where it was made, the
+/// archived original once moved, with the same reach as `task_by_key`. A
+/// key from before its project's key changed finds the original through
+/// the alias the move recorded. The move itself checks access again.
+async fn original_task_by_key(
+    state: &AppState,
+    principal: &McpPrincipal,
+    project_key: &str,
+    number: i64,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT found.id FROM (
+            SELECT item.id, 0 AS preference, item.project_id
+            FROM work_items item
+            JOIN projects project ON project.id = item.project_id
+            WHERE upper(project.project_key) = upper($3) AND item.number = $4
+              AND project.archived_at IS NULL
+            UNION ALL
+            SELECT original.id, 1, original.project_id
+            FROM work_item_key_aliases alias
+            JOIN work_items original ON original.id = alias.source_work_item_id
             WHERE upper(alias.project_key) = upper($3) AND alias.number = $4
         ) found
         JOIN project_memberships membership
