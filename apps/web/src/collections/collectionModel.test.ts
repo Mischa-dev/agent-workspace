@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import type { FieldDefinition } from '../fields/fieldModel'
 import { formatDateLabel } from '../ui/dateModel'
 import type { CollectionRecord, ViewConfig } from './api'
-import { columnOrder, historyValue, sameConfig, sortText, tableItems, viewColumns, withColumnHidden, withValues } from './collectionModel'
+import { activeConfig, columnOrder, historyValue, sameConfig, sortText, tableItems, viewColumns, withColumnHidden, withValues } from './collectionModel'
 
 const field = (id: string, type: FieldDefinition['type'], position: number, archived = false): FieldDefinition => ({
   id,
@@ -63,6 +63,34 @@ describe('a view’s columns', () => {
     expect(sameConfig(saved, { ...saved, filters: [{ values: ['x'], op: 'contains', field: 'a' }] })).toBe(true)
     expect(sameConfig(saved, { ...saved, sort: [{ field: 'title', direction: 'desc' }] })).toBe(false)
     expect(sameConfig(saved, { ...saved, groupBy: 'c' })).toBe(false)
+  })
+
+  it('leaves out filters, sorts and a grouping on an archived field, which the server refuses in a query', () => {
+    const changed = config({
+      filters: [
+        { field: 'gone', op: 'notEmpty' },
+        { field: 'a', op: 'contains', values: ['x'] },
+      ],
+      sort: [
+        { field: 'gone', direction: 'asc' },
+        { field: 'updated', direction: 'desc' },
+        { field: 'b', direction: 'asc' },
+      ],
+      groupBy: 'gone',
+      columns: [{ field: 'gone', width: 300 }],
+    })
+    expect(activeConfig(changed, fields)).toEqual(
+      config({
+        filters: [{ field: 'a', op: 'contains', values: ['x'] }],
+        sort: [
+          { field: 'updated', direction: 'desc' },
+          { field: 'b', direction: 'asc' },
+        ],
+        columns: [{ field: 'gone', width: 300 }],
+      }),
+    )
+    const fine = config({ groupBy: 'c', sort: [{ field: 'title', direction: 'asc' }] })
+    expect(activeConfig(fine, fields)).toBe(fine)
   })
 })
 

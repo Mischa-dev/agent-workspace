@@ -29,7 +29,7 @@ import {
   type CollectionView,
   type ViewConfig,
 } from './api'
-import { sameConfig, withColumnHidden } from './collectionModel'
+import { activeConfig, sameConfig, withColumnHidden } from './collectionModel'
 import { CollectionDetailsDialog, ViewNameDialog } from './CollectionDialogs'
 import { CollectionToolbar } from './CollectionToolbar'
 import type { ColumnActions } from './ColumnMenus'
@@ -154,16 +154,19 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
   const body = collection.data
   const views = [...body.views].sort((left, right) => left.position - right.position)
   const view = views.find((entry) => entry.id === params.get('view')) ?? views[0] ?? null
-  const draft = view ? drafts[view.id] : undefined
-  const config = draft ?? view?.config ?? NO_CONFIG
-  const changed = Boolean(view && draft && !sameConfig(draft, view.config))
+  // What the view and its unsaved changes say, without what names an archived field.
+  const viewConfig = view ? activeConfig(view.config, body.fields) : NO_CONFIG
+  const unsaved = view ? drafts[view.id] : undefined
+  const draft = unsaved && activeConfig(unsaved, body.fields)
+  const config = draft ?? viewConfig
+  const changed = Boolean(view && draft && !sameConfig(draft, viewConfig))
   const readOnly = Boolean(project.archivedAt) || body.collection.archived
   const canBuild = body.canBuild && !readOnly
   const editable = body.canEditRecords && !readOnly && !showArchived
   const filtered = config.filters.length > 0 || Boolean(searched.trim())
   const archived = showArchived ? ('only' as const) : undefined
   const recordQuery = recordsParams(
-    view && draft && !sameQuery(draft, view.config)
+    view && draft && !sameQuery(draft, viewConfig)
       ? { view: view.id, filters: config.filters, sort: config.sort, groupBy: config.groupBy, search: searched, archived }
       : { view: view?.id ?? null, search: searched, archived },
   )
@@ -171,11 +174,11 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
   const setConfig = (next: ViewConfig) => {
     if (view) setDrafts((current) => ({ ...current, [view.id]: next }))
   }
-  /** Puts a view back as saved. After a save, `saved` is what it sent: a draft changed since stays. */
-  const dropDraft = (viewId: string, saved?: ViewConfig) =>
+  /** Puts a view back as saved. After a save, `sent` is the draft it saved: one changed since stays. */
+  const dropDraft = (viewId: string, sent?: ViewConfig) =>
     setDrafts((current) => {
       const now = current[viewId]
-      if (!now || (saved && !sameConfig(now, saved))) return current
+      if (!now || (sent && now !== sent)) return current
       const next = { ...current }
       delete next[viewId]
       return next
@@ -190,7 +193,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
     setSaving(true)
     try {
       keepView(await updateView(projectId, collectionId, view, { config: draft }))
-      dropDraft(view.id, draft)
+      dropDraft(view.id, unsaved)
       void client.invalidateQueries({ queryKey: collectionKeys.one(projectId, collectionId) })
       showToast({ tone: 'success', title: `${view.name} saved` })
     } catch (error) {

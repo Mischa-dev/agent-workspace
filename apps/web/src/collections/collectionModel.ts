@@ -64,6 +64,23 @@ export function sameConfig(left: ViewConfig, right: ViewConfig) {
   return comparable(left) === comparable(right)
 }
 
+const BUILT_IN_SORTS = new Set(['title', 'number', 'updated'])
+
+/**
+ * A view as it reads now, as the server reads a saved one: filters, sorts and
+ * a grouping on a field that's archived (or gone) are left out until it comes
+ * back. The server refuses them in a query or a save, so a view changed
+ * before its field was archived still loads and saves.
+ */
+export function activeConfig(config: ViewConfig, fields: readonly FieldDefinition[]): ViewConfig {
+  const active = new Set(fields.filter((field) => !field.archived).map((field) => field.id))
+  const filters = config.filters.filter((clause) => active.has(clause.field))
+  const sort = config.sort.filter((rule) => BUILT_IN_SORTS.has(rule.field) || active.has(rule.field))
+  const groupBy = config.groupBy !== null && active.has(config.groupBy) ? config.groupBy : null
+  if (filters.length === config.filters.length && sort.length === config.sort.length && groupBy === config.groupBy) return config
+  return { ...config, filters, sort, groupBy }
+}
+
 /** What a sort key sorts by, in words: the title column, the record's number or a field. */
 export function sortName(rule: SortRule, fields: readonly FieldDefinition[], titleName: string) {
   if (rule.field === 'title') return titleName
