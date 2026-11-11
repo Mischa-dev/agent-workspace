@@ -56,6 +56,7 @@ pub mod notifications;
 pub mod onboarding;
 pub mod outbound;
 pub mod outbox;
+pub mod page_blocks;
 pub mod password_reset;
 pub mod policy;
 pub mod policy_inventory;
