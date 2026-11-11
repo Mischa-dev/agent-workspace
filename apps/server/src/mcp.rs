@@ -21,7 +21,7 @@ use rmcp::{
     model::{
         CacheScope, ClientCapabilities, GetPromptRequestParams, GetPromptResponse, Implementation,
         InitializeRequestParams, ListPromptsResult, ListToolsResult, PaginatedRequestParams,
-        PromptMessage, ProtocolVersion, Role, ServerCapabilities, ServerInfo,
+        PromptMessage, ProtocolVersion, Role, ServerCapabilities, ServerConfig,
     },
     prompt, prompt_router, schemars,
     service::RequestContext,
@@ -2797,8 +2797,8 @@ impl McpServer {
 
 #[tool_handler(router = Self::tools())]
 impl ServerHandler for McpServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_prompts()
@@ -5140,7 +5140,7 @@ mod tests {
             (
                 &create_many,
                 Some("CreateManyValue"),
-                &["labelsCreated", "notes", "idempotentReplay"][..],
+                &["labelsCreated", "notes"][..],
             ),
             (
                 &create_many,
@@ -5152,12 +5152,7 @@ mod tests {
                 Some("BatchProblem"),
                 &["ref", "task", "currentVersion"][..],
             ),
-            (
-                &update_many,
-                Some("UpdateManyValue"),
-                &["notes", "idempotentReplay"][..],
-            ),
-            (&update_many, Some("UpdatedTask"), &["changedFields"][..]),
+            (&update_many, Some("UpdateManyValue"), &["notes"][..]),
             (
                 &update_many,
                 Some("BatchProblem"),
@@ -5173,6 +5168,60 @@ mod tests {
                 );
             }
         }
+
+        // These are written in every result, even false or empty: their
+        // `#[serde(default)]` only lets results stored before they existed
+        // still read. Output schemas describe what is written (rmcp 3.9), so
+        // they're required there, and the JSON always has them.
+        for (schema, definition, field) in [
+            (&create_many, "CreateManyValue", "idempotentReplay"),
+            (&update_many, "UpdateManyValue", "idempotentReplay"),
+            (&update_many, "UpdatedTask", "changedFields"),
+        ] {
+            assert!(
+                required(schema, Some(definition))
+                    .iter()
+                    .any(|name| name == field),
+                "{definition}.{field} isn't required"
+            );
+        }
+        let created = serde_json::to_value(super::task_batch::CreateManyValue {
+            preview: false,
+            project_key: "AW".to_owned(),
+            tasks: Vec::new(),
+            labels_created: Vec::new(),
+            notes: Vec::new(),
+            idempotent_replay: false,
+        })
+        .expect("create_many result");
+        assert_eq!(created["idempotentReplay"], false, "{created}");
+        assert!(created.get("labelsCreated").is_none(), "{created}");
+        assert!(created.get("notes").is_none(), "{created}");
+        let updated = serde_json::to_value(super::task_batch::UpdateManyValue {
+            preview: false,
+            changed_count: 0,
+            unchanged_count: 1,
+            tasks: vec![super::task_batch::UpdatedTask {
+                index: 0,
+                id: "task-id".to_owned(),
+                key: "AW-1".to_owned(),
+                version: 1,
+                changed_fields: Vec::new(),
+                status: "Todo".to_owned(),
+                archived: false,
+                url: "/projects/p/work-items/task-id".to_owned(),
+            }],
+            notes: Vec::new(),
+            idempotent_replay: false,
+        })
+        .expect("update_many result");
+        assert_eq!(updated["idempotentReplay"], false, "{updated}");
+        assert_eq!(
+            updated["tasks"][0]["changedFields"],
+            serde_json::json!([]),
+            "{updated}"
+        );
+        assert!(updated.get("notes").is_none(), "{updated}");
     }
 
     /// Fields added to WriteResult after its first release must never be
