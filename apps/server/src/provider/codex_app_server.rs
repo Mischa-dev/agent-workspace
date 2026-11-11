@@ -263,6 +263,7 @@ impl CodexAdapter {
             slot,
             guard,
             run: purpose == Purpose::Run,
+            active_turn: None,
         };
         for mut evicted in evicted {
             shutdown_bridge(&mut evicted).await;
@@ -523,6 +524,10 @@ pub struct CodexSession {
     slot: Arc<Slot>,
     guard: OwnedMutexGuard<SupervisorState>,
     run: bool,
+    /// The turn this session started. Notifications for any other turn (an
+    /// orphaned turn stopped just before it, whose completion can arrive
+    /// late or sit buffered) are not this run's.
+    active_turn: Option<String>,
 }
 
 impl Drop for CodexSession {
@@ -590,6 +595,9 @@ impl CodexSession {
                 return Err(transport(error));
             }
         };
+        if other_turns_notification(&raw, self.active_turn.as_deref()) {
+            return Ok(HarnessEvent::Ignored);
+        }
         parse_event(raw)
     }
 
@@ -673,11 +681,13 @@ impl HarnessSession for CodexSession {
                     turn_start_params(thread_id, cwd, prompt, config),
                 )
                 .await?;
-            result
+            let turn_id = result
                 .pointer("/turn/id")
                 .and_then(Value::as_str)
                 .map(str::to_owned)
-                .ok_or(HarnessError::MissingResult("turn id"))
+                .ok_or(HarnessError::MissingResult("turn id"))?;
+            self.active_turn = Some(turn_id.clone());
+            Ok(turn_id)
         })
     }
 
@@ -1039,6 +1049,22 @@ async fn ensure_started(
 
 fn transport(error: BridgeError) -> HarnessError {
     HarnessError::Transport(Box::new(error))
+}
+
+/// A notification (not a request, which still needs its answer) that names
+/// a turn other than the one this session started.
+fn other_turns_notification(raw: &Value, active_turn: Option<&str>) -> bool {
+    let Some(active_turn) = active_turn else {
+        return false;
+    };
+    if raw.get("id").is_some() {
+        return false;
+    }
+    let turn = raw
+        .pointer("/params/turnId")
+        .or_else(|| raw.pointer("/params/turn/id"))
+        .and_then(Value::as_str);
+    turn.is_some_and(|turn| turn != active_turn)
 }
 
 fn parse_event(raw: Value) -> Result<HarnessEvent, HarnessError> {
@@ -1819,9 +1845,10 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        CodexAdapter, SupervisorState, health_snapshot, item_kind, parse_event, parse_login_start,
-        parse_model, parse_provider_request, parse_rate_limit_window, parse_usage_report,
-        provider_event_key, record_failure, restart_backoff, turn_start_params,
+        CodexAdapter, SupervisorState, health_snapshot, item_kind, other_turns_notification,
+        parse_event, parse_login_start, parse_model, parse_provider_request,
+        parse_rate_limit_window, parse_usage_report, provider_event_key, record_failure,
+        restart_backoff, turn_start_params,
     };
     use crate::{
         config::AppConfig,
@@ -1852,6 +1879,29 @@ mod tests {
         let health = health_snapshot(&state);
         assert!(health.circuit_open);
         assert_eq!(health.consecutive_failures, 5);
+    }
+
+    #[test]
+    fn a_stopped_orphan_turns_completion_is_not_the_new_turns() {
+        let orphan_done = json!({"method": "turn/completed", "params": {
+            "threadId": "thread-1", "turn": {"id": "turn-old", "status": "interrupted"}}});
+        let orphan_delta = json!({"method": "item/agentMessage/delta", "params": {
+            "threadId": "thread-1", "turnId": "turn-old", "delta": "late"}});
+        let ours_done = json!({"method": "turn/completed", "params": {
+            "threadId": "thread-1", "turn": {"id": "turn-new", "status": "completed"}}});
+        let unscoped = json!({"method": "account/rateLimits/updated", "params": {}});
+        let orphan_request = json!({"id": 7, "method": "item/commandExecution/requestApproval",
+            "params": {"threadId": "thread-1", "turnId": "turn-old"}});
+
+        let active = Some("turn-new");
+        assert!(other_turns_notification(&orphan_done, active));
+        assert!(other_turns_notification(&orphan_delta, active));
+        assert!(!other_turns_notification(&ours_done, active));
+        assert!(!other_turns_notification(&unscoped, active));
+        // A request still reaches the run, which answers it.
+        assert!(!other_turns_notification(&orphan_request, active));
+        // A session following a turn it didn't start filters nothing.
+        assert!(!other_turns_notification(&orphan_done, None));
     }
 
     #[test]
