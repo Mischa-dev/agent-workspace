@@ -4617,17 +4617,19 @@ async fn project_by_key(
     })
 }
 
-/// The task the caller can reach under this key: the task that has it now,
-/// or else the one a moved task went to (migration 0043). It matches the
-/// projects the caller belongs to and can access, and for an older
-/// project-scoped credential only its own project, as
-/// `accessible_project_ids` does.
+/// What a task key names for the caller: nothing, one task, or tasks in
+/// more than one place (a key two workspaces share), which is never guessed.
 pub(super) enum TaskKeyResolution {
     Missing,
     Unique(Uuid),
     Ambiguous,
 }
 
+/// The task the caller can reach under this key: the task that has it now,
+/// or else the one a moved task went to (migration 0043). It matches the
+/// projects the caller belongs to and can access, and for an older
+/// project-scoped credential only its own project, as
+/// `accessible_project_ids` does.
 pub(super) async fn task_by_key(
     state: &AppState,
     principal: &McpPrincipal,
