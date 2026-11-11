@@ -171,6 +171,10 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{project_id}/invitations",
     "/api/v1/projects/{project_id}/labels",
     "/api/v1/projects/{project_id}/fields",
+    "/api/v1/projects/{project_id}/collections",
+    "/api/v1/projects/{project_id}/collections/{collection_id}",
+    "/api/v1/projects/{project_id}/collections/{collection_id}/records",
+    "/api/v1/projects/{project_id}/collections/{collection_id}/records/{record_id}",
     "/api/v1/projects/{project_id}/launches",
     "/api/v1/projects/{project_id}/layout",
     "/api/v1/projects/{project_id}/member-candidates",
@@ -468,6 +472,12 @@ pub(super) struct World {
     pub(super) rule: Uuid,
     pub(super) whiteboard: Uuid,
     pub(super) project_whiteboard: Uuid,
+    /// A collection (AWD-90) with a field, a saved view and a record whose
+    /// values name `rook`, task WORK-1 and `page`.
+    pub(super) collection: Uuid,
+    pub(super) collection_field: Uuid,
+    pub(super) collection_view: Uuid,
+    pub(super) record: Uuid,
     /// A file sent with `file_message` in the channel, and a task's image.
     pub(super) file: Uuid,
     pub(super) file_message: String,
@@ -967,6 +977,14 @@ pub(super) async fn upload(
     Uuid::parse_str(&string_at(&uploaded, "/id")).expect("file id")
 }
 
+/// `value` as a query string value.
+pub(super) fn url_encode(value: &str) -> String {
+    serde_urlencoded::to_string([("v", value)])
+        .expect("encode")
+        .trim_start_matches("v=")
+        .to_owned()
+}
+
 pub(super) fn string_at(value: &Value, pointer: &str) -> String {
     value
         .pointer(pointer)
@@ -1138,6 +1156,80 @@ async fn build_workspace(
         .execute(pool)
         .await
         .expect("page document generation");
+
+    // Collections (AWD-90): fields that point at a person, a task and a
+    // page, a saved view, and a record that uses them, changed once so it
+    // has history.
+    let collection = call(
+        "collection_write",
+        json!({
+            "projectId": "WORK",
+            "name": format!("Playtests{m}"),
+            "description": format!("What players found{m}"),
+            "titleName": format!("Finding{m}"),
+            "fields": [
+                {"name": format!("Severity{m}"), "type": "single_choice", "options": [{"name": format!("Severe{m}")}]},
+                {"name": format!("Tester{m}"), "type": "person"},
+                {"name": format!("Build{m}"), "type": "link", "target": "task"},
+                {"name": format!("Spec{m}"), "type": "link", "target": "page"},
+                {"name": format!("Notes{m}"), "type": "text"},
+            ],
+            "views": [{
+                "name": format!("Severe ones{m}"),
+                "filters": [{"field": format!("Severity{m}"), "op": "is", "values": [format!("Severe{m}")]}],
+                "sort": [{"field": "number", "direction": "desc"}],
+                "groupBy": format!("Tester{m}"),
+            }],
+            "clientRequestId": "collection-1",
+        }),
+    )
+    .await;
+    let collection =
+        Uuid::parse_str(&string_at(&collection, "/value/collection/id")).expect("collection id");
+    let mut record_values = serde_json::Map::new();
+    record_values.insert(format!("Severity{m}"), json!(format!("Severe{m}")));
+    record_values.insert(format!("Tester{m}"), json!("@rook"));
+    record_values.insert(format!("Build{m}"), json!("WORK-1"));
+    record_values.insert(format!("Spec{m}"), json!(page));
+    record_values.insert(
+        format!("Notes{m}"),
+        json!(format!("Falls through the floor{m}")),
+    );
+    let written = call(
+        "record_write",
+        json!({
+            "projectId": "WORK",
+            "collection": collection,
+            "records": [{"title": format!("Crash on level 2{m}"), "fields": record_values}],
+            "clientRequestId": "record-1",
+        }),
+    )
+    .await;
+    let record = Uuid::parse_str(&string_at(&written, "/value/records/0/id")).expect("record id");
+    call(
+        "record_write",
+        json!({
+            "projectId": "WORK",
+            "collection": collection,
+            "records": [{"record": "#1", "title": format!("Crash on level 3{m}")}],
+            "clientRequestId": "record-2",
+        }),
+    )
+    .await;
+    let collection_field = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM field_definitions WHERE collection_id = $1 ORDER BY position, id LIMIT 1",
+    )
+    .bind(collection)
+    .fetch_one(pool)
+    .await
+    .expect("collection field");
+    let collection_view = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM collection_views WHERE collection_id = $1 ORDER BY position, id LIMIT 1",
+    )
+    .bind(collection)
+    .fetch_one(pool)
+    .await
+    .expect("collection view");
 
     let channel = create_channel(&setup, &project, "launch").await;
     let message = say(
@@ -1968,6 +2060,10 @@ async fn build_workspace(
         rule,
         whiteboard,
         project_whiteboard,
+        collection,
+        collection_field,
+        collection_view,
+        record,
         file,
         file_message,
         task_file,
@@ -2637,6 +2733,89 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
         ),
         project_route("/api/v1/projects/{project_id}/labels", "/labels"),
         project_route("/api/v1/projects/{project_id}/fields", "/fields"),
+        case(
+            "/api/v1/projects/{project_id}/collections",
+            vec![
+                format!("{}/collections", p(a)),
+                format!("{}/collections?includeArchived=true", p(a)),
+            ],
+            vec![format!("{}/collections", p(b))],
+            vec![],
+        ),
+        {
+            let (own, foreign) =
+                pair(&|outer, inner| format!("{}/collections/{}", p(outer), inner.collection));
+            case(
+                "/api/v1/projects/{project_id}/collections/{collection_id}",
+                own,
+                foreign,
+                vec![],
+            )
+        },
+        {
+            let (mut own, foreign) = pair(&|outer, inner| {
+                format!("{}/collections/{}/records", p(outer), inner.collection)
+            });
+            let records = format!("{}/collections/{}/records", p(a), a.collection);
+            own.push(format!("{records}?view={}", a.collection_view));
+            own.push(format!("{records}?search=crash&archived=include&limit=1"));
+            case(
+                "/api/v1/projects/{project_id}/collections/{collection_id}/records",
+                own,
+                foreign,
+                vec![
+                    // B's view, B's field, B's people, task and page, and
+                    // B's words never find anything here.
+                    format!("{records}?view={}", b.collection_view),
+                    format!("{records}?search={MARKER}"),
+                    format!("{records}?groupBy={}", b.collection_field),
+                    format!(
+                        "{records}?filters={}",
+                        url_encode(
+                            &json!([{"field": b.collection_field, "op": "notEmpty"}]).to_string()
+                        )
+                    ),
+                    format!(
+                        "{records}?sort={}",
+                        url_encode(
+                            &json!([{"field": b.collection_field.to_string(), "direction": "asc"}])
+                                .to_string()
+                        )
+                    ),
+                ],
+            )
+        },
+        {
+            let (own, foreign) = pair(&|outer, inner| {
+                format!(
+                    "{}/collections/{}/records/{}",
+                    p(outer),
+                    inner.collection,
+                    inner.record
+                )
+            });
+            let mut foreign = foreign;
+            // A's collection with B's record, and B's collection with A's.
+            foreign.push(format!(
+                "{}/collections/{}/records/{}",
+                p(a),
+                a.collection,
+                b.record
+            ));
+            foreign.push(format!(
+                "{}/collections/{}/records/{}",
+                p(a),
+                b.collection,
+                a.record
+            ));
+            foreign.dedup();
+            case(
+                "/api/v1/projects/{project_id}/collections/{collection_id}/records/{record_id}",
+                own,
+                foreign,
+                vec![],
+            )
+        },
         project_route("/api/v1/projects/{project_id}/launches", "/launches"),
         project_route(
             "/api/v1/projects/{project_id}/agent-profiles",
@@ -3320,6 +3499,9 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "external_event_poll",
     "file_list",
     "file_read",
+    "collection_list",
+    "collection_describe",
+    "record_query",
     "inbox_list",
     "label_list",
     "field_list",
@@ -3436,6 +3618,62 @@ fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         ),
         by_project("label_list"),
         by_project("field_list"),
+        case(
+            "collection_list",
+            vec![
+                json!({"projectId": "WORK"}),
+                json!({"projectId": a.project, "includeArchived": true}),
+            ],
+            vec![
+                json!({"projectId": b.project}),
+                json!({"projectId": b.space}),
+            ],
+            vec![],
+        ),
+        case(
+            "collection_describe",
+            vec![
+                json!({"projectId": "WORK", "collection": "Playtests"}),
+                json!({"projectId": a.project, "collection": a.collection, "includeArchived": true}),
+            ],
+            vec![
+                json!({"projectId": "WORK", "collection": b.collection}),
+                json!({"projectId": b.project, "collection": b.collection}),
+            ],
+            vec![],
+        ),
+        case(
+            "record_query",
+            vec![
+                json!({"projectId": "WORK", "collection": "Playtests"}),
+                json!({"projectId": "WORK", "collection": a.collection, "records": ["#1", a.record], "includeHistory": true}),
+                json!({"projectId": "WORK", "collection": "Playtests", "view": a.collection_view, "search": "crash"}),
+                json!({
+                    "projectId": "WORK",
+                    "collection": "Playtests",
+                    "filters": [
+                        {"field": "Tester", "op": "is", "values": ["@rook"]},
+                        {"field": "Build", "op": "is", "values": ["WORK-1"]},
+                        {"field": "Spec", "op": "is", "values": [a.page]},
+                    ],
+                    "groupBy": "Severity",
+                }),
+            ],
+            vec![
+                json!({"projectId": "WORK", "collection": b.collection}),
+                json!({"projectId": "WORK", "collection": a.collection, "records": [b.record]}),
+                json!({"projectId": "WORK", "collection": a.collection, "view": b.collection_view}),
+                json!({"projectId": "WORK", "collection": a.collection, "groupBy": b.collection_field}),
+                json!({"projectId": "WORK", "collection": a.collection, "filters": [{"field": b.collection_field, "op": "notEmpty"}]}),
+                json!({"projectId": "WORK", "collection": a.collection, "filters": [{"field": "Spec", "op": "is", "values": [b.page]}]}),
+                json!({"projectId": "WORK", "collection": a.collection, "filters": [{"field": "Tester", "op": "is", "values": [b.rook]}]}),
+                json!({"projectId": b.project, "collection": b.collection}),
+            ],
+            vec![
+                json!({"projectId": "WORK", "collection": a.collection, "search": MARKER}),
+                json!({"projectId": "WORK", "collection": a.collection, "filters": [{"field": "Build", "op": "is", "values": [b.task]}]}),
+            ],
+        ),
         by_project("launch_list"),
         by_project("agent_profile_list"),
         by_project("environment_list"),

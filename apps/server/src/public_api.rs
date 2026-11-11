@@ -145,6 +145,7 @@ pub(crate) fn tag_for(tool: &str) -> &'static str {
         "reply" | "session" | "agent" => "Agents and replies",
         "task" | "label" | "field" | "milestone" | "view" | "my" | "template" => "Tasks",
         "page" | "skill" | "decision" | "search" => "Pages and search",
+        "collection" | "record" => "Collections",
         "run" | "approval" | "environment" | "external" | "usage" => "Runs and launching",
         "repository" | "pull" => "Code",
         "webhook" => "Webhooks",

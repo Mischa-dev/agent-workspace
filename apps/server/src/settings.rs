@@ -490,6 +490,7 @@ pub const REGISTRY: &[SettingDef] = &[
     module_switch("modules.tasks", "Tasks"),
     module_switch("modules.pages", "Pages"),
     module_switch("modules.whiteboards", "Whiteboards"),
+    module_switch("modules.collections", "Collections"),
     module_switch("modules.runs", "Runs"),
     module_switch("modules.code", "Code"),
     module_switch("modules.agents", "Agents"),
