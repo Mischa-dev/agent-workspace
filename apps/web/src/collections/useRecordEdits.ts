@@ -109,11 +109,10 @@ export function useRecordEdits(projectId: string, collectionId: string) {
         .then((body) => {
           settled()
           versions.current.set(record.id, body.record.version)
-          // The group it's listed under stays until the list refetches.
+          // The group it's listed under stays until the list refetches. A save
+          // answers without history, so an open record keeps its own; the
+          // change's entry comes with the refetch collection.updated starts.
           patch(record.id, (current) => withUnsaved({ ...body.record, group: current.group }), body.references)
-          client.setQueryData<RecordBody>(collectionKeys.record(projectId, collectionId, record.id), (current) =>
-            current ? { ...body, record: withUnsaved(body.record) } : current,
-          )
           if (change.archived !== undefined) void refresh()
           return true
         })
@@ -127,7 +126,7 @@ export function useRecordEdits(projectId: string, collectionId: string) {
           if (queues.current.get(record.id) === next) queues.current.delete(record.id)
         })
     },
-    [client, collectionId, patch, projectId, refresh, withUnsaved],
+    [collectionId, patch, projectId, refresh, withUnsaved],
   )
 
   /** Adds a record, then refetches the lists so it shows where the view sorts it. */

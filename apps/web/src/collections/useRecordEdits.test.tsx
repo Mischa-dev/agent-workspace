@@ -70,6 +70,18 @@ describe('useRecordEdits', () => {
     expect(listed()).toMatchObject({ values: { platform: 'PC', tags: ['camera', 'jump'] }, version: 3 })
   })
 
+  it('keeps the open record’s history when a save answers without it', async () => {
+    const pending = answers()
+    const { client, result } = setup()
+    const added = { id: 'entry-a', action: 'created', actor: 'Ada', via: null, changes: [], version: 1, at: '' }
+    client.setQueryData<RecordBody>(recordKey, { ...body(record), history: [added] })
+
+    act(() => void result.current.save(record, { values: { platform: 'PC' } }))
+    await waitFor(() => expect(updateRecord).toHaveBeenCalledTimes(1))
+    await act(async () => pending[0](body({ ...record, values: { platform: 'PC' }, version: 2 })))
+    expect(client.getQueryData<RecordBody>(recordKey)).toMatchObject({ record: { values: { platform: 'PC' }, version: 2 }, history: [added] })
+  })
+
   it('shows changes still saving on top of a list or record that loads meanwhile', async () => {
     const pending = answers()
     const { client, result, listed, opened } = setup()
