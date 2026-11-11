@@ -1,0 +1,86 @@
+/* The move dialog (AWD-102): a private preview, then one confirmation. */
+.aw-move {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.aw-move__lede {
+  margin: 0 0 var(--space-2);
+  color: var(--content-fg-muted);
+  font-size: var(--t-small);
+}
+
+.aw-move__section h3 {
+  margin: 0 0 var(--space-1-5);
+  font-size: var(--t-ui);
+}
+
+.aw-move__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.aw-move__issues,
+.aw-move__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-move__list li {
+  padding: var(--space-half) 0;
+  color: var(--content-fg);
+  font-size: var(--t-small);
+  overflow-wrap: anywhere;
+}
+
+.aw-move__issue {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 15rem);
+  gap: var(--space-2);
+  align-items: start;
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--content-border);
+}
+
+.aw-move__what {
+  font-size: var(--t-small);
+  overflow-wrap: anywhere;
+}
+
+.aw-move__why {
+  margin-top: var(--space-half);
+  color: var(--content-fg-muted);
+}
+
+.aw-move__key {
+  color: var(--content-fg-muted);
+  font-family: var(--font-mono, inherit);
+  font-size: var(--t-code);
+}
+
+.aw-move__how {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.aw-move__value {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1);
+  font-size: var(--t-small);
+  overflow-wrap: anywhere;
+}
+
+.aw-move__needed {
+  color: var(--danger);
+}
+
+@media (max-width: 560px) {
+  .aw-move__issue {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

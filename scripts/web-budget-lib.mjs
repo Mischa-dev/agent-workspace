@@ -30,7 +30,15 @@ export const WEB_ASSET_LIMITS = Object.freeze({
   // turned-off page and the palette's claims loading lazily. That measured
   // 433,897 / 140,611 (November 2026), so the gzip limit went from 136 to
   // 138 KB by decision; the raw limit is unchanged.
-  initialJavascriptRawBytes: 424 * 1024,
+  // Moving tasks between projects (AWD-102) must forget an unsent or
+  // unanswered move at once on every sign-in and sign-out, so that small
+  // store (moveStore.ts) is in the shell; sending and checking moves load
+  // with the Move dialog. Measured from the built assets (not a browser's
+  // network transfer): 433,999 / 140,955 before it; 435,731 / 141,719 with
+  // the move code in the shell; 434,232 / 141,081 once split, 1,499 raw /
+  // 638 gzip bytes less, still 56 raw bytes over 424 KB. The raw limit went
+  // up 256 bytes by decision (November 2026); gzip is unchanged.
+  initialJavascriptRawBytes: 424 * 1024 + 256,
   initialJavascriptGzipBytes: 138 * 1024,
   // index.html's stylesheets: the design system's five theme presets,
   // components and page layouts. Measured 101,925 raw bytes; the UI kit
@@ -59,9 +67,27 @@ export const WEB_ASSET_LIMITS = Object.freeze({
   whiteboardChunkJavascriptRawBytes: 1792 * 1024,
   whiteboardChunkJavascriptGzipBytes: 752 * 1024,
   whiteboardChunkCssRawBytes: 140 * 1024,
+  // The live page editor (AWD-53): Tiptap on ProseMirror, Yjs and the page's
+  // own schema and sync, which apps/web/vite.config.ts puts under
+  // assets/editor/. Only a page opened to write in loads it, as one chunk of
+  // 524,864 raw / 158,581 gzip bytes (Tiptap 3.33, Yjs 13.6, November 2026).
+  // Its stylesheet is small and held to chunkCssRawBytes.
+  editorChunkJavascriptRawBytes: 544 * 1024,
+  editorChunkJavascriptGzipBytes: 168 * 1024,
 })
 
-const WHITEBOARD_PREFIX = 'assets/whiteboard/'
+// Chunks held to their own limits, by where vite.config.ts puts them.
+const OWN_LIMITS = [
+  ['assets/whiteboard/', 'whiteboard'],
+  ['assets/editor/', 'editor'],
+]
+
+/** The limit for one kind of file: its folder's own (`whiteboardChunkCssRawBytes`) if set, otherwise the general one. */
+function limitName(file, generalName, limits) {
+  const owner = OWN_LIMITS.find(([prefix]) => file.startsWith(prefix))?.[1]
+  const own = owner ? `${owner}${generalName[0].toUpperCase()}${generalName.slice(1)}` : null
+  return own && limits[own] !== undefined ? own : generalName
+}
 
 export function measureWebAssets(distRoot, limits = WEB_ASSET_LIMITS) {
   const files = walkRegularFiles(distRoot).map((absolutePath) => {
@@ -91,13 +117,13 @@ export function measureWebAssets(distRoot, limits = WEB_ASSET_LIMITS) {
     }
   }
   const chunkChecks = [
-    [javascript, 'bytes', 'chunkJavascriptRawBytes', 'whiteboardChunkJavascriptRawBytes'],
-    [javascript, 'gzipBytes', 'chunkJavascriptGzipBytes', 'whiteboardChunkJavascriptGzipBytes'],
-    [css, 'bytes', 'chunkCssRawBytes', 'whiteboardChunkCssRawBytes'],
+    [javascript, 'bytes', 'chunkJavascriptRawBytes'],
+    [javascript, 'gzipBytes', 'chunkJavascriptGzipBytes'],
+    [css, 'bytes', 'chunkCssRawBytes'],
   ]
-  for (const [records, key, chunkName, whiteboardName] of chunkChecks) {
+  for (const [records, key, chunkName] of chunkChecks) {
     for (const record of records) {
-      const name = record.file.startsWith(WHITEBOARD_PREFIX) && limits[whiteboardName] !== undefined ? whiteboardName : chunkName
+      const name = limitName(record.file, chunkName, limits)
       const limit = limits[name]
       if (limit === undefined) continue
       if (!isInitial(record) && record[key] > limit) {

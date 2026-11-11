@@ -135,6 +135,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/organizations/{organization_id}/secrets",
     "/api/v1/organizations/{organization_id}/server",
     "/api/v1/pages/{id}",
+    "/api/v1/pages/{id}/document",
     "/api/v1/pages/{id}/revisions/{version}",
     "/api/v1/projects",
     "/api/v1/projects/{id}",
@@ -197,6 +198,8 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/claim",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/files",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/readiness",
+    "/api/v1/projects/{project_id}/work-items/{work_item_id}/project-move",
+    "/api/v1/projects/{project_id}/work-items/{work_item_id}/project-move/destinations",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/launch",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/timeline",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}/revisions",
@@ -1127,6 +1130,14 @@ async fn build_workspace(
         json!({"pageId": page, "body": format!("Launch notes, second draft{m}"), "skillDescription": format!("Use when launching{m}"), "expectedVersion": 1}),
     )
     .await;
+    // Someone has had the page open, so it has a live document. Its
+    // generation is the page's ID, for write cases to name.
+    call("page_blocks", json!({"pageId": page})).await;
+    sqlx::query("UPDATE project_page_documents SET generation = page_id WHERE page_id = $1")
+        .bind(Uuid::parse_str(&page).expect("page id"))
+        .execute(pool)
+        .await
+        .expect("page document generation");
 
     let channel = create_channel(&setup, &project, "launch").await;
     let message = say(
@@ -2898,6 +2909,40 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
         }
         cases.push(case(route, own, foreign, vec![]));
     }
+    // AWD-102: a move's preview. A has one ordinary project in this fixture
+    // and a move needs two, so A's own preview is in awd102_task_move; here
+    // B's task, project or target project never answer.
+    {
+        let (_, mut foreign) = pair(&|outer, inner| {
+            format!(
+                "/api/v1/projects/{}/work-items/{}/project-move?targetProjectId={}",
+                outer.project, inner.task, a.project
+            )
+        });
+        foreign.push(format!(
+            "/api/v1/projects/{}/work-items/{}/project-move?targetProjectId={}",
+            a.project, a.task, b.project
+        ));
+        cases.push(case(
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/project-move",
+            vec![],
+            foreign,
+            vec![],
+        ));
+        // Where A's task could go: never one of B's projects.
+        let (own, foreign) = pair(&|outer, inner| {
+            format!(
+                "/api/v1/projects/{}/work-items/{}/project-move/destinations",
+                outer.project, inner.task
+            )
+        });
+        cases.push(case(
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/project-move/destinations",
+            own,
+            foreign,
+            vec![],
+        ));
+    }
 
     let (own, foreign) = pair(&|outer, inner| {
         format!(
@@ -3039,6 +3084,12 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
         "/api/v1/pages/{id}",
         vec![format!("/api/v1/pages/{}", a.page)],
         vec![format!("/api/v1/pages/{}", b.page)],
+        vec![],
+    ));
+    cases.push(case(
+        "/api/v1/pages/{id}/document",
+        vec![format!("/api/v1/pages/{}/document", a.page)],
+        vec![format!("/api/v1/pages/{}/document", b.page)],
         vec![],
     ));
     let boards = |w: &World, suffix: &str| {
@@ -3280,6 +3331,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "my_permissions",
     "my_work",
     "notification_list",
+    "page_blocks",
     "page_get",
     "page_list",
     "people_search",
@@ -3648,6 +3700,18 @@ fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![
                 json!({"pageId": b.page}),
                 json!({"pageId": b.page, "version": 1}),
+            ],
+            vec![],
+        ),
+        case(
+            "page_blocks",
+            vec![
+                json!({"pageId": a.page}),
+                json!({"pageId": a.page, "includeMarkdown": true}),
+            ],
+            vec![
+                json!({"pageId": b.page}),
+                json!({"pageId": b.page, "includeMarkdown": true}),
             ],
             vec![],
         ),

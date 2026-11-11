@@ -11,7 +11,9 @@
   "tools": {
     "page_list": "query",
     "page_get": "describe",
+    "page_blocks": "describe",
     "page_write": "change",
+    "page_edit": "change",
     "skill_list": "query",
     "skill_get": "describe",
     "decision_list": "query",
@@ -54,7 +56,7 @@
   ],
   "slots": {
     "pages": ["/projects/:projectId/pages", "/projects/:projectId/pages/:pageId", "/projects/:projectId/decisions"],
-    "parts": ["area.pages", "area.decisions"],
+    "parts": ["area.pages", "area.decisions", "page.live_editing"],
     "sidebar": [],
     "home": [],
     "settings": [],

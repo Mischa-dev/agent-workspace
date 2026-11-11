@@ -1,4 +1,4 @@
-import { Children, Fragment, lazy, Suspense, useEffect, useRef, useState, type DragEvent, type ReactNode } from 'react'
+import { Children, Fragment, lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore, type DragEvent, type ReactNode } from 'react'
 import { Maximize2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
@@ -17,6 +17,7 @@ import {
   showToast,
   type MenuEntry,
 } from '../ui'
+import { useAuthenticatedSession } from '../auth/session'
 import { useProjectExperience } from '../experience/layout'
 import { buildOpenInCodexLink } from './codexDeepLink'
 import { useTaskFiles, useWorkItem, useWorkItemWorkflow } from './hooks'
@@ -28,6 +29,8 @@ import { isFinished } from './taskDisplay'
 import { TitleField } from './TaskFields'
 import { TaskFiles, type TaskFilesHandle } from './TaskFiles'
 import { TaskGlyph } from './TaskGlyph'
+import { listeners as moveListeners, pending as pendingMoves } from './moveStore'
+import { FieldEditor } from './TaskCustomFields'
 import { TaskNotice } from './TaskNotice'
 import { BlockForm, BlockedNotice, ClaimNotice, HandoffNotice } from './TaskNotes'
 import { useArchive, useBoardCount, useEditShortcut, useWide } from './taskPageHooks'
@@ -51,6 +54,8 @@ const LabelManager = lazy(() => import('./LabelManager').then((module) => ({ def
 const TaskLinks = lazy(() => import('./TaskLinks').then((module) => ({ default: module.TaskLinks })))
 // What to do about a save that stopped loads only when one does.
 const TaskSaveNotices = lazy(() => import('./TaskSaveNotices').then((module) => ({ default: module.TaskSaveNotices })))
+// Moving to another project (AWD-102) loads only when someone starts one.
+const MoveTaskDialog = lazy(() => import('./MoveTaskDialog'))
 // Comments and changes are their own chunk, fetched while the task loads.
 const loadTaskActivity = () => import('./TaskActivity')
 const TaskActivity = lazy(() => loadTaskActivity().then((module) => ({ default: module.TaskActivity })))
@@ -202,6 +207,18 @@ function TaskDetailBody({
   const [adding, setAdding] = useState<Adding>(null)
   const [dependency, setDependency] = useState<DependencyRequest | null>(null)
   const [parentAnchor, setParentAnchor] = useState<HTMLElement | null>(null)
+  const [moving, setMoving] = useState(false)
+  const actorId = useAuthenticatedSession().user.actorId
+  const moveKey = `${actorId}:${item.projectId}:${item.id}`
+  const moveSent = useSyncExternalStore(
+    (listener) => {
+      moveListeners.add(listener)
+      return () => {
+        moveListeners.delete(listener)
+      }
+    },
+    () => pendingMoves.get(moveKey)?.actorId === actorId,
+  )
   const [blocking, setBlocking] = useState(false)
   const [boardDialog, setBoardDialog] = useState<'new' | 'link' | null>(null)
   const [managingLabels, setManagingLabels] = useState(false)
@@ -264,8 +281,20 @@ function TaskDetailBody({
   }
   if (local) menu.push({ separator: true }, { label: 'Open locally', icon: 'terminal', onSelect: () => window.location.assign(local) })
   if (archive.allowed) {
+    menu.push({ separator: true })
+    // A move archives the task here, so it takes the same permission; the
+    // target project's own checks come with the preview.
+    // A move this tab sent stays reachable after it archives the task, so an
+    // answer that never came (or one that came while the dialog was closed)
+    // can still be checked; a new move can't start from an archived task.
+    if (!item.archivedAt || moveSent) {
+      menu.push({
+        label: item.archivedAt ? 'Check the move…' : 'Move to project…',
+        icon: 'external',
+        onSelect: () => afterMenu(() => setMoving(true)),
+      })
+    }
     menu.push(
-      { separator: true },
       item.archivedAt
         ? { label: 'Restore task', icon: 'undo', onSelect: archive.restore }
         : { label: 'Archive task', icon: 'archive', onSelect: archive.archive },
@@ -330,6 +359,11 @@ function TaskDetailBody({
         />
       ) : null}
       {item.handoff && !finished ? <HandoffNotice handoff={item.handoff} /> : null}
+      {moving ? (
+        <Suspense fallback={null}>
+          <MoveTaskDialog FieldEditor={FieldEditor} onClose={() => setMoving(false)} projectId={item.projectId} task={{ id: item.id, key: item.key, title: item.title, version: item.version }} />
+        </Suspense>
+      ) : null}
     </div>
   )
 
