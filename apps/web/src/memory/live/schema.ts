@@ -1,4 +1,4 @@
-import { Extension, InputRule, Mark, mergeAttributes, type Extensions } from '@tiptap/core'
+import { Extension, InputRule, Mark, Node as TiptapNode, mergeAttributes, type Extensions } from '@tiptap/core'
 import { Blockquote } from '@tiptap/extension-blockquote'
 import { Bold } from '@tiptap/extension-bold'
 import { Code } from '@tiptap/extension-code'
@@ -28,7 +28,8 @@ import { Plugin, PluginKey, type EditorState } from '@tiptap/pm/state'
 import { Decoration, DecorationSet } from '@tiptap/pm/view'
 
 import { highlight } from '../../ui/markdown/highlight'
-import { NOT_TASK_KEYS, safeHref, TASK_KEY } from '../../ui/markdown/parse'
+import { embedHref, NOT_TASK_KEYS, safeHref, TASK_KEY } from '../../ui/markdown/parse'
+import type { EmbedSlots } from './embeds'
 
 // The page editor's document, in exactly the shape the server keeps it
 // (apps/server/src/page_docs/ydoc.rs): the same node and mark names, the same
@@ -47,6 +48,7 @@ export const BLOCK_TYPES = [
   'orderedList',
   'horizontalRule',
   'table',
+  'embed',
 ] as const
 
 const blockTypes: readonly string[] = BLOCK_TYPES
@@ -259,6 +261,77 @@ const PageListItem = ListItem.extend({
   },
 })
 
+/**
+ * Something of the app's shown live in the page, such as a collection's view
+ * (parse.ts's embed): a block of its own at the page's top level, with the
+ * path it shows and a label for while it loads. The page draws the view into
+ * the element this keeps for it (EmbedSlots); without one, the label shows.
+ */
+const Embed = TiptapNode.create<{ slots: EmbedSlots | null }>({
+  name: 'embed',
+  group: 'embed',
+  atom: true,
+  selectable: true,
+  draggable: true,
+
+  addOptions() {
+    return { slots: null }
+  },
+
+  addAttributes() {
+    return {
+      href: {
+        default: null,
+        parseHTML: (element) => embedHref(element.getAttribute('data-embed') ?? ''),
+        renderHTML: (attributes) => (typeof attributes.href === 'string' ? { 'data-embed': attributes.href } : {}),
+      },
+      label: {
+        default: null,
+        parseHTML: (element) => element.getAttribute('data-label') || null,
+        renderHTML: (attributes) => (typeof attributes.label === 'string' && attributes.label ? { 'data-label': attributes.label } : {}),
+      },
+    }
+  },
+
+  parseHTML() {
+    return [{ tag: 'div[data-embed]', getAttrs: (element) => (embedHref(element.getAttribute('data-embed') ?? '') ? null : false) }]
+  },
+
+  renderHTML({ HTMLAttributes }) {
+    return ['div', mergeAttributes(HTMLAttributes, { class: 'aw-embed' })]
+  },
+
+  addNodeView() {
+    const { slots } = this.options
+    return ({ node }) => {
+      const dom = document.createElement('div')
+      dom.className = 'aw-embed'
+      dom.contentEditable = 'false'
+      const show = (current: ProseMirrorNode) => {
+        const href = typeof current.attrs.href === 'string' ? current.attrs.href : ''
+        const label = typeof current.attrs.label === 'string' ? current.attrs.label : ''
+        if (slots) slots.set({ element: dom, href, label })
+        else dom.textContent = label || href
+      }
+      show(node)
+      return {
+        dom,
+        update: (updated) => {
+          if (updated.type !== node.type) return false
+          show(updated)
+          return true
+        },
+        selectNode: () => dom.classList.add('is-selected'),
+        deselectNode: () => dom.classList.remove('is-selected'),
+        // Links and buttons in the view work as themselves; a click anywhere else selects the embed.
+        stopEvent: (event) => event.target instanceof Element && event.target.closest('a, button, input, select, textarea') !== null,
+        ignoreMutation: () => true,
+        destroy: () => slots?.remove(dom),
+      }
+    }
+  },
+})
+
 /** A table without a column sizer or inline styles (the page's styles say how it looks). */
 const PageTable = Table.extend({
   renderHTML({ HTMLAttributes }) {
@@ -337,13 +410,15 @@ export type PageExtensionsOptions = {
   /** Opens a link or a task key, from a click with Cmd or Ctrl held (or any click when reading). */
   onOpen?: (href: string) => void
   placeholder?: string
+  /** Where embeds' live views go. */
+  embeds?: EmbedSlots
 }
 
 const PageLook = Extension.create<PageExtensionsOptions>({
   name: 'pageLook',
 
   addOptions() {
-    return { onOpen: undefined, placeholder: undefined }
+    return { onOpen: undefined, placeholder: undefined, embeds: undefined }
   },
 
   addProseMirrorPlugins() {
@@ -378,7 +453,8 @@ const PageLook = Extension.create<PageExtensionsOptions>({
 /** Everything the page editor's document is made of, without the live connection. */
 export function pageExtensions(options: PageExtensionsOptions = {}): Extensions {
   return [
-    Document,
+    // Embeds sit only at the top level, as their Markdown does.
+    Document.extend({ content: '(block | embed)+' }),
     Paragraph,
     Text,
     Heading,
@@ -389,6 +465,7 @@ export function pageExtensions(options: PageExtensionsOptions = {}): Extensions 
     ListKeymap,
     CodeBlock.configure({ HTMLAttributes: { class: 'aw-md__pre' } }),
     HorizontalRule,
+    Embed.configure({ slots: options.embeds ?? null }),
     HardBreak,
     PageTable.configure({ View: null, resizable: false, allowTableNodeSelection: false }),
     TableRow,

@@ -17,10 +17,24 @@ import {
   SquareCode,
   Strikethrough,
   Table,
+  Table2,
   Undo2,
   type LucideIcon,
 } from 'lucide-react'
-import { useEffect, useEffectEvent, useId, useReducer, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useEffectEvent,
+  useId,
+  useReducer,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type FormEvent,
+  type ReactNode,
+} from 'react'
+import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import * as Y from 'yjs'
 
@@ -28,11 +42,15 @@ import { lastHeardVersion, onPageChange } from '../../realtime/liveDocuments'
 import { useOptionalRealtime } from '../../realtime/realtimeContext'
 import { Banner, Button, Menu, TextField, Tooltip, describeError, type MenuEntry } from '../../ui'
 import { formatShortcut } from '../../ui/shortcut'
-import { canInsertTable, currentLink, inTasks, insertTable, removeLink, setLink, toggleTasks } from './commands'
+import { PageEmbed } from '../embeds/PageEmbed'
+import { canInsertTable, currentLink, inTasks, insertEmbed, insertTable, removeLink, setLink, toggleTasks } from './commands'
 import { fromBase64, getPageDocument, sendPageUpdate, syncPageDocument, type PageDocument } from './documentApi'
+import { EmbedSlots } from './embeds'
 import { FROM_SERVER, PageSync, saveLabel, type SaveFailure, type SaveState } from './pageSync'
 import { pageExtensions } from './schema'
 import './live.css'
+
+const CollectionEmbedPicker = lazy(() => import('../../collections/CollectionEmbedPicker'))
 
 // A page you write in place, live with everyone who has it open (AWD-53): a
 // Tiptap editor on the page's Yjs document, kept in step with the server by
@@ -44,6 +62,10 @@ const POLL_MS = 5_000
 
 export type LivePageProps = {
   pageId: string
+  /** The page's project, whose collections its views can come from. */
+  projectId: string
+  /** Whether the toolbar offers a collection's view to put in the page. */
+  collections: boolean
   /** Names the editor for screen readers. */
   title: string
   /** The page as last saved: shown while the live copy loads, and if it can't. */
@@ -61,7 +83,7 @@ function openDocument(snapshot: PageDocument) {
   return doc
 }
 
-export default function LivePage({ fallback, pageId, title }: LivePageProps) {
+export default function LivePage({ collections, fallback, pageId, projectId, title }: LivePageProps) {
   const [attempt, setAttempt] = useState(0)
   const [load, setLoad] = useState<Load | null>(null)
   const [unshowable, setUnshowable] = useState(false)
@@ -112,6 +134,7 @@ export default function LivePage({ fallback, pageId, title }: LivePageProps) {
   }
   return (
     <LiveEditor
+      collections={collections ? projectId : null}
       doc={current.doc}
       key={current.attempt}
       onReload={reload}
@@ -147,12 +170,15 @@ const PageKeys = Extension.create<{ onLink: () => void; onSave: () => void }>({
 })
 
 function LiveEditor({
+  collections,
   doc,
   onReload,
   onUnshowable,
   snapshot,
   title,
 }: {
+  /** The project whose collections the toolbar offers, if it does. */
+  collections: string | null
   doc: Y.Doc
   onReload: () => void
   onUnshowable: () => void
@@ -170,6 +196,10 @@ function LiveEditor({
   const [saveState, setSaveState] = useState<SaveState>('saved')
   const [failure, setFailure] = useState<SaveFailure | null>(null)
   const [linking, setLinking] = useState(false)
+  const [embedding, setEmbedding] = useState(false)
+  // Each embed's live view, drawn into the element the editor keeps for it.
+  const [slots] = useState(() => new EmbedSlots())
+  const embeds = useSyncExternalStore(slots.subscribe, slots.getSnapshot)
 
   const open = useEffectEvent((href: string) => {
     if (href.startsWith('/')) navigate(href)
@@ -199,7 +229,7 @@ function LiveEditor({
     const instance = new Editor({
       element,
       extensions: [
-        ...pageExtensions({ onOpen: (href) => open(href) }),
+        ...pageExtensions({ onOpen: (href) => open(href), embeds: slots }),
         Collaboration.configure({ document: doc }),
         PageKeys.configure({ onLink: () => setLinking(true), onSave: () => pageSync.flush() }),
       ],
@@ -241,7 +271,7 @@ function LiveEditor({
       pageSync.destroy()
       sync.current = null
     }
-  }, [doc, editorId, snapshot])
+  }, [doc, editorId, slots, snapshot])
 
   // After a reconnect, and on a timer while the live connection is down.
   useEffect(() => {
@@ -278,7 +308,22 @@ function LiveEditor({
         <div className="aw-live__bar">
           {snapshot.canEdit ? (
             editor ? (
-              <Toolbar controls={editorId} editor={editor} onLink={() => setLinking(true)} />
+              <Toolbar
+                controls={editorId}
+                editor={editor}
+                onEmbed={
+                  collections
+                    ? () => {
+                        setLinking(false)
+                        setEmbedding(true)
+                      }
+                    : null
+                }
+                onLink={() => {
+                  setEmbedding(false)
+                  setLinking(true)
+                }}
+              />
             ) : (
               <div className="aw-live__tools" />
             )
@@ -288,8 +333,24 @@ function LiveEditor({
           </span>
         </div>
         {linking && editor ? <LinkForm editor={editor} onClose={() => setLinking(false)} /> : null}
+        {embedding && editor && collections ? (
+          <Suspense fallback={null}>
+            <CollectionEmbedPicker
+              onClose={() => {
+                setEmbedding(false)
+                editor.commands.focus()
+              }}
+              onPick={(embed) => {
+                insertEmbed(editor, embed)
+                setEmbedding(false)
+              }}
+              projectId={collections}
+            />
+          </Suspense>
+        ) : null}
       </div>
       <div className="aw-live__page" ref={mount} />
+      {embeds.map((slot) => createPortal(<PageEmbed framed={false} href={slot.href} label={slot.label} />, slot.element, slot.key))}
     </div>
   )
 }
@@ -428,6 +489,13 @@ const TOOLS: Tool[][] = [
       run: (editor) => editor.chain().focus().setHorizontalRule().run(),
       enabled: (editor) => editor.can().setHorizontalRule(),
     },
+    // Opens the collection picker: see Toolbar.
+    {
+      key: 'embed',
+      label: 'Collection view',
+      icon: Table2,
+      run: () => undefined,
+    },
   ],
   [
     {
@@ -466,7 +534,7 @@ function tableMenu(editor: Editor): MenuEntry[] {
 }
 
 /** The formatting buttons, kept in step with where the cursor is. */
-function Toolbar({ controls, editor, onLink }: { controls: string; editor: Editor; onLink: () => void }) {
+function Toolbar({ controls, editor, onEmbed, onLink }: { controls: string; editor: Editor; onEmbed: (() => void) | null; onLink: () => void }) {
   const [, redraw] = useReducer((count: number) => count + 1, 0)
   useEffect(() => {
     editor.on('transaction', redraw)
@@ -479,6 +547,7 @@ function Toolbar({ controls, editor, onLink }: { controls: string; editor: Edito
       {TOOLS.map((group) => (
         <div className="aw-live__group" key={group[0].key}>
           {group.map((tool) => {
+            if (tool.key === 'embed' && !onEmbed) return null
             const Glyph = tool.icon
             const pressed = tool.active?.(editor)
             const button = (
@@ -487,7 +556,7 @@ function Toolbar({ controls, editor, onLink }: { controls: string; editor: Edito
                 aria-pressed={tool.active && tool.key !== 'table' ? pressed : undefined}
                 className="aw-iconbtn aw-iconbtn--sm"
                 disabled={tool.enabled ? !tool.enabled(editor) : false}
-                onClick={tool.key === 'link' ? onLink : () => tool.run(editor)}
+                onClick={tool.key === 'link' ? onLink : tool.key === 'embed' && onEmbed ? onEmbed : () => tool.run(editor)}
                 // Keep the page's selection when a button is pressed.
                 onMouseDown={(event) => event.preventDefault()}
                 type="button"

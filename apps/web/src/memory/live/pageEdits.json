@@ -174,6 +174,30 @@
       "document": "marks",
       "markdown": "Some **_bold_**, _italic_, ~~struck~~, `code`, **bold `code`**, [a link](https://example.com), [a page](/projects) and AWD-12.\n",
       "update": "AQKSIQDGAUkBCAZpdGFsaWMCe33GAQsBSgZpdGFsaWMEbnVsbAEBAVIB"
+    },
+    {
+      "name": "embed a view after a paragraph",
+      "document": "paragraphs",
+      "markdown": "One line\nand the next.\n\n[Playtest feedback](/projects/p/collections/c?view=v \"embed\")\n\nA second paragraph with a hard  \nbreak.\n",
+      "update": "AQOSIQDHAQABGgMFZW1iZWQoAJIhAARocmVmAXcgL3Byb2plY3RzL3AvY29sbGVjdGlvbnMvYz92aWV3PXYoAJIhAAVsYWJlbAF3EVBsYXl0ZXN0IGZlZWRiYWNrAA=="
+    },
+    {
+      "name": "embed a view on an empty page",
+      "document": "empty",
+      "markdown": "[A \\[draft\\] view](/projects/p/collections/c \"embed\")",
+      "update": "AQOSIQBHAQADBWVtYmVkKACSIQAEaHJlZgF3GS9wcm9qZWN0cy9wL2NvbGxlY3Rpb25zL2MoAJIhAAVsYWJlbAF3DkEgW2RyYWZ0XSB2aWV3AQEBAAI="
+    },
+    {
+      "name": "remove an embed",
+      "document": "embeds",
+      "markdown": "What players said:\n\n[A \\[draft\\] view](/projects/p/collections/c \"embed\")\n",
+      "update": "AAEBARUE"
+    },
+    {
+      "name": "type below an embed",
+      "document": "embeds",
+      "markdown": "What players said:\n\n[Playtest feedback](/projects/p/collections/c?view=v \"embed\")\n\nMore soon.\n\n[A \\[draft\\] view](/projects/p/collections/c \"embed\")\n",
+      "update": "AQOSIQDHARUBGQMJcGFyYWdyYXBoBwCSIQAGBACSIQEKTW9yZSBzb29uLgA="
     }
   ]
 }

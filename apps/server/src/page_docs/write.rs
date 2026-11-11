@@ -209,6 +209,7 @@ impl BlockWriter {
             Node::OrderedList { start, items } => self.list(items, Some(*start), previous),
             Node::HorizontalRule => (vec!["---".to_owned()], None),
             Node::Table(rows) => (self.table(rows), None),
+            Node::Embed { href, label } => (vec![embed_line(href, label)], None),
         }
     }
 
@@ -798,6 +799,24 @@ fn code_span(content: &str, pad: bool) -> String {
     }
 }
 
+/// An embed's line, `[label](/path "embed")`, with a backslash before each
+/// backslash and bracket in the label (the only characters its reading treats
+/// specially).
+fn embed_line(href: &str, label: &str) -> String {
+    let mut line = String::with_capacity(href.len() + label.len() + 12);
+    line.push('[');
+    for character in label.chars() {
+        if matches!(character, '\\' | '[' | ']') {
+            line.push('\\');
+        }
+        line.push(character);
+    }
+    line.push_str("](");
+    line.push_str(href);
+    line.push_str(" \"embed\")");
+    line
+}
+
 /// A fenced code block, its fence longer than any backtick run inside.
 fn code_block(language: Option<&str>, text: &str) -> Vec<String> {
     let mut longest = 0;
@@ -998,6 +1017,7 @@ mod tests {
                 Node::BulletList(items) => format!("ul[{}]", items_text(items)),
                 Node::OrderedList { start, items } => format!("ol{start}[{}]", items_text(items)),
                 Node::HorizontalRule => "hr".to_owned(),
+                Node::Embed { href, label } => format!("embed({href:?})[{label:?}]"),
                 Node::Table(rows) => format!(
                     "table[{}]",
                     rows.iter()

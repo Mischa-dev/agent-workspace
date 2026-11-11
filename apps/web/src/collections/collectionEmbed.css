@@ -1,0 +1,141 @@
+/* A collection's view inside a page (AWD-90). It sits in a page's Markdown
+   (.aw-md), whose list, link and table styles are reset here. Loaded with the
+   embed's own chunk. */
+
+.aw-cembed {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.aw-cembed__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+}
+
+.aw-cembed__head > .aw-icon {
+  flex: none;
+}
+
+.aw-md .aw-cembed a,
+.aw-cembed a {
+  color: var(--content-fg);
+  text-decoration: none;
+}
+
+.aw-md .aw-cembed a:hover,
+.aw-cembed a:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.aw-md .aw-cembed .aw-cembed__name,
+.aw-cembed .aw-cembed__name {
+  color: var(--content-fg);
+  font: var(--t-ui-strong);
+}
+
+.aw-cembed__view::before {
+  content: '· ';
+}
+
+.aw-cembed__count {
+  margin-left: auto;
+}
+
+.aw-cembed__scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+}
+
+/* The page's own table rules (.aw-md th, and the editor's) reach in here;
+   these sit above them. */
+.aw-cembed table.aw-cembed__table {
+  width: 100%;
+  border-collapse: collapse;
+  font: var(--t-small);
+}
+
+.aw-cembed table.aw-cembed__table th,
+.aw-cembed table.aw-cembed__table td {
+  padding: var(--space-1-5) var(--space-3);
+  border: 0;
+  border-bottom: 1px solid var(--content-border);
+  background: none;
+  font: var(--t-small);
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.aw-cembed table.aw-cembed__table thead th {
+  background: var(--surface-sunken);
+  color: var(--content-fg-muted);
+  font: var(--t-caption-strong);
+}
+
+.aw-cembed table.aw-cembed__table tbody th {
+  font: var(--t-ui);
+}
+
+.aw-cembed table.aw-cembed__table tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
+/* A cell's value on one line, cut short with an ellipsis. */
+.aw-cembed__clip {
+  display: block;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* On a phone, short enough that the next column shows there is more. */
+.aw-cembed th > .aw-cembed__clip {
+  max-width: min(320px, 55vw);
+}
+
+/* Values as the collection shows them: choices as chips on one line. */
+.aw-md .aw-cembed .aw-labels,
+.aw-cembed .aw-labels {
+  flex-wrap: nowrap;
+  margin: 0;
+  padding: 0;
+}
+
+.aw-md .aw-cembed .aw-labels > li,
+.aw-cembed .aw-labels > li {
+  margin: 0;
+  white-space: nowrap;
+}
+
+.aw-cembed__more {
+  justify-self: start;
+  font: var(--t-small);
+}
+
+.aw-md .aw-cembed .aw-cembed__more,
+.aw-cembed .aw-cembed__more {
+  color: var(--link);
+}
+
+.aw-md .aw-cembed__empty,
+.aw-md .aw-cembed__problem,
+.aw-cembed__empty,
+.aw-cembed__problem {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+}

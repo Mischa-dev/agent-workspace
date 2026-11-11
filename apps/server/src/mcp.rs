@@ -1657,7 +1657,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Open a collection: its fields (each with its type and options), its saved views, how many records are archived, and its definition. The definition names the fields and views the way collection_write takes them, so passing it to collection_write in another project makes the same collection there.",
+        description = "Open a collection: its fields (each with its type and options), its saved views, how many records are archived, and its definition. The definition names the fields and views the way collection_write takes them, so passing it to collection_write in another project makes the same collection there. To show a view live in a page, put `[name](/projects/{projectId}/collections/{collectionId}?view={viewId} \"embed\")` on a line of its own.",
         annotations(
             title = "Describe collection",
             read_only_hint = true,

@@ -45,6 +45,11 @@
       "markdown": "- first\n\n  second paragraph\n\n  ```\n  code in an item\n  ```\n- > a quote in an item\n-\n",
       "name": "blocks in items",
       "state": "ARMBAAcBB2RlZmF1bHQDCmJ1bGxldExpc3QoAAEAAmlkAXcGYmxvY2swBwABAAMIbGlzdEl0ZW0HAAECAwlwYXJhZ3JhcGgHAAEDBgQAAQQFZmlyc3SHAQMDCXBhcmFncmFwaAcAAQoGBAABCxBzZWNvbmQgcGFyYWdyYXBohwEKAwljb2RlQmxvY2sHAAEcBgQAAR0PY29kZSBpbiBhbiBpdGVthwECAwhsaXN0SXRlbQcAAS0DCmJsb2NrcXVvdGUHAAEuAwlwYXJhZ3JhcGgHAAEvBgQAATASYSBxdW90ZSBpbiBhbiBpdGVthwEtAwhsaXN0SXRlbQcAAUMDCXBhcmFncmFwaAA="
+    },
+    {
+      "markdown": "What players said:\n\n[Playtest feedback](/projects/p/collections/c?view=v \"embed\")\n\n[A \\[draft\\] view](/projects/p/collections/c \"embed\")\n",
+      "name": "embeds",
+      "state": "AQwBAAcBB2RlZmF1bHQDCXBhcmFncmFwaCgAAQACaWQBdwZibG9jazAHAAEABgQAAQISV2hhdCBwbGF5ZXJzIHNhaWQ6hwEAAwVlbWJlZCgAARUCaWQBdwZibG9jazEoAAEVBGhyZWYBdyAvcHJvamVjdHMvcC9jb2xsZWN0aW9ucy9jP3ZpZXc9digAARUFbGFiZWwBdxFQbGF5dGVzdCBmZWVkYmFja4cBFQMFZW1iZWQoAAEZAmlkAXcGYmxvY2syKAABGQRocmVmAXcZL3Byb2plY3RzL3AvY29sbGVjdGlvbnMvYygAARkFbGFiZWwBdw5BIFtkcmFmdF0gdmlldwA="
     }
   ]
 }

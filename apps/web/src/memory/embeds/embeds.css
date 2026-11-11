@@ -1,0 +1,27 @@
+/* Embeds in a page (AWD-90): the box around something of the app shown live,
+   in the page editor and when the page is read. */
+
+.aw-embed {
+  display: block;
+  min-width: 0;
+  margin: 0 0 var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  white-space: normal;
+}
+
+/* Picked in the editor, ready to move or delete. */
+.aw-embed.is-selected {
+  outline: var(--focus-width) solid var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+.aw-md .aw-embed__link,
+.aw-embed__link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--link);
+}

@@ -66,6 +66,21 @@ export function insertTable(editor: Editor) {
   return canInsertTable(editor) && editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
 }
 
+/**
+ * Puts an embed after the top-level block the cursor is in, or in place of
+ * it when that's an empty paragraph: an embed sits only at the page's top
+ * level, as its Markdown does.
+ */
+export function insertEmbed(editor: Editor, attributes: { href: string; label: string }) {
+  const { selection } = editor.state
+  const { $from } = selection
+  const content = { type: 'embed', attrs: attributes }
+  if ($from.depth === 0) return editor.chain().focus().insertContentAt(selection.to, content).run()
+  const top = $from.node(1)
+  const at = top.type.name === 'paragraph' && top.content.size === 0 ? { from: $from.before(1), to: $from.after(1) } : $from.after(1)
+  return editor.chain().focus().insertContentAt(at, content).run()
+}
+
 /** The link the cursor is on, if any. */
 export function currentLink(editor: Editor): string | null {
   const href: unknown = editor.getAttributes('link').href

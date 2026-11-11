@@ -7,7 +7,7 @@ import { Collaboration } from '@tiptap/extension-collaboration'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
 
-import { insertTable, setLink, toggleTasks } from './commands'
+import { insertEmbed, insertTable, setLink, toggleTasks } from './commands'
 import documents from './pageDocuments.json'
 import { pageExtensions, repeatedIds } from './schema'
 
@@ -121,7 +121,7 @@ describe('documents the server makes', () => {
 
   it('shows every sample', () => {
     expect(samples.map((sample) => sample.name)).toEqual(
-      expect.arrayContaining(['empty', 'marks', 'lists', 'code', 'table', 'quote and rule', 'blocks in items']),
+      expect.arrayContaining(['empty', 'marks', 'lists', 'code', 'table', 'quote and rule', 'blocks in items', 'embeds']),
     )
   })
 })
@@ -396,6 +396,50 @@ const EDIT_CASES: EditCase[] = [
       target.chain().setTextSelection(find(target, 'bold')).toggleItalic().run()
     },
   },
+  {
+    name: 'embed a view after a paragraph',
+    document: 'paragraphs',
+    markdown:
+      'One line\nand the next.\n\n[Playtest feedback](/projects/p/collections/c?view=v "embed")\n\nA second paragraph with a hard  \nbreak.\n',
+    edit: (target) => {
+      target.commands.setTextSelection(find(target, 'One').from)
+      insertEmbed(target, { href: '/projects/p/collections/c?view=v', label: 'Playtest feedback' })
+    },
+  },
+  {
+    name: 'embed a view on an empty page',
+    document: 'empty',
+    markdown: '[A \\[draft\\] view](/projects/p/collections/c "embed")',
+    edit: (target) => {
+      target.commands.setTextSelection(1)
+      insertEmbed(target, { href: '/projects/p/collections/c', label: 'A [draft] view' })
+    },
+  },
+  {
+    name: 'remove an embed',
+    document: 'embeds',
+    markdown: 'What players said:\n\n[A \\[draft\\] view](/projects/p/collections/c "embed")\n',
+    edit: (target) => {
+      let at = -1
+      target.state.doc.forEach((node, offset) => {
+        if (at < 0 && node.type.name === 'embed') at = offset
+      })
+      target.chain().setNodeSelection(at).deleteSelection().run()
+    },
+  },
+  {
+    name: 'type below an embed',
+    document: 'embeds',
+    markdown:
+      'What players said:\n\n[Playtest feedback](/projects/p/collections/c?view=v "embed")\n\nMore soon.\n\n[A \\[draft\\] view](/projects/p/collections/c "embed")\n',
+    edit: (target) => {
+      let after = -1
+      target.state.doc.forEach((node, offset) => {
+        if (after < 0 && node.type.name === 'embed') after = offset + node.nodeSize
+      })
+      target.chain().insertContentAt(after, { type: 'paragraph', content: [{ type: 'text', text: 'More soon.' }] }).run()
+    },
+  },
 ]
 
 describe('edits the editor makes', () => {
@@ -429,6 +473,32 @@ describe('edits the editor makes', () => {
       for (const mark of node.marks) if (mark.type.name === 'link') links.push(mark.attrs.href as string)
     })
     expect(links).toEqual(['https://ok.example/'])
+  })
+
+  it('keeps embeds at the top level, and takes none that leaves the app from a paste', () => {
+    const { editor: opened } = open('lists')
+    opened.commands.setTextSelection(find(opened, 'nested').from)
+    insertEmbed(opened, { href: '/projects/p/collections/c', label: 'Bugs' })
+    const top = opened.state.doc.content.content.map((block) => block.type.name)
+    expect(top.filter((name) => name === 'embed')).toHaveLength(1)
+    let nested = 0
+    opened.state.doc.descendants((node, _position, parent) => {
+      if (node.type.name === 'embed' && parent !== opened.state.doc) nested += 1
+    })
+    expect(nested).toBe(0)
+    opened.destroy()
+
+    const { editor: empty } = open('empty')
+    empty.commands.setTextSelection(1)
+    empty.view.pasteHTML(
+      '<div data-embed="https://evil.example/x" data-label="Outside"></div><div data-embed="/projects/p/collections/d" data-label="Inside"></div>',
+      new Event('paste') as ClipboardEvent,
+    )
+    const embeds: Array<[string, string]> = []
+    empty.state.doc.forEach((node) => {
+      if (node.type.name === 'embed') embeds.push([node.attrs.href as string, node.attrs.label as string])
+    })
+    expect(embeds).toEqual([['/projects/p/collections/d', 'Inside']])
   })
 
   it('records each edit as the update it sends', () => {

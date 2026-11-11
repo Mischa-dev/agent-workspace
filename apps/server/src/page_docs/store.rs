@@ -412,6 +412,7 @@ fn block_words(block: &Block) -> std::collections::HashSet<String> {
                 out.push_str(&plain_text(&cell.content));
                 out.push(' ');
             }),
+            Node::Embed { label, .. } => out.push_str(label),
         }
         out.push(' ');
     }

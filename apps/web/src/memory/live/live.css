@@ -100,6 +100,13 @@
   min-width: 0;
 }
 
+.aw-live__note {
+  flex: 1 1 240px;
+  margin: 0;
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+}
+
 /* The page being written. ProseMirror needs pre-wrap: it keeps the spaces typed. */
 .aw-live__doc {
   position: relative;

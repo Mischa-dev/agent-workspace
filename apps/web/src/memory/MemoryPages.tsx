@@ -39,6 +39,7 @@ import {
   showToast,
 } from '../ui'
 import { Markdown, MarkdownEditor } from '../ui/markdown'
+import type { Embed } from '../ui/markdown/parse'
 import {
   createPage,
   getPage,
@@ -51,7 +52,11 @@ import {
   type Decision,
   type Page,
 } from './api'
+import { PageEmbed } from './embeds/PageEmbed'
 import './memory.css'
+
+/** A collection's view, or whatever else a page embeds, live where the page is read. */
+const renderEmbed = (embed: Embed) => <PageEmbed href={embed.href} label={embed.label} />
 
 // A page's boards load in the whiteboards' own small chunk.
 const LinkedWhiteboards = lazy(() =>
@@ -330,6 +335,7 @@ function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
     <Markdown
       className="aw-doc"
       empty={live ? 'Nothing here yet.' : canEdit ? 'Nothing here yet. Choose Edit to write it.' : 'Nothing here yet.'}
+      renderEmbed={renderEmbed}
       source={current.body}
     />
   )
@@ -396,12 +402,18 @@ function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
             }
             title={`Version ${viewing.version}: ${viewing.title}`}
           >
-            <Markdown className="aw-doc" empty="This version was empty." source={viewing.body} />
+            <Markdown className="aw-doc" empty="This version was empty." renderEmbed={renderEmbed} source={viewing.body} />
           </Section>
         </div>
       ) : live ? (
         <Suspense fallback={<div className="aw-memory__live-wait">{read}</div>}>
-          <LivePage fallback={read} pageId={pageId} title={current.title} />
+          <LivePage
+            collections={experience.shows('area.collections')}
+            fallback={read}
+            pageId={pageId}
+            projectId={projectId}
+            title={current.title}
+          />
         </Suspense>
       ) : (
         read

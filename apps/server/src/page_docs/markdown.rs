@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use serde::Serialize;
 
 use crate::page_blocks::{
-    PARSE_LIMIT, after_indent, fence_closes, fence_open, has_js_line_terminator, heading,
+    PARSE_LIMIT, after_indent, embed_of, fence_closes, fence_open, has_js_line_terminator, heading,
     indent_of, is_blank, is_js_space, is_quote, is_rule, is_table_delimiter, list_item,
     starts_block,
 };
@@ -115,6 +115,13 @@ pub enum Block {
         align: Vec<Option<Align>>,
         head: Vec<Vec<Inline>>,
         rows: Vec<Vec<Vec<Inline>>>,
+    },
+    /// Something of the app's shown live in a page, from a top-level
+    /// paragraph that is only `[label](/path "embed")`
+    /// ([`crate::page_blocks::embed_of`]).
+    Embed {
+        href: String,
+        label: String,
     },
     /// Source past the parsing limit, shown as it is.
     Overflow {
@@ -337,6 +344,13 @@ fn parse_blocks(lines: &[String], depth: usize) -> Vec<Block> {
         while i < lines.len() && !is_blank(&lines[i]) && !starts_block(&lines[i]) {
             paragraph.push(trim_leading_blank(&lines[i]));
             i += 1;
+        }
+        if depth == 0
+            && paragraph.len() == 1
+            && let Some((href, label)) = embed_of(line)
+        {
+            blocks.push(Block::Embed { href, label });
+            continue;
         }
         blocks.push(Block::Paragraph {
             children: parse_inline(&paragraph.join("\n")),

@@ -26,6 +26,7 @@ use yrs::{
 
 use super::markdown::{Align, safe_href};
 use super::tree::{Block, Cell, Inline, Item, MAX_LIST_START, Marks, Node};
+use crate::page_blocks::embed_href;
 
 /// The fragment Tiptap's collaboration extension binds to.
 pub const FRAGMENT: &str = "default";
@@ -48,6 +49,7 @@ const TABLE: &str = "table";
 const TABLE_ROW: &str = "tableRow";
 const TABLE_CELL: &str = "tableCell";
 const TABLE_HEADER: &str = "tableHeader";
+const EMBED: &str = "embed";
 const HARD_BREAK: &str = "hardBreak";
 
 const BOLD: &str = "bold";
@@ -243,6 +245,23 @@ fn read_block<T: ReadTxn>(
             Node::HorizontalRule
         }
         TABLE => Node::Table(read_table(txn, element)?),
+        // Only at the top level, as its Markdown is.
+        EMBED if depth > 0 => return invalid("an embed inside another block"),
+        EMBED => {
+            if element.len(txn) > 0 {
+                return invalid("an embed with content");
+            }
+            let Some(href) = string_attribute(txn, element, "href")
+                .as_deref()
+                .and_then(embed_href)
+            else {
+                return invalid("an embed without a path inside the app");
+            };
+            Node::Embed {
+                href,
+                label: string_attribute(txn, element, "label").unwrap_or_default(),
+            }
+        }
         other => return invalid(format!("an unknown block, {other:?}")),
     };
     Ok(Block { id, node })
@@ -632,6 +651,13 @@ fn p_block(block: &Block) -> PNode {
                 .map(|row| element(TABLE_ROW, Vec::new(), row.iter().map(p_cell).collect()))
                 .collect(),
         ),
+        Node::Embed { href, label } => {
+            attributes.push(("href", string(href)));
+            if !label.is_empty() {
+                attributes.push(("label", string(label)));
+            }
+            element(EMBED, attributes, Vec::new())
+        }
     }
 }
 
@@ -1412,6 +1438,18 @@ mod tests {
             super::super::write::write_document(&blocks).markdown,
             "[**hi**](https://example.com)"
         );
+
+        // An embed the editor adds, with a label its Markdown escapes.
+        let update = client_update(&doc, 92, |txn, fragment| {
+            let embed = fragment.insert(txn, 1, XmlElementPrelim::empty(EMBED));
+            embed.insert_attribute(txn, "href", string("/projects/p/collections/c?view=v"));
+            embed.insert_attribute(txn, "label", string("Feedback [all]"));
+        });
+        assert_eq!(apply_client_update(&doc, &update), Ok(()));
+        assert_eq!(
+            super::super::write::write_document(&blocks_of(&doc)).markdown,
+            "[**hi**](https://example.com)\n\n[Feedback \\[all\\]](/projects/p/collections/c?view=v \"embed\")"
+        );
     }
 
     #[test]
@@ -1473,6 +1511,35 @@ mod tests {
         assert!(refused(Box::new(|txn, _| {
             let other = txn.get_or_insert_map("other");
             yrs::Map::insert(&other, txn, "key", "value");
+        })));
+        // An embed sits at the top level and shows a path inside the app.
+        assert!(refused(Box::new(|txn, fragment| {
+            let quote = fragment.insert(txn, 0, XmlElementPrelim::empty(BLOCKQUOTE));
+            let embed = quote.insert(txn, 0, XmlElementPrelim::empty(EMBED));
+            embed.insert_attribute(txn, "href", string("/projects"));
+        })));
+        for href in [
+            "https://example.com/x",
+            "//example.com",
+            "/a b",
+            "/a\u{a0}b",
+            "",
+        ] {
+            assert!(
+                refused(Box::new(move |txn, fragment| {
+                    let embed = fragment.insert(txn, 0, XmlElementPrelim::empty(EMBED));
+                    embed.insert_attribute(txn, "href", string(href));
+                })),
+                "{href:?}"
+            );
+        }
+        assert!(refused(Box::new(|txn, fragment| {
+            fragment.insert(txn, 0, XmlElementPrelim::empty(EMBED));
+        })));
+        assert!(refused(Box::new(|txn, fragment| {
+            let embed = fragment.insert(txn, 0, XmlElementPrelim::empty(EMBED));
+            embed.insert_attribute(txn, "href", string("/projects"));
+            embed.insert(txn, 0, XmlElementPrelim::empty(PARAGRAPH));
         })));
         // Changes in the server's name: a second copy of the server's
         // document, edited, as a browser would send it.
