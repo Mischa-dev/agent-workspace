@@ -115,6 +115,18 @@ function packageOf(id: string) {
   return first.startsWith('@') ? `${first}/${second}` : first
 }
 
+// The page editor (Tiptap on ProseMirror, and Yjs) loads only when a page
+// opens for writing (src/memory/live). Its chunks go under assets/editor/,
+// held to their own limit in scripts/web-budget-lib.mjs. Checked before the
+// whiteboard's rule, which would take chunks of ProseMirror's packages too.
+const EDITOR_PACKAGES = /^(?:@tiptap\/.+|prosemirror-.+|yjs|lib0|y-protocols|orderedmap|rope-sequence|w3c-keyname)$/
+
+function isEditorChunk(moduleIds: readonly string[]) {
+  return moduleIds
+    .map((id) => id.split(sep).join('/'))
+    .some((id) => !id.startsWith('\0') && (id.includes('/src/memory/live/') || EDITOR_PACKAGES.test(packageOf(id) ?? '')))
+}
+
 function isWhiteboardChunk(moduleIds: readonly string[]) {
   const ids = moduleIds.map((id) => id.split(sep).join('/')).filter((id) => !id.startsWith('\0'))
   if (ids.some((id) => id.includes('/src/whiteboards/BoardCanvas') || packageOf(id) === '@excalidraw/excalidraw')) {
@@ -132,7 +144,11 @@ export default defineConfig({
     rollupOptions: {
       output: {
         chunkFileNames: (chunk) =>
-          isWhiteboardChunk(chunk.moduleIds) ? 'assets/whiteboard/[name]-[hash].js' : 'assets/[name]-[hash].js',
+          isEditorChunk(chunk.moduleIds)
+            ? 'assets/editor/[name]-[hash].js'
+            : isWhiteboardChunk(chunk.moduleIds)
+              ? 'assets/whiteboard/[name]-[hash].js'
+              : 'assets/[name]-[hash].js',
         assetFileNames: (asset) =>
           (asset.names ?? []).some((name) => name.startsWith('BoardCanvas'))
             ? 'assets/whiteboard/[name]-[hash][extname]'

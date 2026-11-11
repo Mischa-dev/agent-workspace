@@ -758,6 +758,19 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     policy_route!("conversations", Patch, "/api/v1/threads/{id}", ThreadCreate),
     policy_route!("memory", Post, "/api/v1/projects/{id}/pages", PageEdit),
     policy_route!("memory", Patch, "/api/v1/pages/{id}", PageEdit),
+    // Syncing a page's live document is a read: what the caller's copy lacks.
+    policy_route!(
+        "memory",
+        Post,
+        "/api/v1/pages/{id}/document/sync",
+        ProjectView
+    ),
+    policy_route!(
+        "memory",
+        Post,
+        "/api/v1/pages/{id}/document/updates",
+        PageEdit
+    ),
     policy_route!(
         "whiteboards/http",
         Post,

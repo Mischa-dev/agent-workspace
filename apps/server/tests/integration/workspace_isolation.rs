@@ -135,6 +135,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/organizations/{organization_id}/secrets",
     "/api/v1/organizations/{organization_id}/server",
     "/api/v1/pages/{id}",
+    "/api/v1/pages/{id}/document",
     "/api/v1/pages/{id}/revisions/{version}",
     "/api/v1/projects",
     "/api/v1/projects/{id}",
@@ -1129,6 +1130,14 @@ async fn build_workspace(
         json!({"pageId": page, "body": format!("Launch notes, second draft{m}"), "skillDescription": format!("Use when launching{m}"), "expectedVersion": 1}),
     )
     .await;
+    // Someone has had the page open, so it has a live document. Its
+    // generation is the page's ID, for write cases to name.
+    call("page_blocks", json!({"pageId": page})).await;
+    sqlx::query("UPDATE project_page_documents SET generation = page_id WHERE page_id = $1")
+        .bind(Uuid::parse_str(&page).expect("page id"))
+        .execute(pool)
+        .await
+        .expect("page document generation");
 
     let channel = create_channel(&setup, &project, "launch").await;
     let message = say(
@@ -3075,6 +3084,12 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
         "/api/v1/pages/{id}",
         vec![format!("/api/v1/pages/{}", a.page)],
         vec![format!("/api/v1/pages/{}", b.page)],
+        vec![],
+    ));
+    cases.push(case(
+        "/api/v1/pages/{id}/document",
+        vec![format!("/api/v1/pages/{}/document", a.page)],
+        vec![format!("/api/v1/pages/{}/document", b.page)],
         vec![],
     ));
     let boards = |w: &World, suffix: &str| {

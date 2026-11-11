@@ -133,8 +133,8 @@ limited by their role in the project.
 |---|---|---|
 | `search` | ✓ | |
 | `page_list`, `page_get`, `page_write` | ✓ | |
-| `page_blocks` | + | A page's outline and blocks (position, type, hash) for one version; a section or block range exactly as stored (AWD-53). |
-| `page_edit` | + | Replace, insert, delete or append blocks by position and hash against `expectedVersion`; everything else stays byte for byte (AWD-53). |
+| `page_blocks` | + | A page's outline and blocks (lasting id, position, type, hash); a section or block range exactly as the page's Markdown has it. Positions need the version they came from; ids don't (AWD-53). |
+| `page_edit` | + | Replace, insert, delete or append blocks named by id (or position, with `expectedVersion`) and hash; everything else stays byte for byte, and people typing in the page keep their changes (AWD-53). |
 | `decision_record` | ✓ | |
 | `decision_list` | + | Decisions in a project, with `includeSuperseded`. |
 | `decision_update` | + | Edit the detail, supersede with an existing decision, or withdraw. |

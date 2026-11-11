@@ -129,6 +129,14 @@
   color: var(--content-fg-muted);
 }
 
+/* On a phone, buttons that don't fit beside the title go under it. */
+@media (max-width: 640px) {
+  .aw-pagesection__head {
+    flex-wrap: wrap;
+    row-gap: var(--space-2);
+  }
+}
+
 .aw-form {
   display: grid;
   gap: var(--space-4);

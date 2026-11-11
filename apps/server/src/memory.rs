@@ -10,9 +10,9 @@
 
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{DefaultBodyLimit, State},
     http::HeaderMap,
-    routing::{delete, get},
+    routing::{delete, get, post},
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
@@ -23,6 +23,7 @@ use crate::{
     auth::{AuthenticatedActor, require_authenticated_write},
     conversations::{authorize_conversation_row_for, fetch_conversation_access, parse_actor_kind},
     error::{ApiJson, ApiPath, ApiQuery, AppError},
+    page_docs,
     policy::{
         Action, ActorKind, Decision, Membership, ProjectScope, Resource, RoleGrant, Subject,
         authorize,
@@ -50,6 +51,20 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/pages/{id}/revisions/{version}",
             get(get_revision_http),
+        )
+        .route(
+            "/api/v1/pages/{id}/document",
+            get(page_docs::http::get_document),
+        )
+        .route(
+            "/api/v1/pages/{id}/document/sync",
+            post(page_docs::http::sync_document),
+        )
+        .route(
+            "/api/v1/pages/{id}/document/updates",
+            post(page_docs::http::update_document).layer(DefaultBodyLimit::max(
+                page_docs::http::MAX_UPDATE_REQUEST_BYTES,
+            )),
         )
         .route(
             "/api/v1/projects/{id}/decisions",
@@ -452,7 +467,7 @@ pub fn skill_name(title: &str) -> String {
     }
 }
 
-fn normalize_note(value: Option<&str>) -> Result<Option<String>, AppError> {
+pub(crate) fn normalize_note(value: Option<&str>) -> Result<Option<String>, AppError> {
     match value.map(str::trim).filter(|value| !value.is_empty()) {
         Some(note) if note.chars().count() <= 500 => Ok(Some(note.to_owned())),
         Some(_) => Err(AppError::Validation("note")),
@@ -520,6 +535,7 @@ pub async fn create_page(
         note.as_deref(),
     )
     .await?;
+    page_docs::store::page_updated(transaction, project_id, page_id, 1).await?;
     Ok(page_id)
 }
 
@@ -571,6 +587,17 @@ pub async fn update_page(
     }
     if let Some(value) = input.body.as_deref() {
         new_body = normalize_body(value, MAX_PAGE_BODY)?;
+    }
+    // A page with a stored document changes through it, and its Markdown is
+    // derived from the result.
+    if new_body != body
+        && let Some(derived) =
+            page_docs::store::set_markdown(transaction, page_id, &new_body).await?
+    {
+        if derived.chars().count() > MAX_PAGE_BODY {
+            return Err(page_docs::store::too_long());
+        }
+        new_body = derived;
     }
     let new_guide = input.is_guide.unwrap_or(is_guide);
     let new_skill = normalize_skill_description(input.skill_description.as_deref())?
@@ -632,6 +659,7 @@ pub async fn update_page(
         note.as_deref(),
     )
     .await?;
+    page_docs::store::page_updated(transaction, project_id, page_id, next_version).await?;
     Ok(project_id)
 }
 
@@ -668,8 +696,61 @@ async fn clear_guide(
             Some("No longer the guide"),
         )
         .await?;
+        page_docs::store::page_updated(transaction, project_id, page_id, version).await?;
     }
     Ok(())
+}
+
+/// Records a version in a page's history. With `merge_minutes`, a change
+/// with no note goes into the latest version instead, when that's the same
+/// writer's (through the same app) from less than that many minutes ago:
+/// live editing saves every few seconds, and its history is kept by the
+/// stretch, not by the keystroke. Returns whether a new version was added.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn record_revision(
+    transaction: &mut Transaction<'_, Postgres>,
+    writer: Writer,
+    page_id: Uuid,
+    version: i64,
+    title: &str,
+    body: &str,
+    note: Option<&str>,
+    merge_minutes: Option<i32>,
+) -> Result<bool, AppError> {
+    if let Some(minutes) = merge_minutes
+        && note.is_none()
+    {
+        let merged = sqlx::query(
+            r#"
+            UPDATE project_page_revisions revision
+            SET version = $2, title = $3, body = $4
+            WHERE revision.page_id = $1
+              AND revision.version = (
+                  SELECT max(latest.version) FROM project_page_revisions latest
+                  WHERE latest.page_id = $1
+              )
+              AND revision.actor_id = $5
+              AND revision.via_oauth_grant_id IS NOT DISTINCT FROM $6
+              AND revision.note IS NULL
+              AND revision.created_at > now() - make_interval(mins => $7)
+            "#,
+        )
+        .bind(page_id)
+        .bind(version)
+        .bind(title)
+        .bind(body)
+        .bind(writer.actor_id)
+        .bind(writer.via_grant_id)
+        .bind(minutes)
+        .execute(&mut **transaction)
+        .await?
+        .rows_affected();
+        if merged == 1 {
+            return Ok(false);
+        }
+    }
+    insert_revision(transaction, writer, page_id, version, title, body, note).await?;
+    Ok(true)
 }
 
 async fn insert_revision(
@@ -999,7 +1080,7 @@ pub async fn set_pin(
 // ---------------------------------------------------------------------------
 // Browser API
 
-fn browser_writer(principal: &AuthenticatedActor) -> Result<Writer, AppError> {
+pub(crate) fn browser_writer(principal: &AuthenticatedActor) -> Result<Writer, AppError> {
     Ok(Writer {
         actor_id: principal.actor_id,
         actor_kind: parse_actor_kind(&principal.actor_kind)?,
@@ -1007,7 +1088,7 @@ fn browser_writer(principal: &AuthenticatedActor) -> Result<Writer, AppError> {
     })
 }
 
-async fn audit(
+pub(crate) async fn audit(
     transaction: &mut Transaction<'_, Postgres>,
     principal: &AuthenticatedActor,
     project_id: Uuid,
@@ -1121,7 +1202,7 @@ async fn create_page_http(
         .ok_or(AppError::NotFound("page"))
 }
 
-async fn page_project(pool: &PgPool, page_id: Uuid) -> Result<Uuid, AppError> {
+pub(crate) async fn page_project(pool: &PgPool, page_id: Uuid) -> Result<Uuid, AppError> {
     sqlx::query_scalar::<_, Uuid>("SELECT project_id FROM project_pages WHERE id = $1")
         .bind(page_id)
         .fetch_optional(pool)
