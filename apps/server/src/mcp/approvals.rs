@@ -155,7 +155,7 @@ pub async fn get(
         return ApprovalToolResult::invalid("approvalId");
     };
     match fetch_context(state, principal, approval_id, false).await {
-        Ok(Some(context)) => match projection(&context) {
+        Ok(Some(context)) => match projection(&context, may_respond(principal)) {
             Ok(approval) => ApprovalToolResult::Found { approval },
             Err(error) => {
                 tracing::error!(
@@ -275,14 +275,14 @@ async fn respond_inner(
     };
     if context.version != arguments.expected_version || context.status != "pending" {
         return Ok(ApprovalToolResult::Conflict {
-            current: projection(&context)?,
+            current: projection(&context, may_respond(principal))?,
             reason: None,
             retry_category: "refetch_before_retry".to_owned(),
         });
     }
     if context.run_state != "blocked" {
         return Ok(ApprovalToolResult::Conflict {
-            current: projection(&context)?,
+            current: projection(&context, may_respond(principal))?,
             reason: None,
             retry_category: "do_not_retry".to_owned(),
         });
@@ -473,7 +473,7 @@ async fn fetch_projection(
 ) -> Result<Option<ApprovalProjection>, AppError> {
     fetch_context(state, principal, approval_id, false)
         .await?
-        .map(|context| projection(&context))
+        .map(|context| projection(&context, may_respond(principal)))
         .transpose()
 }
 
@@ -626,7 +626,10 @@ fn parse_role(value: &str) -> Result<MembershipRole, AppError> {
     }
 }
 
-fn projection(context: &ApprovalContext) -> Result<ApprovalProjection, AppError> {
+fn projection(
+    context: &ApprovalContext,
+    may_respond: bool,
+) -> Result<ApprovalProjection, AppError> {
     let summary = bounded_text(&context.summary, 500);
     let options = context
         .options
@@ -650,7 +653,7 @@ fn projection(context: &ApprovalContext) -> Result<ApprovalProjection, AppError>
         options,
         status: context.status.clone(),
         version: context.version,
-        can_respond: context.status == "pending" && context.run_state == "blocked",
+        can_respond: may_respond && context.status == "pending" && context.run_state == "blocked",
         created_at: context.created_at.clone(),
         canonical_path: format!(
             "/projects/{}/threads/{}",
@@ -879,7 +882,7 @@ pub async fn list(
             .iter()
             .filter(|row| !row.human_required)
             .filter(|row| require_policy(principal, row).is_ok())
-            .map(projection)
+            .map(|row| projection(row, may_respond(principal)))
             .collect::<Result<Vec<_>, _>>()?;
         Ok::<_, AppError>(ToolResult::ok(ApprovalListValue {
             approvals,

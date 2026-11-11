@@ -36,7 +36,7 @@ async function inBatches<T>(items: T[], size: number, work: (item: T) => Promise
   return results
 }
 
-async function unreadInProject(projectId: string): Promise<Unread[]> {
+async function unreadInProject(projectId: string): Promise<{ found: Unread[]; failed: number }> {
   const sidebar = await getProjectConversationSidebar(projectId)
   const found = unreadInSidebar(sidebar.channels)
   // The compact list hides quiet threads; ask for the rest channel by channel.
@@ -45,10 +45,12 @@ async function unreadInProject(projectId: string): Promise<Unread[]> {
     const full = await getProjectConversationSidebar(projectId, undefined, false, channel.id)
     return unreadInSidebar(full.channels.filter((candidate) => candidate.id === channel.id))
   })
+  let failed = 0
   for (const result of expanded) {
     if (result.status === 'fulfilled') found.push(...(result.value as Unread[]))
+    else failed += 1
   }
-  return found
+  return { found, failed }
 }
 
 export async function markAllRead(projectIds: string[]): Promise<{ marked: number; failed: number }> {
@@ -62,7 +64,10 @@ export async function markAllRead(projectIds: string[]): Promise<{ marked: numbe
   let failed = direct.status === 'rejected' ? 1 : 0
   for (const result of projects) {
     if (result.status === 'rejected') failed += 1
-    else for (const unread of result.value) byId.set(unread.conversationId, unread)
+    else {
+      failed += result.value.failed
+      for (const unread of result.value.found) byId.set(unread.conversationId, unread)
+    }
   }
   const marks = await inBatches([...byId.values()], 6, (unread) =>
     markConversationSeen({ conversationId: unread.conversationId, highestSeenSequence: unread.highestSequence }),

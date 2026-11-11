@@ -246,6 +246,27 @@ async fn a_saved_private_message_vanishes_and_stays_silent_after_leaving() {
 }
 
 #[tokio::test]
+async fn a_plain_note_can_be_saved_without_scheduling_a_reminder() {
+    let Some(fixture) = fixture("w21_untimed_note").await else {
+        return;
+    };
+    let setup = &fixture.setup;
+    let (status, saved) = save(setup, &setup.browser, json!({"note": "Buy milk"})).await;
+    assert_eq!(status, StatusCode::CREATED, "{saved}");
+    let id = saved["item"]["id"].as_str().expect("saved note");
+    assert_eq!(remind_at(&setup.pool, id).await, None);
+    let listed = later(setup, &setup.browser, "open").await;
+    assert!(listed.to_string().contains("Buy milk"), "{listed}");
+    run_jobs(&fixture).await;
+    let notifications =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM notifications WHERE kind = 'reminder'")
+            .fetch_one(&setup.pool)
+            .await
+            .expect("notifications");
+    assert_eq!(notifications, 0, "an untimed note sends no notification");
+}
+
+#[tokio::test]
 async fn a_due_reminder_notifies_once_and_done_or_snooze_work_from_the_push() {
     let Some(fixture) = fixture("w21_remind").await else {
         return;

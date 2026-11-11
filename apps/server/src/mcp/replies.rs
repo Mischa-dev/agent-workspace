@@ -717,6 +717,7 @@ pub(super) async fn reply_progress(
           AND request.agent_actor_id = $3
           AND request.generation = $4
           AND request.status = 'claimed'
+          AND request.lease_expires_at > clock_timestamp()
           AND conversation.id = request.conversation_id
           AND conversation.archived_at IS NULL
           AND conversation_visible_to(conversation.id, $3)

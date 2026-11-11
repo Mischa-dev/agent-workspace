@@ -21,6 +21,84 @@ use uuid::Uuid;
 
 const PASSWORD: &str = "correct horse battery staple";
 
+#[tokio::test]
+async fn expired_claims_cannot_post_or_renew_and_reply_modes_cannot_replay_each_other() {
+    let Some(Fixture {
+        pool,
+        app,
+        owner,
+        space,
+        ..
+    }) = fixture("reply_lease_hash").await
+    else {
+        return;
+    };
+    let agent = owner.add_agent(&app, &space, "Mara", "mara").await;
+    let session = agent.connect(&app).await;
+    let (_, dm) = owner
+        .call(
+            &app,
+            "POST",
+            "/api/v1/direct/dms",
+            None,
+            json!({"actorId": agent.actor_id}),
+        )
+        .await;
+    let conversation = dm["conversation"]["id"].as_str().expect("DM");
+    owner.say(&app, conversation, "ask", "Please answer").await;
+    let request = only_request(&session, &app).await;
+    let claim = session
+        .tool(
+            &app,
+            "reply_claim",
+            json!({"requestId": request["requestId"]}),
+        )
+        .await;
+    assert_eq!(claim["outcome"], "ok", "{claim}");
+    let generation = claim["value"]["request"]["generation"].clone();
+    sqlx::query("UPDATE reply_requests SET lease_expires_at = now() - interval '1 minute' WHERE id = $1::uuid")
+        .bind(request["requestId"].as_str().expect("request"))
+        .execute(&pool).await.expect("expire without sweeping status");
+    let progress = session.tool(&app, "reply_progress", json!({
+        "requestId": request["requestId"], "generation": generation, "status": "Still working"
+    })).await;
+    assert_eq!(
+        progress["outcome"], "conflict",
+        "expired progress cannot restore a lease: {progress}"
+    );
+    for final_reply in [false, true] {
+        let late = session.tool(&app, "reply_send", json!({
+            "requestId": request["requestId"], "generation": generation,
+            "text": "Too late", "final": final_reply, "clientRequestId": format!("late-{final_reply}")
+        })).await;
+        assert_eq!(late["outcome"], "conflict", "{late}");
+    }
+    assert_eq!(
+        agent_messages(&pool, conversation).await,
+        0,
+        "a refused reply rolls back its message"
+    );
+    sqlx::query("UPDATE reply_requests SET lease_expires_at = now() + interval '10 minutes' WHERE id = $1::uuid")
+        .bind(request["requestId"].as_str().expect("request"))
+        .execute(&pool).await.expect("restore a current lease");
+    let interim_args = json!({
+        "requestId": request["requestId"], "generation": generation,
+        "text": "Working", "final": false, "clientRequestId": "mode-key"
+    });
+    let interim = session.tool(&app, "reply_send", interim_args.clone()).await;
+    assert_eq!(interim["outcome"], "ok", "{interim}");
+    let mut final_args = interim_args.clone();
+    final_args["final"] = json!(true);
+    let changed = session.tool(&app, "reply_send", final_args).await;
+    assert_eq!(
+        changed["outcome"], "conflict",
+        "changing final is not the same request: {changed}"
+    );
+    let replayed = session.tool(&app, "reply_send", interim_args).await;
+    assert_eq!(replayed["outcome"], "ok", "{replayed}");
+    assert_eq!(agent_messages(&pool, conversation).await, 1);
+}
+
 /// The rules for who answers: a DM asks for a required reply that can only be
 /// answered once; group messages ask everyone optionally; agent back-and-forth
 /// stops when the turn allowance runs out until a person says Continue.

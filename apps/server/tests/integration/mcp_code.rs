@@ -949,8 +949,15 @@ async fn people_start_and_follow_runs_and_answer_approvals() {
     let owner_app = connect_app(app, &setup.browser, "Claude Code", "full").await;
     let reader_app = connect_app(app, &setup.browser, "Reader", "read").await;
     let dana_app = connect_app(app, &dana_browser, "Dana Code", "full").await;
+    let dana_reader_app = connect_app(app, &dana_browser, "Dana Reader", "read").await;
     let mut sessions = Vec::new();
-    for token in [&owner_app, &reader_app, &dana_app, &mara_token] {
+    for token in [
+        &owner_app,
+        &reader_app,
+        &dana_app,
+        &mara_token,
+        &dana_reader_app,
+    ] {
         sessions.push((
             token.clone(),
             initialize(app, token).await.expect("MCP session"),
@@ -964,6 +971,7 @@ async fn people_start_and_follow_runs_and_answer_approvals() {
     const READER: usize = 1;
     const DANA: usize = 2;
     const MARA: usize = 3;
+    const DANA_READER: usize = 4;
     execute(
         pool,
         "UPDATE repositories SET preparation_state = 'ready', prepared_at = now(), trusted = true WHERE id = $1",
@@ -1091,6 +1099,18 @@ async fn people_start_and_follow_runs_and_answer_approvals() {
     assert_eq!(agents["outcome"], "permission_denied", "{agents}");
     let in_web = call(DANA, "approval_get", json!({"approvalId": human})).await;
     assert_ne!(in_web["outcome"], "found", "{in_web}");
+    let dana_sees = waiting["value"]["approvals"]
+        .as_array()
+        .and_then(|rows| rows.iter().find(|row| row["id"] == approval.to_string()))
+        .expect("Dana's approval");
+    assert_eq!(dana_sees["canRespond"], true, "{waiting}");
+    // A read-only app sees the approval but isn't offered an answer it can't give.
+    let reader_sees = call(DANA_READER, "approval_get", json!({"approvalId": approval})).await;
+    assert_eq!(reader_sees["outcome"], "found", "{reader_sees}");
+    assert_eq!(
+        reader_sees["approval"]["canRespond"], false,
+        "{reader_sees}"
+    );
     let read_only = call(
         READER,
         "approval_respond",

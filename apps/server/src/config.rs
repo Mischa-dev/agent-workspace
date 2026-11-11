@@ -752,7 +752,7 @@ fn public_origin(
             reason: "must be an HTTPS origin without credentials, query, or fragment (development may use HTTP loopback)".into(),
         });
     }
-    Ok(Some(value.to_owned()))
+    Ok(Some(parsed.origin().ascii_serialization()))
 }
 
 fn operator_logins(values: &BTreeMap<String, String>) -> Result<Vec<String>, ConfigError> {
@@ -1190,6 +1190,20 @@ mod tests {
             "http://127.0.0.1:3100".to_owned(),
         );
         assert!(AppConfig::from_values(&development).is_ok());
+    }
+
+    #[test]
+    fn public_origin_keeps_the_validated_canonical_origin() {
+        for input in [
+            "https:EXAMPLE.com",
+            "https:/example.com",
+            "https://EXAMPLE.com:443/",
+        ] {
+            let mut values = base_values();
+            values.insert("AGENT_WORKSPACE_PUBLIC_ORIGIN".to_owned(), input.to_owned());
+            let config = AppConfig::from_values(&values).expect("valid origin");
+            assert_eq!(config.public_origin.as_deref(), Some("https://example.com"));
+        }
     }
 
     #[test]
