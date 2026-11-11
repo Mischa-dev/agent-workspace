@@ -11,7 +11,7 @@ import { Banner, Button, Dialog, SelectField, countLabel, describeError, showToa
 import { useWorkItem } from './hooks'
 import { listMoveDestinations, movedTo, previewMove, type MoveDone, type MoveIssue, type MovePlan, type MoveResolution } from './moveApi'
 import { pendingMove, sendMove, settleMove, subscribeMoves, type PendingMove } from './moveRecovery'
-import type { FieldEditor as FieldEditorType } from './TaskCustomFields'
+import type { FieldEditor as FieldEditorType } from '../fields/FieldEditor'
 import './moveTask.css'
 
 /** What the mover chose for one issue; `label` is how a picked person, task or page reads. */
@@ -34,7 +34,7 @@ type Refusal = { status: number; message: string }
  */
 /**
  * FieldEditor comes from the task page as a prop: importing it here would split
- * TaskCustomFields into a chunk of its own and grow the first page load.
+ * it into a chunk of its own and grow the first page load.
  */
 export default function MoveTaskDialog({
   FieldEditor,

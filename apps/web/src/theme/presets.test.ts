@@ -4,7 +4,8 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 import bootSource from '../../public/theme-boot.js?raw'
-import { CONTRAST_PAIRS, THEME_PRESETS, contrastRatio, type Rgb } from './slots'
+import { CONTRAST_PAIRS, SLOT_GROUPS, contrastRatio } from './slotEditing'
+import { ALL_SLOTS, THEME_PRESETS, type Rgb } from './slots'
 
 // Read from disk: vitest hands CSS imports over empty, even with ?raw.
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8')
@@ -59,6 +60,10 @@ describe('theme presets', () => {
         for (const [fg, bg] of CONTRAST_PAIRS) expect(Object.keys(blocks.get(preset.id) ?? {}), preset.id).toEqual(expect.arrayContaining([fg, bg]))
       }
     }
+  })
+
+  it('lists the same slots, in the same order, for the shell and the Appearance page', () => {
+    expect(SLOT_GROUPS.flatMap((group) => group.slots.map(([slot]) => slot))).toEqual(ALL_SLOTS)
   })
 
   it.each(THEME_PRESETS.map((preset) => [preset.name, preset.id]))('%s reads clearly on every pair the editor checks', (_name, id) => {

@@ -1,4 +1,4 @@
-import { SLOT_GROUPS } from '../theme/slots'
+import { SLOT_GROUPS } from '../theme/slotEditing'
 import { Section } from '../ui'
 
 // The scales in styles/tokens.css, drawn with the tokens themselves so each

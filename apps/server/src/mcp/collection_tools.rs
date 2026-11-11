@@ -442,8 +442,9 @@ pub(super) struct CollectionWriteArguments {
     /// true archives it (hidden with its records, nothing deleted), false
     /// restores it.
     pub archived: Option<bool>,
-    /// The version from collection_describe. Leave it out to change the
-    /// current one.
+    /// The version from collection_describe: if the collection changed
+    /// since, a write that would change anything (fields and views too) is
+    /// a conflict. Leave it out to change the current one.
     pub expected_version: Option<i64>,
     /// A stable ID so a retry never creates or changes twice.
     pub client_request_id: Option<String>,
@@ -460,6 +461,12 @@ pub(super) struct CollectionWriteValue {
     pub url: String,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub idempotent_replay: bool,
+}
+
+fn stale_conflict<T>(name: &str, version: i64) -> ToolResult<T> {
+    ToolResult::conflict(format!(
+        "\"{name}\" changed since you read it (now version {version}). Read it again with collection_describe and retry."
+    ))
 }
 
 fn apply_refusal<T>(problem: definition::ApplyProblem) -> ToolResult<T> {
@@ -577,6 +584,9 @@ pub(super) async fn collection_write(
             project_key: &project_key,
         };
         let mut changes = Vec::new();
+        // The collection's version when the caller's expectedVersion is
+        // behind it: a write that would change anything is then a conflict.
+        let mut stale = None::<i64>;
         let (collection, created) = match arguments.collection.as_deref() {
             None => {
                 // Create one, with its fields and views.
@@ -650,10 +660,19 @@ pub(super) async fn collection_write(
                     archived: arguments.archived,
                     expected_version: arguments.expected_version,
                 };
+                // Read under the lock, before anything changes: field and
+                // view changes are checked against this version too.
+                let locked = collections::lock(&mut transaction, project_id, found.id)
+                    .await?
+                    .ok_or(AppError::NotFound("collection"))?;
+                if arguments
+                    .expected_version
+                    .is_some_and(|expected| expected != locked.version)
+                {
+                    stale = Some(locked.version);
+                }
                 let collection = if change.is_empty() {
-                    collections::lock(&mut transaction, project_id, found.id)
-                        .await?
-                        .ok_or(AppError::NotFound("collection"))?
+                    locked
                 } else {
                     match collections::change(
                         &mut transaction,
@@ -685,10 +704,7 @@ pub(super) async fn collection_write(
                             return Ok(ToolResult::not_found("That collection"));
                         }
                         ChangeOutcome::VersionConflict(collection) => {
-                            return Ok(ToolResult::conflict(format!(
-                                "\"{}\" changed since you read it (now version {}). Read it again with collection_describe and retry.",
-                                collection.name, collection.version
-                            )));
+                            return Ok(stale_conflict(&collection.name, collection.version));
                         }
                         ChangeOutcome::NameTaken(other) => {
                             return Ok(ToolResult::invalid(
@@ -724,7 +740,13 @@ pub(super) async fn collection_write(
             )
             .await?
             {
-                Ok(applied) => changes.extend(applied),
+                Ok(applied) => {
+                    // Returning before the commit keeps none of it.
+                    if let Some(version) = stale.filter(|_| !applied.is_empty()) {
+                        return Ok(stale_conflict(&collection.name, version));
+                    }
+                    changes.extend(applied);
+                }
                 Err(problem) => return Ok(apply_refusal(problem)),
             }
         }

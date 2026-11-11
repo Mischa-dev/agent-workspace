@@ -345,6 +345,203 @@ async fn a_thousand_records_page_filter_sort_and_group_on_the_server() {
     assert_eq!(events[1]["recordIds"].as_array().expect("ids").len(), 100);
 }
 
+/// A page that ends on a record with long values still has a next page:
+/// sorts compare the first characters of text, so the cursor stays small.
+#[tokio::test]
+async fn records_with_long_values_page_through_when_sorted_by_them() {
+    let Some(setup) = setup("awd90_long_sorts").await else {
+        return;
+    };
+    let app = &setup.app;
+    create_project(&setup, "WORK", "Work").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+    let created = call(
+        "collection_write",
+        json!({
+            "projectId": "WORK",
+            "name": "Notes",
+            "fields": [{"name": "Body", "type": "text"}, {"name": "Steps", "type": "text"}],
+            "clientRequestId": "notes",
+        }),
+    )
+    .await;
+    assert_eq!(created["outcome"], "ok", "{created}");
+    // The longest values a record takes, in the widest characters, alike
+    // but for the last one.
+    let long = |last: char| format!("{}{last}", "😁".repeat(4_999));
+    let records = ['c', 'a', 'b']
+        .into_iter()
+        .enumerate()
+        .map(|(index, last)| {
+            json!({
+                "title": format!("{}{index}", "😁".repeat(299)),
+                "fields": {"Body": long(last), "Steps": long(last)},
+            })
+        })
+        .collect::<Vec<_>>();
+    let written = call(
+        "record_write",
+        json!({"projectId": "WORK", "collection": "Notes", "records": records, "clientRequestId": "long"}),
+    )
+    .await;
+    assert_eq!(written["outcome"], "ok", "{written}");
+    for sort in [
+        json!([{"field": "Body"}]),
+        json!([{"field": "Body"}, {"field": "Steps", "direction": "desc"}, {"field": "title"}]),
+    ] {
+        let mut seen = Vec::new();
+        let mut cursor = None::<String>;
+        loop {
+            let mut arguments = json!({
+                "projectId": "WORK",
+                "collection": "Notes",
+                "sort": sort,
+                "fields": ["Body"],
+                "limit": 1,
+            });
+            if let Some(cursor) = &cursor {
+                arguments["cursor"] = json!(cursor);
+            }
+            let page = call("record_query", arguments).await;
+            assert_eq!(page["outcome"], "ok", "{sort}: {page}");
+            seen.extend(numbers(&page));
+            assert!(seen.len() <= 3, "{sort}: {seen:?}");
+            match page["value"]["nextCursor"].as_str() {
+                Some(next) => cursor = Some(next.to_owned()),
+                None => break,
+            }
+        }
+        seen.sort_unstable();
+        assert_eq!(seen, vec![1, 2, 3], "{sort}");
+    }
+}
+
+/// collection_write with the version collection_describe gave is refused,
+/// with nothing kept, when the collection changed since, even when all it
+/// changes is fields or views. A write that changes nothing still passes.
+#[tokio::test]
+async fn a_definition_from_an_old_version_conflicts_instead_of_overwriting() {
+    let Some(setup) = setup("awd90_stale_definition").await else {
+        return;
+    };
+    let app = &setup.app;
+    create_project(&setup, "WORK", "Work").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+    let created = call(
+        "collection_write",
+        json!({
+            "projectId": "WORK",
+            "name": "Builds",
+            "fields": [{"name": "Platform", "type": "text"}],
+            "clientRequestId": "builds",
+        }),
+    )
+    .await;
+    assert_eq!(created["outcome"], "ok", "{created}");
+    let read = created["value"]["collection"]["version"]
+        .as_i64()
+        .expect("version");
+    // Someone else adds a field in between.
+    let other = call(
+        "collection_write",
+        json!({
+            "projectId": "WORK",
+            "collection": "Builds",
+            "fields": [{"name": "Branch", "type": "text"}],
+            "clientRequestId": "branch",
+        }),
+    )
+    .await;
+    assert_eq!(other["outcome"], "ok", "{other}");
+    let current = other["value"]["collection"]["version"]
+        .as_i64()
+        .expect("version");
+    assert!(current > read, "{other}");
+
+    for (index, change) in [
+        json!({"fields": [{"name": "Notes", "type": "text"}]}),
+        json!({"views": [{"name": "Mine"}]}),
+        json!({"description": "What we ship", "fields": [{"name": "Notes", "type": "text"}]}),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut arguments = json!({
+            "projectId": "WORK",
+            "collection": "Builds",
+            "expectedVersion": read,
+            "clientRequestId": format!("stale-{index}"),
+        });
+        for (key, value) in change.as_object().expect("change") {
+            arguments[key] = value.clone();
+        }
+        let stale = call("collection_write", arguments).await;
+        assert_eq!(stale["outcome"], "conflict", "{change}: {stale}");
+    }
+    let described = call(
+        "collection_describe",
+        json!({"projectId": "WORK", "collection": "Builds"}),
+    )
+    .await;
+    assert_eq!(described["outcome"], "ok", "{described}");
+    let names = |list: &str| {
+        described["value"][list]
+            .as_array()
+            .expect("list")
+            .iter()
+            .map(|entry| entry["name"].as_str().expect("name").to_owned())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names("fields"), vec!["Platform", "Branch"], "{described}");
+    assert!(!names("views").contains(&"Mine".to_owned()), "{described}");
+    assert_eq!(described["value"]["collection"]["version"], current);
+
+    // Writing what's there already changes nothing, so the old version passes.
+    let same = call(
+        "collection_write",
+        json!({
+            "projectId": "WORK",
+            "collection": "Builds",
+            "expectedVersion": read,
+            "fields": [{"name": "Platform", "type": "text"}],
+            "clientRequestId": "same",
+        }),
+    )
+    .await;
+    assert_eq!(same["outcome"], "ok", "{same}");
+    assert_eq!(same["value"]["changes"], json!([]), "{same}");
+    // With the version it has now, the change lands.
+    let fresh = call(
+        "collection_write",
+        json!({
+            "projectId": "WORK",
+            "collection": "Builds",
+            "expectedVersion": current,
+            "fields": [{"name": "Notes", "type": "text"}],
+            "clientRequestId": "fresh",
+        }),
+    )
+    .await;
+    assert_eq!(fresh["outcome"], "ok", "{fresh}");
+    assert_eq!(
+        fresh["value"]["changes"],
+        json!(["field \"Notes\" added"]),
+        "{fresh}"
+    );
+}
+
 #[tokio::test]
 async fn a_definition_made_from_another_projects_description_comes_out_the_same() {
     let Some(setup) = setup("awd90_definition").await else {

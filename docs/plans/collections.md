@@ -9,11 +9,10 @@ fields, records and saved views, using the same field types as task fields
 `20261111081500_collections.sql`. The `collections` module
 (`modules/collections.json`) switches it on and off per workspace and role.
 
-Slice 1 (this change) is the server: storage, the web app's routes, the five
-agent tools and the server-side query. Slice 2 is the Collections area in
-the web app (an editable table, a record panel with history, cards on a
-phone, live updates). Slice 3 embeds a collection's view in a page as a live
-block in the page editor (AWD-53).
+Slice 1 is the server: storage, the web app's routes, the five agent tools
+and the server-side query. Slice 2 is the Collections area in the web app
+(`apps/web/src/collections/`). Slice 3 embeds a collection's view in a page
+as a live block in the page editor (AWD-53).
 
 ## What a collection is
 
@@ -66,7 +65,10 @@ cursor (the sort values of the last row, with a fingerprint of the query, so
 a cursor only reads back with the query it came from), counts the total, and
 counts each group, without reading every record. Search words must each be
 in the title, a text or web address value, a chosen option's name, or be the
-record's number.
+record's number. Text, titles and names sort by their first 100 characters,
+lowercased (`fields::SORT_PREFIX_CHARACTERS`), so a cursor stays under 8 KB
+however long the values are; records alike that far fall through to the next
+sort key, and last to their ID.
 
 ## Agent tools
 
@@ -76,7 +78,7 @@ Five tools, the same whatever collections a project has:
 | --- | --- |
 | `collection_list` | A project's collections with their record counts. |
 | `collection_describe` | One collection's fields, views and definition: its fields and views by name, in the shape `collection_write` takes, so passing it to `collection_write` in another project makes the same collection there. |
-| `collection_write` | Create a collection with its fields and views in one call, or change one. Fields and views are matched by name (or by `field` and `view` to rename), so writing a definition again changes nothing. Needs `collections.build`. |
+| `collection_write` | Create a collection with its fields and views in one call, or change one. Fields and views are matched by name (or by `field` and `view` to rename), so writing a definition again changes nothing. With `expectedVersion`, a write that would change anything (fields and views included) is a conflict if the collection changed since. Needs `collections.build`. |
 | `record_query` | Records found on the server: filters by field name, search words, sort, group counts, a saved view to start from, named records with their history; a page at a time with `nextCursor`. |
 | `record_write` | Add or change up to 100 records, all or nothing, by number or ID, values by field name. Needs `collections.edit`. |
 
@@ -95,3 +97,23 @@ cursor. Writes take an `Idempotency-Key`.
 Every change sends `collection.updated` with the collection's ID and, for
 record changes, up to 100 record IDs (a larger change names none). Open
 screens refetch what they show.
+
+## In the web app
+
+A project's Collections area (`/projects/{id}/collections`, the layout part
+`area.collections`, one lazy chunk) lists its collections with their record
+counts and makes new ones. A collection opens with its views as tabs, and
+each view is a table edited in place: a click on a value opens the same
+editors tasks use (`fields/FieldEditor.tsx`), a title renames in place, the
+last row adds a record, and each column's menu sorts, filters, groups, hides,
+edits or archives its field. Search, filters, sort, grouping and columns
+change what you see at once; people who build the collection save them into
+the view (Save view), and anyone can put the view back (Reset). A record
+opens in the side panel (`?record=`) with every field, who added and last
+changed it, and its history. On a phone the table becomes cards. Changes
+show at once and save one at a time per record, each against the version the
+last one left (`useRecordEdits.ts`), and until a change saves it shows on top
+of whatever loads meanwhile; `collection.updated` refetches what's open of
+the collection, a moment after a burst of changes
+(`realtime/liveDocuments.ts`). What changes in a view while it saves stays
+on screen, ready to save next.

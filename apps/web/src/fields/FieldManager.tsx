@@ -144,7 +144,25 @@ export function FieldManager({ scope }: { scope: FieldScope }) {
 
 type OptionDraft = OptionInput & { key: string }
 
-function FieldDialog({ field, onClose, scope }: { field: FieldDefinition | null; onClose: () => void; scope: FieldScope }) {
+/**
+ * Adds a field to a scope, or changes one: its name, description and a choice
+ * field's options (a type never changes). Collections (AWD-90) open it from a
+ * table's columns; `records` names what holds the values, for the copy.
+ */
+export function FieldDialog({
+  field,
+  onClose,
+  onSaved,
+  records = 'tasks',
+  scope,
+}: {
+  field: FieldDefinition | null
+  onClose: () => void
+  /** The field as it was saved, before the dialog closes. */
+  onSaved?: (saved: FieldDefinition) => void
+  records?: string
+  scope: FieldScope
+}) {
   const { create, update } = useFieldMutations(scope)
   const [name, setName] = useState(field?.name ?? '')
   const [type, setType] = useState<FieldType>(field?.type ?? 'text')
@@ -162,7 +180,13 @@ function FieldDialog({ field, onClose, scope }: { field: FieldDefinition | null;
     const optionInputs = choices
       ? options.filter((option) => option.name.trim()).map(({ id, name: optionName, color }) => ({ id, name: optionName.trim(), color }))
       : undefined
-    const done = { onSuccess: () => onClose(), onError: (error: unknown) => setProblem(describeError(error).message) }
+    const done = {
+      onSuccess: (saved: FieldDefinition) => {
+        onSaved?.(saved)
+        onClose()
+      },
+      onError: (error: unknown) => setProblem(describeError(error).message),
+    }
     if (field) {
       update.mutate(
         {
@@ -281,7 +305,7 @@ function FieldDialog({ field, onClose, scope }: { field: FieldDefinition | null;
           >
             Add option
           </Button>
-          {field ? <p className="aw-pagesection__desc">A removed option is archived: tasks that have it keep it.</p> : null}
+          {field ? <p className="aw-pagesection__desc">A removed option is archived: {records} that have it keep it.</p> : null}
         </fieldset>
       ) : null}
     </Dialog>

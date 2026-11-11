@@ -29,7 +29,10 @@ pub const MAX_SEARCH_WORDS: usize = 8;
 pub const MAX_SEARCH_CHARACTERS: usize = 200;
 /// Records one query names by number or ID.
 pub const MAX_NAMED_RECORDS: usize = 100;
-const MAX_CURSOR_LENGTH: usize = 2_048;
+/// Room for the longest cursor a query can make: a person grouping and three
+/// text sorts, each cut to `fields::SORT_PREFIX_CHARACTERS`, at the most
+/// bytes a character can take (see the test `the_longest_cursor_fits`).
+const MAX_CURSOR_LENGTH: usize = 8_192;
 
 /// Which records a query sees.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -184,9 +187,14 @@ impl Spec {
         };
         for sort in &sorts {
             match (sort.by, &sort.field) {
-                (SortBy::Title, _) => {
-                    keys.push(Key::new("lower(record.title)", "text", sort.desc));
-                }
+                (SortBy::Title, _) => keys.push(Key::new(
+                    &format!(
+                        "left(lower(record.title), {})",
+                        fields::SORT_PREFIX_CHARACTERS
+                    ),
+                    "text",
+                    sort.desc,
+                )),
                 (SortBy::Number, _) => keys.push(Key::new("record.number", "bigint", sort.desc)),
                 (SortBy::Updated, _) => {
                     keys.push(Key::new("record.updated_at", "timestamptz", sort.desc));
@@ -578,11 +586,91 @@ pub async fn group_counts(
 mod tests {
     use uuid::Uuid;
 
-    use super::{Archived, Spec, decode_cursor, encode_cursor, search_words};
+    use super::{Archived, MAX_CURSOR_LENGTH, Spec, decode_cursor, encode_cursor, search_words};
     use crate::{
         collections::views::{Direction, SortRule, ViewConfig},
-        fields::{FieldConfig, FieldDefinition, FieldType},
+        fields::{FieldConfig, FieldDefinition, FieldType, SORT_PREFIX_CHARACTERS},
     };
+
+    fn field(name: &str, field_type: FieldType) -> FieldDefinition {
+        FieldDefinition {
+            id: Uuid::now_v7(),
+            name: name.to_owned(),
+            description: String::new(),
+            field_type,
+            config: FieldConfig::default(),
+            position: 0,
+            archived: false,
+            version: 1,
+        }
+    }
+
+    /// The most keys a query can sort by, each at its longest: text cut to
+    /// SORT_PREFIX_CHARACTERS of the character JSON spends most bytes on, and
+    /// anything else (numbers, times, IDs) at 40 characters. Its cursor
+    /// still reads back, so paging never stops on a record with long values.
+    #[test]
+    fn the_longest_cursor_fits() {
+        let owner = field("Owner", FieldType::Person);
+        let texts = ["Notes", "Steps", "Link"].map(|name| field(name, FieldType::Text));
+        let mut definitions = vec![owner.clone()];
+        definitions.extend(texts.iter().cloned());
+        let config = ViewConfig {
+            sort: texts
+                .iter()
+                .map(|text| SortRule {
+                    field: text.id.to_string(),
+                    direction: Direction::Asc,
+                })
+                .collect(),
+            group_by: Some(owner.id),
+            ..ViewConfig::default()
+        };
+        let spec = Spec::from_config(&config, &definitions, Uuid::now_v7());
+        let keys = spec.keys();
+        // The person group's three, two for each text sort, then the ID.
+        assert_eq!(keys.len(), 10);
+        let longest = keys
+            .iter()
+            .map(|key| {
+                if key.ty == "text" {
+                    "\u{1}".repeat(SORT_PREFIX_CHARACTERS)
+                } else {
+                    "9".repeat(40)
+                }
+            })
+            .collect::<Vec<_>>();
+        let fingerprint = spec.fingerprint(Uuid::now_v7(), Uuid::now_v7());
+        let cursor = encode_cursor(fingerprint.clone(), longest.clone()).expect("cursor");
+        assert!(
+            cursor.len() <= MAX_CURSOR_LENGTH,
+            "{} characters",
+            cursor.len()
+        );
+        assert_eq!(
+            decode_cursor(&cursor, &fingerprint, keys.len()),
+            Some(longest)
+        );
+        // A title sort is cut the same way.
+        let by_title = Spec::from_config(
+            &ViewConfig {
+                sort: vec![SortRule {
+                    field: "title".to_owned(),
+                    direction: Direction::Desc,
+                }],
+                ..ViewConfig::default()
+            },
+            &definitions,
+            Uuid::now_v7(),
+        );
+        assert!(
+            by_title.keys()[0]
+                .expr
+                .contains(&format!(", {SORT_PREFIX_CHARACTERS})")),
+            "{:?}",
+            by_title.keys()
+        );
+    }
 
     #[test]
     fn searches_are_a_few_words() {

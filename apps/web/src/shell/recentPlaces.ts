@@ -85,6 +85,7 @@ export function placeIcon(path: string): IconName {
   if (/^\/messages\//.test(path)) return 'message'
   if (/\/work-items\/[^/]+/.test(path)) return 'checklist'
   if (/\/pages\//.test(path)) return 'list'
+  if (/\/collections\//.test(path)) return 'table'
   if (/^\/whiteboards\//.test(path)) return 'whiteboard'
   if (/^\/runs\//.test(path)) return 'activity'
   return 'clock'

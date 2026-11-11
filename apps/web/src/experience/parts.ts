@@ -13,6 +13,7 @@ export const PART_IDS = [
   'area.pages',
   'area.decisions',
   'area.whiteboards',
+  'area.collections',
   'area.runs',
   'area.agents',
   'area.automations',

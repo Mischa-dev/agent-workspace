@@ -19,20 +19,17 @@ import {
   showToast,
 } from '../ui'
 import type { SettingsPageProps } from '../settings/types'
+import { THEME_PRESETS, loadClassicThemes, toHex, type Rgb } from './slots'
 import {
   CONTRAST_PAIRS,
   SLOT_GROUPS,
   SLOT_LABELS,
-  THEME_PRESETS,
   ThemeCodeError,
   contrastRatio,
   decodeTheme,
   encodeTheme,
   fixContrast,
-  loadClassicThemes,
-  toHex,
-  type Rgb,
-} from './slots'
+} from './slotEditing'
 import type { AppearancePreferences, ThemeChoice } from './preferences'
 import { useTheme } from './themeContext'
 
