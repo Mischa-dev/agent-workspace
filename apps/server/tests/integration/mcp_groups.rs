@@ -969,4 +969,41 @@ async fn marking_unread_brings_a_conversation_back_and_never_marks_anything_read
         wrong_flag.is_err(),
         "the flag is for one conversation and actor"
     );
+    drop(transaction);
+
+    // "Unread from the newest" means the newest message, even when a system
+    // or worker entry came after it.
+    let group_id = group.parse::<Uuid>().expect("group");
+    let mut transaction = setup.pool.begin().await.expect("transaction");
+    let sequence = sqlx::query_scalar::<_, i64>(
+        "UPDATE conversations SET next_entry_sequence = next_entry_sequence + 1 WHERE id = $1 RETURNING next_entry_sequence - 1",
+    )
+    .bind(group_id)
+    .fetch_one(&mut *transaction)
+    .await
+    .expect("allocate a sequence");
+    assert_eq!(sequence, 4);
+    sqlx::query(
+        "INSERT INTO conversation_entries (id, conversation_id, sequence, kind) VALUES ($1, $2, $3, 'system')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(group_id)
+    .bind(sequence)
+    .execute(&mut *transaction)
+    .await
+    .expect("a system entry after the last message");
+    transaction.commit().await.expect("commit");
+    let read = codex
+        .call(&setup, "mark_read", json!({"conversationId": group}))
+        .await;
+    assert_eq!(read["value"]["lastReadSequence"], 4, "{read}");
+    let unread = codex
+        .call(
+            &setup,
+            "mark_read",
+            json!({"conversationId": group, "unread": true}),
+        )
+        .await;
+    assert_eq!(unread["outcome"], "ok", "{unread}");
+    assert_eq!(unread["value"]["lastReadSequence"], 2, "{unread}");
 }

@@ -169,6 +169,9 @@ struct RunRow {
     approvals_waiting: i64,
     created_at: String,
     updated_at: String,
+    conversation_kind: String,
+    parent_conversation_id: Option<Uuid>,
+    parent_kind: Option<String>,
 }
 
 /// Runs the viewer can see: in a project they can reach, in a thread they can
@@ -189,9 +192,13 @@ const RUN_SELECT: &str = r#"
            pr.state AS pr_state, pr.checks_state AS pr_checks, pr.review_state AS pr_review,
            (SELECT count(*) FROM agent_approvals approval
              WHERE approval.agent_run_id = run.id AND approval.status = 'pending') AS approvals_waiting,
-           run.created_at::text AS created_at, run.updated_at::text AS updated_at
+           run.created_at::text AS created_at, run.updated_at::text AS updated_at,
+           thread.kind AS conversation_kind,
+           thread.parent_channel_id AS parent_conversation_id,
+           parent.kind AS parent_kind
     FROM agent_runs run
     JOIN conversations thread ON thread.id = run.conversation_id
+    LEFT JOIN conversations parent ON parent.id = thread.parent_channel_id
     LEFT JOIN project_memberships starter
       ON starter.project_id = thread.project_id AND starter.actor_id = run.requesting_actor_id
     LEFT JOIN repository_workspaces workspace ON workspace.id = run.repository_workspace_id
@@ -306,12 +313,29 @@ fn run_value(state: &AppState, row: RunRow) -> RunValue {
         poll_after_seconds,
         created_at: row.created_at,
         updated_at: row.updated_at,
-        url: public_url(
-            state,
-            &format!(
-                "/projects/{}/threads/{}",
-                row.project_id, row.conversation_id
-            ),
+        url: public_url(state, &run_conversation_path(&row)),
+    }
+}
+
+/// Where a run's conversation opens: DMs, groups and their threads live under
+/// Messages, everything else under its project.
+fn run_conversation_path(row: &RunRow) -> String {
+    match (
+        row.conversation_kind.as_str(),
+        row.parent_kind.as_deref(),
+        row.parent_conversation_id,
+    ) {
+        ("dm" | "group", _, _) => format!("/messages/{}", row.conversation_id),
+        ("thread", Some("dm" | "group"), Some(parent)) => {
+            format!("/messages/{parent}?thread={}", row.conversation_id)
+        }
+        ("channel", _, _) => format!(
+            "/projects/{}/channels/{}",
+            row.project_id, row.conversation_id
+        ),
+        _ => format!(
+            "/projects/{}/threads/{}",
+            row.project_id, row.conversation_id
         ),
     }
 }
@@ -529,5 +553,65 @@ pub(super) async fn run_list(
             runs: rows.into_iter().map(|row| run_value(state, row)).collect(),
         }),
         Err(error) => ToolResult::from_error(error, "run_list"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(kind: &str, parent: Option<(Uuid, &str)>) -> RunRow {
+        RunRow {
+            id: Uuid::nil(),
+            state: "running".to_owned(),
+            prompt: String::new(),
+            conversation_id: Uuid::from_u128(2),
+            project_id: Uuid::from_u128(1),
+            started_by: String::new(),
+            queue_position: None,
+            branch: None,
+            published: false,
+            failure_reason: None,
+            pull_request_request_state: None,
+            pr_number: None,
+            pr_url: None,
+            pr_title: None,
+            pr_state: None,
+            pr_checks: None,
+            pr_review: None,
+            approvals_waiting: 0,
+            created_at: String::new(),
+            updated_at: String::new(),
+            conversation_kind: kind.to_owned(),
+            parent_conversation_id: parent.map(|(id, _)| id),
+            parent_kind: parent.map(|(_, kind)| kind.to_owned()),
+        }
+    }
+
+    #[test]
+    fn runs_in_messages_link_to_messages() {
+        let project = Uuid::from_u128(1);
+        let conversation = Uuid::from_u128(2);
+        let parent = Uuid::from_u128(3);
+        assert_eq!(
+            run_conversation_path(&row("thread", Some((parent, "channel")))),
+            format!("/projects/{project}/threads/{conversation}")
+        );
+        assert_eq!(
+            run_conversation_path(&row("thread", Some((parent, "dm")))),
+            format!("/messages/{parent}?thread={conversation}")
+        );
+        assert_eq!(
+            run_conversation_path(&row("thread", Some((parent, "group")))),
+            format!("/messages/{parent}?thread={conversation}")
+        );
+        assert_eq!(
+            run_conversation_path(&row("dm", None)),
+            format!("/messages/{conversation}")
+        );
+        assert_eq!(
+            run_conversation_path(&row("channel", None)),
+            format!("/projects/{project}/channels/{conversation}")
+        );
     }
 }

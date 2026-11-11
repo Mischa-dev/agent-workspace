@@ -2864,7 +2864,19 @@ pub(crate) async fn mark_unread_from(
     .await?;
     let highest_sequence = conversation.next_entry_sequence - 1;
     let first_unread = match from {
-        UnreadFrom::Newest => highest_sequence,
+        // The newest message, not the newest entry: a run's or worker's
+        // event after it would otherwise leave every message read.
+        UnreadFrom::Newest => sqlx::query_scalar::<_, Option<i64>>(
+            r#"
+            SELECT max(sequence)
+            FROM conversation_entries
+            WHERE conversation_id = $1 AND message_id IS NOT NULL
+            "#,
+        )
+        .bind(conversation.id)
+        .fetch_one(&mut **transaction)
+        .await?
+        .unwrap_or(0),
         UnreadFrom::Message(message_id) => sqlx::query_scalar::<_, i64>(
             r#"
             SELECT sequence
