@@ -293,9 +293,10 @@ export function useRealtimeConnection(): RealtimeContextValue {
             invalidateAroundWorkItem(envelope.projectId, workItem.workItemId)
             return
           }
-          if (envelope.type === 'whiteboard.updated' || envelope.type === 'page.updated') {
+          if (envelope.type === 'whiteboard.updated' || envelope.type === 'page.updated' || envelope.type === 'collection.updated') {
             // An open board or page fetches what changed itself, and lists
-            // refetch; that code loads with the first such event.
+            // (and a collection's records) refetch; that code loads with the
+            // first such event.
             void import('./liveDocuments')
               .then(({ documentChanged }) => documentChanged(queryClient, envelope))
               .catch(() => undefined)

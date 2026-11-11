@@ -9,11 +9,10 @@ fields, records and saved views, using the same field types as task fields
 `20261111081500_collections.sql`. The `collections` module
 (`modules/collections.json`) switches it on and off per workspace and role.
 
-Slice 1 (this change) is the server: storage, the web app's routes, the five
-agent tools and the server-side query. Slice 2 is the Collections area in
-the web app (an editable table, a record panel with history, cards on a
-phone, live updates). Slice 3 embeds a collection's view in a page as a live
-block in the page editor (AWD-53).
+Slice 1 is the server: storage, the web app's routes, the five agent tools
+and the server-side query. Slice 2 is the Collections area in the web app
+(`apps/web/src/collections/`). Slice 3 embeds a collection's view in a page
+as a live block in the page editor (AWD-53).
 
 ## What a collection is
 
@@ -95,3 +94,21 @@ cursor. Writes take an `Idempotency-Key`.
 Every change sends `collection.updated` with the collection's ID and, for
 record changes, up to 100 record IDs (a larger change names none). Open
 screens refetch what they show.
+
+## In the web app
+
+A project's Collections area (`/projects/{id}/collections`, the layout part
+`area.collections`, one lazy chunk) lists its collections with their record
+counts and makes new ones. A collection opens with its views as tabs, and
+each view is a table edited in place: a click on a value opens the same
+editors tasks use (`fields/FieldEditor.tsx`), a title renames in place, the
+last row adds a record, and each column's menu sorts, filters, groups, hides,
+edits or archives its field. Search, filters, sort, grouping and columns
+change what you see at once; people who build the collection save them into
+the view (Save view), and anyone can put the view back (Reset). A record
+opens in the side panel (`?record=`) with every field, who added and last
+changed it, and its history. On a phone the table becomes cards. Changes
+show at once and save one at a time per record, each against the version the
+last one left (`useRecordEdits.ts`); `collection.updated` refetches what's
+open of the collection, a moment after a burst of changes
+(`realtime/liveDocuments.ts`).

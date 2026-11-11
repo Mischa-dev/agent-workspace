@@ -8,7 +8,8 @@ import {
   resolvePreset,
   writeAppearancePreferences,
 } from './preferences'
-import { decodeTheme, encodeTheme, themeProperties } from './slots'
+import { decodeTheme, encodeTheme } from './slotEditing'
+import { themeProperties } from './slots'
 
 function memoryStorage(initial: Record<string, string> = {}) {
   const values = new Map(Object.entries(initial))

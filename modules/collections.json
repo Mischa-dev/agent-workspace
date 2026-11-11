@@ -24,12 +24,12 @@
   "links": [],
   "embeds": [],
   "slots": {
-    "pages": [],
-    "parts": [],
+    "pages": ["/projects/:projectId/collections/*"],
+    "parts": ["area.collections"],
     "sidebar": [],
     "home": [],
     "settings": [],
-    "palette": [],
+    "palette": ["p:collections"],
     "shortcuts": [],
     "slash": [],
     "setup": []

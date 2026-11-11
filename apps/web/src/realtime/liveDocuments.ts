@@ -3,19 +3,23 @@ import type { QueryClient, QueryKey } from '@tanstack/react-query'
 import { field, uuid, type RealtimeEnvelope } from './realtimeModel'
 
 /**
- * Whiteboards and pages (AWD-53) that changed, from the realtime socket. An
- * open board or page listens for its own id and fetches what changed since
- * its last look; lists, and a page's details and history, refetch through
- * the query cache. The socket loads this with the first such event, so the
- * app shell doesn't carry it.
+ * Whiteboards and pages (AWD-53) and collections (AWD-90) that changed, from
+ * the realtime socket. An open board or page listens for its own id and
+ * fetches what changed since its last look; lists, a page's details and
+ * history, and a collection's records refetch through the query cache. The
+ * socket loads this with the first such event, so the app shell doesn't
+ * carry it.
  */
 export type WhiteboardChange = { whiteboardId: string; sceneSeq: number; version: number }
 export type PageChange = { pageId: string; version: number }
+export type CollectionChange = { collectionId: string }
 
 /** Lists refetch a stroke at a time at most. */
 const BOARD_LIST_DELAY_MS = 40
 /** A page's details and the page list refetch every few seconds at most while someone types. */
 const PAGE_DETAILS_DELAY_MS = 3_000
+/** A collection's open lists refetch once for a burst of changes, such as an agent adding records one by one. */
+const COLLECTION_DELAY_MS = 300
 
 export function whiteboardChange(event: Pick<RealtimeEnvelope, 'type' | 'payload'>): WhiteboardChange | null {
   if (event.type !== 'whiteboard.updated') return null
@@ -34,6 +38,12 @@ export function pageChange(event: Pick<RealtimeEnvelope, 'type' | 'payload'>): P
   const version = event.payload.version
   if (!pageId || !Number.isSafeInteger(version) || (version as number) < 1) return null
   return { pageId, version: version as number }
+}
+
+export function collectionChange(event: Pick<RealtimeEnvelope, 'type' | 'payload'>): CollectionChange | null {
+  if (event.type !== 'collection.updated') return null
+  const collectionId = uuid(field(event.payload, 'collectionId', 'collection_id'))
+  return collectionId ? { collectionId } : null
 }
 
 type Listeners<T> = Map<string, Set<(change: T) => void>>
@@ -93,12 +103,26 @@ const isPageQuery = (projectId: string) => (query: { queryKey: QueryKey }) => {
   return scope === 'project' && id === projectId && area === 'memory' && (kind === 'pages' || kind === 'page')
 }
 
-/** A whiteboard.updated or page.updated event: tells whoever has it open, then refreshes the lists. */
+/**
+ * A whiteboard.updated, page.updated or collection.updated event: tells
+ * whoever has the board or page open, then refreshes the lists. For a
+ * collection, everything open of it refetches (its records, views and fields,
+ * and a record beside them) and so does the project's list of collections,
+ * which counts records.
+ */
 export function documentChanged(queryClient: QueryClient, event: RealtimeEnvelope) {
   const board = whiteboardChange(event)
   if (board) {
     for (const listener of boards.get(board.whiteboardId) ?? []) listener(board)
     later('whiteboards', BOARD_LIST_DELAY_MS, () => void queryClient.invalidateQueries({ queryKey: ['whiteboards'] }))
+    return
+  }
+  const collection = collectionChange(event)
+  if (collection) {
+    later(`collection:${event.projectId}:${collection.collectionId}`, COLLECTION_DELAY_MS, () => {
+      void queryClient.invalidateQueries({ queryKey: ['project', event.projectId, 'collections', collection.collectionId] })
+      void queryClient.invalidateQueries({ queryKey: ['project', event.projectId, 'collections', 'list'] })
+    })
     return
   }
   const page = pageChange(event)

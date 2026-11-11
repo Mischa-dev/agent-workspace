@@ -9,7 +9,7 @@ import { AuthenticatedSessionProvider, clearAuthenticatedQueryCache, type Authen
 import MoveTaskDialog from './MoveTaskDialog'
 import { listMoveDestinations, moveTask, previewMove, type MoveDone, type MovePlan } from './moveApi'
 import { clearPendingMoves } from './moveRecovery'
-import { FieldEditor } from './TaskCustomFields'
+import { FieldEditor } from '../fields/FieldEditor'
 import { clearToasts, useToasts } from '../ui/toastStore'
 
 const { owner, plan, risk } = vi.hoisted(() => {

@@ -183,9 +183,16 @@ describe('layout registry', () => {
       .map((path) => relative(src, path).split('\\').join('/'))
       .sort()
     // Checked above, or outside layouts: Messages (direct conversations)
-    // belongs to no project or workspace layout. A new sidebar or tab bar
-    // takes part in layouts: gate its entries on parts, test it here, and
-    // add it to this list.
-    expect(users).toEqual(['direct/DirectSidebar.tsx', 'shell/HomeSidebar.tsx', 'shell/ProjectSidebar.tsx', 'shell/ProjectTabs.tsx'])
+    // belongs to no project or workspace layout, and a collection's tabs are
+    // its own saved views, made by people, not parts of the app. A new
+    // sidebar or tab bar takes part in layouts: gate its entries on parts,
+    // test it here, and add it to this list.
+    expect(users).toEqual([
+      'collections/CollectionPage.tsx',
+      'direct/DirectSidebar.tsx',
+      'shell/HomeSidebar.tsx',
+      'shell/ProjectSidebar.tsx',
+      'shell/ProjectTabs.tsx',
+    ])
   })
 })
