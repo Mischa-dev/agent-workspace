@@ -564,7 +564,6 @@ pub async fn save(
             let note = note
                 .filter(|note| !note.is_empty())
                 .ok_or(AppError::Validation("note"))?;
-            let remind_at = remind_at.ok_or(AppError::Validation("remindAt"))?;
             let (organization_id, project_id) = if saver.human {
                 let organization_id = crate::notification_settings::home_workspace(
                     &state.pool,
@@ -601,7 +600,7 @@ pub async fn save(
                 project_id,
                 Target::Reminder,
                 Some(&note),
-                Some(remind_at),
+                remind_at,
             )
             .await?
         }

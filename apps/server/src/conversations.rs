@@ -1709,23 +1709,35 @@ pub(crate) async fn append_message_command_with(
     // A forward hashes what it forwards too, so the same key and words for
     // a different message are a mismatch, not a replay of the first.
     // A reply hashes what it replies to the same way.
-    let request_hash = match (extras.forwarded_message_id, extras.reply_to_message_id) {
-        (Some(forwarded), None) => RequestHash::for_value(&serde_json::json!({
+    let request_hash = if let Some(reply) = reply {
+        RequestHash::for_value(&serde_json::json!({
             "content": &content,
             "attachments": attachments,
-            "forwards": forwarded,
-        }))?,
-        (forwarded, Some(replies_to)) => RequestHash::for_value(&serde_json::json!({
-            "content": &content,
-            "attachments": attachments,
-            "forwards": forwarded,
-            "repliesTo": replies_to,
-        }))?,
-        (None, None) if attachments.is_empty() => RequestHash::for_value(&content)?,
-        (None, None) => RequestHash::for_value(&serde_json::json!({
-            "content": &content,
-            "attachments": attachments,
-        }))?,
+            "forwards": extras.forwarded_message_id,
+            "repliesTo": extras.reply_to_message_id,
+            "replyRequest": reply.request_id,
+            "replyGeneration": reply.generation,
+            "finalReply": reply.final_reply,
+        }))?
+    } else {
+        match (extras.forwarded_message_id, extras.reply_to_message_id) {
+            (Some(forwarded), None) => RequestHash::for_value(&serde_json::json!({
+                "content": &content,
+                "attachments": attachments,
+                "forwards": forwarded,
+            }))?,
+            (forwarded, Some(replies_to)) => RequestHash::for_value(&serde_json::json!({
+                "content": &content,
+                "attachments": attachments,
+                "forwards": forwarded,
+                "repliesTo": replies_to,
+            }))?,
+            (None, None) if attachments.is_empty() => RequestHash::for_value(&content)?,
+            (None, None) => RequestHash::for_value(&serde_json::json!({
+                "content": &content,
+                "attachments": attachments,
+            }))?,
+        }
     };
     let scope = idempotency::resource_bound_scope("conversation", conversation_id, "message_send")?;
     let mut transaction = state.pool.begin().await?;
@@ -2852,7 +2864,19 @@ pub(crate) async fn mark_unread_from(
     .await?;
     let highest_sequence = conversation.next_entry_sequence - 1;
     let first_unread = match from {
-        UnreadFrom::Newest => highest_sequence,
+        // The newest message, not the newest entry: a run's or worker's
+        // event after it would otherwise leave every message read.
+        UnreadFrom::Newest => sqlx::query_scalar::<_, Option<i64>>(
+            r#"
+            SELECT max(sequence)
+            FROM conversation_entries
+            WHERE conversation_id = $1 AND message_id IS NOT NULL
+            "#,
+        )
+        .bind(conversation.id)
+        .fetch_one(&mut **transaction)
+        .await?
+        .unwrap_or(0),
         UnreadFrom::Message(message_id) => sqlx::query_scalar::<_, i64>(
             r#"
             SELECT sequence

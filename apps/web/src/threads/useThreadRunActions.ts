@@ -168,7 +168,10 @@ export function useThreadRunActions({
     ) {
       return
     }
-    const firstWorkItem = verifiedTimeline?.linkedWorkItems[0]
+    // Archived tasks stay on the thread as chips, but the server refuses them
+    // on a new pull request, so only active ones go with it.
+    const activeWorkItems = verifiedTimeline?.linkedWorkItems.filter((item) => !item.archivedAt) ?? []
+    const firstWorkItem = activeWorkItems[0]
     const rawTitle = firstWorkItem
       ? firstWorkItem.title
         ? `${firstWorkItem.key}: ${firstWorkItem.title}`
@@ -181,7 +184,7 @@ export function useThreadRunActions({
       threadApi.createPullRequest(projectId, runId, commandKey, {
         title,
         body: 'Created from an explicitly published Agent Workspace run.',
-        workItemIds: verifiedTimeline?.linkedWorkItems.map((item) => item.id) ?? [],
+        workItemIds: activeWorkItems.map((item) => item.id),
       }),
     ).then((succeeded) => {
       if (succeeded) setPullRequestIdempotencyKey(null)

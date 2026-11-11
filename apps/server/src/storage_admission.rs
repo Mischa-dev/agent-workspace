@@ -20,6 +20,17 @@ pub fn inspect(
     quota_bytes: u64,
     minimum_free_bytes: u64,
 ) -> Result<StorageAdmission, AppError> {
+    inspect_with_metadata(data_root, quota_bytes, minimum_free_bytes, |path| {
+        fs::symlink_metadata(path)
+    })
+}
+
+fn inspect_with_metadata(
+    data_root: &Path,
+    quota_bytes: u64,
+    minimum_free_bytes: u64,
+    metadata_for: impl Fn(&Path) -> std::io::Result<fs::Metadata>,
+) -> Result<StorageAdmission, AppError> {
     let data_root = if data_root.is_absolute() {
         data_root.to_path_buf()
     } else {
@@ -38,9 +49,20 @@ pub fn inspect(
                 "storage accounting limit reached",
             ));
         }
-        let metadata = fs::symlink_metadata(&path)
-            .map_err(|_| AppError::Internal("inspect storage admission root"))?;
+        let metadata = match metadata_for(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if path != data_root && error.kind() == std::io::ErrorKind::NotFound => {
+                continue;
+            }
+            Err(_) => return Err(AppError::Internal("inspect storage admission root")),
+        };
         if metadata.file_type().is_symlink() {
+            if path == data_root {
+                return Err(AppError::Conflict(
+                    "storage",
+                    "storage root must not be a symlink",
+                ));
+            }
             // Provider profiles and project-local tool caches may contain
             // symlinks. Admission must never traverse them, but their mere
             // presence cannot block every unrelated disk-growing operation.
@@ -49,8 +71,13 @@ pub fn inspect(
             continue;
         }
         if metadata.is_dir() {
-            let children = fs::read_dir(&path)
-                .map_err(|_| AppError::Internal("read storage admission root"))?;
+            let children = match fs::read_dir(&path) {
+                Ok(children) => children,
+                Err(error) if path != data_root && error.kind() == std::io::ErrorKind::NotFound => {
+                    continue;
+                }
+                Err(_) => return Err(AppError::Internal("read storage admission root")),
+            };
             for child in children {
                 let child = child
                     .map_err(|_| AppError::Internal("read storage admission entry"))?
@@ -132,5 +159,47 @@ mod tests {
             .saturating_mul(512);
         assert_eq!(report.allocated_bytes, inside_blocks);
         assert!(report.admitted);
+    }
+
+    #[test]
+    fn a_symlinked_root_cannot_hide_its_usage() {
+        let directory = TempDir::new().expect("directory");
+        let data = directory.path().join("data");
+        fs::create_dir(&data).expect("data");
+        fs::write(data.join("artifact"), vec![0_u8; 8192]).expect("artifact");
+        let linked = directory.path().join("linked");
+        symlink(&data, &linked).expect("root symlink");
+        assert!(
+            inspect(&linked, 1, 0).is_err(),
+            "a symlink must not report zero usage"
+        );
+    }
+
+    #[test]
+    fn a_child_removed_during_the_walk_does_not_block_admission() {
+        for remove_after_metadata in [false, true] {
+            let root = TempDir::new().expect("root");
+            let child = root.path().join("removed");
+            fs::create_dir(&child).expect("child");
+            fs::write(child.join("artifact"), b"gone").expect("artifact");
+            let report = inspect_with_metadata(root.path(), u64::MAX, 0, |path| {
+                if path == child {
+                    let metadata = remove_after_metadata.then(|| fs::symlink_metadata(path));
+                    fs::remove_dir_all(path).expect("concurrent removal");
+                    return metadata.unwrap_or_else(|| fs::symlink_metadata(path));
+                }
+                fs::symlink_metadata(path)
+            })
+            .expect("a removed descendant is no longer using space");
+            assert!(report.admitted);
+            assert_eq!(report.allocated_bytes, 0);
+        }
+        let missing = TempDir::new().expect("root");
+        let path = missing.path().to_owned();
+        missing.close().expect("remove root");
+        assert!(
+            inspect(&path, u64::MAX, 0).is_err(),
+            "a missing root still fails"
+        );
     }
 }

@@ -204,7 +204,7 @@ export function ChannelPage() {
     canPost,
     conversationId: channelId,
     kind: 'channel',
-    latestMessageId: entries.at(-1)?.message?.id,
+    latestMessageId: [...entries].reverse().find((entry) => entry.message)?.message?.id,
     projectId,
   })
 
