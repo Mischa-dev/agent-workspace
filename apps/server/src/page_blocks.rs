@@ -13,7 +13,8 @@
 //! - **The blocks the web app draws.** They're found with the top-level
 //!   rules of the web's own Markdown parser (`apps/web/src/ui/markdown/
 //!   parse.ts`): heading, paragraph, code, quote, list, rule (`hr`), table,
-//!   and the source past the parser's limit (`overflow`). It isn't a
+//!   an embed (a line that is only `[label](/path "embed")`), and the source
+//!   past the parser's limit (`overflow`). It isn't a
 //!   CommonMark parser, and it looks only at the top level: a list's items
 //!   and a quote's contents stay inside their block. `blockParity.json`, next
 //!   to parse.ts, holds the cases both parsers are tested against. Where
@@ -66,6 +67,9 @@ pub enum BlockKind {
         columns: usize,
         rows: usize,
     },
+    /// Something of the app's shown live in the page, such as a
+    /// collection's view: see [`embed_of`].
+    Embed,
     /// The body past [`PARSE_LIMIT`], which the web shows as plain text.
     Overflow {
         limit_inside_character: bool,
@@ -231,7 +235,11 @@ fn top_level_blocks(source: &str) -> Vec<Block> {
             while i < lines.len() && !is_blank(lines[i].text) && !starts_block(lines[i].text) {
                 i += 1;
             }
-            BlockKind::Paragraph
+            if i == from + 1 && embed_of(line).is_some() {
+                BlockKind::Embed
+            } else {
+                BlockKind::Paragraph
+            }
         };
         // A block runs from its first line to its last non-blank one.
         let mut last = i - 1;
@@ -245,6 +253,45 @@ fn top_level_blocks(source: &str) -> Vec<Block> {
         });
     }
     blocks
+}
+
+/// `embedOf`: the `(href, label)` of a top-level paragraph that is one line
+/// of only `[label](/path "embed")`, which the web shows live in the page
+/// (`/^\[((?:[^\\[\]]|\\.)*)\]\((\S+) "embed"\)$/` once spaces and tabs
+/// are trimmed). The path must stay inside the app, as `safeHref` allows it;
+/// a backslash escapes the label's next character.
+pub(crate) fn embed_of(line: &str) -> Option<(String, String)> {
+    let rest = line.trim_matches([' ', '\t']).strip_prefix('[')?;
+    let mut label = String::new();
+    let mut characters = rest.char_indices();
+    let close = loop {
+        match characters.next()? {
+            // `.` doesn't take a line terminator.
+            (_, '\\') => match characters.next()? {
+                (_, '\u{2028}' | '\u{2029}') => return None,
+                (_, escaped) => label.push(escaped),
+            },
+            (_, '[') => return None,
+            (at, ']') => break at,
+            (_, other) => label.push(other),
+        }
+    };
+    let destination = rest[close + 1..]
+        .strip_prefix('(')?
+        .strip_suffix(" \"embed\")")?;
+    Some((embed_href(destination)?, label))
+}
+
+/// The path an embed shows, when `href` can be one: a same-origin path that
+/// `safeHref` allows, without whitespace (which its Markdown can't hold).
+pub(crate) fn embed_href(href: &str) -> Option<String> {
+    if href.is_empty() || href.chars().any(is_js_space) {
+        return None;
+    }
+    match crate::page_docs::markdown::safe_href(href)? {
+        (href, false) => Some(href),
+        (_, true) => None,
+    }
 }
 
 /// ECMAScript's WhiteSpace and LineTerminator characters: what JavaScript's
@@ -676,6 +723,7 @@ mod tests {
             BlockKind::Table { columns, rows } => {
                 json!({"type": "table", "columns": columns, "rows": rows})
             }
+            BlockKind::Embed => json!({"type": "embed"}),
             BlockKind::Overflow { .. } => json!({"type": "overflow"}),
         }
     }

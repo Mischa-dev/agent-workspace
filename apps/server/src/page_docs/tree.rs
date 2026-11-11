@@ -1,7 +1,8 @@
 //! A page as a document tree: the blocks and marks the web editor's schema
 //! holds (Tiptap's names: paragraph, heading, codeBlock, blockquote,
-//! bulletList, orderedList, listItem, horizontalRule, table; bold, italic,
-//! strike, code, link), with the lasting `id` each top-level block carries.
+//! bulletList, orderedList, listItem, horizontalRule, table, embed; bold,
+//! italic, strike, code, link), with the lasting `id` each top-level block
+//! carries.
 //!
 //! [`from_markdown`] builds a tree from Markdown exactly as the web draws it
 //! (through [`super::markdown`]), and [`canon_blocks`] puts a tree in the
@@ -90,6 +91,14 @@ pub enum Node {
     HorizontalRule,
     /// Rows of cells; Markdown's tables have the header first.
     Table(Vec<Vec<Cell>>),
+    /// Something of the app's shown live in the page, such as a
+    /// collection's view: a same-origin path, and a label for while it loads
+    /// and wherever it can't show. Only ever a top-level block, as its
+    /// Markdown (`[label](/path "embed")`) is.
+    Embed {
+        href: String,
+        label: String,
+    },
 }
 
 impl Node {
@@ -104,6 +113,7 @@ impl Node {
             Self::OrderedList { .. } => "orderedList",
             Self::HorizontalRule => "horizontalRule",
             Self::Table(_) => "table",
+            Self::Embed { .. } => "embed",
         }
     }
 }
@@ -231,6 +241,10 @@ fn convert_block(block: &markdown::Block, out: &mut Vec<Block>) {
             }
             Node::Table(table)
         }
+        markdown::Block::Embed { href, label } => Node::Embed {
+            href: href.clone(),
+            label: label.clone(),
+        },
         // The text past the web's parsing limit, which it shows as it is:
         // paragraphs of plain lines.
         markdown::Block::Overflow { value } => {
@@ -380,6 +394,14 @@ fn canon_blocks_in(blocks: &[Block], in_list: bool) -> Vec<Block> {
             Node::Table(rows) => match canon_table(rows) {
                 Some(rows) => Node::Table(rows),
                 None => continue,
+            },
+            // A label is one line of text.
+            Node::Embed { href, label } => Node::Embed {
+                href: href.clone(),
+                label: label
+                    .replace("\r\n", " ")
+                    .replace(['\r', '\n'], " ")
+                    .replace('\0', "\u{fffd}"),
             },
         };
         out.push(Block {

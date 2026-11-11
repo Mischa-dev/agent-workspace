@@ -53,6 +53,10 @@ const SAMPLES: &[(&str, &str)] = &[
         "blocks in items",
         "- first\n\n  second paragraph\n\n  ```\n  code in an item\n  ```\n- > a quote in an item\n-\n",
     ),
+    (
+        "embeds",
+        "What players said:\n\n[Playtest feedback](/projects/p/collections/c?view=v \"embed\")\n\n[A \\[draft\\] view](/projects/p/collections/c \"embed\")\n",
+    ),
 ];
 
 /// A sample's document as the server makes it, with its blocks' ids fixed.

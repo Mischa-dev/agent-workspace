@@ -117,3 +117,46 @@ of whatever loads meanwhile; `collection.updated` refetches what's open of
 the collection, a moment after a burst of changes
 (`realtime/liveDocuments.ts`). What changes in a view while it saves stays
 on screen, ready to save next.
+
+## In a page
+
+A page can show a collection's view live (slice 3), as an embed block. In a
+page's Markdown an embed is a line of its own, at the top level, holding
+only a link with the title `embed`:
+
+```markdown
+[Playtest feedback · Open](/projects/{projectId}/collections/{collectionId}?view={viewId} "embed")
+```
+
+The path must stay inside the app (no scheme, no host, no spaces), and a
+backslash goes before each backslash or bracket in the label. Anything that
+doesn't know embeds still reads the line as a link. The web app
+(`ui/markdown/parse.ts`, `embedOf`) and the server (`page_blocks.rs`,
+`embed_of`) read it the same way, and the shared fixtures check it
+(`parseParity.json`, `blockParity.json`, `pageDocuments.json`,
+`pageEdits.json`). In the page's live document an embed is an `embed`
+element with `href` and `label` and no content. The server refuses one
+inside another block, one with content, and one whose path leaves the app
+(`page_docs/ydoc.rs`).
+
+- **Read**: `memory/embeds/PageEmbed.tsx` draws a collection's path as
+  `collections/CollectionEmbed.tsx` (its own chunk). That shows the view's
+  first 8 records with the title and up to 4 of the view's columns, the
+  count, and a link to the rest; a record opens in the collection. Any
+  other path shows as a link.
+- **Write**: in the editor an embed is an atom node (`memory/live/schema.ts`)
+  that can be selected, moved and deleted. Its view keeps one element per
+  embed in `memory/live/embeds.ts`, and the page draws `PageEmbed` into each
+  through a portal, so embeds share the app's data and routing. The toolbar's
+  Collection view button (shown with the `area.collections` layout part)
+  opens `collections/CollectionEmbedPicker.tsx`, which picks a collection
+  and a view and adds the embed after the block holding the cursor, or in
+  place of an empty paragraph.
+- **Access**: the page keeps only the path and the label. An embed loads as
+  whoever reads the page, so someone who can't see the collection gets "isn't
+  here, or you can't see it" and never its records.
+- **Live**: `collection.updated` refetches an embed like any open view, so a
+  record an agent adds shows without a reload.
+- **Agents**: `page_blocks` lists an embed as a block of type `embed`, and
+  `page_write` or `page_edit` adds one from the line above.
+  `collection_describe` says how.

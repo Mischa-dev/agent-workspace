@@ -162,7 +162,12 @@ fn random_items(random: &mut Random, depth: usize, checks: bool) -> Vec<Item> {
 }
 
 fn random_node(random: &mut Random, depth: usize) -> Node {
-    let kinds = if depth >= 3 { 4 } else { 9 };
+    // Embeds only at the top level, as their Markdown can say them.
+    let kinds = match depth {
+        0 => 10,
+        1 | 2 => 9,
+        _ => 4,
+    };
     match random.below(kinds) {
         0 | 1 => Node::Paragraph(random_inline(random, true)),
         2 => Node::Heading {
@@ -199,6 +204,17 @@ fn random_node(random: &mut Random, depth: usize) -> Node {
             items: random_items(random, depth, false),
         },
         7 => Node::HorizontalRule,
+        9 => Node::Embed {
+            href: (*random.pick(&[
+                "/projects/p/collections/c?view=v",
+                "/x",
+                "/a(b)c",
+                "/q?x=\"embed\")",
+            ]))
+            .to_owned(),
+            label: (*random.pick(&["Feedback", "", "a [b] \\ c]", "  spaced  ", "two\nlines"]))
+                .to_owned(),
+        },
         _ => {
             let columns = 1 + random.below(3);
             let rows = 1 + random.below(3);

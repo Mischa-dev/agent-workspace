@@ -2,7 +2,7 @@ import { Fragment, useMemo, type ReactNode } from 'react'
 import { Link, useInRouterContext } from 'react-router-dom'
 
 import { CodeBlock } from './CodeBlock'
-import { parseMarkdown, safeHref, type Block, type Inline } from './parse'
+import { parseMarkdown, safeHref, type Block, type Embed, type Inline } from './parse'
 
 export type MarkdownProps = {
   /** The Markdown source. Raw HTML in it is shown as text. */
@@ -21,6 +21,8 @@ export type MarkdownProps = {
    */
   renderText?: (value: string) => ReactNode
   codeText?: (value: string) => string
+  /** Draws an embed, such as a collection's view in a page; without it, an embed is a link. */
+  renderEmbed?: (embed: Embed) => ReactNode
 }
 
 const defaultTaskHref = (key: string) => `/${key}`
@@ -30,17 +32,18 @@ type RenderContext = {
   router: boolean
   renderText?: (value: string) => ReactNode
   codeText: (value: string) => string
+  renderEmbed?: (embed: Embed) => ReactNode
 }
 
 const asIs = (value: string) => value
 
 /** Renders Markdown as React elements; never as HTML. */
-export function Markdown({ className, codeText = asIs, empty = null, renderText, source, taskHref = defaultTaskHref }: MarkdownProps) {
+export function Markdown({ className, codeText = asIs, empty = null, renderEmbed, renderText, source, taskHref = defaultTaskHref }: MarkdownProps) {
   const router = useInRouterContext()
   const blocks = useMemo(() => parseMarkdown(source), [source])
   const classes = ['aw-md', className].filter(Boolean).join(' ')
   if (!source.trim()) return empty == null ? null : <div className={classes}>{empty}</div>
-  return <div className={classes}>{renderBlocks(blocks, { taskHref, router, renderText, codeText })}</div>
+  return <div className={classes}>{renderBlocks(blocks, { taskHref, router, renderText, codeText, renderEmbed })}</div>
 }
 
 function renderBlocks(blocks: Block[], context: RenderContext): ReactNode[] {
@@ -61,6 +64,12 @@ function renderBlock(block: Block, key: number, context: RenderContext): ReactNo
       return <blockquote key={key}>{renderBlocks(block.children, context)}</blockquote>
     case 'hr':
       return <hr key={key} />
+    case 'embed':
+      return context.renderEmbed ? (
+        <Fragment key={key}>{context.renderEmbed(block)}</Fragment>
+      ) : (
+        <p key={key}>{renderLink(block.href, false, block.label || block.href, key, context)}</p>
+      )
     case 'overflow':
       return (
         <p className="aw-md__overflow" key={key}>

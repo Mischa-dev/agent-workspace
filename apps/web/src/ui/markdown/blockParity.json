@@ -234,6 +234,18 @@
       "name": "a two-unit character across the limit",
       "generate": { "repeat": "a", "count": 99999, "then": "😀tail" },
       "blocks": [{ "type": "paragraph" }, { "type": "overflow" }]
+    },
+    {
+      "name": "an embed is a top-level line of only a titled link inside the app",
+      "markdown": "[Feedback](/projects/p/collections/c?view=v \"embed\")\n\n  [A \\[b\\]](/x \"embed\")\t\n\n- [a](/x \"embed\")\n\n[b](https://example.com \"embed\")\n\n[c](/x \"embed\")\nmore\n\n[d](/x \"embed\") more",
+      "blocks": [
+        { "type": "embed" },
+        { "type": "embed" },
+        { "type": "list", "ordered": false, "start": 1, "items": 1, "tasks": 0 },
+        { "type": "paragraph" },
+        { "type": "paragraph" },
+        { "type": "paragraph" }
+      ]
     }
   ]
 }

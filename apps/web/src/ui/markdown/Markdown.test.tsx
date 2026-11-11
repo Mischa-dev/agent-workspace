@@ -14,6 +14,19 @@ function renderMarkdown(source: string, taskHref?: (key: string) => string | nul
 }
 
 describe('Markdown', () => {
+  it('shows an embed as a link, or as whatever draws it', () => {
+    const source = 'Feedback:\n\n[Playtest feedback](/projects/p/collections/c "embed")'
+    const { container, rerender } = renderMarkdown(source)
+    expect(screen.getByRole('link', { name: 'Playtest feedback' })).toHaveAttribute('href', '/projects/p/collections/c')
+    rerender(
+      <MemoryRouter>
+        <Markdown renderEmbed={(embed) => <figure data-href={embed.href}>{embed.label}</figure>} source={source} />
+      </MemoryRouter>,
+    )
+    expect(container.querySelector('figure')).toHaveAttribute('data-href', '/projects/p/collections/c')
+    expect(screen.queryByRole('link')).toBeNull()
+  })
+
   it('shows raw HTML as text and never creates elements from it', () => {
     const { container } = renderMarkdown('<script>alert(1)</script>\n\n<img src=x onerror=alert(1)> **bold**')
     expect(container.querySelector('script')).toBeNull()

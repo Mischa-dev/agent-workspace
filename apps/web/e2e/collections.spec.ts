@@ -7,9 +7,11 @@ import { screenshotDir, seededValue, storageStatePath } from './environment'
 // Collections (AWD-90): a project's own kinds of records. One is made through
 // the API, then used the way a person would: a value changed in the table, a
 // record added from its last row, a filter saved into the view, and a record
-// opened beside the table with its history. Then the list, the table and a
-// record at a desktop and a phone width, in light and dark; the PNGs land in
-// e2e-output/screenshots, and no page may scroll sideways.
+// opened beside the table with its history. A page then shows the collection
+// live, as an embed an agent wrote and one added from the editor's toolbar.
+// Then the list, the table, a record and the page at a desktop and a phone
+// width, in light and dark; the PNGs land in e2e-output/screenshots, and no
+// page may scroll sideways.
 
 test.use({ storageState: storageStatePath })
 
@@ -59,6 +61,22 @@ async function seed(context: BrowserContext, page: Page) {
     expect(made.ok(), await made.text()).toBe(true)
   }
   return { projectId, collectionId }
+}
+
+const NOTES = 'Playtest notes'
+
+/** A page that shows the collection as an embed, the way an agent writes one; made once. */
+async function notesPage(context: BrowserContext, page: Page, projectId: string, collectionId: string) {
+  const { request, headers } = await writer(context, page)
+  const listed = (await (await request.get(`/api/v1/projects/${projectId}/pages`)).json()) as { pages: Array<{ id: string; title: string }> }
+  const found = listed.pages.find((entry) => entry.title === NOTES)
+  if (found) return found.id
+  const created = await request.post(`/api/v1/projects/${projectId}/pages`, {
+    headers: headers('page-playtest-notes'),
+    data: { title: NOTES, body: `What players said after 0.4.2:\n\n[${NAME}](/projects/${projectId}/collections/${collectionId} "embed")\n\nWe fix the high ones first.\n` },
+  })
+  expect(created.ok(), await created.text()).toBe(true)
+  return ((await created.json()) as { id: string }).id
 }
 
 test('a collection edited in place, filtered into its view, and a record with its history', async ({ page, context }) => {
@@ -113,6 +131,56 @@ test('a collection edited in place, filtered into its view, and a record with it
   expect(errors, 'uncaught errors on the page').toEqual([])
 })
 
+test('a page shows the collection live, and the editor adds another view of it', async ({ page, context }) => {
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  await page.setViewportSize({ width: 1440, height: 900 })
+  const { projectId, collectionId } = await seed(context, page)
+  const pageId = await notesPage(context, page, projectId, collectionId)
+  const { request, headers } = await writer(context, page)
+
+  await page.goto(`/projects/${projectId}/pages/${pageId}`)
+  const doc = page.locator('.aw-live__doc')
+  const embed = doc.locator('.aw-cembed').first()
+  await expect(embed.getByRole('link', { name: NAME })).toBeVisible()
+  await expect(embed.getByRole('link', { name: 'Menu music loops too soon' })).toBeVisible()
+  await expect(doc).toContainText('We fix the high ones first.')
+
+  // A record an agent adds shows up in the open page.
+  const added = await request.post(`/api/v1/projects/${projectId}/collections/${collectionId}/records`, {
+    headers: headers(`collection-record-live-${Date.now()}`),
+    data: { title: `Checkpoint before the bridge ${Date.now()}`, values: { Severity: 'Medium' } },
+  })
+  expect(added.ok(), await added.text()).toBe(true)
+  const title = ((await added.json()) as { record: { title: string } }).record.title
+  await expect(embed.getByText(title)).toBeVisible()
+
+  // The toolbar adds another view of it below the first paragraph.
+  await doc.getByText('What players said after 0.4.2:').click()
+  await page.keyboard.press('End')
+  await page.getByRole('toolbar', { name: 'Formatting' }).getByRole('button', { name: 'Collection view' }).click()
+  const picker = page.getByRole('form', { name: 'Add a collection view' })
+  await picker.getByLabel('Collection').selectOption({ label: NAME })
+  await picker.getByRole('button', { name: 'Add to page' }).click()
+  await expect(doc.locator('.aw-cembed')).toHaveCount(2)
+  await expect(page.locator('.aw-live__save')).toHaveText('Saved')
+  const saved = (await (await request.get(`/api/v1/pages/${pageId}`)).json()) as { body: string }
+  expect(saved.body.match(/ "embed"\)/g)).toHaveLength(2)
+  await page.screenshot({ path: path.join(screenshotDir, 'collections-embed-desktop.png'), animations: 'disabled' })
+
+  // Put the page back as the agent wrote it, for the screenshots after this.
+  const current = (await (await request.get(`/api/v1/pages/${pageId}`)).json()) as { version: number }
+  const restored = await request.patch(`/api/v1/pages/${pageId}`, {
+    headers: headers(`page-playtest-notes-restore-${Date.now()}`),
+    data: {
+      expectedVersion: current.version,
+      body: `What players said after 0.4.2:\n\n[${NAME}](/projects/${projectId}/collections/${collectionId} "embed")\n\nWe fix the high ones first.\n`,
+    },
+  })
+  expect(restored.ok(), await restored.text()).toBe(true)
+  expect(errors, 'uncaught errors on the page').toEqual([])
+})
+
 const schemes = [
   { scheme: 'light', theme: 'daylight' },
   { scheme: 'dark', theme: 'midnight' },
@@ -143,6 +211,7 @@ for (const { scheme, theme } of schemes) {
         const { projectId, collectionId } = await seed(context, page)
         const records = await (await page.request.get(`/api/v1/projects/${projectId}/collections/${collectionId}/records?search=floaty`)).json()
         const recordId = (records as { records: Array<{ id: string }> }).records[0].id
+        const pageId = await notesPage(context, page, projectId, collectionId)
         const shots = [
           { name: 'list', path: `/projects/${projectId}/collections`, ready: () => expect(page.getByRole('link', { name: NAME })).toBeVisible() },
           {
@@ -154,6 +223,11 @@ for (const { scheme, theme } of schemes) {
             name: 'record',
             path: `/projects/${projectId}/collections/${collectionId}?record=${recordId}`,
             ready: () => expect(page.getByRole('heading', { name: 'History' })).toBeVisible(),
+          },
+          {
+            name: 'page',
+            path: `/projects/${projectId}/pages/${pageId}`,
+            ready: () => expect(page.locator('.aw-cembed').getByRole('link', { name: 'Menu music loops too soon' })).toBeVisible(),
           },
         ]
         for (const shot of shots) {

@@ -29,6 +29,13 @@ export type Block =
   | { type: 'list'; ordered: boolean; start: number; items: ListItem[] }
   | { type: 'hr' }
   | { type: 'table'; align: Align[]; head: Inline[][]; rows: Inline[][][] }
+  /**
+   * Something of the app's shown live in a page, such as a collection's view:
+   * a top-level paragraph that is only `[label](/path "embed")`, where the
+   * path stays inside the app. The label names it while it loads, and for
+   * anywhere that can't show it.
+   */
+  | { type: 'embed'; href: string; label: string }
   /** Source past the parsing limit, shown as it is. */
   | { type: 'overflow'; value: string }
 
@@ -202,9 +209,31 @@ function parseBlocks(lines: string[], depth: number, options: ParseOptions): Blo
       paragraph.push(lines[i])
       i += 1
     }
-    blocks.push({ type: 'paragraph', children: parseInline(paragraph.map((part) => part.replace(/^[ \t]+/, '')).join('\n'), options) })
+    const embed = depth === 0 && paragraph.length === 1 ? embedOf(line) : null
+    blocks.push(embed ?? { type: 'paragraph', children: parseInline(paragraph.map((part) => part.replace(/^[ \t]+/, '')).join('\n'), options) })
   }
   return blocks
+}
+
+const EMBED = /^\[((?:[^\\[\]]|\\.)*)\]\((\S+) "embed"\)$/
+
+export type Embed = Extract<Block, { type: 'embed' }>
+
+/**
+ * The embed a line asks for when it's only `[label](/path "embed")`: the path
+ * must stay inside the app, and a backslash escapes the next character of the
+ * label.
+ */
+export function embedOf(line: string): Embed | null {
+  const match = EMBED.exec(line.replace(/^[ \t]+|[ \t]+$/g, ''))
+  const href = match ? embedHref(match[2]) : null
+  return match && href ? { type: 'embed', href, label: match[1].replace(/\\(.)/g, '$1') } : null
+}
+
+/** The path an embed shows, when `raw` can be one: a path inside the app (one leading `/`, as safeHref allows it) without whitespace. */
+export function embedHref(raw: string): string | null {
+  const href = /^\S+$/.test(raw) ? safeHref(raw) : null
+  return href && !href.external ? href.href : null
 }
 
 function parseList(lines: string[], from: number, depth: number, options: ParseOptions) {

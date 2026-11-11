@@ -630,7 +630,9 @@ pub(super) struct BlockLine {
     pub id: String,
     /// Where the block is in this version.
     pub position: usize,
-    /// heading, paragraph, code, quote, list, hr, or table.
+    /// heading, paragraph, code, quote, list, hr, table, or embed (a line
+    /// `[label](/path "embed")` that shows something of the app live, such
+    /// as a collection's view).
     #[serde(rename = "type")]
     pub kind: String,
     /// A heading's level.
@@ -751,6 +753,7 @@ fn block_type(node: &Node) -> &'static str {
         Node::BulletList(_) | Node::OrderedList { .. } => "list",
         Node::HorizontalRule => "hr",
         Node::Table(_) => "table",
+        Node::Embed { .. } => "embed",
     }
 }
 
