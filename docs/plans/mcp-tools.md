@@ -133,6 +133,8 @@ limited by their role in the project.
 |---|---|---|
 | `search` | ✓ | |
 | `page_list`, `page_get`, `page_write` | ✓ | |
+| `page_blocks` | + | A page's outline and blocks (position, type, hash) for one version; a section or block range exactly as stored (AWD-53). |
+| `page_edit` | + | Replace, insert, delete or append blocks by position and hash against `expectedVersion`; everything else stays byte for byte (AWD-53). |
 | `decision_record` | ✓ | |
 | `decision_list` | + | Decisions in a project, with `includeSuperseded`. |
 | `decision_update` | + | Edit the detail, supersede with an existing decision, or withdraw. |

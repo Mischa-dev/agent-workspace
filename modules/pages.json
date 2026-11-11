@@ -11,7 +11,9 @@
   "tools": {
     "page_list": "query",
     "page_get": "describe",
+    "page_blocks": "describe",
     "page_write": "change",
+    "page_edit": "change",
     "skill_list": "query",
     "skill_get": "describe",
     "decision_list": "query",

@@ -3280,6 +3280,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "my_permissions",
     "my_work",
     "notification_list",
+    "page_blocks",
     "page_get",
     "page_list",
     "people_search",
@@ -3648,6 +3649,18 @@ fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![
                 json!({"pageId": b.page}),
                 json!({"pageId": b.page, "version": 1}),
+            ],
+            vec![],
+        ),
+        case(
+            "page_blocks",
+            vec![
+                json!({"pageId": a.page}),
+                json!({"pageId": a.page, "includeMarkdown": true}),
+            ],
+            vec![
+                json!({"pageId": b.page}),
+                json!({"pageId": b.page, "includeMarkdown": true}),
             ],
             vec![],
         ),
