@@ -1069,7 +1069,13 @@ async fn project_reference(
     .bind(reference.trim())
     .fetch_all(&state.pool)
     .await?;
-    Ok(matches.first().copied())
+    // Keys are organization-scoped: when two of the caller's organizations
+    // use the same key, refuse to guess — archiving the wrong project is
+    // destructive. Mirrors project_by_key in mcp.rs.
+    match matches.as_slice() {
+        [project_id] => Ok(Some(*project_id)),
+        _ => Ok(None),
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -713,9 +713,13 @@ struct ReplyRequestRow {
 
 /// Recent requests for a conversation's timeline, newest first. A thread also
 /// shows the channel tags answered in it.
+/// The reply requests a conversation's timeline shows. The viewer's
+/// visibility is checked in these same queries, not only before them, so a
+/// reader removed from a private conversation in between sees nothing.
 pub(crate) async fn timeline_requests(
     pool: &PgPool,
     conversation_id: Uuid,
+    viewer_actor_id: Uuid,
 ) -> Result<(Vec<ReplyRequestView>, i32), AppError> {
     let rows = sqlx::query_as::<_, ReplyRequestRow>(
         r#"
@@ -743,19 +747,23 @@ pub(crate) async fn timeline_requests(
          AND membership.actor_id = request.agent_actor_id
         WHERE (request.conversation_id = $1 OR request.thread_id = $1)
           AND request.status <> 'superseded'
+          AND conversation_visible_to($1, $2)
         ORDER BY request.created_at DESC, request.id
         LIMIT 60
         "#,
     )
     .bind(conversation_id)
+    .bind(viewer_actor_id)
     .fetch_all(pool)
     .await?;
     let remaining = sqlx::query_scalar::<_, i32>(
-        "SELECT agent_turns_remaining FROM conversations WHERE id = $1",
+        "SELECT agent_turns_remaining FROM conversations WHERE id = $1 AND conversation_visible_to(id, $2)",
     )
     .bind(conversation_id)
-    .fetch_one(pool)
-    .await?;
+    .bind(viewer_actor_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or(AppError::NotFound("conversation"))?;
     let views = rows
         .into_iter()
         .map(|row| ReplyRequestView {
@@ -1610,10 +1618,14 @@ pub(crate) async fn webhook_client(
     let port = url
         .port_or_known_default()
         .ok_or("the webhook URL is unsafe")?;
-    let addresses = tokio::net::lookup_host((host.as_str(), port))
-        .await
-        .map_err(|_| "the webhook host could not be resolved")?
-        .collect::<Vec<_>>();
+    let addresses = tokio::time::timeout(
+        WEBHOOK_TIMEOUT,
+        tokio::net::lookup_host((host.as_str(), port)),
+    )
+    .await
+    .map_err(|_| "the webhook host could not be resolved")?
+    .map_err(|_| "the webhook host could not be resolved")?
+    .collect::<Vec<_>>();
     if addresses.is_empty()
         || !trusted
             && addresses.iter().any(|address| match address.ip() {

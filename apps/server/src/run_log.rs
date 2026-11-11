@@ -125,7 +125,8 @@ pub fn redact(text: &str) -> String {
             if index < characters.len() && characters[index].0 != offset {
                 continue;
             }
-            // `token=…`, `"password": "…"`, `API_KEY: …`.
+            // `token=…`, `"password": "…"`, `API_KEY: …`, and on a command
+            // line `--token …` and `PASSWORD='with spaces'`.
             let lower = rest
                 .chars()
                 .take(32)
@@ -138,10 +139,20 @@ pub fn redact(text: &str) -> String {
                     .chars()
                     .take_while(|c| matches!(c, '"' | '\'' | ' ' | ':' | '='))
                     .collect::<String>();
-                if separator.contains(['=', ':']) {
+                // A flag (`--token abc`) takes its value after a space.
+                let flag_value = key.starts_with('-')
+                    && separator.starts_with(' ')
+                    && !separator.contains(['=', ':']);
+                if separator.contains(['=', ':']) || flag_value {
+                    // A quoted value runs to its closing quote, spaces and
+                    // all; a bare one to the next space or delimiter.
+                    let quote = separator.chars().last().filter(|c| matches!(c, '"' | '\''));
                     let value = after[separator.len()..]
                         .chars()
-                        .take_while(|c| !c.is_whitespace() && !matches!(c, '"' | '\'' | ',' | '}'))
+                        .take_while(|c| match quote {
+                            Some(quote) => *c != quote,
+                            None => !c.is_whitespace() && !matches!(c, '"' | '\'' | ',' | '}'),
+                        })
                         .collect::<String>();
                     if value.len() >= 4 {
                         out.push_str(&key);
@@ -553,6 +564,22 @@ mod tests {
         assert!(redacted.contains("\"user\": \"mischa\""));
         assert!(redacted.contains("https://x"));
         assert_eq!(redact("cargo test --workspace"), "cargo test --workspace");
+        // Command lines: a flag's value after a space, and quoted values
+        // with spaces in them.
+        let command = "./deploy --token abcdefghijklmnop --api-key=zyxwvutsrq --verbose";
+        let redacted = redact(command);
+        assert!(!redacted.contains("abcdefghijklmnop"), "{redacted}");
+        assert!(!redacted.contains("zyxwvutsrq"), "{redacted}");
+        assert!(redacted.contains("--verbose"), "{redacted}");
+        let quoted = redact("PASSWORD='alpha beta gamma' ./deploy && TOKEN=\"one two three\" run");
+        for secret in ["alpha", "beta", "gamma", "one", "two", "three"] {
+            assert!(!quoted.contains(secret), "{secret} leaked: {quoted}");
+        }
+        assert!(
+            quoted.contains("./deploy") && quoted.ends_with(" run"),
+            "{quoted}"
+        );
+        assert_eq!(redact("git log --format=%H"), "git log --format=%H");
         assert_eq!(
             redact("the task-key AW-12 passes"),
             "the task-key AW-12 passes"

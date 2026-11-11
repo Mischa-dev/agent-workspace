@@ -2669,7 +2669,7 @@ async fn conversation_timeline(
         fetch_run_projection(&state, &principal, &conversation).await?;
     let capabilities = conversation_capabilities(&principal, &conversation)?;
     let (reply_requests, remaining) =
-        replies::timeline_requests(&state.pool, conversation.id).await?;
+        replies::timeline_requests(&state.pool, conversation.id, principal.actor_id).await?;
     // Only groups (and threads under them) have turns.
     let agent_turns_remaining =
         matches!(conversation.effective_kind(), "dm" | "group").then_some(remaining);
