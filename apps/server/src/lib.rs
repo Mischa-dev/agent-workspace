@@ -12,6 +12,7 @@ pub mod auth;
 pub mod automations;
 pub mod bootstrap;
 pub mod bug_reports;
+pub mod collections;
 pub mod config;
 pub mod connected_apps;
 pub mod conversations;
@@ -186,6 +187,7 @@ pub fn router(state: AppState) -> Router {
         .merge(ai::http::router())
         .merge(memory::router())
         .merge(whiteboards::router())
+        .merge(collections::http::router())
         .merge(search::router())
         .merge(connected_apps::router())
         .merge(agent_docs::router())

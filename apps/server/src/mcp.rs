@@ -70,6 +70,7 @@ mod briefing;
 mod channels;
 mod code;
 mod collaboration;
+mod collection_tools;
 mod comment_tools;
 mod common;
 mod criteria;
@@ -1634,6 +1635,97 @@ impl McpServer {
     ) -> Json<common::ToolResult<task_move::TaskMoveValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(task_move::task_move(&self.state, principal, arguments).await)
+    }
+
+    // -- Collections (AWD-90) ------------------------------------------------
+
+    #[tool(
+        description = "List a project's collections: record types it keeps, such as Bugs, Playtesters or Builds. Each comes with its description, what its title column is called, how many records it has, and its version. collection_describe opens one's fields and views; record_query reads its records.",
+        annotations(
+            title = "List collections",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn collection_list(
+        &self,
+        Parameters(arguments): Parameters<collection_tools::CollectionListArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<collection_tools::CollectionListValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(collection_tools::collection_list(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Open a collection: its fields (each with its type and options), its saved views, how many records are archived, and its definition. The definition names the fields and views the way collection_write takes them, so passing it to collection_write in another project makes the same collection there.",
+        annotations(
+            title = "Describe collection",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn collection_describe(
+        &self,
+        Parameters(arguments): Parameters<collection_tools::CollectionDescribeArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<collection_tools::CollectionDescribeValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(collection_tools::collection_describe(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Create a collection with its fields and views in one call (name, fields: [{name, type, options}], views: [{name, filters, sort, groupBy, columns}]), or change one (pass collection: its name or ID). Fields and views are matched by name, so writing the same definition again changes nothing; pass field or view to rename one, remove: true to remove a view, archived: true to archive a field or the collection (nothing is deleted) and false to restore it. Field types: text, number, date, single_choice, multiple_choice, person, url, checkbox, link (target task or page). A field's type never changes. Needs collections.build.",
+        annotations(
+            title = "Write collection",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn collection_write(
+        &self,
+        Parameters(arguments): Parameters<collection_tools::CollectionWriteArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<collection_tools::CollectionWriteValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(collection_tools::collection_write(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Find a collection's records on the server, a page at a time: filter on field values (filters: [{field, op, values}], op is, isNot, empty, notEmpty, contains, gt, gte, lt or lte; \"me\" for yourself in a person field), search words, sort by up to 3 fields, group by a choice, person or checkbox field to count each group, or start from a saved view by name. Name records by number (#12) or ID to read just those, with their history if you ask. Returns each record's number, title and values by field name, the total, and nextCursor for the next page.",
+        annotations(
+            title = "Query records",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn record_query(
+        &self,
+        Parameters(arguments): Parameters<collection_tools::RecordQueryArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<collection_tools::RecordQueryValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(collection_tools::record_query(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Add or change up to 100 of a collection's records, all or nothing: leave record out to add one, or name it by number (#12) or ID to change it. Set its title and its values by field name (null clears one): people by @handle or \"me\", tasks by key (AWD-12), pages by ID or link, dates as YYYY-MM-DD, choices by option name. archived: true archives a record (nothing is deleted) and false restores it. If any record is refused, none is written. Needs collections.edit.",
+        annotations(
+            title = "Write records",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn record_write(
+        &self,
+        Parameters(arguments): Parameters<collection_tools::RecordWriteArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<collection_tools::RecordWriteValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(collection_tools::record_write(&self.state, principal, arguments).await)
     }
 
     // -- Search and memory ---------------------------------------------------
