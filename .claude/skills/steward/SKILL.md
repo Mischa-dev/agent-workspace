@@ -46,9 +46,10 @@ several guesses.
 
 ## When CI is red
 
-- CI runs on the self-hosted `redhat-aw` runner through `tools/ci/run.sh`;
-  jobs queue when several branches push at once. A queued job is not a
-  failure.
+- GitHub's CI runs `tools/ci/checks.sh` on a GitHub-hosted `ubuntu-latest`
+  runner (`.github/workflows/ci.yml`), never on our own machines; jobs queue
+  when several branches push at once. A queued job is not a failure. Locally,
+  `tools/ci/run.sh` runs the same checks on the laptop or the Red Hat host.
 - Read the failing step's log. Reproduce it locally with the same command
   before changing anything, then show it passing.
 - Tests that need PostgreSQL skip without `AGENT_WORKSPACE_DATABASE_URL`;

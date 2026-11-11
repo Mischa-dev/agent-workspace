@@ -12,26 +12,67 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# The job itself is light: it runs on the self-hosted runner on the Red Hat
-# host and hands the checks to tools/ci/run.sh, which picks the best machine
-# that's free (Mischa's laptop when it's idle, otherwise the Red Hat host),
-# keeps each machine's build cache warm, and streams the output back here.
-# The repository is private, so only collaborators can start jobs.
+# Runs on GitHub's own hosted runners only (4 cores and 16 GB on a public
+# repository), never on one of our own machines: on a public repository anyone's
+# fork pull request starts this workflow, so it must not reach our machines.
+# tools/ci/test_workflows.py fails if a job names any other runner.
+#
+# tools/ci/checks.sh runs the same checks here as tools/ci/run.sh runs on the
+# laptop or the Red Hat host before an agent pushes.
 jobs:
   ci:
-    runs-on: [self-hosted, redhat-aw]
-    timeout-minutes: 75
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    services:
+      postgres:
+        # The same image docker-compose.dev.yml uses.
+        image: docker.io/library/postgres:18.4-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+        env:
+          POSTGRES_USER: aw_ci
+          POSTGRES_PASSWORD: aw_ci
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aw_ci" --health-interval 5s
+          --health-timeout 5s --health-retries 20
+    env:
+      CI_RUN_ID: gh${{ github.run_id }}_${{ github.run_attempt }}
+      # A throwaway service database: the password is not a secret.
+      CI_DATABASE_BASE: postgres://aw_ci:aw_ci@127.0.0.1:5432
+      # Asks checks.sh for its low-memory order (the server library, then its
+      # tests; web checks after the Rust ones) so builds never overlap.
+      CI_MEMORY_MAX: 14G
+      # The runner image's Google Chrome drives the Playwright smoke tests.
+      PLAYWRIGHT_CHROMIUM_EXECUTABLE: /usr/bin/google-chrome
     steps:
+      # The runner has about 14 GB free; the Rust build cache needs more.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/share/boost /opt/hostedtoolcache/CodeQL
+          df -h /
       # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
+          persist-credentials: false
+      - name: Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+      # Swatinem/rust-cache v2.9.3: target/ and ~/.cargo (with cargo-nextest
+      # and cargo-deny once installed). Only main saves, so a pull request
+      # can't fill the cache.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # Pull requests run only the checks their files touch; pushes to main run all.
       - id: changes
         if: github.event_name == 'pull_request'
-        run: >-
-          ./tools/ci/changed-areas.sh
-          ${{ github.event.pull_request.base.sha }}
-          ${{ github.event.pull_request.head.sha }}
-          >> "$GITHUB_OUTPUT"
-      - run: ./tools/ci/run.sh --areas "${{ steps.changes.outputs.areas || 'rust,web' }}"
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: ./tools/ci/changed-areas.sh "${BASE_SHA}" "${HEAD_SHA}" >> "$GITHUB_OUTPUT"
+      - name: Checks
+        env:
+          AREAS: ${{ steps.changes.outputs.areas || 'rust,web' }}
+        run: ./tools/ci/checks.sh "${AREAS}"
