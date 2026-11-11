@@ -1709,23 +1709,35 @@ pub(crate) async fn append_message_command_with(
     // A forward hashes what it forwards too, so the same key and words for
     // a different message are a mismatch, not a replay of the first.
     // A reply hashes what it replies to the same way.
-    let request_hash = match (extras.forwarded_message_id, extras.reply_to_message_id) {
-        (Some(forwarded), None) => RequestHash::for_value(&serde_json::json!({
+    let request_hash = if let Some(reply) = reply {
+        RequestHash::for_value(&serde_json::json!({
             "content": &content,
             "attachments": attachments,
-            "forwards": forwarded,
-        }))?,
-        (forwarded, Some(replies_to)) => RequestHash::for_value(&serde_json::json!({
-            "content": &content,
-            "attachments": attachments,
-            "forwards": forwarded,
-            "repliesTo": replies_to,
-        }))?,
-        (None, None) if attachments.is_empty() => RequestHash::for_value(&content)?,
-        (None, None) => RequestHash::for_value(&serde_json::json!({
-            "content": &content,
-            "attachments": attachments,
-        }))?,
+            "forwards": extras.forwarded_message_id,
+            "repliesTo": extras.reply_to_message_id,
+            "replyRequest": reply.request_id,
+            "replyGeneration": reply.generation,
+            "finalReply": reply.final_reply,
+        }))?
+    } else {
+        match (extras.forwarded_message_id, extras.reply_to_message_id) {
+            (Some(forwarded), None) => RequestHash::for_value(&serde_json::json!({
+                "content": &content,
+                "attachments": attachments,
+                "forwards": forwarded,
+            }))?,
+            (forwarded, Some(replies_to)) => RequestHash::for_value(&serde_json::json!({
+                "content": &content,
+                "attachments": attachments,
+                "forwards": forwarded,
+                "repliesTo": replies_to,
+            }))?,
+            (None, None) if attachments.is_empty() => RequestHash::for_value(&content)?,
+            (None, None) => RequestHash::for_value(&serde_json::json!({
+                "content": &content,
+                "attachments": attachments,
+            }))?,
+        }
     };
     let scope = idempotency::resource_bound_scope("conversation", conversation_id, "message_send")?;
     let mut transaction = state.pool.begin().await?;

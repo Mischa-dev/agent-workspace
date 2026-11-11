@@ -612,6 +612,7 @@ pub(crate) async fn complete_with_reply(
             updated_at = now()
         WHERE id = $1 AND generation = $2 AND agent_actor_id = $3
           AND COALESCE(thread_id, conversation_id) = $4 AND status = 'claimed'
+          AND lease_expires_at > clock_timestamp()
         RETURNING project_id, conversation_id, thread_id
         "#,
     )
@@ -648,6 +649,7 @@ pub(crate) async fn renew_claim(
         SET lease_expires_at = now() + make_interval(mins => $5), updated_at = now()
         WHERE id = $1 AND generation = $2 AND agent_actor_id = $3
           AND COALESCE(thread_id, conversation_id) = $4 AND status = 'claimed'
+          AND lease_expires_at > clock_timestamp()
         "#,
     )
     .bind(request_id)
