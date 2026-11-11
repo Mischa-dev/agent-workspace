@@ -1,5 +1,12 @@
-//! Pages as blocks (AWD-53, first slice): a read-only view of a page's
-//! Markdown as its top-level blocks, for the live docs work to build on.
+//! Pages as blocks (AWD-53): a page's Markdown split into its top-level
+//! blocks, by the rules the web app draws them with.
+//!
+//! A page is stored as a live document (`page_docs`), and its Markdown is
+//! worked out from that. This module finds where each top-level block of a
+//! Markdown text starts and ends, so the words a page's Markdown already
+//! has, or that an agent sent, can be kept for the blocks they say. Lasting
+//! block ids, and the `page_blocks` and `page_edit` tools that use them, are
+//! in `page_docs` and `mcp/memory_tools.rs`.
 //!
 //! What it is, exactly:
 //!
@@ -12,8 +19,8 @@
 //!   to parse.ts, holds the cases both parsers are tested against. Where
 //!   parse.ts relies on JavaScript's `\s`, `trim()` or `.`, this follows
 //!   JavaScript's character rules, not Rust's (U+FEFF, U+0085, U+2028, U+2029).
-//! - **Nothing is lost or rewritten.** Each block is a byte range of the page
-//!   body exactly as stored (line endings, tabs, trailing spaces and all),
+//! - **Nothing is lost or rewritten.** Each block is a byte range of the
+//!   text exactly as given (line endings, tabs, trailing spaces and all),
 //!   running from its first line to its last non-blank one; between blocks
 //!   there is only blank space. Markdown the app doesn't draw specially
 //!   (HTML, footnotes, setext underlines, front matter) stays as text inside
@@ -24,26 +31,6 @@
 //!   character that takes two code units, the web splits the character; a
 //!   byte range can't, so here the whole character starts the `overflow`
 //!   block, which then says `limitInsideCharacter: true`.
-//! - **A block's `position` names it only within one version of the page.**
-//!   Any save can renumber blocks, so a read by position carries the version
-//!   the position came from, and a read with any other version is refused.
-//!   `hash` is a digest of the block's text: equal text, equal hash, so it
-//!   checks content, not identity. There are no lasting block ids yet; those
-//!   need the stored document the live docs work brings.
-//! - **Edits are small operations on one version.** [`PageBlocks::edit`]
-//!   replaces, inserts, deletes or appends blocks named by position and
-//!   hash, all against the version they were read from, and leaves every
-//!   other byte as it was. The MCP tools `page_blocks` and `page_edit` use
-//!   this; a save still goes through the page's usual version check,
-//!   permissions and history, like `page_write`.
-
-use std::fmt;
-
-use serde::Serialize;
-use sha2::{Digest, Sha256};
-
-/// The shape of [`DocumentView`]. It goes up when the view's meaning changes.
-pub const SCHEMA: u32 = 1;
 
 /// The web parser's `MAX_SOURCE`: how many UTF-16 code units of the body,
 /// after line endings become `\n`, it parses.
@@ -53,8 +40,7 @@ pub const PARSE_LIMIT: usize = 100_000;
 const MAX_TABLE_COLUMNS: usize = 40;
 
 /// What a top-level block is, named as the web parser names it.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BlockKind {
     /// `text` is the heading's Markdown without its `#` markers.
     Heading {
@@ -82,25 +68,8 @@ pub enum BlockKind {
     },
     /// The body past [`PARSE_LIMIT`], which the web shows as plain text.
     Overflow {
-        #[serde(rename = "limitInsideCharacter")]
         limit_inside_character: bool,
     },
-}
-
-impl BlockKind {
-    /// The block's type, as the view names it.
-    pub fn name(&self) -> &'static str {
-        match self {
-            Self::Heading { .. } => "heading",
-            Self::Paragraph => "paragraph",
-            Self::Code { .. } => "code",
-            Self::Quote => "quote",
-            Self::List { .. } => "list",
-            Self::Hr => "hr",
-            Self::Table { .. } => "table",
-            Self::Overflow { .. } => "overflow",
-        }
-    }
 }
 
 /// A top-level block: what it is, and its byte range in the page body.
@@ -111,114 +80,15 @@ pub struct Block {
     pub end: usize,
 }
 
-/// One version of a page's body, seen as blocks.
+/// A page body, seen as its top-level blocks.
 #[derive(Debug)]
-pub struct PageBlocks<'a> {
-    source: &'a str,
-    version: i64,
+pub struct PageBlocks {
     blocks: Vec<Block>,
 }
 
-/// A heading in the outline, with the blocks its section covers: up to the
-/// next heading at the same level or above.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OutlineEntry {
-    pub position: usize,
-    pub level: u8,
-    pub text: String,
-    pub hash: String,
-    /// The last block in the section (its heading's position when empty).
-    pub section_end: usize,
-}
-
-/// The whole document as blocks, for one version of the page.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DocumentView<'a> {
-    pub schema: u32,
-    pub version: i64,
-    pub blocks: Vec<BlockView<'a>>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BlockView<'a> {
-    /// Where the block is in this version; not a lasting id.
-    pub position: usize,
-    #[serde(flatten)]
-    pub kind: &'a BlockKind,
-    pub hash: String,
-    pub markdown: &'a str,
-}
-
-/// What to read.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Selection {
-    /// The whole body, as stored.
-    Whole,
-    /// A heading and its section. `version` is the one the position came from.
-    Section { version: i64, position: usize },
-    /// Blocks `from` to `to`, both included, and everything between them.
-    Blocks {
-        version: i64,
-        from: usize,
-        to: usize,
-    },
-}
-
-/// Exactly the stored text of what was read.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Excerpt<'a> {
-    pub version: i64,
-    /// The first and last block read; none for [`Selection::Whole`].
-    pub blocks: Option<(usize, usize)>,
-    pub markdown: &'a str,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ReadError {
-    /// The positions came from another version of the page.
-    OtherVersion {
-        asked: i64,
-        current: i64,
-    },
-    NoSuchBlock {
-        position: usize,
-        blocks: usize,
-    },
-    NotAHeading {
-        position: usize,
-    },
-    BackwardsRange {
-        from: usize,
-        to: usize,
-    },
-}
-
-impl fmt::Display for ReadError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::OtherVersion { asked, current } => write!(
-                f,
-                "block positions are from version {asked}, but the page is at version {current}; read it again"
-            ),
-            Self::NoSuchBlock { position, blocks } => {
-                write!(f, "there's no block {position}; the page has {blocks}")
-            }
-            Self::NotAHeading { position } => write!(f, "block {position} isn't a heading"),
-            Self::BackwardsRange { from, to } => {
-                write!(f, "block {from} comes after block {to}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for ReadError {}
-
-impl<'a> PageBlocks<'a> {
-    /// Finds the blocks in one version of a page body.
-    pub fn parse(source: &'a str, version: i64) -> Self {
+impl PageBlocks {
+    /// Finds the top-level blocks of a page body.
+    pub fn parse(source: &str) -> Self {
         let (cut, limit_inside_character) = parse_limit(source);
         let mut blocks = top_level_blocks(&source[..cut]);
         if cut < source.len() {
@@ -230,450 +100,12 @@ impl<'a> PageBlocks<'a> {
                 end: source.len(),
             });
         }
-        Self {
-            source,
-            version,
-            blocks,
-        }
-    }
-
-    pub fn version(&self) -> i64 {
-        self.version
+        Self { blocks }
     }
 
     pub fn blocks(&self) -> &[Block] {
         &self.blocks
     }
-
-    /// The body exactly as stored.
-    pub fn markdown(&self) -> &'a str {
-        self.source
-    }
-
-    fn text(&self, block: &Block) -> &'a str {
-        &self.source[block.start..block.end]
-    }
-
-    pub fn outline(&self) -> Vec<OutlineEntry> {
-        let ends = self.section_ends();
-        self.blocks
-            .iter()
-            .enumerate()
-            .filter_map(|(position, block)| match &block.kind {
-                BlockKind::Heading { level, text } => Some(OutlineEntry {
-                    position,
-                    level: *level,
-                    text: text.clone(),
-                    hash: hash(self.text(block)),
-                    section_end: ends[position],
-                }),
-                _ => None,
-            })
-            .collect()
-    }
-
-    /// For each heading, the last block of its section (other blocks: themselves).
-    fn section_ends(&self) -> Vec<usize> {
-        let mut ends: Vec<usize> = (0..self.blocks.len()).collect();
-        let mut open: Vec<(usize, u8)> = Vec::new();
-        for (position, block) in self.blocks.iter().enumerate() {
-            if let BlockKind::Heading { level, .. } = block.kind {
-                while let Some(&(opened, open_level)) = open.last() {
-                    if open_level < level {
-                        break;
-                    }
-                    ends[opened] = position - 1;
-                    open.pop();
-                }
-                open.push((position, level));
-            }
-        }
-        let last = self.blocks.len().saturating_sub(1);
-        for (opened, _) in open {
-            ends[opened] = last;
-        }
-        ends
-    }
-
-    pub fn view(&self) -> DocumentView<'_> {
-        DocumentView {
-            schema: SCHEMA,
-            version: self.version,
-            blocks: self
-                .blocks
-                .iter()
-                .enumerate()
-                .map(|(position, block)| BlockView {
-                    position,
-                    kind: &block.kind,
-                    hash: hash(self.text(block)),
-                    markdown: self.text(block),
-                })
-                .collect(),
-        }
-    }
-
-    pub fn read(&self, selection: Selection) -> Result<Excerpt<'a>, ReadError> {
-        let (version, from, to) = match selection {
-            Selection::Whole => {
-                return Ok(Excerpt {
-                    version: self.version,
-                    blocks: None,
-                    markdown: self.source,
-                });
-            }
-            Selection::Section { version, position } => {
-                self.check_version(version)?;
-                let block = self.block(position)?;
-                if !matches!(block.kind, BlockKind::Heading { .. }) {
-                    return Err(ReadError::NotAHeading { position });
-                }
-                (version, position, self.section_ends()[position])
-            }
-            Selection::Blocks { version, from, to } => {
-                self.check_version(version)?;
-                self.block(from)?;
-                self.block(to)?;
-                if from > to {
-                    return Err(ReadError::BackwardsRange { from, to });
-                }
-                (version, from, to)
-            }
-        };
-        Ok(Excerpt {
-            version,
-            blocks: Some((from, to)),
-            markdown: &self.source[self.blocks[from].start..self.blocks[to].end],
-        })
-    }
-
-    fn check_version(&self, asked: i64) -> Result<(), ReadError> {
-        if asked == self.version {
-            Ok(())
-        } else {
-            Err(ReadError::OtherVersion {
-                asked,
-                current: self.version,
-            })
-        }
-    }
-
-    fn block(&self, position: usize) -> Result<&Block, ReadError> {
-        self.blocks.get(position).ok_or(ReadError::NoSuchBlock {
-            position,
-            blocks: self.blocks.len(),
-        })
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Block edits (AWD-53, second slice): small operations on one version of a
-// page, so an agent changes a paragraph without rewriting the page.
-
-/// The most edits one call may make.
-pub const MAX_EDITS: usize = 100;
-
-/// What an edit does to the block at its position.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EditOp {
-    /// Put new Markdown in the block's place.
-    Replace,
-    /// Add new blocks just before it.
-    InsertBefore,
-    /// Add new blocks just after it.
-    InsertAfter,
-    /// Take it out, with the blank space after it (before it, if it's last).
-    Delete,
-    /// Add new blocks at the end of the page; no position or hash.
-    Append,
-}
-
-/// One edit. `position` and `hash` come from a read of the same version, and
-/// the hash must still match the block's text.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Edit {
-    pub op: EditOp,
-    pub position: Option<usize>,
-    pub hash: Option<String>,
-    pub markdown: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum EditError {
-    OtherVersion {
-        asked: i64,
-        current: i64,
-    },
-    NoEdits,
-    TooManyEdits {
-        limit: usize,
-    },
-    /// Edit `index` (from 0) needs a position, or (append) mustn't have one.
-    Position {
-        index: usize,
-        needed: bool,
-    },
-    NoSuchBlock {
-        index: usize,
-        position: usize,
-        blocks: usize,
-    },
-    /// The block's text isn't what the caller read.
-    HashMismatch {
-        index: usize,
-        position: usize,
-        current: String,
-    },
-    /// Replace and insert need Markdown with something in it; delete takes none.
-    Markdown {
-        index: usize,
-        needed: bool,
-    },
-    /// Two edits replace or delete the same block.
-    SameBlock {
-        index: usize,
-        position: usize,
-    },
-}
-
-impl fmt::Display for EditError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::OtherVersion { asked, current } => write!(
-                f,
-                "the edits are for version {asked}, but the page is at version {current}; read it again"
-            ),
-            Self::NoEdits => write!(f, "pass at least one edit"),
-            Self::TooManyEdits { limit } => write!(f, "at most {limit} edits at once"),
-            Self::Position {
-                index,
-                needed: true,
-            } => {
-                write!(f, "edit {index} needs the position of a block")
-            }
-            Self::Position {
-                index,
-                needed: false,
-            } => write!(f, "edit {index} appends, so it takes no position or hash"),
-            Self::NoSuchBlock {
-                index,
-                position,
-                blocks,
-            } => write!(
-                f,
-                "edit {index}: there's no block {position}; the page has {blocks}"
-            ),
-            Self::HashMismatch {
-                index, position, ..
-            } => write!(
-                f,
-                "edit {index}: block {position} isn't the text you read (its hash differs); read it again"
-            ),
-            Self::Markdown {
-                index,
-                needed: true,
-            } => {
-                write!(f, "edit {index} needs Markdown with something in it")
-            }
-            Self::Markdown {
-                index,
-                needed: false,
-            } => write!(f, "edit {index} deletes, so it takes no Markdown"),
-            Self::SameBlock { index, position } => write!(
-                f,
-                "edit {index} changes block {position} again; replace or delete each block once"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for EditError {}
-
-/// What an edit leaves at one block: kept as is, replaced, or gone.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Fate<'e> {
-    Kept,
-    Replaced(&'e str),
-    Deleted,
-}
-
-impl<'a> PageBlocks<'a> {
-    /// Applies `edits`, all made against `version`, and returns the new body.
-    ///
-    /// Everything the edits don't touch stays byte for byte, blank space
-    /// between untouched blocks included. New and replaced blocks are set off
-    /// by a blank line, so they don't run into their neighbours. Edits apply
-    /// together or not at all; positions all refer to `version`, never to the
-    /// result of an earlier edit in the same call.
-    pub fn edit(&self, version: i64, edits: &[Edit]) -> Result<String, EditError> {
-        if version != self.version {
-            return Err(EditError::OtherVersion {
-                asked: version,
-                current: self.version,
-            });
-        }
-        if edits.is_empty() {
-            return Err(EditError::NoEdits);
-        }
-        if edits.len() > MAX_EDITS {
-            return Err(EditError::TooManyEdits { limit: MAX_EDITS });
-        }
-        let count = self.blocks.len();
-        let mut fates = vec![Fate::Kept; count];
-        let mut before: Vec<Vec<&str>> = vec![Vec::new(); count];
-        let mut after: Vec<Vec<&str>> = vec![Vec::new(); count];
-        let mut appended: Vec<&str> = Vec::new();
-        for (index, edit) in edits.iter().enumerate() {
-            let markdown = edit.markdown.as_deref().map(clean_markdown);
-            let wants_markdown = edit.op != EditOp::Delete;
-            match (wants_markdown, markdown) {
-                (true, None) | (true, Some("")) => {
-                    return Err(EditError::Markdown {
-                        index,
-                        needed: true,
-                    });
-                }
-                (false, Some(_)) => {
-                    return Err(EditError::Markdown {
-                        index,
-                        needed: false,
-                    });
-                }
-                _ => {}
-            }
-            if edit.op == EditOp::Append {
-                if edit.position.is_some() || edit.hash.is_some() {
-                    return Err(EditError::Position {
-                        index,
-                        needed: false,
-                    });
-                }
-                appended.push(markdown.unwrap_or_default());
-                continue;
-            }
-            let Some(position) = edit.position else {
-                return Err(EditError::Position {
-                    index,
-                    needed: true,
-                });
-            };
-            let Some(block) = self.blocks.get(position) else {
-                return Err(EditError::NoSuchBlock {
-                    index,
-                    position,
-                    blocks: count,
-                });
-            };
-            let current = hash(self.text(block));
-            if edit.hash.as_deref() != Some(current.as_str()) {
-                return Err(EditError::HashMismatch {
-                    index,
-                    position,
-                    current,
-                });
-            }
-            match edit.op {
-                EditOp::Replace | EditOp::Delete => {
-                    if fates[position] != Fate::Kept {
-                        return Err(EditError::SameBlock { index, position });
-                    }
-                    fates[position] = match markdown {
-                        Some(text) => Fate::Replaced(text),
-                        None => Fate::Deleted,
-                    };
-                }
-                EditOp::InsertBefore => before[position].push(markdown.unwrap_or_default()),
-                EditOp::InsertAfter => after[position].push(markdown.unwrap_or_default()),
-                EditOp::Append => unreachable!("handled above"),
-            }
-        }
-
-        // The page as a run of pieces: each is either original block `i`
-        // (kept or replaced) or new text. Between two pieces that are
-        // neighbouring original blocks, the original blank space stays; it's
-        // widened to a blank line only when one side changed and it had none.
-        enum Piece<'t> {
-            Original(usize, &'t str),
-            New(&'t str),
-        }
-        let mut pieces: Vec<Piece<'_>> = Vec::new();
-        for position in 0..count {
-            pieces.extend(before[position].iter().map(|text| Piece::New(text)));
-            match fates[position] {
-                Fate::Kept => {
-                    pieces.push(Piece::Original(position, self.text(&self.blocks[position])))
-                }
-                Fate::Replaced(text) => pieces.push(Piece::Original(position, text)),
-                Fate::Deleted => {}
-            }
-            pieces.extend(after[position].iter().map(|text| Piece::New(text)));
-        }
-        pieces.extend(appended.iter().map(|text| Piece::New(text)));
-
-        let leading = self
-            .blocks
-            .first()
-            .map_or("", |first| &self.source[..first.start]);
-        let trailing = match self.blocks.last() {
-            Some(last) => &self.source[last.end..],
-            None => self.source,
-        };
-        let mut body = String::with_capacity(self.source.len());
-        body.push_str(leading);
-        for (at, piece) in pieces.iter().enumerate() {
-            if at > 0 {
-                let gap = match (&pieces[at - 1], piece) {
-                    (Piece::Original(left, _), Piece::Original(right, _)) if left + 1 == *right => {
-                        let gap = &self.source[self.blocks[*left].end..self.blocks[*right].start];
-                        let untouched = fates[*left] == Fate::Kept && fates[*right] == Fate::Kept;
-                        if untouched || line_breaks(gap) >= 2 {
-                            gap
-                        } else {
-                            "\n\n"
-                        }
-                    }
-                    _ => "\n\n",
-                };
-                body.push_str(gap);
-            }
-            body.push_str(match piece {
-                Piece::Original(_, text) | Piece::New(text) => text,
-            });
-        }
-        if pieces.is_empty() {
-            // Everything was deleted: the page is empty.
-            return Ok(String::new());
-        }
-        body.push_str(trailing);
-        if self.blocks.is_empty() && !trailing.contains(['\n', '\r']) {
-            body.push('\n');
-        }
-        Ok(body)
-    }
-}
-
-/// New Markdown without the blank lines around it: blocks are separated by
-/// the page, not by what's inserted.
-fn clean_markdown(text: &str) -> &str {
-    let text = text.trim_end();
-    // Drop whole blank lines at the start, but keep a first line's indent.
-    let mut start = 0;
-    for line in text.split_inclusive('\n') {
-        if !is_blank(line.trim_end_matches(['\n', '\r'])) {
-            break;
-        }
-        start += line.len();
-    }
-    &text[start..]
-}
-
-fn line_breaks(gap: &str) -> usize {
-    gap.replace("\r\n", "\n").matches(['\n', '\r']).count()
-}
-
-/// The first 16 hex digits of the SHA-256 of a block's text.
-fn hash(text: &str) -> String {
-    hex::encode(&Sha256::digest(text.as_bytes())[..8])
 }
 
 /// Where the web parser stops: the byte offset after [`PARSE_LIMIT`] UTF-16
@@ -1199,9 +631,9 @@ mod tests {
 
     /// The guarantee everything else rests on: the blocks are in order,
     /// don't overlap, sit on character boundaries, and only blank space lies
-    /// outside them; reading the whole page gives back the body unchanged.
-    fn assert_lossless(source: &str) -> PageBlocks<'_> {
-        let page = PageBlocks::parse(source, 7);
+    /// outside them.
+    fn assert_lossless(source: &str) -> PageBlocks {
+        let page = PageBlocks::parse(source);
         let mut at = 0;
         for block in page.blocks() {
             assert!(
@@ -1222,21 +654,6 @@ mod tests {
                 .bytes()
                 .all(|byte| matches!(byte, b' ' | b'\t' | b'\r' | b'\n'))
         );
-        let whole = page.read(Selection::Whole).expect("whole");
-        assert_eq!(whole.markdown, source);
-        let rebuilt: String = {
-            let mut text = String::new();
-            let mut at = 0;
-            for view in page.view().blocks {
-                let block = &page.blocks()[view.position];
-                text.push_str(&source[at..block.start]);
-                text.push_str(view.markdown);
-                at = block.end;
-            }
-            text.push_str(&source[at..]);
-            text
-        };
-        assert_eq!(rebuilt, source);
         page
     }
 
@@ -1415,110 +832,6 @@ mod tests {
     }
 
     #[test]
-    fn positions_hold_only_within_a_version_and_hashes_follow_text() {
-        let before = "# Plan\n\nSame text\n\nSame text\n";
-        let page = PageBlocks::parse(before, 3);
-        let view = page.view();
-        // Equal blocks: equal hashes, different positions and ranges.
-        assert_eq!(view.blocks[1].hash, view.blocks[2].hash);
-        assert_eq!(view.blocks[1].markdown, "Same text");
-        assert_ne!(page.blocks()[1].start, page.blocks()[2].start);
-        let second = page
-            .read(Selection::Blocks {
-                version: 3,
-                from: 2,
-                to: 2,
-            })
-            .expect("second");
-        assert_eq!(second.markdown, "Same text");
-        assert_eq!(&before[page.blocks()[2].start..], "Same text\n");
-
-        // A save that adds a block first renumbers everything after it; the
-        // text and its hash move with it.
-        let after = format!("Intro\n\n{before}");
-        let saved = PageBlocks::parse(&after, 4);
-        let moved = saved.view();
-        assert_eq!(moved.blocks[1].hash, view.blocks[0].hash);
-        assert_eq!(moved.blocks[1].markdown, "# Plan");
-        assert_ne!(moved.blocks[0].hash, view.blocks[0].hash);
-
-        // A position from version 3 is refused against version 4.
-        assert_eq!(
-            saved.read(Selection::Section {
-                version: 3,
-                position: 0
-            }),
-            Err(ReadError::OtherVersion {
-                asked: 3,
-                current: 4
-            })
-        );
-        assert_eq!(
-            saved.read(Selection::Blocks {
-                version: 3,
-                from: 0,
-                to: 0
-            }),
-            Err(ReadError::OtherVersion {
-                asked: 3,
-                current: 4
-            })
-        );
-    }
-
-    #[test]
-    fn the_outline_nests_sections_and_reads_them_exactly() {
-        let source = "# One\n\nIntro\n\n## One.a\n\nText a\r\n\r\n### Deep\n\n## One.b ##\n\n- x\n\n# Two\n\nEnd\n";
-        let page = assert_lossless(source);
-        let outline = page.outline();
-        let texts: Vec<&str> = outline.iter().map(|entry| entry.text.as_str()).collect();
-        assert_eq!(texts, ["One", "One.a", "Deep", "One.b", "Two"]);
-        // (position, level, last block of its section)
-        let sections: Vec<(usize, u8, usize)> = outline
-            .iter()
-            .map(|entry| (entry.position, entry.level, entry.section_end))
-            .collect();
-        assert_eq!(
-            sections,
-            [(0, 1, 6), (2, 2, 4), (4, 3, 4), (5, 2, 6), (7, 1, 8)]
-        );
-        let section = page
-            .read(Selection::Section {
-                version: 7,
-                position: 2,
-            })
-            .expect("section");
-        assert_eq!(section.blocks, Some((2, 4)));
-        assert_eq!(section.markdown, "## One.a\n\nText a\r\n\r\n### Deep");
-        assert_eq!(
-            page.read(Selection::Section {
-                version: 7,
-                position: 1
-            }),
-            Err(ReadError::NotAHeading { position: 1 })
-        );
-        assert_eq!(
-            page.read(Selection::Blocks {
-                version: 7,
-                from: 3,
-                to: 9
-            }),
-            Err(ReadError::NoSuchBlock {
-                position: 9,
-                blocks: 9
-            })
-        );
-        assert_eq!(
-            page.read(Selection::Blocks {
-                version: 7,
-                from: 4,
-                to: 3
-            }),
-            Err(ReadError::BackwardsRange { from: 4, to: 3 })
-        );
-    }
-
-    #[test]
     fn heading_text_follows_the_web_pattern() {
         for (line, expected) in [
             ("# Title", Some((1, "Title"))),
@@ -1538,220 +851,5 @@ mod tests {
                 "{line:?}"
             );
         }
-    }
-
-    #[test]
-    fn the_view_is_versioned_and_says_positions_not_ids() {
-        let page = PageBlocks::parse("# A\n\n```TS\nx\n```\n", 12);
-        let view = serde_json::to_value(page.view()).expect("view");
-        assert_eq!(view["schema"], SCHEMA);
-        assert_eq!(view["version"], 12);
-        assert_eq!(view["blocks"][0]["position"], 0);
-        assert_eq!(view["blocks"][0]["type"], "heading");
-        assert_eq!(view["blocks"][0]["text"], "A");
-        assert_eq!(view["blocks"][1]["type"], "code");
-        assert_eq!(view["blocks"][1]["fenced"], true);
-        assert_eq!(view["blocks"][1]["lang"], "ts");
-        assert_eq!(view["blocks"][1]["markdown"], "```TS\nx\n```");
-        assert!(view["blocks"][0].get("id").is_none());
-        let overflow = serde_json::to_value(BlockKind::Overflow {
-            limit_inside_character: true,
-        })
-        .expect("overflow");
-        assert_eq!(
-            overflow,
-            json!({"type": "overflow", "limitInsideCharacter": true})
-        );
-    }
-
-    fn edit(op: EditOp, page: &PageBlocks<'_>, position: usize, markdown: Option<&str>) -> Edit {
-        Edit {
-            op,
-            position: Some(position),
-            hash: Some(hash(page.text(&page.blocks()[position]))),
-            markdown: markdown.map(str::to_owned),
-        }
-    }
-
-    #[test]
-    fn edits_change_only_their_blocks_and_keep_the_rest_exactly() {
-        // Odd spacing, a tab and CRLF endings around untouched blocks survive.
-        let source = "\n# Plan\r\nIntro  \r\n\r\n\r\n- one\n- two\n\n```\ncode\n\n```\n\nLast\t\n";
-        let page = PageBlocks::parse(source, 5);
-        assert_eq!(page.blocks().len(), 5);
-        let body = page
-            .edit(5, &[edit(EditOp::Replace, &page, 1, Some("Better intro"))])
-            .expect("replace");
-        assert_eq!(
-            body,
-            "\n# Plan\n\nBetter intro\r\n\r\n\r\n- one\n- two\n\n```\ncode\n\n```\n\nLast\t\n"
-        );
-        let after = PageBlocks::parse(&body, 6);
-        assert_eq!(after.blocks().len(), 5);
-        assert_eq!(after.view().blocks[1].markdown, "Better intro");
-        for position in [0, 2, 3, 4] {
-            assert_eq!(
-                after.view().blocks[position].markdown,
-                page.view().blocks[position].markdown
-            );
-        }
-    }
-
-    #[test]
-    fn inserts_deletes_and_appends_apply_together_against_one_version() {
-        let source = "# A\n\none\n\ntwo\n\nthree\n";
-        let page = PageBlocks::parse(source, 2);
-        let body = page
-            .edit(
-                2,
-                &[
-                    edit(EditOp::Delete, &page, 2, None),
-                    edit(EditOp::InsertBefore, &page, 1, Some("\n\nzero\n\n")),
-                    edit(EditOp::InsertAfter, &page, 3, Some("four")),
-                    Edit {
-                        op: EditOp::Append,
-                        position: None,
-                        hash: None,
-                        markdown: Some("## End".into()),
-                    },
-                ],
-            )
-            .expect("edits");
-        assert_eq!(body, "# A\n\nzero\n\none\n\nthree\n\nfour\n\n## End\n");
-
-        // Deleting everything leaves an empty page; appending to it starts one.
-        let all: Vec<Edit> = (0..4)
-            .map(|p| edit(EditOp::Delete, &page, p, None))
-            .collect();
-        assert_eq!(page.edit(2, &all).expect("delete all"), "");
-        let empty = PageBlocks::parse("", 9);
-        let first = empty
-            .edit(
-                9,
-                &[Edit {
-                    op: EditOp::Append,
-                    position: None,
-                    hash: None,
-                    markdown: Some("Hello".into()),
-                }],
-            )
-            .expect("append");
-        assert_eq!(first, "Hello\n");
-    }
-
-    #[test]
-    fn edits_are_refused_when_stale_or_malformed() {
-        let source = "# A\n\none\n";
-        let page = PageBlocks::parse(source, 4);
-        let good = edit(EditOp::Replace, &page, 1, Some("uno"));
-        assert_eq!(
-            page.edit(3, std::slice::from_ref(&good)),
-            Err(EditError::OtherVersion {
-                asked: 3,
-                current: 4
-            })
-        );
-        assert_eq!(page.edit(4, &[]), Err(EditError::NoEdits));
-        let stale = Edit {
-            hash: Some("0000000000000000".into()),
-            ..good.clone()
-        };
-        assert!(matches!(
-            page.edit(4, &[stale]),
-            Err(EditError::HashMismatch {
-                index: 0,
-                position: 1,
-                ..
-            })
-        ));
-        assert!(matches!(
-            page.edit(
-                4,
-                &[Edit {
-                    position: Some(7),
-                    ..good.clone()
-                }]
-            ),
-            Err(EditError::NoSuchBlock {
-                position: 7,
-                blocks: 2,
-                ..
-            })
-        ));
-        assert_eq!(
-            page.edit(
-                4,
-                &[Edit {
-                    markdown: Some(" \n\n ".into()),
-                    ..good.clone()
-                }]
-            ),
-            Err(EditError::Markdown {
-                index: 0,
-                needed: true
-            })
-        );
-        assert_eq!(
-            page.edit(4, &[edit(EditOp::Delete, &page, 1, Some("x"))]),
-            Err(EditError::Markdown {
-                index: 0,
-                needed: false
-            })
-        );
-        assert_eq!(
-            page.edit(4, &[good.clone(), edit(EditOp::Delete, &page, 1, None)]),
-            Err(EditError::SameBlock {
-                index: 1,
-                position: 1
-            })
-        );
-        assert_eq!(
-            page.edit(
-                4,
-                &[Edit {
-                    op: EditOp::Append,
-                    ..good.clone()
-                }]
-            ),
-            Err(EditError::Position {
-                index: 0,
-                needed: false
-            })
-        );
-        assert_eq!(
-            page.edit(
-                4,
-                &[Edit {
-                    position: None,
-                    ..good.clone()
-                }]
-            ),
-            Err(EditError::Position {
-                index: 0,
-                needed: true
-            })
-        );
-        let many = vec![edit(EditOp::InsertAfter, &page, 0, Some("x")); MAX_EDITS + 1];
-        assert_eq!(
-            page.edit(4, &many),
-            Err(EditError::TooManyEdits { limit: MAX_EDITS })
-        );
-    }
-
-    #[test]
-    fn new_markdown_keeps_its_first_indent() {
-        let page = PageBlocks::parse("Para\n", 1);
-        let body = page
-            .edit(
-                1,
-                &[edit(
-                    EditOp::Replace,
-                    &page,
-                    0,
-                    Some("\n  \n    indented code\n\n"),
-                )],
-            )
-            .expect("replace");
-        assert_eq!(body, "    indented code\n");
     }
 }

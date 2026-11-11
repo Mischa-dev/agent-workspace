@@ -114,7 +114,7 @@ struct Piece<'s> {
 }
 
 fn pieces_of(text: &str, source: usize) -> Vec<Piece<'_>> {
-    PageBlocks::parse(text, 0)
+    PageBlocks::parse(text)
         .blocks()
         .iter()
         .filter(|block| !matches!(block.kind, BlockKind::Overflow { .. }))
