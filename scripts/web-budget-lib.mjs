@@ -38,8 +38,15 @@ export const WEB_ASSET_LIMITS = Object.freeze({
   // the move code in the shell; 434,232 / 141,081 once split, 1,499 raw /
   // 638 gzip bytes less, still 56 raw bytes over 424 KB. The raw limit went
   // up 256 bytes by decision (November 2026); gzip is unchanged.
+  // The entry names about 270 lazy chunks, each with eight random letters
+  // of content hash, so the same shell gzipped up to a few dozen bytes
+  // larger or smaller whenever any lazy chunk changed: a fix in the page
+  // editor alone measured 141,323 against main's 141,306. Gzip sizes are now
+  // taken with every hash replaced by the same placeholder (withoutHashes),
+  // which measured 139,036 for both, 2,270 less; the gzip limit came down
+  // by that much, so it is exactly as full as before (November 2026).
   initialJavascriptRawBytes: 424 * 1024 + 256,
-  initialJavascriptGzipBytes: 138 * 1024,
+  initialJavascriptGzipBytes: 138 * 1024 - 2270,
   // index.html's stylesheets: the design system's five theme presets,
   // components and page layouts. Measured 101,925 raw bytes; the UI kit
   // (toasts, command menu, shortcut sheet, skeletons) and Markdown styles
@@ -90,12 +97,17 @@ function limitName(file, generalName, limits) {
 }
 
 export function measureWebAssets(distRoot, limits = WEB_ASSET_LIMITS) {
-  const files = walkRegularFiles(distRoot).map((absolutePath) => {
+  const paths = walkRegularFiles(distRoot)
+  const names = paths.map((absolutePath) => relative(distRoot, absolutePath).split('\\').join('/'))
+  const hashes = contentHashes(names)
+  const files = paths.map((absolutePath, index) => {
+    const file = names[index]
     const bytes = readFileSync(absolutePath)
+    const measured = /\.(?:js|css)$/.test(file) ? withoutHashes(bytes, hashes) : bytes
     return {
-      file: relative(distRoot, absolutePath).split('\\').join('/'),
+      file,
       bytes: bytes.length,
-      gzipBytes: gzipSync(bytes, { level: 9, mtime: 0 }).length,
+      gzipBytes: gzipSync(measured, { level: 9, mtime: 0 }).length,
     }
   })
   const initial = initialAssets(distRoot)
@@ -132,13 +144,39 @@ export function measureWebAssets(distRoot, limits = WEB_ASSET_LIMITS) {
     }
   }
   return {
-    compression: 'gzip level 9, per emitted asset',
+    compression: 'gzip level 9, per emitted asset, with content hashes in file names replaced by one placeholder',
     initial: [...initial].sort(),
     files,
     totals,
     limits,
     violations,
   }
+}
+
+// Emitted names end in an eight-character content hash (index-b5whv8zU.js),
+// and a chunk that loads others names them. The letters are random, so their
+// gzip size changes whenever any chunk does; measuring with every hash
+// replaced by one placeholder makes a size move only when code does. The raw
+// size is unchanged, since the placeholder is as long as a hash.
+const HASHED_NAME = /-([A-Za-z0-9_-]{8})\.[A-Za-z0-9]+$/
+const HASH_PLACEHOLDER = '00000000'
+
+function contentHashes(names) {
+  const hashes = new Set()
+  for (const name of names) {
+    const hash = HASHED_NAME.exec(name)?.[1]
+    if (hash) hashes.add(hash)
+  }
+  return hashes
+}
+
+function withoutHashes(bytes, hashes) {
+  if (hashes.size === 0) return bytes
+  const text = bytes.toString('latin1')
+  const measured = text.replace(/-([A-Za-z0-9_-]{8})\./g, (match, hash) =>
+    hashes.has(hash) ? `-${HASH_PLACEHOLDER}.` : match,
+  )
+  return measured === text ? bytes : Buffer.from(measured, 'latin1')
 }
 
 // The scripts, module preloads and stylesheets index.html loads itself.

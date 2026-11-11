@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -50,6 +51,29 @@ test('counts what index.html loads as the initial load', () => {
       { name: 'initialJavascriptRawBytes', observed: 28, limit: 20 },
     ])
   })
+})
+
+test('measures gzip with content hashes replaced, so a size moves only when code does', () => {
+  const plain = Array.from({ length: 40 }, (_, index) => `aaaa${String(index).padStart(4, '0')}`)
+  const varied = Array.from({ length: 40 }, (_, index) =>
+    createHash('sha256').update(`route ${index}`).digest('base64url').slice(0, 8),
+  )
+  const measure = (hashes) =>
+    withDist((root) => {
+      writeFileSync(
+        join(root, 'assets', 'app.js'),
+        hashes.map((hash, index) => `import('./Route${index}-${hash}.js');`).join('\n'),
+      )
+      for (const [index, hash] of hashes.entries()) {
+        writeFileSync(join(root, 'assets', `Route${index}-${hash}.js`), `export const page = ${index};`)
+      }
+      return measureWebAssets(root, roomy).totals
+    })
+  const before = measure(plain)
+  const after = measure(varied)
+  assert.equal(after.initialJavascriptRawBytes, before.initialJavascriptRawBytes)
+  assert.equal(after.initialJavascriptGzipBytes, before.initialJavascriptGzipBytes)
+  assert.equal(after.javascriptGzipBytes, before.javascriptGzipBytes)
 })
 
 test('holds each lazy chunk to its own limit, not a total', () => {
