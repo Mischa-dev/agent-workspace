@@ -393,12 +393,10 @@ fn loosen(content: &[Inline], context: InlineContext) -> Vec<Inline> {
             || before.is_some_and(|before| Some(before) != own)
             || after.is_some_and(|after| Some(after) != own);
         if changes {
-            for slot in &mut characters[start..at] {
-                if let Some((_, marks)) = slot {
-                    marks.bold = false;
-                    marks.italic = false;
-                    marks.strike = false;
-                }
+            for (_, marks) in characters[start..at].iter_mut().flatten() {
+                marks.bold = false;
+                marks.italic = false;
+                marks.strike = false;
             }
         }
     }
@@ -534,7 +532,7 @@ impl Writer {
                 let longest = wanted
                     .iter()
                     .filter(|open| !stack[..keep].iter().any(|kept| same_kind(kept, open)))
-                    .map(|open| runs(open))
+                    .map(&runs)
                     .max()
                     .unwrap_or(0);
                 if let Some(position) = stack[..keep].iter().position(|open| runs(open) < longest) {

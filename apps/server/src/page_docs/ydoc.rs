@@ -1129,7 +1129,7 @@ fn utf16_len(text: &str) -> u32 {
 /// Values equal as JavaScript sees them: 1 and 1.0 are the same number.
 fn any_eq(a: &Any, b: &Any) -> bool {
     match (a, b) {
-        (Any::Number(a), Any::Number(b)) => number_value(a.clone()) == number_value(b.clone()),
+        (Any::Number(a), Any::Number(b)) => number_value(*a) == number_value(*b),
         (Any::Map(a), Any::Map(b)) => {
             a.len() == b.len()
                 && a.iter()
@@ -1150,6 +1150,9 @@ mod tests {
     use yrs::In;
     use yrs::types::Delta;
     use yrs::types::xml::{XmlDeltaPrelim, XmlIn};
+
+    /// A change a test browser makes to its copy of a page.
+    type Change = Box<dyn FnOnce(&mut TransactionMut, &XmlFragmentRef)>;
 
     fn blocks_of(doc: &Doc) -> Vec<Block> {
         read_doc(doc).expect("the editor's shape")
@@ -1414,10 +1417,10 @@ mod tests {
     #[test]
     fn browsers_updates_the_editor_couldnt_make_are_refused() {
         let doc = doc_with(&from_markdown("text"));
-        let refused = |change: Box<dyn FnOnce(&mut TransactionMut, &XmlFragmentRef)>| {
+        let refused = |change: Change| {
             let update = client_update(&doc, 91, change);
             matches!(
-                apply_client_update(&load(&encode(&doc)).unwrap(), &update),
+                apply_client_update(&load(&encode(&doc)).expect("load"), &update),
                 Err(Refused::Invalid(_))
             )
         };
@@ -1473,7 +1476,7 @@ mod tests {
         })));
         // Changes in the server's name: a second copy of the server's
         // document, edited, as a browser would send it.
-        let forger = load(&encode(&doc)).unwrap();
+        let forger = load(&encode(&doc)).expect("load");
         let before = forger.transact().state_vector();
         {
             let fragment = fragment(&forger);
@@ -1481,10 +1484,10 @@ mod tests {
             fragment.insert(&mut txn, 0, XmlElementPrelim::empty(PARAGRAPH));
         }
         let forged = forger.transact().encode_diff_v1(&before);
-        let result = apply_client_update(&load(&encode(&doc)).unwrap(), &forged);
+        let result = apply_client_update(&load(&encode(&doc)).expect("load"), &forged);
         assert!(matches!(result, Err(Refused::Invalid(_))), "{result:?}");
         assert_eq!(
-            apply_client_update(&load(&encode(&doc)).unwrap(), b"\xff\xff"),
+            apply_client_update(&load(&encode(&doc)).expect("load"), b"\xff\xff"),
             Err(Refused::Unreadable)
         );
     }
@@ -1510,7 +1513,7 @@ mod tests {
         assert_eq!(apply_client_update(&doc, &second), Err(Refused::Resync));
         let both = other.transact().encode_diff_v1(&base);
         assert_eq!(
-            apply_client_update(&load(&encode(&doc)).unwrap(), &both),
+            apply_client_update(&load(&encode(&doc)).expect("load"), &both),
             Ok(())
         );
     }

@@ -804,30 +804,33 @@ fn inline_run(
             continue;
         }
 
-        if character == '[' && !in_link && depth < MAX_INLINE_DEPTH && *budget > 0 {
-            if let Some(link) = read_link(text, index, budget) {
-                flush!();
-                let label = Text::new(&link.label);
-                let children = inline_run(
-                    &label,
-                    depth + 1,
-                    true,
-                    &mut Context {
-                        no_closer: HashMap::new(),
-                    },
-                    budget,
-                );
-                match safe_href(&link.destination) {
-                    Some((href, external)) => out.push(Inline::Link {
-                        href,
-                        external,
-                        children,
-                    }),
-                    None => out.extend(children),
-                }
-                index = link.end;
-                continue;
+        if character == '['
+            && !in_link
+            && depth < MAX_INLINE_DEPTH
+            && *budget > 0
+            && let Some(link) = read_link(text, index, budget)
+        {
+            flush!();
+            let label = Text::new(&link.label);
+            let children = inline_run(
+                &label,
+                depth + 1,
+                true,
+                &mut Context {
+                    no_closer: HashMap::new(),
+                },
+                budget,
+            );
+            match safe_href(&link.destination) {
+                Some((href, external)) => out.push(Inline::Link {
+                    href,
+                    external,
+                    children,
+                }),
+                None => out.extend(children),
             }
+            index = link.end;
+            continue;
         }
 
         if character == '<' && !in_link {
@@ -851,36 +854,36 @@ fn inline_run(
             }
         }
 
-        if (character == 'h' || character == 'H') && !in_link && !is_word(text.before(index)) {
-            if let Some(url) = bare_url(text, index)
-                && let Some((href, external)) = safe_href(&url)
-            {
-                flush!();
-                let length = url.chars().count();
-                out.push(Inline::Link {
-                    href,
-                    external,
-                    children: vec![Inline::Text { value: url }],
-                });
-                index += length;
-                continue;
-            }
+        if (character == 'h' || character == 'H')
+            && !in_link
+            && !is_word(text.before(index))
+            && let Some(url) = bare_url(text, index)
+            && let Some((href, external)) = safe_href(&url)
+        {
+            flush!();
+            let length = url.chars().count();
+            out.push(Inline::Link {
+                href,
+                external,
+                children: vec![Inline::Text { value: url }],
+            });
+            index += length;
+            continue;
         }
 
         if character.is_ascii_uppercase()
             && !in_link
             && !text.before(index).unwrap_or(' ').is_ascii_alphanumeric()
             && !matches!(text.before(index), Some('_' | '-'))
+            && let Some(length) = task_key(text, index)
         {
-            if let Some(length) = task_key(text, index) {
-                let key = text.slice(index, index + length);
-                let project = &key[..key.find('-').unwrap_or(key.len())];
-                if !NOT_TASK_KEYS.contains(&project) {
-                    flush!();
-                    out.push(Inline::TaskKey { key });
-                    index += length;
-                    continue;
-                }
+            let key = text.slice(index, index + length);
+            let project = &key[..key.find('-').unwrap_or(key.len())];
+            if !NOT_TASK_KEYS.contains(&project) {
+                flush!();
+                out.push(Inline::TaskKey { key });
+                index += length;
+                continue;
             }
         }
 
@@ -890,30 +893,31 @@ fn inline_run(
             let opens_word =
                 !is_space(text.at(end)) && (character != '_' || !is_word(text.before(index)));
             let usable = if character == '~' { run == 2 } else { run <= 3 };
-            if opens_word && usable {
-                if let Some(close) = find_closer(text, end, character, run, context) {
-                    flush!();
-                    let inner_text = Text::new(&text.slice(end, close));
-                    let inner = inline_run(
-                        &inner_text,
-                        depth + 1,
-                        in_link,
-                        &mut Context {
-                            no_closer: HashMap::new(),
-                        },
-                        budget,
-                    );
-                    out.push(match (character, run) {
-                        ('~', _) => Inline::Del { children: inner },
-                        (_, 1) => Inline::Em { children: inner },
-                        (_, 2) => Inline::Strong { children: inner },
-                        _ => Inline::Strong {
-                            children: vec![Inline::Em { children: inner }],
-                        },
-                    });
-                    index = close + run;
-                    continue;
-                }
+            if opens_word
+                && usable
+                && let Some(close) = find_closer(text, end, character, run, context)
+            {
+                flush!();
+                let inner_text = Text::new(&text.slice(end, close));
+                let inner = inline_run(
+                    &inner_text,
+                    depth + 1,
+                    in_link,
+                    &mut Context {
+                        no_closer: HashMap::new(),
+                    },
+                    budget,
+                );
+                out.push(match (character, run) {
+                    ('~', _) => Inline::Del { children: inner },
+                    (_, 1) => Inline::Em { children: inner },
+                    (_, 2) => Inline::Strong { children: inner },
+                    _ => Inline::Strong {
+                        children: vec![Inline::Em { children: inner }],
+                    },
+                });
+                index = close + run;
+                continue;
             }
             plain.push_str(&text.slice(index, end));
             index = end;
