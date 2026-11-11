@@ -1,0 +1,1927 @@
+{
+  "repository": "Mischa-dev/agent-workspace",
+  "base": "dc695b5707ef6f74111f92b2e79ef2c884af1b75",
+  "input_sha256": "8dc8b7e65c4ef8f78cd65c9c84830ff0ff3a5a7f894734e6652b1a511f97b5e2",
+  "scope": "All 191 Part 1 candidates, Part 2 agent-workspace verdicts, shared-helper plan. Static trace of every entry, dynamic coverage as documented; blocked entries are not validated fixes.",
+  "counts": {
+    "already fixed": 111,
+    "fixed": 21,
+    "invalid": 3,
+    "duplicate": 1,
+    "design decision": 12,
+    "blocked": 43
+  },
+  "findings": [
+    {
+      "id": "AW-001",
+      "severity": "P1",
+      "pr": 6,
+      "source": "apps/server/src/provider.rs:433",
+      "title": "Reject failed or interrupted provider turns",
+      "claim": "A `turn/completed` notification does not necessarily mean success: the pinned contract allows `/params/turn/status` to be `completed`, `interrupted`, or `failed` (`schemas/codex-app-server/0.146.0/ServerNotification.json:6912-6918`).",
+      "verdict": "already fixed",
+      "evidence": "provider/codex_app_server.rs parse_provider_event compares status to completed; provider.rs drive_turn refuses !completed. Interrupted and failed notifications cannot complete runs."
+    },
+    {
+      "id": "AW-002",
+      "severity": "P1",
+      "pr": 6,
+      "source": "apps/server/src/provider.rs:498",
+      "title": "Preserve approval details before asking the user",
+      "claim": "When Codex requests command, file-change, network, or permission approval, this replaces the request-specific command, path, reason, and permission scope with the same generic sentence.",
+      "verdict": "fixed",
+      "evidence": "Locally incorporated reviewed PR #211 commits 7cd01f8 and 9de9350, with authorship retained. See PR-211-review.md for the per-item code trace, tests and limits. Full local verification is recorded separately; this is not a claim that main or the remote PR was changed."
+    },
+    {
+      "id": "AW-003",
+      "severity": "P1",
+      "pr": 6,
+      "source": "apps/server/src/provider.rs:348",
+      "title": "Preserve notifications queued before the turn loop",
+      "claim": "If Codex emits a notification before an `initialize`, `thread/*`, or `turn/start` response, `CodexBridge::read_until_response` removes it from stdout and stores it in `notifications`; this loop then reads only `next_raw_event()` and never drains that queue.",
+      "verdict": "already fixed",
+      "evidence": "tools/codex-bridge-spike/src/lib.rs next_raw_event pops notifications before reading stdout, preserving queued order."
+    },
+    {
+      "id": "AW-004",
+      "severity": "P1",
+      "pr": 6,
+      "source": "apps/server/src/recovery.rs:142",
+      "title": "Cancel pending approvals during startup recovery",
+      "claim": "When the service restarts while a run is blocked, this marks the run `interrupted` but leaves its `agent_approvals` rows pending.",
+      "verdict": "already fixed",
+      "evidence": "recovery.rs selects recovering alongside starting/working/blocked, excludes unstarted work, cancels approvals transactionally on interruption; main.rs also calls cancel_terminal_run_approvals."
+    },
+    {
+      "id": "AW-005",
+      "severity": "P1",
+      "pr": 6,
+      "source": "apps/server/src/recovery.rs:32",
+      "title": "Reconcile runs already marked recovering",
+      "claim": "If the service stops after committing the transition to `recovering` but before committing the terminal recovery result, the next startup excludes that run from this query.",
+      "verdict": "already fixed",
+      "evidence": "recovery.rs selects recovering alongside starting/working/blocked, excludes unstarted work, cancels approvals transactionally on interruption; main.rs also calls cancel_terminal_run_approvals."
+    },
+    {
+      "id": "AW-006",
+      "severity": "P1",
+      "pr": 6,
+      "source": "apps/server/src/provider.rs:112",
+      "title": "Route pre-response approvals through the application",
+      "claim": "If Codex emits a command or file-change approval request before the `turn/start` response, this call is still inside `CodexBridge::read_until_response`, which handles such server requests through `respond_to_server_request` and immediately returns `{\"decision\"",
+      "verdict": "invalid",
+      "evidence": "Production codex_app_server.rs bridge configuration disables automatic_server_request_responses. Pre-response approval requests fail closed, rather than being automatically approved. Routing them gracefully remains a separate functional limitation."
+    },
+    {
+      "id": "AW-007",
+      "severity": "P1",
+      "pr": 17,
+      "source": "apps/server/src/scheduler.rs:275",
+      "title": "Reject retries while the provider turn is unresolved",
+      "claim": "When the predecessor was interrupted because recovery observed an `inProgress` or otherwise ambiguous provider turn, `reusable_retry_workspace` checks only Git state and this call reaches `provider::start_run`, which unconditionally resumes the existing provid",
+      "verdict": "fixed",
+      "evidence": "Locally incorporated reviewed PR #211 commits 7cd01f8 and 9de9350, with authorship retained. See PR-211-review.md for the per-item code trace, tests and limits. Full local verification is recorded separately; this is not a claim that main or the remote PR was changed."
+    },
+    {
+      "id": "AW-008",
+      "severity": "P1",
+      "pr": 19,
+      "source": "apps/server/src/provider/codex_app_server.rs:598",
+      "title": "Record the new pinned provider response contract",
+      "claim": "This makes recovery correctness depend on `thread/read` returning `thread.turns[].id`, but the commit leaves `docs/compatibility/codex-app-server.md` unchanged.",
+      "verdict": "fixed",
+      "evidence": "Locally incorporated reviewed PR #211 commits 7cd01f8 and 9de9350, with authorship retained. See PR-211-review.md for the per-item code trace, tests and limits. Full local verification is recorded separately; this is not a claim that main or the remote PR was changed."
+    },
+    {
+      "id": "AW-009",
+      "severity": "P1",
+      "pr": 35,
+      "source": "apps/server/src/github.rs:1055",
+      "title": "Extend the lease beyond the credentialed network operation",
+      "claim": "When token creation, remote-ref inspection, or the push takes more than 30 seconds, the one-second worker loop marks this still-running job stale here and allows another worker to reclaim it.",
+      "verdict": "fixed",
+      "evidence": "Locally incorporated reviewed PR #211 commits 7cd01f8 and 9de9350, with authorship retained. See PR-211-review.md for the per-item code trace, tests and limits. Full local verification is recorded separately; this is not a claim that main or the remote PR was changed."
+    },
+    {
+      "id": "AW-010",
+      "severity": "P1",
+      "pr": 36,
+      "source": "apps/server/src/github.rs:1287",
+      "title": "Require publication by the selected Agent Run",
+      "claim": "When a terminal run is retried, the scheduler reuses its predecessor's Repository Workspace, but the workspace's `published_commit` is not cleared.",
+      "verdict": "fixed",
+      "evidence": "Locally incorporated reviewed PR #211 commits 7cd01f8 and 9de9350, with authorship retained. See PR-211-review.md for the per-item code trace, tests and limits. Full local verification is recorded separately; this is not a claim that main or the remote PR was changed."
+    },
+    {
+      "id": "AW-011",
+      "severity": "P1",
+      "pr": 41,
+      "source": "apps/server/src/github.rs:3183",
+      "title": "Restrict merge-SHA fallback to merged close deliveries",
+      "claim": "Because `merge_commit_sha` is retained for every `pull_request` and `pull_request_review` action, a delayed open, synchronize, or review job can run after the PR merges.",
+      "verdict": "already fixed",
+      "evidence": "github.rs bounded_job_payload retains merge_commit_sha only for closed+merged pull_request events; reconcile_merge_commit_identity requires live REST merged state. Existing tests cover synchronize/review events."
+    },
+    {
+      "id": "AW-012",
+      "severity": "P1",
+      "pr": 68,
+      "source": "tools/host-maintenance/src/lib.rs:898",
+      "title": "Pass --dbname to pg_restore",
+      "claim": "Under the documented restore path this runs the `agent-workspace-pg-restore` wrapper as `pg_restore --exit-on-error --no-owner --no-privileges` with the dump on stdin, but never supplies `--dbname`/`-d`.",
+      "verdict": "already fixed",
+      "evidence": "tools/host-maintenance/src/lib.rs restore supplies --dbname= with PGDATABASE. The fake pg_restore regression verifies the environment and argument order."
+    },
+    {
+      "id": "AW-013",
+      "severity": "P1",
+      "pr": 68,
+      "source": "tools/host-maintenance/src/lib.rs:606",
+      "title": "Sanitize audit FKs when omitting credential rows",
+      "claim": "On hosts that have processed MCP bearer or OAuth requests, retained `audit_events` rows can contain `mcp_credential_id`/`mcp_oauth_grant_id` values populated by `apps/server/src/mcp/writes.rs`, and those columns are foreign keys to `mcp_client_credentials` and",
+      "verdict": "already fixed",
+      "evidence": "tools/host-maintenance/src/lib.rs sanitizer nulls session_id, mcp_credential_id and mcp_oauth_grant_id before restoring post-data; regression asserts the complete SQL."
+    },
+    {
+      "id": "AW-014",
+      "severity": "P1",
+      "pr": 71,
+      "source": "tools/host-maintenance/src/lib.rs:905",
+      "title": "Clear all excluded audit foreign keys before post-data",
+      "claim": "When the backup contains MCP bearer or OAuth audit rows, this sanitizer only nulls `session_id`; the server also records `audit_events.mcp_credential_id` and `audit_events.mcp_oauth_grant_id` for MCP activity, while `mcp_client_credentials` and `mcp_oauth_gran",
+      "verdict": "duplicate",
+      "evidence": "Same audit-FK defect as AW-013; the sanitizer already nulls all three excluded foreign keys."
+    },
+    {
+      "id": "AW-015",
+      "severity": "P1",
+      "pr": 76,
+      "source": "apps/server/src/storage_admission.rs:43",
+      "title": "Skip symlinks during storage admission",
+      "claim": "When any managed worktree contains a repository symlink, this check makes `require_growth` return a storage conflict before starting runs or preparing repositories, even if quota and free-space watermarks are healthy.",
+      "verdict": "already fixed",
+      "evidence": "storage_admission.rs skips descendant symlinks and has symlinks_are_skipped_without_following_targets. Root-symlink bypass is separately tracked as AW-069."
+    },
+    {
+      "id": "AW-016",
+      "severity": "P1",
+      "pr": 76,
+      "source": "apps/server/src/git_runtime.rs:575",
+      "title": "Preserve ignored files before removing worktrees",
+      "claim": "When a retained worktree contains only files ignored by Git, `inspect_worktree` reports it clean because `git status --porcelain --untracked-files=all` does not list ignored files unless `--ignored` is used; I also verified `git worktree remove` deletes such a",
+      "verdict": "fixed",
+      "evidence": "Locally incorporated reviewed PR #211 commits 7cd01f8 and 9de9350, with authorship retained. See PR-211-review.md for the per-item code trace, tests and limits. Full local verification is recorded separately; this is not a claim that main or the remote PR was changed."
+    },
+    {
+      "id": "AW-017",
+      "severity": "P1",
+      "pr": 90,
+      "source": "apps/server/src/mcp/oauth.rs:980",
+      "title": "Preserve the OAuth grant's approved scopes",
+      "claim": "When an agent connection has broader permissions than the OAuth request (for example, the connection has `write` but the user approved only `read`), this branch replaces `grant_row.scopes` with the connection's full scope list.",
+      "verdict": "design decision",
+      "evidence": "mcp/oauth.rs agent_grant_scopes strips mutating scopes from read-only consent, but full consent deliberately uses the agent connection permissions. Scope response wording and exact full-scope semantics need a product decision; no silent change."
+    },
+    {
+      "id": "AW-018",
+      "severity": "P1",
+      "pr": 90,
+      "source": "apps/server/migrations/0038_reply_requests.sql:69",
+      "title": "Keep webhook signing keys out of database records",
+      "claim": "The new `webhook_secret` column stores every HMAC signing key as plaintext, and the delivery worker reads that value back to sign requests.",
+      "verdict": "already fixed",
+      "evidence": "external_agents.rs writes encrypted webhook_secret_id and NULL plaintext on create/rotate; secrets startup migration handles legacy plaintext when keyring exists. Old deployment without a master key remains an operator migration prerequisite."
+    },
+    {
+      "id": "AW-019",
+      "severity": "P1",
+      "pr": 90,
+      "source": "apps/server/src/external_agents.rs:506",
+      "title": "Reject private webhook destinations",
+      "claim": "A project owner or admin can configure any syntactically valid HTTP(S) URL, after which the server performs POST requests to it from the background worker.",
+      "verdict": "already fixed",
+      "evidence": "replies.rs validates HTTPS public destinations, validates all resolved addresses and pins checked DNS; exact trusted origins are operator-configured. No project-manager exception authorizes arbitrary private addresses."
+    },
+    {
+      "id": "AW-020",
+      "severity": "P1",
+      "pr": 90,
+      "source": "apps/server/src/external_agents.rs:547",
+      "title": "Keep webhook signing secrets out of browser responses",
+      "claim": "When a manager configures a webhook through the settings endpoint, this serializes the new signing key into the HTTP response, and the frontend subsequently renders it in the page.",
+      "verdict": "design decision",
+      "evidence": "external_agents.rs returns a newly generated signing key once to its authorized manager; read views omit it. One-time issuance versus the broad no-browser-secrets wording needs an explicit policy decision."
+    },
+    {
+      "id": "AW-021",
+      "severity": "P1",
+      "pr": 90,
+      "source": "apps/server/src/conversations.rs:1675",
+      "title": "Recheck visibility when loading private reply metadata",
+      "claim": "For a members-only DM or group, the timeline access check and this reply-metadata load run as separate pool operations, while `timeline_requests` accepts no viewer and reads the conversation by raw ID without `conversation_visible_to`.",
+      "verdict": "fixed",
+      "evidence": "Locally incorporated reviewed PR #211 commits 7cd01f8 and 9de9350, with authorship retained. See PR-211-review.md for the per-item code trace, tests and limits. Full local verification is recorded separately; this is not a claim that main or the remote PR was changed."
+    },
+    {
+      "id": "AW-022",
+      "severity": "P1",
+      "pr": 96,
+      "source": "apps/server/src/memberships.rs:360",
+      "title": "Keep human project and organization roles aligned",
+      "claim": "When an owner promotes an existing human from `member` to `admin`, this path now updates only `project_memberships`; the removed `sync_organization_role` call leaves their organization role as `member`.",
+      "verdict": "already fixed",
+      "evidence": "memberships.rs calls sync_organization_role in the same transaction; explicit/custom workspace roles are preserved intentionally."
+    },
+    {
+      "id": "AW-023",
+      "severity": "P1",
+      "pr": 96,
+      "source": "apps/server/src/mcp.rs:1628",
+      "title": "Authorize approvals against the selected project",
+      "claim": "For an approval created in an agent's additional project, `approval_get` and `approval_respond` cannot succeed: this resolver has no `approvalId` lookup, and even when the caller supplies the newly exposed `projectId`, `mcp/approvals.rs` still joins the projec",
+      "verdict": "already fixed",
+      "evidence": "mcp.rs PRIMARY_SCOPES resolves approvalId to its target project. mcp/approvals.rs loads that project, current organization membership and agent_connection_can_access. NULL-run approvals remain a separate functional gap, not this cross-project claim."
+    },
+    {
+      "id": "AW-024",
+      "severity": "P1",
+      "pr": 96,
+      "source": "apps/server/src/mcp.rs:1632",
+      "title": "Authorize sponsored runs in the resolved project",
+      "claim": "When `external_execution_request_create` targets a conversation in an additional project, this new lookup changes `principal.project_id` to that project, but `external_execution.rs` still requires `credential.project_id = principal.project_id` and joins the me",
+      "verdict": "already fixed",
+      "evidence": "external_execution.rs uses the resolved conversation project and agent_connection_can_access, while credentials remain anchored to the home project."
+    },
+    {
+      "id": "AW-025",
+      "severity": "P1",
+      "pr": 99,
+      "source": "apps/server/src/mcp.rs:1736",
+      "title": "Parse resource URLs before resolving their project",
+      "claim": "The new tools advertise canonical links as valid identifiers, but this middleware only resolves `pageId`, `threadId`, and similar fields when the entire value parses as a UUID.",
+      "verdict": "already fixed",
+      "evidence": "mcp/common.rs parse_id accepts UUIDs and canonical trailing-UUID links; middleware uses it. Some handler-level parsers remain UUID-only, a separate functional cleanup."
+    },
+    {
+      "id": "AW-026",
+      "severity": "P1",
+      "pr": 99,
+      "source": "apps/server/src/connected_apps.rs:153",
+      "title": "Require current organization membership to manage agent grants",
+      "claim": "When a person\u2019s organization membership is disabled but their project membership remains enabled, this branch still treats them as an owner/admin of the agent\u2019s OAuth grant, allowing them to toggle or revoke a connected app after losing access to the organizat",
+      "verdict": "already fixed",
+      "evidence": "connected_apps.rs owned_grant joins enabled organization_memberships for the manager, so leftover project membership is insufficient."
+    },
+    {
+      "id": "AW-027",
+      "severity": "P1",
+      "pr": 99,
+      "source": "apps/server/src/mcp/oauth.rs:467",
+      "title": "Enforce read-only access for agent grants",
+      "claim": "When a client requests write access but the user selects an agent and chooses the newly offered Read only option, this stores only `read` on the grant, but `resolve_access_token` later replaces those grant scopes with the agent connection's scopes.",
+      "verdict": "already fixed",
+      "evidence": "mcp/oauth.rs agent_grant_scopes keeps only read/events for read-only consent and has an explicit read-only-consent regression."
+    },
+    {
+      "id": "AW-028",
+      "severity": "P1",
+      "pr": 100,
+      "source": "apps/server/src/auth/workos.rs:542",
+      "title": "Wait for the claimed WorkOS session check",
+      "claim": "When two requests arrive after a WorkOS session\u2019s five-minute check expires, the first request sets `workos_checked_at` while contacting WorkOS, but the second loses the conditional update and this branch authenticates it immediately.",
+      "verdict": "design decision",
+      "evidence": "auth/workos.rs conditional UPDATE claims one provider check; concurrent requests deliberately retain the session until the check resolves. Fail-closed waiting changes latency and availability policy."
+    },
+    {
+      "id": "AW-029",
+      "severity": "P1",
+      "pr": 104,
+      "source": "apps/server/src/mcp/admin.rs:539",
+      "title": "Reject ambiguous project keys before archiving",
+      "claim": "When an account-wide user belongs to two organizations containing the same project key, this query returns both IDs in unspecified order but then silently selects the first.",
+      "verdict": "fixed",
+      "evidence": "Locally incorporated reviewed PR #211 commits 7cd01f8 and 9de9350, with authorship retained. See PR-211-review.md for the per-item code trace, tests and limits. Full local verification is recorded separately; this is not a claim that main or the remote PR was changed."
+    },
+    {
+      "id": "AW-030",
+      "severity": "P1",
+      "pr": 104,
+      "source": "apps/server/src/mcp.rs:2001",
+      "title": "Reject ambiguous task keys before rewriting IDs",
+      "claim": "For an account-wide caller with access to two organizations that both have, for example, `AW-1`, both rows satisfy this query because project keys are only organization-scoped.",
+      "verdict": "fixed",
+      "evidence": "Reviewed and revised PR #211. task_by_key now groups by task ID before LIMIT 2, and resolve_among distinguishes missing, unique and ambiguous lookup results. It keeps the archived-original fallback for an unreadable moved target, but cannot use it after an ambiguous shared lookup. historical_aliases_cannot_hide_a_conflicting_task_key covers a current key and two historical alias rows across workspaces."
+    },
+    {
+      "id": "AW-031",
+      "severity": "P1",
+      "pr": 104,
+      "source": "apps/server/src/mcp/briefing.rs:353",
+      "title": "Check current org membership for archived projects",
+      "claim": "For an account-wide OAuth grant whose organization membership has been disabled while its project-membership row remains enabled, `includeArchived` still adds that organization's archived project IDs because this query checks only `project_memberships`.",
+      "verdict": "fixed",
+      "evidence": "Locally incorporated reviewed PR #211 commits 7cd01f8 and 9de9350, with authorship retained. See PR-211-review.md for the per-item code trace, tests and limits. Full local verification is recorded separately; this is not a claim that main or the remote PR was changed."
+    },
+    {
+      "id": "AW-032",
+      "severity": "P1",
+      "pr": 104,
+      "source": "apps/server/src/mcp/task_move.rs:673",
+      "title": "Recheck access to the actual move target",
+      "claim": "When retrying an archived source UUID, the caller only needs access to the supplied `toProjectId`, which may be an unrelated project; `already_moved` then returns the current key, title, and URL from the actual destination without checking current access to th",
+      "verdict": "already fixed",
+      "evidence": "mcp/task_move.rs already_moved filters the actual destination with actor_can_access_project and projects_showing_tasks; it does not trust the supplied destination alone."
+    },
+    {
+      "id": "AW-033",
+      "severity": "P1",
+      "pr": 105,
+      "source": "apps/server/src/mcp/tasks.rs:2623",
+      "title": "Recheck conversation visibility inside the write transaction",
+      "claim": "For a non-thread conversation, access is checked by `record_visible` on a separate pool connection before this transaction starts, while this query omits `conversation_visible_to`; if the caller is removed from the private conversation between those operations",
+      "verdict": "fixed",
+      "evidence": "Locally incorporated reviewed PR #211 commits 7cd01f8 and 9de9350, with authorship retained. See PR-211-review.md for the per-item code trace, tests and limits. Full local verification is recorded separately; this is not a claim that main or the remote PR was changed."
+    },
+    {
+      "id": "AW-034",
+      "severity": "P1",
+      "pr": 107,
+      "source": "apps/server/src/message_edits.rs:804",
+      "title": "Route thread lookups through conversation visibility",
+      "claim": "Apply `conversation_visible_to` to this removal-time thread lookup (and the related thread queries in this helper) rather than querying `conversations` directly.",
+      "verdict": "invalid",
+      "evidence": "message_edits.rs removal paths enter through lock_message_for_change and the locked origin conversation. Child lookups are structurally limited to threads of that origin; lack of a repeated literal predicate does not itself establish the claimed leak."
+    },
+    {
+      "id": "AW-035",
+      "severity": "P1",
+      "pr": 109,
+      "source": "apps/server/migrations/0050_pull_request_visibility.sql:25",
+      "title": "Apply PR visibility to browser work-item reads",
+      "claim": "This predicate is not applied by the browser work-item projection: `WORK_ITEM_BY_ID_SELECT` in `apps/server/src/work_items.rs` still aggregates every row from `github_pull_request_work_item_links` without `pull_request_visible_to`.",
+      "verdict": "already fixed",
+      "evidence": "work_items.rs WORK_ITEM_SELECT linked-PR aggregation applies pull_request_visible_to and work_item_view suppresses code details when code permission is absent."
+    },
+    {
+      "id": "AW-036",
+      "severity": "P1",
+      "pr": 128,
+      "source": "apps/server/src/replies.rs:1064",
+      "title": "Bound DNS resolution before blocking the reply worker",
+      "claim": "When an external agent configures a hostname whose DNS resolution stalls, this `lookup_host` await is outside `WEBHOOK_TIMEOUT`, which only applies after the reqwest client is built.",
+      "verdict": "fixed",
+      "evidence": "Locally incorporated reviewed PR #211 commits 7cd01f8 and 9de9350, with authorship retained. See PR-211-review.md for the per-item code trace, tests and limits. Full local verification is recorded separately; this is not a claim that main or the remote PR was changed."
+    },
+    {
+      "id": "AW-037",
+      "severity": "P1",
+      "pr": 128,
+      "source": "apps/server/src/replies.rs:1093",
+      "title": "Preserve the deployed private wakeup target",
+      "claim": "The documented live Nyx receiver is `100.119.56.3:8732` (`docs/plans/workspace-merge-plan.md:27-30`), which lies in the 100.64/10 range rejected here.",
+      "verdict": "design decision",
+      "evidence": "replies.rs already has exact-origin trusted webhook configuration, including tests for the tailnet address. Blanket CGNAT acceptance would change SSRF protection; deployment must configure its specific trusted origin."
+    },
+    {
+      "id": "AW-038",
+      "severity": "P1",
+      "pr": 156,
+      "source": "apps/web/src/auth/session.ts:173",
+      "title": "Clear drafts whenever the authenticated session ends",
+      "claim": "This clears local drafts only after an explicit logout request succeeds.",
+      "verdict": "design decision",
+      "evidence": "auth/session.ts logout clears local drafts before awaiting the request. Session expiry detaches the draft owner; owner-scoped storage retains the same person offline outbox. Erasing that outbox on expiry is a product policy change."
+    },
+    {
+      "id": "AW-039",
+      "severity": "P1",
+      "pr": 157,
+      "source": "apps/server/src/mail/mod.rs:314",
+      "title": "Keep reset tokens off workspace-controlled SMTP",
+      "claim": "When a person belongs to a workspace whose owner controls its SMTP endpoint, and their preferred workspace has no configured mail, this query selects that owner-controlled transport for password-reset messages.",
+      "verdict": "fixed",
+      "evidence": "Locally incorporated reviewed PR #211 commits 7cd01f8 and 9de9350, with authorship retained. See PR-211-review.md for the per-item code trace, tests and limits. Full local verification is recorded separately; this is not a claim that main or the remote PR was changed."
+    },
+    {
+      "id": "AW-040",
+      "severity": "P1",
+      "pr": 162,
+      "source": "apps/server/src/link_previews.rs:274",
+      "title": "Account for preview images before storing them",
+      "claim": "When link previews are enabled and messages reference unique pages with images, this writes each processed image under the file-store directory without calling `require_room`.",
+      "verdict": "already fixed",
+      "evidence": "link_previews.rs fetch_job calls files::require_room before storing images; files accounting includes link_previews.image_bytes."
+    },
+    {
+      "id": "AW-041",
+      "severity": "P1",
+      "pr": 172,
+      "source": "apps/server/src/mcp/oauth.rs:867",
+      "title": "Avoid granting a permanent branch during refresh grace",
+      "claim": "When a stolen refresh token is replayed within five minutes of its legitimate exchange, this branch issues the attacker a new refresh token whose `used_at` is null and whose lifetime is another 30 days.",
+      "verdict": "design decision",
+      "evidence": "mcp/oauth.rs refresh grace still issues a live replacement refresh token. Shortening grace-issued expiry or access-only responses can overwrite a shared client token store with an unusable answer. Explicitly deferred by assignment; preserve pending Mischa decision."
+    },
+    {
+      "id": "AW-042",
+      "severity": "P1",
+      "pr": 181,
+      "source": "apps/server/src/bug_reports.rs:70",
+      "title": "Keep bearer tokens out of traced URL paths",
+      "claim": "Whenever an app submits a report, the bearer secret occupies the `{token}` path segment, while the global `TraceLayer` in `lib.rs` records `request.uri().path()` for every request.",
+      "verdict": "already fixed",
+      "evidence": "lib.rs logged_path uses MatchedPath, so bug-report bearer paths log /api/v1/bug-reports/{token}; raw secret is not the traced path."
+    },
+    {
+      "id": "AW-043",
+      "severity": "P1",
+      "pr": 186,
+      "source": "tools/ci/checks.sh:275",
+      "title": "Stub the new pinned-Node check in the CI area test fixture",
+      "claim": "Adding this step breaks every CI run that includes Rust: `AreaValidationTests.setUp()` creates a temporary checkout and stubs `test_admission.sh`, but does not provide `tools/ci/test_pinned_node.sh`.",
+      "verdict": "already fixed",
+      "evidence": "tools/ci/test_areas.py stubs test_pinned_node.sh and asserts it was dispatched. Current checks.sh validates areas before execution."
+    },
+    {
+      "id": "AW-044",
+      "severity": "P1",
+      "pr": 194,
+      "source": "apps/server/src/mcp/tool_permissions.rs:50",
+      "title": "Enforce task-view permissions when reading task attachments",
+      "claim": "When a caller retains a task attachment's file ID after losing `tasks.view`, `file_read` still returns its contents.",
+      "verdict": "already fixed",
+      "evidence": "files.rs READABLE task branch requires tasks.view in the target project, with hidden_by_agent_limit applied afterward. roles_and_access::task_files_follow_who_can_see_tasks covers the path."
+    },
+    {
+      "id": "AW-045",
+      "severity": "P1",
+      "pr": 194,
+      "source": "apps/server/src/work_items/comments.rs:781",
+      "title": "Apply agent limits when authorizing task-comment moderation",
+      "claim": "When an app acting for an Admin retains `tasks.view` and `tasks.edit` but excludes `channels.moderate`, `task_comment_delete` can still delete another person's comment.",
+      "verdict": "already fixed",
+      "evidence": "work_items/comments.rs is_comment_moderator checks agent_limit_hides ChannelsModerate before custom-role moderation. Regression an_app_moderates_only_within_its_agent_limit exists."
+    },
+    {
+      "id": "AW-046",
+      "severity": "P1",
+      "pr": 194,
+      "source": "apps/server/src/invitations.rs:664",
+      "title": "Avoid promoting custom project invitees to workspace Admin",
+      "claim": "When an owner invites someone to a custom Admin-based project role that excludes `members.invite` or `roles.manage`, `accept_new_user` still creates an unrestricted Admin organization membership before storing this custom project role.",
+      "verdict": "already fixed",
+      "evidence": "invitations.rs separates custom role_id from built-in Admin, constrains issuance by require_grantable and accept-time issuer_still_grants. roles_and_access has custom-admin invitation regressions."
+    },
+    {
+      "id": "AW-047",
+      "severity": "P1",
+      "pr": 194,
+      "source": "apps/server/src/mcp/oauth.rs:1324",
+      "title": "Bound OAuth agent credential issuance by grantable permissions",
+      "claim": "When a narrowed administrator retains `agents.manage` but lacks `tasks.edit`, they can still connect an OAuth client as an existing unrestricted Member agent.",
+      "verdict": "already fixed",
+      "evidence": "mcp/oauth.rs managed_agent bounds the agent grant by both manager standing and project_holding. roles_and_access::connecting_an_app_as_an_agent_stays_within_the_project_role covers narrowed project roles."
+    },
+    {
+      "id": "AW-048",
+      "severity": "P1",
+      "pr": 194,
+      "source": "apps/server/src/roles.rs:1705",
+      "title": "Check project management permission before propagating roles",
+      "claim": "When a workspace Admin lacks `members.manage` in a project through a custom project role or project-specific agent limit, they can still change another member's role there by calling `role_assign` with `applyToProjects: true`.",
+      "verdict": "already fixed",
+      "evidence": "roles.rs apply_to_their_projects authorizes MembershipManage through manage_refusal per target and checks grant subset of project_holding; inaccessible projects are skipped."
+    },
+    {
+      "id": "AW-049",
+      "severity": "P2",
+      "pr": 6,
+      "source": "apps/server/src/api.rs:431",
+      "title": "Enforce one active run per execution profile",
+      "claim": "When two Threads use the same execution profile, this guard checks only `conversation_id`, so both runs can start separate App Server processes against the same retained `CODEX_HOME`.",
+      "verdict": "design decision",
+      "evidence": "scheduler.rs now admits against provider_account max_concurrent_runs and one active turn per conversation; pooled adapters own account concurrency. Restoring the old one-process-per-profile restriction would conflict with the current provider-account design."
+    },
+    {
+      "id": "AW-050",
+      "severity": "P2",
+      "pr": 6,
+      "source": "apps/server/src/api.rs:628",
+      "title": "Persist provider-start failures in the visible timeline",
+      "claim": "When Codex fails during spawn, initialization, thread resume/start, or turn start, this records only a `run_state_changed` event that is never linked into `conversation_entries`.",
+      "verdict": "already fixed",
+      "evidence": "scheduler.rs fail_run inserts run_failed plus a conversation entry, retains worktree and publishes an update. Provider-start failures use this path."
+    },
+    {
+      "id": "AW-051",
+      "severity": "P2",
+      "pr": 6,
+      "source": "apps/server/src/recovery.rs:41",
+      "title": "Handle queued runs before entering recovery",
+      "claim": "If startup finds a legitimate `created` or `queued` run, both of which this query explicitly selects, `transition_run(..., Recovering)` rejects the transition because the state table permits recovery only from `starting`, `working`, or `blocked`.",
+      "verdict": "already fixed",
+      "evidence": "recovery.rs first clears leases for created/queued work, then selects only started states and recovering. Unstarted work returns to scheduler admission."
+    },
+    {
+      "id": "AW-052",
+      "severity": "P2",
+      "pr": 6,
+      "source": "apps/server/src/provider.rs:70",
+      "title": "Recover from an unresumable provider session",
+      "claim": "When a retained provider Thread is no longer available\u2014for example after its `CODEX_HOME` is reset or corrupted\u2014`thread/resume` fails here, but the unique `provider_sessions` mapping remains unchanged.",
+      "verdict": "blocked",
+      "evidence": "provider.rs still propagates resume_thread failure while retaining the provider_sessions mapping. A safe reset/replacement flow needs a lost-provider-history regression and a user-visible continuity policy; no such change is included."
+    },
+    {
+      "id": "AW-053",
+      "severity": "P2",
+      "pr": 7,
+      "source": "apps/server/migrations/0004_m1_identity_projects.sql:12",
+      "title": "Enforce the ten-character Project key limit",
+      "claim": "Tighten the existing `projects` check constraint in this migration.",
+      "verdict": "already fixed",
+      "evidence": "Migration 0003_m0_consistency.sql tightens projects_project_key_check to ^[A-Z][A-Z0-9]{1,9}$, which supersedes the initial migration quoted by the finding."
+    },
+    {
+      "id": "AW-054",
+      "severity": "P2",
+      "pr": 8,
+      "source": "apps/server/src/conversations.rs:2012",
+      "title": "Acquire parent and child Conversation locks in one order",
+      "claim": "When a Message send or Thread archive overlaps with archiving its parent Channel, this path first holds the child `FOR UPDATE` lock and then waits for the parent `FOR SHARE` lock, while `archive_conversation` holds the parent first and then locks every child.",
+      "verdict": "already fixed",
+      "evidence": "conversations.rs lock_conversation_scope obtains project, then parent, then child locks and rechecks visibility after waits; writes enter through lock_conversation_for/lock_message_conversation."
+    },
+    {
+      "id": "AW-055",
+      "severity": "P2",
+      "pr": 8,
+      "source": "apps/server/src/conversations.rs:1596",
+      "title": "Enforce or paginate the active Channel limit",
+      "claim": "Once a Project has more than 100 active Channels, this alphabetical `LIMIT` silently omits at least one Channel from the sidebar, while `create_channel` continues accepting additional Channels and the endpoint exposes no cursor.",
+      "verdict": "design decision",
+      "evidence": "conversations.rs lists at most MAX_CHANNELS_PER_PROJECT=100 while channel creation is not capped. Correcting the product behavior requires choosing a write cap or paginated channel navigation; no silent channel-admission restriction added."
+    },
+    {
+      "id": "AW-056",
+      "severity": "P2",
+      "pr": 8,
+      "source": "apps/server/src/conversations.rs:1667",
+      "title": "Paginate Threads before building the sidebar projection",
+      "claim": "For Projects with more than 1,000 Threads, the global `LIMIT` discards older rows before grouping and projection.",
+      "verdict": "blocked",
+      "evidence": "conversations.rs sidebar query still applies a global MAX_THREADS_PER_SIDEBAR=1000 before grouping. Complete per-channel pagination and large-project regressions are not implemented in this branch."
+    },
+    {
+      "id": "AW-057",
+      "severity": "P2",
+      "pr": 18,
+      "source": "apps/web/src/threads/ThreadPage.tsx:774",
+      "title": "Expose failure acknowledgement outside the worker composer",
+      "claim": "For a Viewer, `ReadStateUpdate` is allowed while `WorkerInvoke` is denied (`policy.rs`), so the server reports an unacknowledged failure and permits its acknowledgement, but this button is nested inside `showComposer`, which is false unless `workerInvoke` is a",
+      "verdict": "already fixed",
+      "evidence": "The failure acknowledgement is now a RunCardActions button in ThreadRunControls.tsx, outside RunComposer. The old showComposer nesting no longer controls it."
+    },
+    {
+      "id": "AW-058",
+      "severity": "P2",
+      "pr": 35,
+      "source": "apps/server/src/github.rs:1248",
+      "title": "Mint a separate token for each GitHub operation",
+      "claim": "During every publication, the token already used for the pre-push `branch_commit` request is cloned here into the Git child and then retained for the post-push `branch_commit` request.",
+      "verdict": "design decision",
+      "evidence": "github.rs publication still uses one repository-scoped installation token for ref inspection, push and confirmation, all parts of the same explicit publication operation. Per-HTTP-request credential minting changes rate/credential lifetime policy without demonstrating a new authority grant."
+    },
+    {
+      "id": "AW-059",
+      "severity": "P2",
+      "pr": 36,
+      "source": "apps/server/src/conversations.rs:2567",
+      "title": "Project an existing pull request onto retry runs",
+      "claim": "Retry runs can reuse the predecessor's `repository_workspace_id`, while pull-request requests are unique per workspace and the create endpoint returns that existing request.",
+      "verdict": "blocked",
+      "evidence": "conversations.rs and run_views.rs still join github_pull_request_requests by agent_run_id, while retry reuse keeps a workspace identity. Showing an existing workspace PR on retries requires a shared projection change and retry/PR integration regression; absent here."
+    },
+    {
+      "id": "AW-060",
+      "severity": "P2",
+      "pr": 36,
+      "source": "apps/web/src/threads/ThreadPage.tsx:607",
+      "title": "Exclude archived Work Items from pull-request creation",
+      "claim": "When a Thread retains a link to an archived Work Item, the timeline still includes that item with a non-null `archivedAt`, but this request submits every linked ID.",
+      "verdict": "blocked",
+      "evidence": "useThreadRunActions.tsx still sends every linkedWorkItems ID to PR creation, including archived chips. A create-PR regression for mixed active/archived links is not yet included; no claim that PR #211 covers it."
+    },
+    {
+      "id": "AW-061",
+      "severity": "P2",
+      "pr": 41,
+      "source": "apps/server/src/github.rs:4455",
+      "title": "Serialize recovery before locking the job",
+      "claim": "When two exact redeliveries concurrently target the same failed or exhausted job, both transactions can first acquire `FOR SHARE` on the delivery at line 4442; one then locks the job here while the other waits for that job, after which the first blocks trying",
+      "verdict": "already fixed",
+      "evidence": "github.rs exact redelivery reads checksum without the old delivery FOR SHARE lock, then updates failed/exhausted jobs before updating delivery. The specific two-shared-lock upgrade deadlock is absent."
+    },
+    {
+      "id": "AW-062",
+      "severity": "P2",
+      "pr": 52,
+      "source": "deploy/redhat/agent-workspace-service-command:20",
+      "title": "Load the systemd environment without shell evaluation",
+      "claim": "When a service value contains shell metacharacters\u2014for example `$$` in the database password\u2014systemd's `EnvironmentFile=` in `deploy/redhat/agent-workspace.service:14` passes it literally, while `source` expands it as Bash syntax under root.",
+      "verdict": "blocked",
+      "evidence": "deploy/redhat/agent-workspace-service-command still sources the root-owned EnvironmentFile as Bash. Exact systemd EnvironmentFile parsing and wrapper parity tests are needed; a partial shell parser would be unsafe."
+    },
+    {
+      "id": "AW-063",
+      "severity": "P2",
+      "pr": 68,
+      "source": "tools/host-maintenance/src/lib.rs:501",
+      "title": "Relax parent permission checks for restore roots",
+      "claim": "When running the documented clean restore drill with `--target-data-root /var/lib/agent-workspace-restore-drill` and `--target-release-root /opt/agent-workspace-restore-drill`, this check rejects the normal Red Hat parents because `/var/lib` and `/opt` usually",
+      "verdict": "blocked",
+      "evidence": "Host-maintenance restore-root validation still checks directory ownership/permissions along the path. Relaxing trusted root-owned ancestors needs clean-restore fixtures and a precise trust rule; not safely changed in this pass."
+    },
+    {
+      "id": "AW-064",
+      "severity": "P2",
+      "pr": 68,
+      "source": "tools/host-maintenance/src/lib.rs:935",
+      "title": "Reject unexpected data archive members",
+      "claim": "For `data.tar`, this validation only rejects absolute paths and parent traversal; a repacked archive with a matching manifest checksum and a member such as `codex/profiles/auth.json` or `logs/...` passes and is extracted into the restore root.",
+      "verdict": "blocked",
+      "evidence": "tools/host-maintenance/src/lib.rs safe_archive_entry rejects absolute/traversal paths but does not restrict data archive contents to the captured runtime categories. An allowlist needs restore-format compatibility and archive-member regressions, absent here."
+    },
+    {
+      "id": "AW-065",
+      "severity": "P2",
+      "pr": 70,
+      "source": "apps/server/src/work_items.rs:922",
+      "title": "Meter the board work-item read path",
+      "claim": "Because this budget is only applied in `list_work_items`, the existing `GET /api/v1/projects/{project_id}/work-items/board` path still accepts the same search/filter query and runs its per-status SQL queries without consuming the expensive-read limiter.",
+      "verdict": "already fixed",
+      "evidence": "work_items.rs list and board handlers both call check_expensive_read before executing their queries."
+    },
+    {
+      "id": "AW-066",
+      "severity": "P2",
+      "pr": 70,
+      "source": "apps/server/src/mcp/oauth.rs:499",
+      "title": "Count malformed OAuth attempts before extraction",
+      "claim": "This limiter runs only after `Form` has successfully parsed a request with all required fields, so malformed `/oauth/token` bodies or forms missing `client_id` never consume the OAuth ceremony budget and can be replayed indefinitely up to the body limit.",
+      "verdict": "blocked",
+      "evidence": "mcp/oauth.rs token still uses Form<TokenRequest> before its in-handler rate limiter. Malformed bodies can avoid that specific ceremony budget. Middleware-level accounting needs careful separation from refresh sender/app quotas and malformed-body regressions."
+    },
+    {
+      "id": "AW-067",
+      "severity": "P2",
+      "pr": 76,
+      "source": "apps/server/src/retention.rs:160",
+      "title": "Exclude open pull-request worktrees from retention",
+      "claim": "For a workspace with an open pull request older than seven days, this predicate makes it eligible solely because it has a `published_commit`; the query never checks `github_pull_request_requests`/`github_pull_requests.state`.",
+      "verdict": "design decision",
+      "evidence": "retention.rs excludes active runs and provider sessions, but published retained workspaces remain eligible regardless of an open remote PR. Whether PR review requires a local worktree after publication is a retention policy decision; commits remain published remotely."
+    },
+    {
+      "id": "AW-068",
+      "severity": "P2",
+      "pr": 76,
+      "source": "apps/server/src/storage_admission.rs:38",
+      "title": "Tolerate vanished files during admission scans",
+      "claim": "When an existing run or cleanup task deletes a file after its parent directory has been read but before this `symlink_metadata` call, the scan returns an internal error and `require_growth` rejects run/repository admission even if quota and free-space watermar",
+      "verdict": "fixed",
+      "evidence": "storage_admission.rs now skips NotFound only for descendants, including directories removed after stat; missing roots and other errors still fail. Root symlinks are refused. Regressions use real directory deletion at metadata lookup and a symlink to a populated root."
+    },
+    {
+      "id": "AW-069",
+      "severity": "P2",
+      "pr": 78,
+      "source": "apps/server/src/storage_admission.rs:45",
+      "title": "Reject symlinked data roots before skipping entries",
+      "claim": "In a deployment where the configured `AGENT_WORKSPACE_DATA_ROOT` itself is a symlink, this branch skips the only pending entry, reports `allocated_bytes` as 0, and then `statvfs(&data_root)` follows the symlink for free-space checks.",
+      "verdict": "fixed",
+      "evidence": "storage_admission.rs now skips NotFound only for descendants, including directories removed after stat; missing roots and other errors still fail. Root symlinks are refused. Regressions use real directory deletion at metadata lookup and a symlink to a populated root."
+    },
+    {
+      "id": "AW-070",
+      "severity": "P2",
+      "pr": 81,
+      "source": "apps/server/src/mcp.rs:61",
+      "title": "Persist external connection IDs on MCP write audits",
+      "claim": "When an external agent uses its bearer to perform MCP write tools, the principal now carries `external_agent_connection_id`, but the write audit path still inserts only `mcp_credential_id`/`mcp_oauth_grant_id`.",
+      "verdict": "already fixed",
+      "evidence": "mcp/writes.rs audit metadata now carries external_agent_connection_id from the principal."
+    },
+    {
+      "id": "AW-071",
+      "severity": "P2",
+      "pr": 81,
+      "source": "apps/web/src/external-agents/ExternalAgentSettings.tsx:329",
+      "title": "Preserve scopes when downgrading to viewer",
+      "claim": "If a member connection currently has only `read`/`write` and the manager changes its role to Viewer, this sends the full viewer default (`read`,`events`) instead of preserving the intersection of existing scopes with viewer-allowed scopes.",
+      "verdict": "blocked",
+      "evidence": "ExternalAgentSettings.tsx existing-connection changeRole still uses viewerScopes defaults for viewer downgrade. Preserving the intersection needs UI role-toggle tests and deciding whether role changes reset preset scopes; not changed."
+    },
+    {
+      "id": "AW-072",
+      "severity": "P2",
+      "pr": 82,
+      "source": "apps/server/src/conversations.rs:1377",
+      "title": "Deliver events for replies without fresh mentions",
+      "claim": "When a human replies in a Thread without inserting another mention, `mentioned_actor_ids` is empty and this returns before addressing any event to the external participant.",
+      "verdict": "already fixed",
+      "evidence": "replies.rs ask_for_replies now asks thread_followers on human thread messages even when mentioned_actor_ids is empty, so fresh mentions are not required for follow-ups."
+    },
+    {
+      "id": "AW-073",
+      "severity": "P2",
+      "pr": 82,
+      "source": "apps/server/migrations/0034_m9_external_agent_events.sql:37",
+      "title": "Purge expired external-agent events",
+      "claim": "Setting `expires_at` only hides old rows from polling; no retention command, scheduled task, or delete path removes rows from `external_agent_events`.",
+      "verdict": "already fixed",
+      "evidence": "retention.rs expire_agent_events deletes expired external_agent_events in bounded batches and schedules database retention work."
+    },
+    {
+      "id": "AW-074",
+      "severity": "P2",
+      "pr": 84,
+      "source": "apps/server/src/mcp/approvals.rs:217",
+      "title": "Audit rejected human-required approval responses",
+      "claim": "When an external connector calls `approval_respond` for a human-required approval, `load_context` filters that row with `NOT approval.human_required`, so this branch returns `not_found` before any audit event is inserted.",
+      "verdict": "already fixed",
+      "evidence": "mcp/approvals.rs load_context has an explicit include_human_required_for_denial path and respond inserts insert_human_required_denial_audit before refusing."
+    },
+    {
+      "id": "AW-075",
+      "severity": "P2",
+      "pr": 84,
+      "source": "apps/server/src/provider.rs:608",
+      "title": "Make production approvals routable before enqueueing them",
+      "claim": "The production provider insert immediately above leaves `eligible_role` and `human_required` at their defaults (`owner` and `true`), while this enqueue helper accepts only non-human-required approvals addressed to the external member; external agents also cann",
+      "verdict": "design decision",
+      "evidence": "provider.rs provider_approval_policy explicitly keeps execution approvals human-required while questions may target any authorized approver. Unit test provider_approval_policy_keeps_execution_approvals_human_required pins this safety policy."
+    },
+    {
+      "id": "AW-076",
+      "severity": "P2",
+      "pr": 84,
+      "source": "apps/server/src/mcp/writes.rs:270",
+      "title": "Hash the description before consuming it",
+      "claim": "`arguments.description.take()` has already replaced the description with `None` when this request hash is computed.",
+      "verdict": "already fixed",
+      "evidence": "mcp/writes.rs normalizes then restores arguments.description before hashing the complete arguments; the old take-without-restore hash defect is absent."
+    },
+    {
+      "id": "AW-077",
+      "severity": "P2",
+      "pr": 84,
+      "source": "apps/server/src/mcp/approvals.rs:627",
+      "title": "Notify every addressed approver of resolution",
+      "claim": "When a role-addressed approval is delivered to multiple eligible external members, `enqueue_external_approval_requested` sends each of them a request event, but this result path sends `approval.resolved` only to the connection that responded.",
+      "verdict": "already fixed",
+      "evidence": "mcp/approvals.rs calls enqueue_external_approval_resolved(transaction, approval_id), which targets the approval rather than only the responding connection."
+    },
+    {
+      "id": "AW-078",
+      "severity": "P2",
+      "pr": 88,
+      "source": "apps/web/src/shell/AppShell.tsx:52",
+      "title": "Clear modal state when Details stops being a sheet",
+      "claim": "When an open Details sheet crosses from the `max-width: 1100px` layout to desktop\u2014for example, after rotating a tablet\u2014`contextOpen` remains true.",
+      "verdict": "already fixed",
+      "evidence": "AppShell.tsx listens to the mobile-width media query and closes drawers when it stops matching. contextOpen is also conditional on actual context content."
+    },
+    {
+      "id": "AW-079",
+      "severity": "P2",
+      "pr": 90,
+      "source": "apps/server/src/replies.rs:263",
+      "title": "Reject replies after their claim lease expires",
+      "claim": "If an agent submits a reply after `lease_expires_at` but before the background sweep changes the status, this predicate still accepts it because it checks only `status = 'claimed'`.",
+      "verdict": "fixed",
+      "evidence": "replies.rs final completion/interim renewal and mcp/replies.rs progress require lease_expires_at > clock_timestamp(). New Postgres regression expires a still-claimed row and checks progress and both reply modes are refused without posting; a current lease still works."
+    },
+    {
+      "id": "AW-080",
+      "severity": "P2",
+      "pr": 90,
+      "source": "apps/server/src/direct.rs:607",
+      "title": "Avoid colliding with an existing DMSPACE project key",
+      "claim": "An organization can already have a standard project whose valid key is `DMSPACE`, and the existing organization/key unique index makes this insert conflict.",
+      "verdict": "blocked",
+      "evidence": "direct.rs space_project still inserts reserved DMSPACE with ON CONFLICT DO NOTHING, then requires a direct-kind project. The global organization/key unique index can collide with an older standard DMSPACE project. Needs migration/compatibility handling and bootstrap collision regression."
+    },
+    {
+      "id": "AW-081",
+      "severity": "P2",
+      "pr": 90,
+      "source": "apps/server/src/conversations.rs:1030",
+      "title": "Bind reply identity into the idempotency reservation",
+      "claim": "The new `reply` argument is not included in either the request hash or idempotency scope, which remain based only on message content and conversation.",
+      "verdict": "fixed",
+      "evidence": "conversations.rs binds request ID, generation and final/interim mode into the message request hash. New Postgres regression verifies exact interim replay and refusal to reuse its key for final completion. Older pre-upgrade reply keys may conflict safely once rather than replay under unverifiable context."
+    },
+    {
+      "id": "AW-082",
+      "severity": "P2",
+      "pr": 90,
+      "source": "apps/server/src/replies.rs:584",
+      "title": "Stop wakeups after disabling an agent connection",
+      "claim": "For a queued delivery, disabling or removing its connection leaves `webhook_url` and `webhook_secret` populated, while this query does not require `connection.status = 'active'`.",
+      "verdict": "already fixed",
+      "evidence": "replies.rs delivery still_true checks agent_connection_can_access for every queued delivery; the SQL helper rejects disabled/revoked connections."
+    },
+    {
+      "id": "AW-083",
+      "severity": "P2",
+      "pr": 90,
+      "source": "apps/server/src/direct.rs:515",
+      "title": "Resolve reply requests when removing a group member",
+      "claim": "When the removed member is an agent with a pending or claimed reply request, deleting only its conversation membership leaves that request open.",
+      "verdict": "already fixed",
+      "evidence": "direct.rs change_group_members calls replies::withdraw_requests for removed members, covering pending/claimed/expired/released requests in the group and its threads."
+    },
+    {
+      "id": "AW-084",
+      "severity": "P2",
+      "pr": 91,
+      "source": "apps/web/src/theme/AppearancePage.tsx:219",
+      "title": "Apply imported theme state atomically",
+      "claim": "When a theme code uses a different preset, `setTheme` and `setOverrides` both run with setters that close over the same pre-import preferences.",
+      "verdict": "already fixed",
+      "evidence": "ThemeProvider.tsx uses functional setPreferences updates, so setTheme then setOverrides in one event both apply. The closure-over-old-preferences claim no longer describes the provider."
+    },
+    {
+      "id": "AW-085",
+      "severity": "P2",
+      "pr": 91,
+      "source": "apps/web/src/shell/AppShell.tsx:245",
+      "title": "Synchronize the mobile context drawer with its callers",
+      "claim": "At widths up to 860px, the CSS hides this panel unless `contextOpen` is true, but callers such as the thread details and group-members buttons only add or remove `context`; they cannot update this internal state.",
+      "verdict": "already fixed",
+      "evidence": "AppShell.tsx now accepts contextKey and uses it to open the context drawer when callers request details. Callers can dismiss through onContextDismiss."
+    },
+    {
+      "id": "AW-086",
+      "severity": "P2",
+      "pr": 91,
+      "source": "apps/web/src/conversations/Timeline.tsx:280",
+      "title": "Place the unread divider before the first unread entry",
+      "claim": "When the first loaded entry is unread\u2014which is common when a channel has never been read, or when the unread boundary predates the current page\u2014the `previous` requirement suppresses the divider for that entry.",
+      "verdict": "already fixed",
+      "evidence": "Timeline.tsx emits the first unread divider without requiring a previous entry. It deliberately skips own messages."
+    },
+    {
+      "id": "AW-087",
+      "severity": "P2",
+      "pr": 92,
+      "source": "apps/web/src/work-items/WorkItemsPage.tsx:200",
+      "title": "Give each new-item trigger its own focus target",
+      "claim": "When an unfiltered project has no work items, `newButton` is rendered both in the page header and again as the empty-state action, and both instances attach the same `createButtonRef`.",
+      "verdict": "blocked",
+      "evidence": "WorkItemsPage.tsx renders the same newButton/ref in header and emptyAction. A focus restoration regression is needed before changing the dialog trigger contract."
+    },
+    {
+      "id": "AW-088",
+      "severity": "P2",
+      "pr": 93,
+      "source": "apps/server/src/realtime.rs:188",
+      "title": "Authorize membership events for the correct recipients",
+      "claim": "When `project.membership.updated` is published, `event_is_authorized` applies only `RealtimeSubscribe`: this sends the target actor ID and membership version to ordinary members/viewers who cannot access the membership endpoint, while dropping the same event f",
+      "verdict": "design decision",
+      "evidence": "realtime.rs authorizes project.membership.updated via RealtimeSubscribe for current project members; payload is bounded membership invalidation metadata. Changing its recipients requires deciding whether the affected actor must receive loss-of-membership invalidation after access is gone."
+    },
+    {
+      "id": "AW-089",
+      "severity": "P2",
+      "pr": 96,
+      "source": "apps/server/src/mcp.rs:1652",
+      "title": "Resolve pull-request identifiers from their own table",
+      "claim": "The `identifier` argument is shared by work-item and pull-request read tools, but this resolver always searches `work_items`.",
+      "verdict": "already fixed",
+      "evidence": "mcp.rs identifier_project branches on pull_request_get and resolves github_pull_requests with pull_request_visible_to, rather than work_items."
+    },
+    {
+      "id": "AW-090",
+      "severity": "P2",
+      "pr": 96,
+      "source": "apps/server/src/auth/workos.rs:487",
+      "title": "Serialize expired WorkOS session checks",
+      "claim": "When `workos_checked_at` becomes older than five minutes, concurrent requests for the same local session all observe `needs_check = true` and independently enumerate the user's WorkOS sessions before any request updates the timestamp.",
+      "verdict": "already fixed",
+      "evidence": "auth/workos.rs uses a conditional workos_checked_at UPDATE to claim one five-minute session check; its deliberate concurrent fail-open behavior is AW-028."
+    },
+    {
+      "id": "AW-091",
+      "severity": "P2",
+      "pr": 97,
+      "source": "apps/server/src/conversations.rs:2019",
+      "title": "Exclude agents that cannot answer mentions",
+      "claim": "When an enabled external agent is a viewer or has an active read-only connection, this query now exposes it in the browser picker, and selecting it in a channel creates a reply request via `ask_for_replies`.",
+      "verdict": "blocked",
+      "evidence": "replies.rs agents_to_ask still selects active external agents by membership and visibility without requiring an answering-capable connection. Mention-picker parity and delivery tests are needed before changing discoverability."
+    },
+    {
+      "id": "AW-092",
+      "severity": "P2",
+      "pr": 98,
+      "source": "apps/server/src/mcp/oauth.rs:80",
+      "title": "Advertise the scopes required by WorkOS registration",
+      "claim": "When registration is enabled, this metadata now advertises WorkOS as an authorization server but still tells discovery-driven clients that only `read` and `write` are supported.",
+      "verdict": "already fixed",
+      "evidence": "mcp/oauth.rs protected-resource metadata advertises workspace scopes when WorkOS is enabled, and parse_scopes normalizes workspace:read/workspace:write to local read/write. Unit regression accepts both spellings; the local server supports the advertised resource scopes."
+    },
+    {
+      "id": "AW-093",
+      "severity": "P2",
+      "pr": 99,
+      "source": "apps/server/src/mcp/talk.rs:1171",
+      "title": "Reject mark_read on read-only grants",
+      "claim": "A connection granted only the `read` scope can still call `mark_read`: `readable_conversation` checks only `can_read`, and this unconditional call writes `conversation_read_states`.",
+      "verdict": "already fixed",
+      "evidence": "mcp/talk.rs mark_read begins by refusing !principal.can_write; optional read-time marks also guard can_write."
+    },
+    {
+      "id": "AW-094",
+      "severity": "P2",
+      "pr": 99,
+      "source": "apps/server/src/mcp/talk.rs:1726",
+      "title": "Propagate failures when posting a thread's opening message",
+      "claim": "When `thread_start` includes text that `send` rejects\u2014for example, more than the 20,000-character message limit\u2014this branch converts the error into `None`.",
+      "verdict": "blocked",
+      "evidence": "mcp/talk.rs post_optional still maps every non-Ok send result into None after thread creation. Propagating errors safely requires rollback/idempotent-origin behavior tests; not implemented."
+    },
+    {
+      "id": "AW-095",
+      "severity": "P2",
+      "pr": 100,
+      "source": "apps/server/src/mcp/oauth.rs:83",
+      "title": "Keep resource and authorization-server scopes compatible",
+      "claim": "When WorkOS agent registration is enabled, the protected-resource metadata advertises only `workspace:read`/`workspace:write`, while the local authorization server\u2014still listed as an authorization server\u2014continues to advertise only `read`/`write` in `authoriza",
+      "verdict": "already fixed",
+      "evidence": "mcp/oauth.rs protected-resource metadata advertises workspace scopes when WorkOS is enabled, and parse_scopes normalizes workspace:read/workspace:write to local read/write. Unit regression accepts both spellings; the local server supports the advertised resource scopes."
+    },
+    {
+      "id": "AW-096",
+      "severity": "P2",
+      "pr": 101,
+      "source": "apps/web/public/sw.js:77",
+      "title": "Precache lazy route chunks for the first offline launch",
+      "claim": "When someone installs the app on their first visit and later launches it offline, the worker has never controlled the initial page load, while `cacheShell()` only discovers asset URLs present in `index.html`.",
+      "verdict": "blocked",
+      "evidence": "public/sw.js cacheShell still extracts asset URLs only from index.html and does not traverse lazy route chunks. An offline-first-install browser regression and explicit precache/budget policy are needed."
+    },
+    {
+      "id": "AW-097",
+      "severity": "P2",
+      "pr": 101,
+      "source": "apps/web/src/shell/AppShell.tsx:110",
+      "title": "Restore focus after closing a persisted navigation drawer",
+      "claim": "When a phone user opens navigation and selects another Project or Messages, `MobileNavigationProvider` deliberately keeps the drawer open across the route change, but the newly mounted `AppShell` has a fresh `navTriggerRef` with no trigger.",
+      "verdict": "blocked",
+      "evidence": "AppShell.tsx keeps navTriggerRef inside each remounting shell. Cross-route persistent drawer focus restoration needs a shared trigger/fallback regression, absent here."
+    },
+    {
+      "id": "AW-098",
+      "severity": "P2",
+      "pr": 104,
+      "source": "apps/server/src/mcp.rs:1907",
+      "title": "Keep key-based task-move retries idempotent",
+      "claim": "After moving `OLD-1` to `NEW`, retrying the exact same key-based call rewrites `OLD-1` through its alias to the new task ID.",
+      "verdict": "blocked",
+      "evidence": "mcp.rs rewrites task keys through aliases before task_move, while already_moved operates on the archived source UUID. Exact key-based retry semantics remain to be reproduced with the new task-move work in open PR #208; avoided overlapping its implementation."
+    },
+    {
+      "id": "AW-099",
+      "severity": "P2",
+      "pr": 104,
+      "source": "apps/server/src/mcp/task_move.rs:204",
+      "title": "Detect descendants beyond the recursion cap",
+      "claim": "A task hierarchy deeper than 20 levels is silently truncated here.",
+      "verdict": "invalid",
+      "evidence": "mcp/task_move.rs binds MAX_SUBTASK_LEVELS-1 and the task hierarchy enforces that same maximum. A hypothetical deeper hierarchy outside those invariants is not evidence of a reachable truncation defect; no cap increase or broad traversal change."
+    },
+    {
+      "id": "AW-100",
+      "severity": "P2",
+      "pr": 104,
+      "source": "apps/server/src/mcp/admin.rs:645",
+      "title": "Support the admin role when adding a new member",
+      "claim": "When an owner calls `project_member_set` for someone not yet in the project with `role: \"admin\"`, validation accepts the role but this branch passes it to `add_member`, which rejects every role except `member` and `viewer`; the tool therefore returns a generic",
+      "verdict": "blocked",
+      "evidence": "mcp/admin.rs accepts built-in admin then calls memberships::add_member for a new member; add_member explicitly permits member/viewer only. Needs owner-only admin admission with organization-role synchronization tests, absent here."
+    },
+    {
+      "id": "AW-101",
+      "severity": "P2",
+      "pr": 105,
+      "source": "apps/server/src/work_item_labels.rs:883",
+      "title": "Enforce the per-task label cap when restoring labels",
+      "claim": "Restoring checks only the project's active-label count.",
+      "verdict": "blocked",
+      "evidence": "work_item_labels.rs restoration path needs a task-by-task active-label-cap regression. MAX_LABELS_PER_TASK on normal assignment alone does not establish correctness on label restoration; unverified beyond static path review."
+    },
+    {
+      "id": "AW-102",
+      "severity": "P2",
+      "pr": 106,
+      "source": "tools/ci/checks.sh:13",
+      "title": "Reject invalid areas before dispatching checks",
+      "claim": "When `--areas` is misspelled or otherwise invalid, `run.sh` accepts the value and this predicate matches neither Rust nor web, so the script reaches `All checks passed` without running any checks; for example, `tools/ci/checks.sh rst` exits successfully.",
+      "verdict": "already fixed",
+      "evidence": "tools/ci/checks.sh validates rust,web/rust/web before dispatch and run.sh has matching input validation. tools/ci/test_areas.py checks invalid values perform no work and fail."
+    },
+    {
+      "id": "AW-103",
+      "severity": "P2",
+      "pr": 107,
+      "source": "apps/server/src/conversations.rs:2499",
+      "title": "Rewind to the newest message rather than newest entry",
+      "claim": "When an MCP caller uses `mark_read` with `unread: true` and omits `fromMessageId`, `highest_sequence` may identify a later worker or system entry rather than a message.",
+      "verdict": "blocked",
+      "evidence": "conversations.rs mark_unread_from(UnreadFrom::Newest) still uses next_entry_sequence-1, which can be a worker entry. Selecting the newest actual message needs timeline read-mark regression; not changed."
+    },
+    {
+      "id": "AW-104",
+      "severity": "P2",
+      "pr": 107,
+      "source": "apps/server/src/replies.rs:653",
+      "title": "Reopen superseded requests for the fallback message",
+      "claim": "When a newer message supersedes an agent's pending request for an earlier agent message and the newer message is later removed, this filter makes Continue select the earlier message again.",
+      "verdict": "blocked",
+      "evidence": "replies.rs request superseding/revival needs the exact edit/removal fallback scenario regression before changing generations and lifecycle rules. No valid patch or independently sufficient dynamic evidence is available for this candidate yet."
+    },
+    {
+      "id": "AW-105",
+      "severity": "P2",
+      "pr": 107,
+      "source": "apps/web/src/conversations/useAutoMarkSeen.ts:67",
+      "title": "Schedule another mark-seen attempt after failures",
+      "claim": "When the initial mark-seen request fails while these scalar inputs remain unchanged, resetting only `shown.current` does not retry it: React effects do not rerun on an ordinary render when their dependency values are stable.",
+      "verdict": "blocked",
+      "evidence": "useAutoMarkSeen.ts resets shown.current on failure but has no state change/timer, so stable inputs do not schedule another effect. Needs a retry/backoff and user-mark-unread race regression before changing it."
+    },
+    {
+      "id": "AW-106",
+      "severity": "P2",
+      "pr": 109,
+      "source": "apps/server/src/mcp/code.rs:365",
+      "title": "Include execution availability in repository readiness",
+      "claim": "`readyForRuns` becomes true based only on repository flags, even when the caller has no enabled execution worker, provider connection, or available authenticated execution profile.",
+      "verdict": "blocked",
+      "evidence": "Repository readiness is currently a repository/Git result; provider execution availability is handled separately at admission. The quoted combined-readiness expectation needs a concrete API/UI contract and unavailable-profile regression."
+    },
+    {
+      "id": "AW-107",
+      "severity": "P2",
+      "pr": 110,
+      "source": "apps/server/src/mcp/runs.rs:276",
+      "title": "Use Messages routes for direct-conversation runs",
+      "claim": "When a run belongs to a thread under a DM or group, this always returns `/projects/{direct-project}/threads/{thread}` instead of the Messages route `/messages/{parent}?thread={thread}` used by `mcp/talk.rs::thread_path`, so clients following `run_start`, `run_",
+      "verdict": "blocked",
+      "evidence": "mcp/runs.rs run_value still emits /projects/{project}/threads/{conversation}, without a direct-parent route discriminator. Needs a DM/group run routing regression and shared canonical-link helper."
+    },
+    {
+      "id": "AW-108",
+      "severity": "P2",
+      "pr": 110,
+      "source": "apps/server/src/mcp/approvals.rs:786",
+      "title": "Do not mark approvals answerable for read-only apps",
+      "claim": "For a human using a read-only OAuth grant, this check succeeds, and both `approval_list` and `approval_get` return pending approvals whose projection unconditionally sets `canRespond: true`; `approval_respond` then rejects the same caller because `may_respond`",
+      "verdict": "blocked",
+      "evidence": "mcp/approvals.rs projection sets can_respond from pending/blocked state without carrying principal write eligibility. Respond itself is protected by may_respond. Needs read-only-app projection regression to correct the affordance without weakening access."
+    },
+    {
+      "id": "AW-109",
+      "severity": "P2",
+      "pr": 111,
+      "source": "apps/server/src/mcp/planning.rs:139",
+      "title": "Reject cycles beyond the traversal cap",
+      "claim": "When an existing dependency path contains more than 200 tasks, this cutoff prevents the recursive query from reaching its endpoint, so `path_between` returns `None` and `task_depend` inserts an edge that closes a cycle despite the tool's cycle-free guarantee.",
+      "verdict": "already fixed",
+      "evidence": "work_item_planning.rs blocking_path uses recursive reachable edges plus a visited map rather than a fixed traversal-depth cutoff. This defeats the claimed long-cycle bypass."
+    },
+    {
+      "id": "AW-110",
+      "severity": "P2",
+      "pr": 111,
+      "source": "apps/server/src/mcp/planning.rs:94",
+      "title": "Reject archived endpoints before adding dependencies",
+      "claim": "When `blockedBy` or `blocks` names an archived task, `resolve_tasks` still resolves it and the edge is inserted, but this predicate immediately hides that endpoint from the returned dependency lists.",
+      "verdict": "already fixed",
+      "evidence": "work_item_planning.rs refuses archived dependency endpoints for additions; mcp/planning.rs locks referenced tasks and refuses archived ones before assigning milestones."
+    },
+    {
+      "id": "AW-111",
+      "severity": "P2",
+      "pr": 111,
+      "source": "apps/server/src/mcp/planning.rs:575",
+      "title": "Refuse adding archived tasks to milestones",
+      "claim": "When `addTasks` contains an archived task, this update still assigns its milestone and increments its version because task resolution does not reject archived rows.",
+      "verdict": "already fixed",
+      "evidence": "work_item_planning.rs refuses archived dependency endpoints for additions; mcp/planning.rs locks referenced tasks and refuses archived ones before assigning milestones."
+    },
+    {
+      "id": "AW-112",
+      "severity": "P2",
+      "pr": 112,
+      "source": "apps/server/src/github.rs:1441",
+      "title": "Revalidate thread access before GitHub idempotency replays",
+      "claim": "When a caller successfully publishes or opens a pull request while they belong to a private conversation, is later removed, and retries with the same idempotency key within 24 hours, `reserve` returns the cached response before this predicate executes.",
+      "verdict": "blocked",
+      "evidence": "GitHub publish/PR idempotency order needs access-revoked replay fixtures on the exact handler. No verified replay-safe patch is included; avoid claiming the separate run-projection visibility checks cover cached mutation responses."
+    },
+    {
+      "id": "AW-113",
+      "severity": "P2",
+      "pr": 120,
+      "source": "apps/server/src/mcp/admin.rs:606",
+      "title": "Preserve the membership lock order",
+      "claim": "Move the membership advisory lock ahead of this call, or otherwise use the same ordering as the shared membership helpers.",
+      "verdict": "blocked",
+      "evidence": "mcp/admin.rs admin_row obtains project/membership locks before the membership helpers acquire their advisory lock. The shared lock-order claim needs a concurrent MCP/browser membership regression before a safe reordering."
+    },
+    {
+      "id": "AW-114",
+      "severity": "P2",
+      "pr": 120,
+      "source": "apps/server/migrations/0053_run_prompt_redaction.sql:208",
+      "title": "Complete cancellation through the run transition path",
+      "claim": "When a prompt is removed while its run is `created` or `queued`, this directly changes the state to `canceled` but omits the terminal-transition work performed by `transition_run`: `finished_at` remains null, no `run_state_changed` event is recorded, and an ex",
+      "verdict": "blocked",
+      "evidence": "The prompt-redaction migration directly cancels queued runs in SQL. Comparing every terminal side effect against transition_run requires a dedicated migration-backfill regression; no historical migration edit or untested repair migration included."
+    },
+    {
+      "id": "AW-115",
+      "severity": "P2",
+      "pr": 122,
+      "source": "apps/server/src/execution_setup.rs:78",
+      "title": "Avoid reusing a human who owns the `agent` handle",
+      "claim": "When a project already has a person using the valid handle `agent`\u2014for example, a user whose login name is `agent` creates the project\u2014this query selects that human as the worker actor.",
+      "verdict": "blocked",
+      "evidence": "execution_setup.rs ensure_default_worker still selects the existing agent handle without checking actor kind. A human-handle collision needs a reserved-worker identity strategy and setup regression, absent here."
+    },
+    {
+      "id": "AW-116",
+      "severity": "P2",
+      "pr": 123,
+      "source": "apps/web/src/conversations/hooks.ts:58",
+      "title": "Preserve sidebar data across the route remount",
+      "claim": "When a channel is opened directly and the overview sidebar key has never been cached, archiving still produces an empty sidebar until its request completes (or permanently if it fails).",
+      "verdict": "blocked",
+      "evidence": "conversations/hooks.ts placeholderData can retain only its own prior observer data; a route remount with a cold overview key may still be empty. A remount/cached-sidebar regression is required before changing cache lifetime."
+    },
+    {
+      "id": "AW-117",
+      "severity": "P2",
+      "pr": 128,
+      "source": "apps/server/src/replies.rs:1083",
+      "title": "Preserve all validated DNS addresses",
+      "claim": "For a webhook hostname with multiple valid A/AAAA records, only `addresses[0]` is installed in the client even though every returned address was validated.",
+      "verdict": "blocked",
+      "evidence": "replies.rs webhook_client validates all resolved addresses but pins only addresses[0]. Multi-address fallback needs a deterministic resolver/client fixture proving it preserves the SSRF checks; not changed."
+    },
+    {
+      "id": "AW-118",
+      "severity": "P2",
+      "pr": 128,
+      "source": "apps/server/src/config.rs:552",
+      "title": "Store the normalized public origin",
+      "claim": "`url::Url::parse` accepts and normalizes special-scheme forms such as `https:workspace.example.com` and `https:/workspace.example.com`, so these values now pass the host, scheme, and path checks, but the function still stores the original text.",
+      "verdict": "fixed",
+      "evidence": "config.rs public_origin now stores parsed.origin().ascii_serialization after validation. New regression covers scheme-normalized spellings, hostname case and default HTTPS port removal."
+    },
+    {
+      "id": "AW-119",
+      "severity": "P2",
+      "pr": 156,
+      "source": "apps/web/src/conversations/StructuredComposer.tsx:162",
+      "title": "Preserve mention metadata when editing queued sends",
+      "claim": "When a user clicks Edit on an offline queued message containing an `@mention` or work-item reference, only `item.text` is restored; the `mentions` and `workItems` state remains empty.",
+      "verdict": "already fixed",
+      "evidence": "StructuredComposer.tsx restoreQueued merges stored mentions/workItems and restores attachments and reply target. Editing queued text no longer discards mention metadata."
+    },
+    {
+      "id": "AW-120",
+      "severity": "P2",
+      "pr": 157,
+      "source": "apps/server/src/notification_email.rs:99",
+      "title": "Coalesce jobs for collapsed notification rows",
+      "claim": "When two occurrences with the same `group_key` arrive during the two-minute delay, such as two mentions in one conversation, `notifications::deliver` returns the same mutable `notification_id` for both but their `dedupe_key` values create two distinct jobs her",
+      "verdict": "blocked",
+      "evidence": "notification_email.rs enqueue uses recipient+dedupe_key for jobs, while collapsed rows share notification_id. Coalescing safely needs delayed collapse/update regressions and preserving already-delivered occurrences; not implemented."
+    },
+    {
+      "id": "AW-121",
+      "severity": "P2",
+      "pr": 157,
+      "source": "deploy/redhat/agent-workspace-daily-backup:30",
+      "title": "Make the status-file override visible to the server",
+      "claim": "When an operator sets the documented `BACKUP_STATUS_FILE` override\u2014even to another filename inside `BACKUP_DATA_ROOT`\u2014the script writes status there, but `server_status::backup_status_path` always reads `/backup-status.json`.",
+      "verdict": "blocked",
+      "evidence": "The backup wrapper accepts BACKUP_STATUS_FILE but server_status.rs reads fixed data_root/backup-status.json. Aligning the override needs environment/config and wrapper tests; not silently removing an operator option."
+    },
+    {
+      "id": "AW-122",
+      "severity": "P2",
+      "pr": 158,
+      "source": "apps/web/src/later/useConversationTools.tsx:90",
+      "title": "Permit untimed notes for `/later`",
+      "claim": "When a user runs `/later buy milk`, this call sends only `note`, but `later::save` rejects every no-target request without `remindAt` at `apps/server/src/later.rs:532`.",
+      "verdict": "fixed",
+      "evidence": "later.rs now allows a nonempty bare note with no remindAt, as saved_items already permits. Added integration coverage showing it reads back and queues no reminder notification."
+    },
+    {
+      "id": "AW-123",
+      "severity": "P2",
+      "pr": 158,
+      "source": "apps/web/src/later/useConversationTools.tsx:53",
+      "title": "Generate a fresh idempotency key for each `/task`",
+      "claim": "After one `/task Title` succeeds, `taskKey` remains fixed for the lifetime of this conversation hook.",
+      "verdict": "already fixed",
+      "evidence": "useConversationTools.tsx stores a per-title idempotency key and clears taskKey.current after successful /task, allowing repeated titles to create new tasks."
+    },
+    {
+      "id": "AW-124",
+      "severity": "P2",
+      "pr": 158,
+      "source": "apps/web/src/later/useConversationTools.tsx:50",
+      "title": "Distinguish direct-space threads from project threads",
+      "claim": "A full-page thread under a DM or group is still passed here with `kind === 'thread'`, so this marks it as a project conversation and exposes the project-only `/task` and `/launch` commands.",
+      "verdict": "blocked",
+      "evidence": "useConversationTools.tsx treats every thread kind as a project conversation. Direct-thread callers need parent-kind context and slash-command/module regressions; not changed to infer it from an opaque project UUID."
+    },
+    {
+      "id": "AW-125",
+      "severity": "P2",
+      "pr": 158,
+      "source": "apps/web/src/threads/ThreadPanel.tsx:80",
+      "title": "Wire tools into the thread-panel composer",
+      "claim": "When a thread is opened in the channel/DM side panel, this component adds the new message actions but its `StructuredComposer` at lines 178\u2013186 still receives neither `commands` nor `onSchedule`.",
+      "verdict": "already fixed",
+      "evidence": "ThreadPanel.tsx passes tools.composer into StructuredComposer, including its command and scheduling callbacks."
+    },
+    {
+      "id": "AW-126",
+      "severity": "P2",
+      "pr": 158,
+      "source": "apps/web/src/conversations/ChannelPage.tsx:211",
+      "title": "Search backward for the latest actual message",
+      "claim": "Conversation timelines also contain worker-event entries, so when the newest entry is such an event, `entries.at(-1)?.message` is undefined even though an earlier message exists.",
+      "verdict": "fixed",
+      "evidence": "ChannelPage, DirectConversationPage, ThreadPage and ThreadPanel now search backward for the latest message, so trailing worker/system events do not erase /later context. Existing page and full web checks cover the affected callers."
+    },
+    {
+      "id": "AW-127",
+      "severity": "P2",
+      "pr": 158,
+      "source": "apps/server/src/conversations.rs:1606",
+      "title": "Hash the forwarded source in idempotency payloads",
+      "claim": "If a client forwards two different source messages into the same destination with the same idempotency key and comment, `forwarded_message_id` is excluded from the request hash, so the second call is accepted as a replay.",
+      "verdict": "already fixed",
+      "evidence": "conversations.rs append_message_command_with hashes extras.forwarded_message_id and extras.reply_to_message_id, so different source messages cannot replay the same request."
+    },
+    {
+      "id": "AW-128",
+      "severity": "P2",
+      "pr": 159,
+      "source": "apps/web/src/shell/markAllRead.ts:55",
+      "title": "Fetch all conversations before declaring success",
+      "claim": "When an account exceeds any source endpoint\u2019s list cap, this treats partial results as exhaustive: the caller\u2019s `projects` comes from `listProjects()`, which hard-codes a 100-project limit, while `/api/v1/direct` returns at most 200 conversations and each proj",
+      "verdict": "blocked",
+      "evidence": "markAllRead still operates on capped project/direct/sidebar source lists. Complete pagination requires server list contracts and a large-account regression; this branch only fixes accurate reporting of expanded-channel failures as AW-129."
+    },
+    {
+      "id": "AW-129",
+      "severity": "P2",
+      "pr": 159,
+      "source": "apps/web/src/shell/markAllRead.ts:50",
+      "title": "Report failed expanded-thread requests",
+      "claim": "When an expanded sidebar request rejects\u2014for example during a transient network or server failure\u2014the rejected result is silently ignored here and `unreadInProject` still fulfills.",
+      "verdict": "fixed",
+      "evidence": "markAllRead returns expanded-thread failure counts while preserving successful unread results. A Vitest regression failed on the old behavior and passes with the fix."
+    },
+    {
+      "id": "AW-130",
+      "severity": "P2",
+      "pr": 159,
+      "source": "apps/server/src/notification_settings.rs:232",
+      "title": "Release delayed pushes when notifications resume",
+      "claim": "If a push arrives during a manual pause, `push::deliver_job` schedules its replacement job at the timestamp returned here.",
+      "verdict": "blocked",
+      "evidence": "notification_settings.rs pause changes do not reschedule already delayed push jobs. Needs a resume-before-old-deadline regression and dedupe-safe job rescheduling; not included."
+    },
+    {
+      "id": "AW-131",
+      "severity": "P2",
+      "pr": 161,
+      "source": "apps/server/src/mcp/tasks.rs:2789",
+      "title": "Save handoffs only for a claim the caller actually releases",
+      "claim": "When the caller does not currently own the claim\u2014because another actor owns it, it was already released, or a successful call is retried\u2014the `DELETE` sets `released` to false but this unconditional block still inserts a handoff and activity row.",
+      "verdict": "already fixed",
+      "evidence": "mcp/tasks.rs task_release checks handoff.is_some() && !released and refuses before inserting a handoff. Release retries cannot add notes for another actor claim."
+    },
+    {
+      "id": "AW-132",
+      "severity": "P2",
+      "pr": 161,
+      "source": "sdks/runner-typescript/src/index.ts:13",
+      "title": "Model ping wakeups without a required request ID",
+      "claim": "A `ping` intentionally has no `replyRequestId`, but adding it to `WakeupEvent` while `Wakeup.replyRequestId` remains required makes `verifyWakeup`'s return type unsound.",
+      "verdict": "blocked",
+      "evidence": "sdks/runner-typescript/src/index.ts Wakeup includes ping/inbox.available in the event union but still requires replyRequestId. A discriminated union would be useful, but needs SDK consumer/type tests and runtime validation parity; not silently broadened to optional everywhere."
+    },
+    {
+      "id": "AW-133",
+      "severity": "P2",
+      "pr": 162,
+      "source": "apps/web/src/quick-add/QuickAddForms.tsx:71",
+      "title": "Open the created task when attachment upload fails",
+      "claim": "When any shared-file upload rejects, task creation has already succeeded and `clear()` has blanked the draft, but this catch only changes the banner and never calls `open`.",
+      "verdict": "already fixed",
+      "evidence": "QuickAddForms.tsx catches attachment upload failure into stranded {key,href,reason}, preserving a direct link to the successfully created task instead of losing it."
+    },
+    {
+      "id": "AW-134",
+      "severity": "P2",
+      "pr": 164,
+      "source": "apps/web/src/settings/SettingsArea.tsx:200",
+      "title": "Keep the current settings project visible in the rail",
+      "claim": "When someone opens settings for an unpinned project outside the five most recent projects\u2014for example through a deep link or the settings project picker\u2014removing this navigation update means its `lastOpenedAt` is never refreshed.",
+      "verdict": "blocked",
+      "evidence": "SettingsArea project picker navigates to project settings without refreshing project lastOpenedAt, so off-rail deep links may stay hidden. Needs navigation-state regression and deciding whether opening settings counts as project use."
+    },
+    {
+      "id": "AW-135",
+      "severity": "P2",
+      "pr": 164,
+      "source": "apps/server/src/projects.rs:1077",
+      "title": "Normalize the returned location for legacy clients",
+      "claim": "When a settings-stuck page is still running the pre-change JavaScript bundle during deployment, the switch response continues to report `location.kind` as `settings` even though this branch returns the overview href.",
+      "verdict": "blocked",
+      "evidence": "Legacy settings navigation location normalization needs old-client projection fixtures. Current switch flow refreshes lastOpenedAt but retains stored navigation metadata; no compatibility rewrite included."
+    },
+    {
+      "id": "AW-136",
+      "severity": "P2",
+      "pr": 165,
+      "source": "apps/web/src/shell/AppShell.tsx:280",
+      "title": "Recompute the focus trap after the lazy sidebar mounts",
+      "claim": "When a user opens the mobile navigation on a cold Home or Messages load before this lazy chunk resolves, the focus-trap effect has already captured only `#project-rail` because the fallback has no `#project-sidebar`.",
+      "verdict": "blocked",
+      "evidence": "AppShell focus effect captures drawer elements before a lazy sidebar mounts. Keyboard handling enumerates controls fresh but from those captured elements. Needs a delayed-sidebar keyboard regression and observer/ref ownership fix."
+    },
+    {
+      "id": "AW-137",
+      "severity": "P2",
+      "pr": 166,
+      "source": "apps/server/src/password_reset.rs:642",
+      "title": "Preserve reset tokens after ambiguous SMTP failures",
+      "claim": "If the SMTP server accepts the message body but the connection drops while this client waits for the final `250` reply, `mail::send` returns a retryable error even though the email may already be delivered.",
+      "verdict": "blocked",
+      "evidence": "password_reset.rs deletes the token for every mail::send error, including ambiguous post-DATA SMTP failures. Keeping a token requires a transport-level ambiguous-acceptance regression and retry policy; no speculative credential-flow change included."
+    },
+    {
+      "id": "AW-138",
+      "severity": "P2",
+      "pr": 167,
+      "source": "apps/web/src/agents/AgentProfileDialog.tsx:101",
+      "title": "Derive the agent catalog from its selected environment",
+      "claim": "When an agent has no explicit harness but has environment A selected, the environment determines its harness at launch; this code instead falls back to the project's default harness B.",
+      "verdict": "blocked",
+      "evidence": "AgentProfileDialog runsOn uses draft.harness || project default and omits the selected environment harness. Needs a profile-with-environment/catalog regression before model defaults are normalized differently."
+    },
+    {
+      "id": "AW-139",
+      "severity": "P2",
+      "pr": 173,
+      "source": "apps/web/src/app/App.tsx:340",
+      "title": "Add the new route to the offline navigation allowlist",
+      "claim": "When an installed app reloads or directly navigates to `/design-system` while offline, the service worker does not call `openApp`: `APP_ROUTE` in `apps/web/public/sw.js` still lists `/dev` but not `/design-system`.",
+      "verdict": "already fixed",
+      "evidence": "public/sw.js APP_ROUTE includes design-system, so the renamed route is accepted for offline app navigation."
+    },
+    {
+      "id": "AW-140",
+      "severity": "P2",
+      "pr": 179,
+      "source": "apps/server/src/auth/workos.rs:273",
+      "title": "Avoid logging unauthenticated callback probes",
+      "claim": "Because `/auth/workos/callback` is public, this warning also runs for requests rejected before any login attempt is validated, including a GET with missing `code` or `state`.",
+      "verdict": "already fixed",
+      "evidence": "auth/workos.rs worth_logging excludes unmatched callback stages; failure_location also receives linking, distinguishing account-link conflicts. Dedicated unit regressions cover unmatched probes and link failures."
+    },
+    {
+      "id": "AW-141",
+      "severity": "P2",
+      "pr": 179,
+      "source": "apps/server/src/auth/workos.rs:278",
+      "title": "Distinguish link conflicts from unlinked accounts",
+      "claim": "When a callback was started with `link=true` but the provider subject is already linked to a different local user, `resolve_identity` also returns `AppError::Forbidden` while the step is `account`.",
+      "verdict": "already fixed",
+      "evidence": "auth/workos.rs worth_logging excludes unmatched callback stages; failure_location also receives linking, distinguishing account-link conflicts. Dedicated unit regressions cover unmatched probes and link failures."
+    },
+    {
+      "id": "AW-142",
+      "severity": "P2",
+      "pr": 181,
+      "source": "apps/web/src/settings/project/BugReportsPage.tsx:68",
+      "title": "Clear link state when the project changes",
+      "claim": "When someone leaves Project A\u2019s one-time setup card open and uses the project picker to move directly to Project B\u2019s Bug reports page, `SettingsArea` reuses the same `BugReportsPage` instance, so `setup`, `replacing`, and `deleting` still reference A.",
+      "verdict": "already fixed",
+      "evidence": "SettingsArea.tsx keys PageBody by project.id, so switching projects remounts BugReportsPage and clears setup/replacing/deleting state. The finding did not account for this caller guard."
+    },
+    {
+      "id": "AW-143",
+      "severity": "P2",
+      "pr": 182,
+      "source": "apps/server/src/mcp.rs:2952",
+      "title": "Start handshake timing before authentication",
+      "claim": "When database or pool contention slows `resolve_bearer_principal`, or reading/parsing the request body is slow, that time counts toward the client's handshake timeout but is excluded because the timer starts only immediately before `next.run`.",
+      "verdict": "already fixed",
+      "evidence": "mcp.rs authentication middleware starts timing before bearer lookup/body read. HandshakeStep watches response bodies to distinguish JSON-RPC errors inside HTTP 200. handshake_logs_show_protocol_errors_and_the_whole_wait covers both."
+    },
+    {
+      "id": "AW-144",
+      "severity": "P2",
+      "pr": 182,
+      "source": "apps/server/src/mcp.rs:3022",
+      "title": "Detect protocol errors before logging handshake success",
+      "claim": "With the legacy-session transport configured in `router`, rmcp can carry JSON-RPC errors for `initialize` or `tools/list` inside an HTTP 200 response.",
+      "verdict": "already fixed",
+      "evidence": "mcp.rs authentication middleware starts timing before bearer lookup/body read. HandshakeStep watches response bodies to distinguish JSON-RPC errors inside HTTP 200. handshake_logs_show_protocol_errors_and_the_whole_wait covers both."
+    },
+    {
+      "id": "AW-145",
+      "severity": "P2",
+      "pr": 194,
+      "source": "apps/server/src/mcp/tool_permissions.rs:48",
+      "title": "Let task-edit permission open task attachment uploads",
+      "claim": "For a custom role or agent limit that retains `tasks.view` and `tasks.edit` but excludes `channels.post` everywhere, this prerequisite hides and rejects `file_upload` even when it targets a task.",
+      "verdict": "already fixed",
+      "evidence": "files upload authorization routes task attachments through TasksEdit; roles_and_access::task_files_follow_who_can_see_tasks exercises narrowed task-only roles."
+    },
+    {
+      "id": "AW-146",
+      "severity": "P2",
+      "pr": 194,
+      "source": "apps/server/src/search.rs:132",
+      "title": "Filter task attachments from search by task-view permission",
+      "claim": "When a custom role or app limit excludes `tasks.view`, searching for files still exposes attachments from those projects because only `SearchKind::Tasks` receives the filtered project list.",
+      "verdict": "already fixed",
+      "evidence": "search.rs computes task_projects whenever Tasks OR Files is searched and binds that list separately for task attachment hits. file_search_leaves_out_task_files_where_tasks_are_hidden covers it."
+    },
+    {
+      "id": "AW-147",
+      "severity": "P2",
+      "pr": 194,
+      "source": "apps/server/src/mcp/tool_permissions.rs:59",
+      "title": "Filter saved task previews by current task-view permission",
+      "claim": "When a person has saved a task and subsequently loses `tasks.view` through a custom role or app limit, `later_list` still returns its current title, key and status.",
+      "verdict": "already fixed",
+      "evidence": "later.rs applies roles::role_allows_sql tasks.view plus agent-limit project filtering before saved task projections."
+    },
+    {
+      "id": "AW-148",
+      "severity": "P2",
+      "pr": 194,
+      "source": "apps/server/src/mcp/tool_permissions.rs:26",
+      "title": "Apply code-view restrictions to project overview repositories",
+      "claim": "For a custom role or app limit without `code.view`, `project_open` remains callable and returns repository IDs, owner/name pairs and default branches.",
+      "verdict": "already fixed",
+      "evidence": "mcp/briefing.rs project_open computes sees_code via projects_allowing(CodeView) before including repositories; reads_naming_tasks_or_repositories_follow_the_role_and_limit covers it."
+    },
+    {
+      "id": "AW-149",
+      "severity": "P2",
+      "pr": 194,
+      "source": "apps/server/src/mcp/reads.rs:262",
+      "title": "Filter linked code details from task reads by code-view permission",
+      "claim": "When a custom role or app limit retains `tasks.view` but excludes `code.view`, `task_open` still returns linked repository and pull-request details.",
+      "verdict": "already fixed",
+      "evidence": "mcp/reads.rs passes authorize_read RepositoryView into work_item_value and omits linked code without it; a_tasks_linked_code_needs_see_code covers this."
+    },
+    {
+      "id": "AW-150",
+      "severity": "P2",
+      "pr": 194,
+      "source": "apps/server/src/mcp/tasks.rs:1606",
+      "title": "Filter linked tasks by their own project's task-view permission",
+      "claim": "When a caller can view tasks in project A but lacks `tasks.view` in project B, opening an A task that depends on or relates to a B task still exposes the B task's title, key and status.",
+      "verdict": "already fixed",
+      "evidence": "mcp/planning.rs visible_links combines target-project task_links visibility, reachable projects and agent_limit_hides TasksView; linked_tasks_in_another_project_follow_see_tasks_there covers it."
+    },
+    {
+      "id": "AW-151",
+      "severity": "P2",
+      "pr": 194,
+      "source": "apps/server/src/mcp/tool_permissions.rs:30",
+      "title": "Filter usage batches by effective task-view permission",
+      "claim": "When a person owns a configured provider account and retains `runs.launch` but loses `tasks.view` through a custom role or app limit, `usage_batch` still returns task titles, keys and priorities.",
+      "verdict": "already fixed",
+      "evidence": "usage/batch.rs checks projects_showing_tasks for each task-bearing batch entry before naming/ranking it, applying current role and app limit."
+    },
+    {
+      "id": "AW-152",
+      "severity": "P2",
+      "pr": 194,
+      "source": "apps/server/src/mcp/tool_permissions.rs:145",
+      "title": "Filter linked pull-request details from run reads",
+      "claim": "When a custom role or app limit excludes `code.view`, `run_get` and `run_list` remain callable and return linked pull-request details anyway.",
+      "verdict": "already fixed",
+      "evidence": "mcp/runs.rs suppresses branch, publication-request and PR fields when projects_allowing(CodeView) rejects the target project; redaction includes row.branch."
+    },
+    {
+      "id": "AW-153",
+      "severity": "P2",
+      "pr": 194,
+      "source": "apps/server/src/launch.rs:2285",
+      "title": "Preserve app attribution for batched queued launches",
+      "claim": "When a person's app queues multiple tasks through `task_launch`, then loses `runs.launch` before they start, these launches still execute.",
+      "verdict": "already fixed",
+      "evidence": "launch.rs persists made_through_app for queued and mention launches; drain_queued and tag jobs re-read current app limits before execution."
+    },
+    {
+      "id": "AW-154",
+      "severity": "P2",
+      "pr": 194,
+      "source": "apps/server/src/launch.rs:2717",
+      "title": "Preserve app attribution for launches triggered by mentions",
+      "claim": "If a person's app mentions a harness-backed agent while `runs.launch` is allowed, then loses that permission before the job executes or its queued launch starts, the run still launches.",
+      "verdict": "already fixed",
+      "evidence": "launch.rs persists made_through_app for queued and mention launches; drain_queued and tag jobs re-read current app limits before execution."
+    },
+    {
+      "id": "AW-155",
+      "severity": "P2",
+      "pr": 194,
+      "source": "apps/server/src/work_items.rs:1256",
+      "title": "Check task-view access before returning archive results",
+      "claim": "When a custom project role retains `tasks.delete` but excludes `tasks.view`, a person who knows a task ID can still retrieve its full contents through the browser archive/restore endpoints.",
+      "verdict": "already fixed",
+      "evidence": "work_items.rs archive response uses capabilities TasksView to redact content. roles_and_access::archiving_without_see_tasks_reveals_no_task checks the returned view."
+    },
+    {
+      "id": "AW-156",
+      "severity": "P2",
+      "pr": 194,
+      "source": "apps/server/src/mcp/views_data.rs:545",
+      "title": "Reapply app limits when queued task imports execute",
+      "claim": "When a person's app calls `task_import` with `commit: true` and subsequently loses `tasks.create` through its agent limit, the queued import still creates tasks.",
+      "verdict": "already fixed",
+      "evidence": "work_items/imports.rs persists made_through_app, resolves current app access and runs import chunks within_agent_limits. GitHub reads also check CodeView; role regressions cover the read path."
+    },
+    {
+      "id": "AW-157",
+      "severity": "P2",
+      "pr": 194,
+      "source": "apps/server/src/launch.rs:2568",
+      "title": "Redact task details from launch cancellation responses too",
+      "claim": "If a person queues a task launch and subsequently loses `tasks.view`, the browser's launch-cancellation endpoint still returns the task's current key and title.",
+      "verdict": "already fixed",
+      "evidence": "launch.rs cancel returns through views_by_id, whose read projection removes work_item without sees_tasks. cancelling_a_launch_without_see_tasks_reveals_no_task covers it."
+    },
+    {
+      "id": "AW-158",
+      "severity": "P2",
+      "pr": 194,
+      "source": "apps/server/src/work_items.rs:4063",
+      "title": "Redact task references in comment mutation responses too",
+      "claim": "For a custom role that retains `tasks.edit` but excludes `tasks.view`, the browser's comment endpoints still disclose task titles and statuses because this redaction only covers `WorkItemView`.",
+      "verdict": "already fixed",
+      "evidence": "work_items/comments.rs read projection calls sees_tasks_in and removes task-reference titles when hidden; comment_references_show_titles_only_with_see_tasks covers it."
+    },
+    {
+      "id": "AW-159",
+      "severity": "P2",
+      "pr": 194,
+      "source": "apps/server/src/mcp/tool_permissions.rs:135",
+      "title": "Filter suggestion decision responses by task-view permission",
+      "claim": "When a custom role or app limit retains `tasks.edit` but excludes `tasks.view`, `ai_suggestion_decide` still returns restricted task details for a known pending suggestion ID.",
+      "verdict": "already fixed",
+      "evidence": "ai/suggestions.rs decision locks and checks ai_suggestion_visible_to plus WITHIN_APP_LIMIT before returning the result. ai_suggestions_need_see_tasks covers it."
+    },
+    {
+      "id": "AW-160",
+      "severity": "P2",
+      "pr": 194,
+      "source": "apps/server/src/work_items/planning.rs:1240",
+      "title": "Redact task details from bulk mutation responses",
+      "claim": "When a custom role retains `tasks.delete` or `tasks.edit` but excludes `tasks.view`, the browser bulk endpoint still returns restricted task contents for known task UUIDs.",
+      "verdict": "already fixed",
+      "evidence": "work_items/planning.rs bulk result uses effective capabilities and strips tasks without TasksView; bulk_changes_without_see_tasks_reveal_no_task covers it."
+    },
+    {
+      "id": "AW-161",
+      "severity": "P2",
+      "pr": 194,
+      "source": "apps/server/src/mcp/task_move.rs:236",
+      "title": "Check destination task visibility when replaying a move",
+      "claim": "When a caller can view tasks in the source project but lacks `tasks.view` in the destination, repeating `task_move` for an already-moved task returns the destination task's current title.",
+      "verdict": "already fixed",
+      "evidence": "mcp/task_move.rs already_moved filters destination titles through projects_showing_tasks; a_repeated_move_shows_the_title_only_where_tasks_are_seen covers it."
+    },
+    {
+      "id": "AW-162",
+      "severity": "P2",
+      "pr": 194,
+      "source": "apps/server/src/mcp/tool_permissions.rs:107",
+      "title": "Filter linked task titles from whiteboard reads",
+      "claim": "When a custom role or app limit excludes `tasks.view`, `whiteboard_read` still exposes the current titles of tasks linked to the board.",
+      "verdict": "already fixed",
+      "evidence": "whiteboards.rs resolves linked task projects through projects_showing_tasks before exposing their titles; board_links_show_task_titles_only_where_tasks_are_seen covers it."
+    },
+    {
+      "id": "AW-163",
+      "severity": "P2",
+      "pr": 194,
+      "source": "apps/server/src/workspace.rs:560",
+      "title": "Enforce member-view permission on the workspace member list",
+      "claim": "When a custom workspace role excludes `members.view`, the browser's workspace-members endpoint still returns the member list, including roles, login names and project counts.",
+      "verdict": "already fixed",
+      "evidence": "workspace.rs list_members calls caller_may DirectoryView and otherwise returns only the caller; the_workspace_member_directory_follows_directory_view covers it."
+    },
+    {
+      "id": "AW-164",
+      "severity": "P2",
+      "pr": 194,
+      "source": "apps/server/src/mcp/task_move.rs:195",
+      "title": "Require source task visibility before copying task contents",
+      "claim": "When a caller retains `tasks.edit` and `tasks.delete` in the source project but lacks `tasks.view`, these checks still allow moving a known task into another project where they can create and read tasks.",
+      "verdict": "already fixed",
+      "evidence": "mcp/task_move.rs requires source task visibility and CodeView for linked-code provenance. moving_a_task_needs_its_contents_and_code_to_be_seen covers both."
+    },
+    {
+      "id": "AW-165",
+      "severity": "P2",
+      "pr": 194,
+      "source": "apps/server/src/mcp/task_move.rs:166",
+      "title": "Filter restricted code links from move provenance",
+      "claim": "When a caller can move and view tasks but lacks `code.view` in the source project, moving a task still discloses its linked repository names and pull-request URLs.",
+      "verdict": "already fixed",
+      "evidence": "mcp/task_move.rs requires source task visibility and CodeView for linked-code provenance. moving_a_task_needs_its_contents_and_code_to_be_seen covers both."
+    },
+    {
+      "id": "AW-166",
+      "severity": "P2",
+      "pr": 194,
+      "source": "apps/server/src/mcp/tool_permissions.rs:146",
+      "title": "Redact restricted task details from run-step reads",
+      "claim": "When a custom role or app limit excludes `tasks.view`, `run_steps` still returns the current title of a task linked to a visible run.",
+      "verdict": "already fixed",
+      "evidence": "mcp/run_pages.rs run_steps calls run_views::run_detail and run_diff; run_views::redact clears task_title when projects_showing_tasks excludes the target project."
+    },
+    {
+      "id": "AW-167",
+      "severity": "P2",
+      "pr": 194,
+      "source": "apps/server/src/mcp/runs.rs:347",
+      "title": "Redact repository branches from MCP run reads without code access",
+      "claim": "When a custom role or app limit excludes `code.view`, `run_get` and `run_list` still disclose `repository_workspaces.branch_name`: this helper clears only PR fields, while `run_value` returns `row.branch` unchanged.",
+      "verdict": "already fixed",
+      "evidence": "mcp/runs.rs suppresses branch, publication-request and PR fields when projects_allowing(CodeView) rejects the target project; redaction includes row.branch."
+    },
+    {
+      "id": "AW-168",
+      "severity": "P2",
+      "pr": 194,
+      "source": "apps/server/src/mcp/tool_permissions.rs:139",
+      "title": "Redact task references returned by planning mutations",
+      "claim": "When a custom role or app limit retains `tasks.edit` but excludes `tasks.view`, `task_relate` and `task_depend` still disclose a known task's current title and status.",
+      "verdict": "already fixed",
+      "evidence": "mcp/planning.rs mutation projections use the visibility-aware task_links path and app limit per target. link_changes_name_the_task_only_where_tasks_are_seen and link_changes_list_linked_tasks_only_where_the_app_sees_them cover it."
+    },
+    {
+      "id": "AW-169",
+      "severity": "P2",
+      "pr": 194,
+      "source": "apps/server/src/conversations.rs:4353",
+      "title": "Redact branches and commits from conversation run projections",
+      "claim": "When a custom role excludes `code.view`, opening a visible thread still returns its active or latest terminal run's repository branch, base commit and published commit.",
+      "verdict": "already fixed",
+      "evidence": "conversations.rs hide_pull_request clears branch, base_commit and published_commit as well as PR fields when code visibility is absent."
+    },
+    {
+      "id": "AW-170",
+      "severity": "P2",
+      "pr": 194,
+      "source": "apps/server/src/launch.rs:909",
+      "title": "Check task visibility before rendering a launch prompt",
+      "claim": "When a custom project role retains `runs.launch` and `channels.post` but excludes `tasks.view`, a person with a provider account can still launch a known task UUID through the browser launch endpoint and retrieve its contents from the resulting thread.",
+      "verdict": "already fixed",
+      "evidence": "launch.rs checks projects_showing_tasks before using a work item to render a launch prompt."
+    },
+    {
+      "id": "AW-171",
+      "severity": "P2",
+      "pr": 194,
+      "source": "apps/server/src/external_agents.rs:1169",
+      "title": "Bound agent credential grants by the caller's project permissions",
+      "claim": "When a workspace Admin has a custom project role retaining `agents.manage` but excluding `code.view` or `tasks.edit`, this check still permits creating a built-in Member agent and returns its credentials.",
+      "verdict": "already fixed",
+      "evidence": "external_agents.rs require_grantable intersects manager standing with project_holding; agents_are_given_only_what_the_giver_holds_in_the_project covers it."
+    },
+    {
+      "id": "AW-172",
+      "severity": "P2",
+      "pr": 194,
+      "source": "apps/server/src/memberships.rs:432",
+      "title": "Bound membership grants by the caller's project permissions",
+      "claim": "When a workspace Admin's custom project role retains `members.manage` but excludes `tasks.edit` or `code.view`, this helper still allows giving another member unrestricted Member access because `roles::standing` loads only the caller's workspace grant.",
+      "verdict": "already fixed",
+      "evidence": "memberships.rs require_grantable checks project_holding as well as workspace standing; project_roles_are_given_only_within_the_givers_project_role covers it."
+    },
+    {
+      "id": "AW-173",
+      "severity": "P2",
+      "pr": 194,
+      "source": "apps/server/src/invitations.rs:1315",
+      "title": "Recheck the project grant before accepting an invitation",
+      "claim": "If an administrator issues an unrestricted Member invitation and subsequently receives a custom project role without `code.view` or `tasks.edit` but retaining `members.invite`, the invitation remains redeemable with the original unrestricted grant.",
+      "verdict": "already fixed",
+      "evidence": "invitations.rs require_issuer_still_grants rechecks the issuer project grant before accept; a_project_invitation_lapses_when_its_issuers_project_role_narrows_below_it covers it."
+    },
+    {
+      "id": "AW-174",
+      "severity": "P2",
+      "pr": 194,
+      "source": "apps/server/src/work_items.rs:3386",
+      "title": "Check task visibility before creating a worker thread",
+      "claim": "When a custom project role retains `tasks.edit` and `runs.launch` but excludes `tasks.view`, the browser's `work-with-worker` endpoint still discloses a known task's current title.",
+      "verdict": "already fixed",
+      "evidence": "work_items.rs worker-thread creation checks TasksView; working_with_a_worker_needs_see_tasks covers it."
+    },
+    {
+      "id": "AW-175",
+      "severity": "P2",
+      "pr": 194,
+      "source": "apps/server/src/repositories.rs:682",
+      "title": "Redact repository mutation responses without code-view access",
+      "claim": "When a custom project role retains `code.manage` but excludes `code.view`, the browser's repository preparation endpoint still returns restricted repository metadata for a known repository UUID.",
+      "verdict": "already fixed",
+      "evidence": "Repository prepare authorization requires RepositoryView alongside management; managing_a_repository_needs_see_code covers it."
+    },
+    {
+      "id": "AW-176",
+      "severity": "P2",
+      "pr": 194,
+      "source": "apps/server/src/mcp/oauth.rs:1349",
+      "title": "Bound agent OAuth grants by the manager's project permissions",
+      "claim": "When a workspace Admin has a custom project role retaining `agents.manage` but excluding `code.view` or `tasks.edit`, they can still authorize an OAuth client as an existing unrestricted Member agent.",
+      "verdict": "already fixed",
+      "evidence": "mcp/oauth.rs managed_agent bounds the agent grant by both manager standing and project_holding. roles_and_access::connecting_an_app_as_an_agent_stays_within_the_project_role covers narrowed project roles."
+    },
+    {
+      "id": "AW-177",
+      "severity": "P2",
+      "pr": 197,
+      "source": "apps/server/src/modules/http.rs:303",
+      "title": "Check the thing's own module set before returning it",
+      "claim": "When a person has Channels enabled in one project or workspace but disabled in another, this endpoint resolves the requested thing using the union from `state::anywhere`.",
+      "verdict": "already fixed",
+      "evidence": "modules/http.rs and mcp/module_tools.rs re-fetch the resolved thing using state::for_project for its own project; initial anywhere discovery does not authorize the response."
+    },
+    {
+      "id": "AW-178",
+      "severity": "P2",
+      "pr": 197,
+      "source": "apps/server/src/modules/state.rs:606",
+      "title": "Apply role module restrictions to notification reads",
+      "claim": "If a recipient already has task notifications and their project role is subsequently changed to turn Tasks off, those notifications remain visible and continue contributing to unread and attention counts.",
+      "verdict": "already fixed",
+      "evidence": "modules/state.rs notification predicate combines workspace switches with held project/workspace role modules_off, filtering unread and attention reads."
+    },
+    {
+      "id": "AW-179",
+      "severity": "P2",
+      "pr": 197,
+      "source": "apps/server/src/mcp/module_tools.rs:215",
+      "title": "Apply workspace module settings to projectless things",
+      "claim": "When Whiteboards is disabled in workspace A but enabled in workspace B, a member of both can still open A's workspace-wide boards through either thing endpoint.",
+      "verdict": "already fixed",
+      "evidence": "modules/things.rs shown uses viewer.workspaces[thing.organization_id] for projectless boards, rather than the anywhere union."
+    },
+    {
+      "id": "AW-180",
+      "severity": "P2",
+      "pr": 197,
+      "source": "apps/server/src/mcp.rs:2813",
+      "title": "Keep direct-message thread tools discoverable when Channels is off",
+      "claim": "With the \u201cDMs only\u201d or \u201cChat with my agents\u201d preset, this filter removes `thread_start` and `thread_update` because their manifest owner is Channels.",
+      "verdict": "already fixed",
+      "evidence": "modules/state.rs allows_tool explicitly keeps thread_start/thread_update when Messages is on, with unit tests for the DMs-only case."
+    },
+    {
+      "id": "AW-181",
+      "severity": "P2",
+      "pr": 197,
+      "source": "apps/server/src/events.rs:218",
+      "title": "Apply each webhook owner's effective module restrictions",
+      "claim": "When a webhook owner's project role turns off Automations or Tasks while the workspace switches remain on, this workspace-only check still forwards task events to their webhook.",
+      "verdict": "blocked",
+      "evidence": "events.rs route checks workspace module switches, but webhooks.rs fan_out/visible_to check owner access and permissions without owner-effective module settings. Automations do load state::for_project. Webhook owner-role module regressions and both queue/delivery fixes remain needed."
+    },
+    {
+      "id": "AW-182",
+      "severity": "P2",
+      "pr": 199,
+      "source": "apps/web/src/conversations/StructuredComposer.tsx:595",
+      "title": "Preserve the reply target when flushing queued messages",
+      "claim": "When a reply fails with a connection error and the conversation remains open, the queued item retains `replyTo`, but `ComposerBox.flush()` reconstructs the submission without it (line 300).",
+      "verdict": "already fixed",
+      "evidence": "StructuredComposer.tsx flush passes item.replyTo with the original idempotency key; restoreQueued also restores the target."
+    },
+    {
+      "id": "AW-183",
+      "severity": "P2",
+      "pr": 199,
+      "source": "apps/web/src/conversations/StructuredComposer.tsx:574",
+      "title": "Preserve reply semantics when scheduling a message",
+      "claim": "When someone selects Reply and then uses Schedule message, the quote is silently dropped: `schedule()` still calls `onSchedule(content, at)`, and `later/api.ts::scheduleMessage` sends only `{ content, sendAt }`.",
+      "verdict": "already fixed",
+      "evidence": "StructuredComposer.tsx schedule explicitly rejects replyTo with a visible error, preserving the draft instead of silently dropping reply semantics. Full scheduled-reply support remains an intentional separate feature."
+    },
+    {
+      "id": "AW-184",
+      "severity": "P2",
+      "pr": 199,
+      "source": "apps/web/src/conversations/ReplyQuote.tsx:50",
+      "title": "Keep the direct thread open when jumping to an older reply target",
+      "claim": "In a DM/group thread panel, clicking a quote whose original is outside the loaded messages falls through to `quoted.href`.",
+      "verdict": "already fixed",
+      "evidence": "ReplyQuote.tsx uses RevealInThread when a target is not currently rendered, keeping direct thread panels open while older entries load."
+    },
+    {
+      "id": "AW-185",
+      "severity": "P2",
+      "pr": 199,
+      "source": "apps/web/src/conversations/Timeline.tsx:374",
+      "title": "Refresh reply quotes when their source messages change",
+      "claim": "When a reply is on a loaded older page and its original message is edited or removed, this renders the old quote indefinitely until a reconnect or page reload.",
+      "verdict": "already fixed",
+      "evidence": "useLiveOlderEntries.ts tracks quoted-message revisions, blanks removed quotes immediately and refetches older reply quotes after edits, rather than relying only on newest-page reloads."
+    },
+    {
+      "id": "AW-186",
+      "severity": "P2",
+      "pr": 199,
+      "source": "apps/server/src/conversations.rs:1953",
+      "title": "Refresh reply quotes before replaying a stored send response",
+      "claim": "If a message is replied to and then removed, retrying the reply with its original idempotency key still returns the removed text.",
+      "verdict": "already fixed",
+      "evidence": "conversations.rs idempotency replay calls forwarding::refresh_reply_quote before responding, so removed/edited source text is not replayed from the cached body."
+    },
+    {
+      "id": "AW-187",
+      "severity": "P2",
+      "pr": 203,
+      "source": "apps/server/src/work_items/imports.rs:2038",
+      "title": "Preserve resolvable references in custom-field exports",
+      "claim": "For page-link custom fields, `named_values` exports the page's title rather than its ID or URL.",
+      "verdict": "already fixed",
+      "evidence": "work_items/imports.rs name_field_values rewrites page references with work_item_fields::exported_page, retaining resolvable links with labels."
+    },
+    {
+      "id": "AW-188",
+      "severity": "P2",
+      "pr": 203,
+      "source": "apps/server/src/mcp/tasks.rs:476",
+      "title": "Replace saved-view clauses when overriding custom-field filters",
+      "claim": "When `task_list` receives both a saved view and an explicit filter for the same custom field, the view's clause remains in `self.view` and is ANDed with the explicit clause here.",
+      "verdict": "blocked",
+      "evidence": "mcp/views_data.rs apply_view removes overridden built-in clauses, but does not remove same-field custom-field clauses before mcp/tasks.rs ANDs explicit fields. Needs a saved-view override regression and field-id normalization; not fixed."
+    },
+    {
+      "id": "AW-189",
+      "severity": "P2",
+      "pr": 203,
+      "source": "apps/server/src/work_items/imports.rs:2197",
+      "title": "Preserve person references through CSV formula escaping",
+      "claim": "When a person custom field contains someone with a handle, `named_values` exports it as `@handle`, but passing that cell through `csv_field` adds a leading apostrophe.",
+      "verdict": "already fixed",
+      "evidence": "work_items/imports.rs field_cell doubles literal leading apostrophes; unguarded removes exactly a guard or doubled quote for custom fields. Person/Text/URL/Link/SingleChoice import paths use it, while choices use JSON arrays."
+    },
+    {
+      "id": "AW-190",
+      "severity": "P2",
+      "pr": 203,
+      "source": "apps/server/src/work_items/imports.rs:2123",
+      "title": "Distinguish literal apostrophes from CSV formula guards",
+      "claim": "For an allowed single-choice option named `'=Plan`, `csv_field` leaves the exported cell unchanged, but the new unconditional `unguarded` conversion changes it to `=Plan` on import.",
+      "verdict": "already fixed",
+      "evidence": "work_items/imports.rs field_cell doubles literal leading apostrophes; unguarded removes exactly a guard or doubled quote for custom fields. Person/Text/URL/Link/SingleChoice import paths use it, while choices use JSON arrays."
+    },
+    {
+      "id": "AW-191",
+      "severity": "P2",
+      "pr": 203,
+      "source": "apps/server/src/work_items/imports.rs:533",
+      "title": "Preserve text values through CSV formula escaping",
+      "claim": "When a text custom field contains `=Plan`, `@ana`, or another nonnumeric value beginning with a formula character, `tasks_csv` passes it through `csv_field`, which adds a leading apostrophe.",
+      "verdict": "already fixed",
+      "evidence": "work_items/imports.rs field_cell doubles literal leading apostrophes; unguarded removes exactly a guard or doubled quote for custom fields. Person/Text/URL/Link/SingleChoice import paths use it, while choices use JSON arrays."
+    }
+  ],
+  "code_head": "3ac71534fcaf939aa986b184c45821f3ba5de27b"
+}
