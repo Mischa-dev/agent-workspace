@@ -1,0 +1,39 @@
+{
+  "id": "collections",
+  "name": "Collections",
+  "description": "Record types a project makes for itself, such as Playtest feedback or Builds: fields, records and views, with the same field types as tasks.",
+  "version": 1,
+  "kind": "core",
+  "switchable": true,
+  "needs": ["projects"],
+  "worksWith": ["tasks", "pages"],
+  "permissions": ["collections.edit", "collections.build"],
+  "tools": {
+    "collection_list": "query",
+    "collection_describe": "describe",
+    "collection_write": "change",
+    "record_query": "query",
+    "record_write": "change"
+  },
+  "routes": ["/api/v1/projects/{project_id}/collections*"],
+  "events": { "emits": [], "listens": [] },
+  "notifications": [],
+  "search": [],
+  "automations": { "triggers": [], "actions": [] },
+  "things": [],
+  "links": [],
+  "embeds": [],
+  "slots": {
+    "pages": [],
+    "parts": [],
+    "sidebar": [],
+    "home": [],
+    "settings": [],
+    "palette": [],
+    "shortcuts": [],
+    "slash": [],
+    "setup": []
+  },
+  "settings": [],
+  "nouns": []
+}

@@ -6,6 +6,7 @@ mod awd102_task_move;
 mod awd53_live_pages;
 mod awd53_page_blocks;
 mod awd89_custom_fields;
+mod awd90_collections;
 mod backbone;
 mod bug_report_links;
 mod bug_sweep;

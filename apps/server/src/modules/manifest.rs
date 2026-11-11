@@ -149,6 +149,10 @@ const CORE_SOURCES: &[(&str, &str)] = &[
         "whiteboards",
         include_str!("../../../../modules/whiteboards.json"),
     ),
+    (
+        "collections",
+        include_str!("../../../../modules/collections.json"),
+    ),
     ("code", include_str!("../../../../modules/code.json")),
     ("runs", include_str!("../../../../modules/runs.json")),
     ("agents", include_str!("../../../../modules/agents.json")),

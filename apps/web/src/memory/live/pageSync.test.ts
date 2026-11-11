@@ -199,6 +199,35 @@ describe('a page kept in step with the server', () => {
     expect(client.states.at(-1)).toBe('saved')
   })
 
+  it('waits while offline instead of sending again at once, and sends when back online', async () => {
+    const server = new FakeServer()
+    const client = connect(server)
+    const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
+    try {
+      server.failWith = Array.from({ length: 50 }, () => new TypeError('offline'))
+      client.doc.getText('t').insert(0, 'x')
+      await vi.advanceTimersByTimeAsync(400)
+      expect(server.sends).toBe(1)
+      expect(client.states.at(-1)).toBe('offline')
+      // Typing while offline waits too.
+      client.doc.getText('t').insert(0, 'y')
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(server.sends).toBe(1)
+      // Still offline: one more try now and then, not a stream of them.
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(server.sends).toBe(2)
+      online.mockReturnValue(true)
+      server.failWith = []
+      client.sync.resume()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(server.sends).toBe(3)
+      expect(text(server.doc)).toBe('yxHello')
+      expect(client.states.at(-1)).toBe('saved')
+    } finally {
+      online.mockRestore()
+    }
+  })
+
   it('stops on a refused change until asked to try again', async () => {
     const server = new FakeServer()
     const client = connect(server)

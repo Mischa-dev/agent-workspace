@@ -667,6 +667,7 @@ mod tests {
             "tasks",
             "pages",
             "whiteboards",
+            "collections",
             "runs",
             "code",
             "automations",
