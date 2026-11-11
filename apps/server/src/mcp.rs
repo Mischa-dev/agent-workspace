@@ -4757,6 +4757,14 @@ async fn project_by_key(
     })
 }
 
+/// What a task key names for the caller: nothing, one task, or tasks in
+/// more than one place (a key two workspaces share), which is never guessed.
+pub(super) enum TaskKeyResolution {
+    Missing,
+    Unique(Uuid),
+    Ambiguous,
+}
+
 /// The task the caller can reach under this key: the task that has it now,
 /// or else the one a moved task went to (migration 0043). It matches the
 /// projects the caller belongs to and can access, and for an older
@@ -4768,7 +4776,21 @@ pub(super) async fn task_by_key(
     project_key: &str,
     number: i64,
 ) -> Result<Option<Uuid>, AppError> {
-    Ok(sqlx::query_scalar::<_, Uuid>(
+    Ok(
+        match task_key_resolution(state, principal, project_key, number).await? {
+            TaskKeyResolution::Unique(id) => Some(id),
+            TaskKeyResolution::Missing | TaskKeyResolution::Ambiguous => None,
+        },
+    )
+}
+
+pub(super) async fn task_key_resolution(
+    state: &AppState,
+    principal: &McpPrincipal,
+    project_key: &str,
+    number: i64,
+) -> Result<TaskKeyResolution, AppError> {
+    let matches = sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT found.id FROM (
             SELECT item.id, 0 AS preference, item.project_id
@@ -4792,8 +4814,9 @@ pub(super) async fn task_by_key(
          AND membership.enabled
         WHERE actor_can_access_project($1, $2, found.project_id)
           AND ($5::uuid IS NULL OR found.project_id = $5)
-        ORDER BY found.preference
-        LIMIT 1
+        GROUP BY found.id
+        ORDER BY min(found.preference)
+        LIMIT 2
         "#,
     )
     .bind(principal.actor_id)
@@ -4801,8 +4824,20 @@ pub(super) async fn task_by_key(
     .bind(project_key)
     .bind(number)
     .bind(common::confined_project(principal))
-    .fetch_optional(&state.pool)
-    .await?)
+    .fetch_all(&state.pool)
+    .await?;
+    // Keys are organization-scoped: the same key+number in two of the
+    // caller's organizations names two different tasks, and silently picking
+    // one would rewrite the caller's ID to the wrong task. Refuse, as
+    // project_by_key and repository_by_name do. (The same task may appear
+    // twice — as current holder and as an alias target — and is not
+    // ambiguous.) Group before limiting so duplicate rows cannot hide a
+    // third row naming a different task.
+    Ok(match matches.as_slice() {
+        [] => TaskKeyResolution::Missing,
+        [only] => TaskKeyResolution::Unique(*only),
+        _ => TaskKeyResolution::Ambiguous,
+    })
 }
 
 /// For `task_move` (AWD-102): the task a key names where it was made, the

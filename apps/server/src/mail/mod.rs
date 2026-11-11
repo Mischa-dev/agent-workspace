@@ -295,31 +295,38 @@ pub(crate) async fn load(state: &AppState, row: SettingsRow) -> Result<Transport
 }
 
 /// The transport for mail to a person outside any one workspace (password
-/// resets, address confirmations): their default workspace's, else the
-/// first workspace they own that sends mail. Never another owner's
-/// workspace they merely joined: that owner controls its mail server and
-/// would receive the person's reset link.
+/// resets, address confirmations): the workspace they chose as their default
+/// (Settings, or joining it from a workspace invitation), else the first
+/// workspace they own that sends mail. Never another owner's workspace they
+/// merely joined: that owner controls its mail server and would receive the
+/// person's reset link. So the computed default (the earliest workspace
+/// joined, when none was chosen) doesn't count, only a stored choice, or the
+/// one workspace a person belongs to, where nothing else could send it.
 pub async fn transport_for_actor(
     state: &AppState,
     actor_id: Uuid,
 ) -> Result<Option<Transport>, AppError> {
-    let default = crate::workspace::default_workspace(&state.pool, actor_id)
-        .await?
-        .map(|(organization_id, _)| organization_id);
     let organization_id = sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT membership.organization_id
         FROM organization_memberships membership
         JOIN workspace_mail_settings mail
           ON mail.organization_id = membership.organization_id AND mail.enabled
+        LEFT JOIN users user_account ON user_account.actor_id = membership.actor_id
         WHERE membership.actor_id = $1 AND membership.enabled
-          AND (membership.organization_id = $2 OR membership.role = 'owner')
-        ORDER BY (membership.organization_id = $2) DESC, membership.created_at, membership.organization_id
+          AND (membership.role = 'owner'
+               OR membership.organization_id = user_account.default_organization_id
+               OR NOT EXISTS (
+                   SELECT 1 FROM organization_memberships other
+                   WHERE other.actor_id = membership.actor_id AND other.enabled
+                     AND other.organization_id <> membership.organization_id
+               ))
+        ORDER BY (membership.organization_id = user_account.default_organization_id) DESC NULLS LAST,
+                 membership.created_at, membership.organization_id
         LIMIT 1
         "#,
     )
     .bind(actor_id)
-    .bind(default)
     .fetch_optional(&state.pool)
     .await?;
     match organization_id {

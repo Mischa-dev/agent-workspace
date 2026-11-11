@@ -263,6 +263,7 @@ impl CodexAdapter {
             slot,
             guard,
             run: purpose == Purpose::Run,
+            active_turn: None,
         };
         for mut evicted in evicted {
             shutdown_bridge(&mut evicted).await;
@@ -523,6 +524,10 @@ pub struct CodexSession {
     slot: Arc<Slot>,
     guard: OwnedMutexGuard<SupervisorState>,
     run: bool,
+    /// The turn this session started. Notifications for any other turn (an
+    /// orphaned turn stopped just before it, whose completion can arrive
+    /// late or sit buffered) are not this run's.
+    active_turn: Option<String>,
 }
 
 impl Drop for CodexSession {
@@ -590,6 +595,9 @@ impl CodexSession {
                 return Err(transport(error));
             }
         };
+        if other_turns_notification(&raw, self.active_turn.as_deref()) {
+            return Ok(HarnessEvent::Ignored);
+        }
         parse_event(raw)
     }
 
@@ -673,11 +681,13 @@ impl HarnessSession for CodexSession {
                     turn_start_params(thread_id, cwd, prompt, config),
                 )
                 .await?;
-            result
+            let turn_id = result
                 .pointer("/turn/id")
                 .and_then(Value::as_str)
                 .map(str::to_owned)
-                .ok_or(HarnessError::MissingResult("turn id"))
+                .ok_or(HarnessError::MissingResult("turn id"))?;
+            self.active_turn = Some(turn_id.clone());
+            Ok(turn_id)
         })
     }
 
@@ -1039,6 +1049,22 @@ async fn ensure_started(
 
 fn transport(error: BridgeError) -> HarnessError {
     HarnessError::Transport(Box::new(error))
+}
+
+/// A notification (not a request, which still needs its answer) that names
+/// a turn other than the one this session started.
+fn other_turns_notification(raw: &Value, active_turn: Option<&str>) -> bool {
+    let Some(active_turn) = active_turn else {
+        return false;
+    };
+    if raw.get("id").is_some() {
+        return false;
+    }
+    let turn = raw
+        .pointer("/params/turnId")
+        .or_else(|| raw.pointer("/params/turn/id"))
+        .and_then(Value::as_str);
+    turn.is_some_and(|turn| turn != active_turn)
 }
 
 fn parse_event(raw: Value) -> Result<HarnessEvent, HarnessError> {
@@ -1439,7 +1465,7 @@ fn parse_provider_request(raw: Value) -> Result<HarnessRequest, HarnessError> {
             .and_then(|summary| bounded_provider_text(summary, 2_000).ok())
             .unwrap_or_else(|| "The agent needs an answer before it can continue.".to_owned())
     } else {
-        "The agent needs permission before it can continue.".to_owned()
+        approval_summary(method, raw.get("params").unwrap_or(&Value::Null))
     };
     let options = if kind == RequestKind::Question {
         questions
@@ -1483,6 +1509,93 @@ fn parse_provider_request(raw: Value) -> Result<HarnessRequest, HarnessError> {
         options,
         token: json!({"id": id, "questionIds": question_ids}),
     })
+}
+
+/// What an approval asks for, in words a person can decide on: the command
+/// and where it runs, the files or the access it wants, and the agent's
+/// reason. Bounded and with credentials removed, like the other adapters'
+/// approvals, since it is stored and shown in the conversation.
+fn approval_summary(method: &str, params: &Value) -> String {
+    let text = |pointer: &str| {
+        params
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    };
+    let mut summary = match method {
+        "item/commandExecution/requestApproval" => {
+            let mut ask = match text("/command") {
+                Some(command) => format!("Allow the agent to run `{command}`"),
+                None => "Allow the agent to run a command".to_owned(),
+            };
+            if let Some(cwd) = text("/cwd") {
+                ask.push_str(&format!(" in {cwd}"));
+            }
+            if let Some(host) = text("/networkApprovalContext/host") {
+                let protocol = text("/networkApprovalContext/protocol").unwrap_or("network");
+                ask.push_str(&format!(", reaching {host} over {protocol}"));
+            }
+            ask.push('?');
+            ask
+        }
+        "item/fileChange/requestApproval" => match text("/grantRoot") {
+            Some(root) => format!("Allow the agent to write files under {root}?"),
+            None => "Allow the agent to change files?".to_owned(),
+        },
+        "item/permissions/requestApproval" => {
+            let mut wants = Vec::new();
+            if params.pointer("/permissions/network/enabled") == Some(&Value::Bool(true)) {
+                wants.push("network access".to_owned());
+            }
+            for (access, pointer) in [
+                ("read", "/permissions/fileSystem/read"),
+                ("write", "/permissions/fileSystem/write"),
+            ] {
+                let paths = params
+                    .pointer(pointer)
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .take(10)
+                    .collect::<Vec<_>>();
+                if !paths.is_empty() {
+                    wants.push(format!("{access} access to {}", paths.join(", ")));
+                }
+            }
+            for entry in params
+                .pointer("/permissions/fileSystem/entries")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .take(10)
+            {
+                let access = entry.get("access").and_then(Value::as_str);
+                let path = entry
+                    .pointer("/path/path")
+                    .or_else(|| entry.pointer("/path/pattern"))
+                    .and_then(Value::as_str);
+                if let (Some(access), Some(path)) = (access, path) {
+                    wants.push(format!("{access} access to {path}"));
+                }
+            }
+            if wants.is_empty() {
+                "Allow the agent more access?".to_owned()
+            } else {
+                format!("Allow the agent {}?", wants.join("; "))
+            }
+        }
+        _ => "The agent needs permission before it can continue.".to_owned(),
+    };
+    if let Some(reason) = text("/reason") {
+        summary.push_str(&format!(" Reason: {reason}"));
+    }
+    let summary = summary
+        .chars()
+        .filter(|character| !character.is_control() || *character == '\n')
+        .collect::<String>();
+    crate::run_log::cap(&crate::run_log::redact(&summary), 1_000)
 }
 
 fn provider_event_key(method: &str, raw: &Value) -> String {
@@ -1732,9 +1845,10 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        CodexAdapter, SupervisorState, health_snapshot, item_kind, parse_event, parse_login_start,
-        parse_model, parse_provider_request, parse_rate_limit_window, parse_usage_report,
-        provider_event_key, record_failure, restart_backoff, turn_start_params,
+        CodexAdapter, SupervisorState, health_snapshot, item_kind, other_turns_notification,
+        parse_event, parse_login_start, parse_model, parse_provider_request,
+        parse_rate_limit_window, parse_usage_report, provider_event_key, record_failure,
+        restart_backoff, turn_start_params,
     };
     use crate::{
         config::AppConfig,
@@ -1768,6 +1882,29 @@ mod tests {
     }
 
     #[test]
+    fn a_stopped_orphan_turns_completion_is_not_the_new_turns() {
+        let orphan_done = json!({"method": "turn/completed", "params": {
+            "threadId": "thread-1", "turn": {"id": "turn-old", "status": "interrupted"}}});
+        let orphan_delta = json!({"method": "item/agentMessage/delta", "params": {
+            "threadId": "thread-1", "turnId": "turn-old", "delta": "late"}});
+        let ours_done = json!({"method": "turn/completed", "params": {
+            "threadId": "thread-1", "turn": {"id": "turn-new", "status": "completed"}}});
+        let unscoped = json!({"method": "account/rateLimits/updated", "params": {}});
+        let orphan_request = json!({"id": 7, "method": "item/commandExecution/requestApproval",
+            "params": {"threadId": "thread-1", "turnId": "turn-old"}});
+
+        let active = Some("turn-new");
+        assert!(other_turns_notification(&orphan_done, active));
+        assert!(other_turns_notification(&orphan_delta, active));
+        assert!(!other_turns_notification(&ours_done, active));
+        assert!(!other_turns_notification(&unscoped, active));
+        // A request still reaches the run, which answers it.
+        assert!(!other_turns_notification(&orphan_request, active));
+        // A session following a turn it didn't start filters nothing.
+        assert!(!other_turns_notification(&orphan_done, None));
+    }
+
+    #[test]
     fn provider_requests_become_neutral_requests() {
         let request = parse_provider_request(json!({
             "id": 17,
@@ -1785,17 +1922,99 @@ mod tests {
         assert_eq!(request.token["questionIds"], json!(["choice"]));
         assert!(!request.summary.contains("Codex"));
 
+        // An approval says what it's for, so the person can decide: the
+        // command, where it runs, and why, with credentials taken out.
         let approval = parse_provider_request(json!({
             "id": 19,
             "method": "item/commandExecution/requestApproval",
-            "params": {"command": "rm -rf /"}
+            "params": {
+                "command": "curl -H 'Authorization: Bearer abcdefghijklmnop' https://example.com",
+                "cwd": "/work/tree",
+                "reason": "fetch the release notes",
+                "networkApprovalContext": {"host": "example.com", "protocol": "https"}
+            }
         }))
         .expect("approval request");
         assert_eq!(approval.kind, RequestKind::Approval);
+        assert!(approval.summary.contains("curl -H"), "{}", approval.summary);
         assert!(
-            !approval.summary.contains("rm -rf"),
-            "raw provider params stay private"
+            approval.summary.contains("/work/tree"),
+            "{}",
+            approval.summary
         );
+        assert!(approval.summary.contains("example.com over https"));
+        assert!(approval.summary.contains("Reason: fetch the release notes"));
+        assert!(
+            !approval.summary.contains("abcdefghijklmnop"),
+            "credentials in the command are redacted: {}",
+            approval.summary
+        );
+        assert!(!approval.summary.contains("Codex"));
+        for (command, secret) in [
+            ("./deploy --token abcdefghijklmnop", "abcdefghijklmnop"),
+            ("PASSWORD='alpha beta gamma' ./deploy", "beta gamma"),
+        ] {
+            let approval = parse_provider_request(json!({
+                "id": 24,
+                "method": "item/commandExecution/requestApproval",
+                "params": {"command": command}
+            }))
+            .expect("approval with a credential");
+            assert!(
+                !approval.summary.contains(secret),
+                "{secret} leaked: {}",
+                approval.summary
+            );
+        }
+
+        let long = parse_provider_request(json!({
+            "id": 20,
+            "method": "item/commandExecution/requestApproval",
+            "params": {"command": "x".repeat(10_000)}
+        }))
+        .expect("long approval");
+        assert!(
+            long.summary.chars().count() < 1_100,
+            "summaries are bounded"
+        );
+
+        let files = parse_provider_request(json!({
+            "id": 21,
+            "method": "item/fileChange/requestApproval",
+            "params": {"grantRoot": "/work/tree/src", "reason": "apply the fix"}
+        }))
+        .expect("file change approval");
+        assert_eq!(
+            files.summary,
+            "Allow the agent to write files under /work/tree/src? Reason: apply the fix"
+        );
+
+        let permissions = parse_provider_request(json!({
+            "id": 22,
+            "method": "item/permissions/requestApproval",
+            "params": {
+                "cwd": "/work/tree",
+                "permissions": {
+                    "network": {"enabled": true},
+                    "fileSystem": {"entries": [
+                        {"access": "write", "path": {"type": "path", "path": "/etc/hosts"}}
+                    ]}
+                }
+            }
+        }))
+        .expect("permissions approval");
+        assert_eq!(
+            permissions.summary,
+            "Allow the agent network access; write access to /etc/hosts?"
+        );
+
+        let bare = parse_provider_request(json!({
+            "id": 23,
+            "method": "item/commandExecution/requestApproval",
+            "params": {}
+        }))
+        .expect("bare approval");
+        assert_eq!(bare.summary, "Allow the agent to run a command?");
 
         let unsupported = parse_provider_request(json!({
             "id": 18,
