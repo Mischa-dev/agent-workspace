@@ -300,7 +300,8 @@ pub(crate) async fn load(state: &AppState, row: SettingsRow) -> Result<Transport
 /// workspace they own that sends mail. Never another owner's workspace they
 /// merely joined: that owner controls its mail server and would receive the
 /// person's reset link. So the computed default (the earliest workspace
-/// joined, when none was chosen) doesn't count, only a stored choice.
+/// joined, when none was chosen) doesn't count, only a stored choice, or the
+/// one workspace a person belongs to, where nothing else could send it.
 pub async fn transport_for_actor(
     state: &AppState,
     actor_id: Uuid,
@@ -314,7 +315,12 @@ pub async fn transport_for_actor(
         LEFT JOIN users user_account ON user_account.actor_id = membership.actor_id
         WHERE membership.actor_id = $1 AND membership.enabled
           AND (membership.role = 'owner'
-               OR membership.organization_id = user_account.default_organization_id)
+               OR membership.organization_id = user_account.default_organization_id
+               OR NOT EXISTS (
+                   SELECT 1 FROM organization_memberships other
+                   WHERE other.actor_id = membership.actor_id AND other.enabled
+                     AND other.organization_id <> membership.organization_id
+               ))
         ORDER BY (membership.organization_id = user_account.default_organization_id) DESC NULLS LAST,
                  membership.created_at, membership.organization_id
         LIMIT 1
