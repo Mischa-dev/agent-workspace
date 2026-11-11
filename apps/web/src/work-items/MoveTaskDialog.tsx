@@ -626,7 +626,8 @@ function IssueRow({
           projectId={targetProjectId}
           references={[]}
           taskId=""
-          value={undefined}
+          // Reopening edits the chosen resolution; starting empty would drop earlier picks.
+          value={choice?.kind === 'set' ? choice.value : undefined}
         />
       ) : null}
     </li>
