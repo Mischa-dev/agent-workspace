@@ -1691,21 +1691,27 @@ async fn resolve_among(
     {
         return Ok(Some(found));
     }
-    Ok(sqlx::query_as::<_, (Uuid, Uuid)>(
+    // Two workspaces can use the same key: when it names a task in more
+    // than one of these projects, refuse rather than pick one.
+    let matches = sqlx::query_as::<_, (Uuid, Uuid)>(
         r#"
         SELECT item.id, item.project_id
         FROM work_items item
         JOIN projects project ON project.id = item.project_id
         WHERE item.project_id = ANY($3)
           AND upper(project.project_key) = upper($1) AND item.number = $2
-        LIMIT 1
+        LIMIT 2
         "#,
     )
     .bind(project_key)
     .bind(number)
     .bind(projects)
-    .fetch_optional(&state.pool)
-    .await?)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(match matches.as_slice() {
+        [only] => Some(*only),
+        _ => None,
+    })
 }
 
 /// Why an assignee can't be used.
@@ -3699,7 +3705,7 @@ async fn task_link_inner(
     let target = match request.record_id {
         Some(id) => {
             if !record_visible(
-                state,
+                &state.pool,
                 principal,
                 project_id,
                 request.kind,
@@ -3878,6 +3884,20 @@ async fn task_link_inner(
             (id, version)
         }
         LinkTarget::Record { kind, id } => {
+            // Checked again now that the task is locked: the check above ran
+            // before the transaction, and access can change in between.
+            if !record_visible(
+                &mut *transaction,
+                principal,
+                project_id,
+                kind,
+                id,
+                request.remove,
+            )
+            .await?
+            {
+                return Ok(ToolResult::not_found(&format!("That {kind}")));
+            }
             let thread = kind == "conversation"
                 && sqlx::query_scalar::<_, bool>(
                     "SELECT EXISTS (SELECT 1 FROM conversations WHERE project_id = $1 AND id = $2 AND kind = 'thread')",
@@ -3957,8 +3977,12 @@ async fn task_link_inner(
 /// project and the caller can see it, so a link never shows another
 /// project's (or a private conversation's) content to the task's readers.
 /// A removed message can be unlinked but not linked.
-async fn record_visible(
-    state: &AppState,
+///
+/// Runs on the pool for the early answer, then again inside the write's
+/// transaction (`LinkTarget::Record` below), so access lost in between
+/// can't still write the link.
+async fn record_visible<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
     principal: &McpPrincipal,
     project_id: Uuid,
     kind: &str,
@@ -3993,7 +4017,7 @@ async fn record_visible(
     .bind(principal.actor_id)
     .bind(project_id)
     .bind(principal.external_agent_connection_id)
-    .fetch_one(&state.pool)
+    .fetch_one(executor)
     .await?)
 }
 

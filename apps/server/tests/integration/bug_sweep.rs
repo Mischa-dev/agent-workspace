@@ -170,13 +170,35 @@ async fn reset_mail_goes_only_through_a_workspace_the_person_chose_or_owns() {
     .expect("mail settings");
     let project = create_project(setup, "RST", "Reset").await;
     let (mara, _) = add_person(setup, &[&project], "mara").await;
-    // While it's Mara's default, resets for her use it.
-    assert!(
-        mail::transport_for_actor(&fixture.state, mara)
+    let state = &fixture.state;
+    let transport = |actor: Uuid| async move {
+        mail::transport_for_actor(state, actor)
             .await
             .expect("transport")
-            .is_some()
-    );
+            .map(|transport| transport.organization_id)
+    };
+    // Mara only joined it, and never chose it: it's her default only
+    // because it's her first workspace, so its owner's mail server doesn't
+    // carry her reset links.
+    assert_eq!(transport(mara).await, None);
+    // Once she chooses it as her default (or joins it from a workspace
+    // invitation, which sets it), resets for her use it.
+    sqlx::query("UPDATE users SET default_organization_id = $2 WHERE actor_id = $1")
+        .bind(mara)
+        .bind(setup.organization_id)
+        .execute(pool)
+        .await
+        .expect("chosen default");
+    assert_eq!(transport(mara).await, Some(setup.organization_id));
+    // The owner's own workspace sends theirs.
+    let owner = sqlx::query_scalar::<_, Uuid>(
+        "SELECT actor_id FROM organization_memberships WHERE organization_id = $1 AND role = 'owner' LIMIT 1",
+    )
+    .bind(setup.organization_id)
+    .fetch_one(pool)
+    .await
+    .expect("owner");
+    assert_eq!(transport(owner).await, Some(setup.organization_id));
     // Mara makes a workspace of her own (no mail) her default: the other
     // owner's mail server no longer carries her reset links.
     let own = Uuid::now_v7();
@@ -200,12 +222,42 @@ async fn reset_mail_goes_only_through_a_workspace_the_person_chose_or_owns() {
         .execute(pool)
         .await
         .expect("default");
-    assert!(
-        mail::transport_for_actor(&fixture.state, mara)
-            .await
-            .expect("transport")
-            .is_none()
+    assert_eq!(transport(mara).await, None);
+    // When her own workspace sends mail, it carries hers, default or not.
+    sqlx::query(
+        r#"
+        INSERT INTO workspace_mail_settings (
+            organization_id, provider, provider_config, from_address, enabled, updated_by_actor_id
+        ) VALUES ($1, 'smtp',
+               '{"host":"127.0.0.1","port":2525,"security":"none","username":null}'::jsonb,
+               'mara@example.com', true, $2)
+        "#,
+    )
+    .bind(own)
+    .bind(mara)
+    .execute(pool)
+    .await
+    .expect("Mara's mail settings");
+    assert_eq!(transport(mara).await, Some(own));
+    sqlx::query("UPDATE users SET default_organization_id = $2 WHERE actor_id = $1")
+        .bind(mara)
+        .bind(setup.organization_id)
+        .execute(pool)
+        .await
+        .expect("default back");
+    assert_eq!(
+        transport(mara).await,
+        Some(setup.organization_id),
+        "a chosen default comes first"
     );
+    // Mail turned off in the chosen one: her own still works.
+    sqlx::query("UPDATE workspace_mail_settings SET enabled = false WHERE organization_id = $1")
+        .bind(setup.organization_id)
+        .execute(pool)
+        .await
+        .expect("mail off");
+    assert_eq!(transport(mara).await, Some(own));
+    assert_eq!(transport(owner).await, None);
 }
 
 #[tokio::test]
