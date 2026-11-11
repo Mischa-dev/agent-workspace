@@ -32,11 +32,11 @@ function asRecord(value: unknown): WireRecord {
     : {}
 }
 
-function field(record: WireRecord, camel: string, snake: string) {
+export function field(record: WireRecord, camel: string, snake: string) {
   return record[camel] ?? record[snake]
 }
 
-function uuid(value: unknown): string | null {
+export function uuid(value: unknown): string | null {
   if (typeof value !== 'string') return null
   const normalized = value.toLowerCase()
   return uuidPattern.test(normalized) ? normalized : null
@@ -243,23 +243,4 @@ export function terminalAgentRunId(
     state === 'interrupted'
   if (!terminal) return null
   return uuid(field(event.payload, 'agentRunId', 'agent_run_id'))
-}
-
-/** A board that changed, from a whiteboard.updated event. */
-export function whiteboardChange(
-  event: Pick<RealtimeEnvelope, 'type' | 'payload'>,
-): { whiteboardId: string; sceneSeq: number; version: number } | null {
-  if (event.type !== 'whiteboard.updated') return null
-  const whiteboardId = uuid(field(event.payload, 'whiteboardId', 'whiteboard_id'))
-  const sceneSeq = field(event.payload, 'sceneSeq', 'scene_seq')
-  const version = event.payload.version
-  if (
-    !whiteboardId ||
-    !Number.isSafeInteger(sceneSeq) ||
-    (sceneSeq as number) < 0 ||
-    !Number.isSafeInteger(version)
-  ) {
-    return null
-  }
-  return { whiteboardId, sceneSeq: sceneSeq as number, version: version as number }
 }

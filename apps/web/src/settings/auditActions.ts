@@ -180,6 +180,8 @@ const PHRASES: Record<string, string> = {
   'page.created': 'created a page',
   'page.updated': 'changed a page',
   'page.written': 'wrote a page',
+  'page.mcp_written': 'wrote a page',
+  'page.mcp_block_edited': 'changed part of a page',
   'whiteboard.created': 'created a whiteboard',
   'whiteboard.updated': 'changed a whiteboard',
   'whiteboard.edited': 'drew on a whiteboard',

@@ -99,3 +99,21 @@ test('holds whiteboard chunks to their own limit', () => {
     )
   })
 })
+
+test('holds the page editor to its own limit, and its stylesheet to the general one', () => {
+  withDist((root) => {
+    mkdirSync(join(root, 'assets', 'editor'))
+    writeFileSync(join(root, 'assets', 'editor', 'LivePage.js'), 'x'.repeat(200))
+    writeFileSync(join(root, 'assets', 'editor', 'LivePage.css'), 'y'.repeat(200))
+    const limits = { ...roomy, chunkJavascriptRawBytes: 64, chunkCssRawBytes: 64 }
+    assert.deepEqual(
+      measureWebAssets(root, limits).violations.map(({ name }) => name),
+      ['chunkJavascriptRawBytes', 'chunkCssRawBytes'],
+    )
+    const report = measureWebAssets(root, { ...limits, editorChunkJavascriptRawBytes: 256, editorChunkJavascriptGzipBytes: 256 })
+    assert.deepEqual(
+      report.violations.map(({ name, file }) => [name, file]),
+      [['chunkCssRawBytes', 'assets/editor/LivePage.css']],
+    )
+  })
+})
