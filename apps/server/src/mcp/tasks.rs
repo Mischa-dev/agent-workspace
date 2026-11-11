@@ -1684,34 +1684,12 @@ async fn resolve_among(
     let Some((project_key, number)) = super::split_task_key(identifier) else {
         return Ok(None);
     };
-    // task_by_key keeps to the caller's reach; its answer is checked
-    // against `projects` all the same, the list this lookup was given.
-    if let Some(id) = super::task_by_key(state, principal, project_key, number).await?
-        && let Some(found) = reachable(id).await?
-    {
-        return Ok(Some(found));
+    // Refuse an ambiguous key in the shared resolver. A second lookup of
+    // only current keys would guess a task when historical aliases conflict.
+    match super::task_by_key(state, principal, project_key, number).await? {
+        Some(id) => Ok(reachable(id).await?),
+        None => Ok(None),
     }
-    // Two workspaces can use the same key: when it names a task in more
-    // than one of these projects, refuse rather than pick one.
-    let matches = sqlx::query_as::<_, (Uuid, Uuid)>(
-        r#"
-        SELECT item.id, item.project_id
-        FROM work_items item
-        JOIN projects project ON project.id = item.project_id
-        WHERE item.project_id = ANY($3)
-          AND upper(project.project_key) = upper($1) AND item.number = $2
-        LIMIT 2
-        "#,
-    )
-    .bind(project_key)
-    .bind(number)
-    .bind(projects)
-    .fetch_all(&state.pool)
-    .await?;
-    Ok(match matches.as_slice() {
-        [only] => Some(*only),
-        _ => None,
-    })
 }
 
 /// Why an assignee can't be used.
