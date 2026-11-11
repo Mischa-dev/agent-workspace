@@ -46,7 +46,10 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode, header},
 };
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use base64::{
+    Engine as _,
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
@@ -145,6 +148,8 @@ const WRITE_ROUTES: &[&str] = &[
     "PUT /api/v1/organizations/{organization_id}/secrets/{name}",
     "POST /api/v1/organizations/{organization_id}/transfer-ownership",
     "PATCH /api/v1/pages/{id}",
+    "POST /api/v1/pages/{id}/document/sync",
+    "POST /api/v1/pages/{id}/document/updates",
     "POST /api/v1/project-invitations/{invitation_id}/replace",
     "POST /api/v1/project-invitations/{invitation_id}/revoke",
     "POST /api/v1/projects",
@@ -818,6 +823,32 @@ fn current(table: &str, column: &str, keys: &[(&str, String)], default: i64) -> 
         .collect::<Vec<_>>()
         .join(",");
     Value::String(format!("$current:{table}:{column}:{default}:{keys}"))
+}
+
+/// A browser's change that adds a paragraph to any page document, and its
+/// state vector after it, both base64.
+fn new_paragraph_update() -> (String, String) {
+    use yrs::{
+        Any, ClientID, Doc, OffsetKind, Options, ReadTxn, StateVector, Transact, Xml,
+        XmlElementPrelim, XmlFragment, XmlTextPrelim, updates::encoder::Encode,
+    };
+    let doc = Doc::with_options(Options {
+        client_id: ClientID::new(4_242),
+        offset_kind: OffsetKind::Utf16,
+        ..Options::default()
+    });
+    let fragment = doc.get_or_insert_xml_fragment("default");
+    {
+        let mut txn = doc.transact_mut();
+        let paragraph = fragment.insert(&mut txn, 0, XmlElementPrelim::empty("paragraph"));
+        paragraph.insert_attribute(&mut txn, "id", Any::String("netblock1".into()));
+        paragraph.insert(&mut txn, 0, XmlTextPrelim::new("Net"));
+    }
+    let txn = doc.transact();
+    (
+        STANDARD.encode(txn.encode_state_as_update_v1(&StateVector::default())),
+        STANDARD.encode(txn.state_vector().encode_v1()),
+    )
 }
 
 /// A row's version when the request is sent.
@@ -3759,6 +3790,29 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             &[id(&a.page, &b.page)],
             versioned("project_pages", 0, json!({"title": "Launch page"})),
         ),
+        // A page's live document: its generation is the page's ID (see the
+        // fixture), and the change adds a paragraph to any document.
+        path_case(
+            "POST /api/v1/pages/{id}/document/sync",
+            &[id(&a.page, &b.page)],
+            |values| {
+                Payload::Json(json!({"generation": values[0], "stateVector": STANDARD.encode([0_u8])}))
+            },
+        ),
+        {
+            let (update, state_vector) = new_paragraph_update();
+            path_case(
+                "POST /api/v1/pages/{id}/document/updates",
+                &[id(&a.page, &b.page)],
+                move |values| {
+                    Payload::Json(json!({
+                        "generation": values[0],
+                        "update": update,
+                        "stateVector": state_vector,
+                    }))
+                },
+            )
+        },
         // Project invitations
         path_case(
             "POST /api/v1/project-invitations/{invitation_id}/replace",

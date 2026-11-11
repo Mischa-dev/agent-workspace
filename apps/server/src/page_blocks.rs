@@ -818,7 +818,7 @@ fn top_level_blocks(source: &str) -> Vec<Block> {
 /// ECMAScript's WhiteSpace and LineTerminator characters: what JavaScript's
 /// `\s` matches and `trim()` removes. Unlike Rust's `char::is_whitespace`, it
 /// takes U+FEFF and leaves out U+0085.
-fn is_js_space(character: char) -> bool {
+pub(crate) fn is_js_space(character: char) -> bool {
     matches!(
         character,
         '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | ' ' | '\u{a0}' | '\u{1680}' | '\u{2000}'
@@ -835,17 +835,17 @@ fn is_js_space(character: char) -> bool {
 /// JavaScript's `.` (without the `s` flag) stops at line terminators. Lines
 /// never hold `\n` or `\r`, but they can hold these two, and then a pattern's
 /// `.*` can't reach the `$` after them.
-fn has_js_line_terminator(text: &str) -> bool {
+pub(crate) fn has_js_line_terminator(text: &str) -> bool {
     text.contains(['\u{2028}', '\u{2029}'])
 }
 
 /// `/^[ \t]*$/`
-fn is_blank(line: &str) -> bool {
+pub(crate) fn is_blank(line: &str) -> bool {
     line.bytes().all(|byte| byte == b' ' || byte == b'\t')
 }
 
 /// The leading-whitespace width, with tabs to the next multiple of four.
-fn indent_of(line: &str) -> usize {
+pub(crate) fn indent_of(line: &str) -> usize {
     let mut width = 0;
     for byte in line.bytes() {
         match byte {
@@ -857,22 +857,22 @@ fn indent_of(line: &str) -> usize {
     width
 }
 
-fn leading_spaces(line: &str) -> usize {
+pub(crate) fn leading_spaces(line: &str) -> usize {
     line.bytes().take_while(|&byte| byte == b' ').count()
 }
 
 /// The line after ` {0,3}`, when a pattern's marker must come next.
-fn after_indent(line: &str) -> Option<&str> {
+pub(crate) fn after_indent(line: &str) -> Option<&str> {
     let spaces = leading_spaces(line);
     (spaces <= 3).then(|| &line[spaces..])
 }
 
-fn run_of(text: &str, byte: u8) -> usize {
+pub(crate) fn run_of(text: &str, byte: u8) -> usize {
     text.bytes().take_while(|&b| b == byte).count()
 }
 
 /// `startsBlock`: a line that ends a paragraph, a table or a lazy list line.
-fn starts_block(line: &str) -> bool {
+pub(crate) fn starts_block(line: &str) -> bool {
     fence_open(line).is_some()
         || heading(line).is_some()
         || is_rule(line)
@@ -880,14 +880,14 @@ fn starts_block(line: &str) -> bool {
         || list_item(line).is_some()
 }
 
-struct Fence {
-    marker: u8,
-    length: usize,
-    lang: Option<String>,
+pub(crate) struct Fence {
+    pub(crate) marker: u8,
+    pub(crate) length: usize,
+    pub(crate) lang: Option<String>,
 }
 
 /// FENCE: `/^( {0,3})(`{3,}|~{3,})[ \t]*([^\s`]*)[^`]*$/`
-fn fence_open(line: &str) -> Option<Fence> {
+pub(crate) fn fence_open(line: &str) -> Option<Fence> {
     let rest = after_indent(line)?;
     let marker = *rest.as_bytes().first()?;
     if marker != b'`' && marker != b'~' {
@@ -912,7 +912,7 @@ fn fence_open(line: &str) -> Option<Fence> {
 
 /// The closing fence: `/^ {0,3}(`{3,}|~{3,})[ \t]*$/`, of the opening's
 /// character and at least its length.
-fn fence_closes(line: &str, marker: u8, length: usize) -> bool {
+pub(crate) fn fence_closes(line: &str, marker: u8, length: usize) -> bool {
     after_indent(line).is_some_and(|rest| {
         let run = run_of(rest, marker);
         run >= 3 && run >= length && is_blank(&rest[run..])
@@ -922,7 +922,7 @@ fn fence_closes(line: &str, marker: u8, length: usize) -> bool {
 /// HEADING: `/^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/`, with
 /// its text: group 2, the shortest that leaves only a closing `#` run (with
 /// space before it) and trailing space.
-fn heading(line: &str) -> Option<(u8, String)> {
+pub(crate) fn heading(line: &str) -> Option<(u8, String)> {
     let rest = after_indent(line)?;
     let level = run_of(rest, b'#');
     if !(1..=6).contains(&level) {
@@ -949,7 +949,7 @@ fn heading(line: &str) -> Option<(u8, String)> {
 }
 
 /// RULE: `/^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/`
-fn is_rule(line: &str) -> bool {
+pub(crate) fn is_rule(line: &str) -> bool {
     let Some(rest) = after_indent(line) else {
         return false;
     };
@@ -964,21 +964,21 @@ fn is_rule(line: &str) -> bool {
 }
 
 /// QUOTE: `/^ {0,3}> ?/`
-fn is_quote(line: &str) -> bool {
+pub(crate) fn is_quote(line: &str) -> bool {
     after_indent(line).is_some_and(|rest| rest.starts_with('>'))
 }
 
-struct ListItem<'a> {
-    indent: usize,
-    marker: &'a str,
+pub(crate) struct ListItem<'a> {
+    pub(crate) indent: usize,
+    pub(crate) marker: &'a str,
     /// The space after the marker (`match[3]`), when there is any.
-    spacing: Option<&'a str>,
+    pub(crate) spacing: Option<&'a str>,
     /// The rest of the line (`match[4]`).
-    content: &'a str,
+    pub(crate) content: &'a str,
 }
 
 /// LIST_ITEM: `/^( {0,3})([-*+]|\d{1,9}[.)])(?:([ \t]+)(.*))?$/`
-fn list_item(line: &str) -> Option<ListItem<'_>> {
+pub(crate) fn list_item(line: &str) -> Option<ListItem<'_>> {
     let indent = leading_spaces(line);
     if indent > 3 {
         return None;
@@ -1014,7 +1014,7 @@ fn list_item(line: &str) -> Option<ListItem<'_>> {
 }
 
 /// TASK: `/^\[([ xX])\](?:[ \t]+|$)/`
-fn is_task(text: &str) -> bool {
+pub(crate) fn is_task(text: &str) -> bool {
     let bytes = text.as_bytes();
     bytes.len() >= 3
         && bytes[0] == b'['
@@ -1121,7 +1121,7 @@ fn next_non_blank(lines: &[Line<'_>], from: usize) -> usize {
 }
 
 /// TABLE_DELIMITER: `/^ {0,3}\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/`
-fn is_table_delimiter(line: &str) -> bool {
+pub(crate) fn is_table_delimiter(line: &str) -> bool {
     let spaces = leading_spaces(line);
     let mut rest = &line[spaces.min(3)..];
     if spaces <= 3 {
