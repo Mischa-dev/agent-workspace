@@ -64,6 +64,8 @@ export type PageSyncOptions = {
 const SEND_DELAY_MS = 400
 const RETRY_MS = 2_000
 const RETRIES = 3
+/** While offline, a waiting change is tried this often until the browser says it's back. */
+const OFFLINE_RETRY_MS = 10_000
 /** Answers a retry can't change: the change itself was refused, or the page is gone. */
 const REFUSALS = new Set([400, 401, 403, 404, 409, 413, 422])
 /** A server that keeps saying "resync" has lost something; stop rather than loop. */
@@ -279,8 +281,10 @@ export class PageSync {
       return
     }
     if (navigator.onLine === false) {
-      // Coming back online resumes.
+      // Coming back online resumes at once; until then, try again now and then
+      // rather than straight away, which would send in a loop.
       this.setState('offline')
+      this.schedule(OFFLINE_RETRY_MS)
       return
     }
     this.failures += 1
