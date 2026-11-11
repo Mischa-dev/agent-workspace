@@ -12,6 +12,14 @@
 The generated schema bundle and `SHA256SUMS` are committed under
 `schemas/codex-app-server/0.146.0`.
 
+- Startup recovery depends on the `thread/read` response shape: it is
+  called with `includeTurns: true` and must return `thread.turns[]`
+  entries carrying a stable `id` and `status` per turn. Recovery matches
+  the latest turn's `id` exactly against the durable `provider_turn_id`
+  and treats the turn as completed only when `status` is `completed`;
+  if the turns array or its ids change shape, every recovered run
+  degrades to interrupted.
+
 ## Stable methods in M0
 
 - `initialize`, followed by the `initialized` notification

@@ -371,6 +371,10 @@ pub(super) async fn projects_list(
                     JOIN project_memberships membership
                       ON membership.project_id = project.id AND membership.actor_id = $1
                      AND membership.enabled
+                    JOIN organization_memberships organization_membership
+                      ON organization_membership.organization_id = project.organization_id
+                     AND organization_membership.actor_id = $1
+                     AND organization_membership.enabled
                     WHERE project.archived_at IS NOT NULL
                     LIMIT 200
                     "#,
