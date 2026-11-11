@@ -156,7 +156,7 @@ export function ThreadPanel({
     canPost,
     conversationId: threadId,
     kind: 'thread',
-    latestMessageId: entries.at(-1)?.message?.id,
+    latestMessageId: [...entries].reverse().find((entry) => entry.message)?.message?.id,
     projectId,
   })
   const runActions = useThreadRunActions({ entries, includeArchived: false, projectId, threadId, timeline })

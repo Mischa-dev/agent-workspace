@@ -196,7 +196,7 @@ export function DirectConversationPage() {
     canPost,
     conversationId,
     kind: isGroup ? 'group' : 'dm',
-    latestMessageId: entries.at(-1)?.message?.id,
+    latestMessageId: [...entries].reverse().find((entry) => entry.message)?.message?.id,
     projectId,
   })
 
