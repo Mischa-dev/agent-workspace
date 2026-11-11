@@ -563,6 +563,12 @@ pub fn remove_clean_worktree(mirror: &Path, worktree: &Path) -> Result<(), AppEr
             "dirty worktree is retained",
         ));
     }
+    if worktree_has_ignored_files(worktree)? {
+        return Err(AppError::Conflict(
+            "git_worktree",
+            "worktree holding ignored files is retained",
+        ));
+    }
     let repository_root = mirror
         .parent()
         .ok_or(AppError::Invalid("mirror has no repository root"))?;
@@ -595,6 +601,12 @@ pub fn remove_published_worktree(
         return Err(AppError::Conflict(
             "git_worktree",
             "dirty worktree is retained",
+        ));
+    }
+    if worktree_has_ignored_files(worktree)? {
+        return Err(AppError::Conflict(
+            "git_worktree",
+            "worktree holding ignored files is retained",
         ));
     }
     if inspection.branch != expected_branch {
@@ -769,6 +781,30 @@ pub fn worktree_is_dirty(worktree: &Path) -> Result<bool, AppError> {
         "--untracked-files=all",
     ])?;
     Ok(!output.stdout.is_empty())
+}
+
+/// Ignored files are invisible to `worktree_is_dirty`, but `git worktree
+/// remove` deletes them along with the worktree — and being ignored, they
+/// exist in no commit, so the loss is silent and unrecoverable. Removal
+/// paths check for them separately and retain the worktree instead.
+/// (Publish/retry dirtiness deliberately keeps the narrower meaning.)
+fn worktree_has_ignored_files(worktree: &Path) -> Result<bool, AppError> {
+    if !worktree.is_absolute() || !worktree.is_dir() {
+        return Err(AppError::Conflict("git_worktree", "worktree is not ready"));
+    }
+    let output = run_git([
+        "-C",
+        &worktree.to_string_lossy(),
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+        "--ignored=matching",
+    ])?;
+    Ok(output
+        .stdout
+        .split(|byte| *byte == 0)
+        .any(|entry| entry.starts_with(b"!!")))
 }
 
 /// One file a run changed, against its base (H5).
@@ -1553,6 +1589,22 @@ mod tests {
         assert!(remove_clean_worktree(&mirror, &created[0].0).is_err());
         assert!(created[0].0.exists(), "dirty worktree must be preserved");
         fs::remove_file(created[0].0.join("dirty.txt")).expect("clean temporary worktree");
+        // Ignored files don't make a worktree dirty, but removing it would
+        // delete them, and being ignored they're in no commit: keep it.
+        fs::create_dir_all(mirror.join("info")).expect("mirror info directory");
+        fs::write(mirror.join("info/exclude"), "*.local\n").expect("ignore rule");
+        fs::write(created[0].0.join("notes.local"), "keep me\n").expect("ignored file");
+        assert!(
+            !inspect_worktree(&mirror, &created[0].0)
+                .expect("inspect worktree with an ignored file")
+                .dirty
+        );
+        assert!(remove_clean_worktree(&mirror, &created[0].0).is_err());
+        assert!(
+            created[0].0.join("notes.local").exists(),
+            "a worktree holding ignored files must be preserved"
+        );
+        fs::remove_file(created[0].0.join("notes.local")).expect("remove ignored file");
         remove_clean_worktree(&mirror, &created[0].0).expect("remove clean worktree");
         assert!(!created[0].0.exists());
         repair_and_prune_worktrees(&mirror, Some(&created[1].0)).expect("repair and prune");

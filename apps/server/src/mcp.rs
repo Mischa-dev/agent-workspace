@@ -4628,7 +4628,7 @@ pub(super) async fn task_by_key(
     project_key: &str,
     number: i64,
 ) -> Result<Option<Uuid>, AppError> {
-    Ok(sqlx::query_scalar::<_, Uuid>(
+    let matches = sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT found.id FROM (
             SELECT item.id, 0 AS preference, item.project_id
@@ -4653,7 +4653,7 @@ pub(super) async fn task_by_key(
         WHERE actor_can_access_project($1, $2, found.project_id)
           AND ($5::uuid IS NULL OR found.project_id = $5)
         ORDER BY found.preference
-        LIMIT 1
+        LIMIT 2
         "#,
     )
     .bind(principal.actor_id)
@@ -4661,8 +4661,19 @@ pub(super) async fn task_by_key(
     .bind(project_key)
     .bind(number)
     .bind(common::confined_project(principal))
-    .fetch_optional(&state.pool)
-    .await?)
+    .fetch_all(&state.pool)
+    .await?;
+    // Keys are organization-scoped: the same key+number in two of the
+    // caller's organizations names two different tasks, and silently picking
+    // one would rewrite the caller's ID to the wrong task. Refuse, as
+    // project_by_key and repository_by_name do. (The same task may appear
+    // twice — as current holder and as an alias target — and is not
+    // ambiguous.)
+    Ok(match matches.as_slice() {
+        [only] => Some(*only),
+        [first, second] if first == second => Some(*first),
+        _ => None,
+    })
 }
 
 /// The arguments that name the resource a tool acts on, and the project each

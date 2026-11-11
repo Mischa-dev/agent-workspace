@@ -283,6 +283,15 @@ pub async fn start_run(
             .resume_thread(&thread_id, &worktree, &config)
             .await
             .map_err(|error| provider_error(run_id, "resume thread", error))?;
+        settle_open_turn(provider.as_mut(), &thread_id)
+            .await
+            .map_err(|error| match error {
+                OpenTurn::StillRunning => AppError::Conflict(
+                    "agent_run",
+                    "the agent's previous turn on this conversation is still running",
+                ),
+                OpenTurn::Harness(error) => provider_error(run_id, "settle previous turn", error),
+            })?;
         (session_id, thread_id)
     } else {
         let thread_id = provider
@@ -508,6 +517,47 @@ pub(crate) async fn follow_recovered_run(
         turn_id,
     );
     Ok(true)
+}
+
+#[derive(Debug)]
+enum OpenTurn {
+    StillRunning,
+    Harness(HarnessError),
+}
+
+/// Before a new turn on a resumed thread, make sure the thread's last turn
+/// is over. A run interrupted by a restart can leave its turn running at the
+/// harness (recovery couldn't follow it), and no run here owns it any more:
+/// stop it, and refuse to start if it won't stop, rather than run two turns
+/// on one thread. Harnesses that can't read a thread's turns (cloud tasks,
+/// which run each turn on its own) have nothing to settle.
+async fn settle_open_turn(
+    provider: &mut dyn HarnessSession,
+    thread_id: &str,
+) -> Result<(), OpenTurn> {
+    let latest = match provider.read_latest_turn(thread_id).await {
+        Ok(latest) => latest,
+        Err(HarnessError::Unsupported(_)) => return Ok(()),
+        Err(error) => return Err(OpenTurn::Harness(error)),
+    };
+    if latest.status != "inProgress" {
+        return Ok(());
+    }
+    let Some(turn_id) = latest.id else {
+        return Err(OpenTurn::StillRunning);
+    };
+    tracing::warn!("stopping a provider turn no run owns before starting a new one");
+    provider
+        .interrupt_turn(thread_id, &turn_id)
+        .await
+        .map_err(OpenTurn::Harness)?;
+    match provider.read_latest_turn(thread_id).await {
+        Ok(after) if after.status == "inProgress" && after.id.as_deref() == Some(&turn_id) => {
+            Err(OpenTurn::StillRunning)
+        }
+        Ok(_) => Ok(()),
+        Err(error) => Err(OpenTurn::Harness(error)),
+    }
 }
 
 pub(crate) async fn inspect_provider_for_recovery(
@@ -1462,8 +1512,8 @@ fn provider_message_error(run_id: Uuid, error: MessageContentError) -> AppError 
 #[cfg(test)]
 mod tests {
     use super::{
-        ProviderApprovalPolicy, provider_approval_policy, recovered_turn_has_identity,
-        validated_worker_message,
+        OpenTurn, ProviderApprovalPolicy, provider_approval_policy, recovered_turn_has_identity,
+        settle_open_turn, validated_worker_message,
     };
     use crate::message_content::{MAX_MESSAGE_TEXT_CHARACTERS, MessageContentError};
     use crate::provider::adapter::{RecoveredTurn, RequestKind};
@@ -1525,6 +1575,64 @@ mod tests {
                 final_message: None,
             },
             "turn-current"
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_new_turn_waits_for_no_orphaned_turn() {
+        use std::{path::PathBuf, sync::Arc};
+
+        use crate::provider::{
+            adapter::{AccountHandle, HarnessAdapter},
+            demo::{DemoAdapter, DemoHarness},
+            registry::ShutdownSignal,
+            run_config::RunConfig,
+        };
+
+        let worktree = tempfile::tempdir().expect("worktree");
+        let demo = Arc::new(DemoAdapter::new(Arc::new(ShutdownSignal::default()), 8));
+        let adapter = DemoHarness(Arc::clone(&demo));
+        let account = AccountHandle {
+            id: uuid::Uuid::now_v7(),
+            home: PathBuf::from("/nonexistent/demo-home"),
+            max_concurrent_runs: 2,
+        };
+        let config = RunConfig::default();
+        let mut first = adapter
+            .acquire_run(account.clone())
+            .await
+            .expect("first session");
+        let thread = first
+            .start_thread(worktree.path(), &config)
+            .await
+            .expect("thread");
+        let orphan = first
+            .start_turn(&thread, worktree.path(), "before the restart", &config)
+            .await
+            .expect("turn");
+        // The server restarted: the run that owned the turn was interrupted,
+        // but the harness still has the turn running.
+        let mut retry = adapter.acquire_run(account.clone()).await.expect("retry");
+        retry
+            .resume_thread(&thread, worktree.path(), &config)
+            .await
+            .expect("resume");
+        settle_open_turn(retry.as_mut(), &thread)
+            .await
+            .expect("the orphaned turn is stopped");
+        let turns = demo.turns(account.id);
+        let stopped = turns
+            .iter()
+            .find(|turn| turn.turn_id == orphan)
+            .expect("orphaned turn");
+        assert_eq!(stopped.status, "interrupted");
+        // With nothing open, settling is a no-op.
+        settle_open_turn(retry.as_mut(), &thread)
+            .await
+            .expect("nothing to settle");
+        assert!(!matches!(
+            settle_open_turn(retry.as_mut(), &thread).await,
+            Err(OpenTurn::StillRunning)
         ));
     }
 }
