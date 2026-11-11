@@ -416,6 +416,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "message_send",
     "milestone_write",
     "notification_update",
+    "page_edit",
     "page_write",
     "pin_set",
     "plan_import",
@@ -5717,6 +5718,11 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             // The move leaves the task archived here, as moved.
             .last()
         },
+        mcp_case(
+            "page_edit",
+            json!({"pageId": a.page, "expectedVersion": version("project_pages", &a.page), "edits": [{"op": "append", "markdown": "Net block"}]}),
+            vec![json!({"pageId": b.page, "expectedVersion": version("project_pages", &b.page), "edits": [{"op": "append", "markdown": "Net"}]})],
+        ),
         mcp_case(
             "page_write",
             json!({"pageId": a.page, "body": "Launch notes, third draft", "expectedVersion": version("project_pages", &a.page)}),

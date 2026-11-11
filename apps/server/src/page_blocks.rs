@@ -30,9 +30,12 @@
 //!   `hash` is a digest of the block's text: equal text, equal hash, so it
 //!   checks content, not identity. There are no lasting block ids yet; those
 //!   need the stored document the live docs work brings.
-//! - **Read-only and not exposed.** No route or MCP tool uses this yet.
-//!   Pages are stored, read (`page_get`) and written (`page_write`) exactly
-//!   as before, through the same permission checks.
+//! - **Edits are small operations on one version.** [`PageBlocks::edit`]
+//!   replaces, inserts, deletes or appends blocks named by position and
+//!   hash, all against the version they were read from, and leaves every
+//!   other byte as it was. The MCP tools `page_blocks` and `page_edit` use
+//!   this; a save still goes through the page's usual version check,
+//!   permissions and history, like `page_write`.
 
 use std::fmt;
 
@@ -82,6 +85,22 @@ pub enum BlockKind {
         #[serde(rename = "limitInsideCharacter")]
         limit_inside_character: bool,
     },
+}
+
+impl BlockKind {
+    /// The block's type, as the view names it.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Heading { .. } => "heading",
+            Self::Paragraph => "paragraph",
+            Self::Code { .. } => "code",
+            Self::Quote => "quote",
+            Self::List { .. } => "list",
+            Self::Hr => "hr",
+            Self::Table { .. } => "table",
+            Self::Overflow { .. } => "overflow",
+        }
+    }
 }
 
 /// A top-level block: what it is, and its byte range in the page body.
@@ -345,6 +364,311 @@ impl<'a> PageBlocks<'a> {
             blocks: self.blocks.len(),
         })
     }
+}
+
+// ---------------------------------------------------------------------------
+// Block edits (AWD-53, second slice): small operations on one version of a
+// page, so an agent changes a paragraph without rewriting the page.
+
+/// The most edits one call may make.
+pub const MAX_EDITS: usize = 100;
+
+/// What an edit does to the block at its position.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditOp {
+    /// Put new Markdown in the block's place.
+    Replace,
+    /// Add new blocks just before it.
+    InsertBefore,
+    /// Add new blocks just after it.
+    InsertAfter,
+    /// Take it out, with the blank space after it (before it, if it's last).
+    Delete,
+    /// Add new blocks at the end of the page; no position or hash.
+    Append,
+}
+
+/// One edit. `position` and `hash` come from a read of the same version, and
+/// the hash must still match the block's text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Edit {
+    pub op: EditOp,
+    pub position: Option<usize>,
+    pub hash: Option<String>,
+    pub markdown: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EditError {
+    OtherVersion {
+        asked: i64,
+        current: i64,
+    },
+    NoEdits,
+    TooManyEdits {
+        limit: usize,
+    },
+    /// Edit `index` (from 0) needs a position, or (append) mustn't have one.
+    Position {
+        index: usize,
+        needed: bool,
+    },
+    NoSuchBlock {
+        index: usize,
+        position: usize,
+        blocks: usize,
+    },
+    /// The block's text isn't what the caller read.
+    HashMismatch {
+        index: usize,
+        position: usize,
+        current: String,
+    },
+    /// Replace and insert need Markdown with something in it; delete takes none.
+    Markdown {
+        index: usize,
+        needed: bool,
+    },
+    /// Two edits replace or delete the same block.
+    SameBlock {
+        index: usize,
+        position: usize,
+    },
+}
+
+impl fmt::Display for EditError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::OtherVersion { asked, current } => write!(
+                f,
+                "the edits are for version {asked}, but the page is at version {current}; read it again"
+            ),
+            Self::NoEdits => write!(f, "pass at least one edit"),
+            Self::TooManyEdits { limit } => write!(f, "at most {limit} edits at once"),
+            Self::Position {
+                index,
+                needed: true,
+            } => {
+                write!(f, "edit {index} needs the position of a block")
+            }
+            Self::Position {
+                index,
+                needed: false,
+            } => write!(f, "edit {index} appends, so it takes no position or hash"),
+            Self::NoSuchBlock {
+                index,
+                position,
+                blocks,
+            } => write!(
+                f,
+                "edit {index}: there's no block {position}; the page has {blocks}"
+            ),
+            Self::HashMismatch {
+                index, position, ..
+            } => write!(
+                f,
+                "edit {index}: block {position} isn't the text you read (its hash differs); read it again"
+            ),
+            Self::Markdown {
+                index,
+                needed: true,
+            } => {
+                write!(f, "edit {index} needs Markdown with something in it")
+            }
+            Self::Markdown {
+                index,
+                needed: false,
+            } => write!(f, "edit {index} deletes, so it takes no Markdown"),
+            Self::SameBlock { index, position } => write!(
+                f,
+                "edit {index} changes block {position} again; replace or delete each block once"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for EditError {}
+
+/// What an edit leaves at one block: kept as is, replaced, or gone.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Fate<'e> {
+    Kept,
+    Replaced(&'e str),
+    Deleted,
+}
+
+impl<'a> PageBlocks<'a> {
+    /// Applies `edits`, all made against `version`, and returns the new body.
+    ///
+    /// Everything the edits don't touch stays byte for byte, blank space
+    /// between untouched blocks included. New and replaced blocks are set off
+    /// by a blank line, so they don't run into their neighbours. Edits apply
+    /// together or not at all; positions all refer to `version`, never to the
+    /// result of an earlier edit in the same call.
+    pub fn edit(&self, version: i64, edits: &[Edit]) -> Result<String, EditError> {
+        if version != self.version {
+            return Err(EditError::OtherVersion {
+                asked: version,
+                current: self.version,
+            });
+        }
+        if edits.is_empty() {
+            return Err(EditError::NoEdits);
+        }
+        if edits.len() > MAX_EDITS {
+            return Err(EditError::TooManyEdits { limit: MAX_EDITS });
+        }
+        let count = self.blocks.len();
+        let mut fates = vec![Fate::Kept; count];
+        let mut before: Vec<Vec<&str>> = vec![Vec::new(); count];
+        let mut after: Vec<Vec<&str>> = vec![Vec::new(); count];
+        let mut appended: Vec<&str> = Vec::new();
+        for (index, edit) in edits.iter().enumerate() {
+            let markdown = edit.markdown.as_deref().map(clean_markdown);
+            let wants_markdown = edit.op != EditOp::Delete;
+            match (wants_markdown, markdown) {
+                (true, None) | (true, Some("")) => {
+                    return Err(EditError::Markdown {
+                        index,
+                        needed: true,
+                    });
+                }
+                (false, Some(_)) => {
+                    return Err(EditError::Markdown {
+                        index,
+                        needed: false,
+                    });
+                }
+                _ => {}
+            }
+            if edit.op == EditOp::Append {
+                if edit.position.is_some() || edit.hash.is_some() {
+                    return Err(EditError::Position {
+                        index,
+                        needed: false,
+                    });
+                }
+                appended.push(markdown.unwrap_or_default());
+                continue;
+            }
+            let Some(position) = edit.position else {
+                return Err(EditError::Position {
+                    index,
+                    needed: true,
+                });
+            };
+            let Some(block) = self.blocks.get(position) else {
+                return Err(EditError::NoSuchBlock {
+                    index,
+                    position,
+                    blocks: count,
+                });
+            };
+            let current = hash(self.text(block));
+            if edit.hash.as_deref() != Some(current.as_str()) {
+                return Err(EditError::HashMismatch {
+                    index,
+                    position,
+                    current,
+                });
+            }
+            match edit.op {
+                EditOp::Replace | EditOp::Delete => {
+                    if fates[position] != Fate::Kept {
+                        return Err(EditError::SameBlock { index, position });
+                    }
+                    fates[position] = match markdown {
+                        Some(text) => Fate::Replaced(text),
+                        None => Fate::Deleted,
+                    };
+                }
+                EditOp::InsertBefore => before[position].push(markdown.unwrap_or_default()),
+                EditOp::InsertAfter => after[position].push(markdown.unwrap_or_default()),
+                EditOp::Append => unreachable!("handled above"),
+            }
+        }
+
+        // The page as a run of pieces: each is either original block `i`
+        // (kept or replaced) or new text. Between two pieces that are
+        // neighbouring original blocks, the original blank space stays; it's
+        // widened to a blank line only when one side changed and it had none.
+        enum Piece<'t> {
+            Original(usize, &'t str),
+            New(&'t str),
+        }
+        let mut pieces: Vec<Piece<'_>> = Vec::new();
+        for position in 0..count {
+            pieces.extend(before[position].iter().map(|text| Piece::New(text)));
+            match fates[position] {
+                Fate::Kept => {
+                    pieces.push(Piece::Original(position, self.text(&self.blocks[position])))
+                }
+                Fate::Replaced(text) => pieces.push(Piece::Original(position, text)),
+                Fate::Deleted => {}
+            }
+            pieces.extend(after[position].iter().map(|text| Piece::New(text)));
+        }
+        pieces.extend(appended.iter().map(|text| Piece::New(text)));
+
+        let leading = self
+            .blocks
+            .first()
+            .map_or("", |first| &self.source[..first.start]);
+        let trailing = match self.blocks.last() {
+            Some(last) => &self.source[last.end..],
+            None => self.source,
+        };
+        let mut body = String::with_capacity(self.source.len());
+        body.push_str(leading);
+        for (at, piece) in pieces.iter().enumerate() {
+            if at > 0 {
+                let gap = match (&pieces[at - 1], piece) {
+                    (Piece::Original(left, _), Piece::Original(right, _)) if left + 1 == *right => {
+                        let gap = &self.source[self.blocks[*left].end..self.blocks[*right].start];
+                        let untouched = fates[*left] == Fate::Kept && fates[*right] == Fate::Kept;
+                        if untouched || line_breaks(gap) >= 2 {
+                            gap
+                        } else {
+                            "\n\n"
+                        }
+                    }
+                    _ => "\n\n",
+                };
+                body.push_str(gap);
+            }
+            body.push_str(match piece {
+                Piece::Original(_, text) | Piece::New(text) => text,
+            });
+        }
+        if pieces.is_empty() {
+            // Everything was deleted: the page is empty.
+            return Ok(String::new());
+        }
+        body.push_str(trailing);
+        if self.blocks.is_empty() && !trailing.contains(['\n', '\r']) {
+            body.push('\n');
+        }
+        Ok(body)
+    }
+}
+
+/// New Markdown without the blank lines around it: blocks are separated by
+/// the page, not by what's inserted.
+fn clean_markdown(text: &str) -> &str {
+    let text = text.trim_end();
+    // Drop whole blank lines at the start, but keep a first line's indent.
+    let mut start = 0;
+    for line in text.split_inclusive('\n') {
+        if !is_blank(line.trim_end_matches(['\n', '\r'])) {
+            break;
+        }
+        start += line.len();
+    }
+    &text[start..]
+}
+
+fn line_breaks(gap: &str) -> usize {
+    gap.replace("\r\n", "\n").matches(['\n', '\r']).count()
 }
 
 /// The first 16 hex digits of the SHA-256 of a block's text.
@@ -1238,5 +1562,196 @@ mod tests {
             overflow,
             json!({"type": "overflow", "limitInsideCharacter": true})
         );
+    }
+
+    fn edit(op: EditOp, page: &PageBlocks<'_>, position: usize, markdown: Option<&str>) -> Edit {
+        Edit {
+            op,
+            position: Some(position),
+            hash: Some(hash(page.text(&page.blocks()[position]))),
+            markdown: markdown.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn edits_change_only_their_blocks_and_keep_the_rest_exactly() {
+        // Odd spacing, a tab and CRLF endings around untouched blocks survive.
+        let source = "\n# Plan\r\nIntro  \r\n\r\n\r\n- one\n- two\n\n```\ncode\n\n```\n\nLast\t\n";
+        let page = PageBlocks::parse(source, 5);
+        assert_eq!(page.blocks().len(), 5);
+        let body = page
+            .edit(5, &[edit(EditOp::Replace, &page, 1, Some("Better intro"))])
+            .expect("replace");
+        assert_eq!(
+            body,
+            "\n# Plan\n\nBetter intro\r\n\r\n\r\n- one\n- two\n\n```\ncode\n\n```\n\nLast\t\n"
+        );
+        let after = PageBlocks::parse(&body, 6);
+        assert_eq!(after.blocks().len(), 5);
+        assert_eq!(after.view().blocks[1].markdown, "Better intro");
+        for position in [0, 2, 3, 4] {
+            assert_eq!(
+                after.view().blocks[position].markdown,
+                page.view().blocks[position].markdown
+            );
+        }
+    }
+
+    #[test]
+    fn inserts_deletes_and_appends_apply_together_against_one_version() {
+        let source = "# A\n\none\n\ntwo\n\nthree\n";
+        let page = PageBlocks::parse(source, 2);
+        let body = page
+            .edit(
+                2,
+                &[
+                    edit(EditOp::Delete, &page, 2, None),
+                    edit(EditOp::InsertBefore, &page, 1, Some("\n\nzero\n\n")),
+                    edit(EditOp::InsertAfter, &page, 3, Some("four")),
+                    Edit {
+                        op: EditOp::Append,
+                        position: None,
+                        hash: None,
+                        markdown: Some("## End".into()),
+                    },
+                ],
+            )
+            .expect("edits");
+        assert_eq!(body, "# A\n\nzero\n\none\n\nthree\n\nfour\n\n## End\n");
+
+        // Deleting everything leaves an empty page; appending to it starts one.
+        let all: Vec<Edit> = (0..4)
+            .map(|p| edit(EditOp::Delete, &page, p, None))
+            .collect();
+        assert_eq!(page.edit(2, &all).expect("delete all"), "");
+        let empty = PageBlocks::parse("", 9);
+        let first = empty
+            .edit(
+                9,
+                &[Edit {
+                    op: EditOp::Append,
+                    position: None,
+                    hash: None,
+                    markdown: Some("Hello".into()),
+                }],
+            )
+            .expect("append");
+        assert_eq!(first, "Hello\n");
+    }
+
+    #[test]
+    fn edits_are_refused_when_stale_or_malformed() {
+        let source = "# A\n\none\n";
+        let page = PageBlocks::parse(source, 4);
+        let good = edit(EditOp::Replace, &page, 1, Some("uno"));
+        assert_eq!(
+            page.edit(3, std::slice::from_ref(&good)),
+            Err(EditError::OtherVersion {
+                asked: 3,
+                current: 4
+            })
+        );
+        assert_eq!(page.edit(4, &[]), Err(EditError::NoEdits));
+        let stale = Edit {
+            hash: Some("0000000000000000".into()),
+            ..good.clone()
+        };
+        assert!(matches!(
+            page.edit(4, &[stale]),
+            Err(EditError::HashMismatch {
+                index: 0,
+                position: 1,
+                ..
+            })
+        ));
+        assert!(matches!(
+            page.edit(
+                4,
+                &[Edit {
+                    position: Some(7),
+                    ..good.clone()
+                }]
+            ),
+            Err(EditError::NoSuchBlock {
+                position: 7,
+                blocks: 2,
+                ..
+            })
+        ));
+        assert_eq!(
+            page.edit(
+                4,
+                &[Edit {
+                    markdown: Some(" \n\n ".into()),
+                    ..good.clone()
+                }]
+            ),
+            Err(EditError::Markdown {
+                index: 0,
+                needed: true
+            })
+        );
+        assert_eq!(
+            page.edit(4, &[edit(EditOp::Delete, &page, 1, Some("x"))]),
+            Err(EditError::Markdown {
+                index: 0,
+                needed: false
+            })
+        );
+        assert_eq!(
+            page.edit(4, &[good.clone(), edit(EditOp::Delete, &page, 1, None)]),
+            Err(EditError::SameBlock {
+                index: 1,
+                position: 1
+            })
+        );
+        assert_eq!(
+            page.edit(
+                4,
+                &[Edit {
+                    op: EditOp::Append,
+                    ..good.clone()
+                }]
+            ),
+            Err(EditError::Position {
+                index: 0,
+                needed: false
+            })
+        );
+        assert_eq!(
+            page.edit(
+                4,
+                &[Edit {
+                    position: None,
+                    ..good.clone()
+                }]
+            ),
+            Err(EditError::Position {
+                index: 0,
+                needed: true
+            })
+        );
+        let many = vec![edit(EditOp::InsertAfter, &page, 0, Some("x")); MAX_EDITS + 1];
+        assert_eq!(
+            page.edit(4, &many),
+            Err(EditError::TooManyEdits { limit: MAX_EDITS })
+        );
+    }
+
+    #[test]
+    fn new_markdown_keeps_its_first_indent() {
+        let page = PageBlocks::parse("Para\n", 1);
+        let body = page
+            .edit(
+                1,
+                &[edit(
+                    EditOp::Replace,
+                    &page,
+                    0,
+                    Some("\n  \n    indented code\n\n"),
+                )],
+            )
+            .expect("replace");
+        assert_eq!(body, "    indented code\n");
     }
 }
