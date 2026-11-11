@@ -86,6 +86,12 @@ is new; `/mcp-tools.md` and the OpenAPI document pick it up from there.
   `every_write_route_and_write_tool_has_an_isolation_case`, also needs no
   database. The same goes for a new POST, PUT, PATCH or DELETE route
   (`WRITE_ROUTES` and `http_cases`); the file's top comment says how.
+- Agent parity (AWD-91): every web write is listed in
+  `apps/server/src/agent_parity.rs` with the tool that does the same thing.
+  A new route fails that guard until it's there; a tool that closes a `Gap`
+  moves its entry to `Tool`. If the feature is something an agent would use
+  while running a project, add its step to
+  `tests/integration/awd91_agent_parity.rs`.
 - Write an integration test where a bug would be silent: someone outside the
   project reading or writing, a claim or version conflict, a private
   conversation. See `w22_agent_kit.rs` for a compact one.

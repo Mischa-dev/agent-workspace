@@ -3,6 +3,7 @@
 pub mod account;
 pub mod account_security;
 pub mod agent_docs;
+pub mod agent_parity;
 pub mod agent_profiles;
 pub mod agent_sessions;
 pub mod ai;
