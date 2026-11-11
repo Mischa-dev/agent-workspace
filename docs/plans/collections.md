@@ -65,7 +65,10 @@ cursor (the sort values of the last row, with a fingerprint of the query, so
 a cursor only reads back with the query it came from), counts the total, and
 counts each group, without reading every record. Search words must each be
 in the title, a text or web address value, a chosen option's name, or be the
-record's number.
+record's number. Text, titles and names sort by their first 100 characters,
+lowercased (`fields::SORT_PREFIX_CHARACTERS`), so a cursor stays under 8 KB
+however long the values are; records alike that far fall through to the next
+sort key, and last to their ID.
 
 ## Agent tools
 
@@ -75,7 +78,7 @@ Five tools, the same whatever collections a project has:
 | --- | --- |
 | `collection_list` | A project's collections with their record counts. |
 | `collection_describe` | One collection's fields, views and definition: its fields and views by name, in the shape `collection_write` takes, so passing it to `collection_write` in another project makes the same collection there. |
-| `collection_write` | Create a collection with its fields and views in one call, or change one. Fields and views are matched by name (or by `field` and `view` to rename), so writing a definition again changes nothing. Needs `collections.build`. |
+| `collection_write` | Create a collection with its fields and views in one call, or change one. Fields and views are matched by name (or by `field` and `view` to rename), so writing a definition again changes nothing. With `expectedVersion`, a write that would change anything (fields and views included) is a conflict if the collection changed since. Needs `collections.build`. |
 | `record_query` | Records found on the server: filters by field name, search words, sort, group counts, a saved view to start from, named records with their history; a page at a time with `nextCursor`. |
 | `record_write` | Add or change up to 100 records, all or nothing, by number or ID, values by field name. Needs `collections.edit`. |
 

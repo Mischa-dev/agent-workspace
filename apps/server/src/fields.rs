@@ -44,6 +44,11 @@ pub const MAX_OPTIONS: usize = 100;
 pub const MAX_OPTION_NAME_CHARACTERS: usize = 60;
 pub const MAX_TEXT_CHARACTERS: usize = 5_000;
 pub const MAX_URL_CHARACTERS: usize = 2_048;
+/// Sorts on text compare this many characters of it, lowercased: plenty to
+/// order by, and few enough that a list's cursor, which carries the last
+/// row's sort values, stays small. Values that share them fall through to
+/// the list's next key.
+pub const SORT_PREFIX_CHARACTERS: usize = 100;
 /// The largest number a number field holds, either side of zero.
 pub const MAX_NUMBER: f64 = 1e15;
 /// Field filters one list request can carry.
@@ -1226,8 +1231,9 @@ fn uuid_array(ids: impl Iterator<Item = Uuid>) -> String {
 
 /// How records sort by `field`: records without a value last, then by value
 /// (choices in option order, people by name, linked tasks by number, linked
-/// pages by title). `column` is the JSONB column of values and `project`
-/// the record's project ID column.
+/// pages by title; text, names and titles by their first
+/// `SORT_PREFIX_CHARACTERS`). `column` is the JSONB column of values and
+/// `project` the record's project ID column.
 pub fn sort_keys(field: &FieldDefinition, column: &str, project: &str) -> Vec<SortKey> {
     let value = value_at(column, field.id);
     let text = text_at(column, field.id);
@@ -1237,7 +1243,10 @@ pub fn sort_keys(field: &FieldDefinition, column: &str, project: &str) -> Vec<So
         follows_direction: false,
     };
     let by_value = match field.field_type {
-        FieldType::Text | FieldType::Url => key(format!("lower(COALESCE({text}, ''))"), "text"),
+        FieldType::Text | FieldType::Url => key(
+            format!("left(lower(COALESCE({text}, '')), {SORT_PREFIX_CHARACTERS})"),
+            "text",
+        ),
         FieldType::Date => key(format!("COALESCE({text}, '')"), "text"),
         FieldType::Number => key(
             format!(
@@ -1265,16 +1274,18 @@ pub fn sort_keys(field: &FieldDefinition, column: &str, project: &str) -> Vec<So
         ),
         FieldType::Person => key(
             format!(
-                "lower(COALESCE((SELECT sort_person.display_name FROM project_memberships sort_person \
-                 WHERE sort_person.project_id = {project} AND sort_person.actor_id::text = {text}), ''))"
+                "left(lower(COALESCE((SELECT sort_person.display_name FROM project_memberships sort_person \
+                 WHERE sort_person.project_id = {project} AND sort_person.actor_id::text = {text}), '')), \
+                 {SORT_PREFIX_CHARACTERS})"
             ),
             "text",
         ),
         FieldType::Link => match field.config.target {
             Some(LinkTarget::Page) => key(
                 format!(
-                    "lower(COALESCE((SELECT sort_page.title FROM project_pages sort_page \
-                     WHERE sort_page.project_id = {project} AND sort_page.id::text = {text}), ''))"
+                    "left(lower(COALESCE((SELECT sort_page.title FROM project_pages sort_page \
+                     WHERE sort_page.project_id = {project} AND sort_page.id::text = {text}), '')), \
+                     {SORT_PREFIX_CHARACTERS})"
                 ),
                 "text",
             ),
@@ -1344,7 +1355,9 @@ pub fn group_sql(
                     "integer",
                 ),
                 key(
-                    "lower(COALESCE(group_field.display_name, ''))".to_owned(),
+                    format!(
+                        "left(lower(COALESCE(group_field.display_name, '')), {SORT_PREFIX_CHARACTERS})"
+                    ),
                     "text",
                 ),
                 key(
