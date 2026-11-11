@@ -112,6 +112,8 @@ the view (Save view), and anyone can put the view back (Reset). A record
 opens in the side panel (`?record=`) with every field, who added and last
 changed it, and its history. On a phone the table becomes cards. Changes
 show at once and save one at a time per record, each against the version the
-last one left (`useRecordEdits.ts`); `collection.updated` refetches what's
-open of the collection, a moment after a burst of changes
-(`realtime/liveDocuments.ts`).
+last one left (`useRecordEdits.ts`), and until a change saves it shows on top
+of whatever loads meanwhile; `collection.updated` refetches what's open of
+the collection, a moment after a burst of changes
+(`realtime/liveDocuments.ts`). What changes in a view while it saves stays
+on screen, ready to save next.

@@ -171,8 +171,11 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
   const setConfig = (next: ViewConfig) => {
     if (view) setDrafts((current) => ({ ...current, [view.id]: next }))
   }
-  const dropDraft = (viewId: string) =>
+  /** Puts a view back as saved. After a save, `saved` is what it sent: a draft changed since stays. */
+  const dropDraft = (viewId: string, saved?: ViewConfig) =>
     setDrafts((current) => {
+      const now = current[viewId]
+      if (!now || (saved && !sameConfig(now, saved))) return current
       const next = { ...current }
       delete next[viewId]
       return next
@@ -187,7 +190,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
     setSaving(true)
     try {
       keepView(await updateView(projectId, collectionId, view, { config: draft }))
-      dropDraft(view.id)
+      dropDraft(view.id, draft)
       void client.invalidateQueries({ queryKey: collectionKeys.one(projectId, collectionId) })
       showToast({ tone: 'success', title: `${view.name} saved` })
     } catch (error) {
