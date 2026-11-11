@@ -177,9 +177,26 @@ async fn reset_mail_goes_only_through_a_workspace_the_person_chose_or_owns() {
             .expect("transport")
             .map(|transport| transport.organization_id)
     };
-    // Mara only joined it, and never chose it: it's her default only
-    // because it's her first workspace, so its owner's mail server doesn't
-    // carry her reset links.
+    // It's the only workspace Mara is in, so it carries her mail.
+    assert_eq!(transport(mara).await, Some(setup.organization_id));
+    // She joins a second workspace (that sends no mail). The first is now
+    // her default only because she joined it first, which isn't a choice:
+    // its owner's mail server no longer carries her reset links.
+    let second = Uuid::now_v7();
+    sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, 'Second', $2)")
+        .bind(second)
+        .bind(format!("second-{}", second.simple()))
+        .execute(pool)
+        .await
+        .expect("second organization");
+    sqlx::query(
+        "INSERT INTO organization_memberships (organization_id, actor_id, role) VALUES ($1, $2, 'member')",
+    )
+    .bind(second)
+    .bind(mara)
+    .execute(pool)
+    .await
+    .expect("second membership");
     assert_eq!(transport(mara).await, None);
     // Once she chooses it as her default (or joins it from a workspace
     // invitation, which sets it), resets for her use it.
