@@ -188,7 +188,7 @@ impl BlockWriter {
             }
             Node::CodeBlock { language, text } => (code_block(language.as_deref(), text), None),
             Node::Blockquote(children) => {
-                let inner = self.blocks(children);
+                let inner = self.blocks(children, false);
                 let lines = if inner.is_empty() {
                     vec![">".to_owned()]
                 } else {
@@ -212,13 +212,21 @@ impl BlockWriter {
         }
     }
 
-    /// Blocks inside a quote or list item, a blank line between them.
-    fn blocks(&self, blocks: &[Block]) -> Vec<String> {
+    /// Blocks inside a quote or list item, a blank line between them. In a
+    /// list item, a list right after the item's own text follows it on the
+    /// next line (`- two` then `  - nested`), the way people write nested
+    /// lists, so a list stays tight; the paranoid writer keeps the blank line.
+    fn blocks(&self, blocks: &[Block], in_item: bool) -> Vec<String> {
         let mut lines = Vec::new();
         let mut previous = None;
-        for block in blocks {
+        for (index, block) in blocks.iter().enumerate() {
             let (block_lines, marker) = self.block(&block.node, previous);
-            if !lines.is_empty() {
+            let tight = in_item
+                && !self.paranoid
+                && index == 1
+                && matches!(blocks[0].node, Node::Paragraph(_))
+                && interrupts_paragraph(&block.node);
+            if !lines.is_empty() && !tight {
                 lines.push(String::new());
             }
             lines.extend(block_lines);
@@ -240,7 +248,7 @@ impl BlockWriter {
         };
         let contents: Vec<Vec<String>> = items
             .iter()
-            .map(|item| self.blocks(&item.content))
+            .map(|item| self.blocks(&item.content, true))
             .collect();
         let mut fallback = None;
         for &marker in candidates {
@@ -814,6 +822,18 @@ fn code_block(language: Option<&str>, text: &str) -> Vec<String> {
 }
 
 /// The list's lines, and each item's first line (to check for rules).
+/// Whether a list can start right after a paragraph's last line without a
+/// blank line (CommonMark): a bulleted list, or a numbered one from 1, whose
+/// first item has something in it.
+fn interrupts_paragraph(node: &Node) -> bool {
+    let first = match node {
+        Node::BulletList(items) => items.first(),
+        Node::OrderedList { start: 1, items } => items.first(),
+        _ => None,
+    };
+    first.is_some_and(|item| !item.content.is_empty())
+}
+
 fn compose_list(
     items: &[Item],
     contents: &[Vec<String>],

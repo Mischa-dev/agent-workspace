@@ -15,14 +15,13 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use rand_core::{OsRng, RngCore};
+use yrs::types::Attrs;
 use yrs::types::text::YChange;
-use yrs::types::xml::{XmlDeltaPrelim, XmlIn};
-use yrs::types::{Attrs, Delta};
 use yrs::updates::decoder::Decode;
 use yrs::{
-    Any, ClientID, Doc, In, Number, OffsetKind, Options, Out, ReadTxn, StateVector, Text, Transact,
+    Any, ClientID, Doc, Number, OffsetKind, Options, Out, ReadTxn, StateVector, Text, Transact,
     TransactionMut, Update, WriteTxn, Xml, XmlElementPrelim, XmlElementRef, XmlFragment,
-    XmlFragmentRef, XmlOut, XmlTextRef,
+    XmlFragmentRef, XmlOut, XmlTextPrelim, XmlTextRef,
 };
 
 use super::markdown::{Align, safe_href};
@@ -742,24 +741,35 @@ fn insert_p(txn: &mut TransactionMut, parent: &impl XmlFragment, index: u32, nod
             }
         }
         PNode::Text(runs) => {
-            let delta = runs
-                .iter()
-                .map(|(text, attributes)| {
-                    Delta::Inserted(
-                        In::Any(string(text)),
-                        (!attributes.is_empty()).then(|| Box::new(attributes.clone())),
-                    )
-                })
-                .collect();
-            parent.insert(
+            let whole: String = runs.iter().map(|(run, _)| run.as_str()).collect();
+            let text = parent.insert(txn, index, XmlTextPrelim::new(whole));
+            format_runs(txn, &text, runs, false);
+        }
+    }
+}
+
+/// Gives each run its marks one mark at a time, in [`MARKS`] order, and with
+/// `clear` takes off the marks it lacks. yrs applies a run's attributes in
+/// hash order, which would make the same change a different document each
+/// time; one at a time, the same change always makes the same document.
+fn format_runs(txn: &mut TransactionMut, text: &XmlTextRef, runs: &[(String, Attrs)], clear: bool) {
+    let mut at = 0;
+    for (run, attributes) in runs {
+        let length = utf16_len(run);
+        for name in MARKS {
+            let value = match attributes.get(name) {
+                Some(value) => value.clone(),
+                None if clear => Any::Null,
+                None => continue,
+            };
+            text.format(
                 txn,
-                index,
-                XmlIn::from(XmlDeltaPrelim {
-                    attributes: HashMap::new(),
-                    delta,
-                }),
+                at,
+                length,
+                Attrs::from([(Arc::<str>::from(name), value)]),
             );
         }
+        at += length;
     }
 }
 
@@ -1084,22 +1094,7 @@ fn update_text(txn: &mut TransactionMut, text: &XmlTextRef, runs: &[(String, Att
     if !inserted.is_empty() {
         text.insert(txn, index, &inserted);
     }
-    let delta: Vec<Delta<In>> = runs
-        .iter()
-        .map(|(run, attributes)| {
-            let mut all: Attrs = MARKS
-                .iter()
-                .map(|name| (Arc::<str>::from(*name), Any::Null))
-                .collect();
-            all.extend(
-                attributes
-                    .iter()
-                    .map(|(key, value)| (key.clone(), value.clone())),
-            );
-            Delta::Retain(utf16_len(run), Some(Box::new(all)))
-        })
-        .collect();
-    text.apply_delta(txn, delta);
+    format_runs(txn, text, runs, true);
 }
 
 /// Where two strings differ: the UTF-16 offset of the first difference, how
@@ -1152,6 +1147,9 @@ mod tests {
     use super::*;
     use crate::page_docs::testing::{Random, random_blocks};
     use crate::page_docs::tree::{canon_blocks, from_markdown, strip_ids};
+    use yrs::In;
+    use yrs::types::Delta;
+    use yrs::types::xml::{XmlDeltaPrelim, XmlIn};
 
     fn blocks_of(doc: &Doc) -> Vec<Block> {
         read_doc(doc).expect("the editor's shape")
@@ -1182,6 +1180,33 @@ mod tests {
             // Stored and loaded, it's the same document.
             let loaded = load(&encode(&doc)).expect("loads");
             assert_eq!(canon_blocks(&blocks_of(&loaded)), read);
+        }
+    }
+
+    #[test]
+    fn the_same_change_always_makes_the_same_document() {
+        // Several marks on one run is where yrs's hash order showed through.
+        let mut blocks = from_markdown(
+            "Some **bold `code`**, ~~*both*~~ and **[a link](https://example.com)**.\n",
+        );
+        blocks[0].id = Some("block0".to_owned());
+        let mut changed = blocks.clone();
+        changed[0].node = Node::Paragraph(
+            match &from_markdown("Some *bold `code`*, ~~**both**~~ and [a link](/a).\n")[0].node {
+                Node::Paragraph(content) => content.clone(),
+                other => panic!("{other:?}"),
+            },
+        );
+        let make = || {
+            let doc = new_doc();
+            write(&doc, &blocks);
+            let first = encode(&doc);
+            replace(&doc, &changed);
+            (first, encode(&doc))
+        };
+        let once = make();
+        for _ in 0..20 {
+            assert_eq!(make(), once);
         }
     }
 

@@ -1,0 +1,255 @@
+/* The live page editor (memory/live/LivePage.tsx). The page itself is styled
+   by .aw-md and .aw-doc, as the read view is, so a page looks the same when it
+   opens live. This adds the toolbar and what writing in place needs: the
+   editor's own base styles too, since Tiptap's are off (style-src 'self'). */
+
+.aw-live {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+  max-width: var(--size-measure);
+}
+
+/* The toolbar, and the link field under it, stay in reach down a long page. */
+.aw-live__top {
+  position: sticky;
+  /* Below the phone's top bar, which the page scrolls under (shell.css). */
+  top: var(--aw-sticky-top, 0);
+  z-index: var(--layer-sticky);
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* memory.css leaves this much room while the editor loads; keep the two the same. */
+.aw-live__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  min-height: calc(var(--size-control-sm) + 2 * var(--space-1) + 2px);
+  padding: var(--space-1);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-card);
+}
+
+.aw-live__tools {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.aw-live__group {
+  display: flex;
+  flex: none;
+  gap: var(--space-half);
+}
+
+.aw-live__group + .aw-live__group {
+  padding-left: var(--space-1);
+  border-left: 1px solid var(--content-border);
+}
+
+.aw-live__save {
+  flex: none;
+  max-width: 50%;
+  margin-left: auto;
+  padding: 0 var(--space-2);
+  overflow: hidden;
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-live__save[data-state='error'],
+.aw-live__save[data-state='offline'] {
+  color: var(--warning);
+}
+
+.aw-live__save[data-state='failed'] {
+  color: var(--danger);
+}
+
+.aw-live__actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.aw-live__link {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-card);
+}
+
+.aw-live__address {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+/* The page being written. ProseMirror needs pre-wrap: it keeps the spaces typed. */
+.aw-live__doc {
+  position: relative;
+  min-height: calc(var(--size-control-lg) * 3);
+  outline: none;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-variant-ligatures: none;
+  transition: border-color var(--duration-fast);
+}
+
+.aw-live__doc.ProseMirror-focused {
+  border-color: var(--focus-ring);
+}
+
+.aw-live__doc.aw-md p,
+.aw-live__doc.aw-md li,
+.aw-live__doc.aw-md th,
+.aw-live__doc.aw-md td {
+  white-space: pre-wrap;
+}
+
+/* A list item's first paragraph reads as the item's text, as in the read view. */
+.aw-live__doc .aw-live__item > p:first-child {
+  margin-bottom: 0;
+}
+
+.aw-live__doc .aw-live__item > ul,
+.aw-live__doc .aw-live__item > ol {
+  margin-top: var(--space-1);
+}
+
+.aw-live__doc .aw-live__item > ul,
+.aw-live__doc .aw-live__item > ol,
+.aw-live__doc .aw-live__item > p:last-child {
+  margin-bottom: 0;
+}
+
+.aw-live__doc ul:has(> li.aw-md__task) {
+  padding-left: var(--space-2);
+  list-style: none;
+}
+
+.aw-live__doc li.aw-md__task > .aw-live__box {
+  grid-column: 1;
+}
+
+.aw-live__box > input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+  translate: 0 2px;
+}
+
+.aw-live__box > input:disabled {
+  cursor: default;
+}
+
+.aw-live__doc li.aw-md__task:has(> .aw-live__box > input:checked) > .aw-live__item > p:first-child {
+  color: var(--content-fg-muted);
+  text-decoration: line-through;
+}
+
+/* Task keys like AWD-12 open the task with Cmd or Ctrl held. */
+.aw-live__doc .aw-md__task-key {
+  color: var(--link);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  font-weight: var(--weight-medium);
+}
+
+.aw-live__doc td[data-align='left'],
+.aw-live__doc th[data-align='left'] {
+  text-align: left;
+}
+
+.aw-live__doc td[data-align='center'],
+.aw-live__doc th[data-align='center'] {
+  text-align: center;
+}
+
+.aw-live__doc td[data-align='right'],
+.aw-live__doc th[data-align='right'] {
+  text-align: right;
+}
+
+.aw-live__doc .selectedCell {
+  background: var(--accent-soft);
+}
+
+.aw-live__doc .is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  color: var(--content-fg-muted);
+  pointer-events: none;
+}
+
+.aw-live__doc hr.ProseMirror-selectednode {
+  box-shadow: var(--shadow-focus);
+}
+
+.aw-live__doc.ProseMirror-hideselection *::selection {
+  background: transparent;
+}
+
+.aw-live__doc.ProseMirror-hideselection {
+  caret-color: transparent;
+}
+
+.aw-live__doc img.ProseMirror-separator {
+  display: inline !important;
+  width: 0 !important;
+  height: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+}
+
+/* Where the cursor sits between two blocks that hold no text, such as two tables. */
+.aw-live__doc .ProseMirror-gapcursor {
+  position: absolute;
+  display: none;
+  margin: 0;
+  pointer-events: none;
+}
+
+.aw-live__doc .ProseMirror-gapcursor::after {
+  content: '';
+  position: absolute;
+  top: -2px;
+  display: block;
+  width: 20px;
+  border-top: 1px solid var(--content-fg);
+  animation: aw-live-caret 1.1s steps(2, start) infinite;
+}
+
+.aw-live__doc.ProseMirror-focused .ProseMirror-gapcursor {
+  display: block;
+}
+
+@keyframes aw-live-caret {
+  to {
+    visibility: hidden;
+  }
+}
+
+@media (max-width: 640px) {
+  .aw-live__save {
+    max-width: 40%;
+  }
+}

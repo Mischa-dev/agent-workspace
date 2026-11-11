@@ -8,6 +8,8 @@
 pub mod edits;
 pub mod http;
 pub mod markdown;
+#[cfg(test)]
+mod parity;
 pub mod store;
 #[cfg(test)]
 mod testing;

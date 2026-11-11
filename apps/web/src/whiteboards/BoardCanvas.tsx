@@ -7,7 +7,7 @@ import type { AppState, BinaryFileData, BinaryFiles, ExcalidrawImperativeAPI } f
 import { useNavigate } from 'react-router-dom'
 
 import { useOptionalRealtime } from '../realtime/realtimeContext'
-import { onWhiteboardChange } from '../realtime/whiteboardEvents'
+import { onWhiteboardChange } from '../realtime/liveDocuments'
 import { describeError } from '../ui'
 import { getFile, getScene, uploadFile, writeScene, type Editor, type SceneView, type StoredElement } from './api'
 import { missingFiles, remember, unsaved, type Known, type SaveState } from './sync'

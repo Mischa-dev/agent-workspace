@@ -317,10 +317,11 @@ function parseTable(lines: string[], from: number, options: ParseOptions) {
 // Inlines
 
 const PUNCTUATION = /[!-/:-@[-`{-~]/
-const TASK_KEY = /[A-Z][A-Z0-9]{1,9}-[0-9]{1,9}(?![A-Za-z0-9_-])/y
+/** A task key, matched where lastIndex is set (sticky). The page editor marks keys with it too. */
+export const TASK_KEY = /[A-Z][A-Z0-9]{1,9}-[0-9]{1,9}(?![A-Za-z0-9_-])/y
 const AUTOLINK = /https?:\/\/[^\s<>]+/iy
 /** Common PROJECT-123 shaped words that are not task keys. */
-const NOT_TASK_KEYS = new Set(['UTF', 'ISO', 'SHA', 'RFC', 'GPT', 'COVID', 'CVE', 'MD', 'X', 'TLS', 'SSL', 'P', 'H', 'ES'])
+export const NOT_TASK_KEYS = new Set(['UTF', 'ISO', 'SHA', 'RFC', 'GPT', 'COVID', 'CVE', 'MD', 'X', 'TLS', 'SSL', 'P', 'H', 'ES'])
 
 const isWordChar = (char: string | undefined) => char !== undefined && /[A-Za-z0-9_]/.test(char)
 const isSpace = (char: string | undefined) => char === undefined || /\s/.test(char)

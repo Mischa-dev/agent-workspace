@@ -27,6 +27,13 @@
   margin: 0 0 var(--space-4);
 }
 
+/* Room for the live editor's toolbar (live/live.css .aw-live__bar and the
+   gap under it) while the editor loads, so the page doesn't jump. */
+.aw-memory__live-wait {
+  max-width: var(--size-measure);
+  padding-top: calc(var(--size-control-sm) + 2 * var(--space-1) + 2px + var(--space-3));
+}
+
 /* An old version, scrolled to when it opens, under the sticky header. */
 .aw-memory__viewing {
   scroll-margin-top: var(--space-6);
