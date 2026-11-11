@@ -15,6 +15,7 @@ import { queryKeys } from '../api/queryKeys'
 import { resetQueryScope } from '../api/queryScope'
 import { closeCommandMenu } from '../shell/commandStore'
 import { clearToasts } from '../ui/toastStore'
+import { clearPendingMoves } from '../work-items/moveStore'
 
 export type OrganizationRole = 'owner' | 'admin' | 'member'
 
@@ -220,6 +221,8 @@ function clearActorScopedQueries(queryClient: QueryClient) {
   queryClient.getMutationCache().clear()
   // Toasts can name private conversations and hold Undo callbacks.
   clearToasts()
+  // A move whose answer never arrived belongs to whoever sent it (AWD-102).
+  clearPendingMoves()
   // A menu left open must not reopen over the next session.
   closeCommandMenu()
 }
