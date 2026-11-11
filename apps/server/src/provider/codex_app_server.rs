@@ -1900,6 +1900,22 @@ mod tests {
             approval.summary
         );
         assert!(!approval.summary.contains("Codex"));
+        for (command, secret) in [
+            ("./deploy --token abcdefghijklmnop", "abcdefghijklmnop"),
+            ("PASSWORD='alpha beta gamma' ./deploy", "beta gamma"),
+        ] {
+            let approval = parse_provider_request(json!({
+                "id": 24,
+                "method": "item/commandExecution/requestApproval",
+                "params": {"command": command}
+            }))
+            .expect("approval with a credential");
+            assert!(
+                !approval.summary.contains(secret),
+                "{secret} leaked: {}",
+                approval.summary
+            );
+        }
 
         let long = parse_provider_request(json!({
             "id": 20,
