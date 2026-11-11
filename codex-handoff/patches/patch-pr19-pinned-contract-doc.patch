@@ -1,0 +1,21 @@
+Draft patch — PR #19 pinned contract (CONFIRMED, documentation-only, verdicts.md item 34). Startup recovery depends on thread/read (includeTurns: true) returning thread.turns[] with stable id/status and exact turn-id matching against the durable provider_turn_id; the compat doc never pinned that shape. Adds the bullet to the Pinned contract section.
+
+diff --git a/docs/compatibility/codex-app-server.md b/docs/compatibility/codex-app-server.md
+index 16d4a49..680edf2 100644
+--- a/docs/compatibility/codex-app-server.md
++++ b/docs/compatibility/codex-app-server.md
+@@ -12,6 +12,14 @@
+ The generated schema bundle and `SHA256SUMS` are committed under
+ `schemas/codex-app-server/0.146.0`.
+ 
++- Startup recovery depends on the `thread/read` response shape: it is
++  called with `includeTurns: true` and must return `thread.turns[]`
++  entries carrying a stable `id` and `status` per turn. Recovery matches
++  the latest turn's `id` exactly against the durable `provider_turn_id`
++  and treats the turn as completed only when `status` is `completed`;
++  if the turns array or its ids change shape, every recovered run
++  degrades to interrupted.
++
+ ## Stable methods in M0
+ 
+ - `initialize`, followed by the `initialized` notification
