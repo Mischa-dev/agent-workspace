@@ -11,7 +11,7 @@ import { Banner, Button, Dialog, SelectField, countLabel, describeError, showToa
 import { useWorkItem } from './hooks'
 import { listMoveDestinations, movedTo, previewMove, type MoveDone, type MoveIssue, type MovePlan, type MoveResolution } from './moveApi'
 import { pendingMove, sendMove, settleMove, subscribeMoves, type PendingMove } from './moveRecovery'
-import { FieldEditor } from './TaskCustomFields'
+import type { FieldEditor as FieldEditorType } from './TaskCustomFields'
 import './moveTask.css'
 
 /** What the mover chose for one issue; `label` is how a picked person, task or page reads. */
@@ -32,7 +32,21 @@ type Refusal = { status: number; message: string }
  * answer that never came, when the only thing it offers is to send that same
  * request again.
  */
-export default function MoveTaskDialog({ onClose, projectId, task }: { onClose: () => void; projectId: string; task: MovingTask }) {
+/**
+ * FieldEditor comes from the task page as a prop: importing it here would split
+ * TaskCustomFields into a chunk of its own and grow the first page load.
+ */
+export default function MoveTaskDialog({
+  FieldEditor,
+  onClose,
+  projectId,
+  task,
+}: {
+  FieldEditor: typeof FieldEditorType
+  onClose: () => void
+  projectId: string
+  task: MovingTask
+}) {
   // Every step is its own dialog: focus goes back to whatever opened the first.
   const [opener] = useState<RefObject<HTMLElement | null>>(() => ({ current: document.activeElement as HTMLElement | null }))
   // A confirmation belongs to whoever sent it.
@@ -179,6 +193,7 @@ export default function MoveTaskDialog({ onClose, projectId, task }: { onClose: 
   }
   return (
     <MoveReview
+      FieldEditor={FieldEditor}
       actorId={actorId}
       // A different task, a new version of it, or another project: a new review.
       key={`${task.id}:${task.version}:${reviewing}`}
@@ -341,6 +356,7 @@ function MoveRecovery({
 }
 
 function MoveReview({
+  FieldEditor,
   actorId,
   onBack,
   onClose,
@@ -351,6 +367,7 @@ function MoveReview({
   targetProjectId,
   task,
 }: {
+  FieldEditor: typeof FieldEditorType
   actorId: string
   onBack: () => void
   onClose: () => void
@@ -494,6 +511,7 @@ function MoveReview({
               <ul className="aw-move__issues">
                 {issues.map((issue) => (
                   <IssueRow
+                    FieldEditor={FieldEditor}
                     choice={chosen[issue.id]}
                     disabled={false}
                     issue={issue}
@@ -536,6 +554,7 @@ function MoveReview({
 }
 
 function IssueRow({
+  FieldEditor,
   choice,
   disabled,
   issue,
@@ -543,6 +562,7 @@ function IssueRow({
   targetFields,
   targetProjectId,
 }: {
+  FieldEditor: typeof FieldEditorType
   choice: Choice | undefined
   disabled: boolean
   issue: MoveIssue

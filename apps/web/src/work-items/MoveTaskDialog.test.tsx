@@ -9,6 +9,7 @@ import { AuthenticatedSessionProvider, clearAuthenticatedQueryCache, type Authen
 import MoveTaskDialog from './MoveTaskDialog'
 import { listMoveDestinations, moveTask, previewMove, type MoveDone, type MovePlan } from './moveApi'
 import { clearPendingMoves } from './moveRecovery'
+import { FieldEditor } from './TaskCustomFields'
 import { clearToasts, useToasts } from '../ui/toastStore'
 
 const { owner, plan, risk } = vi.hoisted(() => {
@@ -120,7 +121,7 @@ function Host({ version = 1 }: { version?: number }) {
       <button onClick={() => setOpen(true)} type="button">
         Move to project…
       </button>
-      {open ? <MoveTaskDialog onClose={() => setOpen(false)} projectId="src" task={{ id: 'root', key: 'SRC-1', title: 'Root', version }} /> : null}
+      {open ? <MoveTaskDialog FieldEditor={FieldEditor} onClose={() => setOpen(false)} projectId="src" task={{ id: 'root', key: 'SRC-1', title: 'Root', version }} /> : null}
       <Where />
       <Toasts />
     </>
