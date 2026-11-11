@@ -66,7 +66,8 @@ export function CollectionsListPage() {
     <AppShell project={project.data} user={session.user}>
       <div className="aw-page aw-collections">
         <PageHeader actions={newCollection} icon="table" title="Collections" />
-        {archivedCount ? (
+        {/* It stays while Archived is chosen, so restoring the last one leaves a way back. */}
+        {archivedCount || shown === 'archived' ? (
           <SegmentedControl<Shown>
             label="Collections to show"
             onChange={setShown}
