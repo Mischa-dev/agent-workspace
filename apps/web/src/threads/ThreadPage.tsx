@@ -235,7 +235,7 @@ export function ThreadPage() {
     canPost: Boolean(verifiedTimeline?.capabilities.sendMessage && !verifiedTimeline.conversation.archivedAt),
     conversationId: threadId,
     kind: 'thread',
-    latestMessageId: entries.at(-1)?.message?.id,
+    latestMessageId: [...entries].reverse().find((entry) => entry.message)?.message?.id,
     projectId,
   })
 
