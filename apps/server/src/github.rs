@@ -2183,43 +2183,161 @@ async fn refresh_pull_request(
 
 async fn drain_jobs(state: &AppState) -> Result<(), AppError> {
     loop {
+        // Each job keeps renewing its lease while it works: a publish alone
+        // can take minutes (a token, two ref reads and a push), far past one
+        // lease, and an expired lease lets another worker run it again.
         if let Some(job) = claim_publish_job(state).await? {
             let job_id = job.job_id;
-            if let Err(error) = process_publish_job(state, &job).await {
-                tracing::error!(
-                    %job_id,
-                    error_category = error.log_category(),
-                    "GitHub publication job processing failed"
-                );
-                fail_publish_job(state, &job, "job_processing_failed", false).await?;
+            match while_leased(
+                state,
+                job.job_id,
+                job.claim_id,
+                process_publish_job(state, &job),
+            )
+            .await
+            {
+                Some(Ok(())) => {}
+                Some(Err(error)) => {
+                    tracing::error!(
+                        %job_id,
+                        error_category = error.log_category(),
+                        "GitHub publication job processing failed"
+                    );
+                    fail_publish_job(state, &job, "job_processing_failed", false).await?;
+                }
+                None => lost_lease(job_id),
             }
             continue;
         }
         if let Some(job) = claim_pull_request_job(state).await? {
             let job_id = job.job_id;
-            if let Err(error) = process_pull_request_job(state, &job).await {
-                tracing::error!(
-                    %job_id,
-                    error_category = error.log_category(),
-                    "GitHub pull-request job processing failed"
-                );
-                fail_pull_request_job(state, &job, "job_processing_failed", false).await?;
+            match while_leased(
+                state,
+                job.job_id,
+                job.claim_id,
+                process_pull_request_job(state, &job),
+            )
+            .await
+            {
+                Some(Ok(())) => {}
+                Some(Err(error)) => {
+                    tracing::error!(
+                        %job_id,
+                        error_category = error.log_category(),
+                        "GitHub pull-request job processing failed"
+                    );
+                    fail_pull_request_job(state, &job, "job_processing_failed", false).await?;
+                }
+                None => lost_lease(job_id),
             }
             continue;
         }
         if let Some(job) = claim_pull_request_sync_job(state).await? {
             let job_id = job.job_id;
-            if let Err(error) = process_pull_request_sync_job(state, &job).await {
-                tracing::error!(
-                    %job_id,
-                    error_category = error.log_category(),
-                    "GitHub pull-request synchronization job processing failed"
-                );
-                fail_pull_request_sync_job(state, &job, "job_processing_failed", false).await?;
+            match while_leased(
+                state,
+                job.job_id,
+                job.claim_id,
+                process_pull_request_sync_job(state, &job),
+            )
+            .await
+            {
+                Some(Ok(())) => {}
+                Some(Err(error)) => {
+                    tracing::error!(
+                        %job_id,
+                        error_category = error.log_category(),
+                        "GitHub pull-request synchronization job processing failed"
+                    );
+                    fail_pull_request_sync_job(state, &job, "job_processing_failed", false).await?;
+                }
+                None => lost_lease(job_id),
             }
             continue;
         }
         return Ok(());
+    }
+}
+
+fn lost_lease(job_id: Uuid) {
+    tracing::warn!(
+        %job_id,
+        "a GitHub job lost its lease and was stopped; it will be retried"
+    );
+}
+
+/// Runs a claimed GitHub job's work while extending its lease. Returns None
+/// when the lease is lost (another worker took the job, or renewals kept
+/// failing until it may have expired): the work is dropped there, so no
+/// later step runs twice. Work already handed to a blocking thread (a push)
+/// finishes on its own, but nothing after it does.
+async fn while_leased<T>(
+    state: &AppState,
+    job_id: Uuid,
+    claim_id: Uuid,
+    work: impl std::future::Future<Output = T>,
+) -> Option<T> {
+    let pool = state.pool.clone();
+    hold_lease(GITHUB_JOB_LEASE, work, move || {
+        let pool = pool.clone();
+        async move { extend_github_lease(&pool, job_id, claim_id).await }
+    })
+    .await
+}
+
+async fn extend_github_lease(
+    pool: &sqlx::PgPool,
+    job_id: Uuid,
+    claim_id: Uuid,
+) -> Result<bool, AppError> {
+    Ok(sqlx::query(
+        r#"
+        UPDATE github_jobs
+        SET lease_expires_at = now() + make_interval(secs => $3), updated_at = now()
+        WHERE id = $1 AND state = 'running' AND lease_owner = $2
+        "#,
+    )
+    .bind(job_id)
+    .bind(claim_id)
+    .bind(GITHUB_JOB_LEASE.as_secs_f64())
+    .execute(pool)
+    .await?
+    .rows_affected()
+        == 1)
+}
+
+/// Extends a lease every third of its length while `work` runs, as
+/// background jobs do (`jobs::renew_lease`). A renewal that answers "not
+/// yours" ends the work at once; one that fails is retried while the lease
+/// surely still holds (a wait of a third plus a try of a sixth).
+async fn hold_lease<T, R, F, E>(
+    lease: Duration,
+    work: impl std::future::Future<Output = T>,
+    mut renew: R,
+) -> Option<T>
+where
+    R: FnMut() -> F,
+    F: std::future::Future<Output = Result<bool, E>>,
+{
+    let renewals = async {
+        let mut renewed_at = tokio::time::Instant::now();
+        loop {
+            tokio::time::sleep(lease / 3).await;
+            let sent = tokio::time::Instant::now();
+            match tokio::time::timeout(lease / 6, renew()).await {
+                Ok(Ok(true)) => renewed_at = sent,
+                Ok(Ok(false)) => return,
+                Ok(Err(_)) | Err(_) => {
+                    if renewed_at.elapsed() + lease / 3 + lease / 6 >= lease {
+                        return;
+                    }
+                }
+            }
+        }
+    };
+    tokio::select! {
+        result = work => Some(result),
+        () = renewals => None,
     }
 }
 
@@ -5087,6 +5205,63 @@ mod tests {
     use std::{fs::OpenOptions, io::Write, os::unix::fs::OpenOptionsExt};
 
     use super::*;
+
+    // Short, so the tests run in real time.
+    const TEST_LEASE: Duration = Duration::from_millis(600);
+
+    // A publish takes far longer than one lease; the lease must keep being
+    // extended for all of it, or another worker reclaims the job and pushes
+    // with the same credentials a second time.
+    #[tokio::test]
+    async fn a_long_job_keeps_its_lease_until_it_finishes() {
+        let renewals = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = std::sync::Arc::clone(&renewals);
+        let result = hold_lease(
+            TEST_LEASE,
+            async {
+                tokio::time::sleep(TEST_LEASE * 6).await;
+                "pushed"
+            },
+            move || {
+                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                async { Ok::<bool, ()>(true) }
+            },
+        )
+        .await;
+        assert_eq!(result, Some("pushed"));
+        assert!(renewals.load(std::sync::atomic::Ordering::SeqCst) >= 5);
+    }
+
+    #[tokio::test]
+    async fn a_job_that_loses_its_lease_stops() {
+        let finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let done = std::sync::Arc::clone(&finished);
+        let result = hold_lease(
+            TEST_LEASE,
+            async move {
+                tokio::time::sleep(TEST_LEASE * 2).await;
+                done.store(true, std::sync::atomic::Ordering::SeqCst);
+            },
+            || async { Ok::<bool, ()>(false) },
+        )
+        .await;
+        assert_eq!(result, None);
+        assert!(
+            !finished.load(std::sync::atomic::Ordering::SeqCst),
+            "the work after the lost lease never ran"
+        );
+    }
+
+    #[tokio::test]
+    async fn renewals_that_keep_failing_stop_the_job_before_the_lease_ends() {
+        let started = tokio::time::Instant::now();
+        let result = hold_lease(TEST_LEASE, tokio::time::sleep(TEST_LEASE * 4), || async {
+            Err::<bool, ()>(())
+        })
+        .await;
+        assert_eq!(result, None);
+        assert!(started.elapsed() < TEST_LEASE);
+    }
 
     #[test]
     fn installation_token_debug_is_redacted() {

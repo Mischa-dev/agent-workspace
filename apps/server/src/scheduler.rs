@@ -521,8 +521,11 @@ async fn admit(state: &AppState, run: ClaimedRun) -> Result<(), AppError> {
                 // retained: one cleaned up since the inspection is gone.
                 crate::retention::lock_repository_retention(&mut transaction, run.repository_id)
                     .await?;
+                // The retry publishes its own commit: the predecessor's
+                // publication must not stand in for it, or a pull request
+                // could open from a commit this run never made.
                 let claimed = sqlx::query(
-                    "UPDATE repository_workspaces SET state = 'active', updated_at = now() WHERE id = $1 AND state = 'retained'",
+                    "UPDATE repository_workspaces SET state = 'active', published_commit = NULL, published_at = NULL, published_by_actor_id = NULL, publish_failure_category = NULL, publish_version = publish_version + 1, updated_at = now() WHERE id = $1 AND state = 'retained'",
                 )
                 .bind(workspace_id)
                 .execute(&mut *transaction)

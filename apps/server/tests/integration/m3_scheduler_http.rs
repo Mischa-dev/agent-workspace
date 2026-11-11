@@ -479,6 +479,24 @@ async fn queued_runs_are_idempotent_and_create_no_workspace_before_admission() {
         ],
     );
 
+    // Say the run being retried had published its branch: the retry makes
+    // its own commit, so that publication mustn't carry over to it (a pull
+    // request would open from a commit the retry never made).
+    sqlx::query(
+        r#"
+        UPDATE repository_workspaces workspace
+        SET published_commit = repeat('a', 40), published_at = now(),
+            published_by_actor_id = (
+                SELECT actor_id FROM project_memberships
+                 WHERE project_id = workspace.project_id AND role = 'owner' LIMIT 1
+            )
+        WHERE id = $1
+        "#,
+    )
+    .bind(workspace_id)
+    .execute(&pool)
+    .await
+    .expect("publish the retried run's branch");
     let retry = retry_run(
         &application,
         &cookie,
@@ -521,6 +539,17 @@ async fn queued_runs_are_idempotent_and_create_no_workspace_before_admission() {
     assert!(
         !preserved_dirty,
         "only a clean owned worktree may be reused"
+    );
+    let carried_over = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT published_commit FROM repository_workspaces WHERE id = $1",
+    )
+    .bind(workspace_id)
+    .fetch_one(&pool)
+    .await
+    .expect("read publication after reuse");
+    assert_eq!(
+        carried_over, None,
+        "a reused workspace starts unpublished for the retry"
     );
     assert_eq!(
         interrupt(&application, &cookie, &csrf, retry_run_id)

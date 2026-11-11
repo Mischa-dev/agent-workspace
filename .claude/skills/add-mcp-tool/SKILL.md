@@ -20,6 +20,9 @@ Put them in the module for the area, in `apps/server/src/mcp/` (tasks in
   for an agent: what to pass, in which form, and the default.
 - Accept what people type: task keys (`AWD-12`), project keys (`AWD`), IDs or
   links. `parse_id` and `resolve_task` in `common.rs` / `tasks.rs` do this.
+  Keys are only unique within a workspace, so a new key or name resolver
+  fetches `LIMIT 2` and returns nothing on two different matches, as
+  `project_by_key` does; never `LIMIT 1` or "the first one".
 - Results: `#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]`,
   `#[serde(rename_all = "camelCase")]`. An optional field gets
   `skip_serializing_if`, and a list that may be empty gets
