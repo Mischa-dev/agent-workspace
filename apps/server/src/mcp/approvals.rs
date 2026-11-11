@@ -626,7 +626,10 @@ fn parse_role(value: &str) -> Result<MembershipRole, AppError> {
     }
 }
 
-fn projection(context: &ApprovalContext, may_respond: bool) -> Result<ApprovalProjection, AppError> {
+fn projection(
+    context: &ApprovalContext,
+    may_respond: bool,
+) -> Result<ApprovalProjection, AppError> {
     let summary = bounded_text(&context.summary, 500);
     let options = context
         .options

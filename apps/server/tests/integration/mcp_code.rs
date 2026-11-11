@@ -318,9 +318,8 @@ async fn pull_requests_follow_their_thread_and_reach_the_right_person() {
     let owner_app = connect_app(app, &setup.browser, "Claude Code", "full").await;
     let reader_app = connect_app(app, &setup.browser, "Reader", "read").await;
     let dana_app = connect_app(app, &dana_browser, "Dana Code", "full").await;
-    let dana_reader_app = connect_app(app, &dana_browser, "Dana Reader", "read").await;
     let mut sessions = Vec::new();
-    for token in [&owner_app, &reader_app, &dana_app, &mara_token, &dana_reader_app] {
+    for token in [&owner_app, &reader_app, &dana_app, &mara_token] {
         sessions.push((
             token.clone(),
             initialize(app, token).await.expect("MCP session"),
@@ -950,8 +949,15 @@ async fn people_start_and_follow_runs_and_answer_approvals() {
     let owner_app = connect_app(app, &setup.browser, "Claude Code", "full").await;
     let reader_app = connect_app(app, &setup.browser, "Reader", "read").await;
     let dana_app = connect_app(app, &dana_browser, "Dana Code", "full").await;
+    let dana_reader_app = connect_app(app, &dana_browser, "Dana Reader", "read").await;
     let mut sessions = Vec::new();
-    for token in [&owner_app, &reader_app, &dana_app, &mara_token] {
+    for token in [
+        &owner_app,
+        &reader_app,
+        &dana_app,
+        &mara_token,
+        &dana_reader_app,
+    ] {
         sessions.push((
             token.clone(),
             initialize(app, token).await.expect("MCP session"),
@@ -1101,7 +1107,10 @@ async fn people_start_and_follow_runs_and_answer_approvals() {
     // A read-only app sees the approval but isn't offered an answer it can't give.
     let reader_sees = call(DANA_READER, "approval_get", json!({"approvalId": approval})).await;
     assert_eq!(reader_sees["outcome"], "found", "{reader_sees}");
-    assert_eq!(reader_sees["approval"]["canRespond"], false, "{reader_sees}");
+    assert_eq!(
+        reader_sees["approval"]["canRespond"], false,
+        "{reader_sees}"
+    );
     let read_only = call(
         READER,
         "approval_respond",

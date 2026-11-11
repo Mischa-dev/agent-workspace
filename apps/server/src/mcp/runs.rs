@@ -284,6 +284,7 @@ fn stage(row: &RunRow) -> (&'static str, String, Option<u32>) {
 }
 
 fn run_value(state: &AppState, row: RunRow) -> RunValue {
+    let url = public_url(state, &run_conversation_path(&row));
     let (stage, next, poll_after_seconds) = stage(&row);
     let pull_request = match (row.pr_number, row.pr_url.clone()) {
         (Some(number), Some(url)) => Some(PullRequestLine {
@@ -313,7 +314,7 @@ fn run_value(state: &AppState, row: RunRow) -> RunValue {
         poll_after_seconds,
         created_at: row.created_at,
         updated_at: row.updated_at,
-        url: public_url(state, &run_conversation_path(&row)),
+        url,
     }
 }
 
