@@ -157,6 +157,90 @@ async fn a_key_two_workspaces_share_is_refused_rather_than_guessed() {
 }
 
 #[tokio::test]
+async fn historical_aliases_cannot_hide_a_conflicting_task_key() {
+    let Some(setup) = setup("sweep_alias_keys").await else {
+        return;
+    };
+    let ours = create_project(&setup, "WORK", "Ours").await;
+    let source = create_project(&setup, "FROMSRC", "Renamed source").await;
+    let (elsewhere, theirs) = second_workspace(&setup, "OTHER").await;
+    let (status, foreign_source) = send(
+        &setup.app,
+        setup.browser.request(
+            "POST",
+            "/api/v1/projects",
+            Some("foreign-source"),
+            json!({"organizationId": elsewhere, "key": "FROMSRC", "name": "Foreign source"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{foreign_source}");
+    let foreign_source = foreign_source["id"].as_str().expect("source");
+    let token = connect_app(&setup.app, &setup.browser, "Codex", "full").await;
+    let session = initialize(&setup.app, &token).await.expect("MCP");
+    let mut tasks = Vec::new();
+    for project in [
+        ours.as_str(),
+        source.as_str(),
+        theirs.as_str(),
+        foreign_source,
+    ] {
+        let made = tool(
+            &setup.app,
+            &token,
+            &session,
+            "task_create",
+            json!({"projectId": project, "title": "Task"}),
+        )
+        .await;
+        assert_eq!(made["outcome"], "applied", "{made}");
+        tasks.push(
+            sqlx::query_scalar::<_, Uuid>(
+                "SELECT id FROM work_items WHERE project_id = $1::uuid AND number = 1",
+            )
+            .bind(project)
+            .fetch_one(&setup.pool)
+            .await
+            .expect("task"),
+        );
+    }
+    // A historical WORK-1 can point back to today's WORK-1 after project
+    // keys change. Another workspace also has a historical WORK-1. Both
+    // aliases must participate, even when the first duplicates a current ID.
+    for (source, target) in [(tasks[1], tasks[0]), (tasks[3], tasks[2])] {
+        sqlx::query("INSERT INTO work_item_key_aliases (id, organization_id, project_key, number, source_work_item_id, work_item_id, moved_by_actor_id) SELECT $1, project.organization_id, 'WORK', 1, $2, $3, (SELECT actor_id FROM users WHERE login_name = 'owner') FROM work_items item JOIN projects project ON project.id = item.project_id WHERE item.id = $2")
+            .bind(Uuid::now_v7()).bind(source).bind(target)
+            .execute(&setup.pool).await.expect("historical alias");
+    }
+    let opened = tool(
+        &setup.app,
+        &token,
+        &session,
+        "task_open",
+        json!({"taskId": "WORK-1"}),
+    )
+    .await;
+    assert_ne!(
+        opened["outcome"], "ok",
+        "a current-key fallback must not pick ours: {opened}"
+    );
+    let commented = tool(
+        &setup.app,
+        &token,
+        &session,
+        "task_comment",
+        json!({"taskId": "WORK-1", "text": "Wrong task?", "clientRequestId": "alias-ambiguity"}),
+    )
+    .await;
+    assert_ne!(commented["outcome"], "applied", "{commented}");
+    let count = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM work_item_comments")
+        .fetch_one(&setup.pool)
+        .await
+        .expect("comments");
+    assert_eq!(count, 0);
+}
+
+#[tokio::test]
 async fn a_workspace_you_left_stops_listing_its_archived_projects() {
     let Some(setup) = setup("sweep_archived").await else {
         return;

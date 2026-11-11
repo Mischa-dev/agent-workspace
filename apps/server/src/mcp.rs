@@ -4652,7 +4652,8 @@ pub(super) async fn task_by_key(
          AND membership.enabled
         WHERE actor_can_access_project($1, $2, found.project_id)
           AND ($5::uuid IS NULL OR found.project_id = $5)
-        ORDER BY found.preference
+        GROUP BY found.id
+        ORDER BY min(found.preference)
         LIMIT 2
         "#,
     )
@@ -4668,10 +4669,10 @@ pub(super) async fn task_by_key(
     // one would rewrite the caller's ID to the wrong task. Refuse, as
     // project_by_key and repository_by_name do. (The same task may appear
     // twice — as current holder and as an alias target — and is not
-    // ambiguous.)
+    // ambiguous.) Group before limiting so duplicate rows cannot hide a
+    // third row naming a different task.
     Ok(match matches.as_slice() {
         [only] => Some(*only),
-        [first, second] if first == second => Some(*first),
         _ => None,
     })
 }
