@@ -345,6 +345,23 @@ async fn only_people_who_manage_the_workspace_use_or_save_templates() {
     )
     .await;
     assert!(collection.0.is_success(), "{}", collection.1);
+    // A layout with a part hidden and a noun renamed, which saving keeps.
+    let custom = json!({
+        "preset": "software_team",
+        "changes": {"area.timeline": false},
+        "words": {"task": {"one": "ticket", "many": "tickets"}},
+    });
+    let layout = send(
+        app,
+        setup.browser.request(
+            "PUT",
+            &format!("/api/v1/organizations/{}/layout", setup.organization_id),
+            None,
+            json!({"layout": custom}),
+        ),
+    )
+    .await;
+    assert!(layout.0.is_success(), "{}", layout.1);
     let owner_app = connect_app(app, &setup.browser, "Owner's app", "full").await;
     let owner_session = initialize(app, &owner_app).await.expect("owner app");
     let saved = tool(
@@ -363,6 +380,11 @@ async fn only_people_who_manage_the_workspace_use_or_save_templates() {
         "{definition}"
     );
     assert_eq!(definition["defaultRole"], "Member", "{definition}");
+    assert_eq!(
+        definition["layoutChanges"], custom["changes"],
+        "{definition}"
+    );
+    assert_eq!(definition["layoutWords"], custom["words"], "{definition}");
     let used = tool(
         app,
         &owner_app,
@@ -374,6 +396,27 @@ async fn only_people_who_manage_the_workspace_use_or_save_templates() {
     assert_eq!(used["outcome"], "ok", "{used}");
     // Nothing changed: it's this workspace as it is.
     assert_eq!(used["value"]["changes"], json!([]), "{used}");
+    // After another layout, using it again brings the whole layout back.
+    let (status, body) = apply(&setup, "small_team").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let used = tool(
+        app,
+        &owner_app,
+        &owner_session,
+        "workspace_template_apply",
+        json!({"projectId": work, "template": "Our way"}),
+    )
+    .await;
+    assert_eq!(used["outcome"], "ok", "{used}");
+    let restored = sqlx::query_scalar::<_, Value>(
+        "SELECT value FROM settings WHERE organization_id = $1 AND scope = 'workspace' AND key = 'layout.default'",
+    )
+    .bind(setup.organization_id)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("layout");
+    assert_eq!(restored["changes"], custom["changes"], "{restored}");
+    assert_eq!(restored["words"], custom["words"], "{restored}");
     let removed = tool(
         app,
         &owner_app,

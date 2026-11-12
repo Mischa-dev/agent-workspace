@@ -75,6 +75,15 @@ pub struct TemplateDefinition {
     /// as "software_team", or "everything" for every part shown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<String>,
+    /// With layout: parts shown or hidden where they differ from the
+    /// preset (part id to shown), as Settings > Layout saves them.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[schemars(with = "Value")]
+    pub layout_changes: BTreeMap<String, bool>,
+    /// With layout: nouns renamed from the preset's words.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[schemars(with = "Value")]
+    pub layout_words: BTreeMap<String, layouts::Word>,
     /// Roles to add, or to change when the workspace has one of that name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub roles: Vec<TemplateRole>,
@@ -750,36 +759,35 @@ pub(crate) async fn apply(
 
     // The workspace's default layout.
     if let Some(layout) = definition.layout.as_deref() {
-        let current = sqlx::query_scalar::<_, Option<String>>(
-            "SELECT value->>'preset' FROM settings \
+        let current = sqlx::query_scalar::<_, Value>(
+            "SELECT value FROM settings \
              WHERE organization_id = $1 AND scope = 'workspace' AND key = 'layout.default'",
         )
         .bind(organization_id)
         .fetch_optional(&mut **transaction)
         .await?
-        .flatten();
+        .and_then(|value| serde_json::from_value::<layouts::Layout>(value).ok());
+        let wanted = layouts::Layout {
+            preset: layout.to_owned(),
+            changes: definition.layout_changes.clone(),
+            words: definition.layout_words.clone(),
+        };
         let target = crate::settings::Target::Workspace { organization_id };
         if layout == "everything" {
             if current.is_some() {
                 layouts::write_layout(transaction, target, None, None, caller.actor_id).await?;
                 changes.push("Everyone sees every part of the app.".to_owned());
             }
-        } else if current.as_deref() != Some(layout) {
-            layouts::write_layout(
-                transaction,
-                target,
-                Some(layouts::Layout::preset(layout)),
-                None,
-                caller.actor_id,
-            )
-            .await
-            .map_err(|error| match error {
-                AppError::Validation(_) => ApplyError::Problem(problem(
-                    "layout",
-                    "That layout isn't one this workspace has.",
-                )),
-                error => ApplyError::App(error),
-            })?;
+        } else if current.as_ref() != Some(&wanted) {
+            layouts::write_layout(transaction, target, Some(wanted), None, caller.actor_id)
+                .await
+                .map_err(|error| match error {
+                    AppError::Validation(_) => ApplyError::Problem(problem(
+                        "layout",
+                        "That layout isn't one this workspace has.",
+                    )),
+                    error => ApplyError::App(error),
+                })?;
             changes.push(format!(
                 "Everyone starts with the {} layout.",
                 layouts::builtin_preset_name(layout).unwrap_or("saved")
@@ -1253,15 +1261,19 @@ pub(crate) async fn snapshot(
         .filter(|module| module.switchable && !switches.is_off(&module.id))
         .map(|module| module.id.clone())
         .collect::<Vec<_>>();
-    let layout = sqlx::query_scalar::<_, Option<String>>(
-        "SELECT value->>'preset' FROM settings \
+    let layout = sqlx::query_scalar::<_, Value>(
+        "SELECT value FROM settings \
          WHERE organization_id = $1 AND scope = 'workspace' AND key = 'layout.default'",
     )
     .bind(organization_id)
     .fetch_optional(&mut *connection)
     .await?
-    .flatten()
-    .unwrap_or_else(|| "everything".to_owned());
+    .and_then(|value| serde_json::from_value::<layouts::Layout>(value).ok());
+    // The whole layout, with its shown parts and renamed nouns.
+    let (layout, layout_changes, layout_words) = match layout {
+        Some(layout) => (layout.preset, layout.changes, layout.words),
+        None => ("everything".to_owned(), BTreeMap::new(), BTreeMap::new()),
+    };
     let mut template_roles = Vec::new();
     let mut default_role = None;
     for role in roles::list(connection, caller, organization_id).await? {
@@ -1308,6 +1320,8 @@ pub(crate) async fn snapshot(
     Ok(TemplateDefinition {
         modules: Some(modules),
         layout: Some(layout),
+        layout_changes,
+        layout_words,
         roles: template_roles,
         default_role,
         project,

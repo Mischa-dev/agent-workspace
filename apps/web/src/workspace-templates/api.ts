@@ -22,6 +22,8 @@ export type TemplateRole = {
 export type TemplateDefinition = {
   modules?: string[]
   layout?: string
+  layoutChanges?: Record<string, boolean>
+  layoutWords?: Record<string, { one: string; many: string }>
   roles?: TemplateRole[]
   defaultRole?: string
   project?: { name: string; key: string; channels?: string[]; collections?: { name: string }[] }
