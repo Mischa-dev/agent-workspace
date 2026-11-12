@@ -10,6 +10,7 @@
   "permissions": ["code.view", "code.publish", "code.manage"],
   "tools": {
     "repository_list": "query",
+    "repository_write": "change",
     "repository_get": "describe",
     "pull_request_list": "query",
     "pull_request_get": "describe",

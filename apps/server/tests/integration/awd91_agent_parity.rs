@@ -1790,6 +1790,23 @@ async fn people_change_settings_and_agents_only_read_them() {
     .await;
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
 
+    // An explicit null chooses "not chosen" over the workspace's value.
+    let cleared = person(
+        "settings_set",
+        json!({"projectId": project, "key": "run.model", "value": null}),
+    )
+    .await;
+    assert_eq!(cleared["outcome"], "ok", "{cleared}");
+    assert_eq!(
+        cleared["value"]["setting"]["value"],
+        Value::Null,
+        "{cleared}"
+    );
+    assert_eq!(
+        cleared["value"]["setting"]["source"], "project",
+        "{cleared}"
+    );
+
     // Resetting the project's value falls back to the workspace's.
     let reset = person(
         "settings_set",
@@ -1813,7 +1830,12 @@ async fn people_change_settings_and_agents_only_read_them() {
     .expect("audit");
     assert_eq!(
         audited,
-        ["setting.changed", "setting.changed", "setting.reset"]
+        [
+            "setting.changed",
+            "setting.changed",
+            "setting.changed",
+            "setting.reset"
+        ]
     );
     f.close().await;
 }
@@ -1892,6 +1914,322 @@ async fn people_rename_the_workspace_and_switch_its_modules() {
     assert_eq!(
         audited,
         ["workspace.renamed", "modules.changed", "modules.changed"]
+    );
+    f.close().await;
+}
+
+#[tokio::test]
+async fn people_set_up_environments_and_agents_only_read_them() {
+    let Some(f) = fixture().await else {
+        return;
+    };
+    let project = f.seed.project_id.to_string();
+    let app = connect_app(&f.app, &f.browser, "Owner's app", "full").await;
+    let session = initialize(&f.app, &app).await.expect("owner MCP");
+    let person = |name: &'static str, arguments: Value| {
+        let app = app.clone();
+        let session = session.clone();
+        let router = f.app.clone();
+        async move { tool(&router, &app, &session, name, arguments).await }
+    };
+
+    let first = person(
+        "environment_write",
+        json!({"projectId": project, "name": "Cloud", "harness": "codex_cloud", "providerEnvironmentId": "env-one"}),
+    )
+    .await;
+    assert_eq!(first["outcome"], "ok", "{first}");
+    assert_eq!(first["value"]["done"], "added", "{first}");
+    assert_eq!(first["value"]["environment"]["isDefault"], true, "{first}");
+    let missing = person(
+        "environment_write",
+        json!({"projectId": project, "name": "No id", "harness": "codex_cloud"}),
+    )
+    .await;
+    assert_eq!(missing["outcome"], "invalid_request", "{missing}");
+
+    // A change keeps what it doesn't name; a stale version is refused.
+    let stale = person(
+        "environment_write",
+        json!({"projectId": project, "environment": "Cloud", "branch": "main", "expectedVersion": 9}),
+    )
+    .await;
+    assert_eq!(stale["outcome"], "conflict", "{stale}");
+    let changed = person(
+        "environment_write",
+        json!({"projectId": project, "environment": "cloud", "branch": "main"}),
+    )
+    .await;
+    assert_eq!(changed["value"]["done"], "changed", "{changed}");
+    assert_eq!(
+        changed["value"]["environment"]["branch"], "main",
+        "{changed}"
+    );
+    assert_eq!(
+        changed["value"]["environment"]["providerEnvironmentId"], "env-one",
+        "{changed}"
+    );
+
+    let second = person(
+        "environment_write",
+        json!({"projectId": project, "name": "Other", "harness": "codex_cloud", "providerEnvironmentId": "env-two", "makeDefault": true}),
+    )
+    .await;
+    assert_eq!(
+        second["value"]["environment"]["isDefault"], true,
+        "{second}"
+    );
+    let back = person(
+        "environment_write",
+        json!({"projectId": project, "environment": "Cloud", "makeDefault": true}),
+    )
+    .await;
+    assert_eq!(back["value"]["done"], "made_default", "{back}");
+    assert_eq!(back["value"]["environment"]["isDefault"], true, "{back}");
+
+    // Checking runs as the person; with no account signed in it says so.
+    let checked = person(
+        "environment_write",
+        json!({"projectId": project, "environment": "Cloud", "check": true}),
+    )
+    .await;
+    assert_eq!(checked["value"]["done"], "checked", "{checked}");
+    assert_eq!(checked["value"]["checkOk"], false, "{checked}");
+
+    // Agents read environments and change none.
+    let listed = f
+        .call("environment_list", json!({"projectId": project}))
+        .await;
+    assert_eq!(
+        listed["value"]["environments"].as_array().map(Vec::len),
+        Some(2),
+        "{listed}"
+    );
+    let refused = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "environment_write",
+        json!({"projectId": project, "environment": "Other", "archive": true}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+
+    let archived = person(
+        "environment_write",
+        json!({"projectId": project, "environment": "Other", "archive": true}),
+    )
+    .await;
+    assert_eq!(archived["value"]["done"], "archived", "{archived}");
+    let audited = sqlx::query_scalar::<_, String>(
+        "SELECT action FROM audit_events WHERE target_kind = 'project_environment' AND channel = 'mcp' ORDER BY id",
+    )
+    .fetch_all(&f.pool)
+    .await
+    .expect("audit");
+    assert_eq!(
+        audited,
+        [
+            "environment.created",
+            "environment.updated",
+            "environment.created",
+            "environment.made_default",
+            "environment.archived"
+        ]
+    );
+    f.close().await;
+}
+
+#[tokio::test]
+async fn people_make_agents_and_agents_only_read_them() {
+    let Some(f) = fixture().await else {
+        return;
+    };
+    let project = f.seed.project_id.to_string();
+    // A signed-in account the project's agents run on.
+    let account = f
+        .web(
+            "POST",
+            &format!("/api/v1/projects/{project}/provider-accounts"),
+            json!({"adapterKind": "demo"}),
+        )
+        .await;
+    let account = format!(
+        "/api/v1/projects/{project}/provider-accounts/{}",
+        account["id"].as_str().expect("account id")
+    );
+    f.web(
+        "POST",
+        &format!("{account}/login/api-key"),
+        json!({"apiKey": "demo-key-for-tests"}),
+    )
+    .await;
+    f.web("POST", &format!("{account}/use"), json!({})).await;
+
+    let app = connect_app(&f.app, &f.browser, "Owner's app", "full").await;
+    let session = initialize(&f.app, &app).await.expect("owner MCP");
+    let person = |name: &'static str, arguments: Value| {
+        let app = app.clone();
+        let session = session.clone();
+        let router = f.app.clone();
+        async move { tool(&router, &app, &session, name, arguments).await }
+    };
+
+    let made = person(
+        "agent_profile_write",
+        json!({"projectId": project, "template": "reviewer"}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    assert_eq!(made["value"]["done"], "made", "{made}");
+    assert_eq!(made["value"]["profile"]["handle"], "reviewer", "{made}");
+
+    let stale = person(
+        "agent_profile_write",
+        json!({"projectId": project, "profile": "@reviewer", "description": "Strict", "expectedVersion": 9}),
+    )
+    .await;
+    assert_eq!(stale["outcome"], "conflict", "{stale}");
+    let changed = person(
+        "agent_profile_write",
+        json!({"projectId": project, "profile": "@reviewer", "description": "Strict", "enabled": false}),
+    )
+    .await;
+    assert_eq!(changed["value"]["done"], "changed", "{changed}");
+    assert_eq!(
+        changed["value"]["profile"]["description"], "Strict",
+        "{changed}"
+    );
+    assert_eq!(changed["value"]["profile"]["enabled"], false, "{changed}");
+
+    // Agents read the project's agents and change none.
+    let listed = f
+        .call("agent_profile_list", json!({"projectId": project}))
+        .await;
+    assert_eq!(
+        listed["value"]["profiles"][0]["handle"], "reviewer",
+        "{listed}"
+    );
+    for arguments in [
+        json!({"projectId": project, "template": "planner"}),
+        json!({"projectId": project, "profile": "@reviewer", "remove": true}),
+    ] {
+        let refused = tool(
+            &f.app,
+            &f.token,
+            &f.session,
+            "agent_profile_write",
+            arguments,
+        )
+        .await;
+        assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    }
+
+    // One that never did anything is deleted outright.
+    let removed = person(
+        "agent_profile_write",
+        json!({"projectId": project, "profile": "reviewer", "remove": true}),
+    )
+    .await;
+    assert_eq!(removed["value"]["done"], "deleted", "{removed}");
+    let audited = sqlx::query_scalar::<_, String>(
+        "SELECT action FROM audit_events WHERE target_kind = 'agent_profile' AND channel = 'mcp' ORDER BY id",
+    )
+    .fetch_all(&f.pool)
+    .await
+    .expect("audit");
+    assert_eq!(
+        audited,
+        [
+            "agent_profile.created",
+            "agent_profile.disabled",
+            "agent_profile.deleted"
+        ]
+    );
+    f.close().await;
+}
+
+#[tokio::test]
+async fn people_add_and_archive_repositories_and_agents_only_read_them() {
+    let Some(f) = fixture().await else {
+        return;
+    };
+    let project = f.seed.project_id.to_string();
+    let app = connect_app(&f.app, &f.browser, "Owner's app", "full").await;
+    let session = initialize(&f.app, &app).await.expect("owner MCP");
+    let person = |name: &'static str, arguments: Value| {
+        let app = app.clone();
+        let session = session.clone();
+        let router = f.app.clone();
+        async move { tool(&router, &app, &session, name, arguments).await }
+    };
+    let adding = json!({
+        "projectId": project,
+        "owner": "octo-org",
+        "name": "app",
+        "githubRepositoryId": 4242,
+        "defaultBranch": "main",
+    });
+
+    let untrusted = person("repository_write", adding.clone()).await;
+    assert_eq!(untrusted["outcome"], "invalid_request", "{untrusted}");
+    let mut trusted = adding.clone();
+    trusted["trustAcknowledged"] = json!(true);
+    let added = person("repository_write", trusted.clone()).await;
+    assert_eq!(added["outcome"], "ok", "{added}");
+    assert_eq!(added["value"]["done"], "added", "{added}");
+    assert_eq!(
+        added["value"]["repository"]["cloneUrl"], "https://github.com/octo-org/app.git",
+        "{added}"
+    );
+    let repository = string(&added, "/value/repository/id");
+    let again = person("repository_write", trusted).await;
+    assert_eq!(again["outcome"], "conflict", "{again}");
+
+    // Agents read repositories and change none.
+    let refused = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "repository_write",
+        json!({"projectId": project, "repository": repository, "archive": true}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+
+    let stale = person(
+        "repository_write",
+        json!({"projectId": project, "repository": repository, "archive": true, "expectedVersion": 99}),
+    )
+    .await;
+    assert_eq!(stale["outcome"], "conflict", "{stale}");
+    let archived = person(
+        "repository_write",
+        json!({"projectId": project, "repository": repository, "archive": true}),
+    )
+    .await;
+    assert_eq!(archived["value"]["done"], "archived", "{archived}");
+    assert!(
+        archived["value"]["repository"]["archivedAt"].is_string(),
+        "{archived}"
+    );
+    // An archived repository isn't prepared.
+    let prepared = person(
+        "repository_write",
+        json!({"projectId": project, "repository": repository, "prepare": true}),
+    )
+    .await;
+    assert_eq!(prepared["outcome"], "not_found", "{prepared}");
+
+    let audited = sqlx::query_scalar::<_, String>(
+        "SELECT action FROM audit_events WHERE target_kind = 'repository' AND channel = 'mcp' ORDER BY id",
+    )
+    .fetch_all(&f.pool)
+    .await
+    .expect("audit");
+    assert_eq!(
+        audited[..2],
+        ["repository.registered", "repository.archived"]
     );
     f.close().await;
 }

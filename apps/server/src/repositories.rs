@@ -544,6 +544,32 @@ async fn archive_repository(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
+    archive_in(
+        &mut transaction,
+        principal.actor_id,
+        project_id,
+        repository_id,
+        request.expected_version,
+    )
+    .await?;
+    let reference = RepositoryCommandReference { repository_id };
+    idempotency::complete(&mut transaction, &reservation, StatusCode::OK, &reference).await?;
+    let row = fetch_repository(&mut transaction, project_id, repository_id)
+        .await?
+        .ok_or(AppError::NotFound("repository"))?;
+    transaction.commit().await?;
+    Ok(Json(repository_view(row, role_allows_manage(role))?))
+}
+
+/// Archive a repository of the project (refused while a run uses it), for
+/// someone the caller checked may manage repositories there.
+pub(crate) async fn archive_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    project_id: Uuid,
+    repository_id: Uuid,
+    expected_version: i64,
+) -> Result<(), AppError> {
     // The database refuses to archive a repository with an unfinished run;
     // checked first so the person hears why. Only this project's repository
     // counts, so another project's runs never show through.
@@ -562,7 +588,7 @@ async fn archive_repository(
     )
     .bind(repository_id)
     .bind(project_id)
-    .fetch_one(&mut *transaction)
+    .fetch_one(&mut **transaction)
     .await?;
     if has_active_run {
         return Err(AppError::RepositoryHasActiveRuns);
@@ -581,12 +607,12 @@ async fn archive_repository(
     )
     .bind(repository_id)
     .bind(project_id)
-    .bind(request.expected_version)
-    .bind(principal.actor_id)
-    .execute(&mut *transaction)
+    .bind(expected_version)
+    .bind(actor_id)
+    .execute(&mut **transaction)
     .await?;
     if updated.rows_affected() != 1 {
-        let current = fetch_repository(&mut transaction, project_id, repository_id)
+        let current = fetch_repository(transaction, project_id, repository_id)
             .await?
             .ok_or(AppError::NotFound("repository"))?;
         return Err(AppError::VersionConflict {
@@ -594,13 +620,37 @@ async fn archive_repository(
             current_version: current.version,
         });
     }
-    let reference = RepositoryCommandReference { repository_id };
-    idempotency::complete(&mut transaction, &reservation, StatusCode::OK, &reference).await?;
+    Ok(())
+}
+
+/// Prepare (clone or refresh) an enabled repository of the project on this
+/// server, for someone the caller checked may manage repositories there.
+pub(crate) async fn prepare_in(
+    state: &AppState,
+    project_id: Uuid,
+    repository_id: Uuid,
+) -> Result<(), AppError> {
+    let admission_root = state.config.data_root.clone();
+    let admission_quota = state.config.data_quota_bytes;
+    let admission_free = state.config.minimum_free_bytes;
+    tokio::task::spawn_blocking(move || {
+        crate::storage_admission::require_growth(&admission_root, admission_quota, admission_free)
+    })
+    .await
+    .map_err(|_| AppError::Internal("join storage admission"))??;
+    let mut transaction = state.pool.begin().await?;
     let row = fetch_repository(&mut transaction, project_id, repository_id)
         .await?
+        .filter(|row| row.archived_at.is_none() && row.enabled && row.trusted)
         .ok_or(AppError::NotFound("repository"))?;
     transaction.commit().await?;
-    Ok(Json(repository_view(row, role_allows_manage(role))?))
+    run_preparation(state, project_id, repository_id, row).await?;
+    Ok(())
+}
+
+/// Whether this role may manage repositories (for a view's capabilities).
+pub(crate) fn may_manage(role: RoleGrant) -> bool {
+    role_allows_manage(role)
 }
 
 async fn apply_preparation_result(
@@ -658,6 +708,25 @@ async fn require_project_access(
     project_id: Uuid,
     action: Action,
 ) -> Result<RoleGrant, AppError> {
+    require_project_access_as(
+        transaction,
+        principal.actor_id,
+        actor_kind(&principal.actor_kind)?,
+        project_id,
+        action,
+    )
+    .await
+}
+
+/// `require_project_access` for an actor, such as a person through MCP.
+/// Returns their role in the project when `action` is allowed there.
+pub(crate) async fn require_project_access_as(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    kind: ActorKind,
+    project_id: Uuid,
+    action: Action,
+) -> Result<RoleGrant, AppError> {
     let access = sqlx::query_as::<_, ProjectAccess>(
         r#"
         SELECT membership.role, workspace_role_permissions(membership.role_id) AS role_permissions
@@ -675,14 +744,14 @@ async fn require_project_access(
         "#,
     )
     .bind(project_id)
-    .bind(principal.actor_id)
+    .bind(actor_id)
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::NotFound("project"))?;
     let role = RoleGrant::stored(&access.role, access.role_permissions.as_deref())?;
     let subject = Subject::new(
-        principal.actor_id,
-        actor_kind(&principal.actor_kind)?,
+        actor_id,
+        kind,
         true,
         Some(Membership::project(project_id, role, true)),
         None,

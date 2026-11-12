@@ -572,7 +572,7 @@ async fn manage(
     .await
 }
 
-async fn load(
+pub(crate) async fn load(
     executor: impl sqlx::PgExecutor<'_>,
     state: &AppState,
     project_id: Uuid,
@@ -597,14 +597,50 @@ async fn create_http(
     ApiJson(request): ApiJson<ProfileRequest>,
 ) -> Result<Json<ProfileView>, AppError> {
     let organization_id = manage(&state, &headers, &principal, project_id).await?;
-    let clean = clean(&state, organization_id, project_id, request.clone(), None).await?;
     let mut transaction = state.pool.begin().await?;
-    crate::execution_setup::lock_project_setup(&mut transaction, project_id).await?;
+    let (profile_id, metadata) = create_in(
+        &state,
+        &mut transaction,
+        principal.actor_id,
+        organization_id,
+        project_id,
+        request,
+    )
+    .await?;
+    settings::audit(
+        &mut transaction,
+        &headers,
+        &principal,
+        Some(project_id),
+        "agent_profile.created",
+        "agent_profile",
+        Some(profile_id),
+        metadata,
+    )
+    .await?;
+    let view = load(&mut *transaction, &state, project_id, profile_id).await?;
+    transaction.commit().await?;
+    Ok(Json(view))
+}
+
+/// Make an agent in the project, for someone the caller checked may manage
+/// its settings. Returns the profile and the audit row's metadata; the
+/// caller records the row.
+pub(crate) async fn create_in(
+    state: &AppState,
+    transaction: &mut Transaction<'_, Postgres>,
+    caller_id: Uuid,
+    organization_id: Uuid,
+    project_id: Uuid,
+    request: ProfileRequest,
+) -> Result<(Uuid, Value), AppError> {
+    let clean = clean(state, organization_id, project_id, request.clone(), None).await?;
+    crate::execution_setup::lock_project_setup(transaction, project_id).await?;
     let count = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM agent_profiles WHERE project_id = $1 AND hidden_at IS NULL",
     )
     .bind(project_id)
-    .fetch_one(&mut *transaction)
+    .fetch_one(&mut **transaction)
     .await?;
     if count >= MAX_PROFILES_PER_PROJECT {
         return Err(AppError::Conflict(
@@ -613,7 +649,7 @@ async fn create_http(
         ));
     }
     let Some((connection_id, execution_profile_id, enabled, pending_setup)) =
-        default_worker(&mut *transaction, project_id).await?
+        default_worker(&mut **transaction, project_id).await?
     else {
         return Err(AppError::Conflict(
             "agent_profile",
@@ -623,7 +659,7 @@ async fn create_http(
     // A taken handle gets a number, as a second Reviewer does.
     let mut handle = clean.handle.clone();
     let mut suffix = 2;
-    while handle_taken(&mut transaction, project_id, &handle, None).await? {
+    while handle_taken(transaction, project_id, &handle, None).await? {
         if request.handle.is_some() {
             return Err(AppError::Conflict(
                 "agent_profile",
@@ -642,7 +678,7 @@ async fn create_http(
     let actor_id = Uuid::now_v7();
     sqlx::query("INSERT INTO actors (id, kind) VALUES ($1, 'execution_worker')")
         .bind(actor_id)
-        .execute(&mut *transaction)
+        .execute(&mut **transaction)
         .await?;
     sqlx::query(
         r#"
@@ -655,7 +691,7 @@ async fn create_http(
     .bind(actor_id)
     .bind(&clean.name)
     .bind(&handle)
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
     let worker_id = Uuid::now_v7();
     sqlx::query(
@@ -674,7 +710,7 @@ async fn create_http(
     .bind(execution_profile_id)
     .bind(enabled)
     .bind(pending_setup)
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
     let profile_id = Uuid::now_v7();
     sqlx::query(
@@ -701,23 +737,13 @@ async fn create_http(
     .bind(&clean.instructions)
     .bind(&clean.allowed_tools)
     .bind(clean.environment_id)
-    .bind(principal.actor_id)
-    .execute(&mut *transaction)
+    .bind(caller_id)
+    .execute(&mut **transaction)
     .await?;
-    settings::audit(
-        &mut transaction,
-        &headers,
-        &principal,
-        Some(project_id),
-        "agent_profile.created",
-        "agent_profile",
-        Some(profile_id),
+    Ok((
+        profile_id,
         json!({ "template": request.template, "handle": handle, "harness": clean.harness }),
-    )
-    .await?;
-    let view = load(&mut *transaction, &state, project_id, profile_id).await?;
-    transaction.commit().await?;
-    Ok(Json(view))
+    ))
 }
 
 async fn update_http(
@@ -728,10 +754,49 @@ async fn update_http(
     ApiJson(request): ApiJson<ProfileRequest>,
 ) -> Result<Json<ProfileView>, AppError> {
     let organization_id = manage(&state, &headers, &principal, project_id).await?;
+    let mut transaction = state.pool.begin().await?;
+    let (action, metadata) = update_in(
+        &state,
+        &mut transaction,
+        principal.actor_id,
+        organization_id,
+        project_id,
+        profile_id,
+        request,
+    )
+    .await?;
+    settings::audit(
+        &mut transaction,
+        &headers,
+        &principal,
+        Some(project_id),
+        action,
+        "agent_profile",
+        Some(profile_id),
+        metadata,
+    )
+    .await?;
+    let view = load(&mut *transaction, &state, project_id, profile_id).await?;
+    transaction.commit().await?;
+    Ok(Json(view))
+}
+
+/// Change an agent of the project (turning it off takes it out of
+/// mentions), for someone the caller checked may manage its settings.
+/// Returns the audit row's action and metadata; the caller records it.
+pub(crate) async fn update_in(
+    state: &AppState,
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    organization_id: Uuid,
+    project_id: Uuid,
+    profile_id: Uuid,
+    request: ProfileRequest,
+) -> Result<(&'static str, Value), AppError> {
     if request.template.is_some() {
         return Err(AppError::Validation("template"));
     }
-    let current = load(&state.pool, &state, project_id, profile_id).await?;
+    let current = load(&mut **transaction, state, project_id, profile_id).await?;
     if request
         .version
         .is_some_and(|version| version != current.version)
@@ -742,12 +807,11 @@ async fn update_http(
         ));
     }
     let enabled = request.enabled.unwrap_or(current.enabled);
-    let clean = clean(&state, organization_id, project_id, request, Some(&current)).await?;
-    let mut transaction = state.pool.begin().await?;
-    crate::execution_setup::lock_project_setup(&mut transaction, project_id).await?;
+    let clean = clean(state, organization_id, project_id, request, Some(&current)).await?;
+    crate::execution_setup::lock_project_setup(transaction, project_id).await?;
     if enabled
         && handle_taken(
-            &mut transaction,
+            transaction,
             project_id,
             &clean.handle,
             Some(current.actor_id),
@@ -780,7 +844,7 @@ async fn update_http(
     .bind(clean.environment_id)
     .bind(enabled)
     .bind(current.version)
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?
     .rows_affected();
     if updated != 1 {
@@ -806,8 +870,8 @@ async fn update_http(
     .bind(&clean.name)
     .bind(&clean.handle)
     .bind(enabled)
-    .bind(principal.actor_id)
-    .execute(&mut *transaction)
+    .bind(actor_id)
+    .execute(&mut **transaction)
     .await?;
     sqlx::query(
         r#"
@@ -819,13 +883,9 @@ async fn update_http(
     .bind(project_id)
     .bind(current.actor_id)
     .bind(enabled)
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
-    settings::audit(
-        &mut transaction,
-        &headers,
-        &principal,
-        Some(project_id),
+    Ok((
         if enabled == current.enabled {
             "agent_profile.updated"
         } else if enabled {
@@ -833,14 +893,8 @@ async fn update_http(
         } else {
             "agent_profile.disabled"
         },
-        "agent_profile",
-        Some(profile_id),
         json!({ "handle": clean.handle, "harness": clean.harness }),
-    )
-    .await?;
-    let view = load(&mut *transaction, &state, project_id, profile_id).await?;
-    transaction.commit().await?;
-    Ok(Json(view))
+    ))
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -862,7 +916,33 @@ async fn delete_http(
 ) -> Result<Json<RemovedProfile>, AppError> {
     manage(&state, &headers, &principal, project_id).await?;
     let mut transaction = state.pool.begin().await?;
-    crate::execution_setup::lock_project_setup(&mut transaction, project_id).await?;
+    let (outcome, handle) =
+        remove_in(&mut transaction, principal.actor_id, project_id, profile_id).await?;
+    settings::audit(
+        &mut transaction,
+        &headers,
+        &principal,
+        Some(project_id),
+        &format!("agent_profile.{outcome}"),
+        "agent_profile",
+        Some(profile_id),
+        json!({ "handle": handle }),
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(Json(RemovedProfile { outcome }))
+}
+
+/// Remove an agent of the project: delete it if it never did anything, or
+/// hide it. Returns the outcome ("deleted" or "hidden") and its handle for
+/// the caller's audit row.
+pub(crate) async fn remove_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    caller_id: Uuid,
+    project_id: Uuid,
+    profile_id: Uuid,
+) -> Result<(&'static str, String), AppError> {
+    crate::execution_setup::lock_project_setup(transaction, project_id).await?;
     let (actor_id, worker_id, handle) = sqlx::query_as::<_, (Uuid, Uuid, String)>(
         r#"
         SELECT profile.actor_id, profile.execution_worker_id, membership.handle
@@ -875,7 +955,7 @@ async fn delete_http(
     )
     .bind(project_id)
     .bind(profile_id)
-    .fetch_optional(&mut *transaction)
+    .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::NotFound("agent_profile"))?;
     let (running, used) = sqlx::query_as::<_, (bool, bool)>(&format!(
@@ -891,7 +971,7 @@ async fn delete_http(
     ))
     .bind(worker_id)
     .bind(profile_id)
-    .fetch_one(&mut *transaction)
+    .fetch_one(&mut **transaction)
     .await?;
     if running {
         return Err(AppError::Conflict(
@@ -902,7 +982,7 @@ async fn delete_http(
     // Anything else that names it (a message it wrote, a mention, a
     // reaction) refuses the delete, and it's hidden instead.
     let deleted = !used && {
-        let mut attempt = sqlx::Acquire::begin(&mut transaction).await?;
+        let mut attempt = sqlx::Acquire::begin(&mut **transaction).await?;
         match delete_profile_rows(&mut attempt, project_id, profile_id, worker_id, actor_id).await {
             Ok(()) => {
                 attempt.commit().await?;
@@ -924,7 +1004,7 @@ async fn delete_http(
             "#,
         )
         .bind(profile_id)
-        .execute(&mut *transaction)
+        .execute(&mut **transaction)
         .await?;
         sqlx::query(
             r#"
@@ -937,8 +1017,8 @@ async fn delete_http(
         )
         .bind(project_id)
         .bind(actor_id)
-        .bind(principal.actor_id)
-        .execute(&mut *transaction)
+        .bind(caller_id)
+        .execute(&mut **transaction)
         .await?;
         sqlx::query(
             r#"
@@ -947,23 +1027,11 @@ async fn delete_http(
             "#,
         )
         .bind(worker_id)
-        .execute(&mut *transaction)
+        .execute(&mut **transaction)
         .await?;
     }
     let outcome = if deleted { "deleted" } else { "hidden" };
-    settings::audit(
-        &mut transaction,
-        &headers,
-        &principal,
-        Some(project_id),
-        &format!("agent_profile.{outcome}"),
-        "agent_profile",
-        Some(profile_id),
-        json!({ "handle": handle }),
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(Json(RemovedProfile { outcome }))
+    Ok((outcome, handle))
 }
 
 async fn delete_profile_rows(

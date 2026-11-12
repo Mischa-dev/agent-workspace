@@ -307,23 +307,23 @@ async fn list_environments(
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct EnvironmentRequest {
-    name: String,
-    harness: String,
+pub(crate) struct EnvironmentRequest {
+    pub name: String,
+    pub harness: String,
     #[serde(default)]
-    provider_environment_id: Option<String>,
+    pub provider_environment_id: Option<String>,
     #[serde(default)]
-    repository_id: Option<Uuid>,
+    pub repository_id: Option<Uuid>,
     #[serde(default)]
-    branch: Option<String>,
+    pub branch: Option<String>,
     #[serde(default)]
-    setup_notes: String,
-    /// Create only: make it the project's default.
+    pub setup_notes: String,
+    /// Make it the project's default.
     #[serde(default)]
-    make_default: bool,
+    pub make_default: bool,
     /// Update only.
     #[serde(default)]
-    expected_version: Option<i64>,
+    pub expected_version: Option<i64>,
 }
 
 struct CleanEnvironment {
@@ -471,9 +471,45 @@ async fn create_environment(
         Action::SettingsManage,
     )
     .await?;
-    let make_default = request.make_default;
-    let clean = clean(&state, project_id, request).await?;
     let mut transaction = state.pool.begin().await?;
+    let row = create_in(
+        &state,
+        &mut transaction,
+        principal.actor_id,
+        organization_id,
+        project_id,
+        request,
+    )
+    .await?;
+    audit(
+        &mut transaction,
+        &headers,
+        &principal,
+        project_id,
+        "environment.created",
+        row.id,
+        json!({ "harness": row.harness }),
+    )
+    .await?;
+    transaction.commit().await?;
+    let (default, _) =
+        default_environment(&state, organization_id, project_id, principal.actor_id).await?;
+    Ok(Json(view(&state, row, default)))
+}
+
+/// Add an environment to a project, for someone the caller checked may
+/// manage its settings. The first one, or one asked to be, becomes the
+/// default. The caller records the audit row.
+pub(crate) async fn create_in(
+    state: &AppState,
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    actor_id: Uuid,
+    organization_id: Uuid,
+    project_id: Uuid,
+    request: EnvironmentRequest,
+) -> Result<EnvironmentRow, AppError> {
+    let make_default = request.make_default;
+    let clean = clean(state, project_id, request).await?;
     let id = Uuid::now_v7();
     let row = sqlx::query_as::<_, EnvironmentRow>(&format!(
         r#"
@@ -493,8 +529,8 @@ async fn create_environment(
     .bind(clean.repository_id)
     .bind(&clean.branch)
     .bind(&clean.setup_notes)
-    .bind(principal.actor_id)
-    .fetch_one(&mut *transaction)
+    .bind(actor_id)
+    .fetch_one(&mut **transaction)
     .await
     .map_err(name_conflict)?;
     // The first environment becomes the default unless one is set.
@@ -512,32 +548,12 @@ async fn create_environment(
         "#,
     )
     .bind(project_id)
-    .fetch_one(&mut *transaction)
+    .fetch_one(&mut **transaction)
     .await?;
     if make_default || !has_default {
-        set_default(
-            &mut transaction,
-            organization_id,
-            project_id,
-            id,
-            principal.actor_id,
-        )
-        .await?;
+        set_default(transaction, organization_id, project_id, id, actor_id).await?;
     }
-    audit(
-        &mut transaction,
-        &headers,
-        &principal,
-        project_id,
-        "environment.created",
-        id,
-        json!({ "harness": clean.harness }),
-    )
-    .await?;
-    transaction.commit().await?;
-    let (default, _) =
-        default_environment(&state, organization_id, project_id, principal.actor_id).await?;
-    Ok(Json(view(&state, row, default)))
+    Ok(row)
 }
 
 async fn update_environment(
@@ -559,18 +575,56 @@ async fn update_environment(
         Action::SettingsManage,
     )
     .await?;
+    let mut transaction = state.pool.begin().await?;
+    let row = update_in(
+        &state,
+        &mut transaction,
+        principal.actor_id,
+        organization_id,
+        project_id,
+        environment_id,
+        request,
+    )
+    .await?;
+    audit(
+        &mut transaction,
+        &headers,
+        &principal,
+        project_id,
+        "environment.updated",
+        environment_id,
+        json!({ "harness": row.harness, "version": row.version }),
+    )
+    .await?;
+    transaction.commit().await?;
+    let (default, _) =
+        default_environment(&state, organization_id, project_id, principal.actor_id).await?;
+    Ok(Json(view(&state, row, default)))
+}
+
+/// Change an active environment (the request's expectedVersion must be
+/// current), for someone the caller checked may manage the project's
+/// settings. The caller records the audit row.
+pub(crate) async fn update_in(
+    state: &AppState,
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    actor_id: Uuid,
+    organization_id: Uuid,
+    project_id: Uuid,
+    environment_id: Uuid,
+    request: EnvironmentRequest,
+) -> Result<EnvironmentRow, AppError> {
     let expected_version = request
         .expected_version
         .ok_or(AppError::Validation("expectedVersion"))?;
     let make_default = request.make_default;
-    let clean = clean(&state, project_id, request).await?;
-    let mut transaction = state.pool.begin().await?;
+    let clean = clean(state, project_id, request).await?;
     let current = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM project_environments WHERE project_id = $1 AND id = $2 AND archived_at IS NULL FOR UPDATE",
     )
     .bind(project_id)
     .bind(environment_id)
-    .fetch_optional(&mut *transaction)
+    .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::NotFound("environment"))?;
     if current != expected_version {
@@ -603,33 +657,20 @@ async fn update_environment(
     .bind(clean.repository_id)
     .bind(&clean.branch)
     .bind(&clean.setup_notes)
-    .fetch_one(&mut *transaction)
+    .fetch_one(&mut **transaction)
     .await
     .map_err(name_conflict)?;
     if make_default {
         set_default(
-            &mut transaction,
+            transaction,
             organization_id,
             project_id,
             environment_id,
-            principal.actor_id,
+            actor_id,
         )
         .await?;
     }
-    audit(
-        &mut transaction,
-        &headers,
-        &principal,
-        project_id,
-        "environment.updated",
-        environment_id,
-        json!({ "harness": clean.harness, "version": row.version }),
-    )
-    .await?;
-    transaction.commit().await?;
-    let (default, _) =
-        default_environment(&state, organization_id, project_id, principal.actor_id).await?;
-    Ok(Json(view(&state, row, default)))
+    Ok(row)
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -656,36 +697,13 @@ async fn archive_environment(
     )
     .await?;
     let mut transaction = state.pool.begin().await?;
-    let archived = sqlx::query(
-        "UPDATE project_environments SET archived_at = now(), updated_at = now(), version = version + 1 WHERE project_id = $1 AND id = $2 AND archived_at IS NULL",
+    archive_in(
+        &mut transaction,
+        organization_id,
+        project_id,
+        environment_id,
     )
-    .bind(project_id)
-    .bind(environment_id)
-    .execute(&mut *transaction)
     .await?;
-    if archived.rows_affected() != 1 {
-        return Err(AppError::NotFound("environment"));
-    }
-    // A default that pointed here falls back to the workspace's (or none).
-    let pointed_here = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (SELECT 1 FROM settings WHERE scope = 'project' AND project_id = $1 AND key = 'run.environment' AND value #>> '{}' = $2)",
-    )
-    .bind(project_id)
-    .bind(environment_id.to_string())
-    .fetch_one(&mut *transaction)
-    .await?;
-    if pointed_here {
-        settings::reset(
-            &mut transaction,
-            settings::Target::Project {
-                organization_id,
-                project_id,
-            },
-            "run.environment",
-            None,
-        )
-        .await?;
-    }
     audit(
         &mut transaction,
         &headers,
@@ -700,6 +718,48 @@ async fn archive_environment(
     Ok(Json(
         list_for(&state, principal.actor_id, ActorKind::Human, project_id).await?,
     ))
+}
+
+/// Archive an active environment; a project default that pointed at it
+/// falls back to the workspace's. The caller checked who may, and records
+/// the audit row.
+pub(crate) async fn archive_in(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    organization_id: Uuid,
+    project_id: Uuid,
+    environment_id: Uuid,
+) -> Result<(), AppError> {
+    let archived = sqlx::query(
+        "UPDATE project_environments SET archived_at = now(), updated_at = now(), version = version + 1 WHERE project_id = $1 AND id = $2 AND archived_at IS NULL",
+    )
+    .bind(project_id)
+    .bind(environment_id)
+    .execute(&mut **transaction)
+    .await?;
+    if archived.rows_affected() != 1 {
+        return Err(AppError::NotFound("environment"));
+    }
+    // A default that pointed here falls back to the workspace's (or none).
+    let pointed_here = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM settings WHERE scope = 'project' AND project_id = $1 AND key = 'run.environment' AND value #>> '{}' = $2)",
+    )
+    .bind(project_id)
+    .bind(environment_id.to_string())
+    .fetch_one(&mut **transaction)
+    .await?;
+    if pointed_here {
+        settings::reset(
+            transaction,
+            settings::Target::Project {
+                organization_id,
+                project_id,
+            },
+            "run.environment",
+            None,
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 async fn make_default(
@@ -722,10 +782,7 @@ async fn make_default(
     )
     .await?;
     let mut transaction = state.pool.begin().await?;
-    active_environment(&mut *transaction, project_id, environment_id)
-        .await?
-        .ok_or(AppError::NotFound("environment"))?;
-    set_default(
+    make_default_in(
         &mut transaction,
         organization_id,
         project_id,
@@ -747,6 +804,28 @@ async fn make_default(
     Ok(Json(
         list_for(&state, principal.actor_id, ActorKind::Human, project_id).await?,
     ))
+}
+
+/// Make an active environment the project's default. The caller checked
+/// who may, and records the audit row.
+pub(crate) async fn make_default_in(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    organization_id: Uuid,
+    project_id: Uuid,
+    environment_id: Uuid,
+    actor_id: Uuid,
+) -> Result<(), AppError> {
+    active_environment(&mut **transaction, project_id, environment_id)
+        .await?
+        .ok_or(AppError::NotFound("environment"))?;
+    set_default(
+        transaction,
+        organization_id,
+        project_id,
+        environment_id,
+        actor_id,
+    )
+    .await
 }
 
 /// The caller's own signed-in account for a harness in this workspace.
@@ -800,16 +879,36 @@ async fn check_environment(
         Action::WorkerInvoke,
     )
     .await?;
+    let (ok, message, row) = check_in(
+        &state,
+        principal.actor_id,
+        organization_id,
+        project_id,
+        environment_id,
+    )
+    .await?;
+    let (default, _) =
+        default_environment(&state, organization_id, project_id, principal.actor_id).await?;
+    Ok(Json(CheckResult {
+        ok,
+        message,
+        environment: view(&state, row, default),
+    }))
+}
+
+/// Check an environment with the caller's own signed-in account for its
+/// harness, and record the result on it. The caller checked who may.
+pub(crate) async fn check_in(
+    state: &AppState,
+    actor_id: Uuid,
+    organization_id: Uuid,
+    project_id: Uuid,
+    environment_id: Uuid,
+) -> Result<(bool, String, EnvironmentRow), AppError> {
     let environment = active_environment(&state.pool, project_id, environment_id)
         .await?
         .ok_or(AppError::NotFound("environment"))?;
-    let account = own_account(
-        &state.pool,
-        organization_id,
-        principal.actor_id,
-        &environment.harness,
-    )
-    .await?;
+    let account = own_account(&state.pool, organization_id, actor_id, &environment.harness).await?;
     let manifest = state.supervisors.manifest(&environment.harness);
     let (ok, message) = match (manifest, account) {
         (None, _) => (
@@ -875,11 +974,5 @@ async fn check_environment(
     .bind(message.chars().take(300).collect::<String>())
     .fetch_one(&state.pool)
     .await?;
-    let (default, _) =
-        default_environment(&state, organization_id, project_id, principal.actor_id).await?;
-    Ok(Json(CheckResult {
-        ok,
-        message,
-        environment: view(&state, row, default),
-    }))
+    Ok((ok, message, row))
 }
