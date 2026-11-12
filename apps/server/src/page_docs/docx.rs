@@ -1083,7 +1083,7 @@ impl Reader<'_> {
                 self.flat
                     .push(Flat::Block(Block::new(Node::HorizontalRule)));
             } else if kind == Kind::Code {
-                self.flat.push(Flat::Code(String::new()));
+                self.flat.push(Flat::Code(code_text));
             }
             return;
         }
@@ -1551,7 +1551,7 @@ mod tests {
     use super::*;
     use crate::page_docs::{tree::from_markdown, write::write_document};
 
-    const SAMPLE: &str = "## Plan\n\nSome **bold**, *italic*, ~~gone~~ and `code` with a [link](https://example.com/a?b=1&c=2) and [a task](/projects/p/work-items/t).\n\n- one\n- two\n  - nested\n\n3. three\n4. four\n\n- [ ] open\n- [x] done\n\n> Quoted words\n\n```\nfn main() {\n\n    println!(\"<hi>\");\n}\n\tindented()\n```\n\n---\n\n| Name | Count |\n| :--- | ---: |\n| a | 1 |\n| b | 2 |\n\n[Open tasks](/projects/p/work-items?status=open \"embed\")";
+    const SAMPLE: &str = "## Plan\n\nSome **bold**, *italic*, ~~gone~~ and `code` with a [link](https://example.com/a?b=1&c=2) and [a task](/projects/p/work-items/t).\n\n- one\n- two\n  - nested\n\n3. three\n4. four\n\n- [ ] open\n- [x] done\n\n> Quoted words\n\n```\nfn main() {\n\n    println!(\"<hi>\");\n}\n\t\n\tindented()\n```\n\n---\n\n| Name | Count |\n| :--- | ---: |\n| a | 1 |\n| b | 2 |\n\n[Open tasks](/projects/p/work-items?status=open \"embed\")";
 
     fn round_trip(markdown: &str) -> (Imported, String) {
         let bytes = export(

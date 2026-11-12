@@ -309,10 +309,21 @@ fn split_title(text: &str) -> (Option<String>, String) {
     let (line, rest) = start.split_once('\n').unwrap_or((start, ""));
     match line.trim_end().strip_prefix("# ") {
         Some(title) if !title.trim().is_empty() => (
-            Some(title.trim().trim_end_matches('#').trim_end().to_owned()),
+            Some(without_closing_hashes(title.trim()).to_owned()),
             rest.trim_start_matches(['\n', '\r']).trim_end().to_owned(),
         ),
         _ => (None, text.trim_end().to_owned()),
+    }
+}
+
+/// A heading's text without its closing `#`s, which count only after a
+/// space (`# C#` is "C#").
+fn without_closing_hashes(text: &str) -> &str {
+    let open = text.trim_end_matches('#');
+    if open.len() < text.len() && (open.is_empty() || open.ends_with([' ', '\t'])) {
+        open.trim_end()
+    } else {
+        text
     }
 }
 
@@ -364,6 +375,11 @@ mod tests {
             (None, "## Only\n\ntext".to_owned())
         );
         assert_eq!(split_title("# \n\ntext").0, None);
+        assert_eq!(
+            split_title(&markdown_file("C#", "x")).0.as_deref(),
+            Some("C#")
+        );
+        assert_eq!(split_title("# Plan ##\n").0.as_deref(), Some("Plan"));
     }
 
     #[test]
