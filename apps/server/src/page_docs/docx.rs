@@ -973,6 +973,8 @@ enum ListKind {
     Bullet,
     Check,
     Ordered(String),
+    /// An indented paragraph after a list item: more of that item.
+    More,
 }
 
 #[derive(Debug)]
@@ -1156,7 +1158,23 @@ impl Reader<'_> {
                 self.flat.push(Flat::Code(code_text));
                 return;
             }
-            _ => Node::Paragraph(content),
+            _ => {
+                // Indented under a list item, a paragraph is more of it.
+                if let Some(Flat::List(last)) = self.flat.last()
+                    && indent >= i64::from(INDENT_STEP)
+                {
+                    let under = (indent / i64::from(INDENT_STEP) - 1) as usize;
+                    self.flat.push(Flat::List(ListEntry {
+                        level: under.min(last.level),
+                        kind: ListKind::More,
+                        start: 0,
+                        checked: None,
+                        content,
+                    }));
+                    return;
+                }
+                Node::Paragraph(content)
+            }
         };
         self.flat.push(Flat::Block(Block::new(node)));
     }
@@ -1507,6 +1525,10 @@ fn lists(entries: Vec<ListEntry>) -> Vec<Block> {
     let mut out = Vec::new();
     let mut entries = entries.into_iter().peekable();
     while let Some(head) = entries.next() {
+        if head.kind == ListKind::More {
+            out.push(Block::new(Node::Paragraph(head.content)));
+            continue;
+        }
         let kind = head.kind.clone();
         let start = head.start;
         let mut items = vec![item(head)];
@@ -1521,6 +1543,13 @@ fn lists(entries: Vec<ListEntry>) -> Vec<Block> {
                 }
                 continue;
             }
+            if next.kind == ListKind::More {
+                let Some(more) = entries.next() else { break };
+                if let Some(last) = items.last_mut() {
+                    last.content.push(Block::new(Node::Paragraph(more.content)));
+                }
+                continue;
+            }
             if next.kind != kind {
                 break;
             }
@@ -1529,7 +1558,7 @@ fn lists(entries: Vec<ListEntry>) -> Vec<Block> {
         }
         out.push(Block::new(match kind {
             ListKind::Ordered(_) => Node::OrderedList { start, items },
-            ListKind::Bullet | ListKind::Check => Node::BulletList(items),
+            ListKind::Bullet | ListKind::Check | ListKind::More => Node::BulletList(items),
         }));
     }
     out
@@ -1584,6 +1613,13 @@ mod tests {
             })
             .collect();
         assert_eq!(imported.blocks, expected, "{written}");
+    }
+
+    #[test]
+    fn paragraphs_inside_list_items_stay_inside() {
+        let markdown = "1. First\n\n   Explanation belonging to first.\n\n   - Under first\n\n     More under it.\n\n   Back in first.\n\n2. Second\n\n- [ ] Box\n\n  Box note.\n\nAfter the lists.";
+        let (imported, written) = round_trip(markdown);
+        assert_eq!(imported.blocks, from_markdown(markdown), "{written}");
     }
 
     #[test]
