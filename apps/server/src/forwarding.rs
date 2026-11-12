@@ -23,8 +23,8 @@ use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
     conversations::{
-        AppendExtras, MessageAppendResponse, MessageCommandActor, MessageView, TimelineEntryView,
-        append_message_command_with,
+        AppendExtras, MessageAppendOutcome, MessageAppendResponse, MessageCommandActor,
+        MessageView, TimelineEntryView, append_message_command_with,
     },
     error::{ApiJson, ApiPath, AppError},
     idempotency::IdempotencyKey,
@@ -32,7 +32,7 @@ use crate::{
 };
 
 const QUOTE_CHARACTERS: i32 = 2_000;
-const COMMENT_CHARACTERS: usize = 4_000;
+pub(crate) const COMMENT_CHARACTERS: usize = 4_000;
 /// The text of a forward sent without a comment.
 pub const DEFAULT_TEXT: &str = "Forwarded a message";
 
@@ -94,7 +94,9 @@ struct SourceRow {
     created_at: DateTime<Utc>,
 }
 
-/// Messages `$2` can see now, among `$1`.
+/// Messages `$2` can see now, among `$1`. `$4` is the agent connection an
+/// agent acts through (NULL for a person), which decides the projects it
+/// reaches.
 const SOURCE_SQL: &str = r#"
     SELECT message.id, message.project_id, message.conversation_id,
            conversation.kind AS conversation_kind, conversation.name AS conversation_name,
@@ -112,7 +114,7 @@ const SOURCE_SQL: &str = r#"
     LEFT JOIN project_memberships author
       ON author.project_id = message.project_id AND author.actor_id = message.author_actor_id
     WHERE message.id = ANY($1)
-      AND actor_can_access_project($2, NULL, message.project_id)
+      AND actor_can_access_project($2, $4::uuid, message.project_id)
       AND conversation_visible_to(message.conversation_id, $2)
 "#;
 
@@ -178,6 +180,7 @@ where
         .bind(&sources)
         .bind(viewer)
         .bind(QUOTE_CHARACTERS)
+        .bind(None::<Uuid>)
         .fetch_all(executor)
         .await?;
     let found = rows
@@ -242,11 +245,13 @@ where
 }
 
 /// The messages among `ids` that `viewer` can see now, quoted. One the
-/// viewer can't see is simply missing.
+/// viewer can't see is simply missing. An agent reads through
+/// `connection`, the connection it acts through.
 pub(crate) async fn quotes<'e, E>(
     executor: E,
     ids: &[Uuid],
     viewer: Uuid,
+    connection: Option<Uuid>,
 ) -> Result<std::collections::HashMap<Uuid, ForwardedView>, AppError>
 where
     E: sqlx::PgExecutor<'e>,
@@ -258,6 +263,7 @@ where
         .bind(ids)
         .bind(viewer)
         .bind(QUOTE_CHARACTERS)
+        .bind(connection)
         .fetch_all(executor)
         .await?
         .into_iter()
@@ -269,17 +275,20 @@ where
 /// be in `conversation_id`, the conversation the sender was just allowed to
 /// post in, and not removed. Anything else, including a message elsewhere
 /// that the sender can't see, gets the same refusal, so it says nothing
-/// about what's there.
+/// about what's there. An agent sends with `sender_connection`, the
+/// connection it acts through.
 pub(crate) async fn quote_for_reply(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     conversation_id: Uuid,
     message_id: Uuid,
     sender: Uuid,
+    sender_connection: Option<Uuid>,
 ) -> Result<ForwardedView, AppError> {
     sqlx::query_as::<_, SourceRow>(SOURCE_SQL)
         .bind(vec![message_id])
         .bind(sender)
         .bind(QUOTE_CHARACTERS)
+        .bind(sender_connection)
         .fetch_optional(&mut **transaction)
         .await?
         .filter(|row| row.conversation_id == conversation_id && !row.removed)
@@ -316,7 +325,7 @@ async fn forward_http(
 ) -> Result<(StatusCode, Json<MessageAppendResponse>), AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
-    let (status, body) = forward(
+    let outcome = forward(
         &state,
         MessageCommandActor {
             actor_id: principal.actor_id,
@@ -330,7 +339,7 @@ async fn forward_http(
         idempotency_key,
     )
     .await?;
-    Ok((status, Json(body)))
+    Ok((outcome.status, Json(outcome.body)))
 }
 
 /// Forward `message_id`, which the sender must be able to see now, into
@@ -342,11 +351,17 @@ pub(crate) async fn forward(
     conversation_id: Uuid,
     text: Option<&str>,
     idempotency_key: IdempotencyKey,
-) -> Result<(StatusCode, MessageAppendResponse), AppError> {
+) -> Result<MessageAppendOutcome, AppError> {
     let source = sqlx::query_as::<_, SourceRow>(SOURCE_SQL)
         .bind(vec![message_id])
         .bind(actor.actor_id)
         .bind(QUOTE_CHARACTERS)
+        .bind(
+            actor
+                .mcp_credential
+                .as_ref()
+                .map(|credential| credential.connection_id),
+        )
         .fetch_optional(&state.pool)
         .await?
         .filter(|row| !row.removed)
@@ -376,11 +391,11 @@ pub(crate) async fn forward(
         },
     )
     .await?;
-    let mut body = outcome.body;
+    let mut outcome = outcome;
     let quote = available(source);
-    body.message.forwarded = Some(quote.clone());
-    if let Some(message) = body.entry.message.as_mut() {
+    outcome.body.message.forwarded = Some(quote.clone());
+    if let Some(message) = outcome.body.entry.message.as_mut() {
         message.forwarded = Some(quote);
     }
-    Ok((outcome.status, body))
+    Ok(outcome)
 }

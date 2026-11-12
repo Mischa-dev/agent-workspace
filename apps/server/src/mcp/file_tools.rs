@@ -23,6 +23,7 @@ use super::{
     common::{ToolResult, accessible_project_ids, confined_project, parse_id, parse_message_id},
     talk::{can_write_in, message_actor},
     tasks::resolve_task,
+    writes::{WriteAccess, check_access_for},
 };
 use crate::{
     AppState,
@@ -247,6 +248,20 @@ async fn list_message(
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct FileDeleteArguments {
+    /// The file's ID, from file_upload or file_list.
+    pub file_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct DeletedFile {
+    pub file_id: String,
+    pub removed: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct FileReadArguments {
     /// The file's ID, from file_list or a message's attachments.
     pub file_id: String,
@@ -453,6 +468,71 @@ pub(super) async fn file_upload(
         ),
         Err(error) => ToolResult::from_error(error, "file_upload"),
     }
+}
+
+/// Remove a file, as the web's remove button does: an upload of your own
+/// you haven't sent yet, or one of a task's own files (not a comment's) when
+/// you may edit the task. Files sent with a message go with the message
+/// (message_delete), and a comment's with the comment (task_comment_delete).
+pub(super) async fn file_delete(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: FileDeleteArguments,
+) -> ToolResult<DeletedFile> {
+    if !principal.can_write() {
+        return ToolResult::read_only();
+    }
+    let Some(file_id) = parse_id(&arguments.file_id) else {
+        return ToolResult::invalid("fileId", "Pass a file ID.");
+    };
+    let result = async {
+        let row = match files::readable_file(&state.pool, reader(principal), file_id).await {
+            Ok(row) => row,
+            Err(AppError::NotFound(_)) => return Ok(ToolResult::not_found("That file")),
+            Err(error) => return Err(error),
+        };
+        let task = row.attached_at.as_ref().and(row.work_item_id);
+        let mut transaction = state.pool.begin().await?;
+        // Decided under the project lock check_access_for takes, as the web
+        // decides it under authorize_task_change's.
+        let may_edit_task = match task {
+            Some(work_item_id) => {
+                let at_file = super::tasks::scoped(principal, row.project_id);
+                matches!(
+                    check_access_for(&mut transaction, &at_file, Action::WorkItemEdit).await?,
+                    WriteAccess::Allowed
+                ) && sqlx::query_scalar::<_, bool>(
+                    "SELECT archived_at IS NULL FROM work_items WHERE project_id = $1 AND id = $2",
+                )
+                .bind(row.project_id)
+                .bind(work_item_id)
+                .fetch_optional(&mut *transaction)
+                .await?
+                .unwrap_or(false)
+            }
+            None => false,
+        };
+        match files::remove_file(&mut transaction, &row, principal.actor_id, may_edit_task).await {
+            Ok(()) => {}
+            Err(AppError::Forbidden) => {
+                return Ok(ToolResult::denied(
+                    "You can remove uploads of yours you haven't sent, and a task's own files when you can edit the task. A file sent in a message goes with message_delete; a comment's with task_comment_delete.",
+                ));
+            }
+            Err(error) => return Err(error),
+        }
+        transaction.commit().await?;
+        if let Some(work_item_id) = task {
+            crate::work_items::notify_files_changed(&state.pool, row.project_id, work_item_id)
+                .await?;
+        }
+        Ok(ToolResult::ok(DeletedFile {
+            file_id: row.id.to_string(),
+            removed: true,
+        }))
+    }
+    .await;
+    result.unwrap_or_else(|error| ToolResult::from_error(error, "file_delete"))
 }
 
 async fn upload_to_conversation(

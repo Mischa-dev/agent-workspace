@@ -1801,6 +1801,10 @@ pub(crate) async fn append_message_command_with(
                 conversation.id,
                 reply_to_message_id,
                 actor.actor_id,
+                actor
+                    .mcp_credential
+                    .as_ref()
+                    .map(|credential| credential.connection_id),
             )
             .await?,
         ),
