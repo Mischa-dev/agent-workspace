@@ -1277,22 +1277,22 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/views",
-            Gap("view_write: saved task views"),
+            Tool("view_write"),
         ),
         (
             Patch,
             "/api/v1/projects/{project_id}/views/{view_id}",
-            Gap("view_write: saved task views"),
+            Tool("view_write"),
         ),
         (
             Delete,
             "/api/v1/projects/{project_id}/views/{view_id}",
-            Gap("view_write: saved task views"),
+            Tool("view_write"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/views/{view_id}/pin",
-            Gap("view_write: saved task views"),
+            Tool("view_write"),
         ),
         (
             Post,

@@ -71,7 +71,8 @@ pub(super) struct ViewListArguments {
 pub(super) struct ViewListValue {
     /// Each view: id, name, builtin (my_tasks, ready_for_agents, blocked,
     /// recently_changed), shared, pinned, its query as the list page keeps
-    /// it, resolvedQuery ("me" replaced by you) and a link.
+    /// it, resolvedQuery ("me" replaced by you), version (for view_write)
+    /// and a link.
     pub views: Vec<Value>,
     pub how_to_use: String,
 }
@@ -94,18 +95,7 @@ pub(super) async fn view_list(
             views::visible_views(&state.pool, principal.project_id, principal.actor_id).await?;
         let views = rows
             .into_iter()
-            .map(|row| {
-                let mut view = views::saved_view(row, principal.actor_id, false);
-                view.href = public_url(state, &view.href);
-                to_value(view).map(|mut value| {
-                    if let Some(object) = value.as_object_mut() {
-                        for key in ["canEdit", "canDelete", "position", "version"] {
-                            object.remove(key);
-                        }
-                    }
-                    value
-                })
-            })
+            .map(|row| view_value(state, views::saved_view(row, principal.actor_id, false)))
             .collect::<Result<Vec<_>, _>>()?;
         Ok::<_, AppError>(ToolResult::ok(ViewListValue {
             views,
@@ -114,6 +104,365 @@ pub(super) async fn view_list(
     }
     .await;
     result.unwrap_or_else(|error| ToolResult::from_error(error, "view_list"))
+}
+
+/// A view as agents see it: its link in full, and without the web's own
+/// fields (whether you can edit or delete it, its place in the sidebar).
+fn view_value(state: &AppState, mut view: views::SavedViewView) -> Result<Value, AppError> {
+    view.href = public_url(state, &view.href);
+    to_value(view).map(|mut value| {
+        if let Some(object) = value.as_object_mut() {
+            for key in ["canEdit", "canDelete", "position"] {
+                object.remove(key);
+            }
+        }
+        value
+    })
+}
+
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct ViewWriteArguments {
+    /// The project's ID, link or key (such as "AWD").
+    pub project_id: String,
+    /// The view to change, pin or delete: its ID, its name, or a built-in's
+    /// key (my_tasks, ready_for_agents, blocked, recently_changed). Leave it
+    /// out to save a new view.
+    pub view: Option<String>,
+    /// The new view's name, or a new name: 1 to 80 characters.
+    pub name: Option<String>,
+    /// true shares the view with everyone in the project (needs the right
+    /// to edit its tasks); false keeps it yours alone. New views are yours
+    /// alone unless you say so.
+    pub shared: Option<bool>,
+    /// The task list's query, as view_list shows it for other views: keys
+    /// such as q, statusId, semanticCategory, priority, assigneeActorId
+    /// ("me" means whoever opens it, "none" unassigned), labelIds,
+    /// milestoneId, blocked, ready, claimed, dueBefore, includeDone, sort
+    /// (priority, updated, number, due), groupBy, columnsBy and lanes. Values
+    /// are strings; several IDs are comma-separated. On a change it replaces
+    /// the whole query.
+    pub query: Option<BTreeMap<String, String>>,
+    /// "list" (the default) or "board".
+    pub layout: Option<String>,
+    /// The list columns to show: any of priority, key, status, details,
+    /// due, assignee, or "field:<id>" for a custom field. Leave it out to
+    /// keep them; [] shows only the title.
+    pub fields: Option<Vec<String>>,
+    /// true pins the view to your own sidebar, false unpins it. Nobody
+    /// else's sidebar changes.
+    pub pinned: Option<bool>,
+    /// true deletes the view. Built-in views can't be deleted; unpin them
+    /// instead.
+    pub delete: Option<bool>,
+    /// The version from view_list or an earlier view_write. Leave it out to
+    /// change the current one.
+    pub expected_version: Option<i64>,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ViewWriteValue {
+    /// The view as it is now (as view_list shows it, with its version).
+    /// Absent once it's deleted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub view: Option<Value>,
+    /// Whether this call saved a new view.
+    pub created: bool,
+    /// Whether this call deleted the view.
+    pub deleted: bool,
+}
+
+/// view_write's arguments, checked before anything is locked.
+struct CheckedView {
+    name: Option<String>,
+    layout: Option<String>,
+    fields: Option<Vec<String>>,
+}
+
+fn check_view_arguments(
+    arguments: &ViewWriteArguments,
+) -> Result<CheckedView, (&'static str, &'static str)> {
+    let changes = arguments.name.is_some()
+        || arguments.shared.is_some()
+        || arguments.query.is_some()
+        || arguments.layout.is_some()
+        || arguments.fields.is_some()
+        || arguments.pinned.is_some();
+    if arguments.delete == Some(true) {
+        if arguments.view.is_none() {
+            return Err(("view", "Name the view to delete."));
+        }
+        if changes {
+            return Err((
+                "delete",
+                "Deleting a view can't be combined with changing it.",
+            ));
+        }
+    }
+    if arguments.view.is_none() && arguments.name.is_none() {
+        return Err((
+            "name",
+            "Give a new view a name, or pass view to change one (see view_list).",
+        ));
+    }
+    let name = match arguments.name.as_deref() {
+        None => None,
+        Some(value) => Some(
+            views::normalize_view_name(value)
+                .ok_or(("name", "Give the view a name of 1 to 80 characters."))?,
+        ),
+    };
+    if let Some(layout) = arguments.layout.as_deref() {
+        views::check_layout(layout).map_err(|_| ("layout", "layout is \"list\" or \"board\"."))?;
+    }
+    let fields = views::normalize_fields(arguments.fields.as_deref()).map_err(|_| {
+        (
+            "fields",
+            "fields are priority, key, status, details, due, assignee, or \"field:<id>\" for a custom field.",
+        )
+    })?;
+    Ok(CheckedView {
+        name,
+        layout: arguments.layout.clone(),
+        fields,
+    })
+}
+
+fn view_outcome<T>(outcome: views::ViewOutcome<T>) -> Result<T, ToolResult<ViewWriteValue>> {
+    match outcome {
+        views::ViewOutcome::Done(value) => Ok(value),
+        views::ViewOutcome::Invalid(field, message) => Err(ToolResult::invalid(field, message)),
+        views::ViewOutcome::TooMany(message) => Err(ToolResult::conflict(message)),
+        views::ViewOutcome::Builtin => Err(ToolResult::conflict(
+            "Built-in views can't be deleted. Unpin it (pinned: false) to take it out of your sidebar.",
+        )),
+        views::ViewOutcome::VersionConflict(current) => Err(ToolResult::conflict(format!(
+            "Someone changed this view first (now version {}). Read it again with view_list, then retry.",
+            current.version
+        ))),
+    }
+}
+
+/// The view `wanted` names among those `principal` can see: by ID, name or
+/// built-in key. Two different views with that name are no match.
+async fn find_view(
+    state: &AppState,
+    principal: &McpPrincipal,
+    wanted: &str,
+) -> Result<Option<Uuid>, AppError> {
+    let rows = views::visible_views(&state.pool, principal.project_id, principal.actor_id).await?;
+    let wanted_id = parse_id(wanted);
+    let wanted = wanted.trim();
+    if let Some(row) = rows.iter().find(|row| Some(row.id) == wanted_id) {
+        return Ok(Some(row.id));
+    }
+    let mut matches = rows.iter().filter(|row| {
+        row.name.eq_ignore_ascii_case(wanted) || row.builtin.as_deref() == Some(wanted)
+    });
+    Ok(match (matches.next(), matches.next()) {
+        (Some(row), None) => Some(row.id),
+        _ => None,
+    })
+}
+
+pub(super) async fn view_write(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: ViewWriteArguments,
+) -> ToolResult<ViewWriteValue> {
+    if !principal.can_write() {
+        return ToolResult::read_only();
+    }
+    if parse_id(&arguments.project_id) != Some(principal.project_id) {
+        return ToolResult::not_found("That project");
+    }
+    let checked = match check_view_arguments(&arguments) {
+        Ok(checked) => checked,
+        Err((field, message)) => return ToolResult::invalid(field, message),
+    };
+    let project_id = principal.project_id;
+    let reader = principal.actor_id;
+    let result = async {
+        if let Some(query) = &arguments.query {
+            match views::check_view_query(&state.pool, project_id, reader, query).await {
+                Ok(()) => {}
+                Err(AppError::Validation(field) | AppError::Invalid(field)) => {
+                    return Ok(ToolResult::invalid(
+                        "query",
+                        format!(
+                            "The task list can't read this query ({field}). Copy the keys a view in view_list uses; IDs must belong to this project."
+                        ),
+                    ));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        views::ensure_builtin_views(&state.pool, project_id).await?;
+        let view_id = match arguments.view.as_deref() {
+            None => None,
+            Some(wanted) => match find_view(state, principal, wanted).await? {
+                Some(id) => Some(id),
+                None => {
+                    return Ok(ToolResult::not_found(
+                        "That view (pass its ID if two share a name; see view_list)",
+                    ));
+                }
+            },
+        };
+        if view_id.is_none()
+            && let Some(name) = &checked.name
+            && find_view(state, principal, name).await?.is_some()
+        {
+            return Ok(ToolResult::conflict(format!(
+                "There's already a view called “{name}” here. Pass view: \"{name}\" to change it."
+            )));
+        }
+        let mut transaction = state.pool.begin().await?;
+        match check_access_for(&mut transaction, principal, Action::WorkItemView).await? {
+            WriteAccess::Allowed => {}
+            WriteAccess::ReadOnly => return Ok(ToolResult::read_only()),
+            WriteAccess::NotFound => return Ok(ToolResult::not_found("That project")),
+            WriteAccess::ProjectArchived => {
+                return Ok(ToolResult::conflict("That project is archived."));
+            }
+            WriteAccess::Denied => {
+                return Ok(ToolResult::denied("You can't see tasks in that project."));
+            }
+        }
+        // Shared views change what everyone in the project sees, so they
+        // take the right to edit its tasks, as on the web.
+        let sharing = matches!(
+            check_access_for(&mut transaction, principal, Action::WorkItemEdit).await?,
+            WriteAccess::Allowed
+        );
+        let shared_denied = || {
+            ToolResult::denied(
+                "Only people who can edit this project's tasks can change its shared views. Save a view of your own instead (shared: false).",
+            )
+        };
+        if arguments.shared == Some(true) && !sharing {
+            return Ok(shared_denied());
+        }
+        let actor = command_actor(principal, project_id);
+        let mut created = false;
+        let mut view = None;
+        match view_id {
+            None => {
+                let new = views::NewView {
+                    name: checked.name.clone().unwrap_or_default(),
+                    shared: arguments.shared.unwrap_or(false),
+                    query: arguments.query.clone().unwrap_or_default(),
+                    layout: checked.layout.clone().unwrap_or_else(|| "list".to_owned()),
+                    fields: checked.fields.clone(),
+                };
+                let outcome =
+                    views::insert_view(&mut transaction, &actor, project_id, reader, sharing, &new)
+                        .await?;
+                match view_outcome(outcome) {
+                    Ok(saved) => {
+                        created = true;
+                        view = Some(saved);
+                    }
+                    Err(refusal) => return Ok(refusal),
+                }
+            }
+            Some(view_id) if arguments.delete == Some(true) => {
+                let outcome = match views::remove_view(
+                    &mut transaction,
+                    &actor,
+                    project_id,
+                    view_id,
+                    reader,
+                    sharing,
+                    arguments.expected_version,
+                )
+                .await
+                {
+                    Err(AppError::Forbidden) => return Ok(shared_denied()),
+                    outcome => outcome?,
+                };
+                if let Err(refusal) = view_outcome(outcome) {
+                    return Ok(refusal);
+                }
+                transaction.commit().await?;
+                return Ok(ToolResult::ok(ViewWriteValue {
+                    view: None,
+                    created: false,
+                    deleted: true,
+                }));
+            }
+            Some(view_id) => {
+                let change = views::ViewChange {
+                    expected_version: arguments.expected_version,
+                    name: checked.name.clone(),
+                    shared: arguments.shared,
+                    query: arguments.query.clone(),
+                    layout: checked.layout.clone(),
+                    fields: checked.fields.clone().map(Some),
+                };
+                let changing = change.name.is_some()
+                    || change.shared.is_some()
+                    || change.query.is_some()
+                    || change.layout.is_some()
+                    || change.fields.is_some();
+                if changing {
+                    let outcome = match views::change_view(
+                        &mut transaction,
+                        &actor,
+                        project_id,
+                        view_id,
+                        reader,
+                        sharing,
+                        change,
+                    )
+                    .await
+                    {
+                        Err(AppError::Forbidden) => return Ok(shared_denied()),
+                        outcome => outcome?,
+                    };
+                    match view_outcome(outcome) {
+                        Ok(saved) => view = Some(saved),
+                        Err(refusal) => return Ok(refusal),
+                    }
+                }
+            }
+        }
+        let view_id = view.as_ref().map(|view| view.id).or(view_id);
+        if let (Some(view_id), Some(pinned)) = (view_id, arguments.pinned) {
+            view = Some(
+                views::pin_view_for(
+                    &mut transaction,
+                    project_id,
+                    view_id,
+                    reader,
+                    sharing,
+                    pinned,
+                    None,
+                )
+                .await?,
+            );
+        }
+        let view = match (view, view_id) {
+            (Some(view), _) => view,
+            // Nothing to change: the view as it is.
+            (None, Some(view_id)) => views::visible_views(&mut *transaction, project_id, reader)
+                .await?
+                .into_iter()
+                .find(|row| row.id == view_id)
+                .map(|row| views::saved_view(row, reader, sharing))
+                .ok_or(AppError::NotFound("saved_view"))?,
+            (None, None) => return Err(AppError::Internal("view_write made no view")),
+        };
+        transaction.commit().await?;
+        Ok::<_, AppError>(ToolResult::ok(ViewWriteValue {
+            view: Some(view_value(state, view)?),
+            created,
+            deleted: false,
+        }))
+    }
+    .await;
+    result.unwrap_or_else(|error| ToolResult::from_error(error, "view_write"))
 }
 
 /// Reads a saved view for task_list: its filters, applied exactly as the

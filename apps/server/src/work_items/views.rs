@@ -18,7 +18,7 @@ use axum::{
 use chrono::{Duration, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sqlx::{FromRow, PgConnection, PgExecutor, PgPool};
+use sqlx::{FromRow, PgConnection, PgExecutor, PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use super::{
@@ -32,7 +32,7 @@ use crate::{
     error::{ApiJson, ApiPath, ApiQuery, AppError},
     idempotency::resource_bound_scope,
     policy::Action,
-    work_item_commands::record_audit_for,
+    work_item_commands::{CommandActor, record_audit_for},
     work_item_planning::{self as planning, HAS_OPEN_BLOCKER, MilestoneView},
 };
 
@@ -426,7 +426,7 @@ pub(crate) async fn check_view_query(
     spec.resolve_fields(pool, project_id).await
 }
 
-fn check_layout(layout: &str) -> Result<(), AppError> {
+pub(crate) fn check_layout(layout: &str) -> Result<(), AppError> {
     if matches!(layout, "list" | "board") {
         Ok(())
     } else {
@@ -435,7 +435,7 @@ fn check_layout(layout: &str) -> Result<(), AppError> {
 }
 
 async fn count_views(
-    write: &mut Write,
+    connection: &mut PgConnection,
     project_id: Uuid,
     owner: Option<Uuid>,
 ) -> Result<i64, AppError> {
@@ -444,12 +444,299 @@ async fn count_views(
     )
     .bind(project_id)
     .bind(owner)
-    .fetch_one(&mut *write.transaction)
+    .fetch_one(&mut *connection)
     .await?)
 }
 
 fn can_share(write: &Write) -> Result<bool, AppError> {
     Ok(capabilities(&write.membership)?.edit)
+}
+
+/// What a saved-view write came to, when it wasn't an error: the web and
+/// view_write both make their own answer from it.
+pub(crate) enum ViewOutcome<T = SavedViewView> {
+    Done(T),
+    Invalid(&'static str, &'static str),
+    TooMany(&'static str),
+    Builtin,
+    VersionConflict(Box<SavedViewView>),
+}
+
+/// A view to save, already checked: its name normalized, its query read
+/// the way the list reads it, its layout and fields known.
+pub(crate) struct NewView {
+    pub(crate) name: String,
+    pub(crate) shared: bool,
+    pub(crate) query: BTreeMap<String, String>,
+    pub(crate) layout: String,
+    pub(crate) fields: Option<Vec<String>>,
+}
+
+/// Changes to a view, already checked like `NewView`. `fields` is
+/// `Some(None)` to go back to the default columns.
+#[derive(Default)]
+pub(crate) struct ViewChange {
+    pub(crate) expected_version: Option<i64>,
+    pub(crate) name: Option<String>,
+    pub(crate) shared: Option<bool>,
+    pub(crate) query: Option<BTreeMap<String, String>>,
+    pub(crate) layout: Option<String>,
+    pub(crate) fields: Option<Option<Vec<String>>>,
+}
+
+/// Saves a new view in the project. `sharing` is whether `reader` may
+/// change what the whole project sees (TasksEdit).
+pub(crate) async fn insert_view(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    project_id: Uuid,
+    reader: Uuid,
+    sharing: bool,
+    view: &NewView,
+) -> Result<ViewOutcome, AppError> {
+    if view.shared && !sharing {
+        return Err(AppError::Forbidden);
+    }
+    let owner = (!view.shared).then_some(reader);
+    if count_views(transaction, project_id, owner).await? >= MAX_VIEWS {
+        return Ok(ViewOutcome::TooMany(
+            "This project has 100 views already. Delete one you no longer use first.",
+        ));
+    }
+    let id = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO saved_views (
+            id, project_id, owner_actor_id, created_by_actor_id, name, query, layout, fields, position
+        )
+        SELECT $1, $2, $3, $4, $5, $6, $7, $8,
+               COALESCE((SELECT max(position) + 1 FROM saved_views WHERE project_id = $2), 0)
+        "#,
+    )
+    .bind(id)
+    .bind(project_id)
+    .bind(owner)
+    .bind(reader)
+    .bind(&view.name)
+    .bind(json!(view.query))
+    .bind(&view.layout)
+    .bind(&view.fields)
+    .execute(&mut **transaction)
+    .await?;
+    record_audit_for(
+        transaction,
+        actor,
+        "saved_view",
+        "saved_view.created",
+        id,
+        json!({"shared": view.shared}),
+    )
+    .await?;
+    let row = view_for_update(transaction, project_id, id, reader)
+        .await?
+        .ok_or(AppError::Internal("saved view just made is missing"))?;
+    Ok(ViewOutcome::Done(saved_view(row, reader, sharing)))
+}
+
+/// Locks a view the caller may change: their own, or a shared one when
+/// they can edit the project's tasks.
+async fn editable_view(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    view_id: Uuid,
+    reader: Uuid,
+    sharing: bool,
+) -> Result<ViewRow, AppError> {
+    let row = view_for_update(connection, project_id, view_id, reader)
+        .await?
+        .ok_or(AppError::NotFound("saved_view"))?;
+    if row.owner_actor_id.is_none() && !sharing {
+        return Err(AppError::Forbidden);
+    }
+    Ok(row)
+}
+
+fn view_version_conflict(current: SavedViewView) -> Response {
+    refusal(
+        StatusCode::CONFLICT,
+        "version_conflict",
+        "Someone changed this view first. You’re now looking at the latest version.".to_owned(),
+        json!({ "resource": "saved_view", "currentVersion": current.version, "current": current }),
+    )
+}
+
+/// The web's answer to a refused view write.
+fn view_refusal<T>(outcome: ViewOutcome<T>) -> Result<Response, AppError> {
+    match outcome {
+        ViewOutcome::Done(_) => Err(AppError::Internal("a saved view write wasn't refused")),
+        ViewOutcome::Invalid(field, message) => Ok(invalid(field, message)),
+        ViewOutcome::TooMany(message) => Ok(refusal(
+            StatusCode::CONFLICT,
+            "too_many_views",
+            message.to_owned(),
+            json!({}),
+        )),
+        ViewOutcome::Builtin => Ok(refusal(
+            StatusCode::CONFLICT,
+            "builtin_view",
+            "Built-in views can’t be deleted. Unpin it to take it out of your sidebar.".to_owned(),
+            json!({}),
+        )),
+        ViewOutcome::VersionConflict(current) => Ok(view_version_conflict(*current)),
+    }
+}
+
+/// Changes a view the caller may change.
+pub(crate) async fn change_view(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    project_id: Uuid,
+    view_id: Uuid,
+    reader: Uuid,
+    sharing: bool,
+    change: ViewChange,
+) -> Result<ViewOutcome, AppError> {
+    let row = editable_view(transaction, project_id, view_id, reader, sharing).await?;
+    if change
+        .expected_version
+        .is_some_and(|expected| expected != row.version)
+    {
+        return Ok(ViewOutcome::VersionConflict(Box::new(saved_view(
+            row, reader, sharing,
+        ))));
+    }
+    // Sharing a personal view or taking a shared one back needs the right
+    // to change what the whole project sees; built-ins stay shared.
+    let owner = match change.shared {
+        Some(true) if !sharing => return Err(AppError::Forbidden),
+        Some(false) if row.builtin.is_some() => {
+            return Ok(ViewOutcome::Invalid(
+                "shared",
+                "Built-in views stay shared with the project.",
+            ));
+        }
+        Some(false) if row.owner_actor_id.is_none() && !sharing => {
+            return Err(AppError::Forbidden);
+        }
+        Some(true) => None,
+        Some(false) => Some(reader),
+        None => row.owner_actor_id,
+    };
+    if owner != row.owner_actor_id
+        && count_views(transaction, project_id, owner).await? >= MAX_VIEWS
+    {
+        return Ok(ViewOutcome::TooMany(
+            "There are 100 views there already. Delete one you no longer use first.",
+        ));
+    }
+    sqlx::query(
+        r#"
+        UPDATE saved_views
+        SET name = COALESCE($3, name),
+            owner_actor_id = $4,
+            query = COALESCE($5, query),
+            layout = COALESCE($6, layout),
+            fields = CASE WHEN $7 THEN $8 ELSE fields END,
+            version = version + 1,
+            updated_at = now()
+        WHERE project_id = $1 AND id = $2
+        "#,
+    )
+    .bind(project_id)
+    .bind(view_id)
+    .bind(&change.name)
+    .bind(owner)
+    .bind(change.query.as_ref().map(|query| json!(query)))
+    .bind(&change.layout)
+    .bind(change.fields.is_some())
+    .bind(change.fields.flatten())
+    .execute(&mut **transaction)
+    .await?;
+    record_audit_for(
+        transaction,
+        actor,
+        "saved_view",
+        "saved_view.updated",
+        view_id,
+        json!({}),
+    )
+    .await?;
+    let row = view_for_update(transaction, project_id, view_id, reader)
+        .await?
+        .ok_or(AppError::Internal("saved view just changed is missing"))?;
+    Ok(ViewOutcome::Done(saved_view(row, reader, sharing)))
+}
+
+/// Deletes a view the caller may change; built-ins stay.
+pub(crate) async fn remove_view(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    project_id: Uuid,
+    view_id: Uuid,
+    reader: Uuid,
+    sharing: bool,
+    expected_version: Option<i64>,
+) -> Result<ViewOutcome<()>, AppError> {
+    let row = editable_view(transaction, project_id, view_id, reader, sharing).await?;
+    if row.builtin.is_some() {
+        return Ok(ViewOutcome::Builtin);
+    }
+    if expected_version.is_some_and(|expected| expected != row.version) {
+        return Ok(ViewOutcome::VersionConflict(Box::new(saved_view(
+            row, reader, sharing,
+        ))));
+    }
+    sqlx::query("DELETE FROM saved_views WHERE project_id = $1 AND id = $2")
+        .bind(project_id)
+        .bind(view_id)
+        .execute(&mut **transaction)
+        .await?;
+    record_audit_for(
+        transaction,
+        actor,
+        "saved_view",
+        "saved_view.deleted",
+        view_id,
+        json!({}),
+    )
+    .await?;
+    Ok(ViewOutcome::Done(()))
+}
+
+/// Pins a view the caller can see to their own sidebar, or unpins it.
+pub(crate) async fn pin_view_for(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    view_id: Uuid,
+    reader: Uuid,
+    sharing: bool,
+    pinned: bool,
+    position: Option<i32>,
+) -> Result<SavedViewView, AppError> {
+    view_for_update(connection, project_id, view_id, reader)
+        .await?
+        .ok_or(AppError::NotFound("saved_view"))?;
+    sqlx::query(
+        r#"
+        INSERT INTO saved_view_pins (project_id, view_id, actor_id, pinned, position)
+        VALUES ($1, $2, $3, $4, COALESCE($5, 0))
+        ON CONFLICT (view_id, actor_id) DO UPDATE
+        SET pinned = EXCLUDED.pinned,
+            position = COALESCE($5, saved_view_pins.position),
+            updated_at = now()
+        "#,
+    )
+    .bind(project_id)
+    .bind(view_id)
+    .bind(reader)
+    .bind(pinned)
+    .bind(position)
+    .execute(&mut *connection)
+    .await?;
+    let row = view_for_update(connection, project_id, view_id, reader)
+        .await?
+        .ok_or(AppError::Internal("saved view just pinned is missing"))?;
+    Ok(saved_view(row, reader, sharing))
 }
 
 pub(super) async fn create_view(
@@ -485,76 +772,27 @@ pub(super) async fn create_view(
         )
         .await
     );
-    let owner = (!request.shared).then_some(principal.actor_id);
-    if count_views(&mut write, project_id, owner).await? >= MAX_VIEWS {
-        return Ok(refusal(
-            StatusCode::CONFLICT,
-            "too_many_views",
-            "This project has 100 views already. Delete one you no longer use first.".to_owned(),
-            json!({}),
-        ));
-    }
-    let id = Uuid::now_v7();
-    sqlx::query(
-        r#"
-        INSERT INTO saved_views (
-            id, project_id, owner_actor_id, created_by_actor_id, name, query, layout, fields, position
-        )
-        SELECT $1, $2, $3, $4, $5, $6, $7, $8,
-               COALESCE((SELECT max(position) + 1 FROM saved_views WHERE project_id = $2), 0)
-        "#,
-    )
-    .bind(id)
-    .bind(project_id)
-    .bind(owner)
-    .bind(principal.actor_id)
-    .bind(&name)
-    .bind(json!(request.query))
-    .bind(&request.layout)
-    .bind(&fields)
-    .execute(&mut *write.transaction)
-    .await?;
+    let sharing = can_share(&write)?;
     let actor = write.actor.clone();
-    record_audit_for(
+    let outcome = insert_view(
         &mut write.transaction,
         &actor,
-        "saved_view",
-        "saved_view.created",
-        id,
-        json!({"shared": request.shared}),
+        project_id,
+        principal.actor_id,
+        sharing,
+        &NewView {
+            name,
+            shared: request.shared,
+            query: request.query.clone(),
+            layout: request.layout.clone(),
+            fields,
+        },
     )
     .await?;
-    let row = view_for_update(&mut write.transaction, project_id, id, principal.actor_id)
-        .await?
-        .ok_or(AppError::Internal("saved view just made is missing"))?;
-    let view = saved_view(row, principal.actor_id, can_share(&write)?);
-    write.finish(StatusCode::CREATED, &view).await
-}
-
-/// Locks a view the caller may change: their own, or a shared one when
-/// they can edit the project's tasks.
-async fn editable_view(
-    write: &mut Write,
-    project_id: Uuid,
-    view_id: Uuid,
-    reader: Uuid,
-) -> Result<ViewRow, AppError> {
-    let row = view_for_update(&mut write.transaction, project_id, view_id, reader)
-        .await?
-        .ok_or(AppError::NotFound("saved_view"))?;
-    if row.owner_actor_id.is_none() && !can_share(write)? {
-        return Err(AppError::Forbidden);
+    match outcome {
+        ViewOutcome::Done(view) => write.finish(StatusCode::CREATED, &view).await,
+        refused => view_refusal(refused),
     }
-    Ok(row)
-}
-
-fn view_version_conflict(current: SavedViewView) -> Response {
-    refusal(
-        StatusCode::CONFLICT,
-        "version_conflict",
-        "Someone changed this view first. You’re now looking at the latest version.".to_owned(),
-        json!({ "resource": "saved_view", "currentVersion": current.version, "current": current }),
-    )
 }
 
 pub(super) async fn update_view(
@@ -599,84 +837,29 @@ pub(super) async fn update_view(
         )
         .await
     );
-    let row = editable_view(&mut write, project_id, view_id, principal.actor_id).await?;
     let sharing = can_share(&write)?;
-    if row.version != request.expected_version {
-        return Ok(view_version_conflict(saved_view(
-            row,
-            principal.actor_id,
-            sharing,
-        )));
-    }
-    // Sharing a personal view or taking a shared one back needs the right
-    // to change what the whole project sees; built-ins stay shared.
-    let owner = match request.shared {
-        Some(true) if !sharing => return Err(AppError::Forbidden),
-        Some(false) if row.builtin.is_some() => {
-            return Ok(invalid(
-                "shared",
-                "Built-in views stay shared with the project.",
-            ));
-        }
-        Some(false) if row.owner_actor_id.is_none() && !sharing => {
-            return Err(AppError::Forbidden);
-        }
-        Some(true) => None,
-        Some(false) => Some(principal.actor_id),
-        None => row.owner_actor_id,
-    };
-    if owner != row.owner_actor_id && count_views(&mut write, project_id, owner).await? >= MAX_VIEWS
-    {
-        return Ok(refusal(
-            StatusCode::CONFLICT,
-            "too_many_views",
-            "There are 100 views there already. Delete one you no longer use first.".to_owned(),
-            json!({}),
-        ));
-    }
-    sqlx::query(
-        r#"
-        UPDATE saved_views
-        SET name = COALESCE($3, name),
-            owner_actor_id = $4,
-            query = COALESCE($5, query),
-            layout = COALESCE($6, layout),
-            fields = CASE WHEN $7 THEN $8 ELSE fields END,
-            version = version + 1,
-            updated_at = now()
-        WHERE project_id = $1 AND id = $2
-        "#,
-    )
-    .bind(project_id)
-    .bind(view_id)
-    .bind(&name)
-    .bind(owner)
-    .bind(request.query.as_ref().map(|query| json!(query)))
-    .bind(&request.layout)
-    .bind(fields.is_some())
-    .bind(fields.flatten())
-    .execute(&mut *write.transaction)
-    .await?;
     let actor = write.actor.clone();
-    record_audit_for(
+    let outcome = change_view(
         &mut write.transaction,
         &actor,
-        "saved_view",
-        "saved_view.updated",
-        view_id,
-        json!({}),
-    )
-    .await?;
-    let row = view_for_update(
-        &mut write.transaction,
         project_id,
         view_id,
         principal.actor_id,
+        sharing,
+        ViewChange {
+            expected_version: Some(request.expected_version),
+            name,
+            shared: request.shared,
+            query: request.query.clone(),
+            layout: request.layout.clone(),
+            fields,
+        },
     )
-    .await?
-    .ok_or(AppError::Internal("saved view just changed is missing"))?;
-    let view = saved_view(row, principal.actor_id, sharing);
-    write.finish(StatusCode::OK, &view).await
+    .await?;
+    match outcome {
+        ViewOutcome::Done(view) => write.finish(StatusCode::OK, &view).await,
+        refused => view_refusal(refused),
+    }
 }
 
 pub(super) async fn delete_view(
@@ -699,44 +882,26 @@ pub(super) async fn delete_view(
         )
         .await
     );
-    let row = editable_view(&mut write, project_id, view_id, principal.actor_id).await?;
-    if row.builtin.is_some() {
-        return Ok(refusal(
-            StatusCode::CONFLICT,
-            "builtin_view",
-            "Built-in views can’t be deleted. Unpin it to take it out of your sidebar.".to_owned(),
-            json!({}),
-        ));
-    }
-    if request
-        .expected_version
-        .is_some_and(|expected| expected != row.version)
-    {
-        let sharing = can_share(&write)?;
-        return Ok(view_version_conflict(saved_view(
-            row,
-            principal.actor_id,
-            sharing,
-        )));
-    }
-    sqlx::query("DELETE FROM saved_views WHERE project_id = $1 AND id = $2")
-        .bind(project_id)
-        .bind(view_id)
-        .execute(&mut *write.transaction)
-        .await?;
+    let sharing = can_share(&write)?;
     let actor = write.actor.clone();
-    record_audit_for(
+    let outcome = remove_view(
         &mut write.transaction,
         &actor,
-        "saved_view",
-        "saved_view.deleted",
+        project_id,
         view_id,
-        json!({}),
+        principal.actor_id,
+        sharing,
+        request.expected_version,
     )
     .await?;
-    write
-        .finish(StatusCode::OK, &json!({ "deleted": true }))
-        .await
+    match outcome {
+        ViewOutcome::Done(()) => {
+            write
+                .finish(StatusCode::OK, &json!({ "deleted": true }))
+                .await
+        }
+        refused => view_refusal(refused),
+    }
 }
 
 pub(super) async fn pin_view(
@@ -759,40 +924,17 @@ pub(super) async fn pin_view(
         )
         .await
     );
-    view_for_update(
+    let sharing = can_share(&write)?;
+    let view = pin_view_for(
         &mut write.transaction,
         project_id,
         view_id,
         principal.actor_id,
+        sharing,
+        request.pinned,
+        request.position,
     )
-    .await?
-    .ok_or(AppError::NotFound("saved_view"))?;
-    sqlx::query(
-        r#"
-        INSERT INTO saved_view_pins (project_id, view_id, actor_id, pinned, position)
-        VALUES ($1, $2, $3, $4, COALESCE($5, 0))
-        ON CONFLICT (view_id, actor_id) DO UPDATE
-        SET pinned = EXCLUDED.pinned,
-            position = COALESCE($5, saved_view_pins.position),
-            updated_at = now()
-        "#,
-    )
-    .bind(project_id)
-    .bind(view_id)
-    .bind(principal.actor_id)
-    .bind(request.pinned)
-    .bind(request.position)
-    .execute(&mut *write.transaction)
     .await?;
-    let row = view_for_update(
-        &mut write.transaction,
-        project_id,
-        view_id,
-        principal.actor_id,
-    )
-    .await?
-    .ok_or(AppError::Internal("saved view just pinned is missing"))?;
-    let view = saved_view(row, principal.actor_id, can_share(&write)?);
     write.finish(StatusCode::OK, &view).await
 }
 
