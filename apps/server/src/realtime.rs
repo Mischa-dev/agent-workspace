@@ -215,6 +215,7 @@ impl OutboxPublisher for RealtimeHub {
                 | "page.updated"
                 | "page.discussion.updated"
                 | "collection.updated"
+                | "sheet.updated"
         );
         let project_scoped_event = matches!(
             envelope.event_type.as_str(),
@@ -225,6 +226,7 @@ impl OutboxPublisher for RealtimeHub {
                 | "page.updated"
                 | "page.discussion.updated"
                 | "collection.updated"
+                | "sheet.updated"
         );
         let invalid_conversation_scope = if project_scoped_event {
             envelope.conversation_id.is_some() || envelope.payload.get("conversationId").is_some()
@@ -270,6 +272,13 @@ impl OutboxPublisher for RealtimeHub {
                 && envelope
                     .payload
                     .get("collectionId")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|value| Uuid::parse_str(value).ok())
+                    .is_none_or(|id| id.is_nil()))
+            || (envelope.event_type == "sheet.updated"
+                && envelope
+                    .payload
+                    .get("sheetId")
                     .and_then(serde_json::Value::as_str)
                     .and_then(|value| Uuid::parse_str(value).ok())
                     .is_none_or(|id| id.is_nil()))

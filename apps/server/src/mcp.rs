@@ -97,6 +97,7 @@ mod role_tools;
 mod run_pages;
 mod runs;
 mod settings_tools;
+mod sheet_tools;
 mod talk;
 mod task_batch;
 mod workspace_template_tools;
@@ -1965,6 +1966,53 @@ impl McpServer {
     ) -> Json<common::ToolResult<collection_tools::RecordWriteValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(collection_tools::record_write(&self.state, principal, arguments).await)
+    }
+
+    // -- Sheets (AWD-54) -----------------------------------------------------
+
+    #[tool(
+        description = "List a project's sheets (spreadsheets), last changed first, with their tabs, how many cells they fill and their revision. Read one with sheet_read; create or change one with sheet_write.",
+        annotations(title = "List sheets", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn sheet_list(
+        &self,
+        Parameters(arguments): Parameters<sheet_tools::SheetListArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<sheet_tools::SheetListValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(sheet_tools::sheet_list(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Read a sheet's tab: its filled cells in a range in A1 form (\"A1:D20\", \"B:D\", \"2:10\"), each with its computed value and its formula if it has one; or, with asRows, its rows as {header: value} objects using row 1 as the header, filtered with where and paged with offset and limit. Returns the sheet's revision, to pass back as ifRevision when you change a cell you read.",
+        annotations(title = "Read a sheet", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn sheet_read(
+        &self,
+        Parameters(arguments): Parameters<sheet_tools::SheetReadArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<sheet_tools::SheetReadValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(sheet_tools::sheet_read(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Create a sheet (leave sheet out and give a name), or change one: rename, describe, archive or restore it; add, rename, move or remove tabs, insert or delete rows and columns, freeze header rows and set column widths (tabs); set cells as you'd type them, formulas starting with \"=\" (cells); and add or update rows by header, found by a key column such as ID (rows). Formulas are worked out on the server and the computed values come back. All or nothing; a cell given ifRevision is refused if someone changed it since. Needs sheets.edit.",
+        annotations(
+            title = "Write a sheet",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn sheet_write(
+        &self,
+        Parameters(arguments): Parameters<sheet_tools::SheetWriteArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<sheet_tools::SheetWriteValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(sheet_tools::sheet_write(&self.state, principal, arguments).await)
     }
 
     // -- Search and memory ---------------------------------------------------

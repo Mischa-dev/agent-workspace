@@ -87,6 +87,7 @@ pub mod secrets;
 pub mod seed;
 pub mod server_status;
 pub mod settings;
+pub mod sheets;
 pub mod storage_admission;
 pub mod telemetry;
 pub mod test_support;

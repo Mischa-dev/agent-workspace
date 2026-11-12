@@ -10,6 +10,7 @@
     "pages",
     "whiteboards",
     "collections",
+    "sheets",
     "runs",
     "code",
     "agents",
@@ -34,6 +35,7 @@
         "pages.edit",
         "whiteboards.edit",
         "collections.edit",
+        "sheets.edit",
         "collections.build",
         "runs.launch",
         "runs.interrupt",
@@ -49,6 +51,7 @@
         "channels.post",
         "pages.edit",
         "collections.edit",
+        "sheets.edit",
         "runs.launch",
         "code.view"
       ]
@@ -66,6 +69,7 @@
         "pages.edit",
         "whiteboards.edit",
         "collections.edit",
+        "sheets.edit",
         "runs.launch",
         "runs.interrupt",
         "code.view",

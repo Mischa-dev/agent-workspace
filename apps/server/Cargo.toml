@@ -56,6 +56,7 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
 webpki-roots = "1.0.9"
 uuid = { version = "1.18.1", features = ["serde", "v7"] }
 yrs = "0.28.1"
+ironcalc_base = "0.9.1"
 url = "2.5.7"
 zeroize = "1.8.2"
 chrono-tz = "0.10.4"

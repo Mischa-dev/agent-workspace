@@ -668,6 +668,7 @@ mod tests {
             "pages",
             "whiteboards",
             "collections",
+            "sheets",
             "runs",
             "code",
             "automations",

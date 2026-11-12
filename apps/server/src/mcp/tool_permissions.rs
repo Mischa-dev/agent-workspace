@@ -17,8 +17,8 @@
 use crate::policy::Permission::{
     self, ChannelsCreate, ChannelsPost, CodeView, CollectionsBuild, CollectionsEdit, MembersInvite,
     MembersManage, MembersView, PagesEdit, ProjectsCreate, ProjectsManage, RolesManage,
-    RunsApprove, RunsInterrupt, RunsLaunch, SettingsManage, TasksCreate, TasksDelete, TasksEdit,
-    TasksView, TasksWorkflow, WhiteboardsEdit,
+    RunsApprove, RunsInterrupt, RunsLaunch, SettingsManage, SheetsEdit, TasksCreate, TasksDelete,
+    TasksEdit, TasksView, TasksWorkflow, WhiteboardsEdit,
 };
 
 pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
@@ -122,6 +122,11 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("collection_write", Some(CollectionsBuild)),
     ("record_query", None),
     ("record_write", Some(CollectionsEdit)),
+    // Sheets (AWD-54): anyone in the project reads them; sheets.edit
+    // changes them.
+    ("sheet_list", None),
+    ("sheet_read", None),
+    ("sheet_write", Some(SheetsEdit)),
     ("search", None),
     ("thing_open", None),
     ("page_list", None),

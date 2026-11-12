@@ -1,7 +1,7 @@
 {
   "id": "everything",
   "name": "Everything",
-  "description": "Every module on: chat, projects, tasks, pages, whiteboards, collections, runs, code and automations. Change anything later.",
+  "description": "Every module on: chat, projects, tasks, pages, whiteboards, collections, sheets, runs, code and automations. Change anything later.",
   "modules": [
     "messages",
     "projects",
@@ -10,6 +10,7 @@
     "pages",
     "whiteboards",
     "collections",
+    "sheets",
     "runs",
     "code",
     "agents",
