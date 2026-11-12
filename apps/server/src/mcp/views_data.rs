@@ -1105,6 +1105,12 @@ pub(super) async fn recurring_write(
                 "A schedule keeps its template. Delete it and make a new one to use another.",
             );
         }
+        (None, false) if arguments.enabled.is_some() => {
+            return ToolResult::invalid(
+                "enabled",
+                "A new schedule starts running. Pause it afterwards with recurring and enabled: false.",
+            );
+        }
         (None, false) if arguments.template.is_none() || arguments.frequency.is_none() => {
             return ToolResult::invalid(
                 "template",

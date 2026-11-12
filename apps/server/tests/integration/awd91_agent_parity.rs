@@ -1018,16 +1018,19 @@ async fn an_agent_schedules_recurring_tasks() {
     )
     .await;
 
-    // A schedule needs a template and a frequency.
-    let missing = tool(
-        &f.app,
-        &f.token,
-        &f.session,
-        "recurring_write",
+    // A schedule needs a template and a frequency, and starts running.
+    for arguments in [
         json!({"projectId": project, "template": "Weekly review"}),
-    )
-    .await;
-    assert_eq!(missing["outcome"], "invalid_request", "{missing}");
+        json!({"projectId": project, "template": "Weekly review", "frequency": "daily", "enabled": false}),
+    ] {
+        let refused = tool(&f.app, &f.token, &f.session, "recurring_write", arguments).await;
+        assert_eq!(refused["outcome"], "invalid_request", "{refused}");
+    }
+    let none = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM recurring_tasks")
+        .fetch_one(&f.pool)
+        .await
+        .expect("schedules");
+    assert_eq!(none, 0);
 
     let made = f
         .call(
