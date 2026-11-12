@@ -27,6 +27,7 @@
   "routes": [
     "/api/v1/pages/*",
     "/api/v1/projects/{id}/pages",
+    "/api/v1/projects/{id}/pages/import",
     "/api/v1/projects/{id}/decisions"
   ],
   "events": { "emits": [], "listens": [] },
@@ -61,7 +62,7 @@
   ],
   "slots": {
     "pages": ["/projects/:projectId/pages", "/projects/:projectId/pages/:pageId", "/projects/:projectId/decisions"],
-    "parts": ["area.pages", "area.decisions", "page.live_editing", "page.comments"],
+    "parts": ["area.pages", "area.decisions", "page.live_editing", "page.comments", "page.import_export"],
     "sidebar": [],
     "home": [],
     "settings": [],
