@@ -731,16 +731,22 @@ impl WorkingTab {
     }
 }
 
-/// Two row keys are the same when their text is, or both are the same number.
+/// Two row keys are the same when their text is, or both are numbers (not
+/// typed as text with a leading apostrophe) small enough to compare exactly
+/// and equal, so 1 and 1.0 match but two long IDs never round together.
 fn same_key(candidate: &str, wanted: &str) -> bool {
-    let candidate = candidate.trim().trim_start_matches('\'');
-    if candidate == wanted {
+    let (candidate, wanted) = (candidate.trim(), wanted.trim());
+    let text = |key: &str| key.strip_prefix('\'').unwrap_or(key).to_owned();
+    if text(candidate) == text(wanted) {
         return true;
     }
-    matches!(
-        (candidate.parse::<f64>(), wanted.parse::<f64>()),
-        (Ok(left), Ok(right)) if left == right
-    )
+    let number = |key: &str| {
+        (!key.starts_with('\''))
+            .then(|| key.parse::<f64>().ok())
+            .flatten()
+            .filter(|value| value.is_finite() && value.abs() < 9_007_199_254_740_992.0)
+    };
+    matches!((number(candidate), number(wanted)), (Some(left), Some(right)) if left == right)
 }
 
 fn resolve_tab(tabs: &[WorkingTab], reference: &TabRef) -> Option<usize> {
@@ -1171,7 +1177,7 @@ pub async fn apply_with(
                     }
                 }
                 let found = key.as_ref().and_then(|(column, key_input)| {
-                    let wanted = key_input.trim().trim_start_matches('\'');
+                    let wanted = key_input.as_str();
                     let stored = tab_cells
                         .iter()
                         .filter(|cell| cell.row_number > 1 && cell.column_number == *column)
@@ -1859,6 +1865,20 @@ fn normalize_header(value: &str) -> Option<String> {
     let value = collapse(value);
     let length = value.chars().count();
     (length > 0 && length <= 200 && !value.starts_with('=')).then_some(value)
+}
+
+#[cfg(test)]
+mod key_tests {
+    use super::same_key;
+
+    #[test]
+    fn row_keys_match_by_text_or_exact_number() {
+        assert!(same_key("1", "1.0"));
+        assert!(same_key("'00123", "00123"));
+        assert!(!same_key("'00123", "123"));
+        assert!(!same_key("'9007199254740992", "'9007199254740993"));
+        assert!(!same_key("9007199254740992", "9007199254740993"));
+    }
 }
 
 #[cfg(test)]
