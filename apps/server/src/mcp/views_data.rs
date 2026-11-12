@@ -312,10 +312,13 @@ pub(super) async fn view_write(
         };
         if view_id.is_none()
             && let Some(name) = &checked.name
-            && find_view(state, principal, name).await?.is_some()
+            && views::visible_views(&state.pool, project_id, reader)
+                .await?
+                .iter()
+                .any(|row| row.name.eq_ignore_ascii_case(name))
         {
             return Ok(ToolResult::conflict(format!(
-                "There's already a view called “{name}” here. Pass view: \"{name}\" to change it."
+                "There's already a view called “{name}” here. Pass view (its name or ID, see view_list) to change it instead."
             )));
         }
         let mut transaction = state.pool.begin().await?;

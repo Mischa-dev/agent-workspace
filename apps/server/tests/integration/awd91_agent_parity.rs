@@ -807,6 +807,31 @@ async fn an_agent_saves_shares_and_deletes_task_views() {
     let listed = f.web("GET", &views_uri, Value::Null).await;
     assert!(names(&listed).contains(&"Owner's private".to_owned()));
 
+    // Two views the agent can see with one name: a new one by that name is
+    // still a conflict, and the name alone picks neither.
+    f.call("view_write", json!({"projectId": project, "name": "Twins"}))
+        .await;
+    f.web("POST", &views_uri, json!({"name": "Twins", "shared": true}))
+        .await;
+    for (arguments, outcome) in [
+        (json!({"projectId": project, "name": "Twins"}), "conflict"),
+        (
+            json!({"projectId": project, "view": "Twins", "layout": "board"}),
+            "not_found",
+        ),
+    ] {
+        let refused = tool(&f.app, &f.token, &f.session, "view_write", arguments).await;
+        assert_eq!(refused["outcome"], outcome, "{refused}");
+    }
+    let twins = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM saved_views WHERE project_id = $1 AND name = 'Twins'",
+    )
+    .bind(f.seed.project_id)
+    .fetch_one(&f.pool)
+    .await
+    .expect("twins");
+    assert_eq!(twins, 2);
+
     // A query that names something outside the project is refused.
     let foreign = tool(
         &f.app,
