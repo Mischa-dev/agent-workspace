@@ -149,6 +149,13 @@ pub trait FormulaEngine: Send + Sync {
         tabs: &[TabInput],
         operations: &[Operation],
     ) -> Result<Vec<TabOutput>, EngineError>;
+
+    /// The workbook `tabs` as an Excel file (.xlsx), computed.
+    fn to_xlsx(&self, tabs: &[TabInput]) -> Result<Vec<u8>, EngineError>;
+
+    /// The tabs and cell inputs of an Excel file (.xlsx). The caller checks
+    /// the file's size first; the result can be as large as the file allows.
+    fn read_xlsx(&self, bytes: &[u8]) -> Result<Vec<TabInput>, EngineError>;
 }
 
 /// The IronCalc engine, in English, on UTC.
@@ -237,28 +244,34 @@ fn value_of(model: &Model<'_>, tab: u32, row: i32, column: i32) -> Result<Value,
     })
 }
 
+/// A model holding `tabs`, not yet evaluated.
+fn build(tabs: &[TabInput]) -> Result<Model<'static>, EngineError> {
+    let Some(first) = tabs.first() else {
+        return Err(whole("A sheet keeps at least one tab."));
+    };
+    let mut model = Model::new_empty("sheet", LOCALE, TIMEZONE, LANGUAGE).map_err(whole)?;
+    model.rename_sheet("Sheet1", &first.name).map_err(whole)?;
+    for tab in &tabs[1..] {
+        model.add_sheet(&tab.name).map_err(whole)?;
+    }
+    for (tab_index, tab) in tabs.iter().enumerate() {
+        let tab_index = u32::try_from(tab_index).map_err(|_| whole("Too many tabs."))?;
+        for (row, column, input) in &tab.cells {
+            model
+                .set_user_input(tab_index, *row, *column, input.clone())
+                .map_err(whole)?;
+        }
+    }
+    Ok(model)
+}
+
 impl FormulaEngine for IronCalc {
     fn apply(
         &self,
         tabs: &[TabInput],
         operations: &[Operation],
     ) -> Result<Vec<TabOutput>, EngineError> {
-        let Some(first) = tabs.first() else {
-            return Err(whole("A sheet keeps at least one tab."));
-        };
-        let mut model = Model::new_empty("sheet", LOCALE, TIMEZONE, LANGUAGE).map_err(whole)?;
-        model.rename_sheet("Sheet1", &first.name).map_err(whole)?;
-        for tab in &tabs[1..] {
-            model.add_sheet(&tab.name).map_err(whole)?;
-        }
-        for (tab_index, tab) in tabs.iter().enumerate() {
-            let tab_index = u32::try_from(tab_index).map_err(|_| whole("Too many tabs."))?;
-            for (row, column, input) in &tab.cells {
-                model
-                    .set_user_input(tab_index, *row, *column, input.clone())
-                    .map_err(whole)?;
-            }
-        }
+        let mut model = build(tabs)?;
         for (position, operation) in operations.iter().enumerate() {
             apply_one(&mut model, operation).map_err(|message| EngineError {
                 operation: Some(position),
@@ -300,6 +313,46 @@ impl FormulaEngine for IronCalc {
                 }
             })
             .collect())
+    }
+
+    fn to_xlsx(&self, tabs: &[TabInput]) -> Result<Vec<u8>, EngineError> {
+        let mut model = build(tabs)?;
+        model.evaluate();
+        let writer =
+            ironcalc::export::save_xlsx_to_writer(&model, std::io::Cursor::new(Vec::new()))
+                .map_err(|error| whole(format!("The Excel file couldn't be written: {error}")))?;
+        Ok(writer.into_inner())
+    }
+
+    fn read_xlsx(&self, bytes: &[u8]) -> Result<Vec<TabInput>, EngineError> {
+        let unreadable = |_| whole("That isn't an Excel file (.xlsx) this can read.");
+        let workbook = ironcalc::import::load_from_xlsx_bytes(bytes, "import", LOCALE, TIMEZONE)
+            .map_err(unreadable)?;
+        let model = Model::from_workbook(workbook, LANGUAGE)
+            .map_err(|_| whole("That isn't an Excel file (.xlsx) this can read."))?;
+        let mut tabs = model
+            .get_worksheets_properties()
+            .into_iter()
+            .map(|properties| TabInput {
+                name: properties.name,
+                cells: Vec::new(),
+            })
+            .collect::<Vec<_>>();
+        for cell in model.get_all_cells() {
+            let input = model
+                .get_localized_cell_content(cell.index, cell.row, cell.column)
+                .map_err(whole)?;
+            if input.is_empty() {
+                continue;
+            }
+            if let Some(tab) = tabs.get_mut(cell.index as usize) {
+                tab.cells.push((cell.row, cell.column, input));
+            }
+        }
+        for tab in &mut tabs {
+            tab.cells.sort_by_key(|(row, column, _)| (*row, *column));
+        }
+        Ok(tabs)
     }
 }
 
@@ -440,6 +493,36 @@ mod tests {
             )
             .expect_err("refused");
         assert_eq!(error.operation, Some(0));
+    }
+
+    #[test]
+    fn an_excel_file_round_trips_its_tabs_and_formulas() {
+        let tabs = vec![
+            tab(
+                "Costs",
+                &[
+                    (1, 1, "Item"),
+                    (1, 2, "Cost"),
+                    (2, 1, "Rent"),
+                    (2, 2, "1200"),
+                    (3, 2, "=SUM(B2:B2)"),
+                ],
+            ),
+            tab("Notes", &[(1, 1, "'00123"), (2, 1, "=Costs!B3*2")]),
+        ];
+        let bytes = IronCalc.to_xlsx(&tabs).expect("written");
+        let back = IronCalc.read_xlsx(&bytes).expect("read");
+        assert_eq!(
+            back.iter().map(|tab| tab.name.as_str()).collect::<Vec<_>>(),
+            ["Costs", "Notes"]
+        );
+        assert!(back[0].cells.contains(&(3, 2, "=SUM(B2:B2)".to_owned())));
+        assert!(back[1].cells.contains(&(2, 1, "=Costs!B3*2".to_owned())));
+        assert_eq!(
+            IronCalc.apply(&back, &[]).expect("computed")[1].cells[1].value,
+            Value::Number(2400.0)
+        );
+        assert!(IronCalc.read_xlsx(b"not a zip").is_err());
     }
 
     #[test]

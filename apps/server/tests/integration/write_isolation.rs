@@ -232,6 +232,7 @@ const WRITE_ROUTES: &[&str] = &[
     "PATCH /api/v1/projects/{project_id}/collections/{collection_id}/records/{record_id}",
     "POST /api/v1/projects/{project_id}/sheets",
     "PATCH /api/v1/projects/{project_id}/sheets/{sheet_id}",
+    "POST /api/v1/projects/{project_id}/sheets/import",
     "POST /api/v1/projects/{project_id}/sheets/{sheet_id}/changes",
     "POST /api/v1/projects/{project_id}/launches",
     "POST /api/v1/projects/{project_id}/launches/{launch_id}/cancel",
@@ -4685,6 +4686,12 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             &[project(), id(a.sheet, b.sheet)],
             json_body(json!({"description": "Net"})),
         ),
+        path_case(
+            "POST /api/v1/projects/{project_id}/sheets/import",
+            &[project()],
+            |_| Payload::Bytes("text/csv", b"Net,import\n1,2\n".to_vec()),
+        )
+        .query("?name=Net%20import&format=csv"),
         path_case(
             "POST /api/v1/projects/{project_id}/sheets/{sheet_id}/changes",
             &[project(), id(a.sheet, b.sheet)],

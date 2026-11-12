@@ -9,6 +9,7 @@ import { AppShell } from '../shell/AppShell'
 import { Button, EmptyState, ErrorState, Icon, ListSkeleton, PageHeader, Row, RowList, SegmentedControl, countLabel, describeError, formatRelative, showToast } from '../ui'
 import { sheetKeys, updateSheet, useSheets, type SheetSummary } from './api'
 import { SheetDetailsDialog } from './SheetDialogs'
+import { SheetImportButton } from './SheetImportButton'
 
 type Shown = 'open' | 'archived'
 
@@ -65,7 +66,18 @@ export function SheetsListPage() {
   return (
     <AppShell project={project.data} user={session.user}>
       <div className="aw-page aw-sheets">
-        <PageHeader actions={newSheet} icon="table" title="Sheets" />
+        <PageHeader
+          actions={
+            canEdit ? (
+              <>
+                <SheetImportButton onImported={(body) => void navigate(href(body.sheet.id))} projectId={projectId} />
+                {newSheet}
+              </>
+            ) : null
+          }
+          icon="table"
+          title="Sheets"
+        />
         {archivedCount || shown === 'archived' ? (
           <SegmentedControl<Shown>
             label="Sheets to show"

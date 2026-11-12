@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { Download } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useParams, useSearchParams } from 'react-router-dom'
 
@@ -26,7 +27,7 @@ import {
   type MenuEntry,
 } from '../ui'
 import { usePhoneWidth } from '../work-items/useCoarsePointer'
-import { changeSheet, sheetKeys, updateSheet, useSheet, type SheetBody, type SheetChange, type SheetTab } from './api'
+import { changeSheet, sheetExportHref, sheetKeys, updateSheet, useSheet, type SheetBody, type SheetChange, type SheetTab } from './api'
 import { SheetDetailsDialog, TabNameDialog } from './SheetDialogs'
 import { SheetGrid, type GridEdit } from './SheetGrid'
 import { bounds, cards, cellKey, cellMap, cellName, extent, patched, type Selection } from './sheetModel'
@@ -362,7 +363,19 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
         },
       ]
     : []
+  const download = (format: 'xlsx' | 'csv') => {
+    const link = document.createElement('a')
+    link.href = sheetExportHref(projectId, sheetId, format, body.tab)
+    link.download = ''
+    link.rel = 'noopener'
+    document.body.append(link)
+    link.click()
+    link.remove()
+  }
   const sheetItems: MenuEntry[] = [
+    { label: 'Download as Excel (.xlsx)', icon: Download, onSelect: () => download('xlsx') },
+    { label: 'Download this tab as CSV', icon: Download, onSelect: () => download('csv') },
+    ...(editable ? [{ separator: true as const }] : []),
     ...(editable && !body.sheet.archived
       ? [
           {

@@ -257,6 +257,29 @@ export async function changeSheet(projectId: string, sheetId: string, changes: S
   )
 }
 
+/** The file types a sheet can be made from. */
+export const SHEET_IMPORT_ACCEPT = '.xlsx,.csv,.tsv,.txt'
+
+/** Makes a sheet from an Excel (.xlsx) or CSV file, named after it. */
+export async function importSheet(projectId: string, file: File) {
+  const format = /\.xlsx$/i.test(file.name) ? 'xlsx' : 'csv'
+  const name = file.name.replace(/\.(xlsx|csv|tsv|txt)$/i, '').trim().slice(0, 80) || 'Imported sheet'
+  return normalizeBody(
+    await requestJson<unknown>(`${listPath(projectId)}/import?name=${encodeURIComponent(name)}&format=${format}`, {
+      method: 'POST',
+      idempotencyKey: crypto.randomUUID(),
+      body: file,
+      headers: { 'content-type': 'application/octet-stream' },
+    }),
+  )
+}
+
+/** Where a sheet downloads: every tab as Excel, or one tab's values as CSV. */
+export function sheetExportHref(projectId: string, sheetId: string, format: 'xlsx' | 'csv', tab?: string) {
+  const query = format === 'csv' && tab ? `&tab=${encodeURIComponent(tab)}` : ''
+  return `${sheetPath(projectId, sheetId)}/export?format=${format}${query}`
+}
+
 export function useSheets(projectId: string) {
   return useQuery({
     queryKey: sheetKeys.list(projectId),
