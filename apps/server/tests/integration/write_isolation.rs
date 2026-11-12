@@ -415,6 +415,7 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
 
 /// Every MCP tool that isn't read-only, which `mcp_cases` covers.
 const MCP_WRITE_TOOLS: &[&str] = &[
+    "agent_profile_write",
     "ai_analyze",
     "ai_suggestion_decide",
     "ai_summarize",
@@ -5674,6 +5675,16 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"projectId": b.project, "person": "@wren", "role": "viewer"})],
         )
         .rejecting(vec![json!({"projectId": a.project, "person": bx.wren, "role": "viewer"})]),
+        mcp_case(
+            "agent_profile_write",
+            json!({"projectId": a.project, "template": "reviewer", "name": "Net mcp reviewer"}),
+            vec![json!({"projectId": b.project, "template": "reviewer", "name": "Net mcp reviewer"})],
+        )
+        .rejecting(vec![
+            json!({"projectId": a.project, "profile": bx.agent_profile, "description": "Net"}),
+            json!({"projectId": a.project, "profile": bx.agent_profile, "remove": true}),
+            json!({"projectId": a.project, "template": "reviewer", "name": "Net mcp b", "environmentId": bx.environment}),
+        ]),
         mcp_case(
             "environment_write",
             json!({"projectId": a.project, "name": "Net mcp cloud", "harness": "codex_cloud", "providerEnvironmentId": "env-mcp"}),

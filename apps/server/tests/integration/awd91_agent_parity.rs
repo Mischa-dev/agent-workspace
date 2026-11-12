@@ -2039,3 +2039,112 @@ async fn people_set_up_environments_and_agents_only_read_them() {
     );
     f.close().await;
 }
+
+#[tokio::test]
+async fn people_make_agents_and_agents_only_read_them() {
+    let Some(f) = fixture().await else {
+        return;
+    };
+    let project = f.seed.project_id.to_string();
+    // A signed-in account the project's agents run on.
+    let account = f
+        .web(
+            "POST",
+            &format!("/api/v1/projects/{project}/provider-accounts"),
+            json!({"adapterKind": "demo"}),
+        )
+        .await;
+    let account = format!(
+        "/api/v1/projects/{project}/provider-accounts/{}",
+        account["id"].as_str().expect("account id")
+    );
+    f.web(
+        "POST",
+        &format!("{account}/login/api-key"),
+        json!({"apiKey": "demo-key-for-tests"}),
+    )
+    .await;
+    f.web("POST", &format!("{account}/use"), json!({})).await;
+
+    let app = connect_app(&f.app, &f.browser, "Owner's app", "full").await;
+    let session = initialize(&f.app, &app).await.expect("owner MCP");
+    let person = |name: &'static str, arguments: Value| {
+        let app = app.clone();
+        let session = session.clone();
+        let router = f.app.clone();
+        async move { tool(&router, &app, &session, name, arguments).await }
+    };
+
+    let made = person(
+        "agent_profile_write",
+        json!({"projectId": project, "template": "reviewer"}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    assert_eq!(made["value"]["done"], "made", "{made}");
+    assert_eq!(made["value"]["profile"]["handle"], "reviewer", "{made}");
+
+    let stale = person(
+        "agent_profile_write",
+        json!({"projectId": project, "profile": "@reviewer", "description": "Strict", "expectedVersion": 9}),
+    )
+    .await;
+    assert_eq!(stale["outcome"], "conflict", "{stale}");
+    let changed = person(
+        "agent_profile_write",
+        json!({"projectId": project, "profile": "@reviewer", "description": "Strict", "enabled": false}),
+    )
+    .await;
+    assert_eq!(changed["value"]["done"], "changed", "{changed}");
+    assert_eq!(
+        changed["value"]["profile"]["description"], "Strict",
+        "{changed}"
+    );
+    assert_eq!(changed["value"]["profile"]["enabled"], false, "{changed}");
+
+    // Agents read the project's agents and change none.
+    let listed = f
+        .call("agent_profile_list", json!({"projectId": project}))
+        .await;
+    assert_eq!(
+        listed["value"]["profiles"][0]["handle"], "reviewer",
+        "{listed}"
+    );
+    for arguments in [
+        json!({"projectId": project, "template": "planner"}),
+        json!({"projectId": project, "profile": "@reviewer", "remove": true}),
+    ] {
+        let refused = tool(
+            &f.app,
+            &f.token,
+            &f.session,
+            "agent_profile_write",
+            arguments,
+        )
+        .await;
+        assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    }
+
+    // One that never did anything is deleted outright.
+    let removed = person(
+        "agent_profile_write",
+        json!({"projectId": project, "profile": "reviewer", "remove": true}),
+    )
+    .await;
+    assert_eq!(removed["value"]["done"], "deleted", "{removed}");
+    let audited = sqlx::query_scalar::<_, String>(
+        "SELECT action FROM audit_events WHERE target_kind = 'agent_profile' AND channel = 'mcp' ORDER BY id",
+    )
+    .fetch_all(&f.pool)
+    .await
+    .expect("audit");
+    assert_eq!(
+        audited,
+        [
+            "agent_profile.created",
+            "agent_profile.disabled",
+            "agent_profile.deleted"
+        ]
+    );
+    f.close().await;
+}

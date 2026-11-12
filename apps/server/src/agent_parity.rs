@@ -126,17 +126,17 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/agent-profiles",
-            Gap("agent_profile_write"),
+            Tool("agent_profile_write"),
         ),
         (
             Patch,
             "/api/v1/projects/{project_id}/agent-profiles/{profile_id}",
-            Gap("agent_profile_write"),
+            Tool("agent_profile_write"),
         ),
         (
             Delete,
             "/api/v1/projects/{project_id}/agent-profiles/{profile_id}",
-            Gap("agent_profile_write"),
+            Tool("agent_profile_write"),
         ),
         (
             Put,

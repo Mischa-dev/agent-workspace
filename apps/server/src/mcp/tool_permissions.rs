@@ -190,6 +190,7 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("run_steps", None),
     ("run_usage", None),
     ("agent_profile_list", None),
+    ("agent_profile_write", Some(SettingsManage)),
     ("launch_list", None),
     ("launch_cancel", Some(RunsLaunch)),
     ("environment_list", None),

@@ -61,6 +61,7 @@ use crate::{
 };
 
 mod admin;
+mod agent_profile_tools;
 mod agents;
 mod ai_tools;
 mod approvals;
@@ -3120,6 +3121,25 @@ impl McpServer {
     ) -> Json<common::ToolResult<run_pages::AgentProfileListValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(run_pages::agent_profile_list(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "People: make an agent in a project (often from a template such as reviewer), change it (name, @handle, harness, model settings, instructions, allowed tools, environment), turn it off or on, or remove it. The project's owners and admins, through an app connected as themselves; agents read them with agent_profile_list. Audited.",
+        annotations(
+            title = "Change an agent",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn agent_profile_write(
+        &self,
+        Parameters(arguments): Parameters<agent_profile_tools::AgentProfileWriteArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<agent_profile_tools::AgentProfileWriteValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(agent_profile_tools::agent_profile_write(&self.state, principal, arguments).await)
     }
 
     #[tool(

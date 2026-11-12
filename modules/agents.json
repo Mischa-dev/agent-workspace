@@ -11,6 +11,7 @@
   "tools": {
     "agent_list": "query",
     "agent_profile_list": "query",
+    "agent_profile_write": "change",
     "session_bind": "change",
     "external_event_poll": "query"
   },
