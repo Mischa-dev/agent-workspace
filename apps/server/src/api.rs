@@ -520,6 +520,25 @@ async fn retry_agent_run(
     ApiJson(_request): ApiJson<EmptyCommand>,
 ) -> Result<(StatusCode, Json<StartRunResponse>), AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
+    let (status, response) = retry_run_in(
+        &state,
+        &principal,
+        predecessor_run_id,
+        IdempotencyKey::from_headers(&headers),
+    )
+    .await?;
+    Ok((status, Json(response)))
+}
+
+/// Start a terminal run again with the same prompt, repository and
+/// settings, as `principal`: the browser's Retry and MCP's run_retry.
+pub(crate) async fn retry_run_in(
+    state: &AppState,
+    principal: &impl RunActor,
+    predecessor_run_id: Uuid,
+    // Checked after authorization, as in `start_run_in`.
+    idempotency_key: Result<IdempotencyKey, AppError>,
+) -> Result<(StatusCode, StartRunResponse), AppError> {
     let conversation_id =
         sqlx::query_scalar::<_, Uuid>("SELECT conversation_id FROM agent_runs WHERE id = $1")
             .bind(predecessor_run_id)
@@ -527,7 +546,7 @@ async fn retry_agent_run(
             .await?
             .ok_or(AppError::NotFound("agent_run"))?;
     let conversation =
-        authorized_conversation(&state, &principal, conversation_id, Action::WorkerInvoke).await?;
+        authorized_conversation(state, principal, conversation_id, Action::WorkerInvoke).await?;
     if conversation.project_archived {
         return Err(AppError::ProjectArchived);
     }
@@ -535,13 +554,13 @@ async fn retry_agent_run(
         return Err(AppError::NotFound("conversation"));
     }
 
-    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
+    let idempotency_key = idempotency_key?;
     let request_hash = RequestHash::for_value(&EmptyCommand {})?;
     let scope = idempotency::resource_bound_scope("agent_run", predecessor_run_id, "retry")?;
     let mut transaction = state.pool.begin().await?;
     guard_conversation_mutation(
         &mut transaction,
-        &principal,
+        principal,
         conversation_id,
         conversation.project_id,
         Action::WorkerInvoke,
@@ -549,7 +568,7 @@ async fn retry_agent_run(
     .await?;
     let reservation = match idempotency::reserve(
         &mut transaction,
-        principal.actor_id,
+        principal.actor_id(),
         &scope,
         &idempotency_key,
         request_hash,
@@ -559,10 +578,21 @@ async fn retry_agent_run(
         IdempotencyOutcome::Replay(replay) => {
             let response: StartRunResponse = replay.decode()?;
             transaction.commit().await?;
-            return Ok((replay.status(), Json(response)));
+            return Ok((replay.status(), response));
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
+    // Through an app, a retry counts toward the same cap as run_start.
+    if principal.is_mcp()
+        && crate::runs::run_cap(&mut transaction, principal.actor_id())
+            .await?
+            .reached()
+    {
+        return Err(AppError::Conflict(
+            "agent_run",
+            "you already have 5 Codex runs queued or working; wait for one to finish",
+        ));
+    }
     let (
         repository_id,
         prompt,
@@ -632,7 +662,7 @@ async fn retry_agent_run(
         &mut transaction,
         conversation.project_id,
         conversation_id,
-        principal.actor_id,
+        principal.actor_id(),
         Some(repository_id),
         predecessor_config.harness.as_deref(),
         None,
@@ -641,7 +671,7 @@ async fn retry_agent_run(
     )
     .await?;
     let config = crate::provider::resolve_stored_run_config(
-        &state,
+        state,
         setup.organization_id,
         &setup.adapter_kind,
         &setup.run_defaults,
@@ -662,13 +692,13 @@ async fn retry_agent_run(
     .bind(run_id)
     .bind(conversation_id)
     .bind(setup.execution_worker_id)
-    .bind(principal.actor_id)
+    .bind(principal.actor_id())
     .bind(setup.execution_profile_id)
     .bind(repository_id)
     .bind(predecessor_run_id)
     .bind(prompt)
     .bind(serde_json::json!({
-        "actor_id": principal.actor_id,
+        "actor_id": principal.actor_id(),
         "project_id": conversation.project_id,
         "scope": ["repository.read", "repository.write", "provider.turn"],
         "retry_of": predecessor_run_id
@@ -715,7 +745,7 @@ async fn retry_agent_run(
     .await?;
     transaction.commit().await?;
     crate::scheduler::kick(state.clone());
-    Ok((StatusCode::ACCEPTED, Json(response)))
+    Ok((StatusCode::ACCEPTED, response))
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -1874,7 +1904,27 @@ async fn interrupt_agent_run(
     ApiPath(run_id): ApiPath<Uuid>,
 ) -> Result<Json<RunView>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
+    let project_id = interrupt_run_in(
+        &state,
+        &principal,
+        run_id,
+        IdempotencyKey::from_headers(&headers),
+    )
+    .await?;
+    fetch_run(&state, run_id, project_id, principal.actor_id)
+        .await
+        .map(Json)
+}
 
+/// Stop a run that hasn't finished, as `principal`: the browser's Stop and
+/// MCP's run_stop. Returns the run's project. Stopping one already stopped
+/// changes nothing; a finished one is a conflict.
+pub(crate) async fn interrupt_run_in(
+    state: &AppState,
+    principal: &impl RunActor,
+    run_id: Uuid,
+    idempotency_key: Result<IdempotencyKey, AppError>,
+) -> Result<Uuid, AppError> {
     #[derive(FromRow)]
     struct RunContext {
         conversation_id: Uuid,
@@ -1914,12 +1964,12 @@ async fn interrupt_agent_run(
         "#,
     )
     .bind(run_id)
-    .bind(principal.actor_id)
+    .bind(principal.actor_id())
     .fetch_optional(&mut *transaction)
     .await?
     .ok_or(AppError::NotFound("agent_run"))?;
     authorize_project_action(
-        &principal,
+        principal,
         context.project_id,
         &context.membership_role,
         context.membership_role_permissions.as_deref(),
@@ -1933,12 +1983,12 @@ async fn interrupt_agent_run(
         )),
     )?;
 
-    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
+    let idempotency_key = idempotency_key?;
     let request_hash = RequestHash::for_value(&EmptyCommand {})?;
     let scope = idempotency::resource_bound_scope("agent_run", run_id, "interrupt")?;
     let reservation = match idempotency::reserve(
         &mut transaction,
-        principal.actor_id,
+        principal.actor_id(),
         &scope,
         &idempotency_key,
         request_hash,
@@ -1953,9 +2003,7 @@ async fn interrupt_agent_run(
                 ));
             }
             transaction.commit().await?;
-            return fetch_run(&state, run_id, context.project_id, principal.actor_id)
-                .await
-                .map(Json);
+            return Ok(context.project_id);
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
@@ -1979,9 +2027,7 @@ async fn interrupt_agent_run(
         )
         .await?;
         transaction.commit().await?;
-        return fetch_run(&state, run_id, context.project_id, principal.actor_id)
-            .await
-            .map(Json);
+        return Ok(context.project_id);
     }
 
     transition_run(
@@ -1998,7 +2044,7 @@ async fn interrupt_agent_run(
         run_id,
         "run_interrupted",
         "The run was interrupted.",
-        serde_json::json!({"actor_id": principal.actor_id}),
+        serde_json::json!({"actor_id": principal.actor_id()}),
     )
     .await?;
     insert_event_entry(&mut transaction, context.conversation_id, event_id).await?;
@@ -2025,9 +2071,7 @@ async fn interrupt_agent_run(
     )
     .await?;
     transaction.commit().await?;
-    fetch_run(&state, run_id, context.project_id, principal.actor_id)
-        .await
-        .map(Json)
+    Ok(context.project_id)
 }
 
 pub(crate) async fn insert_significant_event(

@@ -34,7 +34,7 @@ use sqlx::{Executor, PgPool, postgres::PgPoolOptions};
 use uuid::Uuid;
 
 use super::{
-    agent_interface::{Browser, PASSWORD, initialize, login, schema_pool, send, tool},
+    agent_interface::{Browser, PASSWORD, connect_app, initialize, login, schema_pool, send, tool},
     m3_scheduler_http::{create_test_mirror, wait_for_state},
 };
 
@@ -544,6 +544,157 @@ async fn an_agent_takes_an_empty_project_from_goal_to_finished_run_through_mcp_a
             .contains("appended the proof line"),
         "{thread_messages}"
     );
+
+    f.close().await;
+}
+
+/// AWD-111, run control: the agent stops the run it asked for, but can't
+/// start it again on the person's account; the person's app can. A launch
+/// in the queue is cancelled by whoever queued it, not by an agent.
+#[tokio::test]
+async fn an_agent_stops_its_run_and_only_people_start_it_again() {
+    let Some(f) = fixture().await else {
+        return;
+    };
+    let project = f.seed.project_id.to_string();
+    let thread = f
+        .call(
+            "thread_start",
+            json!({"conversationId": f.seed.channel_id.to_string(), "name": "Stop and retry", "text": "Trying a run."}),
+        )
+        .await;
+    let thread_id = string(&thread, "/value/id");
+    let requested = f
+        .call(
+            "run_request",
+            json!({
+                "conversationId": thread_id,
+                "repositoryId": f.seed.repository_id.to_string(),
+                "sponsorActorId": f.seed.human_actor_id.to_string(),
+                "prompt": "Append the proof line.",
+                "clientRequestId": "awd111-run"
+            }),
+        )
+        .await;
+    let sponsorship = string(&requested, "/approvalId");
+    let approved = f
+        .web(
+            "POST",
+            &format!("/api/v1/agent-approvals/{sponsorship}/respond"),
+            json!({"decision": "approve"}),
+        )
+        .await;
+    let run = approved["agentRunId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no run: {approved}"))
+        .to_owned();
+    let run_id = run.parse::<Uuid>().expect("run UUID");
+    wait_for_state(&f.pool, run_id, "blocked").await;
+
+    // The agent stops it: the harness's open question goes with it.
+    let stopped = f
+        .call(
+            "run_stop",
+            json!({"runId": run, "clientRequestId": "awd111-stop"}),
+        )
+        .await;
+    assert_eq!(stopped["value"]["stage"], "interrupted", "{stopped}");
+    let pending = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM agent_approvals WHERE agent_run_id = $1 AND status = 'pending'",
+    )
+    .bind(run_id)
+    .fetch_one(&f.pool)
+    .await
+    .expect("open questions");
+    assert_eq!(pending, 0);
+    // Stopping it again changes nothing.
+    f.call(
+        "run_stop",
+        json!({"runId": run, "clientRequestId": "awd111-stop-again"}),
+    )
+    .await;
+
+    // Starting it again spends the person's account, so the agent can't.
+    let refused = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "run_retry",
+        json!({"runId": run, "clientRequestId": "awd111-agent-retry"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+
+    // The person's own app can, and the new run is theirs.
+    let app = connect_app(&f.app, &f.browser, "Owner's app", "full").await;
+    let app_session = initialize(&f.app, &app).await.expect("app session");
+    let retried = tool(
+        &f.app,
+        &app,
+        &app_session,
+        "run_retry",
+        json!({"runId": run, "clientRequestId": "awd111-retry"}),
+    )
+    .await;
+    assert_eq!(retried["outcome"], "ok", "{retried}");
+    let new_run = string(&retried, "/value/id");
+    assert_ne!(new_run, run);
+    let (requester, predecessor) = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(
+        "SELECT requesting_actor_id, predecessor_run_id FROM agent_runs WHERE id = $1",
+    )
+    .bind(new_run.parse::<Uuid>().expect("new run UUID"))
+    .fetch_one(&f.pool)
+    .await
+    .expect("retried run");
+    assert_eq!(requester, f.seed.human_actor_id);
+    assert_eq!(predecessor, Some(run_id));
+
+    // A launch the person queued: the agent can't cancel it, they can.
+    let task = f
+        .call(
+            "task_create",
+            json!({"projectId": project, "title": "Launch later"}),
+        )
+        .await;
+    let key = string(&task, "/key");
+    let far = (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339();
+    let launched = tool(
+        &f.app,
+        &app,
+        &app_session,
+        "task_launch",
+        json!({"taskIds": [key], "startWhen": "at", "startAt": far, "prompt": "Later.", "clientRequestId": "awd111-launch"}),
+    )
+    .await;
+    assert_eq!(launched["outcome"], "ok", "{launched}");
+    let launch = string(&launched, "/value/launches/0/id");
+    let not_theirs = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "launch_cancel",
+        json!({"launchId": launch}),
+    )
+    .await;
+    assert_eq!(not_theirs["outcome"], "permission_denied", "{not_theirs}");
+    let cancelled = tool(
+        &f.app,
+        &app,
+        &app_session,
+        "launch_cancel",
+        json!({"launchId": launch}),
+    )
+    .await;
+    assert_eq!(cancelled["value"]["state"], "cancelled", "{cancelled}");
+    let again = tool(
+        &f.app,
+        &app,
+        &app_session,
+        "launch_cancel",
+        json!({"launchId": launch}),
+    )
+    .await;
+    assert_eq!(again["outcome"], "conflict", "{again}");
 
     f.close().await;
 }
