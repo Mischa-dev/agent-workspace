@@ -275,6 +275,7 @@ async fn empty_trash_http(
         &caller,
         request.organization_id,
         request.project_id,
+        None,
     )
     .await?;
     transaction.commit().await?;

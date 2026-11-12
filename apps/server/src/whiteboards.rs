@@ -624,12 +624,14 @@ const TRASH_IN_SCOPE: &str = r#"
 
 /// Empties the trash the caller sees (one workspace or project, or all of
 /// them): every board there they can change goes for good, up to 200 at a
-/// time. Returns how many.
+/// time. Returns how many. With `on`, only boards where Whiteboards is on
+/// for the caller (AWD-75): in those projects, or across those workspaces.
 pub async fn empty_trash(
     transaction: &mut Transaction<'_, Postgres>,
     caller: &Caller,
     organization_id: Option<Uuid>,
     project_id: Option<Uuid>,
+    on: Option<&OnIn>,
 ) -> Result<usize, AppError> {
     // A project viewer sees the project's trash but can't empty it. Which
     // projects the caller can change is the policy's call, so ask it first:
@@ -648,6 +650,9 @@ pub async fn empty_trash(
     .await?;
     let mut editable = Vec::with_capacity(projects.len());
     for project in projects {
+        if on.is_some_and(|on| !on.projects.contains(&project)) {
+            continue;
+        }
         if memory::project_access(
             &mut **transaction,
             caller.actor_id,
@@ -666,6 +671,8 @@ pub async fn empty_trash(
         SELECT board.id FROM whiteboards board
         WHERE {TRASH_IN_SCOPE}
           AND (board.project_id IS NULL OR board.project_id = ANY($6))
+          AND ($7::uuid[] IS NULL OR board.project_id IS NOT NULL
+               OR board.organization_id = ANY($7))
         ORDER BY board.deleted_at, board.id
         LIMIT 200
         "#
@@ -676,6 +683,7 @@ pub async fn empty_trash(
     .bind(organization_id)
     .bind(project_id)
     .bind(&editable)
+    .bind(on.map(|on| on.workspaces.clone()))
     .fetch_all(&mut **transaction)
     .await?;
     for whiteboard_id in &trashed {

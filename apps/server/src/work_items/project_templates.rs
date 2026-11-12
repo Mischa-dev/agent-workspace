@@ -252,10 +252,27 @@ async fn workspace_role(
 
 /// Whoever made the template, or someone who manages the workspace's
 /// settings.
-fn may_edit(principal: &AuthenticatedActor, role: &RoleGrant, row: &ProjectTemplateRow) -> bool {
-    principal.actor_kind == "human"
-        && (row.created_by_actor_id == principal.actor_id
+fn may_edit(reader: TemplateReader, role: &RoleGrant, row: &ProjectTemplateRow) -> bool {
+    reader.human
+        && (row.created_by_actor_id == reader.actor_id
             || role.permissions().contains(Permission::SettingsManage))
+}
+
+/// Who reads or changes project templates: their actor, and whether they're
+/// a person (agents never edit one).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TemplateReader {
+    pub actor_id: Uuid,
+    pub human: bool,
+}
+
+impl TemplateReader {
+    fn browser(principal: &AuthenticatedActor) -> Self {
+        Self {
+            actor_id: principal.actor_id,
+            human: principal.actor_kind == "human",
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -267,11 +284,11 @@ pub(super) struct ProjectTemplatesResponse {
 /// The workspace's project templates, newest first.
 pub(crate) async fn templates_for(
     connection: &mut PgConnection,
-    principal: &AuthenticatedActor,
+    reader: TemplateReader,
     organization_id: Uuid,
     include_archived: bool,
 ) -> Result<Vec<ProjectTemplateView>, AppError> {
-    let role = workspace_role(connection, principal.actor_id, organization_id)
+    let role = workspace_role(connection, reader.actor_id, organization_id)
         .await?
         .ok_or(AppError::NotFound("workspace"))?;
     let rows = sqlx::query_as::<_, ProjectTemplateRow>(&format!(
@@ -287,13 +304,13 @@ pub(crate) async fn templates_for(
     let visible_sources = sqlx::query_scalar::<_, Uuid>(
         "SELECT project_id FROM project_memberships WHERE actor_id = $1 AND enabled",
     )
-    .bind(principal.actor_id)
+    .bind(reader.actor_id)
     .fetch_all(&mut *connection)
     .await?;
     Ok(rows
         .into_iter()
         .map(|row| {
-            let can_edit = may_edit(principal, &role, &row);
+            let can_edit = may_edit(reader, &role, &row);
             let visible = row
                 .source_project_id
                 .is_some_and(|id| visible_sources.contains(&id));
@@ -318,7 +335,7 @@ pub(super) async fn list_project_templates(
     let mut connection = state.pool.acquire().await?;
     let templates = templates_for(
         &mut connection,
-        &principal,
+        TemplateReader::browser(&principal),
         organization_id,
         query.include_archived,
     )
@@ -472,6 +489,16 @@ fn name_taken() -> Response {
     )
 }
 
+/// What saving or changing a project template came to.
+pub(crate) enum ProjectTemplateOutcome {
+    /// The template as it is now, and whether this change archived it.
+    Done(Box<ProjectTemplateView>, bool),
+    Invalid(&'static str, &'static str),
+    NameTaken,
+    LimitReached,
+    TooLarge,
+}
+
 pub(super) async fn save_as_template(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -480,24 +507,98 @@ pub(super) async fn save_as_template(
     ApiJson(request): ApiJson<SaveAsTemplateRequest>,
 ) -> Result<Response, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let Some(name) = normalize_template_name(&request.name) else {
-        return Ok(invalid(
-            "name",
-            "Give the template a name of 1 to 80 characters.",
-        ));
-    };
-    let Some(description) = normalize_description(&request.description) else {
-        return Ok(invalid(
-            "description",
-            "Keep the description to 500 characters.",
-        ));
-    };
+    if let Some(refused) = check_name_and_description(&request.name, &request.description) {
+        return Ok(outcome_response(refused, StatusCode::CREATED));
+    }
     let mut transaction = state.pool.begin().await?;
     let organization_id =
         settings::authorize_project_manage(&mut *transaction, &principal, project_id).await?;
+    let outcome = save_project_template(
+        &mut transaction,
+        principal.actor_id,
+        organization_id,
+        project_id,
+        &request.name,
+        &request.description,
+    )
+    .await?;
+    if let ProjectTemplateOutcome::Done(view, _) = &outcome {
+        settings::audit(
+            &mut transaction,
+            &headers,
+            &principal,
+            Some(project_id),
+            "project_template.created",
+            "project_template",
+            Some(view.id),
+            json!({ "organizationId": organization_id }),
+        )
+        .await?;
+        transaction.commit().await?;
+    }
+    Ok(outcome_response(outcome, StatusCode::CREATED))
+}
+
+/// A name or description the template can't take, checked before anything
+/// is locked.
+fn check_name_and_description(name: &str, description: &str) -> Option<ProjectTemplateOutcome> {
+    if normalize_template_name(name).is_none() {
+        return Some(ProjectTemplateOutcome::Invalid(
+            "name",
+            "Give the template a name of 1 to 80 characters.",
+        ));
+    }
+    if normalize_description(description).is_none() {
+        return Some(ProjectTemplateOutcome::Invalid(
+            "description",
+            "Keep the description to 500 characters.",
+        ));
+    }
+    None
+}
+
+/// The web's answer for an outcome: `done` is the status of a success.
+fn outcome_response(outcome: ProjectTemplateOutcome, done: StatusCode) -> Response {
+    match outcome {
+        ProjectTemplateOutcome::Done(view, _) => (done, Json(*view)).into_response(),
+        ProjectTemplateOutcome::Invalid(field, message) => invalid(field, message),
+        ProjectTemplateOutcome::NameTaken => name_taken(),
+        ProjectTemplateOutcome::LimitReached => refusal(
+            StatusCode::CONFLICT,
+            "limit_reached",
+            format!(
+                "A workspace can keep {MAX_PROJECT_TEMPLATES} project templates. Archive one first."
+            ),
+            json!({}),
+        ),
+        ProjectTemplateOutcome::TooLarge => refusal(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "too_large",
+            "This project's setup is too large to save as a template.".to_owned(),
+            json!({}),
+        ),
+    }
+}
+
+/// Save `project_id`'s setup as a new template of `organization_id`, its
+/// workspace. The caller has checked `actor_id` may manage the project and
+/// records the audit row.
+pub(crate) async fn save_project_template(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    organization_id: Uuid,
+    project_id: Uuid,
+    name: &str,
+    description: &str,
+) -> Result<ProjectTemplateOutcome, AppError> {
+    if let Some(refused) = check_name_and_description(name, description) {
+        return Ok(refused);
+    }
+    let name = normalize_template_name(name).unwrap_or_default();
+    let description = normalize_description(description).unwrap_or_default();
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(format!("project-templates:{organization_id}"))
-        .execute(&mut *transaction)
+        .execute(&mut **transaction)
         .await?;
     let (count, taken) = sqlx::query_as::<_, (i64, bool)>(
         r#"
@@ -508,31 +609,19 @@ pub(super) async fn save_as_template(
     )
     .bind(organization_id)
     .bind(&name)
-    .fetch_one(&mut *transaction)
+    .fetch_one(&mut **transaction)
     .await?;
     if taken {
-        return Ok(name_taken());
+        return Ok(ProjectTemplateOutcome::NameTaken);
     }
     if count >= MAX_PROJECT_TEMPLATES {
-        return Ok(refusal(
-            StatusCode::CONFLICT,
-            "limit_reached",
-            format!(
-                "A workspace can keep {MAX_PROJECT_TEMPLATES} project templates. Archive one first."
-            ),
-            json!({}),
-        ));
+        return Ok(ProjectTemplateOutcome::LimitReached);
     }
-    let content = snapshot(&mut transaction, project_id, principal.actor_id).await?;
+    let content = snapshot(transaction, project_id, actor_id).await?;
     let content_value =
         serde_json::to_value(&content).map_err(|_| AppError::Internal("serialize template"))?;
     if content_value.to_string().len() > 262_144 {
-        return Ok(refusal(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "too_large",
-            "This project's setup is too large to save as a template.".to_owned(),
-            json!({}),
-        ));
+        return Ok(ProjectTemplateOutcome::TooLarge);
     }
     let id = Uuid::now_v7();
     sqlx::query(
@@ -549,26 +638,16 @@ pub(super) async fn save_as_template(
     .bind(&description)
     .bind(&content_value)
     .bind(project_id)
-    .bind(principal.actor_id)
-    .execute(&mut *transaction)
+    .bind(actor_id)
+    .execute(&mut **transaction)
     .await?;
-    settings::audit(
-        &mut transaction,
-        &headers,
-        &principal,
-        Some(project_id),
-        "project_template.created",
-        "project_template",
-        Some(id),
-        json!({ "organizationId": organization_id }),
-    )
-    .await?;
-    let row = template_row(&mut transaction, organization_id, id)
+    let row = template_row(transaction, organization_id, id)
         .await?
         .ok_or(AppError::Internal("project template vanished"))?;
-    let view = template_view(row, true, true);
-    transaction.commit().await?;
-    Ok((StatusCode::CREATED, Json(view)).into_response())
+    Ok(ProjectTemplateOutcome::Done(
+        Box::new(template_view(row, true, true)),
+        false,
+    ))
 }
 
 async fn template_row(
@@ -603,30 +682,83 @@ pub(super) async fn update_project_template(
 ) -> Result<Response, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
     let mut transaction = state.pool.begin().await?;
-    let role = workspace_role(&mut transaction, principal.actor_id, organization_id)
+    let outcome = change_project_template(
+        &mut transaction,
+        TemplateReader::browser(&principal),
+        organization_id,
+        template_id,
+        TemplateChange {
+            expected_version: request.expected_version,
+            name: request.name.as_deref(),
+            description: request.description.as_deref(),
+            archived: request.archived,
+        },
+    )
+    .await?;
+    if let ProjectTemplateOutcome::Done(_, archived_now) = &outcome {
+        settings::audit(
+            &mut transaction,
+            &headers,
+            &principal,
+            None,
+            if *archived_now {
+                "project_template.archived"
+            } else {
+                "project_template.updated"
+            },
+            "project_template",
+            Some(template_id),
+            json!({ "organizationId": organization_id }),
+        )
+        .await?;
+        transaction.commit().await?;
+    }
+    Ok(outcome_response(outcome, StatusCode::OK))
+}
+
+/// A change to a project template: what's left out stays as it is.
+pub(crate) struct TemplateChange<'a> {
+    pub expected_version: i64,
+    pub name: Option<&'a str>,
+    pub description: Option<&'a str>,
+    pub archived: Option<bool>,
+}
+
+/// Rename, describe, archive or restore a template, for whoever made it or
+/// someone who manages the workspace's settings. Someone outside the
+/// workspace, or a template that isn't there, is "not found"; the caller
+/// records the audit row.
+pub(crate) async fn change_project_template(
+    transaction: &mut Transaction<'_, Postgres>,
+    reader: TemplateReader,
+    organization_id: Uuid,
+    template_id: Uuid,
+    change: TemplateChange<'_>,
+) -> Result<ProjectTemplateOutcome, AppError> {
+    let role = workspace_role(transaction, reader.actor_id, organization_id)
         .await?
         .ok_or(AppError::NotFound("workspace"))?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(format!("project-templates:{organization_id}"))
-        .execute(&mut *transaction)
+        .execute(&mut **transaction)
         .await?;
-    let row = template_row(&mut transaction, organization_id, template_id)
+    let row = template_row(transaction, organization_id, template_id)
         .await?
         .ok_or(AppError::NotFound("project_template"))?;
-    if !may_edit(&principal, &role, &row) {
+    if !may_edit(reader, &role, &row) {
         return Err(AppError::Forbidden);
     }
-    if row.version != request.expected_version {
+    if row.version != change.expected_version {
         return Err(AppError::VersionConflict {
             resource: "project_template",
             current_version: row.version,
         });
     }
-    let name = match request.name.as_deref() {
+    let name = match change.name {
         Some(value) => match normalize_template_name(value) {
             Some(name) => name,
             None => {
-                return Ok(invalid(
+                return Ok(ProjectTemplateOutcome::Invalid(
                     "name",
                     "Give the template a name of 1 to 80 characters.",
                 ));
@@ -634,11 +766,11 @@ pub(super) async fn update_project_template(
         },
         None => row.name.clone(),
     };
-    let description = match request.description.as_deref() {
+    let description = match change.description {
         Some(value) => match normalize_description(value) {
             Some(description) => description,
             None => {
-                return Ok(invalid(
+                return Ok(ProjectTemplateOutcome::Invalid(
                     "description",
                     "Keep the description to 500 characters.",
                 ));
@@ -646,7 +778,7 @@ pub(super) async fn update_project_template(
         },
         None => row.description.clone(),
     };
-    let archived = request.archived.unwrap_or(row.archived);
+    let archived = change.archived.unwrap_or(row.archived);
     if !archived {
         let taken = sqlx::query_scalar::<_, bool>(
             r#"
@@ -660,10 +792,10 @@ pub(super) async fn update_project_template(
         .bind(organization_id)
         .bind(template_id)
         .bind(&name)
-        .fetch_one(&mut *transaction)
+        .fetch_one(&mut **transaction)
         .await?;
         if taken {
-            return Ok(name_taken());
+            return Ok(ProjectTemplateOutcome::NameTaken);
         }
     }
     sqlx::query(
@@ -680,24 +812,10 @@ pub(super) async fn update_project_template(
     .bind(&name)
     .bind(&description)
     .bind(archived)
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
-    settings::audit(
-        &mut transaction,
-        &headers,
-        &principal,
-        None,
-        if archived && !row.archived {
-            "project_template.archived"
-        } else {
-            "project_template.updated"
-        },
-        "project_template",
-        Some(template_id),
-        json!({ "organizationId": organization_id }),
-    )
-    .await?;
-    let row = template_row(&mut transaction, organization_id, template_id)
+    let archived_now = archived && !row.archived;
+    let row = template_row(transaction, organization_id, template_id)
         .await?
         .ok_or(AppError::Internal("project template vanished"))?;
     let visible = match row.source_project_id {
@@ -705,14 +823,15 @@ pub(super) async fn update_project_template(
             "SELECT EXISTS (SELECT 1 FROM project_memberships WHERE project_id = $1 AND actor_id = $2 AND enabled)",
         )
         .bind(source)
-        .bind(principal.actor_id)
-        .fetch_one(&mut *transaction)
+        .bind(reader.actor_id)
+        .fetch_one(&mut **transaction)
         .await?,
         None => false,
     };
-    let view = template_view(row, true, visible);
-    transaction.commit().await?;
-    Ok(Json(view).into_response())
+    Ok(ProjectTemplateOutcome::Done(
+        Box::new(template_view(row, true, visible)),
+        archived_now,
+    ))
 }
 
 /// What applying a template set up, for the audit row.
@@ -733,12 +852,12 @@ pub(crate) struct AppliedTemplate {
 /// left out rather than failing the project.
 pub(crate) async fn apply_to_new_project(
     transaction: &mut Transaction<'_, Postgres>,
-    principal: &AuthenticatedActor,
     actor: CommandActor,
     organization_id: Uuid,
     template_id: Uuid,
 ) -> Result<AppliedTemplate, AppError> {
     let project_id = actor.project_id;
+    let actor_id = actor.actor_id;
     let content = sqlx::query_scalar::<_, Value>(
         r#"
         SELECT content FROM project_templates
@@ -778,7 +897,7 @@ pub(crate) async fn apply_to_new_project(
         let outcome = work_item_labels::create_label(
             &mut *transaction,
             project_id,
-            principal.actor_id,
+            actor_id,
             NewLabel {
                 name: &name,
                 color: color.as_deref(),
@@ -802,8 +921,7 @@ pub(crate) async fn apply_to_new_project(
         {
             continue;
         }
-        crate::conversations::insert_channel(transaction, project_id, principal.actor_id, &name)
-            .await?;
+        crate::conversations::insert_channel(transaction, project_id, actor_id, &name).await?;
         channel_names.push(name);
     }
     applied.channels = channel_names.len();
@@ -821,7 +939,7 @@ pub(crate) async fn apply_to_new_project(
             key,
             value.clone(),
             None,
-            principal.actor_id,
+            actor_id,
         )
         .await?;
         applied.settings += 1;
@@ -860,7 +978,7 @@ pub(crate) async fn apply_to_new_project(
         {
             continue;
         }
-        insert_template(&mut *transaction, project_id, principal.actor_id, &fields).await?;
+        insert_template(&mut *transaction, project_id, actor_id, &fields).await?;
         template_names.push(fields.name);
     }
     applied.task_templates = template_names.len();

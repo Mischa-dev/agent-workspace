@@ -492,7 +492,6 @@ async fn create_project(
         Some(template_id) => Some(
             crate::work_items::project_templates::apply_to_new_project(
                 &mut transaction,
-                &principal,
                 crate::work_items::project_templates::creator_actor(&principal, project_id)?,
                 request.organization_id,
                 template_id,

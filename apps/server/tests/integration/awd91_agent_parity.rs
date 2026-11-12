@@ -1420,3 +1420,119 @@ async fn people_retry_an_agents_reply_and_agents_empty_the_whiteboard_trash() {
     assert_eq!(again["outcome"], "conflict", "{again}");
     f.close().await;
 }
+
+#[tokio::test]
+async fn people_save_project_templates_and_start_projects_from_them() {
+    let Some(f) = fixture().await else {
+        return;
+    };
+    let project = f.seed.project_id.to_string();
+    let app = connect_app(&f.app, &f.browser, "Owner's app", "full").await;
+    let session = initialize(&f.app, &app).await.expect("owner MCP");
+    let person = |name: &'static str, arguments: Value| {
+        let app = app.clone();
+        let session = session.clone();
+        let router = f.app.clone();
+        async move { tool(&router, &app, &session, name, arguments).await }
+    };
+
+    let saved = person(
+        "project_template_write",
+        json!({"projectId": project, "name": "Release setup", "description": "How we ship"}),
+    )
+    .await;
+    assert_eq!(saved["outcome"], "ok", "{saved}");
+    assert_eq!(saved["value"]["done"], "saved", "{saved}");
+    assert_eq!(saved["value"]["template"]["canEdit"], true, "{saved}");
+    let template_id = string(&saved, "/value/template/id");
+    let statuses = saved["value"]["template"]["statuses"].clone();
+    assert!(
+        !statuses.as_array().expect("statuses").is_empty(),
+        "{saved}"
+    );
+    let again = person(
+        "project_template_write",
+        json!({"projectId": project, "name": "release setup"}),
+    )
+    .await;
+    assert_eq!(again["outcome"], "conflict", "{again}");
+
+    // Agents read templates, and only read them.
+    let listed = f
+        .call("project_template_list", json!({"projectId": project}))
+        .await;
+    let line = &listed["value"]["templates"][0];
+    assert_eq!(line["name"], "Release setup", "{listed}");
+    assert_eq!(line["canEdit"], false, "{listed}");
+    let refused = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "project_template_write",
+        json!({"projectId": project, "template": template_id, "archived": true}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+
+    // A stale version is refused; then the person archives it, and an
+    // archived template starts nothing.
+    let stale = person(
+        "project_template_write",
+        json!({"projectId": project, "template": "Release setup", "archived": true, "expectedVersion": 0}),
+    )
+    .await;
+    assert_eq!(stale["outcome"], "conflict", "{stale}");
+    let archived = person(
+        "project_template_write",
+        json!({"projectId": project, "template": "Release setup", "archived": true}),
+    )
+    .await;
+    assert_eq!(
+        archived["value"]["template"]["archived"], true,
+        "{archived}"
+    );
+    let blocked = person(
+        "project_create",
+        json!({"key": "SHIP", "name": "Ship", "template": template_id}),
+    )
+    .await;
+    assert_eq!(blocked["outcome"], "conflict", "{blocked}");
+    let restored = person(
+        "project_template_write",
+        json!({"projectId": project, "template": "Release setup", "archived": false, "name": "Ship setup"}),
+    )
+    .await;
+    assert_eq!(
+        restored["value"]["template"]["name"], "Ship setup",
+        "{restored}"
+    );
+    let audited = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM audit_events WHERE target_kind = 'project_template' AND channel = 'mcp'",
+    )
+    .fetch_one(&f.pool)
+    .await
+    .expect("audit");
+    assert_eq!(audited, 3);
+
+    // A project started from it gets its workflow.
+    let created = person(
+        "project_create",
+        json!({"key": "SHIP", "name": "Ship", "template": "Ship setup"}),
+    )
+    .await;
+    assert_eq!(created["outcome"], "ok", "{created}");
+    let new_project =
+        sqlx::query_scalar::<_, Uuid>("SELECT id FROM projects WHERE project_key = 'SHIP'")
+            .fetch_one(&f.pool)
+            .await
+            .expect("new project");
+    let names = sqlx::query_scalar::<_, String>(
+        "SELECT name FROM work_item_statuses WHERE project_id = $1 AND enabled ORDER BY position",
+    )
+    .bind(new_project)
+    .fetch_all(&f.pool)
+    .await
+    .expect("statuses");
+    assert_eq!(json!(names), statuses);
+    f.close().await;
+}

@@ -88,6 +88,7 @@ mod notifications;
 mod oauth;
 mod page_discussion;
 mod planning;
+mod project_template_tools;
 mod reactions;
 mod reads;
 mod replies;
@@ -500,6 +501,44 @@ impl McpServer {
         Json(
             workspace_template_tools::workspace_template_save(&self.state, principal, arguments)
                 .await,
+        )
+    }
+
+    #[tool(
+        description = "List a workspace's project templates (name a project in it): each one's workflow statuses and types, how many labels, settings and task templates it sets up, and its channels. Start a project from one with project_create's template.",
+        annotations(
+            title = "Project templates",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn project_template_list(
+        &self,
+        Parameters(arguments): Parameters<project_template_tools::ProjectTemplateListArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<project_template_tools::ProjectTemplateListValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(project_template_tools::project_template_list(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "People: save a project you manage as a project template for its workspace (its workflow, labels, channel names, settings and task templates), or rename, describe, archive or restore a template (one you made, or any if you manage the workspace's settings). Agents read templates only.",
+        annotations(
+            title = "Save project template",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn project_template_write(
+        &self,
+        Parameters(arguments): Parameters<project_template_tools::ProjectTemplateWriteArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<project_template_tools::ProjectTemplateWriteValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(
+            project_template_tools::project_template_write(&self.state, principal, arguments).await,
         )
     }
 

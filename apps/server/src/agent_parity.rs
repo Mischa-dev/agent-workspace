@@ -1363,12 +1363,12 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/save-as-template",
-            Gap("project templates"),
+            Tool("project_template_write"),
         ),
         (
             Patch,
             "/api/v1/organizations/{organization_id}/project-templates/{template_id}",
-            Gap("project templates"),
+            Tool("project_template_write"),
         ),
         (
             Post,

@@ -12,6 +12,8 @@
     "projects_list": "query",
     "project_open": "describe",
     "project_create": "create",
+    "project_template_list": "query",
+    "project_template_write": "change",
     "project_update": "change",
     "project_archive": "change",
     "project_members": "query",
