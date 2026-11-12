@@ -1368,17 +1368,17 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/recurring-tasks",
-            Gap("recurring tasks"),
+            Tool("recurring_write"),
         ),
         (
             Patch,
             "/api/v1/projects/{project_id}/recurring-tasks/{recurring_id}",
-            Gap("recurring tasks"),
+            Tool("recurring_write"),
         ),
         (
             Delete,
             "/api/v1/projects/{project_id}/recurring-tasks/{recurring_id}",
-            Gap("recurring tasks"),
+            Tool("recurring_write"),
         ),
         (
             Put,
