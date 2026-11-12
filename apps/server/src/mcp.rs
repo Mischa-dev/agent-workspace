@@ -78,6 +78,7 @@ mod field_tools;
 mod file_tools;
 mod groups;
 mod history;
+mod invitation_tools;
 mod labels;
 mod later_tools;
 mod launch_tools;
@@ -373,6 +374,42 @@ impl McpServer {
     ) -> Json<common::ToolResult<admin::MemberLine>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(admin::project_member_set(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "People: a project's invitations (or, with workspace: true, its workspace's), newest first, with each one's role, status and version (not its link). Workspace owners and admins who may invite people, through an app connected as themselves.",
+        annotations(
+            title = "List invitations",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn invitation_list(
+        &self,
+        Parameters(arguments): Parameters<invitation_tools::InvitationListArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<invitation_tools::InvitationListValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(invitation_tools::invitation_list(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "People: invite someone to a project with a join link (role admin, member, viewer or a custom role; never above yours, and only owners invite admins), or to its workspace (workspace: true), or revoke or replace an invitation (invitation_list). The link is returned once, for you to pass on privately. Workspace owners and admins who may invite people, through an app connected as themselves; agents never invite. Audited.",
+        annotations(
+            title = "Invite to project",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn invitation_write(
+        &self,
+        Parameters(arguments): Parameters<invitation_tools::InvitationWriteArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<invitation_tools::InvitationWriteValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(invitation_tools::invitation_write(&self.state, principal, arguments).await)
     }
 
     #[tool(

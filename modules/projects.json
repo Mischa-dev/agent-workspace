@@ -18,6 +18,8 @@
     "project_archive": "change",
     "project_members": "query",
     "project_member_set": "change",
+    "invitation_list": "query",
+    "invitation_write": "change",
     "project_layout_set": "change",
     "project_export": "query"
   },

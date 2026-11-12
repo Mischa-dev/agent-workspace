@@ -176,21 +176,21 @@ struct InvitationAcceptanceRow {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct InvitationView {
-    id: Uuid,
-    project_id: Uuid,
-    role: String,
-    role_id: Option<Uuid>,
-    token_prefix: String,
-    status: String,
-    version: i64,
-    issued_by_actor_id: Uuid,
-    issued_by_display_name: String,
-    expires_at: String,
-    accepted_by_actor_id: Option<Uuid>,
-    accepted_at: Option<String>,
-    revoked_at: Option<String>,
-    created_at: String,
+pub(crate) struct InvitationView {
+    pub(crate) id: Uuid,
+    pub(crate) project_id: Uuid,
+    pub(crate) role: String,
+    pub(crate) role_id: Option<Uuid>,
+    pub(crate) token_prefix: String,
+    pub(crate) status: String,
+    pub(crate) version: i64,
+    pub(crate) issued_by_actor_id: Uuid,
+    pub(crate) issued_by_display_name: String,
+    pub(crate) expires_at: String,
+    pub(crate) accepted_by_actor_id: Option<Uuid>,
+    pub(crate) accepted_at: Option<String>,
+    pub(crate) revoked_at: Option<String>,
+    pub(crate) created_at: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -215,8 +215,19 @@ async fn list_invitations(
     principal: AuthenticatedActor,
     ApiPath(project_id): ApiPath<Uuid>,
 ) -> Result<Json<Vec<InvitationView>>, AppError> {
-    let access = invitation_access(&state, principal.actor_id, project_id).await?;
-    authorize_manage(principal.actor_id, project_id, &access, None)?;
+    Ok(Json(
+        invitations_for(&state, principal.actor_id, project_id).await?,
+    ))
+}
+
+/// A project's invitations, newest first, for someone who may manage them.
+pub(crate) async fn invitations_for(
+    state: &AppState,
+    actor_id: Uuid,
+    project_id: Uuid,
+) -> Result<Vec<InvitationView>, AppError> {
+    let access = invitation_access(state, actor_id, project_id).await?;
+    authorize_manage(actor_id, project_id, &access, None)?;
     let rows = sqlx::query_as::<_, InvitationRow>(
         r#"
         SELECT invitation.id, invitation.project_id, invitation.role, invitation.role_id,
@@ -242,7 +253,17 @@ async fn list_invitations(
     .bind(project_id)
     .fetch_all(&state.pool)
     .await?;
-    Ok(Json(rows.into_iter().map(InvitationView::from).collect()))
+    Ok(rows.into_iter().map(InvitationView::from).collect())
+}
+
+/// A new invitation's ID and its one-time token, which only the join link
+/// carries; the database keeps a digest.
+pub(crate) struct Issued {
+    pub invitation_id: Uuid,
+    pub project_id: Uuid,
+    pub token: String,
+    /// For the caller's audit row.
+    pub metadata: serde_json::Value,
 }
 
 async fn issue_invitation(
@@ -253,32 +274,75 @@ async fn issue_invitation(
     ApiJson(request): ApiJson<IssueInvitationRequest>,
 ) -> Result<(StatusCode, Json<IssuedInvitation>), AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    validate_invitation_role(&request.role)?;
-    if !(1..=MAX_EXPIRY_HOURS).contains(&request.expires_in_hours) {
-        return Err(AppError::Validation("invitation expiry"));
-    }
-
-    let (token, token_prefix, token_digest) = generate_invitation_token();
-    let invitation_id = Uuid::now_v7();
     let mut transaction = state.pool.begin().await?;
-    let access = lock_invitation_access(&mut transaction, principal.actor_id, project_id)
-        .await?
-        .ok_or(AppError::NotFound("project"))?;
-    let (role, role_id) = match request.role_id {
-        None => (request.role.clone(), None),
-        Some(role_id) => {
-            crate::memberships::pick_custom_role(&mut transaction, project_id, role_id).await?
-        }
-    };
-    authorize_manage(principal.actor_id, project_id, &access, Some(&role))?;
-    crate::memberships::require_grantable(
+    let issued = issue_invitation_in(
         &mut transaction,
         principal.actor_id,
         project_id,
-        &role,
-        role_id,
+        &request.role,
+        request.role_id,
+        request.expires_in_hours,
     )
     .await?;
+    insert_audit(
+        &mut transaction,
+        &principal,
+        project_id,
+        issued.invitation_id,
+        "project.invitation.issue",
+        issued.metadata.clone(),
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(issued_invitation(&state, issued).await?),
+    ))
+}
+
+async fn issued_invitation(state: &AppState, issued: Issued) -> Result<IssuedInvitation, AppError> {
+    let invitation = fetch_invitation(state, issued.project_id, issued.invitation_id).await?;
+    Ok(IssuedInvitation {
+        invitation,
+        invitation_url: join_url(state, &issued.token),
+    })
+}
+
+/// The link someone opens to join with `token`.
+pub(crate) fn join_url(state: &AppState, token: &str) -> String {
+    format!("{}/join#token={token}", public_origin(state))
+}
+
+/// Invite someone into `project_id` with a built-in `role`, or a custom
+/// role of the workspace (`role_id`), for `expires_in_hours`: only an owner
+/// or admin of the workspace who manages the project's invitations, and
+/// never above what they hold. The caller records the audit row.
+pub(crate) async fn issue_invitation_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    project_id: Uuid,
+    role: &str,
+    role_id: Option<Uuid>,
+    expires_in_hours: i32,
+) -> Result<Issued, AppError> {
+    validate_invitation_role(role)?;
+    if !(1..=MAX_EXPIRY_HOURS).contains(&expires_in_hours) {
+        return Err(AppError::Validation("invitation expiry"));
+    }
+    let (token, token_prefix, token_digest) = generate_invitation_token();
+    let invitation_id = Uuid::now_v7();
+    let access = lock_invitation_access(transaction, actor_id, project_id)
+        .await?
+        .ok_or(AppError::NotFound("project"))?;
+    let (role, role_id) = match role_id {
+        None => (role.to_owned(), None),
+        Some(role_id) => {
+            crate::memberships::pick_custom_role(transaction, project_id, role_id).await?
+        }
+    };
+    authorize_manage(actor_id, project_id, &access, Some(&role))?;
+    crate::memberships::require_grantable(transaction, actor_id, project_id, &role, role_id)
+        .await?;
     sqlx::query(
         r#"
         INSERT INTO project_invitations (
@@ -294,35 +358,21 @@ async fn issue_invitation(
     .bind(&role)
     .bind(&token_prefix)
     .bind(token_digest.to_vec())
-    .bind(principal.actor_id)
-    .bind(request.expires_in_hours)
+    .bind(actor_id)
+    .bind(expires_in_hours)
     .bind(role_id)
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
-    insert_audit(
-        &mut transaction,
-        &principal,
-        project_id,
+    Ok(Issued {
         invitation_id,
-        "project.invitation.issue",
-        serde_json::json!({
+        project_id,
+        token,
+        metadata: serde_json::json!({
             "role": role,
             "roleId": role_id,
-            "expiresInHours": request.expires_in_hours,
+            "expiresInHours": expires_in_hours,
         }),
-    )
-    .await?;
-    transaction.commit().await?;
-
-    let invitation = fetch_invitation(&state, project_id, invitation_id).await?;
-    let origin = public_origin(&state);
-    Ok((
-        StatusCode::CREATED,
-        Json(IssuedInvitation {
-            invitation,
-            invitation_url: format!("{origin}/join#token={token}"),
-        }),
-    ))
+    })
 }
 
 async fn revoke_invitation(
@@ -333,11 +383,51 @@ async fn revoke_invitation(
     ApiJson(request): ApiJson<RevokeInvitationRequest>,
 ) -> Result<Json<InvitationView>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    if request.expected_version < 1 {
+    let mut transaction = state.pool.begin().await?;
+    let revoked = revoke_invitation_in(
+        &mut transaction,
+        principal.actor_id,
+        invitation_id,
+        request.expected_version,
+    )
+    .await?;
+    if let Some(role) = &revoked.newly_revoked_role {
+        insert_audit(
+            &mut transaction,
+            &principal,
+            revoked.project_id,
+            invitation_id,
+            "project.invitation.revoke",
+            serde_json::json!({"role": role}),
+        )
+        .await?;
+    }
+    transaction.commit().await?;
+    Ok(Json(
+        fetch_invitation(&state, revoked.project_id, invitation_id).await?,
+    ))
+}
+
+/// What revoking did: the invitation's project, and its role when this
+/// call revoked it (None when it was already revoked).
+pub(crate) struct Revoked {
+    pub project_id: Uuid,
+    pub newly_revoked_role: Option<String>,
+}
+
+/// Revoke an active invitation, for someone who may manage it. Revoking one
+/// already revoked does nothing. The caller records the audit row when
+/// `newly_revoked_role` is set.
+pub(crate) async fn revoke_invitation_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    invitation_id: Uuid,
+    expected_version: i64,
+) -> Result<Revoked, AppError> {
+    if expected_version < 1 {
         return Err(AppError::Validation("invitation version"));
     }
-    let mut transaction = state.pool.begin().await?;
-    let row = lock_invitation_for_mutation(&mut transaction, principal.actor_id, invitation_id)
+    let row = lock_invitation_for_mutation(transaction, actor_id, invitation_id)
         .await?
         .ok_or(AppError::NotFound("project_invitation"))?;
     let access = InvitationAccess {
@@ -349,12 +439,12 @@ async fn revoke_invitation(
         project_role_permissions: row.project_role_permissions,
         project_membership_enabled: row.project_membership_enabled,
     };
-    authorize_manage(principal.actor_id, row.project_id, &access, Some(&row.role))?;
+    authorize_manage(actor_id, row.project_id, &access, Some(&row.role))?;
     if row.status == "revoked" {
-        transaction.commit().await?;
-        return Ok(Json(
-            fetch_invitation(&state, row.project_id, invitation_id).await?,
-        ));
+        return Ok(Revoked {
+            project_id: row.project_id,
+            newly_revoked_role: None,
+        });
     }
     if row.status != "active" {
         return Err(AppError::Conflict(
@@ -362,7 +452,7 @@ async fn revoke_invitation(
             "invitation is no longer active",
         ));
     }
-    if row.version != request.expected_version {
+    if row.version != expected_version {
         return Err(AppError::VersionConflict {
             resource: "project_invitation",
             current_version: row.version,
@@ -377,21 +467,12 @@ async fn revoke_invitation(
         "#,
     )
     .bind(invitation_id)
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
-    insert_audit(
-        &mut transaction,
-        &principal,
-        row.project_id,
-        invitation_id,
-        "project.invitation.revoke",
-        serde_json::json!({"role": row.role}),
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(Json(
-        fetch_invitation(&state, row.project_id, invitation_id).await?,
-    ))
+    Ok(Revoked {
+        project_id: row.project_id,
+        newly_revoked_role: Some(row.role),
+    })
 }
 
 async fn replace_invitation(
@@ -402,17 +483,51 @@ async fn replace_invitation(
     ApiJson(request): ApiJson<ReplaceInvitationRequest>,
 ) -> Result<(StatusCode, Json<IssuedInvitation>), AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    if request.expected_version < 1 {
+    let mut transaction = state.pool.begin().await?;
+    let issued = replace_invitation_in(
+        &mut transaction,
+        principal.actor_id,
+        invitation_id,
+        request.expected_version,
+        request.expires_in_hours,
+    )
+    .await?;
+    insert_audit(
+        &mut transaction,
+        &principal,
+        issued.project_id,
+        invitation_id,
+        "project.invitation.replace",
+        issued.metadata.clone(),
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(issued_invitation(&state, issued).await?),
+    ))
+}
+
+/// Replace an active invitation with a new link (the old one stops
+/// working), issued by the caller and so within what they hold. Returns the
+/// replacement; its metadata names the replacement for the audit row, which
+/// the caller records against the old invitation.
+pub(crate) async fn replace_invitation_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    invitation_id: Uuid,
+    expected_version: i64,
+    expires_in_hours: i32,
+) -> Result<Issued, AppError> {
+    if expected_version < 1 {
         return Err(AppError::Validation("invitation version"));
     }
-    if !(1..=MAX_EXPIRY_HOURS).contains(&request.expires_in_hours) {
+    if !(1..=MAX_EXPIRY_HOURS).contains(&expires_in_hours) {
         return Err(AppError::Validation("invitation expiry"));
     }
-
     let (token, token_prefix, token_digest) = generate_invitation_token();
     let replacement_id = Uuid::now_v7();
-    let mut transaction = state.pool.begin().await?;
-    let row = lock_invitation_for_mutation(&mut transaction, principal.actor_id, invitation_id)
+    let row = lock_invitation_for_mutation(transaction, actor_id, invitation_id)
         .await?
         .ok_or(AppError::NotFound("project_invitation"))?;
     let access = InvitationAccess {
@@ -424,12 +539,12 @@ async fn replace_invitation(
         project_role_permissions: row.project_role_permissions,
         project_membership_enabled: row.project_membership_enabled,
     };
-    authorize_manage(principal.actor_id, row.project_id, &access, Some(&row.role))?;
+    authorize_manage(actor_id, row.project_id, &access, Some(&row.role))?;
     // The replacement is issued by the caller, so its role must be within
     // what the caller holds, as for a new invitation.
     crate::memberships::require_grantable(
-        &mut transaction,
-        principal.actor_id,
+        transaction,
+        actor_id,
         row.project_id,
         &row.role,
         row.role_id,
@@ -441,7 +556,7 @@ async fn replace_invitation(
             "invitation is no longer active",
         ));
     }
-    if row.version != request.expected_version {
+    if row.version != expected_version {
         return Err(AppError::VersionConflict {
             resource: "project_invitation",
             current_version: row.version,
@@ -463,10 +578,10 @@ async fn replace_invitation(
     .bind(&row.role)
     .bind(&token_prefix)
     .bind(token_digest.to_vec())
-    .bind(principal.actor_id)
-    .bind(request.expires_in_hours)
+    .bind(actor_id)
+    .bind(expires_in_hours)
     .bind(row.role_id)
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
     sqlx::query(
         r#"
@@ -479,32 +594,18 @@ async fn replace_invitation(
     )
     .bind(invitation_id)
     .bind(replacement_id)
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
-    insert_audit(
-        &mut transaction,
-        &principal,
-        row.project_id,
-        invitation_id,
-        "project.invitation.replace",
-        serde_json::json!({
+    Ok(Issued {
+        invitation_id: replacement_id,
+        project_id: row.project_id,
+        token,
+        metadata: serde_json::json!({
             "replacementInvitationId": replacement_id,
             "role": row.role,
-            "expiresInHours": request.expires_in_hours,
+            "expiresInHours": expires_in_hours,
         }),
-    )
-    .await?;
-    transaction.commit().await?;
-
-    let invitation = fetch_invitation(&state, row.project_id, replacement_id).await?;
-    let origin = public_origin(&state);
-    Ok((
-        StatusCode::CREATED,
-        Json(IssuedInvitation {
-            invitation,
-            invitation_url: format!("{origin}/join#token={token}"),
-        }),
-    ))
+    })
 }
 
 async fn lock_invitation_for_mutation(
@@ -1180,7 +1281,7 @@ fn generate_invitation_token() -> (String, String, [u8; 32]) {
     (token, prefix, digest)
 }
 
-async fn fetch_invitation(
+pub(crate) async fn fetch_invitation(
     state: &AppState,
     project_id: Uuid,
     invitation_id: Uuid,
