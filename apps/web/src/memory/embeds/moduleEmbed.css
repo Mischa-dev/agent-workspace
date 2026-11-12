@@ -1,0 +1,53 @@
+/* A module's embed in a page (AWD-53): a task list's heading and its link to
+   the rest; the pieces draw the things themselves. */
+
+.aw-membed {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.aw-membed__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--content-fg-muted);
+}
+
+.aw-md .aw-membed__name,
+.aw-membed__name {
+  color: var(--content-fg);
+  font-weight: var(--weight-bold);
+  text-decoration: none;
+}
+
+.aw-membed__name:hover {
+  text-decoration: underline;
+}
+
+.aw-membed__count {
+  font: var(--t-small);
+}
+
+.aw-membed__more {
+  justify-self: start;
+  font: var(--t-small);
+}
+
+.aw-membed__problem {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--content-fg-muted);
+}
+
+/* The embed's own box frames a lone card; the card doesn't draw another. */
+.aw-membed--thing .aw-piece__card--alone {
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+}

@@ -2,6 +2,7 @@ import { Editor, Extension, type ChainedCommands } from '@tiptap/core'
 import { Collaboration } from '@tiptap/extension-collaboration'
 import {
   Bold,
+  Blocks,
   Code,
   Heading1,
   Heading2,
@@ -18,7 +19,6 @@ import {
   SquareCode,
   Strikethrough,
   Table,
-  Table2,
   Undo2,
   type LucideIcon,
 } from 'lucide-react'
@@ -53,6 +53,7 @@ import { pageExtensions } from './schema'
 import './live.css'
 
 const CollectionEmbedPicker = lazy(() => import('../../collections/CollectionEmbedPicker'))
+const EmbedPicker = lazy(() => import('../embeds/EmbedPicker'))
 
 // A page you write in place, live with everyone who has it open (AWD-53): a
 // Tiptap editor on the page's Yjs document, kept in step with the server by
@@ -229,7 +230,8 @@ function LiveEditor({
   const [saveState, setSaveState] = useState<SaveState>('saved')
   const [failure, setFailure] = useState<SaveFailure | null>(null)
   const [linking, setLinking] = useState(false)
-  const [embedding, setEmbedding] = useState(false)
+  // Embedding by address, or a collection view.
+  const [embedding, setEmbedding] = useState<'address' | 'collection' | null>(null)
   // Each embed's live view, drawn into the element the editor keeps for it.
   const [slots] = useState(() => new EmbedSlots())
   const embeds = useSyncExternalStore(slots.subscribe, slots.getSnapshot)
@@ -366,16 +368,12 @@ function LiveEditor({
                 controls={editorId}
                 editor={editor}
                 onComment={discussion ? () => commentOnSelection(editor, discussion) : null}
-                onEmbed={
-                  collections
-                    ? () => {
-                        setLinking(false)
-                        setEmbedding(true)
-                      }
-                    : null
-                }
+                onEmbed={() => {
+                  setLinking(false)
+                  setEmbedding('address')
+                }}
                 onLink={() => {
-                  setEmbedding(false)
+                  setEmbedding(null)
                   setLinking(true)
                 }}
               />
@@ -388,16 +386,31 @@ function LiveEditor({
           </span>
         </div>
         {linking && editor ? <LinkForm editor={editor} onClose={() => setLinking(false)} /> : null}
-        {embedding && editor && collections ? (
+        {embedding === 'address' && editor ? (
+          <Suspense fallback={null}>
+            <EmbedPicker
+              onClose={() => {
+                setEmbedding(null)
+                editor.commands.focus()
+              }}
+              onCollection={collections ? () => setEmbedding('collection') : null}
+              onPick={(embed) => {
+                insertEmbed(editor, embed)
+                setEmbedding(null)
+              }}
+            />
+          </Suspense>
+        ) : null}
+        {embedding === 'collection' && editor && collections ? (
           <Suspense fallback={null}>
             <CollectionEmbedPicker
               onClose={() => {
-                setEmbedding(false)
+                setEmbedding(null)
                 editor.commands.focus()
               }}
               onPick={(embed) => {
                 insertEmbed(editor, embed)
-                setEmbedding(false)
+                setEmbedding(null)
               }}
               projectId={collections}
             />
@@ -544,11 +557,11 @@ const TOOLS: Tool[][] = [
       run: (editor) => editor.chain().focus().setHorizontalRule().run(),
       enabled: (editor) => editor.can().setHorizontalRule(),
     },
-    // Opens the collection picker: see Toolbar.
+    // Opens the embed picker: see Toolbar.
     {
       key: 'embed',
-      label: 'Collection view',
-      icon: Table2,
+      label: 'Embed',
+      icon: Blocks,
       run: () => undefined,
     },
   ],

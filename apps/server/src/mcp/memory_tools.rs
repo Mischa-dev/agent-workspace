@@ -800,8 +800,10 @@ pub(super) struct BlockLine {
     /// Where the block is in this version.
     pub position: usize,
     /// heading, paragraph, code, quote, list, hr, table, or embed (a line
-    /// `[label](/path "embed")` that shows something of the app live, such
-    /// as a collection's view).
+    /// `[label](/path "embed")` that shows something of the app live: a
+    /// collection's view, a task, page, whiteboard or thread at its address,
+    /// or a project's tasks at `/projects/{projectId}/work-items` with the
+    /// task list's filters, `layout=board` for a board).
     #[serde(rename = "type")]
     pub kind: String,
     /// A heading's level.
