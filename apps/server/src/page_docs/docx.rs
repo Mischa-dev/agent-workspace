@@ -973,8 +973,17 @@ enum ListKind {
     Bullet,
     Check,
     Ordered(String),
-    /// An indented paragraph after a list item: more of that item.
-    More,
+    /// An indented paragraph, line of code or quote after a list item:
+    /// more of that item.
+    More(Part),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Part {
+    Paragraph,
+    /// One line, as the entry's only text.
+    Code,
+    Quote,
 }
 
 #[derive(Debug)]
@@ -1086,7 +1095,7 @@ impl Reader<'_> {
                 self.flat
                     .push(Flat::Block(Block::new(Node::HorizontalRule)));
             } else if kind == Kind::Code {
-                self.flat.push(Flat::Code(code_text));
+                self.code(code_text, indent);
             }
             return;
         }
@@ -1148,36 +1157,55 @@ impl Reader<'_> {
         let node = match kind {
             Kind::Heading(level) => Node::Heading { level, content },
             Kind::Code => {
-                self.flat.push(Flat::Code(code_text));
+                self.code(code_text, indent);
                 return;
             }
             Kind::Quote => {
-                self.flat.push(Flat::Quote(content));
+                if !self.more(Part::Quote, &mut content, indent) {
+                    self.flat.push(Flat::Quote(content));
+                }
                 return;
             }
             _ if all_code => {
-                self.flat.push(Flat::Code(code_text));
+                self.code(code_text, indent);
                 return;
             }
             _ => {
-                // Indented under a list item, a paragraph is more of it.
-                if let Some(Flat::List(last)) = self.flat.last()
-                    && indent >= i64::from(INDENT_STEP)
-                {
-                    let under = (indent / i64::from(INDENT_STEP) - 1) as usize;
-                    self.flat.push(Flat::List(ListEntry {
-                        level: under.min(last.level),
-                        kind: ListKind::More,
-                        start: 0,
-                        checked: None,
-                        content,
-                    }));
+                if self.more(Part::Paragraph, &mut content, indent) {
                     return;
                 }
                 Node::Paragraph(content)
             }
         };
         self.flat.push(Flat::Block(Block::new(node)));
+    }
+
+    fn code(&mut self, line: String, indent: i64) {
+        let mut content = vec![Inline::text(line, Marks::default())];
+        if !self.more(Part::Code, &mut content, indent) {
+            self.flat.push(Flat::Code(plain(&content)));
+        }
+    }
+
+    /// Indented under a list item, a paragraph, line of code or quote is
+    /// more of that item: the one at its level, or the nearest above it.
+    fn more(&mut self, part: Part, content: &mut Vec<Inline>, indent: i64) -> bool {
+        let Some(Flat::List(last)) = self.flat.last() else {
+            return false;
+        };
+        if indent < i64::from(INDENT_STEP) {
+            return false;
+        }
+        let under = (indent / i64::from(INDENT_STEP) - 1) as usize;
+        let level = under.min(last.level);
+        self.flat.push(Flat::List(ListEntry {
+            level,
+            kind: ListKind::More(part),
+            start: 0,
+            checked: None,
+            content: std::mem::take(content),
+        }));
+        true
     }
 
     fn table(&mut self, table: Xml<'_, '_>) -> Option<Node> {
@@ -1526,8 +1554,8 @@ fn lists(entries: Vec<ListEntry>) -> Vec<Block> {
     let mut out = Vec::new();
     let mut entries = entries.into_iter().peekable();
     while let Some(head) = entries.next() {
-        if head.kind == ListKind::More {
-            out.push(Block::new(Node::Paragraph(head.content)));
+        if let ListKind::More(part) = head.kind {
+            add_more(&mut out, part, head.content);
             continue;
         }
         let kind = head.kind.clone();
@@ -1544,10 +1572,10 @@ fn lists(entries: Vec<ListEntry>) -> Vec<Block> {
                 }
                 continue;
             }
-            if next.kind == ListKind::More {
+            if let ListKind::More(part) = next.kind {
                 let Some(more) = entries.next() else { break };
                 if let Some(last) = items.last_mut() {
-                    last.content.push(Block::new(Node::Paragraph(more.content)));
+                    add_more(&mut last.content, part, more.content);
                 }
                 continue;
             }
@@ -1559,10 +1587,32 @@ fn lists(entries: Vec<ListEntry>) -> Vec<Block> {
         }
         out.push(Block::new(match kind {
             ListKind::Ordered(_) => Node::OrderedList { start, items },
-            ListKind::Bullet | ListKind::Check | ListKind::More => Node::BulletList(items),
+            ListKind::Bullet | ListKind::Check | ListKind::More(_) => Node::BulletList(items),
         }));
     }
     out
+}
+
+/// Adds a list item's later paragraph, line of code or quoted paragraph to
+/// its blocks, joining lines of code and quoted paragraphs as `group` does.
+fn add_more(blocks: &mut Vec<Block>, part: Part, content: Vec<Inline>) {
+    match (part, blocks.last_mut().map(|block| &mut block.node)) {
+        (Part::Code, Some(Node::CodeBlock { text, .. })) => {
+            text.push('\n');
+            text.push_str(&plain(&content));
+        }
+        (Part::Code, _) => blocks.push(Block::new(Node::CodeBlock {
+            language: None,
+            text: plain(&content),
+        })),
+        (Part::Quote, Some(Node::Blockquote(children))) => {
+            children.push(Block::new(Node::Paragraph(content)));
+        }
+        (Part::Quote, _) => blocks.push(Block::new(Node::Blockquote(vec![Block::new(
+            Node::Paragraph(content),
+        )]))),
+        (Part::Paragraph, _) => blocks.push(Block::new(Node::Paragraph(content))),
+    }
 }
 
 fn item(entry: ListEntry) -> Item {
@@ -1618,7 +1668,7 @@ mod tests {
 
     #[test]
     fn paragraphs_inside_list_items_stay_inside() {
-        let markdown = "1. First\n\n   Explanation belonging to first.\n\n   - Under first\n\n     More under it.\n\n   Back in first.\n\n2. Second\n\n- [ ] Box\n\n  Box note.\n\nAfter the lists.";
+        let markdown = "1. First\n\n   Explanation belonging to first.\n\n   ```\n   make all\n\n   \tdone\n   ```\n\n   > Quoted in first\n\n   - Under first\n\n     More under it.\n\n   Back in first.\n\n2. Second\n\n- [ ] Box\n\n  Box note.\n\nAfter the lists.";
         let (imported, written) = round_trip(markdown);
         assert_eq!(imported.blocks, from_markdown(markdown), "{written}");
     }

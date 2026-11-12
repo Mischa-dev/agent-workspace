@@ -38,7 +38,7 @@ as the page's title and keeps the rest as it is.
 | Inline code | The Inline Code character style (Consolas) | That style, any character style with "code" in its name, or a monospace font (Consolas, Courier New, Roboto Mono, Menlo and others) |
 | Link | A hyperlink; a link to the app's own page is made absolute with the app's address | Hyperlinks and `HYPERLINK` fields; links back to the app become paths again. Links a page won't hold (other than http, https, mailto and the app's own paths) keep their text only |
 | Line break | A line break | Line and carriage-return breaks; page and column breaks are dropped |
-| Bullet list, nested | Word's bullets, one level per depth; an item's later paragraphs are indented under it | Any bulleted numbering, by level; an indented paragraph after an item stays in that item |
+| Bullet list, nested | Word's bullets, one level per depth; an item's later paragraphs are indented under it | Any bulleted numbering, by level; an indented paragraph, code block or quote after an item stays in that item. **Fallback:** a heading, table or divider inside an item comes back after the list |
 | Numbered list | Word's numbering, each list from its own start | Any counting format (1., a., i.) as a numbered list from its start |
 | Checklist item | **Fallback:** ☐ or ☑ before the text, indented to its level (Word has no checklist) | A paragraph or list item starting with ☐, ☑ or ☒, or a list whose bullet is a box (Google Docs' checklists) |
 | Code block | Paragraphs in the Code style, one per line | Consecutive Code-style (or Preformatted, Source Code) paragraphs, or paragraphs whose text is all in a monospace font, become one code block. **Fallback:** the language name isn't kept |
