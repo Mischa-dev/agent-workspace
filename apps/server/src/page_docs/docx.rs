@@ -1066,6 +1066,9 @@ impl Reader<'_> {
         let mut runs = Runs::new(self);
         runs.walk(paragraph, None, 0);
         let mut content = runs.out;
+        // Code keeps its tabs; elsewhere a tab is a space, as a page shows it.
+        let code_text = plain(&content);
+        untab(&mut content);
         self.set_aside.append(&mut runs.set_aside);
 
         let blank = content.iter().all(|inline| match inline {
@@ -1132,7 +1135,7 @@ impl Reader<'_> {
         let node = match kind {
             Kind::Heading(level) => Node::Heading { level, content },
             Kind::Code => {
-                self.flat.push(Flat::Code(plain(&content)));
+                self.flat.push(Flat::Code(code_text));
                 return;
             }
             Kind::Quote => {
@@ -1140,7 +1143,7 @@ impl Reader<'_> {
                 return;
             }
             _ if all_code => {
-                self.flat.push(Flat::Code(plain(&content)));
+                self.flat.push(Flat::Code(code_text));
                 return;
             }
             _ => Node::Paragraph(content),
@@ -1196,10 +1199,11 @@ impl Reader<'_> {
                         let mut runs = Runs::new(self);
                         runs.walk(paragraph, None, 0);
                         let Runs {
-                            out,
+                            mut out,
                             set_aside: mut aside,
                             ..
                         } = runs;
+                        untab(&mut out);
                         self.set_aside.append(&mut aside);
                         if out.is_empty() {
                             continue;
@@ -1346,7 +1350,7 @@ impl<'r, 'p> Runs<'r, 'p> {
                 }
                 _ if matches!(self.field, Field::Instruction(_)) => {}
                 "t" => self.text(piece.text().unwrap_or_default(), &marks),
-                "tab" | "ptab" => self.text(" ", &marks),
+                "tab" | "ptab" => self.text("\t", &marks),
                 "noBreakHyphen" => self.text("-", &marks),
                 "br" => {
                     if !matches!(attr(piece, "type"), Some("page" | "column")) {
@@ -1414,6 +1418,17 @@ fn take_box(content: &mut Vec<Inline>) -> Option<bool> {
         *text = rest.to_owned();
     }
     Some(state)
+}
+
+/// Tabs as spaces, for anything but code.
+fn untab(content: &mut [Inline]) {
+    for inline in content {
+        if let Inline::Text { text, .. } = inline
+            && text.contains('\t')
+        {
+            *text = text.replace('\t', " ");
+        }
+    }
 }
 
 fn plain(content: &[Inline]) -> String {
@@ -1526,7 +1541,7 @@ mod tests {
     use super::*;
     use crate::page_docs::{tree::from_markdown, write::write_document};
 
-    const SAMPLE: &str = "## Plan\n\nSome **bold**, *italic*, ~~gone~~ and `code` with a [link](https://example.com/a?b=1&c=2) and [a task](/projects/p/work-items/t).\n\n- one\n- two\n  - nested\n\n3. three\n4. four\n\n- [ ] open\n- [x] done\n\n> Quoted words\n\n```\nfn main() {\n\n    println!(\"<hi>\");\n}\n```\n\n---\n\n| Name | Count |\n| :--- | ---: |\n| a | 1 |\n| b | 2 |\n\n[Open tasks](/projects/p/work-items?status=open \"embed\")";
+    const SAMPLE: &str = "## Plan\n\nSome **bold**, *italic*, ~~gone~~ and `code` with a [link](https://example.com/a?b=1&c=2) and [a task](/projects/p/work-items/t).\n\n- one\n- two\n  - nested\n\n3. three\n4. four\n\n- [ ] open\n- [x] done\n\n> Quoted words\n\n```\nfn main() {\n\n    println!(\"<hi>\");\n}\n\tindented()\n```\n\n---\n\n| Name | Count |\n| :--- | ---: |\n| a | 1 |\n| b | 2 |\n\n[Open tasks](/projects/p/work-items?status=open \"embed\")";
 
     fn round_trip(markdown: &str) -> (Imported, String) {
         let bytes = export(

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 
 import { requestJson } from '../../api/client'
 import { isApiError } from '../../api/errors'
+import { queryKeys } from '../../api/queryKeys'
 import type { Piece, Thing, ThingDecl } from '../../modules/contract'
 import { PieceView } from '../../modules/pieces/Pieces'
 import { Button, Icon, ListSkeleton, countLabel } from '../../ui'
@@ -113,7 +114,8 @@ function TasksEmbed({
   projectId: string
 }) {
   const query = useQuery({
-    queryKey: ['work-items', projectId, 'embed', filters],
+    // Under the project's task queries, so task changes refetch it.
+    queryKey: [...queryKeys.workItemsRoot(projectId), 'embed', filters],
     queryFn: () => listWorkItems(projectId, { ...filters, limit: TASKS }),
     retry: (count, error) => !(isApiError(error) && error.status < 500) && count < 2,
   })
