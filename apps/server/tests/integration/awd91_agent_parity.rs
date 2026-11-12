@@ -1709,3 +1709,111 @@ async fn people_invite_to_a_project_and_agents_never_do() {
     assert_eq!(workspace_audit, 2);
     f.close().await;
 }
+
+#[tokio::test]
+async fn people_change_settings_and_agents_only_read_them() {
+    let Some(f) = fixture().await else {
+        return;
+    };
+    let project = f.seed.project_id.to_string();
+    let app = connect_app(&f.app, &f.browser, "Owner's app", "full").await;
+    let session = initialize(&f.app, &app).await.expect("owner MCP");
+    let person = |name: &'static str, arguments: Value| {
+        let app = app.clone();
+        let session = session.clone();
+        let router = f.app.clone();
+        async move { tool(&router, &app, &session, name, arguments).await }
+    };
+
+    let workspace = person(
+        "settings_set",
+        json!({"projectId": project, "key": "run.model", "scope": "workspace", "value": "wide-model"}),
+    )
+    .await;
+    assert_eq!(workspace["outcome"], "ok", "{workspace}");
+    assert_eq!(
+        workspace["value"]["setting"]["source"], "workspace",
+        "{workspace}"
+    );
+    let changed = person(
+        "settings_set",
+        json!({"projectId": project, "key": "run.model", "value": "near-model", "expectedVersion": 0}),
+    )
+    .await;
+    assert_eq!(changed["value"]["done"], "changed", "{changed}");
+    assert_eq!(changed["value"]["version"], 1, "{changed}");
+    assert_eq!(
+        changed["value"]["setting"]["value"], "near-model",
+        "{changed}"
+    );
+    assert_eq!(
+        changed["value"]["setting"]["source"], "project",
+        "{changed}"
+    );
+    let stale = person(
+        "settings_set",
+        json!({"projectId": project, "key": "run.model", "value": "other-model", "expectedVersion": 0}),
+    )
+    .await;
+    assert_eq!(stale["outcome"], "conflict", "{stale}");
+    let bad = person(
+        "settings_set",
+        json!({"projectId": project, "key": "run.model", "value": 7}),
+    )
+    .await;
+    assert_eq!(bad["outcome"], "invalid_request", "{bad}");
+    let layout = person(
+        "settings_set",
+        json!({"projectId": project, "key": "layout.preset", "value": "x"}),
+    )
+    .await;
+    assert_eq!(layout["outcome"], "invalid_request", "{layout}");
+
+    // Agents read what people set, and change nothing.
+    let read = f
+        .call(
+            "settings_get",
+            json!({"projectId": project, "keys": ["run.model"]}),
+        )
+        .await;
+    assert_eq!(
+        read["value"]["settings"][0]["value"], "near-model",
+        "{read}"
+    );
+    let refused = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "settings_set",
+        json!({"projectId": project, "key": "run.model", "value": "agent-model"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+
+    // Resetting the project's value falls back to the workspace's.
+    let reset = person(
+        "settings_set",
+        json!({"projectId": project, "key": "run.model", "reset": true}),
+    )
+    .await;
+    assert_eq!(reset["value"]["done"], "reset", "{reset}");
+    assert_eq!(reset["value"]["setting"]["value"], "wide-model", "{reset}");
+    let again = person(
+        "settings_set",
+        json!({"projectId": project, "key": "run.model", "reset": true}),
+    )
+    .await;
+    assert_eq!(again["value"]["done"], "unchanged", "{again}");
+
+    let audited = sqlx::query_scalar::<_, String>(
+        "SELECT action FROM audit_events WHERE target_kind = 'setting' AND channel = 'mcp' ORDER BY id",
+    )
+    .fetch_all(&f.pool)
+    .await
+    .expect("audit");
+    assert_eq!(
+        audited,
+        ["setting.changed", "setting.changed", "setting.reset"]
+    );
+    f.close().await;
+}

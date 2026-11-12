@@ -266,7 +266,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "A project's settings as they apply to you: the default harness, model, reasoning and speed for runs, its environment, and AI options, each with where its value came from (project, user, workspace or default). Read only; people change settings in the app.",
+        description = "A project's settings as they apply to you: the default harness, model, reasoning and speed for runs, its environment, and AI options, each with where its value came from (project, user, workspace or default). Agents read them; people change them with settings_set.",
         annotations(title = "Get settings", read_only_hint = true, open_world_hint = false)
     )]
     async fn settings_get(
@@ -276,6 +276,25 @@ impl McpServer {
     ) -> Json<common::ToolResult<settings_tools::SettingsValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(settings_tools::settings_get(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "People: change a setting (settings_get lists them) or reset it so it inherits again, at the project (its owners and admins), the workspace (owners and admins of the workspace) or for yourself. Through an app connected as yourself; agents only read settings. Layouts and modules have their own tools. Audited.",
+        annotations(
+            title = "Change a setting",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn settings_set(
+        &self,
+        Parameters(arguments): Parameters<settings_tools::SettingsSetArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<settings_tools::SettingsSetValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(settings_tools::settings_set(&self.state, principal, arguments).await)
     }
 
     #[tool(

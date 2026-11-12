@@ -472,6 +472,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "run_stop",
     "scheduled_message_update",
     "session_bind",
+    "settings_set",
     "task_claim",
     "task_comment",
     "task_comment_delete",
@@ -5670,6 +5671,14 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"projectId": b.project, "person": "@wren", "role": "viewer"})],
         )
         .rejecting(vec![json!({"projectId": a.project, "person": bx.wren, "role": "viewer"})]),
+        mcp_case(
+            "settings_set",
+            json!({"projectId": a.project, "key": "run.model", "value": "net-model"}),
+            vec![
+                json!({"projectId": b.project, "key": "run.model", "value": "net-model"}),
+                json!({"projectId": b.project, "key": "run.model", "scope": "workspace", "value": "net-model"}),
+            ],
+        ),
         mcp_case(
             "invitation_write",
             json!({"projectId": a.project, "role": "viewer", "expiresInHours": 24}),

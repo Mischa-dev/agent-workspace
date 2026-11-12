@@ -27,6 +27,7 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("project_open", None),
     ("workflow_get", Some(TasksView)),
     ("settings_get", None),
+    ("settings_set", None),
     ("module_list", None),
     ("usage_windows", None),
     ("usage_batch", None),

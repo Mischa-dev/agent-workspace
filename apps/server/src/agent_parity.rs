@@ -37,15 +37,11 @@ mod tests {
 
     /// Every web write, in `MUTATING_ENTRY_POINTS` order.
     const WEB_WRITES: &[(MutationMethod, &str, Parity)] = &[
-        (
-            Put,
-            "/api/v1/settings/values/{key}",
-            Gap("settings_set: change a workspace or project setting"),
-        ),
+        (Put, "/api/v1/settings/values/{key}", Tool("settings_set")),
         (
             Post,
             "/api/v1/settings/values/{key}/reset",
-            Gap("settings_set: change a workspace or project setting"),
+            Tool("settings_set"),
         ),
         (
             Put,

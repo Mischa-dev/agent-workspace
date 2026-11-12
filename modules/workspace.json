@@ -11,6 +11,7 @@
   "tools": {
     "briefing": "query",
     "settings_get": "describe",
+    "settings_set": "change",
     "people_search": "query",
     "search": "query",
     "notification_list": "query",
