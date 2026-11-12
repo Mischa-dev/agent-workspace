@@ -695,6 +695,7 @@ pub fn import(bytes: &[u8], origin: Option<&str>) -> Result<Imported, ImportErro
         title: None,
         set_aside: Vec::new(),
         flat: Vec::new(),
+        counted: HashMap::new(),
     };
     reader.body(body, 0);
     let Reader {
@@ -1001,6 +1002,8 @@ struct Reader<'r> {
     title: Option<String>,
     set_aside: Vec<&'static str>,
     flat: Vec<Flat>,
+    /// Items seen so far in each list's level: `(numId, ilvl)`.
+    counted: HashMap<(String, u32), u32>,
 }
 
 impl Reader<'_> {
@@ -1102,6 +1105,13 @@ impl Reader<'_> {
             if checked.is_none() {
                 checked = box_state(&found.text);
             }
+            // Word counts on across whatever comes between a list's items,
+            // and starts a level's count again under each item above it.
+            let counted = self.counted.entry((id.clone(), *level)).or_insert(0);
+            let start = found.start.saturating_add(*counted);
+            *counted += 1;
+            self.counted
+                .retain(|(other, deeper), _| other != id || deeper <= level);
             list = Some((
                 *level as usize,
                 match (checked, found.ordered) {
@@ -1109,7 +1119,7 @@ impl Reader<'_> {
                     (None, true) => ListKind::Ordered(id.clone()),
                     (None, false) => ListKind::Bullet,
                 },
-                found.start,
+                start,
             ));
         } else if checked.is_some() {
             let level = (indent / i64::from(INDENT_STEP)).saturating_sub(1).max(0) as usize;
@@ -1646,6 +1656,8 @@ mod tests {
 <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="4"/></w:numPr></w:pPr><w:r><w:t>Fifth</w:t></w:r></w:p>
 <w:p><w:pPr><w:numPr><w:ilvl w:val="1"/><w:numId w:val="4"/></w:numPr></w:pPr><w:r><w:t>Inside</w:t></w:r></w:p>
 <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="4"/></w:numPr></w:pPr><w:r><w:t>Sixth</w:t></w:r></w:p>
+<w:p><w:r><w:t>Between.</w:t></w:r></w:p>
+<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="4"/></w:numPr></w:pPr><w:r><w:t>Seventh</w:t></w:r></w:p>
 <w:p><w:r><w:rPr><w:rFonts w:ascii="Courier New" w:hAnsi="Courier New"/></w:rPr><w:t>let x = 1;</w:t></w:r></w:p>
 <w:p><w:r><w:rPr><w:rFonts w:ascii="Courier New" w:hAnsi="Courier New"/></w:rPr><w:t>let y = 2;</w:t></w:r></w:p>
 <w:p></w:p>
@@ -1656,7 +1668,7 @@ mod tests {
         assert_eq!(imported.set_aside, vec!["footnotes", "images and drawings"]);
         assert_eq!(
             markdown,
-            "# Goals\n\nSee [**this**](https://example.com/x) and [that](https://example.org/y), not this.\n\n- [ ] Book a room\n\n5. Fifth\n   - Inside\n6. Sixth\n\n```\nlet x = 1;\nlet y = 2;\n```\n\n| A | B |\n| --- | --- |\n| wide two lines |  |\n\nEnd!"
+            "# Goals\n\nSee [**this**](https://example.com/x) and [that](https://example.org/y), not this.\n\n- [ ] Book a room\n\n5. Fifth\n   - Inside\n6. Sixth\n\nBetween.\n\n7. Seventh\n\n```\nlet x = 1;\nlet y = 2;\n```\n\n| A | B |\n| --- | --- |\n| wide two lines |  |\n\nEnd!"
         );
     }
 

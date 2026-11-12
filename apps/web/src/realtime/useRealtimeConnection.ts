@@ -132,6 +132,8 @@ export function useRealtimeConnection(): RealtimeContextValue {
         })
         // My work lists tasks across projects, so it isn't under the project key.
         void queryClient.invalidateQueries({ queryKey: ['my-work'] })
+        // A task embedded in a page as a card.
+        void queryClient.invalidateQueries({ queryKey: ['things', 'task', workItemId] })
       }, INVALIDATION_DELAY_MS)
       invalidationTimers.set(key, timer)
     }

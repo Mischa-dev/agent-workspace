@@ -120,11 +120,21 @@ const isPageQuery = (projectId: string) => (query: { queryKey: QueryKey }) => {
  * and a record beside them) and so does the project's list of collections,
  * which counts records.
  */
+/** A thing embedded in a page (`ModuleEmbed`'s `['things', kind, id]`). */
+function isThing(key: readonly unknown[], kind: string, id: string) {
+  return key[0] === 'things' && key[1] === kind && key[2] === id
+}
+
 export function documentChanged(queryClient: QueryClient, event: RealtimeEnvelope) {
   const board = whiteboardChange(event)
   if (board) {
     for (const listener of boards.get(board.whiteboardId) ?? []) listener(board)
-    later('whiteboards', BOARD_LIST_DELAY_MS, () => void queryClient.invalidateQueries({ queryKey: ['whiteboards'] }))
+    // Board lists, and a board embedded in a page as a card.
+    later(`whiteboards:${board.whiteboardId}`, BOARD_LIST_DELAY_MS, () =>
+      void queryClient.invalidateQueries({
+        predicate: (query) => query.queryKey[0] === 'whiteboards' || isThing(query.queryKey, 'whiteboard', board.whiteboardId),
+      }),
+    )
     return
   }
   const collection = collectionChange(event)
@@ -148,8 +158,10 @@ export function documentChanged(queryClient: QueryClient, event: RealtimeEnvelop
   if (page) {
     remember(page)
     for (const listener of pages.get(page.pageId) ?? []) listener(page)
-    later(`pages:${event.projectId}`, PAGE_DETAILS_DELAY_MS, () =>
-      void queryClient.invalidateQueries({ predicate: isPageQuery(event.projectId) }),
+    // The project's page details, and the page embedded in another page as a card.
+    const pageQuery = isPageQuery(event.projectId)
+    later(`pages:${event.projectId}:${page.pageId}`, PAGE_DETAILS_DELAY_MS, () =>
+      void queryClient.invalidateQueries({ predicate: (query) => pageQuery(query) || isThing(query.queryKey, 'page', page.pageId) }),
     )
   }
 }
