@@ -695,6 +695,9 @@ struct WorkingTab {
     settings_changed: bool,
     /// Rows and columns this write inserted or deleted, in order.
     moves: Vec<Move>,
+    /// Where the tab stands among the others now, from 0. Moves change it
+    /// as they come; the engine keeps its own stable indexes.
+    rank: usize,
 }
 
 /// Rows (or columns) inserted or deleted at `at`.
@@ -741,7 +744,7 @@ fn same_key(candidate: &str, wanted: &str) -> bool {
 
 fn resolve_tab(tabs: &[WorkingTab], reference: &TabRef) -> Option<usize> {
     match reference.as_deref().map(str::trim) {
-        None | Some("") => (!tabs.is_empty()).then_some(0),
+        None | Some("") => tabs.iter().position(|tab| tab.rank == 0),
         Some(reference) => {
             let id = reference.parse::<Uuid>().ok();
             tabs.iter().position(|tab| {
@@ -910,13 +913,16 @@ pub async fn apply_with(
             column_widths: tab.column_widths.as_object().cloned().unwrap_or_default(),
             settings_changed: false,
             moves: Vec::new(),
+            rank: 0,
         })
         .collect::<Vec<_>>();
+    for (rank, tab) in working.iter_mut().enumerate() {
+        tab.rank = rank;
+    }
     // Order kept apart from the engine's: moving a tab doesn't touch cells.
     let mut operations = Vec::new();
     // Rows a `Row` change added, per tab, so two in one write don't collide.
     let mut appended: HashMap<usize, i32> = HashMap::new();
-    let mut moves: Vec<(usize, Uuid, i32)> = Vec::new();
 
     for (index, change) in changes.iter().enumerate() {
         let tab_at = |working: &[WorkingTab], reference: &TabRef| {
@@ -1313,6 +1319,7 @@ pub async fn apply_with(
                     column_widths: serde_json::Map::new(),
                     settings_changed: false,
                     moves: Vec::new(),
+                    rank: working.len(),
                 });
                 operations.push((index, Operation::AddTab { name }));
             }
@@ -1349,19 +1356,17 @@ pub async fn apply_with(
                         "A sheet keeps at least one tab. Archive the sheet instead.",
                     )));
                 }
-                working.remove(tab);
+                let gone = working.remove(tab);
+                for other in &mut working {
+                    if other.rank > gone.rank {
+                        other.rank -= 1;
+                    }
+                }
                 appended.clear();
                 operations.push((index, Operation::RemoveTab { tab }));
             }
             Change::MoveTab { tab, position } => {
                 let tab = tab!(tab);
-                let Some(id) = working[tab].id else {
-                    return Ok(Err(problem(
-                        index,
-                        ProblemKind::Invalid,
-                        "Move a tab this write adds in a later call.",
-                    )));
-                };
                 if *position < 1 || *position as usize > working.len() {
                     return Ok(Err(problem(
                         index,
@@ -1369,7 +1374,17 @@ pub async fn apply_with(
                         format!("position goes from 1 to {}.", working.len()),
                     )));
                 }
-                moves.push((index, id, *position));
+                // Tabs apply in order, so a later entry sees this move.
+                let from = working[tab].rank;
+                let to = *position as usize - 1;
+                for other in &mut working {
+                    if from < to && other.rank > from && other.rank <= to {
+                        other.rank -= 1;
+                    } else if to < from && other.rank >= to && other.rank < from {
+                        other.rank += 1;
+                    }
+                }
+                working[tab].rank = to;
             }
             Change::FreezeRows { tab, rows } => {
                 let tab = tab!(tab);
@@ -1533,14 +1548,10 @@ pub async fn apply_with(
                 .await?;
         }
     }
-    // Final order: working order, then the moves in turn.
-    let mut order = ids.clone();
-    for (_, id, position) in &moves {
-        if let Some(from) = order.iter().position(|existing| existing == id) {
-            let id = order.remove(from);
-            order.insert((*position as usize - 1).min(order.len()), id);
-        }
-    }
+    // Final order: each tab's rank.
+    let mut ranked = working.iter().zip(&ids).collect::<Vec<_>>();
+    ranked.sort_by_key(|(tab, _)| tab.rank);
+    let order = ranked.into_iter().map(|(_, id)| *id).collect::<Vec<_>>();
     // Positions are unique only by convention; park them first so a swap
     // never trips over itself.
     let stored_positions: HashMap<Uuid, i32> = stored_tabs

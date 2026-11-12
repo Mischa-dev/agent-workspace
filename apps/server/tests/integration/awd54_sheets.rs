@@ -516,6 +516,27 @@ async fn clears_inserts_row_keys_renames_and_retries_hold_up() {
     );
     assert_eq!(names[1].1, json!({"1": 180}));
 
+    // Tab entries apply in order: a move, then a removal.
+    let reordered = call(
+        "sheet_write",
+        json!({
+            "projectId": "EDGE",
+            "sheet": "Log",
+            "tabs": [{"tab": "D", "position": 2}, {"tab": "B", "remove": true}],
+            "clientRequestId": "edge-8b",
+        }),
+    )
+    .await;
+    assert_eq!(reordered["outcome"], "ok", "{reordered}");
+    let order = sqlx::query_scalar::<_, String>(
+        "SELECT tab.name FROM sheet_tabs tab JOIN sheets sheet ON sheet.id = tab.sheet_id \
+         WHERE sheet.name = 'Log' ORDER BY tab.position",
+    )
+    .fetch_all(&setup.pool)
+    .await
+    .expect("order");
+    assert_eq!(order, ["D", "C"]);
+
     // A retry of a rename by the old name gets its first answer back.
     let rename = json!({"projectId": "EDGE", "sheet": "Log", "name": "Journal", "clientRequestId": "edge-9"});
     let first = call("sheet_write", rename.clone()).await;
