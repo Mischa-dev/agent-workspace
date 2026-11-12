@@ -1313,6 +1313,25 @@ impl McpServer {
     }
 
     #[tool(
+        description = "People: ask an agent again about a reply request that expired, was released or was stopped, as the Retry button on its status line does. It goes back in the agent's inbox and the agent is woken. The agent must still be able to answer there.",
+        annotations(
+            title = "Retry agent",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn reply_retry(
+        &self,
+        Parameters(arguments): Parameters<replies::ReplyRetryArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<replies::ReplyToolResult<replies::RetryProjection>> {
+        let principal = principal_or!(parts, replies::ReplyToolResult::denied());
+        Json(replies::reply_retry(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
         description = "People: stop an agent's work on a reply request, as the Stop button on its status line does. Its follow-ups queued behind it stop too. The agent hears at once, and its next call on the request is refused.",
         annotations(
             title = "Stop agent",
@@ -2169,6 +2188,25 @@ impl McpServer {
     ) -> Json<common::ToolResult<whiteboard_tools::WhiteboardChangeValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(whiteboard_tools::whiteboard_update(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Empty the whiteboard trash, as the web's Empty trash does: every trashed board you may change goes for good, with its drawing, images and links. Narrow it to one project or workspace. This can't be undone. Up to 200 go per call.",
+        annotations(
+            title = "Empty whiteboard trash",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn whiteboard_trash_empty(
+        &self,
+        Parameters(arguments): Parameters<whiteboard_tools::WhiteboardTrashEmptyArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<whiteboard_tools::WhiteboardTrashEmptyValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(whiteboard_tools::whiteboard_trash_empty(&self.state, principal, arguments).await)
     }
 
     #[tool(

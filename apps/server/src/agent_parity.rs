@@ -642,7 +642,7 @@ mod tests {
         (
             Post,
             "/api/v1/whiteboard-trash/empty",
-            Gap("emptying the whiteboard trash"),
+            Tool("whiteboard_trash_empty"),
         ),
         (
             Post,
@@ -720,7 +720,7 @@ mod tests {
         (
             Post,
             "/api/v1/reply-requests/{id}/retry",
-            Gap("retrying an agent's failed reply"),
+            Tool("reply_retry"),
         ),
         (Post, "/api/v1/reply-requests/{id}/stop", Tool("reply_stop")),
         (

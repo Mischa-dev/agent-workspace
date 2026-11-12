@@ -15,6 +15,7 @@
     "whiteboard_create": "create",
     "whiteboard_edit": "change",
     "whiteboard_update": "change",
+    "whiteboard_trash_empty": "change",
     "whiteboard_duplicate": "create",
     "whiteboard_link": "change"
   },

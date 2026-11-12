@@ -851,6 +851,62 @@ pub(super) async fn whiteboard_update(
 }
 
 // ---------------------------------------------------------------------------
+// whiteboard_trash_empty
+
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct WhiteboardTrashEmptyArguments {
+    /// Only the trash of this project.
+    pub project_id: Option<String>,
+    /// Only the trash of this workspace (organization ID).
+    pub workspace_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct WhiteboardTrashEmptyValue {
+    /// How many boards were deleted for good. Up to 200 go at a time; call
+    /// again while this is 200.
+    pub deleted: usize,
+}
+
+/// Empty the trash, as the web's "Empty trash" does: every trashed board the
+/// caller may change, in the scope asked for, goes for good.
+pub(super) async fn whiteboard_trash_empty(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: WhiteboardTrashEmptyArguments,
+) -> ToolResult<WhiteboardTrashEmptyValue> {
+    if !principal.can_write() {
+        return ToolResult::read_only();
+    }
+    let project_id = match arguments.project_id.as_deref().map(parse_id) {
+        None => None,
+        Some(Some(id)) => Some(id),
+        Some(None) => return ToolResult::invalid("projectId", "Pass a project ID or link."),
+    };
+    let organization_id = match arguments.workspace_id.as_deref().map(parse_id) {
+        None => None,
+        Some(Some(id)) => Some(id),
+        Some(None) => return ToolResult::invalid("workspaceId", "Pass a workspace ID."),
+    };
+    let caller = caller(principal);
+    let result = async {
+        let mut transaction = state.pool.begin().await?;
+        let deleted =
+            whiteboards::empty_trash(&mut transaction, &caller, organization_id, project_id)
+                .await?;
+        transaction.commit().await?;
+        Ok::<_, AppError>(deleted)
+    }
+    .await;
+    match result {
+        Ok(deleted) => ToolResult::ok(WhiteboardTrashEmptyValue { deleted }),
+        Err(error) => refused(error, "whiteboard_trash_empty"),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // whiteboard_duplicate
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]

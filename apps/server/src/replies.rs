@@ -34,7 +34,7 @@ use crate::{
     auth::{AuthenticatedActor, require_authenticated_write},
     conversations::{
         ActorView, enqueue_event, insert_audit_event, insert_audit_event_for,
-        lock_conversation_access, lock_conversation_for, parse_actor_kind,
+        lock_conversation_for, parse_actor_kind,
     },
     error::{ApiPath, AppError},
     external_events::enqueue_external_event,
@@ -968,17 +968,49 @@ async fn retry_request(
 ) -> Result<Json<RetryResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
     let mut transaction = state.pool.begin().await?;
+    retry_request_in(
+        &mut transaction,
+        principal.actor_id,
+        parse_actor_kind(&principal.actor_kind)?,
+        request_id,
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(Json(RetryResponse {
+        id: request_id,
+        status: "pending",
+    }))
+}
+
+/// What retrying a reply request did, for the caller's audit row.
+pub(crate) struct RetryOutcome {
+    pub(crate) project_id: Uuid,
+    pub(crate) agent_actor_id: Uuid,
+}
+
+/// Put an expired, released or stopped request back in the agent's inbox
+/// and wake it, for someone who may post in its conversation. Someone who
+/// can't see the conversation gets the same answer as for a request that
+/// doesn't exist. Shared by the browser API and MCP; callers record their
+/// own audit rows.
+pub(crate) async fn retry_request_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    actor_kind: ActorKind,
+    request_id: Uuid,
+) -> Result<RetryOutcome, AppError> {
     let (conversation_id, agent_actor_id, thread_id) =
         sqlx::query_as::<_, (Uuid, Uuid, Option<Uuid>)>(
             "SELECT conversation_id, agent_actor_id, thread_id FROM reply_requests WHERE id = $1",
         )
         .bind(request_id)
-        .fetch_optional(&mut *transaction)
+        .fetch_optional(&mut **transaction)
         .await?
         .ok_or(AppError::NotFound("reply request"))?;
-    let conversation = lock_conversation_access(
-        &mut transaction,
-        &principal,
+    let conversation = lock_conversation_for(
+        transaction,
+        actor_id,
+        actor_kind,
         conversation_id,
         Action::MessageSend,
         false,
@@ -1002,7 +1034,7 @@ async fn retry_request(
         "#,
     )
     .bind(request_id)
-    .fetch_one(&mut *transaction)
+    .fetch_one(&mut **transaction)
     .await?;
     if !answerable {
         return Err(AppError::Conflict(
@@ -1020,7 +1052,7 @@ async fn retry_request(
         "#,
     )
     .bind(request_id)
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
     if updated.rows_affected() != 1 {
         return Err(AppError::Conflict(
@@ -1029,7 +1061,7 @@ async fn retry_request(
         ));
     }
     wake(
-        &mut transaction,
+        transaction,
         conversation.project_id,
         conversation_id,
         agent_actor_id,
@@ -1038,17 +1070,16 @@ async fn retry_request(
     )
     .await?;
     notify_request(
-        &mut transaction,
+        transaction,
         conversation.project_id,
         conversation_id,
         thread_id,
     )
     .await?;
-    transaction.commit().await?;
-    Ok(Json(RetryResponse {
-        id: request_id,
-        status: "pending",
-    }))
+    Ok(RetryOutcome {
+        project_id: conversation.project_id,
+        agent_actor_id,
+    })
 }
 
 #[derive(Debug, Serialize)]
