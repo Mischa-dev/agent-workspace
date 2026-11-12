@@ -72,6 +72,13 @@ pub(super) struct ProjectArguments {
     pub project_id: Option<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct LaunchCancelArguments {
+    /// The queued launch, from launch_list. It names its project.
+    pub launch_id: String,
+}
+
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct LaunchValue {
@@ -337,6 +344,34 @@ pub(super) async fn launch_list(
         }),
         Err(AppError::NotFound(_) | AppError::Forbidden) => ToolResult::not_found("That project"),
         Err(error) => ToolResult::from_error(error, "launch_list"),
+    }
+}
+
+/// Take a launch out of the queue before it starts, as the queue's Cancel
+/// button does: your own, or anyone's if you manage the project.
+pub(super) async fn launch_cancel(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: LaunchCancelArguments,
+) -> ToolResult<LaunchValue> {
+    if !principal.can_write() {
+        return ToolResult::read_only();
+    }
+    let Some(launch_id) = parse_id(&arguments.launch_id) else {
+        return ToolResult::invalid("launchId", "Pass the launch's ID from launch_list.");
+    };
+    if !project_is_chosen(principal) {
+        return ToolResult::not_found("That launch");
+    }
+    let project_id = principal.project_id;
+    match launch::cancel(state, &caller(principal, None), project_id, launch_id).await {
+        Ok(view) => ToolResult::ok(launch_value(state, project_id, view)),
+        Err(AppError::NotFound(_)) => ToolResult::not_found("That launch"),
+        Err(AppError::Forbidden) => ToolResult::denied(
+            "Only whoever queued it, or the project's owners and admins, can cancel it.",
+        ),
+        Err(AppError::Conflict(_, message)) => ToolResult::conflict(message),
+        Err(error) => ToolResult::from_error(error, "launch_cancel"),
     }
 }
 

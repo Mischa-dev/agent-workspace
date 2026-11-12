@@ -150,7 +150,7 @@ limited by their role in the project.
 | `run_start` | + | A person starts a Codex run on a thread or task. Agents keep `run_request`, which asks a person to approve. |
 | `run_request` | ✓ | |
 | `run_list`, `run_get` | + | Runs with status, and the result and errors of one run. |
-| `run_control` | + | Interrupt, retry or acknowledge a failure. |
+| `run_stop`, `run_retry`, `launch_cancel` | ✓ | Stop a run (agents too), start a finished one again (people), take a launch out of the queue (AWD-111). Acknowledging a failure is still web-only. |
 | `approval_list` | + | Approvals waiting on you. |
 | `approval_get`, `approval_respond` | ~ | Open to people with Full access, including approvals that require a person. |
 | `external_event_poll` | ✓ | Legacy; kept for the Hermes connector. |
