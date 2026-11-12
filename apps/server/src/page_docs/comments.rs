@@ -514,6 +514,7 @@ pub async fn change(
             .bind(body)
             .execute(&mut **transaction)
             .await?;
+            notifications::forget_page_comment(transaction, project_id, comment_id, false).await?;
         }
         CommentChange::Resolve(resolved) => {
             sqlx::query(
@@ -542,6 +543,7 @@ pub async fn change(
             .bind(comment_id)
             .execute(&mut **transaction)
             .await?;
+            notifications::forget_page_comment(transaction, project_id, comment_id, true).await?;
         }
     }
     discussion_updated(transaction, project_id, page_id).await?;

@@ -695,6 +695,63 @@ pub(crate) async fn forget_comment(
     ])
     .fetch_all(&mut **transaction)
     .await?;
+    retract(transaction, project_id, comment_id, affected).await
+}
+
+/// A page comment that was edited or deleted (AWD-53) stops showing its old
+/// words in anyone's inbox: a deletion takes its occurrence away (and the
+/// notification, when that was all it stood for), and either way the
+/// notifications it reached lose their copied preview.
+pub(crate) async fn forget_page_comment(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    comment_id: Uuid,
+    deleted: bool,
+) -> Result<(), AppError> {
+    let key = format!("page-comment:{comment_id}");
+    let reached = sqlx::query_as::<_, (Uuid, Uuid)>(
+        r#"
+        UPDATE notifications n
+        SET detail = n.detail - 'preview', updated_at = now()
+        FROM notification_occurrences o
+        WHERE o.notification_id = n.id AND o.dedupe_key = $1
+        RETURNING n.id, n.recipient_actor_id
+        "#,
+    )
+    .bind(&key)
+    .fetch_all(&mut **transaction)
+    .await?;
+    if !deleted {
+        let recipients = reached
+            .into_iter()
+            .map(|(_, recipient)| recipient)
+            .collect::<BTreeSet<_>>();
+        for recipient in recipients {
+            announce(transaction, project_id, recipient).await?;
+        }
+        return Ok(());
+    }
+    let affected = sqlx::query_as::<_, (Uuid, Uuid)>(
+        r#"
+        DELETE FROM notification_occurrences
+        WHERE dedupe_key = $1
+        RETURNING notification_id, recipient_actor_id
+        "#,
+    )
+    .bind(&key)
+    .fetch_all(&mut **transaction)
+    .await?;
+    retract(transaction, project_id, comment_id, affected).await
+}
+
+/// Notifications that lost occurrences: one left with none goes, the rest
+/// are counted again, and their recipients hear about it.
+async fn retract(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    comment_id: Uuid,
+    affected: Vec<(Uuid, Uuid)>,
+) -> Result<(), AppError> {
     if affected.is_empty() {
         return Ok(());
     }

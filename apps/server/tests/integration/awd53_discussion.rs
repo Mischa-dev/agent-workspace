@@ -328,6 +328,17 @@ async fn agents_suggest_on_other_peoples_pages_and_comments_follow_the_words() {
         "{after}"
     );
     assert_eq!(after["threads"][0]["comments"][0]["body"], "", "{after}");
+    // Its words leave the inbox it reached, too.
+    let copies = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM notifications WHERE detail::text LIKE '%Sketch where%'",
+    )
+    .fetch_one(&setup.pool)
+    .await
+    .expect("notifications");
+    assert_eq!(
+        copies, 0,
+        "a deleted comment's words stay in no notification"
+    );
     assert_eq!(
         after["threads"][0]["comments"].as_array().map(Vec::len),
         Some(3)
