@@ -2263,6 +2263,25 @@ impl McpServer {
     }
 
     #[tool(
+        description = "Save a view of a project's tasks (a name, the task list's query, list or board, columns), or change, pin or delete one (pass view: its name or ID). Views are yours alone unless shared: true, which needs the right to edit the project's tasks. Pinning only changes your own sidebar. List a view's tasks with task_list's view.",
+        annotations(
+            title = "Write saved view",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn view_write(
+        &self,
+        Parameters(arguments): Parameters<views_data::ViewWriteArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<views_data::ViewWriteValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(views_data::view_write(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
         description = "Your work across your projects (or one, with projectId): tasks assigned to you that aren't finished (due first), tasks you or agents you set up are working on, and tasks in review that you made or watch.",
         annotations(title = "My work", read_only_hint = true, open_world_hint = false)
     )]
