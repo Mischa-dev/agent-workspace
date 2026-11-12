@@ -444,6 +444,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "message_delete",
     "message_edit",
     "message_forward",
+    "message_preview_hide",
     "message_react",
     "message_schedule",
     "message_send",
@@ -5860,6 +5861,11 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "message_delete",
             json!({"messageId": sp.messages[1]}),
             vec![json!({"messageId": b.message})],
+        ),
+        mcp_case(
+            "message_preview_hide",
+            json!({"messageId": a.file_message}),
+            vec![json!({"messageId": b.file_message})],
         ),
         mcp_case(
             "conversation_members",

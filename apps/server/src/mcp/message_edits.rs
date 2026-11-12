@@ -474,6 +474,89 @@ pub(super) async fn message_delete(
     result.unwrap_or_else(|error| ToolResult::from_error(error, "message_delete"))
 }
 
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct MessagePreviewHideArguments {
+    /// The message's ID, or a link to it.
+    pub message_id: String,
+    /// Only the preview for this link, as written in the message. Left out,
+    /// every preview on the message.
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct HiddenPreviews {
+    pub message_id: String,
+    /// How many previews this call hid; 0 when they were hidden already.
+    pub hidden: u64,
+}
+
+/// Hide link previews under a message, for everyone, as the remove button
+/// on a preview does: the caller's own message, or anyone's for a project
+/// owner or admin. The message and its links stay.
+pub(super) async fn message_preview_hide(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: MessagePreviewHideArguments,
+) -> ToolResult<HiddenPreviews> {
+    if !principal.can_write() {
+        return ToolResult::read_only();
+    }
+    let Some(message_id) = parse_message_id(&arguments.message_id) else {
+        return ToolResult::invalid("messageId", "Pass a message ID or a link to it.");
+    };
+    let actor = match message_actor(principal) {
+        Ok(actor) => actor,
+        Err(message) => return ToolResult::denied(message),
+    };
+    let result = async {
+        let mut transaction = state.pool.begin().await?;
+        mark_via(&mut transaction, principal).await?;
+        let locked = match lock_message_for_change(
+            &mut transaction,
+            &actor,
+            None,
+            message_id,
+            Change::Remove,
+        )
+        .await
+        {
+            Ok(locked) => locked,
+            Err(error) => return refusal(error, Change::Remove),
+        };
+        if locked.project_id != principal.project_id {
+            return Ok(ToolResult::not_found("That message"));
+        }
+        let hidden = match crate::link_previews::hide_in(
+            &mut transaction,
+            &locked,
+            principal.actor_id,
+            crate::link_previews::Hide::Url(arguments.url.as_deref()),
+        )
+        .await
+        {
+            Ok(hidden) => hidden,
+            Err(AppError::NotFound(_)) => {
+                return Ok(ToolResult::not_found(if arguments.url.is_some() {
+                    "A preview for that link on that message"
+                } else {
+                    "A link preview on that message"
+                }));
+            }
+            Err(error) => return Err(error),
+        };
+        transaction.commit().await?;
+        Ok(ToolResult::ok(HiddenPreviews {
+            message_id: locked.id.to_string(),
+            hidden,
+        }))
+    }
+    .await;
+    result.unwrap_or_else(|error| ToolResult::from_error(error, "message_preview_hide"))
+}
+
 pub(super) async fn message_history(
     state: &AppState,
     principal: &McpPrincipal,

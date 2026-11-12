@@ -2173,6 +2173,11 @@ async fn people_add_and_archive_repositories_and_agents_only_read_them() {
 
     let untrusted = person("repository_write", adding.clone()).await;
     assert_eq!(untrusted["outcome"], "invalid_request", "{untrusted}");
+    let mut add_and_prepare = adding.clone();
+    add_and_prepare["trustAcknowledged"] = json!(true);
+    add_and_prepare["prepare"] = json!(true);
+    let both = person("repository_write", add_and_prepare).await;
+    assert_eq!(both["outcome"], "invalid_request", "{both}");
     let mut trusted = adding.clone();
     trusted["trustAcknowledged"] = json!(true);
     let added = person("repository_write", trusted.clone()).await;
@@ -2436,5 +2441,74 @@ async fn people_make_bug_report_links_and_agents_only_read_them() {
             "bug_report_link.delete"
         ]
     );
+    f.close().await;
+}
+
+#[tokio::test]
+async fn an_agent_hides_link_previews_on_its_own_messages_only() {
+    let Some(f) = fixture().await else {
+        return;
+    };
+    let channel = f.seed.channel_id.to_string();
+    let posted = f
+        .web(
+            "POST",
+            &format!("/api/v1/channels/{channel}/messages"),
+            json!({"content": {"version": 1, "nodes": [{"type": "text", "text": "Notes at https://example.com/notes"}]}}),
+        )
+        .await;
+    let theirs = string(&posted, "/message/id");
+    let refused = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "message_preview_hide",
+        json!({"messageId": theirs}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+
+    let sent = f
+        .call(
+            "message_send",
+            json!({"conversationId": channel, "text": "See https://example.com/a and https://example.com/b"}),
+        )
+        .await;
+    let mine = string(&sent, "/value/messageId");
+    let hidden = f
+        .call(
+            "message_preview_hide",
+            json!({"messageId": mine, "url": "https://example.com/a"}),
+        )
+        .await;
+    assert_eq!(hidden["value"]["hidden"], 1, "{hidden}");
+    let again = f
+        .call(
+            "message_preview_hide",
+            json!({"messageId": mine, "url": "https://example.com/a"}),
+        )
+        .await;
+    assert_eq!(again["value"]["hidden"], 0, "{again}");
+    let missing = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "message_preview_hide",
+        json!({"messageId": mine, "url": "https://example.com/c"}),
+    )
+    .await;
+    assert_eq!(missing["outcome"], "not_found", "{missing}");
+    let rest = f
+        .call("message_preview_hide", json!({"messageId": mine}))
+        .await;
+    assert_eq!(rest["value"]["hidden"], 1, "{rest}");
+    let shown = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM message_link_previews WHERE message_id = $1 AND hidden_at IS NULL",
+    )
+    .bind(Uuid::parse_str(&mine).expect("message id"))
+    .fetch_one(&f.pool)
+    .await
+    .expect("previews");
+    assert_eq!(shown, 0);
     f.close().await;
 }

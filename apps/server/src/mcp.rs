@@ -937,6 +937,25 @@ impl McpServer {
     }
 
     #[tool(
+        description = "Hide the link previews under a message, for everyone, as the remove button on a preview does: the one for url, or all of them. Your own messages, or anyone's if you own or administer the project. The message and its links stay.",
+        annotations(
+            title = "Hide link previews",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn message_preview_hide(
+        &self,
+        Parameters(arguments): Parameters<message_edits::MessagePreviewHideArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<message_edits::HiddenPreviews>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(message_edits::message_preview_hide(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
         description = "Every version of a message, oldest first: who wrote each one, when, and through which app. Versions of a removed message show as redacted.",
         annotations(
             title = "Message history",

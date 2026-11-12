@@ -63,6 +63,7 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("file_delete", None),
     ("message_edit", Some(ChannelsPost)),
     ("message_delete", None),
+    ("message_preview_hide", None),
     ("message_history", None),
     ("conversation_members", None),
     ("conversation_continue", Some(ChannelsPost)),

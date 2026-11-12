@@ -743,7 +743,7 @@ mod tests {
         (
             Delete,
             "/api/v1/conversations/{id}/messages/{message_id}/link-previews/{preview_id}",
-            Gap("removing a link preview"),
+            Tool("message_preview_hide"),
         ),
         (
             Put,
