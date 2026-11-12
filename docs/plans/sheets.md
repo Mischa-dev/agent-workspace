@@ -59,13 +59,15 @@ its own that a workspace or role can switch off.
 
 ## Slices
 
-1. **Server and tools** (this PR). Migration `20261112193000_sheets.sql`,
+1. **Server and tools** (#231, merged). Migration `20261112193000_sheets.sql`,
    the engine, `sheet_list`, `sheet_read` (a range, or rows as objects by
    header with a filter) and `sheet_write` (create, rename, archive, tabs,
    cells, rows).
-2. **The web app.** A Sheets area and a grid that edits in place: formulas,
-   copy and paste, resizing, a frozen header, live updates from other people
-   and agents (`sheet.updated` events), and cards on a phone.
+2. **The web app** (this PR). HTTP routes under
+   `/api/v1/projects/{project_id}/sheets`, a Sheets area and a grid that edits
+   in place: formulas, copy and paste, resizing, a frozen header, live updates
+   from other people and agents (`sheet.updated` events), and cards on a
+   phone.
 3. **Pages and files.** A sheet range embedded live in a page through the
    embed block, and `.xlsx` and CSV import and export (Google Sheets goes
    through `.xlsx`).
