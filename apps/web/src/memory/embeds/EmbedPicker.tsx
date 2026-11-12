@@ -9,16 +9,18 @@ import { embedPath, moduleEmbedTarget } from './moduleEmbed'
  * Embeds something of the app in a page (AWD-53), from the page editor's
  * toolbar: a pasted address of a task, page, whiteboard, thread or task list
  * becomes the piece its module declares. `onCollection` offers a collection
- * view instead, where collections are on.
+ * view instead, where collections are on, and `onSheet` a sheet's range.
  */
 export default function EmbedPicker({
   onClose,
   onCollection,
   onPick,
+  onSheet,
 }: {
   onClose: () => void
   onCollection: (() => void) | null
   onPick: (embed: { href: string; label: string }) => void
+  onSheet: (() => void) | null
 }) {
   const [address, setAddress] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -77,6 +79,11 @@ export default function EmbedPicker({
         {onCollection ? (
           <Button onClick={onCollection} size="sm">
             Collection view…
+          </Button>
+        ) : null}
+        {onSheet ? (
+          <Button onClick={onSheet} size="sm">
+            Sheet…
           </Button>
         ) : null}
         <Button onClick={onClose} size="sm" variant="ghost">

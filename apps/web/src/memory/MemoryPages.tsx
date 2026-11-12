@@ -454,6 +454,7 @@ function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
             fallback={read}
             pageId={pageId}
             projectId={projectId}
+            sheets={experience.shows('area.sheets')}
             title={current.title}
           />
         </Suspense>

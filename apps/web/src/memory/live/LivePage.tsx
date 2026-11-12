@@ -54,6 +54,7 @@ import './live.css'
 
 const CollectionEmbedPicker = lazy(() => import('../../collections/CollectionEmbedPicker'))
 const EmbedPicker = lazy(() => import('../embeds/EmbedPicker'))
+const SheetEmbedPicker = lazy(() => import('../../sheets/SheetEmbedPicker'))
 
 // A page you write in place, live with everyone who has it open (AWD-53): a
 // Tiptap editor on the page's Yjs document, kept in step with the server by
@@ -69,6 +70,8 @@ export type LivePageProps = {
   projectId: string
   /** Whether the toolbar offers a collection's view to put in the page. */
   collections: boolean
+  /** Whether the toolbar offers a sheet's range to put in the page. */
+  sheets: boolean
   /** Names the editor for screen readers. */
   title: string
   /** The page as last saved: shown while the live copy loads, and if it can't. */
@@ -99,7 +102,7 @@ function openDocument(snapshot: PageDocument) {
   return doc
 }
 
-export default function LivePage({ collections, discussion = null, fallback, pageId, projectId, title }: LivePageProps) {
+export default function LivePage({ collections, discussion = null, fallback, pageId, projectId, sheets, title }: LivePageProps) {
   const [attempt, setAttempt] = useState(0)
   const [load, setLoad] = useState<Load | null>(null)
   const [unshowable, setUnshowable] = useState(false)
@@ -151,6 +154,7 @@ export default function LivePage({ collections, discussion = null, fallback, pag
   return (
     <LiveEditor
       collections={collections ? projectId : null}
+      sheets={sheets ? projectId : null}
       discussion={discussion}
       doc={current.doc}
       key={current.attempt}
@@ -207,6 +211,7 @@ function LiveEditor({
   doc,
   onReload,
   onUnshowable,
+  sheets,
   snapshot,
   title,
 }: {
@@ -216,6 +221,8 @@ function LiveEditor({
   doc: Y.Doc
   onReload: () => void
   onUnshowable: () => void
+  /** The project whose sheets the toolbar offers, if it does. */
+  sheets: string | null
   snapshot: PageDocument
   title: string
 }) {
@@ -230,8 +237,8 @@ function LiveEditor({
   const [saveState, setSaveState] = useState<SaveState>('saved')
   const [failure, setFailure] = useState<SaveFailure | null>(null)
   const [linking, setLinking] = useState(false)
-  // Embedding by address, or a collection view.
-  const [embedding, setEmbedding] = useState<'address' | 'collection' | null>(null)
+  // Embedding by address, a collection view, or a sheet's range.
+  const [embedding, setEmbedding] = useState<'address' | 'collection' | 'sheet' | null>(null)
   // Each embed's live view, drawn into the element the editor keeps for it.
   const [slots] = useState(() => new EmbedSlots())
   const embeds = useSyncExternalStore(slots.subscribe, slots.getSnapshot)
@@ -394,6 +401,7 @@ function LiveEditor({
                 editor.commands.focus()
               }}
               onCollection={collections ? () => setEmbedding('collection') : null}
+              onSheet={sheets ? () => setEmbedding('sheet') : null}
               onPick={(embed) => {
                 insertEmbed(editor, embed)
                 setEmbedding(null)
@@ -413,6 +421,21 @@ function LiveEditor({
                 setEmbedding(null)
               }}
               projectId={collections}
+            />
+          </Suspense>
+        ) : null}
+        {embedding === 'sheet' && editor && sheets ? (
+          <Suspense fallback={null}>
+            <SheetEmbedPicker
+              onClose={() => {
+                setEmbedding(null)
+                editor.commands.focus()
+              }}
+              onPick={(embed) => {
+                insertEmbed(editor, embed)
+                setEmbedding(null)
+              }}
+              projectId={sheets}
             />
           </Suspense>
         ) : null}
