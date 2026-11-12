@@ -1056,20 +1056,41 @@ pub(super) async fn message_items(
         principal.external_agent_connection_id,
     )
     .await?;
-    // An older grant confined to one project reads nothing outside it, so
-    // a forward from another project shows only its ID there.
-    if let Some(home) = super::common::confined_project(principal)
-        && !quotes.is_empty()
-    {
+    // A forward's original lives in another conversation, often another
+    // project: it shows only where this connection could read it there
+    // directly (conversation_read's own check, which also keeps an older
+    // grant in its project). Anything else shows only its ID.
+    if !quotes.is_empty() {
         let ids = quotes.keys().copied().collect::<Vec<_>>();
-        let inside = sqlx::query_scalar::<_, Uuid>(
-            "SELECT id FROM messages WHERE id = ANY($1) AND project_id = $2",
+        let elsewhere = sqlx::query_as::<_, (Uuid, Uuid, Uuid)>(
+            "SELECT id, conversation_id, project_id FROM messages WHERE id = ANY($1) AND conversation_id <> $2",
         )
         .bind(&ids)
-        .bind(home)
+        .bind(conversation_id)
         .fetch_all(&state.pool)
         .await?;
-        quotes.retain(|id, _| inside.contains(id));
+        let mut readable = std::collections::HashMap::<Uuid, bool>::new();
+        for (id, source_conversation, source_project) in elsewhere {
+            let allowed = match readable.get(&source_conversation) {
+                Some(allowed) => *allowed,
+                None => {
+                    let allowed = super::common::confined_project(principal)
+                        .is_none_or(|home| home == source_project)
+                        && readable_conversation(
+                            state,
+                            &super::tasks::scoped(principal, source_project),
+                            &source_conversation.to_string(),
+                        )
+                        .await?
+                        .is_ok();
+                    readable.insert(source_conversation, allowed);
+                    allowed
+                }
+            };
+            if !allowed {
+                quotes.remove(&id);
+            }
+        }
     }
     Ok(rows
         .into_iter()
