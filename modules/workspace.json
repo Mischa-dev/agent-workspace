@@ -18,6 +18,7 @@
     "file_upload": "create",
     "file_list": "query",
     "file_read": "describe",
+    "file_delete": "change",
     "module_list": "describe",
     "role_list": "query",
     "role_get": "describe",

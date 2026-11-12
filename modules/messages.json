@@ -17,6 +17,7 @@
     "conversation_members": "query",
     "conversation_update": "change",
     "message_send": "create",
+    "message_forward": "create",
     "message_edit": "change",
     "message_delete": "change",
     "message_history": "query",

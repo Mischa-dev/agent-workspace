@@ -1642,6 +1642,91 @@ async fn a_project_scoped_credential_never_learns_ids_beyond_its_project() {
     );
 }
 
+/// The same credential reads a forward in its project, but a quote of a
+/// message in another of the person's projects shows only its ID, and it
+/// can't forward that message either.
+#[tokio::test]
+async fn a_project_scoped_credential_never_reads_forwards_from_beyond_its_project() {
+    let Some(setup) = setup("mcp_board_scoped_forward").await else {
+        return;
+    };
+    let app = &setup.app;
+    let home = create_project(&setup, "HOME", "Home").await;
+    create_project(&setup, "SECRET", "Secret").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let mut channels = Vec::new();
+    for project in ["HOME", "SECRET"] {
+        let created = tool(
+            app,
+            &codex,
+            &session,
+            "channel_create",
+            json!({"projectId": project, "name": "general"}),
+        )
+        .await;
+        assert_eq!(created["outcome"], "ok", "{created}");
+        channels.push(created["value"]["id"].as_str().expect("channel").to_owned());
+    }
+    let sent = tool(
+        app,
+        &codex,
+        &session,
+        "message_send",
+        json!({"conversationId": channels[1], "text": "Secret plan"}),
+    )
+    .await;
+    let secret_message = sent["value"]["messageId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("sent: {sent}"))
+        .to_owned();
+    let forwarded = tool(
+        app,
+        &codex,
+        &session,
+        "message_forward",
+        json!({"messageId": secret_message, "conversationId": channels[0], "text": "See this"}),
+    )
+    .await;
+    assert_eq!(forwarded["outcome"], "ok", "{forwarded}");
+
+    let scoped = mcp::issue_credential(
+        &setup.pool,
+        IssueCredentialCommand {
+            project_id: home.parse().expect("home ID"),
+            actor_id: owner(&setup, &home).await,
+            client_name: "scoped-test".to_owned(),
+            scopes: vec!["read".to_owned(), "write".to_owned()],
+            expires_in_days: 1,
+        },
+    )
+    .await
+    .expect("issue credential")
+    .token;
+    let scoped_session = initialize(app, &scoped).await.expect("scoped MCP");
+    let read = tool(
+        app,
+        &scoped,
+        &scoped_session,
+        "conversation_read",
+        json!({"conversationId": channels[0]}),
+    )
+    .await;
+    assert_eq!(read["outcome"], "ok", "{read}");
+    assert!(read.to_string().contains("See this"), "{read}");
+    assert!(!read.to_string().contains("Secret plan"), "{read}");
+    let again = tool(
+        app,
+        &scoped,
+        &scoped_session,
+        "message_forward",
+        json!({"messageId": secret_message, "conversationId": channels[0]}),
+    )
+    .await;
+    assert_eq!(again["outcome"], "not_found", "{again}");
+    assert!(!again.to_string().contains("Secret plan"), "{again}");
+}
+
 /// task_claim takes its turn on the project row before it locks the task, as
 /// every task writer does. Locked the other way round, a claim deadlocked
 /// with a status change or reorder whose column held the task: the writer
