@@ -204,8 +204,8 @@ pub struct RevisionSession {
 /// Columns for [`RevisionSession`], with `$viewer` the viewer's actor id;
 /// joins `session` and `session_conversation`.
 const REVISION_SESSION_COLUMNS: &str = r#"
-    session.harness AS session_harness,
-    CASE WHEN session_conversation.id IS NOT NULL THEN session.agent_run_id END AS session_run_id,
+    revision.agent_harness AS session_harness,
+    CASE WHEN session_conversation.id IS NOT NULL THEN revision.agent_run_id END AS session_run_id,
     session_conversation.id AS session_conversation_id,
     session_conversation.name AS session_conversation_name,
     session_conversation.kind AS session_conversation_kind
@@ -222,11 +222,12 @@ fn revision_session_joins(viewer: &str) -> String {
     )
 }
 
-/// The writer's agent session for a page's project: their active one that
-/// moved most lately. `$page` and `$actor` are the bound parameters.
-fn writer_session(page: &str, actor: &str) -> String {
+/// A column (`id`, `harness`, `agent_run_id`) of the writer's agent session
+/// for a page's project: their active one that moved most lately. `$page`
+/// and `$actor` are the bound parameters.
+fn writer_session(column: &str, page: &str, actor: &str) -> String {
     format!(
-        r#"(SELECT session.id FROM agent_sessions session
+        r#"(SELECT session.{column} FROM agent_sessions session
             JOIN project_pages session_page ON session_page.id = {page}
             WHERE session.agent_actor_id = {actor}
               AND session.project_id = session_page.project_id
@@ -835,10 +836,12 @@ pub(crate) async fn record_revision(
               AND revision.actor_id = $5
               AND revision.via_oauth_grant_id IS NOT DISTINCT FROM $6
               AND revision.agent_session_id IS NOT DISTINCT FROM {session}
+              AND revision.agent_run_id IS NOT DISTINCT FROM {run}
               AND revision.note IS NULL
               AND revision.created_at > now() - make_interval(mins => $7)
             "#,
-            session = writer_session("$1", "$5"),
+            session = writer_session("id", "$1", "$5"),
+            run = writer_session("agent_run_id", "$1", "$5"),
         ))
         .bind(page_id)
         .bind(version)
@@ -870,10 +873,13 @@ async fn insert_revision(
     sqlx::query(&format!(
         r#"
         INSERT INTO project_page_revisions (
-            page_id, version, title, body, actor_id, via_oauth_grant_id, note, agent_session_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, {session})
+            page_id, version, title, body, actor_id, via_oauth_grant_id, note,
+            agent_session_id, agent_harness, agent_run_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, {session}, {harness}, {run})
         "#,
-        session = writer_session("$1", "$5"),
+        session = writer_session("id", "$1", "$5"),
+        harness = writer_session("harness", "$1", "$5"),
+        run = writer_session("agent_run_id", "$1", "$5"),
     ))
     .bind(page_id)
     .bind(version)

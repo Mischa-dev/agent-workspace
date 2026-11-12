@@ -12,12 +12,17 @@ describe('module embeds', () => {
   })
 
   it('shows a project’s tasks as a list, or a board, with only known filters', () => {
-    expect(moduleEmbedTarget('/projects/p1/work-items?status=s1&secret=x')).toMatchObject({
+    const list = moduleEmbedTarget('/projects/p1/work-items?semanticCategory=started&priority=high&sort=oldest&secret=x&task=t9')
+    expect(list).toMatchObject({
       kind: 'tasks',
       projectId: 'p1',
-      filters: { status: 's1' },
+      filters: { semanticCategory: 'started', priority: 'high', sort: 'oldest' },
       embed: { id: 'tasks.list' },
     })
+    expect(list?.kind === 'tasks' && Object.keys(list.filters).sort()).toEqual(['priority', 'semanticCategory', 'sort'])
+    const board = moduleEmbedTarget('/projects/p1/work-items?view=board&priority=high')
+    expect(board).toMatchObject({ embed: { id: 'tasks.board' }, filters: { priority: 'high' } })
+    expect(board?.kind === 'tasks' && 'view' in board.filters).toBe(false)
     expect(moduleEmbedTarget('/projects/p1/work-items?layout=board')).toMatchObject({ embed: { id: 'tasks.board' } })
   })
 

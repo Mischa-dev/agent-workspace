@@ -107,6 +107,29 @@ async fn a_pages_history_names_the_agent_session_behind_each_version() {
     let first = version(1);
     assert!(first.get("sessionHarness").is_none(), "{first}");
 
+    // Mara's next run in the same channel reuses the session row; the version
+    // written earlier keeps naming what wrote it.
+    sqlx::query("UPDATE agent_sessions SET harness = 'codex' WHERE agent_actor_id = $1")
+        .bind(mara)
+        .execute(&setup.pool)
+        .await
+        .expect("next run");
+    let (_, read) = send(
+        app,
+        setup
+            .browser
+            .request("GET", &format!("/api/v1/pages/{page}"), None, Value::Null),
+    )
+    .await;
+    let kept = read["revisions"]
+        .as_array()
+        .expect("revisions")
+        .iter()
+        .find(|revision| revision["version"] == 2)
+        .expect("version 2")
+        .clone();
+    assert_eq!(kept["sessionHarness"], "claude_code", "{kept}");
+
     // Once the channel is private to people the reader isn't among, the
     // version still says a session wrote it, but not where.
     sqlx::query("UPDATE conversations SET visibility = 'members' WHERE id = $1")

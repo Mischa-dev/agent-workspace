@@ -1,5 +1,7 @@
 import type { EmbedDecl, ThingDecl } from '../../modules/contract'
 import { DECLARED_EMBEDS, DECLARED_THINGS } from '../../modules/pieces/declared'
+import { listQuery, readListState } from '../../work-items/listModel'
+import type { WorkItemFilters } from '../../work-items/types'
 
 /**
  * What a module's embed shows in a page (AWD-53), from the embed's path: one
@@ -10,15 +12,12 @@ import { DECLARED_EMBEDS, DECLARED_THINGS } from '../../modules/pieces/declared'
  */
 export type ModuleEmbedTarget =
   | { kind: 'thing'; thing: string; id: string; decl: ThingDecl; embed: EmbedDecl }
-  | { kind: 'tasks'; projectId: string; filters: Record<string, string>; decl: ThingDecl; embed: EmbedDecl }
+  | { kind: 'tasks'; projectId: string; filters: WorkItemFilters; decl: ThingDecl; embed: EmbedDecl }
 
 /** Kinds the server opens as things (`GET /api/v1/things/{kind}/{id}`). */
 const OPENS = new Set(['task', 'page', 'whiteboard', 'thread'])
 
 const TASK_LIST = /^\/projects\/([^/]+)\/work-items\/?$/
-
-/** Filters a task list embed passes on; the rest of the address is left out. */
-const TASK_FILTERS = new Set(['status', 'statusGroup', 'assignee', 'priority', 'label', 'milestone', 'type', 'q', 'view', 'ready', 'sort'])
 
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
@@ -47,12 +46,14 @@ export function moduleEmbedTarget(href: string): ModuleEmbedTarget | null {
   try {
     const list = TASK_LIST.exec(url.pathname)
     if (list) {
+      // The task list's own address contract: its filters and sort go to the
+      // server, and its view (list or board) picks the piece.
+      const state = readListState(url.searchParams)
+      const board = state.view === 'board' || url.searchParams.get('layout') === 'board'
       const decl = declOf('task')
-      const embed = embedFor('task', url.searchParams.get('layout') === 'board' ? 'board' : 'list')
+      const embed = embedFor('task', board ? 'board' : 'list')
       if (!decl || !embed) return null
-      const filters: Record<string, string> = {}
-      for (const [key, value] of url.searchParams) if (TASK_FILTERS.has(key) && value) filters[key] = value
-      return { kind: 'tasks', projectId: decodeURIComponent(list[1]), filters, decl, embed }
+      return { kind: 'tasks', projectId: decodeURIComponent(list[1]), filters: listQuery(state), decl, embed }
     }
     for (const { decl } of DECLARED_THINGS) {
       if (!OPENS.has(decl.kind) || !decl.href.includes('{id}')) continue

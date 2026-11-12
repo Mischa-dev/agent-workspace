@@ -7,6 +7,7 @@ import type { Piece, Thing, ThingDecl } from '../../modules/contract'
 import { PieceView } from '../../modules/pieces/Pieces'
 import { Button, Icon, ListSkeleton, countLabel } from '../../ui'
 import { listWorkItems } from '../../work-items/api'
+import type { WorkItemFilters } from '../../work-items/types'
 import type { WorkItemCard } from '../../work-items/types'
 import { moduleEmbedTarget } from './moduleEmbed'
 import './moduleEmbed.css'
@@ -105,7 +106,7 @@ function TasksEmbed({
   projectId,
 }: {
   decl: ThingDecl
-  filters: Record<string, string>
+  filters: WorkItemFilters
   href: string
   label: string
   piece: Piece
