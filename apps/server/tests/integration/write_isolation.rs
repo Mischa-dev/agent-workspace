@@ -488,6 +488,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "task_update",
     "task_update_many",
     "task_watch",
+    "template_write",
     "thread_start",
     "thread_update",
     "usage_batch_launch",
@@ -6334,6 +6335,20 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "template": bx.task_template, "title": "Net from template"}),
             json!({"projectId": a.project, "template": ax.task_template, "title": "Net", "assignee": b.rook}),
             json!({"projectId": a.project, "template": ax.task_template, "title": "Net", "milestone": bx.milestone}),
+        ]),
+        mcp_case(
+            "template_write",
+            json!({"projectId": a.project, "name": "Net mcp template", "title": "Net templated", "subtasks": [{"title": "Net step"}]}),
+            vec![
+                json!({"projectId": b.project, "name": "Net mcp template", "title": "Net"}),
+                json!({"projectId": b.project, "template": bx.task_template, "title": "Net"}),
+                json!({"projectId": a.project, "template": bx.task_template, "title": "Net"}),
+                json!({"projectId": a.project, "template": bx.task_template, "archived": true}),
+            ],
+        )
+        .rejecting(vec![
+            json!({"projectId": a.project, "name": "Net typed", "title": "Net", "type": bx.task_type}),
+            json!({"projectId": a.project, "template": ax.task_template, "type": bx.task_type}),
         ]),
         mcp_case(
             "task_import",

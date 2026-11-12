@@ -23,7 +23,7 @@ use crate::{
     work_items::{
         imports::{self, CommitRefusal, CreateImportRequest, ImportOptions},
         list::ViewFilters,
-        templates::{self, ApplyOptions, ApplyOutcome},
+        templates::{self, ApplyOptions, ApplyOutcome, TemplateFields},
         views,
     },
 };
@@ -686,6 +686,295 @@ pub(super) async fn template_list(
     }
     .await;
     result.unwrap_or_else(|error| ToolResult::from_error(error, "template_list"))
+}
+
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct TemplateSubtask {
+    /// One line, up to 240 characters.
+    pub title: String,
+    /// Up to 5,000 characters of Markdown.
+    pub description: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct TemplateWriteArguments {
+    /// The project's ID, link or key (such as "AWD").
+    pub project_id: String,
+    /// The template to change: its name or ID (see template_list). Leave it
+    /// out to make a new one.
+    pub template: Option<String>,
+    /// The template's name, 1 to 80 characters, unique among the project's
+    /// templates. Needed for a new one.
+    pub name: Option<String>,
+    /// The title tasks made from it get. Needed for a new one.
+    pub title: Option<String>,
+    /// The tasks' description, in Markdown. "" clears it.
+    pub description: Option<String>,
+    /// A task type by name or ID. "" clears it.
+    #[serde(rename = "type")]
+    pub task_type: Option<String>,
+    /// no_priority, low, medium, high or urgent.
+    pub priority: Option<String>,
+    /// Label names; labels the project doesn't have yet are made when the
+    /// template is used. Replaces the list.
+    pub labels: Option<Vec<String>>,
+    /// Acceptance criteria, one line each. Replaces the list.
+    pub acceptance_criteria: Option<Vec<String>>,
+    /// Subtasks each task made from it gets. Replaces the list.
+    pub subtasks: Option<Vec<TemplateSubtask>>,
+    /// An estimate from 0 to 100,000, in steps of 0.25.
+    pub estimate: Option<f64>,
+    /// Leave the estimate empty.
+    pub clear_estimate: Option<bool>,
+    /// true archives it (task_from_template can't use it, and schedules
+    /// that make tasks from it pause), false restores it.
+    pub archived: Option<bool>,
+    /// The version from template_list or an earlier template_write. Leave
+    /// it out to change the current one.
+    pub expected_version: Option<i64>,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct TemplateWriteValue {
+    /// The template as it is now, as template_list shows it, with its
+    /// version.
+    pub template: Value,
+    /// Whether this call made a new template.
+    pub created: bool,
+}
+
+/// The template `wanted` names: by ID, or by name, the active one first.
+/// Two archived ones with that name and no active one are no match.
+async fn find_template(
+    connection: &mut sqlx::PgConnection,
+    project_id: Uuid,
+    wanted: &str,
+) -> Result<Option<Uuid>, AppError> {
+    let rows = sqlx::query_as::<_, (Uuid, bool)>(
+        r#"
+        SELECT id, archived_at IS NULL FROM task_templates
+        WHERE project_id = $1 AND (id = $2 OR lower(name) = lower($3))
+        ORDER BY id = $2 DESC, archived_at IS NULL DESC
+        LIMIT 3
+        "#,
+    )
+    .bind(project_id)
+    .bind(parse_id(wanted))
+    .bind(wanted.trim())
+    .fetch_all(&mut *connection)
+    .await?;
+    let wanted_id = parse_id(wanted);
+    Ok(match rows.as_slice() {
+        [(id, _), ..] if Some(*id) == wanted_id => Some(*id),
+        [(id, true), ..] => Some(*id),
+        [(id, false)] => Some(*id),
+        _ => None,
+    })
+}
+
+/// A task type of the project by name or ID, enabled ones only.
+async fn find_type(
+    connection: &mut sqlx::PgConnection,
+    project_id: Uuid,
+    wanted: &str,
+) -> Result<Result<Uuid, String>, AppError> {
+    let ids = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT id FROM work_item_types
+        WHERE project_id = $1 AND enabled
+          AND (id::text = lower($2) OR lower(name) = lower($2))
+        LIMIT 2
+        "#,
+    )
+    .bind(project_id)
+    .bind(wanted.trim())
+    .fetch_all(&mut *connection)
+    .await?;
+    if let [id] = ids.as_slice() {
+        return Ok(Ok(*id));
+    }
+    let names = sqlx::query_scalar::<_, String>(
+        "SELECT name FROM work_item_types WHERE project_id = $1 AND enabled ORDER BY position, name LIMIT 40",
+    )
+    .bind(project_id)
+    .fetch_all(&mut *connection)
+    .await?;
+    Ok(Err(format!(
+        "No task type by that name or ID here. Types: {}.",
+        names.join(", ")
+    )))
+}
+
+pub(super) async fn template_write(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: TemplateWriteArguments,
+) -> ToolResult<TemplateWriteValue> {
+    if !principal.can_write() {
+        return ToolResult::read_only();
+    }
+    if parse_id(&arguments.project_id) != Some(principal.project_id) {
+        return ToolResult::not_found("That project");
+    }
+    let project_id = principal.project_id;
+    let result = async {
+        let mut transaction = state.pool.begin().await?;
+        match check_access_for(&mut transaction, principal, Action::WorkItemEdit).await? {
+            WriteAccess::Allowed => {}
+            WriteAccess::ReadOnly => return Ok(ToolResult::read_only()),
+            WriteAccess::NotFound => return Ok(ToolResult::not_found("That project")),
+            WriteAccess::ProjectArchived => {
+                return Ok(ToolResult::conflict("That project is archived."));
+            }
+            WriteAccess::Denied => {
+                return Ok(ToolResult::denied(
+                    "Only people who can edit this project's tasks can change its templates.",
+                ));
+            }
+        }
+        let current = match arguments.template.as_deref() {
+            None => None,
+            Some(wanted) => {
+                let Some(id) = find_template(&mut transaction, project_id, wanted).await? else {
+                    return Ok(ToolResult::not_found("That template (see template_list)"));
+                };
+                Some(
+                    templates::template_for_update(&mut transaction, project_id, id)
+                        .await?
+                        .ok_or(AppError::NotFound("task_template"))?,
+                )
+            }
+        };
+        let type_id = match arguments.task_type.as_deref().map(str::trim) {
+            None => current.as_ref().and_then(|row| row.type_id),
+            Some("") => None,
+            Some(wanted) => match find_type(&mut transaction, project_id, wanted).await? {
+                Ok(id) => Some(id),
+                Err(message) => return Ok(ToolResult::invalid("type", message)),
+            },
+        };
+        let changes_fields = arguments.name.is_some()
+            || arguments.title.is_some()
+            || arguments.description.is_some()
+            || arguments.task_type.is_some()
+            || arguments.priority.is_some()
+            || arguments.labels.is_some()
+            || arguments.acceptance_criteria.is_some()
+            || arguments.subtasks.is_some()
+            || arguments.estimate.is_some()
+            || arguments.clear_estimate == Some(true);
+        if current.is_none() && (arguments.name.is_none() || arguments.title.is_none()) {
+            return Ok(ToolResult::invalid(
+                "name",
+                "Give a new template a name and a title, or pass template to change one (see template_list).",
+            ));
+        }
+        // Fields left out keep what the template has.
+        let base = current
+            .clone()
+            .map(templates::TaskTemplateView::from)
+            .map(|view| TemplateFields {
+                name: view.name,
+                title: view.title,
+                description: view.description,
+                type_id: view.type_id,
+                priority: view.priority,
+                labels: view.labels,
+                acceptance_criteria: view.acceptance_criteria,
+                subtasks: view.subtasks,
+                estimate: view.estimate,
+            })
+            .unwrap_or_else(|| TemplateFields {
+                priority: "no_priority".to_owned(),
+                ..TemplateFields::default()
+            });
+        let fields = TemplateFields {
+            name: arguments.name.clone().unwrap_or(base.name),
+            title: arguments.title.clone().unwrap_or(base.title),
+            description: arguments.description.clone().unwrap_or(base.description),
+            type_id,
+            priority: arguments.priority.clone().unwrap_or(base.priority),
+            labels: arguments.labels.clone().unwrap_or(base.labels),
+            acceptance_criteria: arguments
+                .acceptance_criteria
+                .clone()
+                .unwrap_or(base.acceptance_criteria),
+            subtasks: arguments
+                .subtasks
+                .clone()
+                .map(|subtasks| {
+                    subtasks
+                        .into_iter()
+                        .map(|subtask| templates::SubtaskDraft {
+                            title: subtask.title,
+                            description: subtask.description.unwrap_or_default(),
+                        })
+                        .collect()
+                })
+                .unwrap_or(base.subtasks),
+            estimate: if arguments.clear_estimate == Some(true) {
+                None
+            } else {
+                arguments.estimate.or(base.estimate)
+            },
+        };
+        let fields = match templates::normalize_template(fields) {
+            Ok(fields) => fields,
+            Err((field, message)) => return Ok(ToolResult::invalid(field, message)),
+        };
+        let actor = command_actor(principal, project_id);
+        let outcome = match &current {
+            None => {
+                templates::create_task_template(
+                    &mut transaction,
+                    &actor,
+                    project_id,
+                    principal.actor_id,
+                    &fields,
+                )
+                .await?
+            }
+            Some(row) => {
+                templates::change_task_template(
+                    &mut transaction,
+                    &actor,
+                    project_id,
+                    row.id,
+                    arguments.expected_version,
+                    changes_fields.then_some(&fields),
+                    arguments.archived,
+                )
+                .await?
+            }
+        };
+        let view = match outcome {
+            templates::TemplateOutcome::Done(view) => view,
+            templates::TemplateOutcome::Invalid(field, message) => {
+                return Ok(ToolResult::invalid(field, message));
+            }
+            templates::TemplateOutcome::TooMany => {
+                return Ok(ToolResult::conflict(
+                    "This project has 200 templates. Archive one it no longer uses first.",
+                ));
+            }
+            templates::TemplateOutcome::VersionConflict(current) => {
+                return Ok(ToolResult::conflict(format!(
+                    "Someone changed this template first (now version {}). Read it again with template_list, then retry.",
+                    current.version
+                )));
+            }
+        };
+        transaction.commit().await?;
+        Ok::<_, AppError>(ToolResult::ok(TemplateWriteValue {
+            template: to_value(view)?,
+            created: current.is_none(),
+        }))
+    }
+    .await;
+    result.unwrap_or_else(|error| ToolResult::from_error(error, "template_write"))
 }
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
