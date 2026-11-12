@@ -254,7 +254,7 @@ async fn only_people_who_manage_the_workspace_use_or_save_templates() {
     let work = create_project(&setup, "WORK", "Work").await;
 
     // A member reads them but can't use or save one.
-    let (_, bea) = add_person(&setup, &[&work], "bea").await;
+    let (bea_id, bea) = add_person(&setup, &[&work], "bea").await;
     let (status, listed) = send(
         app,
         bea.request("GET", &templates_path(&setup), None, Value::Null),
@@ -331,6 +331,53 @@ async fn only_people_who_manage_the_workspace_use_or_save_templates() {
     )
     .await;
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+
+    // An admin's app with an agent limit that leaves out making channels
+    // can't use a template that makes them, even where it may change
+    // settings and roles; nothing is applied.
+    sqlx::query(
+        "UPDATE organization_memberships SET role = 'admin', role_explicit = true WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(setup.organization_id)
+    .bind(bea_id)
+    .execute(&setup.pool)
+    .await
+    .expect("make admin");
+    let (status, limit) = send(
+        app,
+        setup.browser.request(
+            "PUT",
+            &format!(
+                "/api/v1/organizations/{}/members/{bea_id}/agent-limit",
+                setup.organization_id
+            ),
+            None,
+            json!({"permissions": ["settings.manage", "roles.manage", "projects.view", "projects.create"]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{limit}");
+    let bea_app = connect_app(app, &bea, "Bea's app", "full").await;
+    let bea_session = initialize(app, &bea_app).await.expect("bea app");
+    let refused = tool(
+        app,
+        &bea_app,
+        &bea_session,
+        "workspace_template_apply",
+        json!({"projectId": work, "template": "personal"}),
+    )
+    .await;
+    assert_ne!(refused["outcome"], "ok", "{refused}");
+    assert!(refused.to_string().contains("channels"), "{refused}");
+    assert_eq!(
+        count(
+            &setup,
+            "SELECT count(*) FROM projects WHERE organization_id = $1 AND project_key = 'LIFE'"
+        )
+        .await,
+        0,
+        "{refused}"
+    );
 
     // The owner's app saves the workspace with the project's channels and
     // collections, and uses templates.

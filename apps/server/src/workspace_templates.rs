@@ -1147,6 +1147,23 @@ async fn starter_contents(
         .bind(project_id)
         .execute(&mut **transaction)
         .await?;
+    // What the caller may do in the project, as channel and collection
+    // writes there check it: an app's agent limit for the project included.
+    let holding = roles::project_holding(transaction, actor_id, project_id)
+        .await?
+        .unwrap_or(crate::policy::PermissionSet::EMPTY);
+    if !project.channels.is_empty() && !holding.contains(Permission::ChannelsCreate) {
+        return Err(ApplyError::Problem(problem(
+            "project.channels",
+            "You can't make channels in the starter project, so this template can't be used here.",
+        )));
+    }
+    if !project.collections.is_empty() && !holding.contains(Permission::CollectionsBuild) {
+        return Err(ApplyError::Problem(problem(
+            "project.collections",
+            "You can't build collections in the starter project, so this template can't be used here.",
+        )));
+    }
     let mut made = Vec::new();
     for channel in &project.channels {
         let name = crate::conversations::normalize_conversation_name(channel_name(channel))?;
@@ -1307,8 +1324,9 @@ pub(crate) async fn snapshot(
                 .agent_limit
                 .map(|keys| keys.iter().map(|key| (*key).to_owned()).collect()),
             modules_off: role.modules_off.clone(),
-            defaults: (role.defaults != RoleDefaults::default())
-                .then(|| serde_json::to_value(&role.defaults).unwrap_or_default()),
+            // Always written, empty or not, so using the template puts the
+            // role's defaults back as they were saved.
+            defaults: serde_json::to_value(&role.defaults).ok(),
         });
     }
     let project = match project_id {
