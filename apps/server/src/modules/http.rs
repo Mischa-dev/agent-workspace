@@ -192,14 +192,52 @@ async fn change_modules(
     ApiJson(request): ApiJson<ChangeRequest>,
 ) -> Result<Json<ModulesResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
+    let mut transaction = state.pool.begin().await?;
+    let metadata = change_modules_in(
+        &mut transaction,
+        principal.actor_id,
+        organization_id,
+        request.preset.as_deref(),
+        &request.switches,
+    )
+    .await?;
+    if let Some(metadata) = metadata {
+        settings::audit(
+            &mut transaction,
+            &headers,
+            &principal,
+            None,
+            "modules.changed",
+            "organization",
+            Some(organization_id),
+            metadata,
+        )
+        .await?;
+    }
+    let response = view(&mut transaction, &principal, organization_id).await?;
+    transaction.commit().await?;
+    Ok(Json(response))
+}
+
+/// Switch a workspace's modules, from a preset and then single switches
+/// (module id to on), for an owner or admin who may manage its settings.
+/// Returns the audit metadata when something changed; the caller records
+/// the row.
+pub(crate) async fn change_modules_in(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    actor_id: Uuid,
+    organization_id: Uuid,
+    preset: Option<&str>,
+    switches: &BTreeMap<String, bool>,
+) -> Result<Option<serde_json::Value>, AppError> {
     let mut wanted = BTreeMap::new();
-    if let Some(preset) = &request.preset {
-        let preset = manifest::preset(preset).ok_or(AppError::Validation("preset"))?;
+    if let Some(name) = preset {
+        let found = manifest::preset(name).ok_or(AppError::Validation("preset"))?;
         for module in manifest::core().iter().filter(|module| module.switchable) {
-            wanted.insert(module.id.clone(), preset.on.contains(&module.id));
+            wanted.insert(module.id.clone(), found.on.contains(&module.id));
         }
     }
-    for (module, on) in &request.switches {
+    for (module, on) in switches {
         let found = manifest::get(module).ok_or(AppError::Validation("module"))?;
         if !found.switchable {
             return Err(AppError::Validation("module can't be switched"));
@@ -209,40 +247,26 @@ async fn change_modules(
     if wanted.is_empty() {
         return Err(AppError::Validation("switches"));
     }
-    let mut transaction = state.pool.begin().await?;
-    settings::authorize_workspace_manage(&mut *transaction, &principal, organization_id).await?;
-    let before = state::switches(&mut transaction, organization_id).await?;
-    let changed = write_switches(
-        &mut transaction,
+    settings::authorize_workspace_manage_as(
+        &mut **transaction,
+        actor_id,
+        crate::policy::ActorKind::Human,
         organization_id,
-        principal.actor_id,
-        &wanted,
     )
     .await?;
-    if !changed.is_empty() {
-        let after = state::switches(&mut transaction, organization_id).await?;
-        let off = |switches: &state::Switches| switched_off(switches);
-        settings::audit(
-            &mut transaction,
-            &headers,
-            &principal,
-            None,
-            "modules.changed",
-            "organization",
-            Some(organization_id),
-            json!({
-                "organizationId": organization_id,
-                "preset": request.preset,
-                "changed": changed,
-                "before": { "off": off(&before) },
-                "after": { "off": off(&after) },
-            }),
-        )
-        .await?;
+    let before = state::switches(transaction, organization_id).await?;
+    let changed = write_switches(transaction, organization_id, actor_id, &wanted).await?;
+    if changed.is_empty() {
+        return Ok(None);
     }
-    let response = view(&mut transaction, &principal, organization_id).await?;
-    transaction.commit().await?;
-    Ok(Json(response))
+    let after = state::switches(transaction, organization_id).await?;
+    Ok(Some(json!({
+        "organizationId": organization_id,
+        "preset": preset,
+        "changed": changed,
+        "before": { "off": switched_off(&before) },
+        "after": { "off": switched_off(&after) },
+    })))
 }
 
 /// The modules a workspace's switches have off, by id.
