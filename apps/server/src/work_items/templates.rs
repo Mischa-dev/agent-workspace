@@ -153,7 +153,7 @@ pub(crate) async fn list_templates(
     .await?)
 }
 
-async fn template_for_update(
+pub(crate) async fn template_for_update(
     connection: &mut PgConnection,
     project_id: Uuid,
     template_id: Uuid,
@@ -366,10 +366,6 @@ async fn active_name_taken(
     .await?)
 }
 
-fn name_taken() -> Response {
-    invalid("name", "Another template already has that name.")
-}
-
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct TemplatesResponse {
@@ -397,6 +393,172 @@ pub(super) async fn get_templates(
     }))
 }
 
+/// What a template write came to, when it wasn't an error: the web and
+/// template_write each make their own answer from it.
+pub(crate) enum TemplateOutcome {
+    Done(Box<TaskTemplateView>),
+    Invalid(&'static str, &'static str),
+    TooMany,
+    VersionConflict(Box<TaskTemplateView>),
+}
+
+const TYPE_MESSAGE: &str = "Pick one of the project's task types.";
+const NAME_TAKEN: &str = "Another template already has that name.";
+
+/// Saves a new template from normalized fields, as `actor_id`.
+pub(crate) async fn create_task_template(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    project_id: Uuid,
+    actor_id: Uuid,
+    fields: &TemplateFields,
+) -> Result<TemplateOutcome, AppError> {
+    if !type_is_enabled(transaction, project_id, fields.type_id).await? {
+        return Ok(TemplateOutcome::Invalid("typeId", TYPE_MESSAGE));
+    }
+    if active_name_taken(transaction, project_id, &fields.name, None).await? {
+        return Ok(TemplateOutcome::Invalid("name", NAME_TAKEN));
+    }
+    let count = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM task_templates WHERE project_id = $1 AND archived_at IS NULL",
+    )
+    .bind(project_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if count >= MAX_TEMPLATES {
+        return Ok(TemplateOutcome::TooMany);
+    }
+    let id = insert_template(transaction, project_id, actor_id, fields).await?;
+    record_audit_for(
+        transaction,
+        actor,
+        "task_template",
+        "task_template.created",
+        id,
+        json!({}),
+    )
+    .await?;
+    let row = template_for_update(transaction, project_id, id)
+        .await?
+        .ok_or(AppError::Internal("template just made is missing"))?;
+    Ok(TemplateOutcome::Done(Box::new(row.into())))
+}
+
+/// Changes a template: its fields replaced by normalized `fields` when
+/// given, and archived or restored. Archiving pauses the schedules that
+/// make tasks from it.
+pub(crate) async fn change_task_template(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    project_id: Uuid,
+    template_id: Uuid,
+    expected_version: Option<i64>,
+    fields: Option<&TemplateFields>,
+    archived: Option<bool>,
+) -> Result<TemplateOutcome, AppError> {
+    let row = template_for_update(transaction, project_id, template_id)
+        .await?
+        .ok_or(AppError::NotFound("task_template"))?;
+    if expected_version.is_some_and(|expected| expected != row.version) {
+        return Ok(TemplateOutcome::VersionConflict(Box::new(row.into())));
+    }
+    let archived = archived.unwrap_or(row.archived);
+    let name = fields.map_or(row.name.as_str(), |fields| &fields.name);
+    if !archived && active_name_taken(transaction, project_id, name, Some(template_id)).await? {
+        return Ok(TemplateOutcome::Invalid("name", NAME_TAKEN));
+    }
+    if let Some(fields) = fields {
+        if !type_is_enabled(transaction, project_id, fields.type_id).await? {
+            return Ok(TemplateOutcome::Invalid("typeId", TYPE_MESSAGE));
+        }
+        sqlx::query(
+            r#"
+            UPDATE task_templates
+            SET name = $3, title = $4, description = $5, type_id = $6, priority = $7,
+                labels = $8, acceptance_criteria = $9, subtasks = $10, estimate = $11
+            WHERE project_id = $1 AND id = $2
+            "#,
+        )
+        .bind(project_id)
+        .bind(template_id)
+        .bind(&fields.name)
+        .bind(&fields.title)
+        .bind(&fields.description)
+        .bind(fields.type_id)
+        .bind(&fields.priority)
+        .bind(&fields.labels)
+        .bind(&fields.acceptance_criteria)
+        .bind(json!(fields.subtasks))
+        .bind(fields.estimate)
+        .execute(&mut **transaction)
+        .await?;
+    }
+    sqlx::query(
+        r#"
+        UPDATE task_templates
+        SET archived_at = CASE WHEN $3 THEN COALESCE(archived_at, now()) ELSE NULL END,
+            version = version + 1, updated_at = now()
+        WHERE project_id = $1 AND id = $2
+        "#,
+    )
+    .bind(project_id)
+    .bind(template_id)
+    .bind(archived)
+    .execute(&mut **transaction)
+    .await?;
+    if archived && !row.archived {
+        // A schedule with nothing to make stops, and says why.
+        sqlx::query(
+            r#"
+            UPDATE recurring_tasks
+            SET enabled = false, next_run_at = NULL, version = version + 1, updated_at = now(),
+                paused_reason = 'Paused because its template was archived.'
+            WHERE project_id = $1 AND template_id = $2 AND enabled
+            "#,
+        )
+        .bind(project_id)
+        .bind(template_id)
+        .execute(&mut **transaction)
+        .await?;
+    }
+    record_audit_for(
+        transaction,
+        actor,
+        "task_template",
+        "task_template.updated",
+        template_id,
+        json!({ "archived": archived }),
+    )
+    .await?;
+    let row = template_for_update(transaction, project_id, template_id)
+        .await?
+        .ok_or(AppError::Internal("template just changed is missing"))?;
+    Ok(TemplateOutcome::Done(Box::new(row.into())))
+}
+
+/// The web's answer to a template write that didn't go through.
+fn template_refusal(outcome: TemplateOutcome) -> Result<Response, AppError> {
+    Ok(match outcome {
+        TemplateOutcome::Done(_) => {
+            return Err(AppError::Internal("a template write wasn't refused"));
+        }
+        TemplateOutcome::Invalid(field, message) => invalid(field, message),
+        TemplateOutcome::TooMany => refusal(
+            StatusCode::CONFLICT,
+            "too_many_templates",
+            "This project has 200 templates. Archive one you no longer use first.".to_owned(),
+            json!({}),
+        ),
+        TemplateOutcome::VersionConflict(current) => refusal(
+            StatusCode::CONFLICT,
+            "version_conflict",
+            "Someone changed this template first. You’re now looking at the latest version."
+                .to_owned(),
+            json!({ "resource": "task_template", "currentVersion": current.version, "current": current }),
+        ),
+    })
+}
+
 pub(super) async fn create_template(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -421,49 +583,19 @@ pub(super) async fn create_template(
         )
         .await
     );
-    if !type_is_enabled(&mut write.transaction, project_id, fields.type_id).await? {
-        return Ok(invalid("typeId", "Pick one of the project's task types."));
-    }
-    if active_name_taken(&mut write.transaction, project_id, &fields.name, None).await? {
-        return Ok(name_taken());
-    }
-    let count = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM task_templates WHERE project_id = $1 AND archived_at IS NULL",
-    )
-    .bind(project_id)
-    .fetch_one(&mut *write.transaction)
-    .await?;
-    if count >= MAX_TEMPLATES {
-        return Ok(refusal(
-            StatusCode::CONFLICT,
-            "too_many_templates",
-            "This project has 200 templates. Archive one you no longer use first.".to_owned(),
-            json!({}),
-        ));
-    }
-    let id = insert_template(
+    let actor = write.actor.clone();
+    match create_task_template(
         &mut write.transaction,
+        &actor,
         project_id,
         principal.actor_id,
         &fields,
     )
-    .await?;
-    let actor = write.actor.clone();
-    record_audit_for(
-        &mut write.transaction,
-        &actor,
-        "task_template",
-        "task_template.created",
-        id,
-        json!({}),
-    )
-    .await?;
-    let row = template_for_update(&mut write.transaction, project_id, id)
-        .await?
-        .ok_or(AppError::Internal("template just made is missing"))?;
-    write
-        .finish(StatusCode::CREATED, &TaskTemplateView::from(row))
-        .await
+    .await?
+    {
+        TemplateOutcome::Done(view) => write.finish(StatusCode::CREATED, &view).await,
+        refused => template_refusal(refused),
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -499,97 +631,21 @@ pub(super) async fn update_template(
         )
         .await
     );
-    let row = template_for_update(&mut write.transaction, project_id, template_id)
-        .await?
-        .ok_or(AppError::NotFound("task_template"))?;
-    if row.version != request.expected_version {
-        return Ok(refusal(
-            StatusCode::CONFLICT,
-            "version_conflict",
-            "Someone changed this template first. You’re now looking at the latest version."
-                .to_owned(),
-            json!({ "resource": "task_template", "currentVersion": row.version, "current": TaskTemplateView::from(row) }),
-        ));
-    }
-    let archived = request.archived.unwrap_or(row.archived);
-    let name = fields
-        .as_ref()
-        .map_or(row.name.as_str(), |fields| &fields.name);
-    if !archived
-        && active_name_taken(&mut write.transaction, project_id, name, Some(template_id)).await?
-    {
-        return Ok(name_taken());
-    }
-    if let Some(fields) = &fields {
-        if !type_is_enabled(&mut write.transaction, project_id, fields.type_id).await? {
-            return Ok(invalid("typeId", "Pick one of the project's task types."));
-        }
-        sqlx::query(
-            r#"
-            UPDATE task_templates
-            SET name = $3, title = $4, description = $5, type_id = $6, priority = $7,
-                labels = $8, acceptance_criteria = $9, subtasks = $10, estimate = $11
-            WHERE project_id = $1 AND id = $2
-            "#,
-        )
-        .bind(project_id)
-        .bind(template_id)
-        .bind(&fields.name)
-        .bind(&fields.title)
-        .bind(&fields.description)
-        .bind(fields.type_id)
-        .bind(&fields.priority)
-        .bind(&fields.labels)
-        .bind(&fields.acceptance_criteria)
-        .bind(json!(fields.subtasks))
-        .bind(fields.estimate)
-        .execute(&mut *write.transaction)
-        .await?;
-    }
-    sqlx::query(
-        r#"
-        UPDATE task_templates
-        SET archived_at = CASE WHEN $3 THEN COALESCE(archived_at, now()) ELSE NULL END,
-            version = version + 1, updated_at = now()
-        WHERE project_id = $1 AND id = $2
-        "#,
-    )
-    .bind(project_id)
-    .bind(template_id)
-    .bind(archived)
-    .execute(&mut *write.transaction)
-    .await?;
-    if archived && !row.archived {
-        // A schedule with nothing to make stops, and says why.
-        sqlx::query(
-            r#"
-            UPDATE recurring_tasks
-            SET enabled = false, next_run_at = NULL, version = version + 1, updated_at = now(),
-                paused_reason = 'Paused because its template was archived.'
-            WHERE project_id = $1 AND template_id = $2 AND enabled
-            "#,
-        )
-        .bind(project_id)
-        .bind(template_id)
-        .execute(&mut *write.transaction)
-        .await?;
-    }
     let actor = write.actor.clone();
-    record_audit_for(
+    match change_task_template(
         &mut write.transaction,
         &actor,
-        "task_template",
-        "task_template.updated",
+        project_id,
         template_id,
-        json!({ "archived": archived }),
+        Some(request.expected_version),
+        fields.as_ref(),
+        request.archived,
     )
-    .await?;
-    let row = template_for_update(&mut write.transaction, project_id, template_id)
-        .await?
-        .ok_or(AppError::Internal("template just changed is missing"))?;
-    write
-        .finish(StatusCode::OK, &TaskTemplateView::from(row))
-        .await
+    .await?
+    {
+        TemplateOutcome::Done(view) => write.finish(StatusCode::OK, &view).await,
+        refused => template_refusal(refused),
+    }
 }
 
 /// What applying a template may change from it.

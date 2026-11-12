@@ -1312,12 +1312,12 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/task-templates",
-            Gap("template_write: task templates"),
+            Tool("template_write"),
         ),
         (
             Patch,
             "/api/v1/projects/{project_id}/task-templates/{template_id}",
-            Gap("template_write: task templates"),
+            Tool("template_write"),
         ),
         (
             Post,
