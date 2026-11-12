@@ -72,6 +72,8 @@ pub enum Action {
     CollectionRecordEdit,
     /// Create collections and change their fields and views (AWD-90).
     CollectionBuild,
+    /// Change a project's sheets: their cells, tabs and names (AWD-54).
+    SheetEdit,
     RepositoryView,
     RepositoryManage,
     RepositoryPublish,
@@ -86,7 +88,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Self; 42] = [
+    pub const ALL: [Self; 43] = [
         Self::OrganizationProjectCreate,
         Self::ProjectView,
         Self::ProjectManage,
@@ -121,6 +123,7 @@ impl Action {
         Self::WhiteboardEdit,
         Self::CollectionRecordEdit,
         Self::CollectionBuild,
+        Self::SheetEdit,
         Self::RepositoryView,
         Self::RepositoryManage,
         Self::RepositoryPublish,
@@ -165,6 +168,7 @@ impl Action {
             Self::WhiteboardEdit => Permission::WhiteboardsEdit,
             Self::CollectionRecordEdit => Permission::CollectionsEdit,
             Self::CollectionBuild => Permission::CollectionsBuild,
+            Self::SheetEdit => Permission::SheetsEdit,
             Self::RepositoryView => Permission::CodeView,
             Self::RepositoryManage | Self::GithubIntegrationManage => Permission::CodeManage,
             Self::RepositoryPublish | Self::PullRequestCreate | Self::PullRequestRefresh => {
@@ -200,6 +204,7 @@ pub enum Permission {
     WhiteboardsEdit,
     CollectionsEdit,
     CollectionsBuild,
+    SheetsEdit,
     RunsLaunch,
     RunsApprove,
     RunsInterrupt,
@@ -296,7 +301,7 @@ const WORKERS: [bool; 4] = [true, true, true, false];
 const MANAGERS: [bool; 4] = [true, true, false, false];
 
 /// Every permission, in the order the Roles page shows them.
-pub const PERMISSIONS: [PermissionInfo; 29] = [
+pub const PERMISSIONS: [PermissionInfo; 30] = [
     required(permission(
         Permission::ProjectsView,
         "projects.view",
@@ -433,6 +438,15 @@ pub const PERMISSIONS: [PermissionInfo; 29] = [
         WORKERS,
     ),
     permission(
+        Permission::SheetsEdit,
+        "sheets.edit",
+        "sheets",
+        "Edit sheets",
+        "Create sheets and change their cells and tabs. Anyone in the project can still read them.",
+        PermissionScope::Project,
+        WORKERS,
+    ),
+    permission(
         Permission::RunsLaunch,
         "runs.launch",
         "runs",
@@ -565,13 +579,14 @@ pub const PERMISSIONS: [PermissionInfo; 29] = [
 ];
 
 /// The modules permissions are grouped by, in order, with their names.
-pub const PERMISSION_MODULES: [(&str, &str); 11] = [
+pub const PERMISSION_MODULES: [(&str, &str); 12] = [
     ("projects", "Projects"),
     ("tasks", "Tasks"),
     ("channels", "Channels"),
     ("pages", "Pages and decisions"),
     ("whiteboards", "Whiteboards"),
     ("collections", "Collections"),
+    ("sheets", "Sheets"),
     ("runs", "Runs"),
     ("code", "Code"),
     ("agents", "Agents"),
@@ -1155,6 +1170,7 @@ pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decis
             | Action::WhiteboardEdit
             | Action::CollectionRecordEdit
             | Action::CollectionBuild
+            | Action::SheetEdit
             | Action::RepositoryView
             | Action::RepositoryManage
             | Action::RepositoryPublish
@@ -1389,6 +1405,8 @@ mod tests {
                             // AWD-90: members build and fill collections.
                             | Action::CollectionRecordEdit
                             | Action::CollectionBuild
+                            // AWD-54: members edit sheets.
+                            | Action::SheetEdit
                     ),
                     MembershipRole::Viewer => {
                         matches!(

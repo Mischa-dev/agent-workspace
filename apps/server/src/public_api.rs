@@ -147,6 +147,7 @@ pub(crate) fn tag_for(tool: &str) -> &'static str {
         "task" | "label" | "field" | "milestone" | "view" | "my" | "template" => "Tasks",
         "page" | "skill" | "decision" | "search" => "Pages and search",
         "collection" | "record" => "Collections",
+        "sheet" => "Sheets",
         "run" | "launch" | "approval" | "environment" | "external" | "usage" => {
             "Runs and launching"
         }

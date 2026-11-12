@@ -1,0 +1,37 @@
+{
+  "id": "sheets",
+  "name": "Sheets",
+  "description": "Spreadsheets in a project: tabs of cells with formulas, worked out on the server, that people and agents edit together.",
+  "version": 1,
+  "kind": "core",
+  "switchable": true,
+  "needs": ["projects"],
+  "worksWith": ["pages", "collections"],
+  "permissions": ["sheets.edit"],
+  "tools": {
+    "sheet_list": "query",
+    "sheet_read": "query",
+    "sheet_write": "change"
+  },
+  "routes": [],
+  "events": { "emits": [], "listens": [] },
+  "notifications": [],
+  "search": [],
+  "automations": { "triggers": [], "actions": [] },
+  "things": [],
+  "links": [],
+  "embeds": [],
+  "slots": {
+    "pages": [],
+    "parts": [],
+    "sidebar": [],
+    "home": [],
+    "settings": [],
+    "palette": [],
+    "shortcuts": [],
+    "slash": [],
+    "setup": []
+  },
+  "settings": [],
+  "nouns": []
+}

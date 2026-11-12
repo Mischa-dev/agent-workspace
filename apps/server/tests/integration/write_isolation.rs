@@ -432,6 +432,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "field_write",
     "collection_write",
     "record_write",
+    "sheet_write",
     "later_save",
     "later_update",
     "launch_cancel",
@@ -6209,6 +6210,21 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": {"Spec": b.page}}]}),
             json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": keyed(b.collection_field, json!("Net"))}]}),
         ]),
+        mcp_case(
+            "sheet_write",
+            json!({
+                "projectId": a.project,
+                "sheet": a.sheet,
+                "cells": [{"cell": "C1", "input": "Net mcp"}],
+                "rows": [{"keyColumn": "Item", "values": {"Item": "Net mcp row", "Cost": 3}}],
+            }),
+            vec![
+                json!({"projectId": a.project, "sheet": b.sheet, "cells": [{"cell": "C1", "input": "Net"}]}),
+                json!({"projectId": b.project, "sheet": b.sheet, "cells": [{"cell": "C1", "input": "Net"}]}),
+                json!({"projectId": a.project, "sheet": b.sheet, "archived": true}),
+                json!({"projectId": b.project, "name": "Net mcp sheet"}),
+            ],
+        ),
         mcp_case(
             "view_write",
             json!({"projectId": a.project, "name": "Net mcp view", "query": {"assigneeActorId": "me"}, "pinned": true}),

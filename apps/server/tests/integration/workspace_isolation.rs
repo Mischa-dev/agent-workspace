@@ -485,6 +485,8 @@ pub(super) struct World {
     pub(super) collection_field: Uuid,
     pub(super) collection_view: Uuid,
     pub(super) record: Uuid,
+    /// A sheet (AWD-54) with a header, a value and a formula.
+    pub(super) sheet: Uuid,
     /// A file sent with `file_message` in the channel, and a task's image.
     pub(super) file: Uuid,
     pub(super) file_message: String,
@@ -1244,6 +1246,26 @@ async fn build_workspace(
     .fetch_one(pool)
     .await
     .expect("collection view");
+
+    // Sheets (AWD-54): a header row, a value and a formula over it.
+    let sheet = call(
+        "sheet_write",
+        json!({
+            "projectId": "WORK",
+            "name": format!("Budget{m}"),
+            "description": format!("What it costs{m}"),
+            "cells": [
+                {"cell": "A1", "input": "Item"},
+                {"cell": "B1", "input": "Cost"},
+                {"cell": "A2", "input": format!("Rent{m}")},
+                {"cell": "B2", "input": "1200"},
+                {"cell": "B3", "input": "=SUM(B2:B2)"},
+            ],
+            "clientRequestId": "sheet-1",
+        }),
+    )
+    .await;
+    let sheet = Uuid::parse_str(&string_at(&sheet, "/value/id")).expect("sheet id");
 
     let channel = create_channel(&setup, &project, "launch").await;
     let message = say(
@@ -2119,6 +2141,7 @@ async fn build_workspace(
         collection_field,
         collection_view,
         record,
+        sheet,
         file,
         file_message,
         task_file,
@@ -3587,6 +3610,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "collection_list",
     "collection_describe",
     "record_query",
+    "sheet_list",
+    "sheet_read",
     "inbox_list",
     "label_list",
     "field_list",
@@ -3716,6 +3741,31 @@ fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![
                 json!({"projectId": b.project}),
                 json!({"projectId": b.space}),
+            ],
+            vec![],
+        ),
+        case(
+            "sheet_list",
+            vec![
+                json!({"projectId": "WORK"}),
+                json!({"projectId": a.project, "includeArchived": true}),
+            ],
+            vec![
+                json!({"projectId": b.project}),
+                json!({"projectId": b.space}),
+            ],
+            vec![],
+        ),
+        case(
+            "sheet_read",
+            vec![
+                json!({"projectId": "WORK", "sheet": "Budget"}),
+                json!({"projectId": a.project, "sheet": a.sheet, "range": "A1:B3"}),
+                json!({"projectId": "WORK", "sheet": "Budget", "asRows": true, "where": {"Item": "Rent"}}),
+            ],
+            vec![
+                json!({"projectId": "WORK", "sheet": b.sheet}),
+                json!({"projectId": b.project, "sheet": b.sheet}),
             ],
             vec![],
         ),

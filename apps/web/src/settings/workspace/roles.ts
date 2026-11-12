@@ -21,6 +21,7 @@ export const PERMISSION_KEYS = [
   'whiteboards.edit',
   'collections.edit',
   'collections.build',
+  'sheets.edit',
   'runs.launch',
   'runs.approve',
   'runs.interrupt',
