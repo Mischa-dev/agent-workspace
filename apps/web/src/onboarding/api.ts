@@ -4,7 +4,9 @@ import { requestJson } from '../api/client'
 // so doing a step anywhere in the app ticks it here.
 
 export type OnboardingStepId =
+  | 'template'
   | 'workspace'
+  | 'roles'
   | 'project'
   | 'github'
   | 'repository'
@@ -30,7 +32,7 @@ export type Onboarding = {
 
 export type OnboardingChange = {
   projectId?: string
-  confirm?: 'workspace'
+  confirm?: 'workspace' | 'roles'
   skip?: 'agent'
   unskip?: 'agent'
   dismissed?: boolean
@@ -49,7 +51,9 @@ export const updateOnboarding = (organizationId: string, change: OnboardingChang
   requestJson<Onboarding>(path(organizationId), { method: 'PUT', json: change })
 
 export const STEP_TITLES: Record<OnboardingStepId, string> = {
+  template: 'Pick a template',
   workspace: 'Name your workspace',
+  roles: 'Decide who gets what',
   project: 'Create a project',
   github: 'Connect GitHub',
   repository: 'Pick a repository',

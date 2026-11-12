@@ -23,6 +23,9 @@
     "role_get": "describe",
     "my_permissions": "describe",
     "role_write": "change",
+    "workspace_template_list": "query",
+    "workspace_template_apply": "change",
+    "workspace_template_save": "create",
     "role_assign": "change",
     "thing_open": "describe"
   },
@@ -96,6 +99,7 @@
       "workspace/members",
       "workspace/roles",
       "workspace/modules",
+      "workspace/templates",
       "workspace/keys",
       "workspace/email",
       "workspace/layout",
@@ -118,7 +122,7 @@
     ],
     "shortcuts": ["command-menu", "shortcut-sheet", "search", "go-home", "go-settings", "go-appearance"],
     "slash": [],
-    "setup": ["workspace"]
+    "setup": ["template", "workspace", "roles"]
   },
   "settings": ["notifications.*", "files.*", "layout.*", "modules.*"],
   "nouns": []

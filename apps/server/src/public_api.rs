@@ -139,6 +139,7 @@ pub(crate) fn tag_for(tool: &str) -> &'static str {
         "briefing" | "inbox" | "notification" | "mark" => "Inbox and notifications",
         "project" | "projects" | "workflow" | "settings" => "Projects",
         "role" => "Roles and access",
+        "workspace" => "Workspace",
         "conversation" | "message" | "file" | "thread" | "channel" | "pin" | "people" => {
             "Conversations"
         }
@@ -301,15 +302,17 @@ pub(crate) fn document() -> Value {
             }),
         );
         for (status, description) in ERROR_STATUSES {
-            let content = if matches!(*status, "403" | "404" | "409" | "422" | "503") {
-                json!({ "application/json": { "schema": output.clone() } })
+            let response = if matches!(*status, "403" | "404" | "409" | "422" | "503") {
+                json!({
+                    "description": description,
+                    "content": { "application/json": { "schema": output.clone() } },
+                })
             } else {
-                json!({ "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } })
+                // The same for every operation, so referenced rather than
+                // repeated, which keeps the document small as tools are added.
+                json!({ "$ref": format!("#/components/responses/Error{status}") })
             };
-            responses.insert(
-                (*status).to_owned(),
-                json!({ "description": description, "content": content }),
-            );
+            responses.insert((*status).to_owned(), response);
         }
         paths.insert(
             format!("/{name}"),
@@ -360,6 +363,23 @@ pub(crate) fn document() -> Value {
         "paths": paths,
         "components": {
             "schemas": components,
+            "responses": ERROR_STATUSES
+                .iter()
+                .filter(|(status, _)| !matches!(*status, "403" | "404" | "409" | "422" | "503"))
+                .map(|(status, description)| {
+                    (
+                        format!("Error{status}"),
+                        json!({
+                            "description": description,
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/Error" },
+                                },
+                            },
+                        }),
+                    )
+                })
+                .collect::<Map<_, _>>(),
             "securitySchemes": {
                 "bearerToken": {
                     "type": "http",
@@ -401,7 +421,17 @@ mod tests {
         let mut references = Vec::new();
         collect_refs(&document, &mut references);
         assert!(!references.is_empty());
+        let responses = document["components"]["responses"]
+            .as_object()
+            .expect("responses");
         for reference in references {
+            if let Some(name) = reference.strip_prefix("#/components/responses/") {
+                assert!(
+                    responses.contains_key(name),
+                    "dangling reference {reference}"
+                );
+                continue;
+            }
             let name = reference
                 .strip_prefix("#/components/schemas/")
                 .unwrap_or_else(|| panic!("reference outside components: {reference}"));

@@ -245,6 +245,21 @@ mod tests {
         ),
         (
             Post,
+            "/api/v1/organizations/{organization_id}/workspace-templates",
+            Tool("workspace_template_save"),
+        ),
+        (
+            Post,
+            "/api/v1/organizations/{organization_id}/workspace-templates/apply",
+            Tool("workspace_template_apply"),
+        ),
+        (
+            Delete,
+            "/api/v1/organizations/{organization_id}/workspace-templates/{template_id}",
+            Tool("workspace_template_save"),
+        ),
+        (
+            Post,
             "/api/v1/organizations/{organization_id}/leave",
             Person("a person's own account"),
         ),
