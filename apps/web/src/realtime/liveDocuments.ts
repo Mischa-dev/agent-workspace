@@ -49,6 +49,13 @@ export function discussionChange(event: Pick<RealtimeEnvelope, 'type' | 'payload
   return pageId ? { pageId } : null
 }
 
+/** A sheet's cells or tabs changed (AWD-54): its open tab and the list refetch. */
+export function sheetChange(event: Pick<RealtimeEnvelope, 'type' | 'payload'>): { sheetId: string } | null {
+  if (event.type !== 'sheet.updated') return null
+  const sheetId = uuid(field(event.payload, 'sheetId', 'sheet_id'))
+  return sheetId ? { sheetId } : null
+}
+
 export function collectionChange(event: Pick<RealtimeEnvelope, 'type' | 'payload'>): CollectionChange | null {
   if (event.type !== 'collection.updated') return null
   const collectionId = uuid(field(event.payload, 'collectionId', 'collection_id'))
@@ -135,6 +142,14 @@ export function documentChanged(queryClient: QueryClient, event: RealtimeEnvelop
         predicate: (query) => query.queryKey[0] === 'whiteboards' || isThing(query.queryKey, 'whiteboard', board.whiteboardId),
       }),
     )
+    return
+  }
+  const sheet = sheetChange(event)
+  if (sheet) {
+    later(`sheet:${event.projectId}:${sheet.sheetId}`, COLLECTION_DELAY_MS, () => {
+      void queryClient.invalidateQueries({ queryKey: ['project', event.projectId, 'sheets', sheet.sheetId] })
+      void queryClient.invalidateQueries({ queryKey: ['project', event.projectId, 'sheets', 'list'] })
+    })
     return
   }
   const collection = collectionChange(event)

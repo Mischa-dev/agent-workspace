@@ -129,6 +129,11 @@ export function ProjectSidebar({
       link: <SidebarLink icon="table" key="collections" label="Collections" onNavigate={onNavigate} to={`${base}/collections`} />,
     },
     {
+      part: 'area.sheets',
+      shown: experience.shows('area.sheets'),
+      link: <SidebarLink icon="table" key="sheets" label="Sheets" onNavigate={onNavigate} to={`${base}/sheets`} />,
+    },
+    {
       part: 'area.runs',
       shown: experience.shows('area.runs'),
       link: <SidebarLink icon="activity" key="runs" label="Runs" onNavigate={onNavigate} to={`${base}/launches`} />,

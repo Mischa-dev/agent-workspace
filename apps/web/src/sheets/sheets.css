@@ -1,0 +1,264 @@
+/* Sheets (AWD-54): a project's list of sheets, and one sheet as a grid with
+   its tabs under it (cards on a phone). Loaded with the Sheets area's chunk. */
+
+.aw-sheets .aw-seg {
+  margin-bottom: var(--space-4);
+}
+
+.aw-sheet {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.aw-sheet__description {
+  margin: var(--space-1) 0 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+/* The selected cell's name and what was typed in it. */
+.aw-sheet__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--size-control);
+  margin-bottom: var(--space-2);
+}
+
+.aw-sheet__address {
+  min-width: var(--space-12);
+  font: var(--t-code-sm);
+  color: var(--content-fg-muted);
+}
+
+.aw-sheet__formula {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font: var(--t-code-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The grid scrolls itself, so its letters and row numbers stay in view. */
+.aw-grid {
+  flex: 1 1 0;
+  min-height: 320px;
+  overflow: auto;
+  border: var(--border-width) solid var(--content-border);
+  border-radius: var(--radius-md);
+  overscroll-behavior: contain;
+  user-select: none;
+}
+
+.aw-grid:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.aw-grid__table {
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+  width: max-content;
+}
+
+.aw-grid__head {
+  position: sticky;
+  top: 0;
+  z-index: var(--layer-sticky);
+  background: var(--content-bg);
+}
+
+.aw-grid__corner,
+.aw-grid__colhead,
+.aw-grid__rowhead {
+  font: var(--t-caption);
+  color: var(--content-fg-muted);
+  background: var(--surface-sunken);
+}
+
+.aw-grid__colhead {
+  position: relative;
+  border-right: var(--border-width) solid var(--content-border);
+  border-bottom: var(--border-width) solid var(--content-border);
+  text-align: center;
+}
+
+.aw-grid__colhead.is-active,
+.aw-grid__rowhead:has(+ .is-selected) {
+  color: var(--content-fg);
+  background: var(--accent-soft);
+}
+
+.aw-grid__corner,
+.aw-grid__rowhead {
+  position: sticky;
+  left: 0;
+  z-index: var(--layer-sticky);
+  border-right: var(--border-width) solid var(--content-border);
+  border-bottom: var(--border-width) solid var(--content-border);
+  text-align: center;
+}
+
+.aw-grid__resize {
+  position: absolute;
+  top: 0;
+  right: calc(-1 * var(--space-1));
+  bottom: 0;
+  width: var(--space-2);
+  cursor: col-resize;
+}
+
+.aw-grid__cell {
+  position: relative;
+  padding: 0 var(--space-1-5);
+  overflow: hidden;
+  font: var(--t-small);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  border-right: var(--border-width) solid var(--content-border);
+  border-bottom: var(--border-width) solid var(--content-border);
+  cursor: cell;
+}
+
+.aw-grid__head .aw-grid__cell {
+  font: var(--t-caption-strong);
+  background: var(--content-bg);
+}
+
+.aw-grid__text {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.aw-grid__cell.is-number {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.aw-grid__cell.is-error {
+  color: var(--danger);
+}
+
+.aw-grid__cell.is-pending {
+  color: var(--content-fg-muted);
+}
+
+.aw-grid__cell.is-selected {
+  background: var(--accent-soft);
+}
+
+.aw-grid__cell.is-focused {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.aw-grid__editor {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  padding: 0 var(--space-1-5);
+  font: var(--t-small);
+  color: var(--content-fg);
+  background: var(--content-bg);
+  border: 0;
+  box-shadow: inset 0 0 0 2px var(--accent);
+  outline: none;
+}
+
+/* Tabs, under the grid as in any spreadsheet. */
+.aw-sheet__tabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  padding-top: var(--space-2);
+}
+
+.aw-sheet__tab {
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--radius-sm);
+}
+
+.aw-sheet__tab.is-current {
+  background: var(--accent-soft);
+}
+
+.aw-sheet__tabname {
+  padding: var(--space-1) var(--space-2);
+  font: var(--t-ui);
+  color: var(--content-fg);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.aw-sheet__tabname:hover {
+  background: var(--content-hover);
+}
+
+.aw-sheet__tab.is-current .aw-sheet__tabname {
+  font: var(--t-ui-strong);
+}
+
+/* A phone shows a tab's rows as cards. */
+.aw-sheet__cards {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-sheet__card {
+  padding: var(--space-3);
+  background: var(--surface-raised);
+  border: var(--border-width) solid var(--content-border);
+  border-radius: var(--radius-md);
+}
+
+.aw-sheet__cardrow {
+  font: var(--t-caption);
+  color: var(--content-fg-muted);
+}
+
+.aw-sheet__card dl {
+  display: grid;
+  gap: var(--space-1);
+  margin: var(--space-1) 0 0;
+}
+
+.aw-sheet__card dl > div {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.aw-sheet__card dt {
+  flex: 0 0 40%;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-sheet__card dd {
+  min-width: 0;
+  margin: 0;
+}
+
+.aw-sheet__card dd button {
+  padding: 0;
+  font: var(--t-small);
+  color: var(--content-fg);
+  text-align: left;
+  overflow-wrap: anywhere;
+  background: none;
+  border: 0;
+}
+
+.aw-sheet__empty {
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
