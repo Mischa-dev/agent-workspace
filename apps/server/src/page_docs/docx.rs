@@ -1110,7 +1110,12 @@ impl Reader<'_> {
         }
 
         // A checklist item: a box before the text, or as the bullet.
-        let mut checked = take_box(&mut content);
+        // A box at the start of a line of code is part of the code.
+        let mut checked = if kind == Kind::Code {
+            None
+        } else {
+            take_box(&mut content)
+        };
         let mut list = None;
         if let Some((id, level)) = &numbering {
             let found = self.numbering.level(id, *level);
@@ -1513,15 +1518,10 @@ fn group(flat: Vec<Flat>) -> Vec<Block> {
                         lines.push(line);
                     }
                 }
-                while lines.last().is_some_and(String::is_empty) {
-                    lines.pop();
-                }
-                if !lines.is_empty() {
-                    out.push(Block::new(Node::CodeBlock {
-                        language: None,
-                        text: lines.join("\n"),
-                    }));
-                }
+                out.push(Block::new(Node::CodeBlock {
+                    language: None,
+                    text: lines.join("\n"),
+                }));
             }
             Flat::Quote(content) => {
                 let mut paragraphs = vec![Block::new(Node::Paragraph(content))];
@@ -1671,6 +1671,18 @@ mod tests {
         let markdown = "1. First\n\n   Explanation belonging to first.\n\n   ```\n   make all\n\n   \tdone\n   ```\n\n   > Quoted in first\n\n   - Under first\n\n     More under it.\n\n   Back in first.\n\n2. Second\n\n- [ ] Box\n\n  Box note.\n\nAfter the lists.";
         let (imported, written) = round_trip(markdown);
         assert_eq!(imported.blocks, from_markdown(markdown), "{written}");
+    }
+
+    #[test]
+    fn code_keeps_its_boxes_and_last_blank_lines() {
+        for markdown in [
+            "```\n\u{2610} foo\nbar\n```",
+            "```\nfoo\n\n```",
+            "```\n\n```",
+        ] {
+            let (imported, written) = round_trip(markdown);
+            assert_eq!(imported.blocks, from_markdown(markdown), "{written}");
+        }
     }
 
     #[test]
