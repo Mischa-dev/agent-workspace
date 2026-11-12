@@ -1536,3 +1536,112 @@ async fn people_save_project_templates_and_start_projects_from_them() {
     assert_eq!(json!(names), statuses);
     f.close().await;
 }
+
+#[tokio::test]
+async fn people_invite_to_a_project_and_agents_never_do() {
+    let Some(f) = fixture().await else {
+        return;
+    };
+    let project = f.seed.project_id.to_string();
+    let app = connect_app(&f.app, &f.browser, "Owner's app", "full").await;
+    let session = initialize(&f.app, &app).await.expect("owner MCP");
+    let person = |name: &'static str, arguments: Value| {
+        let app = app.clone();
+        let session = session.clone();
+        let router = f.app.clone();
+        async move { tool(&router, &app, &session, name, arguments).await }
+    };
+
+    let sent = person(
+        "invitation_write",
+        json!({"projectId": project, "role": "viewer", "expiresInHours": 24}),
+    )
+    .await;
+    assert_eq!(sent["outcome"], "ok", "{sent}");
+    assert_eq!(sent["value"]["done"], "sent", "{sent}");
+    assert_eq!(sent["value"]["invitation"]["role"], "viewer", "{sent}");
+    assert_eq!(sent["value"]["invitation"]["status"], "active", "{sent}");
+    let link = string(&sent, "/value/joinUrl");
+    assert!(link.contains("/join#token=aw_inv_"), "{sent}");
+    let invitation = string(&sent, "/value/invitation/id");
+
+    // The list never carries a link.
+    let listed = person("invitation_list", json!({"projectId": project})).await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    assert_eq!(
+        listed["value"]["invitations"][0]["id"], invitation,
+        "{listed}"
+    );
+    let token = link.split("token=").nth(1).expect("token");
+    assert!(!listed.to_string().contains(token), "{listed}");
+
+    // Agents neither list nor send invitations.
+    for (name, arguments) in [
+        ("invitation_list", json!({"projectId": project})),
+        (
+            "invitation_write",
+            json!({"projectId": project, "role": "viewer"}),
+        ),
+        (
+            "invitation_write",
+            json!({"projectId": project, "invitation": invitation, "revoke": true}),
+        ),
+    ] {
+        let refused = tool(&f.app, &f.token, &f.session, name, arguments).await;
+        assert_eq!(refused["outcome"], "permission_denied", "{name}: {refused}");
+    }
+
+    // A stale version is refused; replacing gives a new link and retires
+    // the old one; then the new one is revoked.
+    let stale = person(
+        "invitation_write",
+        json!({"projectId": project, "invitation": invitation, "replace": true, "expectedVersion": 9}),
+    )
+    .await;
+    assert_eq!(stale["outcome"], "conflict", "{stale}");
+    let replaced = person(
+        "invitation_write",
+        json!({"projectId": project, "invitation": invitation, "replace": true}),
+    )
+    .await;
+    assert_eq!(replaced["value"]["done"], "replaced", "{replaced}");
+    let new_link = string(&replaced, "/value/joinUrl");
+    assert_ne!(new_link, link);
+    let replacement = string(&replaced, "/value/invitation/id");
+    assert_ne!(replacement, invitation);
+    let old_status = sqlx::query_scalar::<_, String>(
+        "SELECT status FROM project_invitations WHERE id = $1::uuid",
+    )
+    .bind(&invitation)
+    .fetch_one(&f.pool)
+    .await
+    .expect("old invitation");
+    assert_eq!(old_status, "replaced");
+    let revoked = person(
+        "invitation_write",
+        json!({"projectId": project, "invitation": replacement, "revoke": true}),
+    )
+    .await;
+    assert_eq!(revoked["value"]["done"], "revoked", "{revoked}");
+    assert_eq!(
+        revoked["value"]["invitation"]["status"], "revoked",
+        "{revoked}"
+    );
+    assert!(revoked["value"].get("joinUrl").is_none(), "{revoked}");
+
+    let audited = sqlx::query_scalar::<_, String>(
+        "SELECT action FROM audit_events WHERE target_kind = 'project_invitation' AND channel = 'mcp' ORDER BY id",
+    )
+    .fetch_all(&f.pool)
+    .await
+    .expect("audit");
+    assert_eq!(
+        audited,
+        [
+            "project.invitation.issue",
+            "project.invitation.replace",
+            "project.invitation.revoke"
+        ]
+    );
+    f.close().await;
+}

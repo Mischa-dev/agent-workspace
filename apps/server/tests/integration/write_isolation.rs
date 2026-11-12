@@ -428,6 +428,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "decision_record",
     "file_delete",
     "file_upload",
+    "invitation_write",
     "label_write",
     "field_write",
     "collection_write",
@@ -5669,6 +5670,16 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"projectId": b.project, "person": "@wren", "role": "viewer"})],
         )
         .rejecting(vec![json!({"projectId": a.project, "person": bx.wren, "role": "viewer"})]),
+        mcp_case(
+            "invitation_write",
+            json!({"projectId": a.project, "role": "viewer", "expiresInHours": 24}),
+            vec![json!({"projectId": b.project, "role": "viewer"})],
+        )
+        .rejecting(vec![
+            json!({"projectId": a.project, "invitation": bx.project_invitation, "revoke": true}),
+            json!({"projectId": a.project, "invitation": bx.project_invitation, "replace": true}),
+            json!({"projectId": a.project, "role": bx.custom_role}),
+        ]),
         mcp_case(
             "role_write",
             json!({"projectId": a.project, "name": "Net tool role", "baseRole": "viewer", "permissions": ["tasks.view"]}),

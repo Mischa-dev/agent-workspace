@@ -916,17 +916,17 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/invitations",
-            Gap("invitation_write"),
+            Tool("invitation_write"),
         ),
         (
             Post,
             "/api/v1/project-invitations/{invitation_id}/revoke",
-            Gap("invitation_write"),
+            Tool("invitation_write"),
         ),
         (
             Post,
             "/api/v1/project-invitations/{invitation_id}/replace",
-            Gap("invitation_write"),
+            Tool("invitation_write"),
         ),
         (
             Post,
