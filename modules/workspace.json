@@ -11,6 +11,7 @@
   "tools": {
     "briefing": "query",
     "settings_get": "describe",
+    "settings_set": "change",
     "people_search": "query",
     "search": "query",
     "notification_list": "query",
@@ -20,6 +21,7 @@
     "file_read": "describe",
     "file_delete": "change",
     "module_list": "describe",
+    "workspace_update": "change",
     "role_list": "query",
     "role_get": "describe",
     "my_permissions": "describe",

@@ -401,40 +401,16 @@ async fn rename_workspace(
     ApiJson(request): ApiJson<RenameRequest>,
 ) -> Result<Json<WorkspaceView>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let name = normalize_workspace_name(&request.name)?;
     let mut transaction = state.pool.begin().await?;
-    let role = caller_role(&mut transaction, &principal, organization_id, true).await?;
-    if !role.manages()
-        || !caller_may(
-            &mut transaction,
-            &principal,
-            organization_id,
-            crate::policy::Permission::SettingsManage,
-        )
-        .await?
-    {
-        return Err(AppError::Forbidden);
-    }
-    let previous = sqlx::query_as::<_, (String, i64)>(
-        "SELECT name, version FROM organizations WHERE id = $1 FOR UPDATE",
+    let (role, renamed) = rename_workspace_in(
+        &mut transaction,
+        principal.actor_id,
+        organization_id,
+        &request.name,
+        request.expected_version,
     )
-    .bind(organization_id)
-    .fetch_one(&mut *transaction)
     .await?;
-    if previous.1 != request.expected_version {
-        return Err(AppError::VersionConflict {
-            resource: "workspace",
-            current_version: previous.1,
-        });
-    }
-    if previous.0 != name {
-        sqlx::query(
-            "UPDATE organizations SET name = $2, version = version + 1, updated_at = now() WHERE id = $1",
-        )
-        .bind(organization_id)
-        .bind(&name)
-        .execute(&mut *transaction)
-        .await?;
+    if let Some(metadata) = renamed {
         audit(
             &mut transaction,
             &headers,
@@ -443,13 +419,61 @@ async fn rename_workspace(
             "workspace.renamed",
             "workspace",
             Some(organization_id),
-            serde_json::json!({ "previousName": previous.0, "name": name }),
+            metadata,
         )
         .await?;
     }
     let view = load_workspace(&mut transaction, organization_id, role).await?;
     transaction.commit().await?;
     Ok(Json(view))
+}
+
+/// Rename a workspace, for an owner or admin who may manage its settings.
+/// Returns the caller's role, and the audit metadata when the name changed
+/// (the caller records the row).
+pub(crate) async fn rename_workspace_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    organization_id: Uuid,
+    name: &str,
+    expected_version: i64,
+) -> Result<(WorkspaceRole, Option<serde_json::Value>), AppError> {
+    let name = normalize_workspace_name(name)?;
+    let role = role_of(transaction, actor_id, organization_id, true).await?;
+    if !role.manages()
+        || !crate::roles::standing(transaction, organization_id, actor_id)
+            .await?
+            .permissions
+            .contains(crate::policy::Permission::SettingsManage)
+    {
+        return Err(AppError::Forbidden);
+    }
+    let previous = sqlx::query_as::<_, (String, i64)>(
+        "SELECT name, version FROM organizations WHERE id = $1 FOR UPDATE",
+    )
+    .bind(organization_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if previous.1 != expected_version {
+        return Err(AppError::VersionConflict {
+            resource: "workspace",
+            current_version: previous.1,
+        });
+    }
+    if previous.0 == name {
+        return Ok((role, None));
+    }
+    sqlx::query(
+        "UPDATE organizations SET name = $2, version = version + 1, updated_at = now() WHERE id = $1",
+    )
+    .bind(organization_id)
+    .bind(&name)
+    .execute(&mut **transaction)
+    .await?;
+    Ok((
+        role,
+        Some(serde_json::json!({ "previousName": previous.0, "name": name })),
+    ))
 }
 
 // ---------------------------------------------------------------------------

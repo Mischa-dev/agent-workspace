@@ -59,7 +59,7 @@ pub enum Scope {
 }
 
 impl Scope {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Workspace => "workspace",
             Self::Project => "project",
@@ -514,7 +514,7 @@ const fn module_switch(key: &'static str, label: &'static str) -> SettingDef {
 }
 
 /// Settings written only through their own routes, never the generic ones.
-fn has_own_routes(key: &str) -> bool {
+pub(crate) fn has_own_routes(key: &str) -> bool {
     key.starts_with("layout.") || key.starts_with("modules.")
 }
 
@@ -1001,12 +1001,28 @@ pub async fn authorize_workspace_manage<'e, E: PgExecutor<'e>>(
     principal: &AuthenticatedActor,
     organization_id: Uuid,
 ) -> Result<(), AppError> {
-    let (role, permissions) = workspace_role(executor, principal.actor_id, organization_id)
+    authorize_workspace_manage_as(
+        executor,
+        principal.actor_id,
+        actor_kind(&principal.actor_kind)?,
+        organization_id,
+    )
+    .await
+}
+
+/// `authorize_workspace_manage` for an actor, such as a person through MCP.
+pub(crate) async fn authorize_workspace_manage_as<'e, E: PgExecutor<'e>>(
+    executor: E,
+    actor_id: Uuid,
+    kind: ActorKind,
+    organization_id: Uuid,
+) -> Result<(), AppError> {
+    let (role, permissions) = workspace_role(executor, actor_id, organization_id)
         .await?
         .ok_or(AppError::NotFound("workspace"))?;
     let subject = Subject::new(
-        principal.actor_id,
-        actor_kind(&principal.actor_kind)?,
+        actor_id,
+        kind,
         true,
         Some(Membership::organization(
             organization_id,
@@ -1035,13 +1051,28 @@ pub async fn authorize_project_manage<'e, E: PgExecutor<'e>>(
     principal: &AuthenticatedActor,
     project_id: Uuid,
 ) -> Result<Uuid, AppError> {
-    let (organization_id, role, permissions) =
-        project_role(executor, principal.actor_id, project_id)
-            .await?
-            .ok_or(AppError::NotFound("project"))?;
-    let subject = Subject::new(
+    authorize_project_manage_as(
+        executor,
         principal.actor_id,
         actor_kind(&principal.actor_kind)?,
+        project_id,
+    )
+    .await
+}
+
+/// `authorize_project_manage` for an actor, such as a person through MCP.
+pub(crate) async fn authorize_project_manage_as<'e, E: PgExecutor<'e>>(
+    executor: E,
+    actor_id: Uuid,
+    kind: ActorKind,
+    project_id: Uuid,
+) -> Result<Uuid, AppError> {
+    let (organization_id, role, permissions) = project_role(executor, actor_id, project_id)
+        .await?
+        .ok_or(AppError::NotFound("project"))?;
+    let subject = Subject::new(
+        actor_id,
+        kind,
         true,
         Some(Membership::project(
             project_id,
@@ -1070,10 +1101,26 @@ pub async fn authorize_personal<'e, E: PgExecutor<'e>>(
     principal: &AuthenticatedActor,
     organization_id: Uuid,
 ) -> Result<(), AppError> {
-    workspace_role(executor, principal.actor_id, organization_id)
+    authorize_personal_as(
+        executor,
+        principal.actor_id,
+        actor_kind(&principal.actor_kind)?,
+        organization_id,
+    )
+    .await
+}
+
+/// `authorize_personal` for an actor, such as a person through MCP.
+pub(crate) async fn authorize_personal_as<'e, E: PgExecutor<'e>>(
+    executor: E,
+    actor_id: Uuid,
+    kind: ActorKind,
+    organization_id: Uuid,
+) -> Result<(), AppError> {
+    workspace_role(executor, actor_id, organization_id)
         .await?
         .ok_or(AppError::NotFound("workspace"))?;
-    if principal.actor_kind != "human" {
+    if kind != ActorKind::Human {
         return Err(AppError::Forbidden);
     }
     Ok(())
@@ -1280,16 +1327,37 @@ async fn authorize_target(
     organization_id: Option<Uuid>,
     project_id: Option<Uuid>,
 ) -> Result<Target, AppError> {
+    authorize_target_as(
+        connection,
+        principal.actor_id,
+        actor_kind(&principal.actor_kind)?,
+        scope,
+        organization_id,
+        project_id,
+    )
+    .await
+}
+
+/// `authorize_target` for an actor, such as a person through MCP.
+pub(crate) async fn authorize_target_as(
+    connection: &mut PgConnection,
+    actor_id: Uuid,
+    kind: ActorKind,
+    scope: Scope,
+    organization_id: Option<Uuid>,
+    project_id: Option<Uuid>,
+) -> Result<Target, AppError> {
     match scope {
         Scope::Workspace => {
             let organization_id = organization_id.ok_or(AppError::Validation("organizationId"))?;
-            authorize_workspace_manage(&mut *connection, principal, organization_id).await?;
+            authorize_workspace_manage_as(&mut *connection, actor_id, kind, organization_id)
+                .await?;
             Ok(Target::Workspace { organization_id })
         }
         Scope::Project => {
             let project_id = project_id.ok_or(AppError::Validation("projectId"))?;
             let organization_id =
-                authorize_project_manage(&mut *connection, principal, project_id).await?;
+                authorize_project_manage_as(&mut *connection, actor_id, kind, project_id).await?;
             Ok(Target::Project {
                 organization_id,
                 project_id,
@@ -1297,16 +1365,16 @@ async fn authorize_target(
         }
         Scope::User => {
             let organization_id = organization_id.ok_or(AppError::Validation("organizationId"))?;
-            authorize_personal(&mut *connection, principal, organization_id).await?;
+            authorize_personal_as(&mut *connection, actor_id, kind, organization_id).await?;
             Ok(Target::User {
                 organization_id,
-                actor_id: principal.actor_id,
+                actor_id,
             })
         }
     }
 }
 
-async fn resolved_after(
+pub(crate) async fn resolved_after(
     transaction: &mut Transaction<'_, Postgres>,
     target: Target,
     actor_id: Uuid,
