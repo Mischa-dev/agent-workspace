@@ -1028,6 +1028,9 @@ async fn starter_project(
 ) -> Result<(Uuid, bool), ApplyError> {
     let name = crate::projects::normalize_project_name(&project.name)?;
     let key = crate::projects::normalize_project_key(&project.key)?;
+    let candidates = key_candidates(&key);
+    // A project made by an earlier use may carry a numbered key (ENG2 when
+    // ENG was taken), so any of the candidates counts.
     let existing = sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT project.id
@@ -1035,12 +1038,14 @@ async fn starter_project(
         JOIN project_memberships membership
           ON membership.project_id = project.id AND membership.actor_id = $3
          AND membership.enabled AND membership.role = 'owner'
-        WHERE project.organization_id = $1 AND project.project_key = $2
+        WHERE project.organization_id = $1 AND project.project_key = ANY($2)
           AND project.name = $4 AND project.archived_at IS NULL AND project.kind = 'standard'
+        ORDER BY array_position($2, project.project_key)
+        LIMIT 1
         "#,
     )
     .bind(organization_id)
-    .bind(&key)
+    .bind(&candidates)
     .bind(caller.actor_id)
     .bind(&name)
     .fetch_optional(&mut **transaction)
@@ -1077,21 +1082,14 @@ async fn starter_project(
         return Err(AppError::Forbidden.into());
     }
     let taken = sqlx::query_scalar::<_, String>(
-        "SELECT project_key FROM projects WHERE organization_id = $1 AND project_key LIKE $2 || '%'",
+        "SELECT project_key FROM projects WHERE organization_id = $1 AND project_key = ANY($2)",
     )
     .bind(organization_id)
-    .bind(&key)
+    .bind(&candidates)
     .fetch_all(&mut **transaction)
     .await?;
-    let free = std::iter::once(key.clone())
-        .chain((2..100).map(|n| {
-            let suffix = n.to_string();
-            let stem = key
-                .chars()
-                .take(10 - suffix.len())
-                .collect::<String>();
-            format!("{stem}{suffix}")
-        }))
+    let free = candidates
+        .into_iter()
         .find(|candidate| !taken.contains(candidate))
         .ok_or_else(|| {
             ApplyError::Problem(problem(
@@ -1114,6 +1112,18 @@ async fn starter_project(
     Ok((id, true))
 }
 
+/// The keys a starter project may have: the template's, then numbered
+/// ones (ENG2, ENG3 ...), cut to fit the ten-character limit.
+fn key_candidates(key: &str) -> Vec<String> {
+    std::iter::once(key.to_owned())
+        .chain((2..100).map(|n| {
+            let suffix = n.to_string();
+            let stem = key.chars().take(10 - suffix.len()).collect::<String>();
+            format!("{stem}{suffix}")
+        }))
+        .collect()
+}
+
 /// The starter project's channels and collections, where they aren't there
 /// yet. A collection that is there gets the template's fields and views
 /// added, as collection_write does with a definition.
@@ -1132,6 +1142,9 @@ async fn starter_contents(
     let mut made = Vec::new();
     for channel in &project.channels {
         let name = crate::conversations::normalize_conversation_name(channel_name(channel))?;
+        // Any channel with the name counts, even one the caller can't see:
+        // channel names are unique in a project, so making another would
+        // fail. Only whether it exists is read, never what's in it.
         let exists = sqlx::query_scalar::<_, bool>(
             r#"
             SELECT EXISTS (
@@ -1326,11 +1339,13 @@ async fn project_snapshot(
         SELECT name FROM conversations
         WHERE project_id = $1 AND kind = 'channel' AND archived_at IS NULL
           AND visibility = 'project' AND name IS NOT NULL
+          AND conversation_visible_to(id, $2)
         ORDER BY created_at, id
         LIMIT 20
         "#,
     )
     .bind(project_id)
+    .bind(actor_id)
     .fetch_all(&mut *connection)
     .await?;
     let mut definitions = Vec::new();
@@ -1365,7 +1380,7 @@ async fn project_snapshot(
 
 /// A saved template.
 pub enum SaveOutcome {
-    Saved(TemplateView),
+    Saved(Box<TemplateView>),
     NameTaken,
     Full,
 }
@@ -1437,7 +1452,7 @@ pub(crate) async fn save(
     let view = find(transaction, organization_id, &id.to_string())
         .await?
         .ok_or(AppError::Internal("saved template is missing"))?;
-    Ok(SaveOutcome::Saved(view))
+    Ok(SaveOutcome::Saved(Box::new(view)))
 }
 
 /// Removes a saved template (archives it). Built-in ones stay.
@@ -1623,7 +1638,7 @@ async fn save_route(
     {
         SaveOutcome::Saved(view) => {
             transaction.commit().await?;
-            Ok((StatusCode::CREATED, Json(view)))
+            Ok((StatusCode::CREATED, Json(*view)))
         }
         SaveOutcome::NameTaken => Err(AppError::Conflict("template", "name_taken")),
         SaveOutcome::Full => Err(AppError::Conflict("template", "too_many_templates")),
@@ -1656,6 +1671,16 @@ async fn remove_route(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn numbered_keys_fit_the_key_limit() {
+        let short = key_candidates("ENG");
+        assert_eq!(&short[..3], ["ENG", "ENG2", "ENG3"]);
+        let long = key_candidates("ABCDEFGHIJ");
+        assert_eq!(&long[..3], ["ABCDEFGHIJ", "ABCDEFGHI2", "ABCDEFGHI3"]);
+        assert_eq!(long[9], "ABCDEFGH10");
+        assert!(long.iter().all(|key| key.chars().count() <= 10));
+    }
 
     #[test]
     fn every_builtin_template_parses_and_checks() {
@@ -1741,11 +1766,11 @@ mod tests {
             modules: Some(vec!["workspace".to_owned()]),
             ..TemplateDefinition::default()
         };
-        assert_eq!(check(&bad).unwrap_err().field, "modules[0]");
+        assert_eq!(check(&bad).expect_err("unknown module").field, "modules[0]");
         let bad = TemplateDefinition {
             layout: Some("no-such-layout".to_owned()),
             ..TemplateDefinition::default()
         };
-        assert_eq!(check(&bad).unwrap_err().field, "layout");
+        assert_eq!(check(&bad).expect_err("unknown layout").field, "layout");
     }
 }

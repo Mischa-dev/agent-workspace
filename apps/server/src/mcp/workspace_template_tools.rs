@@ -277,7 +277,7 @@ pub(super) async fn workspace_template_save(
                 transaction.commit().await?;
                 Ok(ToolResult::ok(WorkspaceTemplateSaveValue {
                     done: "saved".to_owned(),
-                    template: Some(template),
+                    template: Some(*template),
                 }))
             }
             SaveOutcome::NameTaken => Ok(ToolResult::invalid(
