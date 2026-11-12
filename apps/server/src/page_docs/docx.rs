@@ -1031,15 +1031,14 @@ impl Reader<'_> {
             .and_then(|properties| child(properties, "pStyle"))
             .and_then(val);
         let mut kind = self.styles.kind(style);
-        if kind == Kind::Normal {
-            if let Some(level) = properties
+        if kind == Kind::Normal
+            && let Some(level) = properties
                 .and_then(|properties| child(properties, "outlineLvl"))
                 .and_then(val)
                 .and_then(|level| level.parse::<u8>().ok())
                 .filter(|level| *level < 6)
-            {
-                kind = Kind::Heading(level + 1);
-            }
+        {
+            kind = Kind::Heading(level + 1);
         }
         let direct_numbering = properties
             .and_then(|properties| child(properties, "numPr"))
@@ -1339,10 +1338,10 @@ impl<'r, 'p> Runs<'r, 'p> {
                     _ => {}
                 },
                 "instrText" => {
-                    if let Field::Instruction(instruction) = &mut self.field {
-                        if instruction.len() < 4096 {
-                            instruction.push_str(piece.text().unwrap_or_default());
-                        }
+                    if let Field::Instruction(instruction) = &mut self.field
+                        && instruction.len() < 4096
+                    {
+                        instruction.push_str(piece.text().unwrap_or_default());
                     }
                 }
                 _ if matches!(self.field, Field::Instruction(_)) => {}
@@ -1371,11 +1370,10 @@ impl<'r, 'p> Runs<'r, 'p> {
             text: last,
             marks: last_marks,
         }) = self.out.last_mut()
+            && last_marks == marks
         {
-            if last_marks == marks {
-                last.push_str(text);
-                return;
-            }
+            last.push_str(text);
+            return;
         }
         self.out.push(Inline::text(text, marks.clone()));
     }
@@ -1570,14 +1568,14 @@ mod tests {
             &from_markdown("[t](/projects/p)"),
             Some("https://app.test/"),
         );
-        let package = Package::open(&bytes).unwrap();
+        let package = Package::open(&bytes).expect("test");
         let rels = String::from_utf8(
             package
                 .read("word/_rels/document.xml.rels")
-                .unwrap()
-                .unwrap(),
+                .expect("test")
+                .expect("test"),
         )
-        .unwrap();
+        .expect("test");
         assert!(
             rels.contains(r#"Target="https://app.test/projects/p""#),
             "{rels}"

@@ -200,9 +200,16 @@ mod tests {
         ]);
         let package = Package::open(&bytes).expect("opens");
         assert!(package.has("dir/b.txt"));
-        assert_eq!(package.read("a.xml").unwrap().unwrap(), b"<a/>");
-        assert_eq!(package.read("dir/b.txt").unwrap().unwrap().len(), 10_000);
-        assert_eq!(package.read("missing").unwrap(), None);
+        assert_eq!(package.read("a.xml").expect("test").expect("test"), b"<a/>");
+        assert_eq!(
+            package
+                .read("dir/b.txt")
+                .expect("test")
+                .expect("test")
+                .len(),
+            10_000
+        );
+        assert_eq!(package.read("missing").expect("test"), None);
     }
 
     #[test]
@@ -213,7 +220,7 @@ mod tests {
         let central = bytes
             .windows(4)
             .position(|window| window == CENTRAL.to_le_bytes())
-            .unwrap();
+            .expect("test");
         bytes[central + 24..central + 28].copy_from_slice(&10u32.to_le_bytes());
         let package = Package::open(&bytes).expect("opens");
         assert_eq!(package.read("a").err(), Some(ZipError::NotZip));
