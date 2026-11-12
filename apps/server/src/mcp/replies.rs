@@ -24,7 +24,7 @@ use crate::{
     idempotency::IdempotencyKey,
     outbox::{ConversationCreatedPayload, OutboxConversationKind, OutboxEventPayload},
     policy::{Action, ActorKind},
-    replies::{LEASE_MINUTES, notify_request, stop_request_in},
+    replies::{LEASE_MINUTES, notify_request, retry_request_in, stop_request_in},
 };
 
 const MAX_PROGRESS_CHARACTERS: usize = 200;
@@ -95,6 +95,14 @@ pub(super) struct ReplyReleaseArguments {
     pub generation: Option<i32>,
     /// Why you can't answer. Shown to the people in the conversation.
     pub reason: String,
+}
+
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct ReplyRetryArguments {
+    /// The agent's reply request to ask again: one that expired, was
+    /// released, or was stopped.
+    pub request_id: String,
 }
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
@@ -249,6 +257,14 @@ pub(super) struct ProgressProjection {
     status: String,
     /// When the claim now runs out unless you report progress or reply again.
     lease_expires_at: String,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct RetryProjection {
+    request_id: String,
+    /// "pending": back in the agent's inbox, and the agent was woken.
+    status: String,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -1116,6 +1132,63 @@ pub(super) async fn reply_stop(
         Err(AppError::Forbidden) => ReplyToolResult::denied(),
         Err(error) => {
             tracing::error!(category = error.log_category(), "reply_stop failed");
+            ReplyToolResult::unavailable()
+        }
+    }
+}
+
+/// People: ask an agent again about a request that expired, was released or
+/// was stopped, as the Retry button on its status line does.
+pub(super) async fn reply_retry(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: ReplyRetryArguments,
+) -> ReplyToolResult<RetryProjection> {
+    if principal.actor_kind != ActorKind::Human || !principal.can_write() {
+        return ReplyToolResult::denied();
+    }
+    let Ok(request_id) = arguments.request_id.parse::<Uuid>() else {
+        return ReplyToolResult::invalid("requestId");
+    };
+    let result = async {
+        let mut transaction = state.pool.begin().await?;
+        let outcome = retry_request_in(
+            &mut transaction,
+            principal.actor_id,
+            principal.actor_kind,
+            request_id,
+        )
+        .await?;
+        insert_audit(
+            &mut transaction,
+            principal,
+            outcome.project_id,
+            "reply_request.retried",
+            "reply_request",
+            request_id,
+            serde_json::json!({"agent_actor_id": outcome.agent_actor_id}),
+        )
+        .await?;
+        transaction.commit().await?;
+        Ok::<_, AppError>(())
+    }
+    .await;
+    match result {
+        Ok(()) => ReplyToolResult::Ok {
+            value: RetryProjection {
+                request_id: request_id.to_string(),
+                status: "pending".to_owned(),
+            },
+        },
+        Err(AppError::NotFound(_)) => ReplyToolResult::NotFound {
+            message: "No such reply request that you can see.".to_owned(),
+        },
+        Err(AppError::Conflict(_, message)) => ReplyToolResult::Conflict {
+            message: format!("Can't retry it: {message}."),
+        },
+        Err(AppError::Forbidden) => ReplyToolResult::denied(),
+        Err(error) => {
+            tracing::error!(category = error.log_category(), "reply_retry failed");
             ReplyToolResult::unavailable()
         }
     }

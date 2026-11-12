@@ -1317,3 +1317,106 @@ async fn an_agent_forwards_messages_and_removes_files() {
     assert_eq!(kept["outcome"], "permission_denied", "{kept}");
     f.close().await;
 }
+
+#[tokio::test]
+async fn people_retry_an_agents_reply_and_agents_empty_the_whiteboard_trash() {
+    let Some(f) = fixture().await else {
+        return;
+    };
+    let project = f.seed.project_id.to_string();
+    let channel = f.seed.channel_id.to_string();
+
+    // The agent clears out a board it drew, for good.
+    let board = f
+        .call(
+            "whiteboard_create",
+            json!({"title": "Scratch", "projectId": project}),
+        )
+        .await;
+    let board_id = string(&board, "/value/whiteboard/id");
+    f.call(
+        "whiteboard_update",
+        json!({"whiteboardId": board_id, "deleted": true}),
+    )
+    .await;
+    let emptied = f
+        .call("whiteboard_trash_empty", json!({"projectId": project}))
+        .await;
+    assert_eq!(emptied["value"]["deleted"], 1, "{emptied}");
+    let left = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM whiteboards WHERE id = $1")
+        .bind(board_id.parse::<Uuid>().expect("board id"))
+        .fetch_one(&f.pool)
+        .await
+        .expect("boards");
+    assert_eq!(left, 0);
+
+    // A person asks the agent; it lets the request go; the person, through
+    // their app, asks it again.
+    f.web(
+        "POST",
+        &format!("/api/v1/channels/{channel}/messages"),
+        json!({"content": {"version": 1, "nodes": [
+            {"type": "mention", "actorId": f.agent.to_string()},
+            {"type": "text", "text": " can you check the release notes?"}
+        ]}}),
+    )
+    .await;
+    let request = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM reply_requests WHERE agent_actor_id = $1 ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(f.agent)
+    .fetch_one(&f.pool)
+    .await
+    .expect("a reply request for the agent")
+    .to_string();
+    let claimed = f.call("reply_claim", json!({"requestId": request})).await;
+    f.call(
+        "reply_release",
+        json!({
+            "requestId": request,
+            "generation": claimed["value"]["request"]["generation"],
+            "reason": "Not now."
+        }),
+    )
+    .await;
+
+    // Asking again is a person's call, as on the web.
+    let refused = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "reply_retry",
+        json!({"requestId": request}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    let app = connect_app(&f.app, &f.browser, "Owner's app", "full").await;
+    let session = initialize(&f.app, &app).await.expect("owner MCP");
+    let retried = tool(
+        &f.app,
+        &app,
+        &session,
+        "reply_retry",
+        json!({"requestId": request}),
+    )
+    .await;
+    assert_eq!(retried["outcome"], "ok", "{retried}");
+    assert_eq!(retried["value"]["status"], "pending", "{retried}");
+    let status = sqlx::query_scalar::<_, String>("SELECT status FROM reply_requests WHERE id = $1")
+        .bind(request.parse::<Uuid>().expect("request id"))
+        .fetch_one(&f.pool)
+        .await
+        .expect("request");
+    assert_eq!(status, "pending");
+    // Only a request that ended can be asked again.
+    let again = tool(
+        &f.app,
+        &app,
+        &session,
+        "reply_retry",
+        json!({"requestId": request}),
+    )
+    .await;
+    assert_eq!(again["outcome"], "conflict", "{again}");
+    f.close().await;
+}

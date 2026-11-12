@@ -32,7 +32,8 @@
     "reply_progress": "change",
     "reply_pass": "change",
     "reply_release": "change",
-    "reply_stop": "change"
+    "reply_stop": "change",
+    "reply_retry": "change"
   },
   "routes": [
     "/api/v1/direct*",
