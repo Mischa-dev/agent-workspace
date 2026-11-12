@@ -1249,12 +1249,12 @@ mod tests {
         (
             Post,
             "/api/v1/organizations/{organization_id}/ai/test",
-            Gap("checking the AI provider settings"),
+            Tool("ai_analyze"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/ai/test",
-            Gap("checking the AI provider settings"),
+            Tool("ai_analyze"),
         ),
         (
             Post,

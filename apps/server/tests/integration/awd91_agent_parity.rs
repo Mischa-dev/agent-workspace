@@ -2512,3 +2512,32 @@ async fn an_agent_hides_link_previews_on_its_own_messages_only() {
     assert_eq!(shown, 0);
     f.close().await;
 }
+
+#[tokio::test]
+async fn an_agent_checks_the_ai_provider_settings() {
+    let Some(f) = fixture().await else {
+        return;
+    };
+    let project = f.seed.project_id.to_string();
+    f.web(
+        "PUT",
+        "/api/v1/settings/values/ai.provider",
+        json!({"scope": "project", "projectId": project, "value": "fake"}),
+    )
+    .await;
+    let checked = f
+        .call("ai_analyze", json!({"projectId": project, "check": true}))
+        .await;
+    assert_eq!(checked["value"]["ok"], true, "{checked}");
+    assert!(checked["value"]["latencyMs"].is_u64(), "{checked}");
+    let mixed = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "ai_analyze",
+        json!({"projectId": project, "check": true, "criteria": true}),
+    )
+    .await;
+    assert_eq!(mixed["outcome"], "invalid_request", "{mixed}");
+    f.close().await;
+}

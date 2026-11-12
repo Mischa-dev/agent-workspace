@@ -6632,7 +6632,10 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         mcp_case(
             "ai_analyze",
             json!({"projectId": a.project, "taskId": a.task}),
-            vec![json!({"projectId": b.project, "taskId": b.task})],
+            vec![
+                json!({"projectId": b.project, "taskId": b.task}),
+                json!({"projectId": b.project, "check": true}),
+            ],
         )
         .rejecting(vec![json!({"projectId": a.project, "taskId": b.task})]),
         mcp_case(
