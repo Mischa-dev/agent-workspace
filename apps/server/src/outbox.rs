@@ -38,6 +38,7 @@ pub enum OutboxResourceKind {
     Whiteboard,
     Page,
     Collection,
+    Sheet,
 }
 
 impl OutboxResourceKind {
@@ -53,6 +54,7 @@ impl OutboxResourceKind {
             Self::Whiteboard => "whiteboard",
             Self::Page => "page",
             Self::Collection => "collection",
+            Self::Sheet => "sheet",
         }
     }
 
@@ -68,6 +70,7 @@ impl OutboxResourceKind {
             "whiteboard" => Ok(Self::Whiteboard),
             "page" => Ok(Self::Page),
             "collection" => Ok(Self::Collection),
+            "sheet" => Ok(Self::Sheet),
             _ => Err(OutboxEventError::MalformedMetadata),
         }
     }
@@ -254,6 +257,15 @@ pub struct CollectionUpdatedPayload {
 /// none, and open screens refetch what they show.
 pub const MAX_COLLECTION_EVENT_RECORDS: usize = 100;
 
+/// A sheet's cells, tabs or name changed (AWD-54). IDs and the revision
+/// only: open screens fetch the sheet again over HTTP when theirs is older.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SheetUpdatedPayload {
+    pub sheet_id: Uuid,
+    pub revision: i64,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OutboxEventPayload {
     ConversationCreated(ConversationCreatedPayload),
@@ -273,6 +285,7 @@ pub enum OutboxEventPayload {
     PageUpdated(PageUpdatedPayload),
     PageDiscussionUpdated(PageDiscussionUpdatedPayload),
     CollectionUpdated(CollectionUpdatedPayload),
+    SheetUpdated(SheetUpdatedPayload),
 }
 
 impl OutboxEventPayload {
@@ -295,6 +308,7 @@ impl OutboxEventPayload {
             Self::PageUpdated(_) => "page.updated",
             Self::PageDiscussionUpdated(_) => "page.discussion.updated",
             Self::CollectionUpdated(_) => "collection.updated",
+            Self::SheetUpdated(_) => "sheet.updated",
         }
     }
 
@@ -319,7 +333,8 @@ impl OutboxEventPayload {
             | Self::WhiteboardUpdated(_)
             | Self::PageUpdated(_)
             | Self::PageDiscussionUpdated(_)
-            | Self::CollectionUpdated(_) => None,
+            | Self::CollectionUpdated(_)
+            | Self::SheetUpdated(_) => None,
         }
     }
 
@@ -354,6 +369,7 @@ impl OutboxEventPayload {
             Self::PageUpdated(_) => OutboxResourceKind::Page,
             Self::PageDiscussionUpdated(_) => OutboxResourceKind::Page,
             Self::CollectionUpdated(_) => OutboxResourceKind::Collection,
+            Self::SheetUpdated(_) => OutboxResourceKind::Sheet,
         }
     }
 
@@ -379,6 +395,7 @@ impl OutboxEventPayload {
             Self::PageUpdated(payload) => payload.page_id,
             Self::PageDiscussionUpdated(payload) => payload.page_id,
             Self::CollectionUpdated(payload) => payload.collection_id,
+            Self::SheetUpdated(payload) => payload.sheet_id,
         }
     }
 
@@ -433,6 +450,9 @@ impl OutboxEventPayload {
             Self::PageUpdated(payload) if payload.version < 1 => {
                 Err(OutboxEventError::MalformedPayload)
             }
+            Self::SheetUpdated(payload) if payload.revision < 1 || payload.sheet_id.is_nil() => {
+                Err(OutboxEventError::MalformedPayload)
+            }
             Self::CollectionUpdated(payload)
                 if payload.record_ids.len() > MAX_COLLECTION_EVENT_RECORDS
                     || payload.record_ids.iter().any(Uuid::is_nil) =>
@@ -463,6 +483,7 @@ impl OutboxEventPayload {
             Self::PageUpdated(payload) => serde_json::to_value(payload),
             Self::PageDiscussionUpdated(payload) => serde_json::to_value(payload),
             Self::CollectionUpdated(payload) => serde_json::to_value(payload),
+            Self::SheetUpdated(payload) => serde_json::to_value(payload),
         }
         .map_err(|_| OutboxEventError::MalformedPayload)?;
         validate_payload_size(&value)?;
@@ -521,6 +542,9 @@ impl OutboxEventPayload {
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "collection.updated" => Self::CollectionUpdated(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "sheet.updated" => Self::SheetUpdated(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             _ => return Err(OutboxEventError::UnknownEventType),
@@ -818,6 +842,21 @@ pub async fn enqueue_collection_updated(
             collection_id,
             record_ids,
         }),
+    )
+    .await
+}
+
+/// Enqueue `sheet.updated` for a sheet at its new revision.
+pub async fn enqueue_sheet_updated(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    sheet_id: Uuid,
+    revision: i64,
+) -> Result<Uuid, AppError> {
+    enqueue_typed(
+        transaction,
+        project_id,
+        OutboxEventPayload::SheetUpdated(SheetUpdatedPayload { sheet_id, revision }),
     )
     .await
 }

@@ -122,3 +122,15 @@ CREATE TABLE sheet_revisions (
     FOREIGN KEY (project_id, sheet_id) REFERENCES sheets(project_id, id),
     FOREIGN KEY (project_id, actor_id) REFERENCES project_memberships(project_id, actor_id)
 );
+
+-- sheet.updated: a sheet's cells, tabs, name or archive state changed. Ids
+-- and the new revision only; open screens fetch what they show over HTTP.
+ALTER TABLE outbox_events
+    DROP CONSTRAINT outbox_events_resource_kind_check,
+    ADD CONSTRAINT outbox_events_resource_kind_check CHECK (
+        resource_kind IN (
+            'project', 'conversation', 'message', 'read_state', 'agent_run',
+            'work_item', 'notification', 'whiteboard', 'page', 'collection',
+            'sheet'
+        )
+    );

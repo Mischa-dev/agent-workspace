@@ -340,8 +340,14 @@ mod tests {
                 }],
             )
             .expect("ok");
-        assert_eq!(cell(&output, 1, 1, 1).expect("ok").value, Value::Number(10.0));
-        assert_eq!(cell(&output, 0, 4, 1).expect("ok").value, Value::Number(24.0));
+        assert_eq!(
+            cell(&output, 1, 1, 1).expect("ok").value,
+            Value::Number(10.0)
+        );
+        assert_eq!(
+            cell(&output, 0, 4, 1).expect("ok").value,
+            Value::Number(24.0)
+        );
         assert_eq!(
             cell(&output, 0, 1, 1).expect("ok").value,
             Value::Text("Item".to_owned())
@@ -364,7 +370,10 @@ mod tests {
             cell(&output, 0, 1, 1).expect("ok").value,
             Value::Text("00123".to_owned())
         );
-        assert_eq!(cell(&output, 0, 1, 2).expect("ok").value, Value::Boolean(true));
+        assert_eq!(
+            cell(&output, 0, 1, 2).expect("ok").value,
+            Value::Boolean(true)
+        );
         assert_eq!(cell(&output, 0, 1, 3).expect("ok").input, "=1/0");
         assert!(matches!(
             cell(&output, 0, 1, 3).expect("ok").value,
@@ -402,9 +411,15 @@ mod tests {
             .expect("ok");
         assert_eq!(output[0].name, "Spend");
         assert_eq!(cell(&output, 0, 4, 1).expect("ok").input, "=SUM(A1:A3)");
-        assert_eq!(cell(&output, 0, 4, 1).expect("ok").value, Value::Number(112.0));
+        assert_eq!(
+            cell(&output, 0, 4, 1).expect("ok").value,
+            Value::Number(112.0)
+        );
         assert_eq!(cell(&output, 1, 1, 1).expect("ok").input, "=Spend!A4");
-        assert_eq!(cell(&output, 1, 1, 1).expect("ok").value, Value::Number(112.0));
+        assert_eq!(
+            cell(&output, 1, 1, 1).expect("ok").value,
+            Value::Number(112.0)
+        );
     }
 
     #[test]

@@ -1054,6 +1054,7 @@ pub(super) async fn sheet_write(
         };
 
         // The sheet: made, or found and locked, and renamed or archived.
+        let mut touched = false;
         let (mut sheet, created) = match &arguments.sheet {
             None => {
                 let name = name.clone().unwrap_or_default();
@@ -1094,9 +1095,11 @@ pub(super) async fn sheet_write(
                     archived: arguments.archived,
                 };
                 match sheets::change(&mut transaction, &sheet, principal.actor_id, &change).await? {
-                    ChangeOutcome::Changed(sheet) | ChangeOutcome::Unchanged(sheet) => {
+                    ChangeOutcome::Changed(sheet) => {
+                        touched = true;
                         (sheet, false)
                     }
+                    ChangeOutcome::Unchanged(sheet) => (sheet, false),
                     ChangeOutcome::NameTaken(taken) => {
                         return Ok(ToolResult::conflict(format!(
                             "Another sheet here is called \"{}\". Pick another name.",
@@ -1156,7 +1159,17 @@ pub(super) async fn sheet_write(
             }
         };
         if let Some(applied) = &applied {
+            touched |= applied.revision != sheet.revision;
             sheet.revision = applied.revision;
+        }
+        if created || touched {
+            crate::outbox::enqueue_sheet_updated(
+                &mut transaction,
+                project_id,
+                sheet.id,
+                sheet.revision,
+            )
+            .await?;
         }
         insert_audit(
             &mut transaction,
@@ -1256,6 +1269,9 @@ mod tests {
             "sheet": "Budget",
             "cells": [{"cell": "12B", "input": "x"}]
         }));
-        assert_eq!(changes_of(&arguments).expect_err("refused").0, "cells[0].cell");
+        assert_eq!(
+            changes_of(&arguments).expect_err("refused").0,
+            "cells[0].cell"
+        );
     }
 }

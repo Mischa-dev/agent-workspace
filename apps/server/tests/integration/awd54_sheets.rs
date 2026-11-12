@@ -326,6 +326,17 @@ async fn people_and_agents_build_and_edit_a_sheet_without_losing_each_others_cel
     assert_eq!(numbers, (1..=numbers.len() as i64).collect::<Vec<_>>());
     assert!(revisions.iter().any(|(_, actor)| *actor == mara));
 
+    // Open screens hear about every revision.
+    let events = sqlx::query_scalar::<_, i64>(
+        "SELECT (payload->>'revision')::bigint FROM outbox_events WHERE event_type = 'sheet.updated' AND payload->>'sheetId' = $1 ORDER BY event_cursor",
+    )
+    .bind(&sheet)
+    .fetch_all(&setup.pool)
+    .await
+    .expect("sheet events");
+    assert_eq!(events.last(), numbers.last(), "{events:?}");
+    assert!(events.len() >= 2, "{events:?}");
+
     // An agent that can only view reads the sheet and changes nothing.
     sqlx::query(
         "UPDATE project_memberships SET role = 'viewer' WHERE project_id = $1::uuid AND actor_id = $2",
