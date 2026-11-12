@@ -1049,13 +1049,28 @@ pub(super) async fn message_items(
         .flat_map(|row| [row.reply_to_message_id, row.forwarded_message_id])
         .flatten()
         .collect::<Vec<_>>();
-    let quotes = crate::forwarding::quotes(
+    let mut quotes = crate::forwarding::quotes(
         &state.pool,
         &quoted,
         viewer,
         principal.external_agent_connection_id,
     )
     .await?;
+    // An older grant confined to one project reads nothing outside it, so
+    // a forward from another project shows only its ID there.
+    if let Some(home) = super::common::confined_project(principal)
+        && !quotes.is_empty()
+    {
+        let ids = quotes.keys().copied().collect::<Vec<_>>();
+        let inside = sqlx::query_scalar::<_, Uuid>(
+            "SELECT id FROM messages WHERE id = ANY($1) AND project_id = $2",
+        )
+        .bind(&ids)
+        .bind(home)
+        .fetch_all(&state.pool)
+        .await?;
+        quotes.retain(|id, _| inside.contains(id));
+    }
     Ok(rows
         .into_iter()
         .map(|row| {
