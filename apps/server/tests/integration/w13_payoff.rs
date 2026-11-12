@@ -340,9 +340,20 @@ async fn onboarding_reads_each_step_from_what_exists_for_the_reader() {
     let uri = format!("/api/v1/organizations/{organization}/onboarding");
     let (status, fresh) = get(setup, &setup.browser, &uri).await;
     assert_eq!(status, StatusCode::OK, "{fresh}");
-    assert_eq!(fresh["nextStep"], "workspace", "{fresh}");
+    assert_eq!(fresh["nextStep"], "template", "{fresh}");
     assert_eq!(fresh["complete"], false);
 
+    // AWD-76: setup starts with a template, then the name, then who gets what.
+    let (status, used) = call(
+        setup,
+        &setup.browser,
+        "POST",
+        &format!("/api/v1/organizations/{organization}/workspace-templates/apply"),
+        Some("use-everything"),
+        json!({"template": "everything"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{used}");
     let (status, named) = call(
         setup,
         &setup.browser,
@@ -353,7 +364,18 @@ async fn onboarding_reads_each_step_from_what_exists_for_the_reader() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{named}");
-    assert_eq!(named["nextStep"], "project", "{named}");
+    assert_eq!(named["nextStep"], "roles", "{named}");
+    let (status, decided) = call(
+        setup,
+        &setup.browser,
+        "PUT",
+        &uri,
+        Some("roles-decided"),
+        json!({"confirm": "roles"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{decided}");
+    assert_eq!(decided["nextStep"], "project", "{decided}");
 
     let project = create_project(setup, "ONB", "Onboarding").await;
     let (_, after) = get(setup, &setup.browser, &uri).await;

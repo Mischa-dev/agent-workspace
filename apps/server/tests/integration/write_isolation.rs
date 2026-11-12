@@ -124,6 +124,9 @@ const WRITE_ROUTES: &[&str] = &[
     "PUT /api/v1/organizations/{organization_id}/layout",
     "PUT /api/v1/organizations/{organization_id}/layout/mine",
     "PUT /api/v1/organizations/{organization_id}/modules",
+    "POST /api/v1/organizations/{organization_id}/workspace-templates",
+    "POST /api/v1/organizations/{organization_id}/workspace-templates/apply",
+    "DELETE /api/v1/organizations/{organization_id}/workspace-templates/{template_id}",
     "POST /api/v1/organizations/{organization_id}/layout/presets",
     "DELETE /api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
     "PATCH /api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
@@ -485,6 +488,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "whiteboard_link",
     "whiteboard_update",
     "workflow_update",
+    "workspace_template_apply",
+    "workspace_template_save",
 ];
 
 /// Write tools this suite deliberately doesn't call, and why.
@@ -1145,6 +1150,8 @@ struct Targets {
     /// A custom role with everything a member has (AWD-74), so whoever is
     /// given it can still do what other cases need.
     custom_role: Uuid,
+    /// A template the workspace saved (AWD-76).
+    workspace_template: Uuid,
     task_type: Uuid,
     suggestion: Uuid,
     /// The connected app's grant.
@@ -1515,10 +1522,24 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
     .fetch_one(pool)
     .await
     .expect("custom role");
+    let workspace_template = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO workspace_templates (id, organization_id, name, definition, created_by_actor_id)
+        VALUES (gen_random_uuid(), $1, $2, '{"modules": ["messages"]}'::jsonb, $3)
+        RETURNING id
+        "#,
+    )
+    .bind(organization)
+    .bind(format!("Net template {tag}"))
+    .bind(owner)
+    .fetch_one(pool)
+    .await
+    .expect("workspace template");
     let in_project = |sql: &'static str| scalar(pool, sql, project);
     let in_organization = |sql: &'static str| scalar(pool, sql, organization);
     Targets {
         custom_role,
+        workspace_template,
         sessions,
         owner,
         agent,
@@ -3666,6 +3687,33 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             &[organization()],
             json_body(json!({"switches": {"whiteboards": true}})),
         ),
+        // Workspace templates (AWD-76): Everything changes nothing in A, whose
+        // modules are all on. B's saved template and project are refused.
+        path_case(
+            "POST /api/v1/organizations/{organization_id}/workspace-templates",
+            &[organization()],
+            |values| {
+                let project = if is_a(values, &a.organization.to_string()) {
+                    a.project.clone()
+                } else {
+                    b.project.clone()
+                };
+                Payload::Json(json!({"name": "Net saved", "projectId": project}))
+            },
+        )
+        .rejecting(vec![json!({"name": "Net saved b", "projectId": b.project})]),
+        path_case(
+            "POST /api/v1/organizations/{organization_id}/workspace-templates/apply",
+            &[organization()],
+            json_body(json!({"template": "everything"})),
+        )
+        .rejecting(vec![json!({"template": bx.workspace_template})]),
+        path_case(
+            "DELETE /api/v1/organizations/{organization_id}/workspace-templates/{template_id}",
+            &[organization(), id(ax.workspace_template, bx.workspace_template)],
+            empty(),
+        )
+        .last(),
         path_case(
             "POST /api/v1/organizations/{organization_id}/layout/presets",
             &[organization()],
@@ -5489,6 +5537,18 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"projectId": b.project, "name": "Net tool role b", "baseRole": "viewer", "permissions": ["tasks.view"]})],
         )
         .rejecting(vec![json!({"projectId": a.project, "role": bx.custom_role, "description": "Net"})]),
+        mcp_case(
+            "workspace_template_apply",
+            json!({"projectId": a.project, "template": "everything"}),
+            vec![json!({"projectId": b.project, "template": "everything"})],
+        )
+        .rejecting(vec![json!({"projectId": a.project, "template": bx.workspace_template})]),
+        mcp_case(
+            "workspace_template_save",
+            json!({"projectId": a.project, "name": "Net tool template", "includeProject": true}),
+            vec![json!({"projectId": b.project, "name": "Net tool template b"})],
+        )
+        .rejecting(vec![json!({"projectId": a.project, "remove": bx.workspace_template})]),
         mcp_case(
             "role_assign",
             json!({"projectId": a.project, "person": "@wren", "role": ax.custom_role}),

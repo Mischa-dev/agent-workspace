@@ -1,0 +1,91 @@
+{
+  "id": "company",
+  "name": "Company",
+  "description": "Stricter roles for a bigger group: new people join as Employees, whose agents can read and post but not delete or approve, with Contractor and Read only roles ready.",
+  "modules": [
+    "messages",
+    "projects",
+    "channels",
+    "tasks",
+    "pages",
+    "whiteboards",
+    "collections",
+    "runs",
+    "code",
+    "agents",
+    "inbox",
+    "automations",
+    "suggestions"
+  ],
+  "layout": "startup",
+  "roles": [
+    {
+      "name": "Employee",
+      "description": "Does the work in the projects they're given. Their agents can read, write tasks and pages and post, but never delete, approve runs or publish code.",
+      "baseRole": "member",
+      "permissions": [
+        "projects.view",
+        "tasks.view",
+        "tasks.create",
+        "tasks.edit",
+        "tasks.delete",
+        "channels.post",
+        "channels.create",
+        "pages.edit",
+        "whiteboards.edit",
+        "collections.edit",
+        "collections.build",
+        "runs.launch",
+        "runs.interrupt",
+        "code.view",
+        "code.publish",
+        "directory.view"
+      ],
+      "agentLimit": [
+        "projects.view",
+        "tasks.view",
+        "tasks.create",
+        "tasks.edit",
+        "channels.post",
+        "pages.edit",
+        "collections.edit",
+        "runs.launch",
+        "code.view"
+      ]
+    },
+    {
+      "name": "Contractor",
+      "description": "Works on tasks and code they're given: no new channels, no approving runs, no deleting, and no automations.",
+      "baseRole": "member",
+      "permissions": [
+        "projects.view",
+        "tasks.view",
+        "tasks.create",
+        "tasks.edit",
+        "channels.post",
+        "pages.edit",
+        "whiteboards.edit",
+        "collections.edit",
+        "runs.launch",
+        "runs.interrupt",
+        "code.view",
+        "code.publish"
+      ],
+      "agentLimit": ["projects.view", "tasks.view", "tasks.edit", "channels.post", "code.view"],
+      "modulesOff": ["automations"]
+    },
+    {
+      "name": "Read only",
+      "description": "Reads everything they're given and changes nothing, across the whole workspace.",
+      "baseRole": "viewer",
+      "permissions": ["projects.view", "tasks.view", "code.view", "directory.view"],
+      "agentLimit": []
+    }
+  ],
+  "defaultRole": "Employee",
+  "project": {
+    "name": "Company",
+    "key": "CO",
+    "channels": ["general", "announcements", "help"]
+  }
+}

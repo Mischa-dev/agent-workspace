@@ -96,6 +96,7 @@ mod runs;
 mod settings_tools;
 mod talk;
 mod task_batch;
+mod workspace_template_tools;
 pub(crate) use task_batch::{ImportTask, create_for_import};
 mod task_drafts;
 mod task_move;
@@ -432,6 +433,72 @@ impl McpServer {
     ) -> Json<common::ToolResult<role_tools::RoleWriteValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(role_tools::role_write(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "List the workspace's templates: the built-in ones (Everything first, then Chat with my agents, Personal, Small team, Software team and Company) and any the workspace saved. Each says in plain words what using it does (modules on and off, the layout, roles, the role new members get, a starter project with channels and collections) and carries its full definition. Agents can suggest one to a workspace owner or admin; canUse says whether this connection may use it.",
+        annotations(
+            title = "List workspace templates",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn workspace_template_list(
+        &self,
+        Parameters(arguments): Parameters<workspace_template_tools::WorkspaceTemplateListArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<workspace_template_tools::WorkspaceTemplateListValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(
+            workspace_template_tools::workspace_template_list(&self.state, principal, arguments)
+                .await,
+        )
+    }
+
+    #[tool(
+        description = "Use a workspace template: switches modules on and off, sets the default layout, adds or updates roles and the role new members start with, and makes its starter project with channels and collections. Nothing is deleted; what's already there by name or key is reused, so using it twice changes nothing the second time. Only a person who manages the workspace's settings and roles, through an app connected as themselves; agents suggest a template instead. Audited.",
+        annotations(
+            title = "Use workspace template",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn workspace_template_apply(
+        &self,
+        Parameters(arguments): Parameters<
+            workspace_template_tools::WorkspaceTemplateApplyArguments,
+        >,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<crate::workspace_templates::Applied>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(
+            workspace_template_tools::workspace_template_apply(&self.state, principal, arguments)
+                .await,
+        )
+    }
+
+    #[tool(
+        description = "Save the workspace as a template (its modules, layout, changed roles and default role, and optionally the project's channels and collections), or remove a saved one. Only a person who manages the workspace's settings and roles, through an app connected as themselves. Audited.",
+        annotations(
+            title = "Save workspace template",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn workspace_template_save(
+        &self,
+        Parameters(arguments): Parameters<workspace_template_tools::WorkspaceTemplateSaveArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<workspace_template_tools::WorkspaceTemplateSaveValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(
+            workspace_template_tools::workspace_template_save(&self.state, principal, arguments)
+                .await,
+        )
     }
 
     #[tool(

@@ -1,0 +1,61 @@
+/* AWD-76: the workspace template picker, in setup and in settings. */
+
+.aw-templates {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 16rem), 1fr));
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-templates__card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+}
+
+.aw-templates__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.aw-templates__name {
+  margin: 0;
+  font: var(--t-ui-strong);
+  color: var(--content-fg);
+}
+
+.aw-templates__description {
+  margin: 0;
+  font: var(--t-ui);
+  color: var(--content-fg);
+}
+
+.aw-templates__does {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding-left: var(--space-4);
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-templates__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: auto;
+  padding-top: var(--space-1);
+}
+
+.aw-templates__roles {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}

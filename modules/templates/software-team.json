@@ -1,0 +1,70 @@
+{
+  "id": "software_team",
+  "name": "Software team",
+  "description": "Everything on, with code, runs and agents first: tasks become pull requests. Adds a Contractor role for outside help.",
+  "modules": [
+    "messages",
+    "projects",
+    "channels",
+    "tasks",
+    "pages",
+    "whiteboards",
+    "collections",
+    "runs",
+    "code",
+    "agents",
+    "inbox",
+    "automations",
+    "suggestions"
+  ],
+  "layout": "software_team",
+  "roles": [
+    {
+      "name": "Contractor",
+      "description": "Works on tasks and code they're given: no new channels, no approving runs, no deleting.",
+      "baseRole": "member",
+      "permissions": [
+        "projects.view",
+        "tasks.view",
+        "tasks.create",
+        "tasks.edit",
+        "channels.post",
+        "pages.edit",
+        "whiteboards.edit",
+        "collections.edit",
+        "runs.launch",
+        "runs.interrupt",
+        "code.view",
+        "code.publish",
+        "directory.view"
+      ]
+    }
+  ],
+  "defaultRole": "Member",
+  "project": {
+    "name": "Engineering",
+    "key": "ENG",
+    "channels": ["general", "releases", "incidents"],
+    "collections": [
+      {
+        "name": "Releases",
+        "description": "What shipped and when.",
+        "titleName": "Version",
+        "fields": [
+          { "name": "Date", "type": "date" },
+          {
+            "name": "Status",
+            "type": "single_choice",
+            "options": [
+              { "name": "Planned", "color": "gray" },
+              { "name": "In progress", "color": "blue" },
+              { "name": "Shipped", "color": "green" }
+            ]
+          },
+          { "name": "Notes", "type": "text" }
+        ],
+        "views": [{ "name": "All records", "type": "table" }]
+      }
+    ]
+  }
+}
