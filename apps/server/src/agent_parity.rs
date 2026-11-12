@@ -1,0 +1,1420 @@
+//! AWD-91: agent parity. Mischa's bar is that an agent can do everything a
+//! person can in a project, through MCP. This guard maps every web write
+//! (each state-changing route in `policy_inventory`) to the MCP tool that
+//! does the same thing, or says why it has none:
+//!
+//! - `Tool`: the tool or tools that do it.
+//! - `Person`: deliberately a person's own act, such as their password, their
+//!   devices, a secret, or a provider sign-in.
+//! - `Plumbing`: not an action in a project at all, such as sign-in, OAuth,
+//!   an invitation link or a webhook from GitHub.
+//! - `Gap`: no tool yet. These are tracked in AWD-111 and only shrink: each
+//!   one closed moves to `Tool`.
+//!
+//! A new web write fails the test until it's listed here, and the way to
+//! list it is with its tool. The scenario that walks an agent through a
+//! whole project is `tests/integration/awd91_agent_parity.rs`.
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use crate::policy_inventory::{MUTATING_ENTRY_POINTS, MutationMethod};
+
+    use MutationMethod::{Delete, Patch, Post, Put};
+    use Parity::{Gap, Person, Plumbing, Tool};
+
+    enum Parity {
+        /// The MCP tools that do it, separated by ", ".
+        Tool(&'static str),
+        /// Why only a person does it.
+        Person(&'static str),
+        /// Why it isn't an action in a project.
+        Plumbing(&'static str),
+        /// The tool it needs (AWD-111).
+        Gap(&'static str),
+    }
+
+    /// Every web write, in `MUTATING_ENTRY_POINTS` order.
+    const WEB_WRITES: &[(MutationMethod, &str, Parity)] = &[
+        (
+            Put,
+            "/api/v1/settings/values/{key}",
+            Gap("settings_set: change a workspace or project setting"),
+        ),
+        (
+            Post,
+            "/api/v1/settings/values/{key}/reset",
+            Gap("settings_set: change a workspace or project setting"),
+        ),
+        (
+            Put,
+            "/api/v1/projects/{project_id}/layout",
+            Tool("project_layout_set"),
+        ),
+        (
+            Put,
+            "/api/v1/projects/{project_id}/layout/rules",
+            Gap("layout rules per role"),
+        ),
+        (
+            Put,
+            "/api/v1/organizations/{organization_id}/layout",
+            Gap("workspace layout and presets"),
+        ),
+        (
+            Put,
+            "/api/v1/organizations/{organization_id}/layout/mine",
+            Person("each person's own sidebar"),
+        ),
+        (
+            Put,
+            "/api/v1/organizations/{organization_id}/modules",
+            Gap("module_set: switch modules on or off"),
+        ),
+        (
+            Post,
+            "/api/v1/organizations/{organization_id}/layout/presets",
+            Gap("workspace layout and presets"),
+        ),
+        (
+            Patch,
+            "/api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
+            Gap("workspace layout and presets"),
+        ),
+        (
+            Delete,
+            "/api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
+            Gap("workspace layout and presets"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/environments",
+            Gap("environment_write"),
+        ),
+        (
+            Put,
+            "/api/v1/projects/{project_id}/environments/{environment_id}",
+            Gap("environment_write"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/environments/{environment_id}/archive",
+            Gap("environment_write"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/environments/{environment_id}/default",
+            Gap("environment_write"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/environments/{environment_id}/check",
+            Gap("environment_write"),
+        ),
+        (
+            Post,
+            "/api/v1/organizations/{organization_id}/harnesses",
+            Person("registers a program the host runs"),
+        ),
+        (
+            Patch,
+            "/api/v1/organizations/{organization_id}/harnesses/{harness_id}",
+            Person("registers a program the host runs"),
+        ),
+        (
+            Delete,
+            "/api/v1/organizations/{organization_id}/harnesses/{harness_id}",
+            Person("registers a program the host runs"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/agent-profiles",
+            Gap("agent_profile_write"),
+        ),
+        (
+            Patch,
+            "/api/v1/projects/{project_id}/agent-profiles/{profile_id}",
+            Gap("agent_profile_write"),
+        ),
+        (
+            Delete,
+            "/api/v1/projects/{project_id}/agent-profiles/{profile_id}",
+            Gap("agent_profile_write"),
+        ),
+        (
+            Put,
+            "/api/v1/organizations/{organization_id}/secrets/{name}",
+            Person("secrets never pass through an agent"),
+        ),
+        (
+            Delete,
+            "/api/v1/organizations/{organization_id}/secrets/{name}",
+            Person("secrets never pass through an agent"),
+        ),
+        (
+            Put,
+            "/api/v1/organizations/{organization_id}/mail",
+            Person("secrets never pass through an agent"),
+        ),
+        (
+            Delete,
+            "/api/v1/organizations/{organization_id}/mail",
+            Person("secrets never pass through an agent"),
+        ),
+        (
+            Post,
+            "/api/v1/organizations/{organization_id}/mail/test",
+            Person("secrets never pass through an agent"),
+        ),
+        (
+            Put,
+            "/api/v1/organizations/{organization_id}/personal-secrets/{name}",
+            Person("secrets never pass through an agent"),
+        ),
+        (
+            Delete,
+            "/api/v1/organizations/{organization_id}/personal-secrets/{name}",
+            Person("secrets never pass through an agent"),
+        ),
+        (
+            Put,
+            "/api/v1/projects/{project_id}/secrets/{name}",
+            Person("secrets never pass through an agent"),
+        ),
+        (
+            Delete,
+            "/api/v1/projects/{project_id}/secrets/{name}",
+            Person("secrets never pass through an agent"),
+        ),
+        (
+            Post,
+            "/api/v1/client-errors",
+            Plumbing("browser error reports"),
+        ),
+        (Post, "/api/v1/auth/workos/start", Plumbing("sign-in")),
+        (
+            Patch,
+            "/api/v1/account/profile",
+            Person("a person's own account"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/members",
+            Tool("project_member_set"),
+        ),
+        (
+            Patch,
+            "/api/v1/organizations/{organization_id}",
+            Gap("workspace_update: rename the workspace"),
+        ),
+        (
+            Patch,
+            "/api/v1/organizations/{organization_id}/members/{actor_id}",
+            Tool("role_assign"),
+        ),
+        (
+            Post,
+            "/api/v1/organizations/{organization_id}/transfer-ownership",
+            Person("ownership passes between people"),
+        ),
+        (
+            Post,
+            "/api/v1/organizations/{organization_id}/roles",
+            Tool("role_write"),
+        ),
+        (
+            Patch,
+            "/api/v1/organizations/{organization_id}/roles/{role_id}",
+            Tool("role_write"),
+        ),
+        (
+            Delete,
+            "/api/v1/organizations/{organization_id}/roles/{role_id}",
+            Tool("role_write"),
+        ),
+        (
+            Put,
+            "/api/v1/organizations/{organization_id}/members/{actor_id}/role",
+            Tool("role_assign"),
+        ),
+        (
+            Put,
+            "/api/v1/organizations/{organization_id}/members/{actor_id}/agent-limit",
+            Gap("an agent limit in role_assign"),
+        ),
+        (
+            Post,
+            "/api/v1/organizations/{organization_id}/leave",
+            Person("a person's own account"),
+        ),
+        (
+            Post,
+            "/api/v1/organizations/{organization_id}/invitations",
+            Gap("invitation_write"),
+        ),
+        (
+            Post,
+            "/api/v1/workspace-invitations/{invitation_id}/revoke",
+            Gap("invitation_write"),
+        ),
+        (
+            Post,
+            "/api/v1/workspace-invitations/resolve",
+            Plumbing("accepting an invitation is signing up"),
+        ),
+        (
+            Post,
+            "/api/v1/workspace-invitations/accept-new",
+            Plumbing("accepting an invitation is signing up"),
+        ),
+        (
+            Post,
+            "/api/v1/workspace-invitations/accept-existing",
+            Plumbing("accepting an invitation is signing up"),
+        ),
+        (
+            Put,
+            "/api/v1/account/default-workspace",
+            Person("a person's own account"),
+        ),
+        (Post, "/api/v1/auth/login", Plumbing("sign-in")),
+        (Post, "/api/v1/auth/logout", Plumbing("sign-in")),
+        (Post, "/api/v1/auth/login/two-factor", Plumbing("sign-in")),
+        (
+            Post,
+            "/api/v1/account/password",
+            Person("a person's own account"),
+        ),
+        (
+            Put,
+            "/api/v1/account/email",
+            Person("a person's own account"),
+        ),
+        (
+            Delete,
+            "/api/v1/account/email",
+            Person("a person's own account"),
+        ),
+        (
+            Post,
+            "/api/v1/account/email/resend",
+            Person("a person's own account"),
+        ),
+        (Post, "/api/v1/auth/verify-email", Plumbing("sign-in")),
+        (Post, "/api/v1/auth/password-reset", Plumbing("sign-in")),
+        (
+            Post,
+            "/api/v1/auth/password-reset/inspect",
+            Plumbing("sign-in"),
+        ),
+        (
+            Post,
+            "/api/v1/auth/password-reset/complete",
+            Plumbing("sign-in"),
+        ),
+        (
+            Post,
+            "/api/v1/account/sessions/{session_id}/revoke",
+            Person("a person's own account"),
+        ),
+        (
+            Post,
+            "/api/v1/account/sessions/revoke-others",
+            Person("a person's own account"),
+        ),
+        (
+            Post,
+            "/api/v1/account/two-factor/setup",
+            Person("a person's own account"),
+        ),
+        (
+            Post,
+            "/api/v1/account/two-factor/confirm",
+            Person("a person's own account"),
+        ),
+        (
+            Post,
+            "/api/v1/account/two-factor/recovery-codes",
+            Person("a person's own account"),
+        ),
+        (
+            Post,
+            "/api/v1/account/two-factor/disable",
+            Person("a person's own account"),
+        ),
+        (
+            Post,
+            "/api/v1/account/api-tokens",
+            Person("credentials are made and revoked by people"),
+        ),
+        (
+            Post,
+            "/api/v1/account/api-tokens/{credential_id}/revoke",
+            Person("credentials are made and revoked by people"),
+        ),
+        (Post, "/api/v1/webhooks", Tool("webhook_write")),
+        (
+            Patch,
+            "/api/v1/webhooks/{webhook_id}",
+            Tool("webhook_write"),
+        ),
+        (
+            Delete,
+            "/api/v1/webhooks/{webhook_id}",
+            Tool("webhook_write"),
+        ),
+        (
+            Post,
+            "/api/v1/webhooks/{webhook_id}/rotate-secret",
+            Tool("webhook_write"),
+        ),
+        (
+            Post,
+            "/api/v1/webhooks/{webhook_id}/test",
+            Tool("webhook_write"),
+        ),
+        (
+            Post,
+            "/api/v1/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver",
+            Tool("webhook_write"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/bug-report-links",
+            Gap("bug_report_link_write"),
+        ),
+        (
+            Patch,
+            "/api/v1/bug-report-links/{link_id}",
+            Gap("bug_report_link_write"),
+        ),
+        (
+            Delete,
+            "/api/v1/bug-report-links/{link_id}",
+            Gap("bug_report_link_write"),
+        ),
+        (
+            Post,
+            "/api/v1/bug-report-links/{link_id}/replace",
+            Gap("bug_report_link_write"),
+        ),
+        (
+            Post,
+            "/api/v1/bug-reports/{token}",
+            Plumbing("a public bug report form"),
+        ),
+        (
+            Put,
+            "/api/v1/account/appearance",
+            Person("a person's own account"),
+        ),
+        (
+            Post,
+            "/api/v1/threads/{id}/agent-runs",
+            Tool("run_start, run_request"),
+        ),
+        (
+            Post,
+            "/api/v1/agent-runs/{id}/interrupt",
+            Gap("run_stop and run_retry"),
+        ),
+        (
+            Post,
+            "/api/v1/agent-runs/{id}/retry",
+            Gap("run_stop and run_retry"),
+        ),
+        (
+            Post,
+            "/api/v1/agent-runs/{id}/acknowledge-failure",
+            Gap("run_stop and run_retry"),
+        ),
+        (
+            Post,
+            "/api/v1/agent-approvals/{id}/respond",
+            Tool("approval_respond"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/execution-profiles/{profile_id}/account/login/browser",
+            Person("signing in to a provider is a person's"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/execution-profiles/{profile_id}/account/login/device-code",
+            Person("signing in to a provider is a person's"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/execution-profiles/{profile_id}/account/login/api-key",
+            Person("signing in to a provider is a person's"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/execution-profiles/{profile_id}/account/login/cancel",
+            Person("signing in to a provider is a person's"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/execution-profiles/{profile_id}/account/logout",
+            Person("signing in to a provider is a person's"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{id}/execution-profiles",
+            Gap("agent_profile_write"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/provider-accounts",
+            Person("a person's own provider account"),
+        ),
+        (
+            Patch,
+            "/api/v1/projects/{project_id}/provider-accounts/{account_id}",
+            Person("a person's own provider account"),
+        ),
+        (
+            Delete,
+            "/api/v1/projects/{project_id}/provider-accounts/{account_id}",
+            Person("a person's own provider account"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/provider-accounts/{account_id}/use",
+            Person("a person's own provider account"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/provider-accounts/{account_id}/login/browser",
+            Person("signing in to a provider is a person's"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/provider-accounts/{account_id}/login/device-code",
+            Person("signing in to a provider is a person's"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/provider-accounts/{account_id}/login/api-key",
+            Person("signing in to a provider is a person's"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/provider-accounts/{account_id}/login/cancel",
+            Person("signing in to a provider is a person's"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/provider-accounts/{account_id}/logout",
+            Person("signing in to a provider is a person's"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{id}/harnesses/{kind}/catalog/refresh",
+            Gap("model_catalog_write"),
+        ),
+        (
+            Put,
+            "/api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
+            Gap("model_catalog_write"),
+        ),
+        (
+            Delete,
+            "/api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
+            Gap("model_catalog_write"),
+        ),
+        (
+            Post,
+            "/api/v1/organizations/{organization_id}/model-catalog/{kind}/refresh",
+            Gap("model_catalog_write"),
+        ),
+        (
+            Put,
+            "/api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
+            Gap("model_catalog_write"),
+        ),
+        (
+            Delete,
+            "/api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
+            Gap("model_catalog_write"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{id}/channels",
+            Tool("channel_create"),
+        ),
+        (Post, "/api/v1/channels/{id}/messages", Tool("message_send")),
+        (Post, "/api/v1/threads/{id}/messages", Tool("message_send")),
+        (Post, "/api/v1/channels/{id}/threads", Tool("thread_start")),
+        (
+            Post,
+            "/api/v1/channels/{id}/archive",
+            Tool("conversation_update"),
+        ),
+        (
+            Post,
+            "/api/v1/threads/{id}/archive",
+            Tool("conversation_update"),
+        ),
+        (
+            Post,
+            "/api/v1/channels/{id}/restore",
+            Tool("conversation_update"),
+        ),
+        (
+            Post,
+            "/api/v1/threads/{id}/restore",
+            Tool("conversation_update"),
+        ),
+        (
+            Post,
+            "/api/v1/conversations/{id}/mark-seen",
+            Tool("mark_read"),
+        ),
+        (
+            Post,
+            "/api/v1/conversations/{id}/mark-unread",
+            Tool("mark_read"),
+        ),
+        (
+            Post,
+            "/api/v1/conversations/{id}/messages",
+            Tool("message_send"),
+        ),
+        (
+            Post,
+            "/api/v1/conversations/{id}/threads",
+            Tool("thread_start"),
+        ),
+        (Patch, "/api/v1/threads/{id}", Tool("thread_update")),
+        (Post, "/api/v1/projects/{id}/pages", Tool("page_write")),
+        (Patch, "/api/v1/pages/{id}", Tool("page_write")),
+        (
+            Post,
+            "/api/v1/pages/{id}/document/sync",
+            Plumbing("the live editor's sync handshake"),
+        ),
+        (
+            Post,
+            "/api/v1/pages/{id}/document/updates",
+            Tool("page_edit"),
+        ),
+        (Post, "/api/v1/whiteboards", Tool("whiteboard_create")),
+        (Patch, "/api/v1/whiteboards/{id}", Tool("whiteboard_update")),
+        (
+            Delete,
+            "/api/v1/whiteboards/{id}",
+            Tool("whiteboard_update"),
+        ),
+        (
+            Post,
+            "/api/v1/whiteboard-trash/empty",
+            Gap("emptying the whiteboard trash"),
+        ),
+        (
+            Post,
+            "/api/v1/whiteboards/{id}/duplicate",
+            Tool("whiteboard_duplicate"),
+        ),
+        (
+            Post,
+            "/api/v1/whiteboards/{id}/scene",
+            Tool("whiteboard_edit"),
+        ),
+        (
+            Post,
+            "/api/v1/whiteboards/{id}/operations",
+            Tool("whiteboard_edit"),
+        ),
+        (
+            Post,
+            "/api/v1/whiteboards/{id}/files",
+            Gap("images on a whiteboard"),
+        ),
+        (
+            Post,
+            "/api/v1/whiteboards/{id}/revisions/{revision}/restore",
+            Tool("whiteboard_update"),
+        ),
+        (
+            Post,
+            "/api/v1/whiteboards/{id}/links",
+            Tool("whiteboard_link"),
+        ),
+        (
+            Delete,
+            "/api/v1/whiteboards/{id}/links/{kind}/{target_id}",
+            Tool("whiteboard_link"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{id}/decisions",
+            Tool("decision_record"),
+        ),
+        (Post, "/api/v1/conversations/{id}/pins", Tool("pin_set")),
+        (
+            Delete,
+            "/api/v1/conversations/{id}/pins/{kind}/{target_id}",
+            Tool("pin_set"),
+        ),
+        (
+            Patch,
+            "/api/v1/account/connected-apps/{id}",
+            Person("credentials are made and revoked by people"),
+        ),
+        (
+            Post,
+            "/api/v1/account/connected-apps/{id}/revoke",
+            Person("credentials are made and revoked by people"),
+        ),
+        (Post, "/api/v1/direct/dms", Tool("conversation_start")),
+        (Post, "/api/v1/direct/groups", Tool("conversation_start")),
+        (
+            Post,
+            "/api/v1/conversations/{id}/members",
+            Tool("conversation_members"),
+        ),
+        (
+            Post,
+            "/api/v1/conversations/{id}/members/{actor_id}/remove",
+            Tool("conversation_members"),
+        ),
+        (
+            Post,
+            "/api/v1/conversations/{id}/continue",
+            Tool("conversation_continue"),
+        ),
+        (
+            Post,
+            "/api/v1/reply-requests/{id}/retry",
+            Gap("retrying an agent's failed reply"),
+        ),
+        (Post, "/api/v1/reply-requests/{id}/stop", Tool("reply_stop")),
+        (
+            Patch,
+            "/api/v1/conversations/{id}/messages/{message_id}",
+            Tool("message_edit"),
+        ),
+        (
+            Delete,
+            "/api/v1/conversations/{id}/messages/{message_id}",
+            Tool("message_delete"),
+        ),
+        (
+            Post,
+            "/api/v1/conversations/{id}/files",
+            Tool("file_upload"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/files",
+            Tool("file_upload"),
+        ),
+        (Delete, "/api/v1/files/{id}", Gap("file_delete")),
+        (
+            Delete,
+            "/api/v1/conversations/{id}/messages/{message_id}/link-previews/{preview_id}",
+            Gap("removing a link preview"),
+        ),
+        (
+            Put,
+            "/api/v1/conversations/{id}/messages/{message_id}/reactions/{name}",
+            Tool("message_react"),
+        ),
+        (
+            Delete,
+            "/api/v1/conversations/{id}/messages/{message_id}/reactions/{name}",
+            Tool("message_react"),
+        ),
+        (Post, "/api/v1/inbox/update", Tool("notification_update")),
+        (
+            Put,
+            "/api/v1/notification-settings/channels",
+            Person("a person's own notification preferences"),
+        ),
+        (
+            Put,
+            "/api/v1/notification-settings/mutes",
+            Person("a person's own notification preferences"),
+        ),
+        (
+            Put,
+            "/api/v1/conversations/{id}/notification-level",
+            Person("a person's own notification preferences"),
+        ),
+        (Post, "/api/v1/later", Tool("later_save")),
+        (Patch, "/api/v1/later/{id}", Tool("later_update")),
+        (Delete, "/api/v1/later/{id}", Tool("later_update")),
+        (
+            Post,
+            "/api/v1/conversations/{id}/scheduled-messages",
+            Tool("message_schedule"),
+        ),
+        (
+            Patch,
+            "/api/v1/scheduled-messages/{id}",
+            Tool("scheduled_message_update"),
+        ),
+        (
+            Delete,
+            "/api/v1/scheduled-messages/{id}",
+            Tool("scheduled_message_update"),
+        ),
+        (
+            Post,
+            "/api/v1/scheduled-messages/{id}/send-now",
+            Tool("scheduled_message_update"),
+        ),
+        (
+            Post,
+            "/api/v1/messages/{id}/forward",
+            Gap("message_forward"),
+        ),
+        (
+            Post,
+            "/api/v1/push/subscriptions",
+            Person("a person's own devices"),
+        ),
+        (
+            Delete,
+            "/api/v1/push/subscriptions/{id}",
+            Person("a person's own devices"),
+        ),
+        (
+            Post,
+            "/api/v1/push/subscriptions/{id}/test",
+            Person("a person's own devices"),
+        ),
+        (
+            Post,
+            "/api/v1/notification-actions",
+            Plumbing("a button on a person's push notification"),
+        ),
+        (
+            Post,
+            "/api/v1/usage/accounts/{account_id}/refresh",
+            Person("a person's own provider account"),
+        ),
+        (
+            Post,
+            "/api/v1/usage/accounts/{account_id}/schedules",
+            Person("a person's own provider account"),
+        ),
+        (
+            Delete,
+            "/api/v1/usage/accounts/{account_id}/schedules/{schedule_id}",
+            Person("a person's own provider account"),
+        ),
+        (
+            Put,
+            "/api/v1/usage/accounts/{account_id}/rules/{rule}",
+            Person("a person's own provider account"),
+        ),
+        (
+            Post,
+            "/api/v1/usage/accounts/{account_id}/reset-credits/spend",
+            Person("a person's own provider account"),
+        ),
+        (
+            Post,
+            "/api/v1/usage/accounts/{account_id}/batch",
+            Tool("usage_batch_launch"),
+        ),
+        (
+            Put,
+            "/api/v1/organizations/{organization_id}/onboarding",
+            Person("a person's own account"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/repositories",
+            Gap("repository_write"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/repositories/{repository_id}/prepare",
+            Gap("repository_write"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/repositories/{repository_id}/archive",
+            Gap("repository_write"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/integrations/github/sync",
+            Gap("github_sync and the GitHub automation switch"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/integrations/github/connect",
+            Person("installs the GitHub app as a person"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/integrations/github/repositories",
+            Gap("repository_write"),
+        ),
+        (
+            Put,
+            "/api/v1/projects/{project_id}/integrations/github/automation",
+            Gap("github_sync and the GitHub automation switch"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/agent-runs/{run_id}/publish",
+            Gap("run_publish and pull_request_create"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/agent-runs/{run_id}/pull-request",
+            Gap("run_publish and pull_request_create"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/pull-requests/{pull_request_id}/refresh",
+            Gap("run_publish and pull_request_create"),
+        ),
+        (
+            Post,
+            "/api/v1/integrations/github/webhook",
+            Plumbing("GitHub's own deliveries"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/invitations",
+            Gap("invitation_write"),
+        ),
+        (
+            Post,
+            "/api/v1/project-invitations/{invitation_id}/revoke",
+            Gap("invitation_write"),
+        ),
+        (
+            Post,
+            "/api/v1/project-invitations/{invitation_id}/replace",
+            Gap("invitation_write"),
+        ),
+        (
+            Post,
+            "/api/v1/project-invitations/resolve",
+            Plumbing("accepting an invitation is signing up"),
+        ),
+        (
+            Post,
+            "/api/v1/project-invitations/accept-new",
+            Plumbing("accepting an invitation is signing up"),
+        ),
+        (
+            Post,
+            "/api/v1/project-invitations/accept-existing",
+            Plumbing("accepting an invitation is signing up"),
+        ),
+        (
+            Patch,
+            "/api/v1/projects/{project_id}/members/{actor_id}",
+            Tool("project_member_set"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/external-agents",
+            Person("adding an agent makes its credential"),
+        ),
+        (
+            Patch,
+            "/api/v1/projects/{project_id}/external-agents/{connection_id}",
+            Person("adding an agent makes its credential"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/external-agents/{connection_id}/credentials/rotate",
+            Person("adding an agent makes its credential"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/external-agents/{connection_id}/remove",
+            Person("adding an agent makes its credential"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/external-agents/{connection_id}/webhook",
+            Person("adding an agent makes its credential"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/external-agents/{connection_id}/webhook/test",
+            Person("adding an agent makes its credential"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/external-agents/{connection_id}/workos",
+            Person("adding an agent makes its credential"),
+        ),
+        (
+            Delete,
+            "/api/v1/projects/{project_id}/external-agents/{connection_id}/workos/{binding_id}",
+            Person("adding an agent makes its credential"),
+        ),
+        (
+            Post,
+            "/api/v1/agents/token",
+            Plumbing("an agent trading its credential for a token"),
+        ),
+        (Post, "/oauth/register", Plumbing("OAuth")),
+        (Post, "/oauth/authorize", Plumbing("OAuth")),
+        (Post, "/connect/confirm", Plumbing("OAuth")),
+        (Post, "/oauth/token", Plumbing("OAuth")),
+        (Post, "/oauth/revoke", Plumbing("OAuth")),
+        (
+            Post,
+            "/api/public/v1/{tool}",
+            Plumbing("the MCP tools themselves, over HTTP"),
+        ),
+        (Post, "/api/v1/projects", Tool("project_create")),
+        (Patch, "/api/v1/projects/{id}", Tool("project_update")),
+        (
+            Post,
+            "/api/v1/projects/{id}/archive",
+            Tool("project_archive"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{id}/restore",
+            Tool("project_archive"),
+        ),
+        (
+            Put,
+            "/api/v1/projects/rail-order",
+            Person("each person's own sidebar"),
+        ),
+        (
+            Put,
+            "/api/v1/projects/{id}/navigation",
+            Person("each person's own sidebar"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{id}/switch",
+            Person("each person's own sidebar"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/work-items",
+            Tool("task_create"),
+        ),
+        (
+            Patch,
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}",
+            Tool("task_update"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/archive",
+            Tool("task_update"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/move",
+            Tool("task_update"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/project-move",
+            Tool("task_move"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/work-with-worker",
+            Tool("task_launch"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/launches",
+            Tool("task_launch"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/launches/{launch_id}/cancel",
+            Gap("launch_cancel"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/automations",
+            Tool("automation_write"),
+        ),
+        (
+            Patch,
+            "/api/v1/projects/{project_id}/automations/{rule_id}",
+            Tool("automation_write"),
+        ),
+        (
+            Delete,
+            "/api/v1/projects/{project_id}/automations/{rule_id}",
+            Tool("automation_write"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/automations/{rule_id}/run",
+            Tool("automation_write"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/restore",
+            Tool("task_update"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria",
+            Tool("task_criteria"),
+        ),
+        (
+            Patch,
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria/{criterion_id}",
+            Tool("task_criteria"),
+        ),
+        (
+            Delete,
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria/{criterion_id}",
+            Tool("task_criteria"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments",
+            Tool("task_comment"),
+        ),
+        (
+            Patch,
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}",
+            Tool("task_comment_edit"),
+        ),
+        (
+            Delete,
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}",
+            Tool("task_comment_delete"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/threads/{conversation_id}",
+            Tool("task_link"),
+        ),
+        (
+            Delete,
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/threads/{conversation_id}",
+            Tool("task_link"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}",
+            Tool("task_link"),
+        ),
+        (
+            Delete,
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}",
+            Tool("task_link"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}/primary",
+            Tool("task_link"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/work-items/bulk",
+            Tool("task_update_many"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/dependencies",
+            Tool("task_depend"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/relations",
+            Tool("task_relate"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/watch",
+            Tool("task_watch"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/release-claim",
+            Tool("task_release"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/labels",
+            Tool("label_write"),
+        ),
+        (
+            Patch,
+            "/api/v1/projects/{project_id}/labels/{label_id}",
+            Tool("label_write"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/fields",
+            Tool("field_write"),
+        ),
+        (
+            Patch,
+            "/api/v1/projects/{project_id}/fields/{field_id}",
+            Tool("field_write"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/collections",
+            Tool("collection_write"),
+        ),
+        (
+            Patch,
+            "/api/v1/projects/{project_id}/collections/{collection_id}",
+            Tool("collection_write"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/collections/{collection_id}/fields",
+            Tool("collection_write"),
+        ),
+        (
+            Patch,
+            "/api/v1/projects/{project_id}/collections/{collection_id}/fields/{field_id}",
+            Tool("collection_write"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/collections/{collection_id}/views",
+            Tool("collection_write"),
+        ),
+        (
+            Patch,
+            "/api/v1/projects/{project_id}/collections/{collection_id}/views/{view_id}",
+            Tool("collection_write"),
+        ),
+        (
+            Delete,
+            "/api/v1/projects/{project_id}/collections/{collection_id}/views/{view_id}",
+            Tool("collection_write"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/collections/{collection_id}/records",
+            Tool("record_write"),
+        ),
+        (
+            Patch,
+            "/api/v1/projects/{project_id}/collections/{collection_id}/records/{record_id}",
+            Tool("record_write"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/milestones",
+            Tool("milestone_write"),
+        ),
+        (
+            Patch,
+            "/api/v1/projects/{project_id}/milestones/{milestone_id}",
+            Tool("milestone_write"),
+        ),
+        (
+            Post,
+            "/api/v1/organizations/{organization_id}/ai/test",
+            Gap("checking the AI provider settings"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/ai/test",
+            Gap("checking the AI provider settings"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/ai/analyze",
+            Tool("ai_analyze"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/ai/suggestions/{suggestion_id}/accept",
+            Tool("ai_suggestion_decide"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/ai/suggestions/{suggestion_id}/dismiss",
+            Tool("ai_suggestion_decide"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/ai/plans",
+            Tool("plan_import"),
+        ),
+        (
+            Put,
+            "/api/v1/projects/{project_id}/ai/plans/{import_id}",
+            Tool("plan_import"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/ai/plans/{import_id}/commit",
+            Tool("plan_import"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/ai/triage",
+            Tool("ai_analyze"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/ai/criteria",
+            Tool("ai_analyze"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/ai/summary",
+            Tool("ai_summarize"),
+        ),
+        (
+            Post,
+            "/api/v1/conversations/{id}/ai/summary",
+            Tool("ai_summarize"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/views",
+            Gap("view_write: saved task views"),
+        ),
+        (
+            Patch,
+            "/api/v1/projects/{project_id}/views/{view_id}",
+            Gap("view_write: saved task views"),
+        ),
+        (
+            Delete,
+            "/api/v1/projects/{project_id}/views/{view_id}",
+            Gap("view_write: saved task views"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/views/{view_id}/pin",
+            Gap("view_write: saved task views"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/task-templates",
+            Gap("template_write: task templates"),
+        ),
+        (
+            Patch,
+            "/api/v1/projects/{project_id}/task-templates/{template_id}",
+            Gap("template_write: task templates"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/task-templates/{template_id}/apply",
+            Tool("task_from_template"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/imports",
+            Tool("task_import"),
+        ),
+        (
+            Patch,
+            "/api/v1/projects/{project_id}/imports/{import_id}",
+            Tool("task_import"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/imports/{import_id}/commit",
+            Tool("task_import"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/save-as-template",
+            Gap("project templates"),
+        ),
+        (
+            Patch,
+            "/api/v1/organizations/{organization_id}/project-templates/{template_id}",
+            Gap("project templates"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/recurring-tasks",
+            Gap("recurring tasks"),
+        ),
+        (
+            Patch,
+            "/api/v1/projects/{project_id}/recurring-tasks/{recurring_id}",
+            Gap("recurring tasks"),
+        ),
+        (
+            Delete,
+            "/api/v1/projects/{project_id}/recurring-tasks/{recurring_id}",
+            Gap("recurring tasks"),
+        ),
+        (
+            Put,
+            "/api/v1/projects/{project_id}/work-item-workflow",
+            Tool("workflow_update"),
+        ),
+    ];
+
+    #[test]
+    fn every_web_write_has_its_mcp_tool_or_says_why_not() {
+        let mut listed = BTreeMap::new();
+        for (method, path, parity) in WEB_WRITES {
+            assert!(
+                listed.insert((*method, *path), parity).is_none(),
+                "{method:?} {path} is listed twice in agent_parity"
+            );
+        }
+        let routes = MUTATING_ENTRY_POINTS
+            .iter()
+            .filter(|entry| entry.method != MutationMethod::Protocol)
+            .map(|entry| (entry.method, entry.path))
+            .collect::<BTreeSet<_>>();
+
+        let unlisted = routes
+            .iter()
+            .filter(|route| !listed.contains_key(route))
+            .map(|(method, path)| format!("{method:?} {path}"))
+            .collect::<Vec<_>>();
+        assert!(
+            unlisted.is_empty(),
+            "these web writes have no MCP tool listed in agent_parity.rs: {unlisted:#?}\n\
+             Agents can do everything a person can (AWD-91): add the MCP tool that does the \
+             same thing and list it as Tool, or, if only a person should ever do it, as Person \
+             with the reason."
+        );
+        let stale = listed
+            .keys()
+            .filter(|route| !routes.contains(route))
+            .map(|(method, path)| format!("{method:?} {path}"))
+            .collect::<Vec<_>>();
+        assert!(
+            stale.is_empty(),
+            "agent_parity.rs lists routes that no longer exist: {stale:#?}"
+        );
+
+        let tools = crate::mcp::tool_catalog()
+            .into_iter()
+            .map(|tool| tool.name.to_string())
+            .collect::<BTreeSet<_>>();
+        for (method, path, parity) in WEB_WRITES {
+            match parity {
+                Tool(names) => {
+                    for name in names.split(", ") {
+                        assert!(
+                            tools.contains(name),
+                            "{method:?} {path} names {name}, which isn't an MCP tool"
+                        );
+                    }
+                }
+                Person(why) | Plumbing(why) | Gap(why) => {
+                    assert!(!why.trim().is_empty(), "{method:?} {path} needs a reason");
+                }
+            }
+        }
+    }
+}
