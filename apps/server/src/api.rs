@@ -684,9 +684,10 @@ pub(crate) async fn retry_run_in(
         INSERT INTO agent_runs (
             id, conversation_id, execution_worker_id, requesting_actor_id,
             execution_profile_id, repository_id, predecessor_run_id,
-            state, prompt, authorization_snapshot, prompt_message_id, config
+            state, prompt, authorization_snapshot, prompt_message_id, config,
+            made_through_app
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, 'created', $8, $9, $10, $11)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, 'created', $8, $9, $10, $11, $12)
         "#,
     )
     .bind(run_id)
@@ -705,6 +706,17 @@ pub(crate) async fn retry_run_in(
     }))
     .bind(prompt_message_id)
     .bind(serde_json::to_value(&config).map_err(|_| AppError::Internal("serialize run settings"))?)
+    // As in `start_run_in`: a retry through a person's app starts, if it
+    // waits in the queue, only within that app's agent limit as it is then.
+    .bind(
+        matches!(principal.actor_kind(), Ok(ActorKind::Human))
+            && (principal.made_through_app()
+                || crate::policy::current_agent_limit(
+                    principal.actor_id(),
+                    crate::policy::MembershipScope::Project(conversation.project_id),
+                )
+                .is_some()),
+    )
     .execute(&mut *transaction)
     .await?;
     transition_run(&mut transaction, run_id, RunState::Queued, None).await?;

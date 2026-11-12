@@ -639,8 +639,8 @@ async fn an_agent_stops_its_run_and_only_people_start_it_again() {
     assert_eq!(retried["outcome"], "ok", "{retried}");
     let new_run = string(&retried, "/value/id");
     assert_ne!(new_run, run);
-    let (requester, predecessor) = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(
-        "SELECT requesting_actor_id, predecessor_run_id FROM agent_runs WHERE id = $1",
+    let (requester, predecessor, through_app) = sqlx::query_as::<_, (Uuid, Option<Uuid>, bool)>(
+        "SELECT requesting_actor_id, predecessor_run_id, made_through_app FROM agent_runs WHERE id = $1",
     )
     .bind(new_run.parse::<Uuid>().expect("new run UUID"))
     .fetch_one(&f.pool)
@@ -648,6 +648,9 @@ async fn an_agent_stops_its_run_and_only_people_start_it_again() {
     .expect("retried run");
     assert_eq!(requester, f.seed.human_actor_id);
     assert_eq!(predecessor, Some(run_id));
+    // Made in the app's call, so if it waits in the queue it starts only
+    // within the app's limit as it is then, as run_start's runs do.
+    assert!(through_app);
 
     // A launch the person queued: the agent can't cancel it, they can.
     let task = f
