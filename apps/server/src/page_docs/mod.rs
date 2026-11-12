@@ -5,12 +5,15 @@
 //! Markdown exactly as the web app does, so a page keeps its look when it
 //! turns into a document.
 
+pub mod comments;
+pub mod discussion;
 pub mod edits;
 pub mod http;
 pub mod markdown;
 #[cfg(test)]
 mod parity;
 pub mod store;
+pub mod suggestions;
 #[cfg(test)]
 mod testing;
 pub mod tree;

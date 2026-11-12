@@ -72,6 +72,11 @@ pub mod kind {
     pub const REMINDER: &str = "reminder";
     /// A message you scheduled couldn't be sent (W21).
     pub const SCHEDULED_SEND_FAILED: &str = "scheduled_send_failed";
+    /// An agent suggested edits to a page you made (AWD-53).
+    pub const PAGE_SUGGESTION: &str = "page_suggestion";
+    /// Someone commented on a page you made, or in a page thread you're in
+    /// (AWD-53).
+    pub const PAGE_COMMENT: &str = "page_comment";
 }
 
 /// Groups of kinds people filter the inbox by.
@@ -201,6 +206,28 @@ impl NewNotification {
             group_key,
             dedupe_key,
         }
+    }
+}
+
+impl NewNotification {
+    /// About a page: its title and address go in `detail`.
+    pub fn page(
+        project_id: Uuid,
+        recipient_actor_id: Uuid,
+        kind: &'static str,
+        page_id: Uuid,
+        group_key: String,
+        dedupe_key: String,
+    ) -> Self {
+        Self::new(
+            project_id,
+            recipient_actor_id,
+            kind,
+            "page",
+            page_id,
+            group_key,
+            dedupe_key,
+        )
     }
 }
 

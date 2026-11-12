@@ -228,6 +228,14 @@ pub struct PageUpdatedPayload {
     pub version: i64,
 }
 
+/// A page's comments or suggestions changed (AWD-53). The page's ID only:
+/// open pages fetch the discussion over HTTP.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PageDiscussionUpdatedPayload {
+    pub page_id: Uuid,
+}
+
 /// A collection, its fields or views, or some of its records changed
 /// (AWD-90). IDs only: open screens fetch what they show over HTTP, so no
 /// record's title or values are stored in the outbox or sent to anyone.
@@ -263,6 +271,7 @@ pub enum OutboxEventPayload {
     NotificationsUpdated(NotificationsUpdatedPayload),
     WhiteboardUpdated(WhiteboardUpdatedPayload),
     PageUpdated(PageUpdatedPayload),
+    PageDiscussionUpdated(PageDiscussionUpdatedPayload),
     CollectionUpdated(CollectionUpdatedPayload),
 }
 
@@ -284,6 +293,7 @@ impl OutboxEventPayload {
             Self::NotificationsUpdated(_) => "notifications.updated",
             Self::WhiteboardUpdated(_) => "whiteboard.updated",
             Self::PageUpdated(_) => "page.updated",
+            Self::PageDiscussionUpdated(_) => "page.discussion.updated",
             Self::CollectionUpdated(_) => "collection.updated",
         }
     }
@@ -308,6 +318,7 @@ impl OutboxEventPayload {
             | Self::NotificationsUpdated(_)
             | Self::WhiteboardUpdated(_)
             | Self::PageUpdated(_)
+            | Self::PageDiscussionUpdated(_)
             | Self::CollectionUpdated(_) => None,
         }
     }
@@ -341,6 +352,7 @@ impl OutboxEventPayload {
             Self::NotificationsUpdated(_) => OutboxResourceKind::Notification,
             Self::WhiteboardUpdated(_) => OutboxResourceKind::Whiteboard,
             Self::PageUpdated(_) => OutboxResourceKind::Page,
+            Self::PageDiscussionUpdated(_) => OutboxResourceKind::Page,
             Self::CollectionUpdated(_) => OutboxResourceKind::Collection,
         }
     }
@@ -365,6 +377,7 @@ impl OutboxEventPayload {
             Self::NotificationsUpdated(payload) => payload.actor_id,
             Self::WhiteboardUpdated(payload) => payload.whiteboard_id,
             Self::PageUpdated(payload) => payload.page_id,
+            Self::PageDiscussionUpdated(payload) => payload.page_id,
             Self::CollectionUpdated(payload) => payload.collection_id,
         }
     }
@@ -448,6 +461,7 @@ impl OutboxEventPayload {
             Self::NotificationsUpdated(payload) => serde_json::to_value(payload),
             Self::WhiteboardUpdated(payload) => serde_json::to_value(payload),
             Self::PageUpdated(payload) => serde_json::to_value(payload),
+            Self::PageDiscussionUpdated(payload) => serde_json::to_value(payload),
             Self::CollectionUpdated(payload) => serde_json::to_value(payload),
         }
         .map_err(|_| OutboxEventError::MalformedPayload)?;
@@ -501,6 +515,9 @@ impl OutboxEventPayload {
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "page.updated" => Self::PageUpdated(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "page.discussion.updated" => Self::PageDiscussionUpdated(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "collection.updated" => Self::CollectionUpdated(

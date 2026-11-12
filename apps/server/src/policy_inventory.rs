@@ -771,6 +771,25 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/pages/{id}/document/updates",
         PageEdit
     ),
+    policy_route!("memory", Post, "/api/v1/pages/{id}/comments", PageEdit),
+    policy_route!(
+        "memory",
+        Patch,
+        "/api/v1/pages/{id}/comments/{comment_id}",
+        PageEdit
+    ),
+    policy_route!(
+        "memory",
+        Delete,
+        "/api/v1/pages/{id}/comments/{comment_id}",
+        PageEdit
+    ),
+    policy_route!(
+        "memory",
+        Post,
+        "/api/v1/pages/{id}/suggestions/{suggestion_id}/decision",
+        PageEdit
+    ),
     policy_route!(
         "whiteboards/http",
         Post,

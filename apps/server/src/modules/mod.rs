@@ -364,6 +364,8 @@ mod tests {
             kind::CONVERSATION_MESSAGE,
             kind::REMINDER,
             kind::SCHEDULED_SEND_FAILED,
+            kind::PAGE_SUGGESTION,
+            kind::PAGE_COMMENT,
             crate::automations::NOTIFICATION_KIND,
             "automation_disabled",
             "ai_suggestions",

@@ -180,6 +180,12 @@ const ERROR_STATUSES: &[(&str, &str)] = &[
     ),
 ];
 
+/// Whether an error status answers with the operation's own result (its
+/// `outcome` says what went wrong), rather than the shared `Error`.
+fn carries_outcome(status: &str) -> bool {
+    matches!(status, "403" | "404" | "409" | "422" | "503")
+}
+
 /// Moves a schema's `$defs` into `components.schemas` under the tool's name,
 /// and points its references there.
 fn hoist(tool: &str, schema: &Map<String, Value>, components: &mut Map<String, Value>) -> Value {
@@ -289,15 +295,16 @@ pub(crate) fn document() -> Value {
             }),
         );
         for (status, description) in ERROR_STATUSES {
-            let content = if matches!(*status, "403" | "404" | "409" | "422" | "503") {
-                json!({ "application/json": { "schema": output.clone() } })
+            let response = if carries_outcome(status) {
+                json!({
+                    "description": description,
+                    "content": { "application/json": { "schema": output.clone() } },
+                })
             } else {
-                json!({ "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } })
+                // The same for every operation, so it's written once.
+                json!({ "$ref": format!("#/components/responses/Error{status}") })
             };
-            responses.insert(
-                (*status).to_owned(),
-                json!({ "description": description, "content": content }),
-            );
+            responses.insert((*status).to_owned(), response);
         }
         paths.insert(
             format!("/{name}"),
@@ -335,6 +342,19 @@ pub(crate) fn document() -> Value {
             },
         }),
     );
+    let shared_responses: Map<String, Value> = ERROR_STATUSES
+        .iter()
+        .filter(|(status, _)| !carries_outcome(status))
+        .map(|(status, description)| {
+            (
+                format!("Error{status}"),
+                json!({
+                    "description": description,
+                    "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } },
+                }),
+            )
+        })
+        .collect();
     json!({
         "openapi": "3.1.0",
         "info": {
@@ -348,6 +368,7 @@ pub(crate) fn document() -> Value {
         "paths": paths,
         "components": {
             "schemas": components,
+            "responses": shared_responses,
             "securitySchemes": {
                 "bearerToken": {
                     "type": "http",
@@ -389,7 +410,17 @@ mod tests {
         let mut references = Vec::new();
         collect_refs(&document, &mut references);
         assert!(!references.is_empty());
+        let responses = document["components"]["responses"]
+            .as_object()
+            .expect("responses");
         for reference in references {
+            if let Some(name) = reference.strip_prefix("#/components/responses/") {
+                assert!(
+                    responses.contains_key(name),
+                    "dangling reference {reference}"
+                );
+                continue;
+            }
             let name = reference
                 .strip_prefix("#/components/schemas/")
                 .unwrap_or_else(|| panic!("reference outside components: {reference}"));
