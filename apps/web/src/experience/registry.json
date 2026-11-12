@@ -271,6 +271,13 @@
       "default": true
     },
     {
+      "id": "page.comments",
+      "group": "pages",
+      "label": "Comments and suggestions",
+      "description": "Comments on a page's words, and changes agents suggest to someone else's page.",
+      "default": true
+    },
+    {
       "id": "tech.task_keys",
       "group": "technical",
       "label": "Task keys",
@@ -371,6 +378,7 @@
         "talk.threads",
         "talk.replies",
         "page.live_editing",
+        "page.comments",
         "workspace.my_work",
         "workspace.later"
       ],
@@ -400,6 +408,7 @@
         "talk.threads",
         "talk.replies",
         "page.live_editing",
+        "page.comments",
         "workspace.my_work",
         "workspace.later"
       ],
@@ -472,6 +481,7 @@
         "talk.threads",
         "talk.replies",
         "page.live_editing",
+        "page.comments",
         "workspace.my_work",
         "workspace.later"
       ],
@@ -505,6 +515,7 @@
         "talk.threads",
         "talk.replies",
         "page.live_editing",
+        "page.comments",
         "home.working_now",
         "workspace.my_work",
         "workspace.later",
@@ -535,6 +546,7 @@
         "talk.threads",
         "talk.replies",
         "page.live_editing",
+        "page.comments",
         "workspace.my_work",
         "workspace.later"
       ],
@@ -569,6 +581,7 @@
         "talk.threads",
         "talk.replies",
         "page.live_editing",
+        "page.comments",
         "workspace.my_work",
         "workspace.later"
       ],
@@ -597,6 +610,7 @@
         "talk.threads",
         "talk.replies",
         "page.live_editing",
+        "page.comments",
         "workspace.my_work",
         "workspace.later"
       ],
@@ -631,6 +645,7 @@
         "talk.threads",
         "talk.replies",
         "page.live_editing",
+        "page.comments",
         "tech.task_keys",
         "workspace.my_work",
         "workspace.later"
@@ -673,6 +688,7 @@
         "talk.threads",
         "talk.replies",
         "page.live_editing",
+        "page.comments",
         "tech.task_keys",
         "workspace.my_work"
       ]
@@ -695,6 +711,7 @@
         "talk.threads",
         "talk.replies",
         "page.live_editing",
+        "page.comments",
         "workspace.my_work"
       ]
     },

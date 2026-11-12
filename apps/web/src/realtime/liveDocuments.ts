@@ -18,6 +18,8 @@ export type CollectionChange = { collectionId: string }
 const BOARD_LIST_DELAY_MS = 40
 /** A page's details and the page list refetch every few seconds at most while someone types. */
 const PAGE_DETAILS_DELAY_MS = 3_000
+/** A page's comments refetch once for a burst of changes. */
+const DISCUSSION_DELAY_MS = 200
 /** A collection's open lists refetch once for a burst of changes, such as an agent adding records one by one. */
 const COLLECTION_DELAY_MS = 300
 
@@ -38,6 +40,13 @@ export function pageChange(event: Pick<RealtimeEnvelope, 'type' | 'payload'>): P
   const version = event.payload.version
   if (!pageId || !Number.isSafeInteger(version) || (version as number) < 1) return null
   return { pageId, version: version as number }
+}
+
+/** A page's comments or suggestions changed (AWD-53). */
+export function discussionChange(event: Pick<RealtimeEnvelope, 'type' | 'payload'>): { pageId: string } | null {
+  if (event.type !== 'page.discussion.updated') return null
+  const pageId = uuid(field(event.payload, 'pageId', 'page_id'))
+  return pageId ? { pageId } : null
 }
 
 export function collectionChange(event: Pick<RealtimeEnvelope, 'type' | 'payload'>): CollectionChange | null {
@@ -104,7 +113,8 @@ const isPageQuery = (projectId: string) => (query: { queryKey: QueryKey }) => {
 }
 
 /**
- * A whiteboard.updated, page.updated or collection.updated event: tells
+ * A whiteboard.updated, page.updated, page.discussion.updated or
+ * collection.updated event: tells
  * whoever has the board or page open, then refreshes the lists. For a
  * collection, everything open of it refetches (its records, views and fields,
  * and a record beside them) and so does the project's list of collections,
@@ -123,6 +133,15 @@ export function documentChanged(queryClient: QueryClient, event: RealtimeEnvelop
       void queryClient.invalidateQueries({ queryKey: ['project', event.projectId, 'collections', collection.collectionId] })
       void queryClient.invalidateQueries({ queryKey: ['project', event.projectId, 'collections', 'list'] })
     })
+    return
+  }
+  const discussion = discussionChange(event)
+  if (discussion) {
+    later(`discussion:${discussion.pageId}`, DISCUSSION_DELAY_MS, () =>
+      void queryClient.invalidateQueries({
+        queryKey: ['project', event.projectId, 'memory', 'page', discussion.pageId, 'discussion'],
+      }),
+    )
     return
   }
   const page = pageChange(event)

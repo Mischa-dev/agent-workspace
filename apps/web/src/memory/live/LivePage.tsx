@@ -11,6 +11,7 @@ import {
   List,
   ListChecks,
   ListOrdered,
+  MessageSquarePlus,
   Minus,
   Quote,
   Redo2,
@@ -40,12 +41,13 @@ import * as Y from 'yjs'
 
 import { lastHeardVersion, onPageChange } from '../../realtime/liveDocuments'
 import { useOptionalRealtime } from '../../realtime/realtimeContext'
-import { Banner, Button, Menu, TextField, Tooltip, describeError, type MenuEntry } from '../../ui'
+import { Banner, Button, Menu, TextField, Tooltip, describeError, showToast, type MenuEntry } from '../../ui'
 import { formatShortcut } from '../../ui/shortcut'
 import { PageEmbed } from '../embeds/PageEmbed'
 import { canInsertTable, currentLink, inTasks, insertEmbed, insertTable, removeLink, setLink, toggleTasks } from './commands'
 import { fromBase64, getPageDocument, sendPageUpdate, syncPageDocument, type PageDocument } from './documentApi'
 import { EmbedSlots } from './embeds'
+import { DiscussionMarks, discussionKey, selectionAnchor, type MarkedThread, type Marks } from './highlights'
 import { FROM_SERVER, PageSync, saveLabel, type SaveFailure, type SaveState } from './pageSync'
 import { pageExtensions } from './schema'
 import './live.css'
@@ -70,6 +72,19 @@ export type LivePageProps = {
   title: string
   /** The page as last saved: shown while the live copy loads, and if it can't. */
   fallback: ReactNode
+  /** Comments and suggestions to show in the page, and what commenting does (AWD-53). */
+  discussion?: LiveDiscussion | null
+}
+
+export type LiveDiscussion = {
+  threads: MarkedThread[]
+  active: string | null
+  /** Blocks a pending suggestion changes. */
+  suggested: string[]
+  /** Start a thread about these words. */
+  onComment: (anchor: { blockId: string; quote: string }) => void
+  /** Someone clicked words a thread is about. */
+  onOpenThread: (id: string) => void
 }
 
 type Load = { attempt: number; snapshot: PageDocument; doc: Y.Doc } | { attempt: number; error: unknown }
@@ -83,7 +98,7 @@ function openDocument(snapshot: PageDocument) {
   return doc
 }
 
-export default function LivePage({ collections, fallback, pageId, projectId, title }: LivePageProps) {
+export default function LivePage({ collections, discussion = null, fallback, pageId, projectId, title }: LivePageProps) {
   const [attempt, setAttempt] = useState(0)
   const [load, setLoad] = useState<Load | null>(null)
   const [unshowable, setUnshowable] = useState(false)
@@ -135,6 +150,7 @@ export default function LivePage({ collections, fallback, pageId, projectId, tit
   return (
     <LiveEditor
       collections={collections ? projectId : null}
+      discussion={discussion}
       doc={current.doc}
       key={current.attempt}
       onReload={reload}
@@ -145,16 +161,17 @@ export default function LivePage({ collections, fallback, pageId, projectId, tit
   )
 }
 
-/** The page's own keys: a link, a list of tasks, and saving now. */
-const PageKeys = Extension.create<{ onLink: () => void; onSave: () => void }>({
+/** The page's own keys: a link, a list of tasks, a comment, and saving now. */
+const PageKeys = Extension.create<{ onLink: () => void; onSave: () => void; onComment: () => boolean }>({
   name: 'pageKeys',
 
   addOptions() {
-    return { onLink: () => undefined, onSave: () => undefined }
+    return { onLink: () => undefined, onSave: () => undefined, onComment: () => false }
   },
 
   addKeyboardShortcuts() {
     return {
+      'Mod-Alt-m': () => this.options.onComment(),
       'Mod-k': () => {
         this.options.onLink()
         return true
@@ -169,8 +186,23 @@ const PageKeys = Extension.create<{ onLink: () => void; onSave: () => void }>({
   },
 })
 
+/** Starts a comment on the selected words, or says why it can't. */
+function commentOnSelection(editor: Editor, discussion: LiveDiscussion) {
+  const anchor = selectionAnchor(editor.state)
+  if (anchor === 'empty') {
+    showToast({ title: 'Select the words to comment on.' })
+    return
+  }
+  if (anchor === 'unsaved') {
+    showToast({ title: 'That part is still saving.', description: 'Try again in a moment.' })
+    return
+  }
+  discussion.onComment(anchor)
+}
+
 function LiveEditor({
   collections,
+  discussion,
   doc,
   onReload,
   onUnshowable,
@@ -179,6 +211,7 @@ function LiveEditor({
 }: {
   /** The project whose collections the toolbar offers, if it does. */
   collections: string | null
+  discussion: LiveDiscussion | null
   doc: Y.Doc
   onReload: () => void
   onUnshowable: () => void
@@ -208,6 +241,12 @@ function LiveEditor({
   const replaced = useEffectEvent(() => onReload())
   const unshowable = useEffectEvent(() => onUnshowable())
   const label = useEffectEvent(() => title)
+  const openThread = useEffectEvent((id: string) => discussion?.onOpenThread(id))
+  const comment = useEffectEvent((editor: Editor) => {
+    if (!discussion) return false
+    commentOnSelection(editor, discussion)
+    return true
+  })
 
   useEffect(() => {
     const element = mount.current
@@ -226,12 +265,17 @@ function LiveEditor({
       onReplaced: () => replaced(),
     })
     sync.current = pageSync
-    const instance = new Editor({
+    const instance: Editor = new Editor({
       element,
       extensions: [
         ...pageExtensions({ onOpen: (href) => open(href), embeds: slots }),
         Collaboration.configure({ document: doc }),
-        PageKeys.configure({ onLink: () => setLinking(true), onSave: () => pageSync.flush() }),
+        PageKeys.configure({
+          onLink: () => setLinking(true),
+          onSave: () => pageSync.flush(),
+          onComment: (): boolean => comment(instance),
+        }),
+        DiscussionMarks.configure({ onOpenThread: (id) => openThread(id) }),
       ],
       editable: snapshot.canEdit,
       // Content this editor can't show stays in the document, untouched.
@@ -273,6 +317,16 @@ function LiveEditor({
     }
   }, [doc, editorId, slots, snapshot])
 
+  // The words open threads are about, and blocks with suggested edits.
+  const threads = discussion?.threads
+  const active = discussion?.active ?? null
+  const suggested = discussion?.suggested
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return
+    const marks: Marks = { threads: threads ?? [], active, suggested: suggested ?? [] }
+    editor.view.dispatch(editor.state.tr.setMeta(discussionKey, marks).setMeta('addToHistory', false))
+  }, [editor, threads, active, suggested])
+
   // After a reconnect, and on a timer while the live connection is down.
   useEffect(() => {
     if (resync > 0) sync.current?.refresh()
@@ -311,6 +365,7 @@ function LiveEditor({
               <Toolbar
                 controls={editorId}
                 editor={editor}
+                onComment={discussion ? () => commentOnSelection(editor, discussion) : null}
                 onEmbed={
                   collections
                     ? () => {
@@ -498,6 +553,17 @@ const TOOLS: Tool[][] = [
     },
   ],
   [
+    // Starts a comment on the selection: see Toolbar.
+    {
+      key: 'comment',
+      label: 'Comment',
+      icon: MessageSquarePlus,
+      shortcut: 'mod+alt+m',
+      run: () => undefined,
+      enabled: (editor) => !editor.state.selection.empty,
+    },
+  ],
+  [
     {
       key: 'undo',
       label: 'Undo',
@@ -534,7 +600,19 @@ function tableMenu(editor: Editor): MenuEntry[] {
 }
 
 /** The formatting buttons, kept in step with where the cursor is. */
-function Toolbar({ controls, editor, onEmbed, onLink }: { controls: string; editor: Editor; onEmbed: (() => void) | null; onLink: () => void }) {
+function Toolbar({
+  controls,
+  editor,
+  onComment,
+  onEmbed,
+  onLink,
+}: {
+  controls: string
+  editor: Editor
+  onComment: (() => void) | null
+  onEmbed: (() => void) | null
+  onLink: () => void
+}) {
   const [, redraw] = useReducer((count: number) => count + 1, 0)
   useEffect(() => {
     editor.on('transaction', redraw)
@@ -545,9 +623,10 @@ function Toolbar({ controls, editor, onEmbed, onLink }: { controls: string; edit
   return (
     <div aria-controls={controls} aria-label="Formatting" className="aw-live__tools" role="toolbar">
       {TOOLS.map((group) => (
-        <div className="aw-live__group" key={group[0].key}>
+        <div className="aw-live__group" hidden={group[0].key === 'comment' && !onComment} key={group[0].key}>
           {group.map((tool) => {
             if (tool.key === 'embed' && !onEmbed) return null
+            if (tool.key === 'comment' && !onComment) return null
             const Glyph = tool.icon
             const pressed = tool.active?.(editor)
             const button = (
@@ -556,7 +635,15 @@ function Toolbar({ controls, editor, onEmbed, onLink }: { controls: string; edit
                 aria-pressed={tool.active && tool.key !== 'table' ? pressed : undefined}
                 className="aw-iconbtn aw-iconbtn--sm"
                 disabled={tool.enabled ? !tool.enabled(editor) : false}
-                onClick={tool.key === 'link' ? onLink : tool.key === 'embed' && onEmbed ? onEmbed : () => tool.run(editor)}
+                onClick={
+                  tool.key === 'link'
+                    ? onLink
+                    : tool.key === 'embed' && onEmbed
+                      ? onEmbed
+                      : tool.key === 'comment' && onComment
+                        ? onComment
+                        : () => tool.run(editor)
+                }
                 // Keep the page's selection when a button is pressed.
                 onMouseDown={(event) => event.preventDefault()}
                 type="button"

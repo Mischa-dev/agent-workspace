@@ -1,0 +1,193 @@
+/* A page's discussion (AWD-53): suggested changes and comment threads. */
+
+.aw-discussion {
+  display: grid;
+  gap: var(--space-3);
+  margin-top: var(--space-6);
+}
+
+.aw-discussion__list {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-discussion__item {
+  display: flex;
+  gap: var(--space-3);
+  scroll-margin-top: var(--space-8);
+}
+
+.aw-discussion__thread {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.aw-discussion__thread.is-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.aw-discussion__thread.is-resolved {
+  opacity: 0.75;
+}
+
+.aw-discussion__threadbody {
+  display: grid;
+  flex: 1;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.aw-discussion__quote {
+  margin: 0;
+  padding: var(--space-1) var(--space-2);
+  border-left: 3px solid var(--warning);
+  background: var(--warning-soft);
+  color: var(--content-fg);
+  font: var(--t-small);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.aw-discussion__quote--link {
+  width: 100%;
+  border-top: 0;
+  border-right: 0;
+  border-bottom: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.aw-discussion__quote--link:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.aw-discussion__comments {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-discussion__comment {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.aw-discussion__commentbody {
+  flex: 1;
+  min-width: 0;
+}
+
+.aw-discussion__menu {
+  margin-left: auto;
+}
+
+.aw-discussion__text {
+  font: var(--t-body);
+  overflow-wrap: anywhere;
+}
+
+.aw-discussion__text > :first-child {
+  margin-top: var(--space-half);
+}
+
+.aw-discussion__text > :last-child {
+  margin-bottom: 0;
+}
+
+.aw-discussion__note,
+.aw-discussion__resolved,
+.aw-discussion__empty,
+.aw-discussion__context {
+  margin: 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-discussion__context {
+  font-style: italic;
+  overflow-wrap: anywhere;
+}
+
+.aw-discussion__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.aw-discussion__new,
+.aw-discussion__reply {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.aw-discussion__edits {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-2) 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-discussion__edit {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.aw-discussion__op {
+  font: var(--t-caption);
+  color: var(--content-fg-muted);
+}
+
+.aw-discussion__before,
+.aw-discussion__after {
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  overflow-wrap: anywhere;
+}
+
+.aw-discussion__before {
+  background: var(--danger-soft);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in oklab, currentColor 40%, transparent);
+}
+
+.aw-discussion__after {
+  background: var(--success-soft);
+}
+
+.aw-discussion__before > .aw-doc > :first-child,
+.aw-discussion__after > .aw-doc > :first-child {
+  margin-top: 0;
+}
+
+.aw-discussion__before > .aw-doc > :last-child,
+.aw-discussion__after > .aw-doc > :last-child {
+  margin-bottom: 0;
+}
+
+.aw-discussion__earlier summary {
+  cursor: pointer;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-discussion__decided {
+  display: grid;
+  gap: var(--space-1);
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-4);
+  font: var(--t-small);
+}

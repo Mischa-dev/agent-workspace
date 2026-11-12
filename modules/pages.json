@@ -61,7 +61,7 @@
   ],
   "slots": {
     "pages": ["/projects/:projectId/pages", "/projects/:projectId/pages/:pageId", "/projects/:projectId/decisions"],
-    "parts": ["area.pages", "area.decisions", "page.live_editing"],
+    "parts": ["area.pages", "area.decisions", "page.live_editing", "page.comments"],
     "sidebar": [],
     "home": [],
     "settings": [],
