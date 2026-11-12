@@ -227,3 +227,181 @@ pub(super) async fn thing_open(
     .await;
     result.unwrap_or_else(|error| ToolResult::from_error(error, "thing_open"))
 }
+
+// ---------------------------------------------------------------------------
+// workspace_update (AWD-111)
+
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct WorkspaceUpdateArguments {
+    /// A project in the workspace: its ID, link or key (such as "AWD").
+    pub project_id: String,
+    /// A new name for the workspace.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// The workspace's version you last read, for a rename. Defaults to the
+    /// current one.
+    #[serde(default)]
+    pub expected_version: Option<i64>,
+    /// A module preset to start from (as in the workspace's settings), then
+    /// `modules` on top.
+    #[serde(default)]
+    pub preset: Option<String>,
+    /// Switch modules on (true) or off (false), by id (module_list). Off
+    /// hides a module everywhere in the workspace without deleting anything.
+    #[serde(default)]
+    pub modules: Option<std::collections::BTreeMap<String, bool>>,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct WorkspaceUpdateValue {
+    pub name: String,
+    pub version: i64,
+    /// Whether the name changed.
+    pub renamed: bool,
+    /// The modules this call switched, by id: true for on.
+    pub switched: std::collections::BTreeMap<String, bool>,
+    /// The modules now off in the workspace, by id.
+    pub modules_off: Vec<String>,
+}
+
+const MANAGERS_ONLY: &str = "Only the workspace's owners and admins who manage its settings change it, as people, on the web or through an app connected as themselves.";
+
+pub(super) async fn workspace_update(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: WorkspaceUpdateArguments,
+) -> ToolResult<WorkspaceUpdateValue> {
+    if !principal.can_write() {
+        return ToolResult::read_only();
+    }
+    if principal.actor_kind != crate::policy::ActorKind::Human {
+        return ToolResult::denied(MANAGERS_ONLY);
+    }
+    if parse_id(&arguments.project_id) != Some(principal.project_id) {
+        return ToolResult::not_found("That project");
+    }
+    let switches = arguments.modules.clone().unwrap_or_default();
+    if arguments.name.is_none() && arguments.preset.is_none() && switches.is_empty() {
+        return ToolResult::invalid("name", "Give a new name, a preset, or modules to switch.");
+    }
+    if arguments.name.is_none() && arguments.expected_version.is_some() {
+        return ToolResult::invalid("expectedVersion", "expectedVersion goes with a rename.");
+    }
+    let project_id = principal.project_id;
+    let result = async {
+        if super::common::project_role(state, principal, project_id)
+            .await?
+            .is_none()
+        {
+            return Ok(ToolResult::not_found("That project"));
+        }
+        let mut transaction = state.pool.begin().await?;
+        super::common::mark_via(&mut transaction, principal).await?;
+        let organization_id =
+            sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
+                .bind(project_id)
+                .fetch_one(&mut *transaction)
+                .await?;
+        let mut renamed = false;
+        if let Some(name) = arguments.name.as_deref() {
+            let current =
+                sqlx::query_scalar::<_, i64>("SELECT version FROM organizations WHERE id = $1")
+                    .bind(organization_id)
+                    .fetch_one(&mut *transaction)
+                    .await?;
+            let (_, metadata) = crate::workspace::rename_workspace_in(
+                &mut transaction,
+                principal.actor_id,
+                organization_id,
+                name,
+                arguments.expected_version.unwrap_or(current),
+            )
+            .await?;
+            if let Some(mut metadata) = metadata {
+                metadata["organizationId"] = serde_json::json!(organization_id);
+                super::common::insert_audit(
+                    &mut transaction,
+                    principal,
+                    project_id,
+                    "workspace.renamed",
+                    "workspace",
+                    organization_id,
+                    metadata,
+                )
+                .await?;
+                renamed = true;
+            }
+        }
+        let mut switched = std::collections::BTreeMap::new();
+        if arguments.preset.is_some() || !switches.is_empty() {
+            let metadata = modules::http::change_modules_in(
+                &mut transaction,
+                principal.actor_id,
+                organization_id,
+                arguments.preset.as_deref(),
+                &switches,
+            )
+            .await?;
+            if let Some(metadata) = metadata {
+                if let Some(changed) = metadata["changed"].as_object() {
+                    for (module, on) in changed {
+                        switched.insert(module.clone(), on.as_bool().unwrap_or(false));
+                    }
+                }
+                super::common::insert_audit(
+                    &mut transaction,
+                    principal,
+                    project_id,
+                    "modules.changed",
+                    "organization",
+                    organization_id,
+                    metadata,
+                )
+                .await?;
+            }
+        }
+        let (name, version) = sqlx::query_as::<_, (String, i64)>(
+            "SELECT name, version FROM organizations WHERE id = $1",
+        )
+        .bind(organization_id)
+        .fetch_one(&mut *transaction)
+        .await?;
+        let off = state::switches(&mut transaction, organization_id).await?;
+        let modules_off = modules::http::switched_off(&off);
+        transaction.commit().await?;
+        Ok::<_, AppError>(ToolResult::ok(WorkspaceUpdateValue {
+            name,
+            version,
+            renamed,
+            switched,
+            modules_off,
+        }))
+    }
+    .await;
+    match result {
+        Ok(result) => result,
+        Err(AppError::Forbidden) => ToolResult::denied(MANAGERS_ONLY),
+        Err(AppError::NotFound("workspace")) => ToolResult::not_found("That project"),
+        Err(AppError::Validation("preset")) => {
+            ToolResult::invalid("preset", "There's no module preset by that name.")
+        }
+        Err(AppError::Validation("module")) => ToolResult::invalid(
+            "modules",
+            "One of those isn't a module. module_list shows their ids.",
+        ),
+        Err(AppError::Validation("module can't be switched")) => {
+            ToolResult::invalid("modules", "One of those modules is always on.")
+        }
+        Err(AppError::Validation(field)) if field.contains("name") => {
+            ToolResult::invalid("name", "That name isn't valid.")
+        }
+        Err(AppError::VersionConflict {
+            current_version, ..
+        }) => ToolResult::conflict(format!(
+            "The workspace changed since you read it; it's at version {current_version} now. Read it again and retry."
+        )),
+        Err(error) => ToolResult::from_error(error, "workspace_update"),
+    }
+}

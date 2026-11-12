@@ -1817,3 +1817,81 @@ async fn people_change_settings_and_agents_only_read_them() {
     );
     f.close().await;
 }
+
+#[tokio::test]
+async fn people_rename_the_workspace_and_switch_its_modules() {
+    let Some(f) = fixture().await else {
+        return;
+    };
+    let project = f.seed.project_id.to_string();
+    let app = connect_app(&f.app, &f.browser, "Owner's app", "full").await;
+    let session = initialize(&f.app, &app).await.expect("owner MCP");
+    let person = |name: &'static str, arguments: Value| {
+        let app = app.clone();
+        let session = session.clone();
+        let router = f.app.clone();
+        async move { tool(&router, &app, &session, name, arguments).await }
+    };
+
+    let renamed = person(
+        "workspace_update",
+        json!({"projectId": project, "name": "Harbour"}),
+    )
+    .await;
+    assert_eq!(renamed["outcome"], "ok", "{renamed}");
+    assert_eq!(renamed["value"]["name"], "Harbour", "{renamed}");
+    assert_eq!(renamed["value"]["renamed"], true, "{renamed}");
+    let stale = person(
+        "workspace_update",
+        json!({"projectId": project, "name": "Dock", "expectedVersion": 0}),
+    )
+    .await;
+    assert_eq!(stale["outcome"], "conflict", "{stale}");
+
+    let off = person(
+        "workspace_update",
+        json!({"projectId": project, "modules": {"whiteboards": false}}),
+    )
+    .await;
+    assert_eq!(off["value"]["switched"]["whiteboards"], false, "{off}");
+    assert!(
+        off["value"]["modulesOff"]
+            .as_array()
+            .expect("off")
+            .contains(&json!("whiteboards")),
+        "{off}"
+    );
+    let unknown = person(
+        "workspace_update",
+        json!({"projectId": project, "modules": {"nonsense": false}}),
+    )
+    .await;
+    assert_eq!(unknown["outcome"], "invalid_request", "{unknown}");
+
+    // Agents change neither.
+    for arguments in [
+        json!({"projectId": project, "name": "Agent's"}),
+        json!({"projectId": project, "modules": {"whiteboards": true}}),
+    ] {
+        let refused = tool(&f.app, &f.token, &f.session, "workspace_update", arguments).await;
+        assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    }
+
+    let on = person(
+        "workspace_update",
+        json!({"projectId": project, "modules": {"whiteboards": true}}),
+    )
+    .await;
+    assert_eq!(on["value"]["switched"]["whiteboards"], true, "{on}");
+    let audited = sqlx::query_scalar::<_, String>(
+        "SELECT action FROM audit_events WHERE channel = 'mcp' AND action IN ('workspace.renamed', 'modules.changed') ORDER BY id",
+    )
+    .fetch_all(&f.pool)
+    .await
+    .expect("audit");
+    assert_eq!(
+        audited,
+        ["workspace.renamed", "modules.changed", "modules.changed"]
+    );
+    f.close().await;
+}

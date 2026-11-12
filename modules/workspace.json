@@ -21,6 +21,7 @@
     "file_read": "describe",
     "file_delete": "change",
     "module_list": "describe",
+    "workspace_update": "change",
     "role_list": "query",
     "role_get": "describe",
     "my_permissions": "describe",

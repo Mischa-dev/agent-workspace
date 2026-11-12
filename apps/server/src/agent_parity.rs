@@ -66,7 +66,7 @@ mod tests {
         (
             Put,
             "/api/v1/organizations/{organization_id}/modules",
-            Gap("module_set: switch modules on or off"),
+            Tool("workspace_update"),
         ),
         (
             Post,
@@ -202,7 +202,7 @@ mod tests {
         (
             Patch,
             "/api/v1/organizations/{organization_id}",
-            Gap("workspace_update: rename the workspace"),
+            Tool("workspace_update"),
         ),
         (
             Patch,

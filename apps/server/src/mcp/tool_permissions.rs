@@ -29,6 +29,7 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("settings_get", None),
     ("settings_set", None),
     ("module_list", None),
+    ("workspace_update", Some(SettingsManage)),
     ("usage_windows", None),
     ("usage_batch", None),
     ("usage_batch_launch", Some(RunsLaunch)),

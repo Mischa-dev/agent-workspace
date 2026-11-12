@@ -311,6 +311,25 @@ impl McpServer {
     }
 
     #[tool(
+        description = "People: rename a workspace, or switch its modules on or off (by id from module_list, or from a preset). Off hides a module everywhere in the workspace without deleting anything. Owners and admins who manage the workspace's settings, through an app connected as themselves; agents can't. Audited.",
+        annotations(
+            title = "Change workspace",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn workspace_update(
+        &self,
+        Parameters(arguments): Parameters<module_tools::WorkspaceUpdateArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<module_tools::WorkspaceUpdateValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(module_tools::workspace_update(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
         description = "Your provider accounts' usage: every window (a five-hour session, a week, a month, or a reset schedule you set) with percent used, percent unused and when it resets, banked resets you could spend, and how many ready tasks each account could run. Read only; schedules, alert rules and spending a banked reset happen in the app.",
         annotations(
             title = "Usage windows",
