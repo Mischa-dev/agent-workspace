@@ -950,7 +950,18 @@ pub(crate) async fn apply(
                 ));
             }
             changes.extend(
-                starter_contents(transaction, caller.actor_id, id, &project_key, project).await?,
+                starter_contents(
+                    transaction,
+                    caller.actor_id,
+                    StarterProject {
+                        organization_id,
+                        id,
+                        new: made,
+                    },
+                    &project_key,
+                    project,
+                )
+                .await?,
             );
             // The setup path carries on in the project it made.
             sqlx::query(
@@ -1139,13 +1150,21 @@ fn key_candidates(key: &str) -> Vec<String> {
 /// The starter project's channels and collections, where they aren't there
 /// yet. A collection that is there gets the template's fields and views
 /// added, as collection_write does with a definition.
+/// The starter project being filled, and whether this use made it.
+struct StarterProject {
+    organization_id: Uuid,
+    id: Uuid,
+    new: bool,
+}
+
 async fn starter_contents(
     transaction: &mut Transaction<'_, Postgres>,
     actor_id: Uuid,
-    project_id: Uuid,
+    starter: StarterProject,
     project_key: &str,
     project: &TemplateProject,
 ) -> Result<Vec<String>, ApplyError> {
+    let project_id = starter.id;
     let mut changes = Vec::new();
     sqlx::query("SELECT id FROM projects WHERE id = $1 FOR UPDATE")
         .bind(project_id)
@@ -1153,9 +1172,21 @@ async fn starter_contents(
         .await?;
     // What the caller may do in the project, as channel and collection
     // writes there check it: an app's agent limit for the project included.
-    let holding = roles::project_holding(transaction, actor_id, project_id)
-        .await?
-        .unwrap_or(crate::policy::PermissionSet::EMPTY);
+    let holding = if starter.new {
+        // Made in this call: the caller owns it, and an app acting for them
+        // gets there what its workspace limit allows, as it would in any
+        // project it owns. (The call's limits were read before the project
+        // existed, so they don't name it yet.)
+        crate::policy::current_agent_limit(
+            actor_id,
+            crate::policy::MembershipScope::Organization(starter.organization_id),
+        )
+        .unwrap_or_else(crate::policy::PermissionSet::all)
+    } else {
+        roles::project_holding(transaction, actor_id, project_id)
+            .await?
+            .unwrap_or(crate::policy::PermissionSet::EMPTY)
+    };
     if !project.channels.is_empty() && !holding.contains(Permission::ChannelsCreate) {
         return Err(ApplyError::Problem(problem(
             "project.channels",

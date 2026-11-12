@@ -382,6 +382,41 @@ async fn only_people_who_manage_the_workspace_use_or_save_templates() {
         0,
         "{refused}"
     );
+    // With making channels and building collections in her limit, her app
+    // uses it, in the project it makes.
+    let (status, limit) = send(
+        app,
+        setup.browser.request(
+            "PUT",
+            &format!(
+                "/api/v1/organizations/{}/members/{bea_id}/agent-limit",
+                setup.organization_id
+            ),
+            None,
+            json!({"permissions": ["settings.manage", "roles.manage", "projects.view", "projects.create", "channels.create", "collections.build"]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{limit}");
+    let bea_session = initialize(app, &bea_app).await.expect("bea app");
+    let used = tool(
+        app,
+        &bea_app,
+        &bea_session,
+        "workspace_template_apply",
+        json!({"projectId": work, "template": "personal"}),
+    )
+    .await;
+    assert_eq!(used["outcome"], "ok", "{used}");
+    assert_eq!(
+        count(
+            &setup,
+            "SELECT count(*) FROM projects WHERE organization_id = $1 AND project_key = 'LIFE'"
+        )
+        .await,
+        1,
+        "{used}"
+    );
 
     // The owner's app saves the workspace with the project's channels and
     // collections, and uses templates.
