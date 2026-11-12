@@ -55,6 +55,7 @@ import {
 } from './api'
 import { discussionKey, getDiscussion, type CommentAnchor } from './discussion/api'
 import { PageEmbed } from './embeds/PageEmbed'
+import { PageDownloadMenu, PageImportButton } from './PageTransfer'
 import type { LiveDiscussion } from './live/LivePage'
 import './memory.css'
 
@@ -132,14 +133,18 @@ function PagesList({ projectId }: { projectId: string }) {
   const base = pagesHref(projectId)
   const hasGuide = Boolean(pages.data?.pages.some((page) => page.isGuide))
   const canEdit = Boolean(pages.data?.canEdit)
+  const transfers = useProjectExperience(projectId).shows('page.import_export')
   return (
     <>
       <PageHeader
         actions={
           canEdit ? (
-            <Button icon="plus" onClick={() => setCreating({ title: '' })} variant="primary">
-              New page
-            </Button>
+            <>
+              {transfers ? <PageImportButton pagesHref={base} projectId={projectId} /> : null}
+              <Button icon="plus" onClick={() => setCreating({ title: '' })} variant="primary">
+                New page
+              </Button>
+            </>
           ) : null
         }
         icon="list"
@@ -375,17 +380,22 @@ function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
       <RememberPlace location={{ kind: 'page', pageId }} project={project} />
       <PageHeader
         actions={
-          canEdit && !editing ? (
-            live ? (
-              <Button icon="settings" onClick={() => setEditing(true)}>
-                Edit details
-              </Button>
-            ) : (
-              <Button icon="pencil" onClick={() => setEditing(true)} variant="primary">
-                Edit
-              </Button>
-            )
-          ) : null
+          editing ? null : (
+            <>
+              {experience.shows('page.import_export') ? <PageDownloadMenu pageId={pageId} /> : null}
+              {canEdit ? (
+                live ? (
+                  <Button icon="settings" onClick={() => setEditing(true)}>
+                    Edit details
+                  </Button>
+                ) : (
+                  <Button icon="pencil" onClick={() => setEditing(true)} variant="primary">
+                    Edit
+                  </Button>
+                )
+              ) : null}
+            </>
+          )
         }
         icon="list"
         title={current.title}

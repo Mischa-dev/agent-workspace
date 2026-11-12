@@ -53,6 +53,15 @@ pub fn router() -> Router<AppState> {
             get(get_revision_http),
         )
         .route(
+            "/api/v1/pages/{id}/export",
+            get(page_docs::transfer::export_page),
+        )
+        .route(
+            "/api/v1/projects/{id}/pages/import",
+            post(page_docs::transfer::import_page)
+                .layer(DefaultBodyLimit::max(page_docs::transfer::MAX_IMPORT_BYTES)),
+        )
+        .route(
             "/api/v1/pages/{id}/document",
             get(page_docs::http::get_document),
         )

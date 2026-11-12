@@ -138,6 +138,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/pages/{id}",
     "/api/v1/pages/{id}/discussion",
     "/api/v1/pages/{id}/document",
+    "/api/v1/pages/{id}/export",
     "/api/v1/pages/{id}/revisions/{version}",
     "/api/v1/projects",
     "/api/v1/projects/{id}",
@@ -3335,6 +3336,18 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
         "/api/v1/pages/{id}/document",
         vec![format!("/api/v1/pages/{}/document", a.page)],
         vec![format!("/api/v1/pages/{}/document", b.page)],
+        vec![],
+    ));
+    cases.push(case(
+        "/api/v1/pages/{id}/export",
+        vec![
+            format!("/api/v1/pages/{}/export", a.page),
+            format!("/api/v1/pages/{}/export?format=docx", a.page),
+        ],
+        vec![
+            format!("/api/v1/pages/{}/export", b.page),
+            format!("/api/v1/pages/{}/export?format=docx", b.page),
+        ],
         vec![],
     ));
     cases.push(case(

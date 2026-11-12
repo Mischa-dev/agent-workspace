@@ -171,6 +171,7 @@ const WRITE_ROUTES: &[&str] = &[
     "PUT /api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
     "PUT /api/v1/projects/{id}/navigation",
     "POST /api/v1/projects/{id}/pages",
+    "POST /api/v1/projects/{id}/pages/import",
     "POST /api/v1/projects/{id}/restore",
     "POST /api/v1/projects/{id}/switch",
     "POST /api/v1/projects/{project_id}/agent-profiles",
@@ -4129,6 +4130,12 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             &[project()],
             json_body(json!({"title": "Net page", "body": "Net"})),
         ),
+        path_case(
+            "POST /api/v1/projects/{id}/pages/import",
+            &[project()],
+            |_| Payload::Bytes("text/markdown", b"# Net import\n\nNet".to_vec()),
+        )
+        .query("?name=net.md"),
         path_case("POST /api/v1/projects/{id}/switch", &[project()], |values| {
             Payload::Json(json!({"expectedVersion": navigation_version(&values[0])}))
         }),

@@ -7,6 +7,7 @@
 
 pub mod comments;
 pub mod discussion;
+pub mod docx;
 pub mod edits;
 pub mod http;
 pub mod markdown;
@@ -16,6 +17,8 @@ pub mod store;
 pub mod suggestions;
 #[cfg(test)]
 mod testing;
+pub mod transfer;
 pub mod tree;
 pub mod write;
 pub mod ydoc;
+pub mod zip;

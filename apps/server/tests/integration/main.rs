@@ -7,6 +7,7 @@ mod awd53_attribution;
 mod awd53_discussion;
 mod awd53_live_pages;
 mod awd53_page_blocks;
+mod awd53_transfer;
 mod awd76_workspace_templates;
 mod awd89_custom_fields;
 mod awd90_collections;

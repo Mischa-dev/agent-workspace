@@ -600,6 +600,11 @@ mod tests {
         ),
         (Patch, "/api/v1/threads/{id}", Tool("thread_update")),
         (Post, "/api/v1/projects/{id}/pages", Tool("page_write")),
+        (
+            Post,
+            "/api/v1/projects/{id}/pages/import",
+            Person("a file from the person's own computer; agents write the page with page_write"),
+        ),
         (Patch, "/api/v1/pages/{id}", Tool("page_write")),
         (
             Post,
