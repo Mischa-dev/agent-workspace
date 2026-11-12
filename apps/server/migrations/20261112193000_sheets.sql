@@ -13,6 +13,8 @@
 --   that last changed the input, so two people (or agents) editing different
 --   cells never conflict, and the same cell only when one of them read it
 --   before the other's change.
+-- * sheet_cleared_cells: where cells were cleared, and when, for the same
+--   conflict check.
 -- * sheet_revisions: every change, with who made it and the connected app
 --   they acted through (current_via_grant(), migration 0042).
 --
@@ -105,6 +107,18 @@ CREATE TABLE sheet_cells (
 );
 
 CREATE INDEX sheet_cells_sheet ON sheet_cells (sheet_id);
+
+-- Cells cleared since their tab's rows or columns last moved, with the
+-- revision that cleared them: an edit read before the clear is refused, as
+-- it would be for a cell that changed. A tab whose rows or columns move
+-- forgets its clears, since its structure_revision then refuses older edits.
+CREATE TABLE sheet_cleared_cells (
+    tab_id UUID NOT NULL REFERENCES sheet_tabs(id) ON DELETE CASCADE,
+    row_number INTEGER NOT NULL CHECK (row_number BETWEEN 1 AND 10000),
+    column_number INTEGER NOT NULL CHECK (column_number BETWEEN 1 AND 200),
+    revision BIGINT NOT NULL CHECK (revision > 0),
+    PRIMARY KEY (tab_id, row_number, column_number)
+);
 
 CREATE TABLE sheet_revisions (
     id UUID PRIMARY KEY,

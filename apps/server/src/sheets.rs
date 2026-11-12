@@ -693,6 +693,50 @@ struct WorkingTab {
     frozen_rows: i32,
     column_widths: serde_json::Map<String, Json>,
     settings_changed: bool,
+    /// Rows and columns this write inserted or deleted, in order.
+    moves: Vec<Move>,
+}
+
+/// Rows (or columns) inserted or deleted at `at`.
+#[derive(Clone, Copy, Debug)]
+struct Move {
+    rows: bool,
+    insert: bool,
+    at: i32,
+    count: i32,
+}
+
+impl WorkingTab {
+    /// Where a cell this write names was before its inserts and deletes,
+    /// or `None` for one an insert made.
+    fn original(&self, row: i32, column: i32) -> Option<(i32, i32)> {
+        let (mut row, mut column) = (row, column);
+        for step in self.moves.iter().rev() {
+            let place = if step.rows { &mut row } else { &mut column };
+            if step.insert {
+                if *place >= step.at + step.count {
+                    *place -= step.count;
+                } else if *place >= step.at {
+                    return None;
+                }
+            } else if *place >= step.at {
+                *place += step.count;
+            }
+        }
+        Some((row, column))
+    }
+}
+
+/// Two row keys are the same when their text is, or both are the same number.
+fn same_key(candidate: &str, wanted: &str) -> bool {
+    let candidate = candidate.trim().trim_start_matches('\'');
+    if candidate == wanted {
+        return true;
+    }
+    matches!(
+        (candidate.parse::<f64>(), wanted.parse::<f64>()),
+        (Ok(left), Ok(right)) if left == right
+    )
 }
 
 fn resolve_tab(tabs: &[WorkingTab], reference: &TabRef) -> Option<usize> {
@@ -840,6 +884,19 @@ pub async fn apply_with(
         .iter()
         .map(|cell| ((cell.tab_id, cell.row_number, cell.column_number), cell))
         .collect();
+    // Cells cleared since their tab's rows and columns last moved, and the
+    // revision that cleared each.
+    let cleared_at: HashMap<(Uuid, i32, i32), i64> = sqlx::query_as::<_, (Uuid, i32, i32, i64)>(
+        "SELECT cleared.tab_id, cleared.row_number, cleared.column_number, cleared.revision \
+             FROM sheet_cleared_cells cleared JOIN sheet_tabs tab ON tab.id = cleared.tab_id \
+             WHERE tab.sheet_id = $1",
+    )
+    .bind(sheet.id)
+    .fetch_all(&mut *connection)
+    .await?
+    .into_iter()
+    .map(|(tab, row, column, revision)| ((tab, row, column), revision))
+    .collect();
 
     let mut working = stored_tabs
         .iter()
@@ -852,6 +909,7 @@ pub async fn apply_with(
             frozen_rows: tab.frozen_rows,
             column_widths: tab.column_widths.as_object().cloned().unwrap_or_default(),
             settings_changed: false,
+            moves: Vec::new(),
         })
         .collect::<Vec<_>>();
     // Order kept apart from the engine's: moving a tab doesn't touch cells.
@@ -914,9 +972,29 @@ pub async fn apply_with(
                             ),
                         )));
                     }
-                    if !working_tab.structure_changed
-                        && let Some(id) = working_tab.id
-                        && let Some(stored) = stored_at.get(&(id, *row, *column))
+                    // The cell where it was before this write's own inserts
+                    // and deletes; one an insert made is new.
+                    let before = working_tab
+                        .id
+                        .zip(working_tab.original(*row, *column))
+                        .map(|(id, (row, column))| (id, row, column));
+                    if let Some(at) = before
+                        && let Some(cleared) = cleared_at.get(&at)
+                        && *cleared > *read_at
+                    {
+                        return Ok(Err(problem(
+                            index,
+                            ProblemKind::Conflict,
+                            format!(
+                                "{}{} in \"{}\" was cleared at revision {cleared}, after revision {read_at}. Read it again and retry.",
+                                column_name(*column),
+                                row,
+                                working_tab.name,
+                            ),
+                        )));
+                    }
+                    if let Some(at) = before
+                        && let Some(stored) = stored_at.get(&at)
                         && stored.revision > *read_at
                     {
                         return Ok(Err(problem(
@@ -1071,24 +1149,54 @@ pub async fn apply_with(
                     }
                     None => None,
                 };
+                // What this write already set in the tab, over what's stored.
+                let mut pending: BTreeMap<(i32, i32), &str> = BTreeMap::new();
+                for (_, operation) in &operations {
+                    if let Operation::Set {
+                        tab: set_tab,
+                        row,
+                        column,
+                        input,
+                    } = operation
+                        && *set_tab == tab
+                    {
+                        pending.insert((*row, *column), input.as_str());
+                    }
+                }
                 let found = key.as_ref().and_then(|(column, key_input)| {
                     let wanted = key_input.trim().trim_start_matches('\'');
-                    tab_cells
+                    let stored = tab_cells
                         .iter()
                         .filter(|cell| cell.row_number > 1 && cell.column_number == *column)
-                        .find(|cell| {
-                            text_of(&cell.value()).trim() == wanted || cell.input.trim() == wanted
+                        .filter(|cell| !pending.contains_key(&(cell.row_number, *column)))
+                        .filter(|cell| {
+                            same_key(&text_of(&cell.value()), wanted)
+                                || same_key(&cell.input, wanted)
                         })
-                        .map(|cell| cell.row_number)
+                        .map(|cell| cell.row_number);
+                    let set = pending
+                        .iter()
+                        .filter(|((row, set_column), input)| {
+                            *row > 1 && set_column == column && same_key(input, wanted)
+                        })
+                        .map(|((row, _), _)| *row);
+                    stored.chain(set).min()
                 });
                 let row = match found {
                     Some(row) => row,
                     None => {
+                        let last_set = pending
+                            .iter()
+                            .filter(|(_, input)| !input.is_empty())
+                            .map(|((row, _), _)| *row)
+                            .max()
+                            .unwrap_or(0);
                         let last_stored = tab_cells
                             .iter()
                             .map(|cell| cell.row_number)
                             .max()
                             .unwrap_or(0)
+                            .max(last_set)
                             .max(1);
                         let next = appended
                             .get(&tab)
@@ -1118,6 +1226,12 @@ pub async fn apply_with(
                 check!(check_row(index, *row));
                 check!(check_count(index, *count, MAX_ROWS));
                 working[tab].structure_changed = true;
+                working[tab].moves.push(Move {
+                    rows: true,
+                    insert: matches!(change, Change::InsertRows { .. }),
+                    at: *row,
+                    count: *count,
+                });
                 operations.push((
                     index,
                     if matches!(change, Change::InsertRows { .. }) {
@@ -1141,6 +1255,12 @@ pub async fn apply_with(
                 check!(check_column(index, *column));
                 check!(check_count(index, *count, MAX_COLUMNS));
                 working[tab].structure_changed = true;
+                working[tab].moves.push(Move {
+                    rows: false,
+                    insert: matches!(change, Change::InsertColumns { .. }),
+                    at: *column,
+                    count: *count,
+                });
                 operations.push((
                     index,
                     if matches!(change, Change::InsertColumns { .. }) {
@@ -1192,6 +1312,7 @@ pub async fn apply_with(
                     frozen_rows: 1,
                     column_widths: serde_json::Map::new(),
                     settings_changed: false,
+                    moves: Vec::new(),
                 });
                 operations.push((index, Operation::AddTab { name }));
             }
@@ -1399,6 +1520,19 @@ pub async fn apply_with(
             .execute(&mut *connection)
             .await?;
     }
+    // Renamed tabs take a stand-in name first, so renames that swap or
+    // chain names (B to C, then A to B) never meet a name not yet freed.
+    for tab in working.iter().filter(|tab| tab.renamed) {
+        if let Some(id) = tab.id {
+            let simple = id.simple().to_string();
+            sqlx::query("UPDATE sheet_tabs SET name = $3 WHERE sheet_id = $1 AND id = $2")
+                .bind(sheet.id)
+                .bind(id)
+                .bind(format!("~{}", &simple[simple.len() - 24..]))
+                .execute(&mut *connection)
+                .await?;
+        }
+    }
     // Final order: working order, then the moves in turn.
     let mut order = ids.clone();
     for (_, id, position) in &moves {
@@ -1423,8 +1557,9 @@ pub async fn apply_with(
                 tabs_changed = true;
                 sqlx::query(
                     "INSERT INTO sheet_tabs \
-                       (id, project_id, sheet_id, name, position, structure_revision, frozen_rows) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                       (id, project_id, sheet_id, name, position, structure_revision, frozen_rows, \
+                        column_widths) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
                 )
                 .bind(id)
                 .bind(sheet.project_id)
@@ -1433,6 +1568,7 @@ pub async fn apply_with(
                 .bind(position)
                 .bind(revision)
                 .bind(tab.frozen_rows)
+                .bind(Json::Object(tab.column_widths.clone()))
                 .execute(&mut *connection)
                 .await?;
             }
@@ -1587,6 +1723,58 @@ pub async fn apply_with(
             .bind(&upsert_kinds)
             .bind(&upsert_values)
             .bind(&upsert_revisions)
+            .execute(&mut *connection)
+            .await?;
+        }
+        // Clears are remembered, so an edit read before one is refused like
+        // any other. A tab whose rows or columns moved forgets them: its new
+        // structure revision refuses older edits anyway.
+        let moved_tabs = working
+            .iter()
+            .zip(&ids)
+            .filter(|(tab, _)| tab.id.is_some() && tab.structure_changed)
+            .map(|(_, id)| *id)
+            .collect::<Vec<_>>();
+        if !moved_tabs.is_empty() {
+            sqlx::query("DELETE FROM sheet_cleared_cells WHERE tab_id = ANY($1)")
+                .bind(&moved_tabs)
+                .execute(&mut *connection)
+                .await?;
+        }
+        let mut clear_tabs = Vec::new();
+        let mut clear_rows = Vec::new();
+        let mut clear_columns = Vec::new();
+        for ((tab, row), column) in delete_tabs.iter().zip(&delete_rows).zip(&delete_columns) {
+            if !moved_tabs.contains(tab) {
+                clear_tabs.push(*tab);
+                clear_rows.push(*row);
+                clear_columns.push(*column);
+            }
+        }
+        if !clear_tabs.is_empty() {
+            sqlx::query(
+                "INSERT INTO sheet_cleared_cells (tab_id, row_number, column_number, revision) \
+                 SELECT gone.tab_id, gone.row_number, gone.column_number, $4 \
+                 FROM UNNEST($1::uuid[], $2::int[], $3::int[]) AS gone(tab_id, row_number, column_number) \
+                 ON CONFLICT (tab_id, row_number, column_number) DO UPDATE SET revision = EXCLUDED.revision",
+            )
+            .bind(&clear_tabs)
+            .bind(&clear_rows)
+            .bind(&clear_columns)
+            .bind(revision)
+            .execute(&mut *connection)
+            .await?;
+        }
+        if !upsert_tabs.is_empty() {
+            sqlx::query(
+                "DELETE FROM sheet_cleared_cells cleared \
+                 USING UNNEST($1::uuid[], $2::int[], $3::int[]) AS filled(tab_id, row_number, column_number) \
+                 WHERE cleared.tab_id = filled.tab_id AND cleared.row_number = filled.row_number \
+                   AND cleared.column_number = filled.column_number",
+            )
+            .bind(&upsert_tabs)
+            .bind(&upsert_rows)
+            .bind(&upsert_columns)
             .execute(&mut *connection)
             .await?;
         }

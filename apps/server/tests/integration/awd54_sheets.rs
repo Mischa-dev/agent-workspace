@@ -380,3 +380,147 @@ async fn people_and_agents_build_and_edit_a_sheet_without_losing_each_others_cel
     );
     assert!(listed["value"]["sheets"][0]["cells"].as_i64().unwrap_or(0) > 10);
 }
+
+#[tokio::test]
+async fn clears_inserts_row_keys_renames_and_retries_hold_up() {
+    let Some(setup) = setup("awd54_sheet_edges").await else {
+        return;
+    };
+    let app = &setup.app;
+    create_project(&setup, "EDGE", "Edges").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+    let revision_of = |result: &Value| result["value"]["revision"].as_i64().expect("revision");
+    let made = call(
+        "sheet_write",
+        json!({
+            "projectId": "EDGE",
+            "name": "Log",
+            "cells": [
+                {"cell": "A1", "input": "ID"},
+                {"cell": "B1", "input": "Note"},
+                {"cell": "A2", "input": "1"},
+                {"cell": "B2", "input": "first"},
+                {"cell": "C2", "input": "keep"},
+            ],
+            "clientRequestId": "edge-1",
+        }),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let read_at = revision_of(&made);
+
+    // A clear is a change: an edit read before it is refused.
+    let cleared = call(
+        "sheet_write",
+        json!({"projectId": "EDGE", "sheet": "Log", "cells": [{"cell": "C2", "input": "", "ifRevision": read_at}], "clientRequestId": "edge-2"}),
+    )
+    .await;
+    assert_eq!(cleared["outcome"], "ok", "{cleared}");
+    let stale = call(
+        "sheet_write",
+        json!({"projectId": "EDGE", "sheet": "Log", "cells": [{"cell": "C2", "input": "back", "ifRevision": read_at}], "clientRequestId": "edge-3"}),
+    )
+    .await;
+    assert_eq!(stale["outcome"], "conflict", "{stale}");
+
+    // A row inserted far below in the same write doesn't hide a newer B2.
+    let newer = call(
+        "sheet_write",
+        json!({"projectId": "EDGE", "sheet": "Log", "cells": [{"cell": "B2", "input": "second"}], "clientRequestId": "edge-4"}),
+    )
+    .await;
+    assert_eq!(newer["outcome"], "ok", "{newer}");
+    let hidden = call(
+        "sheet_write",
+        json!({
+            "projectId": "EDGE",
+            "sheet": "Log",
+            "tabs": [{"tab": "Sheet1", "insertRowsAt": 100, "count": 1}],
+            "cells": [{"cell": "B2", "input": "stale", "ifRevision": read_at}],
+            "clientRequestId": "edge-5",
+        }),
+    )
+    .await;
+    assert_eq!(hidden["outcome"], "conflict", "{hidden}");
+
+    // Rows by key see what this write set first, and 1.0 is the key 1.
+    let keyed = call(
+        "sheet_write",
+        json!({
+            "projectId": "EDGE",
+            "sheet": "Log",
+            "cells": [{"cell": "A3", "input": "2"}, {"cell": "B3", "input": "by cell"}],
+            "rows": [
+                {"keyColumn": "ID", "values": {"ID": 1.0, "Note": "by key"}},
+                {"keyColumn": "ID", "values": {"ID": "3", "Note": "new"}},
+                {"keyColumn": "ID", "values": {"ID": "3", "Note": "newer"}},
+            ],
+            "clientRequestId": "edge-6",
+        }),
+    )
+    .await;
+    assert_eq!(keyed["outcome"], "ok", "{keyed}");
+    let read = call(
+        "sheet_read",
+        json!({"projectId": "EDGE", "sheet": "Log", "range": "A1:B6"}),
+    )
+    .await;
+    assert_eq!(value_at(&read, "B2"), json!("by key"));
+    assert_eq!(value_at(&read, "B3"), json!("by cell"));
+    assert_eq!(value_at(&read, "A4"), json!(3.0));
+    assert_eq!(value_at(&read, "B4"), json!("newer"));
+    assert_eq!(value_at(&read, "A5"), Value::Null);
+
+    // A new tab keeps its widths, and chained renames land.
+    let tabs = call(
+        "sheet_write",
+        json!({
+            "projectId": "EDGE",
+            "sheet": "Log",
+            "tabs": [{"add": "B", "columnWidths": {"A": 180}}, {"add": "C"}],
+            "clientRequestId": "edge-7",
+        }),
+    )
+    .await;
+    assert_eq!(tabs["outcome"], "ok", "{tabs}");
+    let renamed = call(
+        "sheet_write",
+        json!({
+            "projectId": "EDGE",
+            "sheet": "Log",
+            "tabs": [{"tab": "C", "rename": "D"}, {"tab": "B", "rename": "C"}, {"tab": "Sheet1", "rename": "B"}],
+            "clientRequestId": "edge-8",
+        }),
+    )
+    .await;
+    assert_eq!(renamed["outcome"], "ok", "{renamed}");
+    let names = sqlx::query_as::<_, (String, Value)>(
+        "SELECT tab.name, tab.column_widths FROM sheet_tabs tab JOIN sheets sheet ON sheet.id = tab.sheet_id \
+         WHERE sheet.name = 'Log' ORDER BY tab.position",
+    )
+    .fetch_all(&setup.pool)
+    .await
+    .expect("tabs");
+    assert_eq!(
+        names
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        ["B", "C", "D"]
+    );
+    assert_eq!(names[1].1, json!({"1": 180}));
+
+    // A retry of a rename by the old name gets its first answer back.
+    let rename = json!({"projectId": "EDGE", "sheet": "Log", "name": "Journal", "clientRequestId": "edge-9"});
+    let first = call("sheet_write", rename.clone()).await;
+    assert_eq!(first["outcome"], "ok", "{first}");
+    let retry = call("sheet_write", rename).await;
+    assert_eq!(retry["value"]["idempotentReplay"], true, "{retry}");
+    assert_eq!(retry["value"]["name"], "Journal");
+}

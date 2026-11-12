@@ -1014,14 +1014,9 @@ pub(super) async fn sheet_write(
             Ok(transaction) => transaction,
             Err(refusal) => return Ok(refusal),
         };
-        let scope_id = match &arguments.sheet {
-            Some(reference) => match find_sheet(&mut transaction, project_id, reference).await? {
-                Ok(sheet) => sheet.id,
-                Err(refusal) => return Ok(refusal),
-            },
-            None => project_id,
-        };
-        let scope = resource_bound_scope("mcp_sheets", scope_id, "sheet_write")?;
+        // Bound to the project, not the sheet: a retry finds its first answer
+        // even after that write renamed the sheet it named.
+        let scope = resource_bound_scope("mcp_sheets", project_id, "sheet_write")?;
         let request_hash = RequestHash::for_value(&arguments)?;
         let reservation = match reserve(
             &mut transaction,
@@ -1084,8 +1079,12 @@ pub(super) async fn sheet_write(
                     }
                 }
             }
-            Some(_) => {
-                let Some(sheet) = sheets::lock(&mut transaction, project_id, scope_id).await?
+            Some(reference) => {
+                let sheet_id = match find_sheet(&mut transaction, project_id, reference).await? {
+                    Ok(sheet) => sheet.id,
+                    Err(refusal) => return Ok(refusal),
+                };
+                let Some(sheet) = sheets::lock(&mut transaction, project_id, sheet_id).await?
                 else {
                     return Ok(ToolResult::not_found("That sheet"));
                 };
