@@ -53,7 +53,7 @@ export type PageDiscussionProps = {
 
 function When({ at }: { at: string }) {
   return (
-    <time className="aw-activity__time" dateTime={at} title={formatFullDate(at)}>
+    <time className="aw-discussion__via" dateTime={at} title={formatFullDate(at)}>
       {formatRelative(at)}
     </time>
   )
@@ -235,8 +235,8 @@ function SuggestionCard({
   return (
     <li className="aw-discussion__item aw-discussion__suggestion" id={`suggestion-${suggestion.id}`}>
       <Avatar kind={kind} name={name} seed={suggestion.authorId} size={28} />
-      <div className="aw-activity__body">
-        <p className="aw-activity__line">
+      <div className="aw-discussion__commentbody">
+        <p className="aw-discussion__line">
           <strong>{name}</strong>
           <ActorTag kind={kind} />
           <span>suggested {suggestion.edits.length === 1 ? 'a change' : `${suggestion.edits.length} changes`}</span>
@@ -485,12 +485,12 @@ function Comment({
     <li className="aw-discussion__comment">
       <Avatar kind={kind} name={name} seed={comment.authorId} size={24} />
       <div className="aw-discussion__commentbody">
-        <p className="aw-activity__line">
+        <p className="aw-discussion__line">
           <strong>{name}</strong>
           <ActorTag kind={kind} />
-          {comment.via ? <span className="aw-activity__via">via {comment.via}</span> : null}
+          {comment.via ? <span className="aw-discussion__via">via {comment.via}</span> : null}
           <When at={comment.createdAt} />
-          {comment.editedAt ? <span className="aw-activity__via">edited</span> : null}
+          {comment.editedAt ? <span className="aw-discussion__via">edited</span> : null}
           {actions.length > 0 && !editing ? (
             <span className="aw-discussion__menu">
               <Menu items={actions} label="Comment actions" placement="bottom-end" trigger={<IconButton icon="more" label="Comment actions" size="sm" />} />

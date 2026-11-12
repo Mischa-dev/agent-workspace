@@ -191,3 +191,23 @@
   padding-left: var(--space-4);
   font: var(--t-small);
 }
+
+.aw-discussion__line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1-5);
+  margin: 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-discussion__line strong {
+  color: var(--content-fg);
+  font-weight: var(--weight-bold);
+}
+
+.aw-discussion__via {
+  font: var(--t-caption);
+  color: var(--content-fg-muted);
+}
