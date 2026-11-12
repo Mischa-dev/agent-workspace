@@ -484,6 +484,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "thread_start",
     "thread_update",
     "usage_batch_launch",
+    "view_write",
     "webhook_write",
     "whiteboard_create",
     "whiteboard_duplicate",
@@ -6134,6 +6135,21 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": {"Build": b.task}}]}),
             json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": {"Spec": b.page}}]}),
             json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": keyed(b.collection_field, json!("Net"))}]}),
+        ]),
+        mcp_case(
+            "view_write",
+            json!({"projectId": a.project, "name": "Net mcp view", "query": {"assigneeActorId": "me"}, "pinned": true}),
+            vec![
+                json!({"projectId": b.project, "name": "Net mcp view"}),
+                json!({"projectId": b.project, "view": bx.view, "name": "Net"}),
+                json!({"projectId": a.project, "view": bx.view, "name": "Net"}),
+                json!({"projectId": a.project, "view": bx.view, "pinned": true}),
+                json!({"projectId": a.project, "view": bx.view, "delete": true}),
+            ],
+        )
+        .rejecting(vec![
+            json!({"projectId": a.project, "name": "Net", "query": {"milestoneId": bx.milestone}}),
+            json!({"projectId": a.project, "name": "Net", "query": {"labelIds": bx.label}}),
         ]),
         mcp_case(
             "label_write",

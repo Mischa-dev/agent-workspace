@@ -39,6 +39,7 @@
     "field_list": "query",
     "field_write": "change",
     "view_list": "query",
+    "view_write": "change",
     "my_work": "query",
     "template_list": "query",
     "milestone_list": "query",

@@ -701,3 +701,174 @@ async fn an_agent_stops_its_run_and_only_people_start_it_again() {
 
     f.close().await;
 }
+
+/// AWD-111: an agent keeps views of its own, shares one with the project,
+/// and can't see or change a person's own views.
+#[tokio::test]
+async fn an_agent_saves_shares_and_deletes_task_views() {
+    let Some(f) = fixture().await else {
+        return;
+    };
+    let project = f.seed.project_id.to_string();
+    let views_uri = format!("/api/v1/projects/{project}/views");
+    let names = |listed: &Value| -> Vec<String> {
+        listed["views"]
+            .as_array()
+            .expect("views")
+            .iter()
+            .map(|view| view["name"].as_str().unwrap_or_default().to_owned())
+            .collect()
+    };
+
+    // A view of the agent's own: the person doesn't see it.
+    let mine = f
+        .call(
+            "view_write",
+            json!({"projectId": project, "name": "My open work", "query": {"assigneeActorId": "me", "includeDone": "false"}, "pinned": true}),
+        )
+        .await;
+    assert_eq!(mine["value"]["created"], true, "{mine}");
+    assert_eq!(mine["value"]["view"]["shared"], false, "{mine}");
+    assert_eq!(mine["value"]["view"]["pinned"], true, "{mine}");
+    let mine_id = string(&mine, "/value/view/id");
+    assert_eq!(
+        f.author(
+            "SELECT owner_actor_id FROM saved_views WHERE id = $1",
+            &mine_id
+        )
+        .await,
+        f.agent
+    );
+    let listed = f.web("GET", &views_uri, Value::Null).await;
+    assert!(!names(&listed).contains(&"My open work".to_owned()));
+    // The same name again is a conflict, so a retried call makes no copy.
+    let again = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "view_write",
+        json!({"projectId": project, "name": "my open work"}),
+    )
+    .await;
+    assert_eq!(again["outcome"], "conflict", "{again}");
+    // task_list reads it.
+    f.call(
+        "task_list",
+        json!({"projectId": project, "view": "My open work"}),
+    )
+    .await;
+
+    // Shared, it shows for the person, without the agent's pin.
+    let shared = f
+        .call(
+            "view_write",
+            json!({"projectId": project, "view": "My open work", "name": "Planner's queue", "shared": true, "layout": "board", "expectedVersion": mine["value"]["view"]["version"]}),
+        )
+        .await;
+    assert_eq!(shared["value"]["view"]["shared"], true, "{shared}");
+    assert_eq!(shared["value"]["view"]["layout"], "board", "{shared}");
+    let listed = f.web("GET", &views_uri, Value::Null).await;
+    let seen = listed["views"]
+        .as_array()
+        .expect("views")
+        .iter()
+        .find(|view| view["name"] == "Planner's queue")
+        .unwrap_or_else(|| panic!("shared view: {listed}"))
+        .clone();
+    assert_eq!(seen["pinned"], false, "{seen}");
+    // An old version is a conflict.
+    let stale = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "view_write",
+        json!({"projectId": project, "view": mine_id, "name": "Stale", "expectedVersion": mine["value"]["view"]["version"]}),
+    )
+    .await;
+    assert_eq!(stale["outcome"], "conflict", "{stale}");
+
+    // The person's own view stays theirs: the agent can't find it.
+    let private = f
+        .web(
+            "POST",
+            &views_uri,
+            json!({"name": "Owner's private", "query": {"priority": "urgent"}}),
+        )
+        .await;
+    let private_id = private["id"].as_str().expect("view id").to_owned();
+    for arguments in [
+        json!({"projectId": project, "view": private_id, "name": "Taken"}),
+        json!({"projectId": project, "view": "Owner's private", "pinned": true}),
+        json!({"projectId": project, "view": private_id, "delete": true}),
+    ] {
+        let refused = tool(&f.app, &f.token, &f.session, "view_write", arguments).await;
+        assert_eq!(refused["outcome"], "not_found", "{refused}");
+    }
+    let listed = f.web("GET", &views_uri, Value::Null).await;
+    assert!(names(&listed).contains(&"Owner's private".to_owned()));
+
+    // Two views the agent can see with one name: a new one by that name is
+    // still a conflict, and the name alone picks neither.
+    f.call("view_write", json!({"projectId": project, "name": "Twins"}))
+        .await;
+    f.web("POST", &views_uri, json!({"name": "Twins", "shared": true}))
+        .await;
+    for (arguments, outcome) in [
+        (json!({"projectId": project, "name": "Twins"}), "conflict"),
+        (
+            json!({"projectId": project, "view": "Twins", "layout": "board"}),
+            "not_found",
+        ),
+    ] {
+        let refused = tool(&f.app, &f.token, &f.session, "view_write", arguments).await;
+        assert_eq!(refused["outcome"], outcome, "{refused}");
+    }
+    let twins = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM saved_views WHERE project_id = $1 AND name = 'Twins'",
+    )
+    .bind(f.seed.project_id)
+    .fetch_one(&f.pool)
+    .await
+    .expect("twins");
+    assert_eq!(twins, 2);
+
+    // A query that names something outside the project is refused.
+    let foreign = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "view_write",
+        json!({"projectId": project, "name": "Elsewhere", "query": {"milestoneId": Uuid::now_v7().to_string()}}),
+    )
+    .await;
+    assert_eq!(foreign["outcome"], "invalid_request", "{foreign}");
+
+    // Built-ins can be unpinned but not deleted; the shared view can go.
+    let builtin = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "view_write",
+        json!({"projectId": project, "view": "blocked", "delete": true}),
+    )
+    .await;
+    assert_eq!(builtin["outcome"], "conflict", "{builtin}");
+    let unpinned = f
+        .call(
+            "view_write",
+            json!({"projectId": project, "view": "blocked", "pinned": false}),
+        )
+        .await;
+    assert_eq!(unpinned["value"]["view"]["pinned"], false, "{unpinned}");
+    let deleted = f
+        .call(
+            "view_write",
+            json!({"projectId": project, "view": "Planner's queue", "delete": true}),
+        )
+        .await;
+    assert_eq!(deleted["value"]["deleted"], true, "{deleted}");
+    let listed = f.web("GET", &views_uri, Value::Null).await;
+    assert!(!names(&listed).contains(&"Planner's queue".to_owned()));
+
+    f.close().await;
+}

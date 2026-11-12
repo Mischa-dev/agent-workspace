@@ -135,6 +135,7 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("approval_list", None),
     ("task_depend", Some(TasksEdit)),
     ("view_list", Some(TasksView)),
+    ("view_write", Some(TasksView)),
     ("my_work", None),
     ("template_list", None),
     ("task_from_template", Some(TasksCreate)),
