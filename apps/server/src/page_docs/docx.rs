@@ -1080,7 +1080,8 @@ impl Reader<'_> {
             Inline::Text { text, .. } => text.trim().is_empty(),
             Inline::HardBreak => true,
         });
-        if blank {
+        // An empty list item still counts, so the items after keep their numbers.
+        if blank && (numbering.is_none() || kind != Kind::Normal) {
             if rule_below && kind != Kind::Code {
                 self.flat
                     .push(Flat::Block(Block::new(Node::HorizontalRule)));
@@ -1618,6 +1619,13 @@ mod tests {
     #[test]
     fn paragraphs_inside_list_items_stay_inside() {
         let markdown = "1. First\n\n   Explanation belonging to first.\n\n   - Under first\n\n     More under it.\n\n   Back in first.\n\n2. Second\n\n- [ ] Box\n\n  Box note.\n\nAfter the lists.";
+        let (imported, written) = round_trip(markdown);
+        assert_eq!(imported.blocks, from_markdown(markdown), "{written}");
+    }
+
+    #[test]
+    fn an_empty_numbered_item_keeps_its_place() {
+        let markdown = "1. one\n2.\n3. three";
         let (imported, written) = round_trip(markdown);
         assert_eq!(imported.blocks, from_markdown(markdown), "{written}");
     }
