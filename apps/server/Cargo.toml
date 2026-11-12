@@ -15,7 +15,9 @@ base64 = "0.22.1"
 command-fds = { version = "0.3.3", features = ["tokio"] }
 codex-bridge-spike = { version = "0.0.1", path = "../../tools/codex-bridge-spike" }
 chrono = "0.4.45"
+crc32fast = "1.5.2"
 dotenvy = "0.15.7"
+flate2 = "1.1.10"
 fs2 = "0.4.3"
 futures-util = "0.3.33"
 hex = "0.4.3"
@@ -27,6 +29,7 @@ rand_core = { version = "0.6.4", features = ["getrandom"] }
 reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls"] }
 resvg = { version = "0.48.1", default-features = false, features = ["text", "raster-images"] }
 rmcp = { version = "=3.9.0", features = ["transport-streamable-http-server"] }
+roxmltree = "0.21.1"
 rpassword = "7.4.0"
 rustix = { version = "1.1.4", features = ["fs", "process"] }
 secrecy = "0.10.3"

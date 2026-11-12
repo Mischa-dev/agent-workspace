@@ -278,6 +278,13 @@
       "default": true
     },
     {
+      "id": "page.import_export",
+      "group": "pages",
+      "label": "Import and download",
+      "description": "Downloading a page as Markdown or a Word document, and making a page from one.",
+      "default": true
+    },
+    {
       "id": "tech.task_keys",
       "group": "technical",
       "label": "Task keys",
@@ -379,6 +386,7 @@
         "talk.replies",
         "page.live_editing",
         "page.comments",
+        "page.import_export",
         "workspace.my_work",
         "workspace.later"
       ],
@@ -409,6 +417,7 @@
         "talk.replies",
         "page.live_editing",
         "page.comments",
+        "page.import_export",
         "workspace.my_work",
         "workspace.later"
       ],
@@ -482,6 +491,7 @@
         "talk.replies",
         "page.live_editing",
         "page.comments",
+        "page.import_export",
         "workspace.my_work",
         "workspace.later"
       ],
@@ -516,6 +526,7 @@
         "talk.replies",
         "page.live_editing",
         "page.comments",
+        "page.import_export",
         "home.working_now",
         "workspace.my_work",
         "workspace.later",
@@ -547,6 +558,7 @@
         "talk.replies",
         "page.live_editing",
         "page.comments",
+        "page.import_export",
         "workspace.my_work",
         "workspace.later"
       ],
@@ -582,6 +594,7 @@
         "talk.replies",
         "page.live_editing",
         "page.comments",
+        "page.import_export",
         "workspace.my_work",
         "workspace.later"
       ],
@@ -611,6 +624,7 @@
         "talk.replies",
         "page.live_editing",
         "page.comments",
+        "page.import_export",
         "workspace.my_work",
         "workspace.later"
       ],
@@ -646,6 +660,7 @@
         "talk.replies",
         "page.live_editing",
         "page.comments",
+        "page.import_export",
         "tech.task_keys",
         "workspace.my_work",
         "workspace.later"
@@ -689,6 +704,7 @@
         "talk.replies",
         "page.live_editing",
         "page.comments",
+        "page.import_export",
         "tech.task_keys",
         "workspace.my_work"
       ]
@@ -712,6 +728,7 @@
         "talk.replies",
         "page.live_editing",
         "page.comments",
+        "page.import_export",
         "workspace.my_work"
       ]
     },

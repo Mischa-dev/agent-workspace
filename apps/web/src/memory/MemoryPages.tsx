@@ -51,9 +51,11 @@ import {
   updatePage,
   type Decision,
   type Page,
+  type PageRevision,
 } from './api'
 import { discussionKey, getDiscussion, type CommentAnchor } from './discussion/api'
 import { PageEmbed } from './embeds/PageEmbed'
+import { PageDownloadMenu, PageImportButton } from './PageTransfer'
 import type { LiveDiscussion } from './live/LivePage'
 import './memory.css'
 
@@ -131,14 +133,18 @@ function PagesList({ projectId }: { projectId: string }) {
   const base = pagesHref(projectId)
   const hasGuide = Boolean(pages.data?.pages.some((page) => page.isGuide))
   const canEdit = Boolean(pages.data?.canEdit)
+  const transfers = useProjectExperience(projectId).shows('page.import_export')
   return (
     <>
       <PageHeader
         actions={
           canEdit ? (
-            <Button icon="plus" onClick={() => setCreating({ title: '' })} variant="primary">
-              New page
-            </Button>
+            <>
+              {transfers ? <PageImportButton pagesHref={base} projectId={projectId} /> : null}
+              <Button icon="plus" onClick={() => setCreating({ title: '' })} variant="primary">
+                New page
+              </Button>
+            </>
           ) : null
         }
         icon="list"
@@ -374,17 +380,22 @@ function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
       <RememberPlace location={{ kind: 'page', pageId }} project={project} />
       <PageHeader
         actions={
-          canEdit && !editing ? (
-            live ? (
-              <Button icon="settings" onClick={() => setEditing(true)}>
-                Edit details
-              </Button>
-            ) : (
-              <Button icon="pencil" onClick={() => setEditing(true)} variant="primary">
-                Edit
-              </Button>
-            )
-          ) : null
+          editing ? null : (
+            <>
+              {experience.shows('page.import_export') ? <PageDownloadMenu pageId={pageId} /> : null}
+              {canEdit ? (
+                live ? (
+                  <Button icon="settings" onClick={() => setEditing(true)}>
+                    Edit details
+                  </Button>
+                ) : (
+                  <Button icon="pencil" onClick={() => setEditing(true)} variant="primary">
+                    Edit
+                  </Button>
+                )
+              ) : null}
+            </>
+          )
         }
         icon="list"
         title={current.title}
@@ -488,6 +499,7 @@ function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
                   </time>
                   {revision.author ? ` · ${revision.author}` : ''}
                   {revision.via ? ` via ${revision.via}` : ''}
+                  <RevisionSession projectId={projectId} revision={revision} />
                 </span>
               }
               title={`Version ${revision.version}${revision.note ? `: ${revision.note}` : ''}`}
@@ -814,5 +826,38 @@ function RecordDecisionDialog({ onClose, projectId }: { onClose: () => void; pro
       <TextField label="What was decided" maxLength={300} onChange={(event) => setTitle(event.target.value)} value={title} />
       <MarkdownEditor label="Why (optional)" onChange={setDetail} rows={4} value={detail} />
     </Dialog>
+  )
+}
+
+/** "claude_code" → "Claude Code". */
+const harnessName = (kind: string) =>
+  kind
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toLocaleUpperCase() + word.slice(1))
+    .join(' ')
+
+/** Which agent session wrote a version (AWD-53): its run, or the thread or channel it works in. */
+function RevisionSession({ projectId, revision }: { projectId: string; revision: PageRevision }) {
+  if (!revision.sessionHarness) return null
+  const name = harnessName(revision.sessionHarness)
+  const conversation = revision.sessionConversationId
+  const where =
+    conversation && revision.sessionConversationKind === 'channel'
+      ? { href: `/projects/${encodeURIComponent(projectId)}/channels/${encodeURIComponent(conversation)}`, label: `#${revision.sessionConversationName ?? 'channel'}` }
+      : conversation && revision.sessionConversationKind === 'thread'
+        ? { href: `/projects/${encodeURIComponent(projectId)}/threads/${encodeURIComponent(conversation)}`, label: revision.sessionConversationName ?? 'a thread' }
+        : null
+  return (
+    <>
+      {' · '}
+      {revision.sessionRunId ? <Link to={`/runs/${encodeURIComponent(revision.sessionRunId)}`}>{`${name} run`}</Link> : `${name} session`}
+      {where ? (
+        <>
+          {' in '}
+          <Link to={where.href}>{where.label}</Link>
+        </>
+      ) : null}
+    </>
   )
 }

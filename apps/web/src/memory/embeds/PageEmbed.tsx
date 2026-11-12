@@ -6,6 +6,9 @@ import { embedTarget } from './embedModel'
 import './embeds.css'
 
 const CollectionEmbed = lazy(() => import('../../collections/CollectionEmbed'))
+// Anything else a module's manifest embeds (a task, a task list, a
+// whiteboard), or a link to it.
+const ModuleEmbed = lazy(() => import('./ModuleEmbed'))
 
 /**
  * Something of the app's shown live in a page (an embed block): a
@@ -20,10 +23,16 @@ export function PageEmbed({ framed = true, href, label }: { framed?: boolean; hr
         <CollectionEmbed collectionId={target.collectionId} label={label} projectId={target.projectId} viewId={target.viewId} />
       </Suspense>
     ) : (
-      <Link className="aw-embed__link" to={href}>
-        <Icon name="link" size={16} />
-        <span>{label || href}</span>
-      </Link>
+      <Suspense
+        fallback={
+          <Link className="aw-embed__link" to={href}>
+            <Icon name="link" size={16} />
+            <span>{label || href}</span>
+          </Link>
+        }
+      >
+        <ModuleEmbed href={href} label={label} />
+      </Suspense>
     )
   return framed ? <div className="aw-embed">{content}</div> : content
 }

@@ -149,10 +149,11 @@ function isListKey(key: readonly unknown[]) {
 
 /**
  * The task list page's views: pages of the list, its groups, the board, and
- * the label and milestone task counts. Their sorts, groups, totals and manual
- * board order are computed by the server, so they refetch rather than patch.
+ * the label and milestone task counts, and task lists embedded in pages.
+ * Their sorts, groups, totals and manual board order are computed by the
+ * server, so they refetch rather than patch.
  */
-const SERVER_ORDERED_VIEWS = new Set(['pages', 'groups', 'board', 'labels', 'milestones'])
+const SERVER_ORDERED_VIEWS = new Set(['pages', 'groups', 'board', 'labels', 'milestones', 'embed'])
 
 function isServerOrderedKey(key: readonly unknown[]) {
   return key[2] === 'work-items' && SERVER_ORDERED_VIEWS.has(key[3] as string)

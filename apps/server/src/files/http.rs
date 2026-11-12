@@ -304,7 +304,7 @@ pub(crate) async fn serve(
 
 /// `inline` or `attachment`, with the name as an RFC 6266 `filename*` and
 /// an ASCII fallback.
-fn content_disposition(name: &str, download: bool) -> String {
+pub(crate) fn content_disposition(name: &str, download: bool) -> String {
     let fallback = name
         .chars()
         .map(|character| {
@@ -331,7 +331,7 @@ fn declared_type(headers: &HeaderMap) -> Option<String> {
         .map(str::to_owned)
 }
 
-async fn read_body(body: Body, limit: usize) -> Result<Vec<u8>, AppError> {
+pub(crate) async fn read_body(body: Body, limit: usize) -> Result<Vec<u8>, AppError> {
     let bytes = axum::body::to_bytes(body, limit)
         .await
         .map_err(|_| AppError::PayloadTooLarge)?;

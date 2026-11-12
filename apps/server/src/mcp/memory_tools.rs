@@ -360,7 +360,7 @@ pub(super) async fn page_get(
         return ToolResult::invalid("pageId", "Pass a page ID or link.");
     };
     let result = async {
-        let Some(page) = memory::get_page(&state.pool, page_id).await? else {
+        let Some(page) = memory::get_page(&state.pool, page_id, principal.actor_id).await? else {
             return Ok(ToolResult::not_found("That page"));
         };
         if page.project_id != principal.project_id
@@ -378,7 +378,9 @@ pub(super) async fn page_get(
         }
         let (title, body) = match arguments.version {
             Some(version) if version != page.version => {
-                match memory::get_revision(&state.pool, page_id, version).await? {
+                match memory::get_revision(&state.pool, page_id, version, principal.actor_id)
+                    .await?
+                {
                     Some(revision) => (revision.title, revision.body),
                     None => return Ok(ToolResult::not_found("That version")),
                 }
@@ -798,8 +800,10 @@ pub(super) struct BlockLine {
     /// Where the block is in this version.
     pub position: usize,
     /// heading, paragraph, code, quote, list, hr, table, or embed (a line
-    /// `[label](/path "embed")` that shows something of the app live, such
-    /// as a collection's view).
+    /// `[label](/path "embed")` that shows something of the app live: a
+    /// collection's view, a task, page, whiteboard or thread at its address,
+    /// or a project's tasks at `/projects/{projectId}/work-items` with the
+    /// task list's filters, `layout=board` for a board).
     #[serde(rename = "type")]
     pub kind: String,
     /// A heading's level.
@@ -821,7 +825,7 @@ async fn readable_page(
     principal: &McpPrincipal,
     page_id: Uuid,
 ) -> Result<Option<memory::PageView>, AppError> {
-    let Some(page) = memory::get_page(&state.pool, page_id).await? else {
+    let Some(page) = memory::get_page(&state.pool, page_id, principal.actor_id).await? else {
         return Ok(None);
     };
     if page.project_id != principal.project_id
@@ -1517,7 +1521,7 @@ pub(super) async fn skill_get(
             (None, None) => None,
         };
         let page = match page_id {
-            Some(page_id) => memory::get_page(&state.pool, page_id).await?,
+            Some(page_id) => memory::get_page(&state.pool, page_id, principal.actor_id).await?,
             None => None,
         };
         let Some(page) = page.filter(|page| {

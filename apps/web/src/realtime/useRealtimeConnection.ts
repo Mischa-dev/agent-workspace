@@ -31,6 +31,8 @@ import { workItemChange } from './workItemEvent'
 
 const MAX_RECENT_EVENT_IDS = 512
 const INVALIDATION_DELAY_MS = 40
+/** Thing kinds whose id is a conversation's (see modules/channels.json and messages.json). */
+const CONVERSATION_THINGS = new Set(['thread', 'channel', 'conversation'])
 const MAX_RECONNECT_DELAY_MS = 10_000
 // Phones suspend a page in the background, and its socket can die without a
 // close event. After this long away, reconnect on return rather than trust it.
@@ -101,6 +103,22 @@ export function useRealtimeConnection(): RealtimeContextValue {
       invalidationTimers.set(projectId, timer)
     }
 
+    // A thread, channel or conversation embedded in a page as a card.
+    const invalidateConversationThing = (conversationId: string) => {
+      const key = `thing:${conversationId}`
+      if (invalidationTimers.has(key)) return
+      const timer = window.setTimeout(() => {
+        invalidationTimers.delete(key)
+        void queryClient.invalidateQueries({
+          predicate: (query) =>
+            query.queryKey[0] === 'things' &&
+            CONVERSATION_THINGS.has(String(query.queryKey[1])) &&
+            query.queryKey[2] === conversationId,
+        })
+      }, INVALIDATION_DELAY_MS)
+      invalidationTimers.set(key, timer)
+    }
+
     // Reactions change one conversation's timelines and nothing else, so
     // they refetch only those (including a DM thread shown in a side panel).
     const invalidateReactions = (projectId: string, conversationId: string) => {
@@ -132,6 +150,8 @@ export function useRealtimeConnection(): RealtimeContextValue {
         })
         // My work lists tasks across projects, so it isn't under the project key.
         void queryClient.invalidateQueries({ queryKey: ['my-work'] })
+        // A task embedded in a page as a card.
+        void queryClient.invalidateQueries({ queryKey: ['things', 'task', workItemId] })
       }, INVALIDATION_DELAY_MS)
       invalidationTimers.set(key, timer)
     }
@@ -322,6 +342,7 @@ export function useRealtimeConnection(): RealtimeContextValue {
             clearRunStreams(envelope.conversationId, terminalRunId)
           }
           invalidateProject(envelope.projectId)
+          if (envelope.conversationId) invalidateConversationThing(envelope.conversationId)
           if (update?.removed) refreshMemoryCaches(queryClient)
           return
         }

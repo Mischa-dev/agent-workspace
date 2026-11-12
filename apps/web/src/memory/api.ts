@@ -20,6 +20,12 @@ export type PageRevision = {
   via: string | null
   note: string | null
   createdAt: string
+  /** The agent session that wrote it: what ran it, and where, when the viewer can see that conversation. */
+  sessionHarness?: string
+  sessionRunId?: string
+  sessionConversationId?: string
+  sessionConversationName?: string
+  sessionConversationKind?: string
 }
 
 export type Page = {
@@ -92,6 +98,26 @@ export function listPages(projectId: string) {
 
 export function createPage(projectId: string, input: PageInput) {
   return requestJson<Page>(`${project(projectId)}/pages`, { method: 'POST', json: input })
+}
+
+/** A page made from a file: what the file held that a page can't, left out. */
+export type PageImport = { page: Page; setAside: string[] }
+
+/** The file types a page can be made from. */
+export const PAGE_IMPORT_ACCEPT = '.docx,.md,.markdown,.txt'
+
+/** Makes a page from a Word document (.docx) or a Markdown file. */
+export function importPage(projectId: string, file: File) {
+  return requestJson<PageImport>(`${project(projectId)}/pages/import?name=${encodeURIComponent(file.name)}`, {
+    method: 'POST',
+    body: file,
+    headers: { 'content-type': file.type || 'application/octet-stream' },
+  })
+}
+
+/** Where a page downloads as Markdown or a Word document. */
+export function pageExportHref(pageId: string, format: 'markdown' | 'docx') {
+  return `/api/v1/pages/${encodeURIComponent(pageId)}/export?format=${format}`
 }
 
 export function getPage(pageId: string) {

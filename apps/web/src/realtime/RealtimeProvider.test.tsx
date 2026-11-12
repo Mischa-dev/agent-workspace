@@ -55,6 +55,8 @@ describe('authenticated realtime provider', () => {
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries')
     const boardKey = ['project', projectId, 'threads', conversationId]
     queryClient.setQueryData(boardKey, [])
+    const cardKey = ['things', 'thread', conversationId]
+    queryClient.setQueryData(cardKey, {})
     render(
       <QueryClientProvider client={queryClient}>
         <RealtimeProvider>
@@ -77,7 +79,7 @@ describe('authenticated realtime provider', () => {
     socket.message(event)
     socket.message(event)
 
-    await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(4))
+    await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(5))
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: ['projects', 'rail'],
     })
@@ -85,6 +87,8 @@ describe('authenticated realtime provider', () => {
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['inbox'] })
     // Thread boards are project queries, so the project refresh reaches them.
     expect(queryClient.getQueryState(boardKey)?.isInvalidated).toBe(true)
+    // So is the conversation's card where a page embeds it.
+    expect(queryClient.getQueryState(cardKey)?.isInvalidated).toBe(true)
   })
 
   it('blanks a removed message in cached timelines and pins before refetching', async () => {

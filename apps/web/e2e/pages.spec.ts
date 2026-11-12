@@ -149,3 +149,46 @@ for (const scheme of ['light', 'dark'] as const) {
     await context.close()
   })
 }
+
+test('a page embeds a task and a task list, as their module declares them', async ({ context, page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  const projectId = seededValue('E2E_PROJECT_ID')
+  const { id, href } = await newPage(context, page, `Embeds ${Date.now()}`)
+  const { request, headers } = await writer(context, page)
+  const title = `Embedded task ${Date.now()}`
+  const created = await request.post(`/api/v1/projects/${projectId}/work-items`, { headers: headers(`embed-task-${Date.now()}`), data: { title } })
+  expect(created.ok(), await created.text()).toBe(true)
+  const task = (await created.json()) as { id: string }
+  const current = (await (await request.get(`/api/v1/pages/${id}`)).json()) as { version: number; body: string }
+  const saved = await request.patch(`/api/v1/pages/${id}`, {
+    headers: headers(`embed-page-${Date.now()}`),
+    data: {
+      expectedVersion: current.version,
+      body: `${current.body}\n[Tasks](/projects/${projectId}/work-items "embed")\n`,
+    },
+  })
+  expect(saved.ok(), await saved.text()).toBe(true)
+
+  await page.goto(href)
+  await expect(editor(page)).toContainText('We ship on Friday.')
+  await expect(editor(page).locator('.aw-membed').getByText(title)).toBeVisible()
+
+  // The toolbar embeds the task from its address, as a card.
+  await endOf(page, 'Keep it short.')
+  await page.getByRole('toolbar', { name: 'Formatting' }).getByRole('button', { name: 'Embed' }).click()
+  const picker = page.getByRole('form', { name: 'Embed in the page' })
+  await picker.getByLabel('Address').fill(`${new URL(page.url()).origin}/projects/${projectId}/work-items/${task.id}`)
+  await picker.getByRole('button', { name: 'Add to page' }).click()
+  const card = editor(page).locator('.aw-piece__card')
+  await expect(card).toContainText(title)
+  await expect(page.locator('.aw-live__save')).toHaveText('Saved')
+  const after = (await (await request.get(`/api/v1/pages/${id}`)).json()) as { body: string }
+  expect(after.body).toContain(`${title}](/projects/${projectId}/work-items/${task.id} "embed")`)
+  await page.screenshot({ path: path.join(screenshotDir, 'live-page-embeds.png'), fullPage: true, animations: 'disabled' })
+  await page.setViewportSize({ width: 390, height: 844 })
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+  expect(overflow, 'horizontal scroll on a 390 px phone').toBeLessThanOrEqual(0)
+  await page.screenshot({ path: path.join(screenshotDir, 'live-page-embeds-phone.png'), fullPage: true, animations: 'disabled' })
+  expect(errors, 'uncaught errors on the page').toEqual([])
+})

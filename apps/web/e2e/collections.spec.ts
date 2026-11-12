@@ -158,7 +158,8 @@ test('a page shows the collection live, and the editor adds another view of it',
   // The toolbar adds another view of it below the first paragraph.
   await doc.getByText('What players said after 0.4.2:').click()
   await page.keyboard.press('End')
-  await page.getByRole('toolbar', { name: 'Formatting' }).getByRole('button', { name: 'Collection view' }).click()
+  await page.getByRole('toolbar', { name: 'Formatting' }).getByRole('button', { name: 'Embed' }).click()
+  await page.getByRole('form', { name: 'Embed in the page' }).getByRole('button', { name: 'Collection view…' }).click()
   const picker = page.getByRole('form', { name: 'Add a collection view' })
   await picker.getByLabel('Collection').selectOption({ label: NAME })
   await picker.getByRole('button', { name: 'Add to page' }).click()

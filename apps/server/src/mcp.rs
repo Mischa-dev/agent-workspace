@@ -1932,7 +1932,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Create or edit a page: what's true now for the project, in Markdown. Edits replace the text and keep every earlier version, so restoreVersion can undo one. Pass expectedVersion when editing. A page with skillDescription is a skill: instructions agents load with skill_get when that one line says they apply.",
+        description = "Create or edit a page: what's true now for the project, in Markdown. Edits replace the text and keep every earlier version, so restoreVersion can undo one. Pass expectedVersion when editing. A page with skillDescription is a skill: instructions agents load with skill_get when that one line says they apply. A line `[label](/path \"embed\")` shows the task, page, whiteboard, thread, task list or collection view at that address live.",
         annotations(
             title = "Write page",
             read_only_hint = false,
