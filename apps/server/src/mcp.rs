@@ -68,6 +68,7 @@ mod approvals;
 mod automation_tools;
 mod batch_tools;
 mod briefing;
+mod bug_report_tools;
 mod channels;
 mod code;
 mod collaboration;
@@ -2608,6 +2609,44 @@ impl McpServer {
     ) -> Json<common::ToolResult<views_data::TaskFromTemplateValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(views_data::task_from_template(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "A project's bug report links: each is a URL a game, site or form posts reports to, and every report becomes a task. Lists each link's name, state, maker and report count, never its URL.",
+        annotations(
+            title = "List bug report links",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn bug_report_link_list(
+        &self,
+        Parameters(arguments): Parameters<bug_report_tools::BugReportLinkListArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<serde_json::Value>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(bug_report_tools::bug_report_link_list(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "People: make a bug report link (its URL is shown once), rename or pause it, give it a new URL, or delete it, as the project's settings do. Anyone who can add tasks makes one; its maker or the project's owners and admins change it. Agents read links with bug_report_link_list. Audited.",
+        annotations(
+            title = "Change bug report link",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
+    )]
+    async fn bug_report_link_write(
+        &self,
+        Parameters(arguments): Parameters<bug_report_tools::BugReportLinkWriteArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<serde_json::Value>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(bug_report_tools::bug_report_link_write(&self.state, principal, arguments).await)
     }
 
     #[tool(

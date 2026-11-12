@@ -393,22 +393,22 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/bug-report-links",
-            Gap("bug_report_link_write"),
+            Tool("bug_report_link_write"),
         ),
         (
             Patch,
             "/api/v1/bug-report-links/{link_id}",
-            Gap("bug_report_link_write"),
+            Tool("bug_report_link_write"),
         ),
         (
             Delete,
             "/api/v1/bug-report-links/{link_id}",
-            Gap("bug_report_link_write"),
+            Tool("bug_report_link_write"),
         ),
         (
             Post,
             "/api/v1/bug-report-links/{link_id}/replace",
-            Gap("bug_report_link_write"),
+            Tool("bug_report_link_write"),
         ),
         (
             Post,

@@ -421,6 +421,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "ai_summarize",
     "approval_respond",
     "automation_write",
+    "bug_report_link_write",
     "channel_create",
     "conversation_continue",
     "conversation_members",
@@ -5708,10 +5709,10 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         ]),
         mcp_case(
             "model_catalog_write",
-            json!({"projectId": a.project, "harness": "demo", "model": "net-model", "overrides": {"displayName": "Net"}}),
+            json!({"projectId": a.project, "harness": "codex_cloud", "model": "net-model", "overrides": {"displayName": "Net"}}),
             vec![
-                json!({"projectId": b.project, "harness": "demo", "model": "net-model", "overrides": {"displayName": "Net"}}),
-                json!({"projectId": b.project, "harness": "demo", "model": "net-model", "remove": true}),
+                json!({"projectId": b.project, "harness": "codex_cloud", "model": "net-model", "overrides": {"displayName": "Net"}}),
+                json!({"projectId": b.project, "harness": "codex_cloud", "model": "net-model", "remove": true}),
             ],
         ),
         mcp_case(
@@ -6561,6 +6562,16 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             ],
         )
         .rejecting(vec![json!({"operation": "redeliver", "webhookId": a.webhook, "deliveryId": bx.delivery})]),
+        mcp_case(
+            "bug_report_link_write",
+            json!({"projectId": a.project, "name": "Net mcp link"}),
+            vec![json!({"projectId": b.project, "name": "Net mcp link"})],
+        )
+        .rejecting(vec![
+            json!({"projectId": a.project, "linkId": bx.bug_link, "name": "Net"}),
+            json!({"projectId": a.project, "linkId": bx.bug_link, "replace": true}),
+            json!({"projectId": a.project, "linkId": bx.bug_link, "delete": true}),
+        ]),
         mcp_case(
             "automation_write",
             with(&with(&rule, "projectId", json!(a.project)), "operation", json!("create"))

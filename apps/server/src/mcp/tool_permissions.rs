@@ -162,6 +162,8 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("recurring_write", Some(TasksCreate)),
     ("task_from_template", Some(TasksCreate)),
     ("task_import", Some(TasksCreate)),
+    ("bug_report_link_list", Some(TasksView)),
+    ("bug_report_link_write", Some(TasksCreate)),
     ("project_export", Some(TasksView)),
     ("webhook_list", None),
     ("webhook_write", None),

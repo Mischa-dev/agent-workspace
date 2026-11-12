@@ -2347,3 +2347,94 @@ async fn people_change_the_model_lists_and_agents_never_do() {
     );
     f.close().await;
 }
+
+#[tokio::test]
+async fn people_make_bug_report_links_and_agents_only_read_them() {
+    let Some(f) = fixture().await else {
+        return;
+    };
+    let project = f.seed.project_id.to_string();
+    let app = connect_app(&f.app, &f.browser, "Owner's app", "full").await;
+    let session = initialize(&f.app, &app).await.expect("owner MCP");
+    let person = |name: &'static str, arguments: Value| {
+        let app = app.clone();
+        let session = session.clone();
+        let router = f.app.clone();
+        async move { tool(&router, &app, &session, name, arguments).await }
+    };
+
+    let made = person(
+        "bug_report_link_write",
+        json!({"projectId": project, "name": "Game"}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let first_url = string(&made, "/value/url");
+    assert!(first_url.contains("/api/v1/bug-reports/awbr_"), "{made}");
+    let link = string(&made, "/value/link/id");
+
+    let paused = person(
+        "bug_report_link_write",
+        json!({"projectId": project, "linkId": link, "name": "Game beta", "state": "paused"}),
+    )
+    .await;
+    assert_eq!(paused["value"]["state"], "paused", "{paused}");
+    assert_eq!(paused["value"]["name"], "Game beta", "{paused}");
+    let replaced = person(
+        "bug_report_link_write",
+        json!({"projectId": project, "linkId": link, "replace": true}),
+    )
+    .await;
+    assert_ne!(string(&replaced, "/value/url"), first_url, "{replaced}");
+    let both = person(
+        "bug_report_link_write",
+        json!({"projectId": project, "linkId": link, "replace": true, "delete": true}),
+    )
+    .await;
+    assert_eq!(both["outcome"], "invalid_request", "{both}");
+
+    // Agents read the links, never their URLs, and change none.
+    let listed = f
+        .call("bug_report_link_list", json!({"projectId": project}))
+        .await;
+    assert_eq!(listed["value"]["links"][0]["name"], "Game beta", "{listed}");
+    assert_eq!(listed["value"]["canCreate"], false, "{listed}");
+    assert!(!listed.to_string().contains("awbr_"), "{listed}");
+    for arguments in [
+        json!({"projectId": project, "name": "Agent link"}),
+        json!({"projectId": project, "linkId": link, "delete": true}),
+    ] {
+        let refused = tool(
+            &f.app,
+            &f.token,
+            &f.session,
+            "bug_report_link_write",
+            arguments,
+        )
+        .await;
+        assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    }
+
+    let deleted = person(
+        "bug_report_link_write",
+        json!({"projectId": project, "linkId": link, "delete": true}),
+    )
+    .await;
+    assert_eq!(deleted["value"]["deleted"], true, "{deleted}");
+    let audited = sqlx::query_scalar::<_, String>(
+        "SELECT action FROM audit_events WHERE target_kind = 'bug_report_link' AND channel = 'mcp' ORDER BY id",
+    )
+    .fetch_all(&f.pool)
+    .await
+    .expect("audit");
+    assert_eq!(
+        audited,
+        [
+            "bug_report_link.create",
+            "bug_report_link.update",
+            "bug_report_link.replace",
+            "bug_report_link.delete"
+        ]
+    );
+    f.close().await;
+}

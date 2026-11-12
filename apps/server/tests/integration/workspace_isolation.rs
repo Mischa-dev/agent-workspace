@@ -3598,6 +3598,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "automation_list",
     "automation_runs",
     "briefing",
+    "bug_report_link_list",
     "conversation_list",
     "conversation_open",
     "conversation_read",
@@ -3837,6 +3838,7 @@ fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         ),
         by_project("view_list"),
         by_project("automation_list"),
+        by_project("bug_report_link_list"),
         case(
             "automation_runs",
             vec![json!({"projectId": a.project, "ruleId": a.rule.to_string()})],
