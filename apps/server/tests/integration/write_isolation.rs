@@ -458,6 +458,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "reply_progress",
     "reply_release",
     "reply_send",
+    "recurring_write",
     "reply_stop",
     "role_assign",
     "role_write",
@@ -6356,6 +6357,21 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         .rejecting(vec![
             json!({"projectId": a.project, "name": "Net typed", "title": "Net", "type": bx.task_type}),
             json!({"projectId": a.project, "template": ax.task_template, "type": bx.task_type}),
+        ]),
+        mcp_case(
+            "recurring_write",
+            json!({"projectId": a.project, "template": ax.task_template, "frequency": "weekly", "weekdays": [4], "assignee": "me"}),
+            vec![
+                json!({"projectId": b.project, "template": bx.task_template, "frequency": "daily"}),
+                json!({"projectId": b.project, "recurring": bx.recurring, "enabled": false}),
+                json!({"projectId": a.project, "recurring": bx.recurring, "enabled": false}),
+                json!({"projectId": a.project, "recurring": bx.recurring, "delete": true}),
+                json!({"projectId": a.project, "template": bx.task_template, "frequency": "daily"}),
+            ],
+        )
+        .rejecting(vec![
+            json!({"projectId": a.project, "template": ax.task_template, "frequency": "daily", "assignee": b.rook}),
+            json!({"projectId": a.project, "recurring": ax.recurring, "assignee": b.rook}),
         ]),
         mcp_case(
             "task_import",

@@ -1003,3 +1003,144 @@ async fn an_agent_writes_task_templates_and_uses_them() {
 
     f.close().await;
 }
+
+/// AWD-111: an agent schedules a template to make tasks, changes and
+/// pauses the schedule, and deletes it. The schedule acts as the agent.
+#[tokio::test]
+async fn an_agent_schedules_recurring_tasks() {
+    let Some(f) = fixture().await else {
+        return;
+    };
+    let project = f.seed.project_id.to_string();
+    f.call(
+        "template_write",
+        json!({"projectId": project, "name": "Weekly review", "title": "Review the week"}),
+    )
+    .await;
+
+    // A schedule needs a template and a frequency, and starts running.
+    for arguments in [
+        json!({"projectId": project, "template": "Weekly review"}),
+        json!({"projectId": project, "template": "Weekly review", "frequency": "daily", "enabled": false}),
+    ] {
+        let refused = tool(&f.app, &f.token, &f.session, "recurring_write", arguments).await;
+        assert_eq!(refused["outcome"], "invalid_request", "{refused}");
+    }
+    let none = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM recurring_tasks")
+        .fetch_one(&f.pool)
+        .await
+        .expect("schedules");
+    assert_eq!(none, 0);
+
+    let made = f
+        .call(
+            "recurring_write",
+            json!({
+                "projectId": project,
+                "template": "Weekly review",
+                "frequency": "weekly",
+                "weekdays": [5],
+                "timeOfDay": "16:30",
+                "timezone": "Europe/Amsterdam",
+                "assignee": "me",
+                "dueInDays": 2
+            }),
+        )
+        .await;
+    assert_eq!(made["value"]["created"], true, "{made}");
+    let schedule = &made["value"]["recurring"];
+    let schedule_id = schedule["id"].as_str().expect("schedule id").to_owned();
+    assert_eq!(schedule["weekdays"], json!([5]), "{made}");
+    assert_eq!(schedule["assigneeActorId"], f.agent.to_string());
+    assert!(schedule["nextRunAt"].is_string(), "{made}");
+    // It acts as the agent that set it up.
+    assert_eq!(
+        f.author(
+            "SELECT created_by_actor_id FROM recurring_tasks WHERE id = $1",
+            &schedule_id
+        )
+        .await,
+        f.agent
+    );
+
+    // Changing the time keeps the day; an old version is a conflict.
+    let changed = f
+        .call(
+            "recurring_write",
+            json!({"projectId": project, "recurring": schedule_id, "timeOfDay": "08:00", "clearDueInDays": true}),
+        )
+        .await;
+    let schedule = &changed["value"]["recurring"];
+    assert_eq!(schedule["timeOfDay"], "08:00", "{changed}");
+    assert_eq!(schedule["weekdays"], json!([5]), "{changed}");
+    assert_eq!(schedule["timezone"], "Europe/Amsterdam");
+    assert!(schedule["dueInDays"].is_null(), "{changed}");
+    let stale = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "recurring_write",
+        json!({"projectId": project, "recurring": schedule_id, "every": 2, "expectedVersion": made["value"]["recurring"]["version"]}),
+    )
+    .await;
+    assert_eq!(stale["outcome"], "conflict", "{stale}");
+
+    // Paused, it has no next run; archiving its template keeps it paused.
+    let paused = f
+        .call(
+            "recurring_write",
+            json!({"projectId": project, "recurring": schedule_id, "enabled": false}),
+        )
+        .await;
+    assert_eq!(paused["value"]["recurring"]["enabled"], false, "{paused}");
+    assert!(paused["value"]["recurring"]["nextRunAt"].is_null());
+    f.call(
+        "template_write",
+        json!({"projectId": project, "template": "Weekly review", "archived": true}),
+    )
+    .await;
+    let refused = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "recurring_write",
+        json!({"projectId": project, "recurring": schedule_id, "enabled": true}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "invalid_request", "{refused}");
+
+    // The person sees it in the app; then the agent deletes it.
+    let listed = f
+        .web(
+            "GET",
+            &format!("/api/v1/projects/{project}/task-templates"),
+            Value::Null,
+        )
+        .await;
+    assert!(
+        listed["recurring"]
+            .as_array()
+            .expect("recurring")
+            .iter()
+            .any(|row| row["id"] == schedule_id.as_str()),
+        "{listed}"
+    );
+    let deleted = f
+        .call(
+            "recurring_write",
+            json!({"projectId": project, "recurring": schedule_id, "delete": true}),
+        )
+        .await;
+    assert_eq!(deleted["value"]["deleted"], true, "{deleted}");
+    let gone = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "recurring_write",
+        json!({"projectId": project, "recurring": schedule_id, "enabled": false}),
+    )
+    .await;
+    assert_eq!(gone["outcome"], "not_found", "{gone}");
+
+    f.close().await;
+}

@@ -979,6 +979,317 @@ pub(super) async fn template_write(
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct RecurringWriteArguments {
+    /// The project's ID, link or key (such as "AWD").
+    pub project_id: String,
+    /// The schedule to change, pause or delete: its ID from
+    /// template_list's recurring. Leave it out to make a new one.
+    pub recurring: Option<String>,
+    /// For a new schedule: the template it makes tasks from, by name or ID
+    /// (see template_list).
+    pub template: Option<String>,
+    /// daily, weekly or monthly. Needed for a new schedule.
+    pub frequency: Option<String>,
+    /// Every this many days, weeks or months, 1 to 52 (default 1).
+    pub every: Option<u32>,
+    /// Weekly: ISO weekdays, 1 (Monday) to 7 (Sunday).
+    pub weekdays: Option<Vec<u32>>,
+    /// Monthly: the day of the month, 1 to 31; a shorter month uses its
+    /// last day.
+    pub month_day: Option<u32>,
+    /// HH:MM, in `timezone` (default 09:00).
+    pub time_of_day: Option<String>,
+    /// An IANA time zone such as Europe/Amsterdam (default UTC).
+    pub timezone: Option<String>,
+    /// YYYY-MM-DD: the first day it may run (default today).
+    pub starts_on: Option<String>,
+    /// Who each task is assigned to: "me", an @handle or an actor ID;
+    /// "none" leaves them unassigned.
+    pub assignee: Option<String>,
+    /// Each task is due this many days after it's made, 0 to 365.
+    pub due_in_days: Option<i32>,
+    /// Make tasks with no due date.
+    pub clear_due_in_days: Option<bool>,
+    /// false pauses the schedule, true starts it again.
+    pub enabled: Option<bool>,
+    /// true deletes the schedule; the tasks it made stay.
+    pub delete: Option<bool>,
+    /// The version from template_list or an earlier recurring_write. Leave
+    /// it out to change the current one.
+    pub expected_version: Option<i64>,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct RecurringWriteValue {
+    /// The schedule as it is now, as template_list shows it: its next run,
+    /// whether it's paused and why, who it acts as, and its version.
+    /// Absent once it's deleted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recurring: Option<Value>,
+    /// Whether this call made a new schedule.
+    pub created: bool,
+    /// Whether this call deleted the schedule.
+    pub deleted: bool,
+}
+
+fn recurring_outcome<T>(
+    outcome: templates::RecurringOutcome<T>,
+) -> Result<T, ToolResult<RecurringWriteValue>> {
+    match outcome {
+        templates::RecurringOutcome::Done(value) => Ok(value),
+        templates::RecurringOutcome::Invalid(field, message) => {
+            Err(ToolResult::invalid(field, message))
+        }
+        templates::RecurringOutcome::TooMany => Err(ToolResult::conflict(
+            "This project has 100 recurring tasks. Delete one it no longer needs first.",
+        )),
+        templates::RecurringOutcome::VersionConflict(current) => {
+            Err(ToolResult::conflict(format!(
+                "Someone changed this schedule first (now version {}). Read it again with template_list, then retry.",
+                current.version
+            )))
+        }
+    }
+}
+
+pub(super) async fn recurring_write(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: RecurringWriteArguments,
+) -> ToolResult<RecurringWriteValue> {
+    if !principal.can_write() {
+        return ToolResult::read_only();
+    }
+    if parse_id(&arguments.project_id) != Some(principal.project_id) {
+        return ToolResult::not_found("That project");
+    }
+    let starts_on = match arguments.starts_on.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some(value) => match chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+            Ok(date) => Some(date),
+            Err(_) => return ToolResult::invalid("startsOn", DATE_MESSAGE),
+        },
+    };
+    let schedule_given = arguments.frequency.is_some()
+        || arguments.every.is_some()
+        || arguments.weekdays.is_some()
+        || arguments.month_day.is_some()
+        || arguments.time_of_day.is_some()
+        || arguments.timezone.is_some()
+        || starts_on.is_some();
+    let changes = schedule_given
+        || arguments.template.is_some()
+        || arguments.assignee.is_some()
+        || arguments.due_in_days.is_some()
+        || arguments.clear_due_in_days.is_some()
+        || arguments.enabled.is_some();
+    let recurring_id = match arguments.recurring.as_deref() {
+        None => None,
+        Some(value) => match parse_id(value) {
+            Some(id) => Some(id),
+            None => return ToolResult::not_found("That schedule (see template_list)"),
+        },
+    };
+    match (recurring_id, arguments.delete == Some(true)) {
+        (None, true) => return ToolResult::invalid("recurring", "Name the schedule to delete."),
+        (Some(_), true) if changes => {
+            return ToolResult::invalid(
+                "delete",
+                "Deleting a schedule can't be combined with changing it.",
+            );
+        }
+        (Some(_), false) if arguments.template.is_some() => {
+            return ToolResult::invalid(
+                "template",
+                "A schedule keeps its template. Delete it and make a new one to use another.",
+            );
+        }
+        (None, false) if arguments.enabled.is_some() => {
+            return ToolResult::invalid(
+                "enabled",
+                "A new schedule starts running. Pause it afterwards with recurring and enabled: false.",
+            );
+        }
+        (None, false) if arguments.template.is_none() || arguments.frequency.is_none() => {
+            return ToolResult::invalid(
+                "template",
+                "Give a new schedule a template and a frequency, or pass recurring to change one (see template_list).",
+            );
+        }
+        _ => {}
+    }
+    let project_id = principal.project_id;
+    let result = async {
+        let mut transaction = state.pool.begin().await?;
+        match check_access_for(&mut transaction, principal, Action::WorkItemCreate).await? {
+            WriteAccess::Allowed => {}
+            WriteAccess::ReadOnly => return Ok(ToolResult::read_only()),
+            WriteAccess::NotFound => return Ok(ToolResult::not_found("That project")),
+            WriteAccess::ProjectArchived => {
+                return Ok(ToolResult::conflict("That project is archived."));
+            }
+            WriteAccess::Denied => {
+                return Ok(ToolResult::denied(
+                    "Only people who can create tasks in this project can schedule them.",
+                ));
+            }
+        }
+        let current = match recurring_id {
+            None => None,
+            Some(id) => match templates::list_recurring(&mut transaction, project_id)
+                .await?
+                .into_iter()
+                .find(|row| row.id == id)
+            {
+                Some(row) => Some(row),
+                None => return Ok(ToolResult::not_found("That schedule (see template_list)")),
+            },
+        };
+        let actor = command_actor(principal, project_id);
+        if let (Some(current), true) = (&current, arguments.delete == Some(true)) {
+            let outcome = templates::delete_recurring_in(
+                &mut transaction,
+                &actor,
+                project_id,
+                current.id,
+                Some(arguments.expected_version.unwrap_or(current.version)),
+            )
+            .await?;
+            if let Err(refusal) = recurring_outcome(outcome) {
+                return Ok(refusal);
+            }
+            transaction.commit().await?;
+            return Ok(ToolResult::ok(RecurringWriteValue {
+                recurring: None,
+                created: false,
+                deleted: true,
+            }));
+        }
+        let assignee = match arguments.assignee.as_deref() {
+            None => None,
+            Some(value) => {
+                match resolve_assignee(&mut transaction, principal, project_id, value).await? {
+                    Ok(actor) => Some(actor),
+                    Err(problem) => return Ok(ToolResult::invalid("assignee", problem.message())),
+                }
+            }
+        };
+        let due_in_days = if arguments.clear_due_in_days == Some(true) {
+            Some(None)
+        } else {
+            arguments.due_in_days.map(Some)
+        };
+        // Schedule fields left out keep what the schedule has.
+        let schedule = templates::ScheduleRequest {
+            frequency: arguments
+                .frequency
+                .clone()
+                .or_else(|| current.as_ref().map(|row| row.frequency.clone()))
+                .unwrap_or_default(),
+            every: arguments
+                .every
+                .or_else(|| {
+                    current
+                        .as_ref()
+                        .and_then(|row| u32::try_from(row.every).ok())
+                })
+                .unwrap_or(1),
+            weekdays: arguments.weekdays.clone().unwrap_or_else(|| {
+                current
+                    .as_ref()
+                    .map(|row| {
+                        row.weekdays
+                            .iter()
+                            .filter_map(|day| u32::try_from(*day).ok())
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            }),
+            month_day: arguments.month_day.or_else(|| {
+                current
+                    .as_ref()
+                    .and_then(|row| row.month_day)
+                    .and_then(|day| u32::try_from(day).ok())
+            }),
+            time_of_day: arguments
+                .time_of_day
+                .clone()
+                .or_else(|| current.as_ref().map(|row| row.time_of_day.clone()))
+                .unwrap_or_else(|| "09:00".to_owned()),
+            timezone: arguments
+                .timezone
+                .clone()
+                .or_else(|| current.as_ref().map(|row| row.timezone.clone()))
+                .unwrap_or_else(|| "UTC".to_owned()),
+            starts_on: starts_on.or_else(|| current.as_ref().map(|row| row.starts_on)),
+        };
+        let (outcome, created) = match &current {
+            None => {
+                let Some(template_id) = find_template(
+                    &mut transaction,
+                    project_id,
+                    arguments.template.as_deref().unwrap_or_default(),
+                )
+                .await?
+                else {
+                    return Ok(ToolResult::not_found("That template (see template_list)"));
+                };
+                let outcome = templates::create_recurring_in(
+                    &mut transaction,
+                    &actor,
+                    project_id,
+                    principal.actor_id,
+                    templates::NewRecurring {
+                        template_id,
+                        schedule: &schedule,
+                        assignee_actor_id: assignee.flatten(),
+                        due_in_days: due_in_days.flatten(),
+                    },
+                )
+                .await?;
+                (outcome, true)
+            }
+            Some(current) => {
+                let outcome = templates::change_recurring_in(
+                    &mut transaction,
+                    &actor,
+                    project_id,
+                    current.id,
+                    principal.actor_id,
+                    templates::RecurringChange {
+                        // What was read above is what's merged, so a change
+                        // made since is a conflict, not lost.
+                        expected_version: Some(
+                            arguments.expected_version.unwrap_or(current.version),
+                        ),
+                        schedule: schedule_given.then_some(&schedule),
+                        assignee_actor_id: assignee,
+                        due_in_days,
+                        enabled: arguments.enabled,
+                    },
+                )
+                .await?;
+                (outcome, false)
+            }
+        };
+        let view = match recurring_outcome(outcome) {
+            Ok(view) => view,
+            Err(refusal) => return Ok(refusal),
+        };
+        transaction.commit().await?;
+        Ok::<_, AppError>(ToolResult::ok(RecurringWriteValue {
+            recurring: Some(to_value(view)?),
+            created,
+            deleted: false,
+        }))
+    }
+    .await;
+    result.unwrap_or_else(|error| ToolResult::from_error(error, "recurring_write"))
+}
+
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct TaskFromTemplateArguments {
     /// The project's ID, link or key.
     pub project_id: String,
