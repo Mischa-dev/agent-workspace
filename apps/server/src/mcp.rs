@@ -86,6 +86,7 @@ mod later_tools;
 mod launch_tools;
 mod memory_tools;
 mod message_edits;
+mod model_catalog_tools;
 mod module_tools;
 mod notifications;
 mod oauth;
@@ -3213,6 +3214,25 @@ impl McpServer {
     ) -> Json<common::ToolResult<environment_tools::EnvironmentWriteValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(environment_tools::environment_write(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "People: change a workspace's model list for one harness, as its Runs and models settings do: edit a model (name, context size, prices, reasoning levels, speeds, hiding it, making it the default) or add one by hand with model and overrides, remove one with remove, or refresh the list from the harness through your own signed-in account with refresh. The workspace's owners and admins, through an app connected as themselves. Audited.",
+        annotations(
+            title = "Change model list",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
+    )]
+    async fn model_catalog_write(
+        &self,
+        Parameters(arguments): Parameters<model_catalog_tools::ModelCatalogWriteArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<model_catalog_tools::ModelCatalogWriteValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(model_catalog_tools::model_catalog_write(&self.state, principal, arguments).await)
     }
 
     #[tool(

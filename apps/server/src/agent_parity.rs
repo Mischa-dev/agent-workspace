@@ -519,32 +519,32 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{id}/harnesses/{kind}/catalog/refresh",
-            Gap("model_catalog_write"),
+            Tool("model_catalog_write"),
         ),
         (
             Put,
             "/api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
-            Gap("model_catalog_write"),
+            Tool("model_catalog_write"),
         ),
         (
             Delete,
             "/api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
-            Gap("model_catalog_write"),
+            Tool("model_catalog_write"),
         ),
         (
             Post,
             "/api/v1/organizations/{organization_id}/model-catalog/{kind}/refresh",
-            Gap("model_catalog_write"),
+            Tool("model_catalog_write"),
         ),
         (
             Put,
             "/api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
-            Gap("model_catalog_write"),
+            Tool("model_catalog_write"),
         ),
         (
             Delete,
             "/api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
-            Gap("model_catalog_write"),
+            Tool("model_catalog_write"),
         ),
         (
             Post,

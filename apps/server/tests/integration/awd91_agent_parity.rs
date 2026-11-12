@@ -2233,3 +2233,117 @@ async fn people_add_and_archive_repositories_and_agents_only_read_them() {
     );
     f.close().await;
 }
+
+#[tokio::test]
+async fn people_change_the_model_lists_and_agents_never_do() {
+    let Some(f) = fixture().await else {
+        return;
+    };
+    let project = f.seed.project_id.to_string();
+    let app = connect_app(&f.app, &f.browser, "Owner's app", "full").await;
+    let session = initialize(&f.app, &app).await.expect("owner MCP");
+    let person = |name: &'static str, arguments: Value| {
+        let app = app.clone();
+        let session = session.clone();
+        let router = f.app.clone();
+        async move { tool(&router, &app, &session, name, arguments).await }
+    };
+
+    // A refresh lists the models through the caller's own account.
+    let unsigned = person(
+        "model_catalog_write",
+        json!({"projectId": project, "harness": "demo", "refresh": true}),
+    )
+    .await;
+    assert_eq!(unsigned["outcome"], "conflict", "{unsigned}");
+    let account = f
+        .web(
+            "POST",
+            &format!("/api/v1/projects/{project}/provider-accounts"),
+            json!({"adapterKind": "demo"}),
+        )
+        .await;
+    f.web(
+        "POST",
+        &format!(
+            "/api/v1/projects/{project}/provider-accounts/{}/login/api-key",
+            account["id"].as_str().expect("account id")
+        ),
+        json!({"apiKey": "demo-key-for-tests"}),
+    )
+    .await;
+    let refreshed = person(
+        "model_catalog_write",
+        json!({"projectId": project, "harness": "demo", "refresh": true}),
+    )
+    .await;
+    assert_eq!(refreshed["outcome"], "ok", "{refreshed}");
+    assert_eq!(refreshed["value"]["done"], "refreshed", "{refreshed}");
+
+    let bad = person(
+        "model_catalog_write",
+        json!({"projectId": project, "harness": "demo", "model": "house-model", "overrides": {"contextWindow": 0}}),
+    )
+    .await;
+    assert_eq!(bad["outcome"], "invalid_request", "{bad}");
+    let saved = person(
+        "model_catalog_write",
+        json!({"projectId": project, "harness": "demo", "model": "house-model", "overrides": {"displayName": "House model", "contextWindow": 32000}}),
+    )
+    .await;
+    assert_eq!(saved["value"]["done"], "saved", "{saved}");
+    let models = saved["value"]["harness"]["catalog"]["models"]
+        .as_array()
+        .expect("models")
+        .clone();
+    let added = models
+        .iter()
+        .find(|model| model["id"] == "house-model")
+        .expect("added model");
+    assert_eq!(added["source"], "manual", "{added}");
+    assert_eq!(added["overrides"]["displayName"], "House model", "{added}");
+
+    // Agents change no model list.
+    for arguments in [
+        json!({"projectId": project, "harness": "demo", "refresh": true}),
+        json!({"projectId": project, "harness": "demo", "model": "house-model", "remove": true}),
+    ] {
+        let refused = tool(
+            &f.app,
+            &f.token,
+            &f.session,
+            "model_catalog_write",
+            arguments,
+        )
+        .await;
+        assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    }
+
+    let removed = person(
+        "model_catalog_write",
+        json!({"projectId": project, "harness": "demo", "model": "house-model", "remove": true}),
+    )
+    .await;
+    assert_eq!(removed["value"]["done"], "removed", "{removed}");
+    let gone = person(
+        "model_catalog_write",
+        json!({"projectId": project, "harness": "demo", "model": "house-model", "remove": true}),
+    )
+    .await;
+    assert_eq!(gone["outcome"], "not_found", "{gone}");
+    let audited = sqlx::query_scalar::<_, String>(
+        "SELECT action FROM audit_events WHERE target_kind = 'organization' AND channel = 'mcp' AND action LIKE 'harness_%' ORDER BY id",
+    )
+    .fetch_all(&f.pool)
+    .await
+    .expect("audit");
+    assert_eq!(
+        audited,
+        [
+            "harness_catalog.refreshed",
+            "harness_model.saved",
+            "harness_model.removed"
+        ]
+    );
+    f.close().await;
+}

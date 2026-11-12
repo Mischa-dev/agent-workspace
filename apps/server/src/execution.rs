@@ -644,7 +644,7 @@ async fn register_personal_execution_profile(
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct HarnessView {
+pub(crate) struct HarnessView {
     #[serde(flatten)]
     manifest: AdapterManifest,
     catalog: Catalog,
@@ -773,12 +773,11 @@ async fn refresh_catalog(
     Ok(Json(
         refresh_in(
             &state,
-            &principal,
+            principal.actor_id,
             organization_id,
             Some(project_id),
             &kind,
-            &scope,
-            &idempotency_key,
+            Some((&scope, &idempotency_key)),
         )
         .await?,
     ))
@@ -799,12 +798,11 @@ async fn refresh_workspace_catalog(
     Ok(Json(
         refresh_in(
             &state,
-            &principal,
+            principal.actor_id,
             organization_id,
             None,
             &kind,
-            &scope,
-            &idempotency_key,
+            Some((&scope, &idempotency_key)),
         )
         .await?,
     ))
@@ -813,14 +811,14 @@ async fn refresh_workspace_catalog(
 /// Lists the harness's models through the caller's own signed-in account
 /// (the one they use in `project_id` first, when asked from a project) and
 /// stores them in the workspace's catalog. The caller may edit the catalog.
-async fn refresh_in(
+/// Without an idempotency key (MCP), every call asks the harness again.
+pub(crate) async fn refresh_in(
     state: &AppState,
-    principal: &AuthenticatedActor,
+    actor_id: Uuid,
     organization_id: Uuid,
     project_id: Option<Uuid>,
     kind: &str,
-    scope: &str,
-    idempotency_key: &IdempotencyKey,
+    idempotency: Option<(&str, &IdempotencyKey)>,
 ) -> Result<HarnessView, AppError> {
     let request_hash = RequestHash::for_value(&serde_json::json!({ "kind": kind }))?;
     let manifest = state
@@ -838,14 +836,15 @@ async fn refresh_in(
     // A retry whose first refresh already landed replays it instead of
     // asking the harness again. The key is only held once the models are in
     // hand, below, so a failed listing can be retried with the same key.
-    if let IdempotencyOutcome::Replay(_) = idempotency::reserve(
-        &mut transaction,
-        principal.actor_id,
-        scope,
-        idempotency_key,
-        request_hash,
-    )
-    .await?
+    if let Some((scope, idempotency_key)) = idempotency
+        && let IdempotencyOutcome::Replay(_) = idempotency::reserve(
+            &mut transaction,
+            actor_id,
+            scope,
+            idempotency_key,
+            request_hash,
+        )
+        .await?
     {
         transaction.commit().await?;
         return harness_view(state, organization_id, &manifest, true).await;
@@ -865,7 +864,7 @@ async fn refresh_in(
         "#,
     )
     .bind(organization_id)
-    .bind(principal.actor_id)
+    .bind(actor_id)
     .bind(&manifest.kind)
     .bind(project_id)
     .fetch_optional(&mut *transaction)
@@ -884,9 +883,14 @@ async fn refresh_in(
         .map_err(|error| catalog_error(&manifest.kind, error))?;
     drop(session);
     let mut transaction = state.pool.begin().await?;
+    let Some((scope, idempotency_key)) = idempotency else {
+        catalog::store_refresh(&mut transaction, organization_id, &manifest.kind, &models).await?;
+        transaction.commit().await?;
+        return harness_view(state, organization_id, &manifest, true).await;
+    };
     match idempotency::reserve(
         &mut transaction,
-        principal.actor_id,
+        actor_id,
         scope,
         idempotency_key,
         request_hash,
@@ -920,7 +924,7 @@ fn catalog_error(kind: &str, error: crate::provider::HarnessError) -> AppError {
     AppError::Conflict("harness", "the harness could not list its models")
 }
 
-fn valid_model_id(model_id: &str) -> Result<(), AppError> {
+pub(crate) fn valid_model_id(model_id: &str) -> Result<(), AppError> {
     if (1..=200).contains(&model_id.len())
         && model_id.bytes().all(|byte| {
             byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'/' | b':')
@@ -976,7 +980,7 @@ async fn save_model_overrides(
     Ok(Json(
         save_overrides_in(
             &state,
-            &principal,
+            principal.actor_id,
             organization_id,
             &kind,
             &model_id,
@@ -1001,7 +1005,7 @@ async fn save_workspace_model(
     Ok(Json(
         save_overrides_in(
             &state,
-            &principal,
+            principal.actor_id,
             organization_id,
             &kind,
             &model_id,
@@ -1011,9 +1015,9 @@ async fn save_workspace_model(
     ))
 }
 
-async fn save_overrides_in(
+pub(crate) async fn save_overrides_in(
     state: &AppState,
-    principal: &AuthenticatedActor,
+    actor_id: Uuid,
     organization_id: Uuid,
     kind: &str,
     model_id: &str,
@@ -1030,7 +1034,7 @@ async fn save_overrides_in(
         &manifest.kind,
         model_id,
         overrides,
-        principal.actor_id,
+        actor_id,
     )
     .await?;
     harness_view(state, organization_id, &manifest, true).await
@@ -1066,7 +1070,7 @@ async fn remove_workspace_model(
     ))
 }
 
-async fn remove_model_in(
+pub(crate) async fn remove_model_in(
     state: &AppState,
     organization_id: Uuid,
     kind: &str,

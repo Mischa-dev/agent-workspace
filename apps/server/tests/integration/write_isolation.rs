@@ -447,6 +447,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "message_schedule",
     "message_send",
     "milestone_write",
+    "model_catalog_write",
     "notification_update",
     "page_comment",
     "page_comment_update",
@@ -5705,6 +5706,14 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "environment": bx.environment, "archive": true}),
             json!({"projectId": a.project, "name": "Net mcp b", "harness": "codex_cloud", "providerEnvironmentId": "env-b", "repositoryId": b.repository}),
         ]),
+        mcp_case(
+            "model_catalog_write",
+            json!({"projectId": a.project, "harness": "demo", "model": "net-model", "overrides": {"displayName": "Net"}}),
+            vec![
+                json!({"projectId": b.project, "harness": "demo", "model": "net-model", "overrides": {"displayName": "Net"}}),
+                json!({"projectId": b.project, "harness": "demo", "model": "net-model", "remove": true}),
+            ],
+        ),
         mcp_case(
             "workspace_update",
             json!({"projectId": a.project, "modules": {"whiteboards": true}}),

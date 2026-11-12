@@ -22,6 +22,7 @@
     "launch_cancel": "change",
     "environment_list": "query",
     "environment_write": "change",
+    "model_catalog_write": "change",
     "approval_list": "query",
     "approval_get": "describe",
     "approval_respond": "change",
