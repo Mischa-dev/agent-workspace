@@ -61,6 +61,7 @@ use crate::{
 };
 
 mod admin;
+mod agent_profile_tools;
 mod agents;
 mod ai_tools;
 mod approvals;
@@ -74,6 +75,7 @@ mod collection_tools;
 mod comment_tools;
 mod common;
 mod criteria;
+mod environment_tools;
 mod field_tools;
 mod file_tools;
 mod groups;
@@ -93,6 +95,7 @@ mod project_template_tools;
 mod reactions;
 mod reads;
 mod replies;
+mod repository_tools;
 mod role_tools;
 mod run_pages;
 mod runs;
@@ -3122,6 +3125,25 @@ impl McpServer {
     }
 
     #[tool(
+        description = "People: make an agent in a project (often from a template such as reviewer), change it (name, @handle, harness, model settings, instructions, allowed tools, environment), turn it off or on, or remove it. The project's owners and admins, through an app connected as themselves; agents read them with agent_profile_list. Audited.",
+        annotations(
+            title = "Change an agent",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn agent_profile_write(
+        &self,
+        Parameters(arguments): Parameters<agent_profile_tools::AgentProfileWriteArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<agent_profile_tools::AgentProfileWriteValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(agent_profile_tools::agent_profile_write(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
         description = "A project's launch queue: what waits to start and why (blocked by a task, waiting for an account slot, a set time), and the latest launches that started, failed or were cancelled.",
         annotations(
             title = "List launches",
@@ -3175,7 +3197,26 @@ impl McpServer {
     }
 
     #[tool(
-        description = "List repositories in a project, or in every project you can reach: default branch, whether its copy on the server is prepared, whether GitHub is connected, and whether Codex can run on it now (readyForRuns, with notReadyBecause if not). Repositories are added and changed in project settings (settingsUrl), not through MCP.",
+        description = "People: add an environment where a project's runs execute (name and harness), change one, make it the default, archive it, or check it with your own signed-in account. The project's owners and admins, through an app connected as themselves; agents read environments with environment_list. Audited.",
+        annotations(
+            title = "Change environment",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
+    )]
+    async fn environment_write(
+        &self,
+        Parameters(arguments): Parameters<environment_tools::EnvironmentWriteArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<environment_tools::EnvironmentWriteValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(environment_tools::environment_write(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "List repositories in a project, or in every project you can reach: default branch, whether its copy on the server is prepared, whether GitHub is connected, and whether Codex can run on it now (readyForRuns, with notReadyBecause if not). People add, prepare and archive them with repository_write.",
         annotations(
             title = "List repositories",
             read_only_hint = true,
@@ -3189,6 +3230,25 @@ impl McpServer {
     ) -> Json<common::ToolResult<code::RepositoryListValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(code::repository_list(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "People: add a GitHub repository to a project (owner, name, GitHub's ID, default branch, and that you trust its code to run here), prepare its copy on the server, or archive it. Those who manage code in the project, through an app connected as themselves; agents read repositories only.",
+        annotations(
+            title = "Change a repository",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
+    )]
+    async fn repository_write(
+        &self,
+        Parameters(arguments): Parameters<repository_tools::RepositoryWriteArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<repository_tools::RepositoryWriteValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(repository_tools::repository_write(&self.state, principal, arguments).await)
     }
 
     #[tool(

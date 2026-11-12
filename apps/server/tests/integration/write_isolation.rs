@@ -415,6 +415,7 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
 
 /// Every MCP tool that isn't read-only, which `mcp_cases` covers.
 const MCP_WRITE_TOOLS: &[&str] = &[
+    "agent_profile_write",
     "ai_analyze",
     "ai_suggestion_decide",
     "ai_summarize",
@@ -426,6 +427,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "conversation_start",
     "conversation_update",
     "decision_record",
+    "environment_write",
     "file_delete",
     "file_upload",
     "invitation_write",
@@ -465,6 +467,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "recurring_write",
     "reply_stop",
     "reply_retry",
+    "repository_write",
     "role_assign",
     "role_write",
     "run_request",
@@ -5673,6 +5676,35 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"projectId": b.project, "person": "@wren", "role": "viewer"})],
         )
         .rejecting(vec![json!({"projectId": a.project, "person": bx.wren, "role": "viewer"})]),
+        mcp_case(
+            "repository_write",
+            json!({"projectId": a.project, "owner": "net-org", "name": "net-mcp", "githubRepositoryId": 990_001, "defaultBranch": "main", "trustAcknowledged": true}),
+            vec![json!({"projectId": b.project, "owner": "net-org", "name": "net-mcp-b", "githubRepositoryId": 990_002, "defaultBranch": "main", "trustAcknowledged": true})],
+        )
+        .rejecting(vec![
+            json!({"projectId": a.project, "repository": b.repository, "archive": true}),
+            json!({"projectId": a.project, "repository": b.repository, "prepare": true}),
+        ]),
+        mcp_case(
+            "agent_profile_write",
+            json!({"projectId": a.project, "template": "reviewer", "name": "Net mcp reviewer"}),
+            vec![json!({"projectId": b.project, "template": "reviewer", "name": "Net mcp reviewer"})],
+        )
+        .rejecting(vec![
+            json!({"projectId": a.project, "profile": bx.agent_profile, "description": "Net"}),
+            json!({"projectId": a.project, "profile": bx.agent_profile, "remove": true}),
+            json!({"projectId": a.project, "template": "reviewer", "name": "Net mcp b", "environmentId": bx.environment}),
+        ]),
+        mcp_case(
+            "environment_write",
+            json!({"projectId": a.project, "name": "Net mcp cloud", "harness": "codex_cloud", "providerEnvironmentId": "env-mcp"}),
+            vec![json!({"projectId": b.project, "name": "Net mcp cloud", "harness": "codex_cloud", "providerEnvironmentId": "env-mcp"})],
+        )
+        .rejecting(vec![
+            json!({"projectId": a.project, "environment": bx.environment, "name": "Net"}),
+            json!({"projectId": a.project, "environment": bx.environment, "archive": true}),
+            json!({"projectId": a.project, "name": "Net mcp b", "harness": "codex_cloud", "providerEnvironmentId": "env-b", "repositoryId": b.repository}),
+        ]),
         mcp_case(
             "workspace_update",
             json!({"projectId": a.project, "modules": {"whiteboards": true}}),

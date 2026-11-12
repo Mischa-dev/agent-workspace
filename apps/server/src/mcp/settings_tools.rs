@@ -148,12 +148,22 @@ pub(super) struct SettingsSetArguments {
     /// "workspace" (owners and admins of the workspace) or "user" (your
     /// own, in this workspace).
     pub scope: Option<String>,
-    /// The new value, as JSON. Leave it out with reset.
+    /// The new value, as JSON; null means "not chosen" where a setting
+    /// allows it. Leave it out with reset.
+    #[serde(default, deserialize_with = "present")]
     pub value: Option<serde_json::Value>,
     /// Remove the value at scope, so the setting inherits again.
     pub reset: Option<bool>,
     /// The version you last read; 0 means it isn't set at that scope yet.
     pub expected_version: Option<i64>,
+}
+
+/// A value that was given, even as JSON null: only a missing field is None.
+fn present<'de, D>(deserializer: D) -> Result<Option<serde_json::Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    serde_json::Value::deserialize(deserializer).map(Some)
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]

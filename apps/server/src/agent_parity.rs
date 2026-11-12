@@ -86,27 +86,27 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/environments",
-            Gap("environment_write"),
+            Tool("environment_write"),
         ),
         (
             Put,
             "/api/v1/projects/{project_id}/environments/{environment_id}",
-            Gap("environment_write"),
+            Tool("environment_write"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/environments/{environment_id}/archive",
-            Gap("environment_write"),
+            Tool("environment_write"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/environments/{environment_id}/default",
-            Gap("environment_write"),
+            Tool("environment_write"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/environments/{environment_id}/check",
-            Gap("environment_write"),
+            Tool("environment_write"),
         ),
         (
             Post,
@@ -126,17 +126,17 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/agent-profiles",
-            Gap("agent_profile_write"),
+            Tool("agent_profile_write"),
         ),
         (
             Patch,
             "/api/v1/projects/{project_id}/agent-profiles/{profile_id}",
-            Gap("agent_profile_write"),
+            Tool("agent_profile_write"),
         ),
         (
             Delete,
             "/api/v1/projects/{project_id}/agent-profiles/{profile_id}",
-            Gap("agent_profile_write"),
+            Tool("agent_profile_write"),
         ),
         (
             Put,
@@ -857,17 +857,17 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/repositories",
-            Gap("repository_write"),
+            Tool("repository_write"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/repositories/{repository_id}/prepare",
-            Gap("repository_write"),
+            Tool("repository_write"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/repositories/{repository_id}/archive",
-            Gap("repository_write"),
+            Tool("repository_write"),
         ),
         (
             Post,
