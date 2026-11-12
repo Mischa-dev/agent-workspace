@@ -20,6 +20,12 @@ export type PageRevision = {
   via: string | null
   note: string | null
   createdAt: string
+  /** The agent session that wrote it: what ran it, and where, when the viewer can see that conversation. */
+  sessionHarness?: string
+  sessionRunId?: string
+  sessionConversationId?: string
+  sessionConversationName?: string
+  sessionConversationKind?: string
 }
 
 export type Page = {

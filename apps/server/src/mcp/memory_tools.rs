@@ -360,7 +360,7 @@ pub(super) async fn page_get(
         return ToolResult::invalid("pageId", "Pass a page ID or link.");
     };
     let result = async {
-        let Some(page) = memory::get_page(&state.pool, page_id).await? else {
+        let Some(page) = memory::get_page(&state.pool, page_id, principal.actor_id).await? else {
             return Ok(ToolResult::not_found("That page"));
         };
         if page.project_id != principal.project_id
@@ -378,7 +378,9 @@ pub(super) async fn page_get(
         }
         let (title, body) = match arguments.version {
             Some(version) if version != page.version => {
-                match memory::get_revision(&state.pool, page_id, version).await? {
+                match memory::get_revision(&state.pool, page_id, version, principal.actor_id)
+                    .await?
+                {
                     Some(revision) => (revision.title, revision.body),
                     None => return Ok(ToolResult::not_found("That version")),
                 }
@@ -821,7 +823,7 @@ async fn readable_page(
     principal: &McpPrincipal,
     page_id: Uuid,
 ) -> Result<Option<memory::PageView>, AppError> {
-    let Some(page) = memory::get_page(&state.pool, page_id).await? else {
+    let Some(page) = memory::get_page(&state.pool, page_id, principal.actor_id).await? else {
         return Ok(None);
     };
     if page.project_id != principal.project_id
@@ -1517,7 +1519,7 @@ pub(super) async fn skill_get(
             (None, None) => None,
         };
         let page = match page_id {
-            Some(page_id) => memory::get_page(&state.pool, page_id).await?,
+            Some(page_id) => memory::get_page(&state.pool, page_id, principal.actor_id).await?,
             None => None,
         };
         let Some(page) = page.filter(|page| {

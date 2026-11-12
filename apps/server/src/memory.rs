@@ -155,6 +155,9 @@ pub struct RevisionSummary {
     pub via: Option<String>,
     pub note: Option<String>,
     pub created_at: String,
+    #[sqlx(flatten)]
+    #[serde(flatten)]
+    pub session: RevisionSession,
 }
 
 #[derive(Clone, Debug, FromRow, Serialize)]
@@ -167,6 +170,61 @@ pub struct RevisionView {
     pub via: Option<String>,
     pub note: Option<String>,
     pub created_at: String,
+    #[sqlx(flatten)]
+    #[serde(flatten)]
+    pub session: RevisionSession,
+}
+
+/// The agent session a version was written in (AWD-53): what ran it, and
+/// the conversation it works in when the viewer can see that conversation.
+#[derive(Clone, Debug, Default, FromRow, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevisionSession {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_harness: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_run_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_conversation_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_conversation_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_conversation_kind: Option<String>,
+}
+
+/// Columns for [`RevisionSession`], with `$viewer` the viewer's actor id;
+/// joins `session` and `session_conversation`.
+const REVISION_SESSION_COLUMNS: &str = r#"
+    session.harness AS session_harness,
+    CASE WHEN session_conversation.id IS NOT NULL THEN session.agent_run_id END AS session_run_id,
+    session_conversation.id AS session_conversation_id,
+    session_conversation.name AS session_conversation_name,
+    session_conversation.kind AS session_conversation_kind
+"#;
+
+fn revision_session_joins(viewer: &str) -> String {
+    format!(
+        r#"
+        LEFT JOIN agent_sessions session ON session.id = revision.agent_session_id
+        LEFT JOIN conversations session_conversation
+          ON session_conversation.id = session.conversation_id
+         AND conversation_visible_to(session.conversation_id, {viewer})
+        "#
+    )
+}
+
+/// The writer's agent session for a page's project: their active one that
+/// moved most lately. `$page` and `$actor` are the bound parameters.
+fn writer_session(page: &str, actor: &str) -> String {
+    format!(
+        r#"(SELECT session.id FROM agent_sessions session
+            JOIN project_pages session_page ON session_page.id = {page}
+            WHERE session.agent_actor_id = {actor}
+              AND session.project_id = session_page.project_id
+              AND session.state = 'active'
+            ORDER BY session.last_activity_at DESC, session.id
+            LIMIT 1)"#
+    )
 }
 
 #[derive(Clone, Debug, FromRow, Serialize)]
@@ -310,7 +368,13 @@ const PAGE_SELECT: &str = r#"
     WHERE page.id = $1
 "#;
 
-pub async fn get_page(pool: &PgPool, page_id: Uuid) -> Result<Option<PageView>, AppError> {
+/// A page with its latest versions; `viewer` decides which agent sessions'
+/// conversations the history may name.
+pub async fn get_page(
+    pool: &PgPool,
+    page_id: Uuid,
+    viewer: Uuid,
+) -> Result<Option<PageView>, AppError> {
     let Some(mut page) = sqlx::query_as::<_, PageView>(PAGE_SELECT)
         .bind(page_id)
         .bind(STALE_AFTER_DAYS)
@@ -319,11 +383,12 @@ pub async fn get_page(pool: &PgPool, page_id: Uuid) -> Result<Option<PageView>, 
     else {
         return Ok(None);
     };
-    page.revisions = sqlx::query_as::<_, RevisionSummary>(
+    page.revisions = sqlx::query_as::<_, RevisionSummary>(&format!(
         r#"
         SELECT revision.version, revision.title, author.display_name AS author,
                via_client.client_name AS via, revision.note,
-               revision.created_at::text AS created_at
+               revision.created_at::text AS created_at,
+               {REVISION_SESSION_COLUMNS}
         FROM project_page_revisions revision
         JOIN project_pages page ON page.id = revision.page_id
         LEFT JOIN project_memberships author
@@ -331,19 +396,26 @@ pub async fn get_page(pool: &PgPool, page_id: Uuid) -> Result<Option<PageView>, 
         LEFT JOIN mcp_oauth_grants via_grant
           ON via_grant.id = revision.via_oauth_grant_id AND via_grant.show_via
         LEFT JOIN mcp_oauth_clients via_client ON via_client.id = via_grant.client_id
+        {joins}
         WHERE revision.page_id = $1
         ORDER BY revision.version DESC
         LIMIT 50
         "#,
-    )
+        joins = revision_session_joins("$2"),
+    ))
     .bind(page_id)
+    .bind(viewer)
     .fetch_all(pool)
     .await?;
     Ok(Some(page))
 }
 
 /// The guide page for a Project, if it has one.
-pub async fn guide_page(pool: &PgPool, project_id: Uuid) -> Result<Option<PageView>, AppError> {
+pub async fn guide_page(
+    pool: &PgPool,
+    project_id: Uuid,
+    viewer: Uuid,
+) -> Result<Option<PageView>, AppError> {
     let id = sqlx::query_scalar::<_, Uuid>(
         "SELECT id FROM project_pages WHERE project_id = $1 AND is_guide AND archived_at IS NULL",
     )
@@ -351,7 +423,7 @@ pub async fn guide_page(pool: &PgPool, project_id: Uuid) -> Result<Option<PageVi
     .fetch_optional(pool)
     .await?;
     match id {
-        Some(id) => get_page(pool, id).await,
+        Some(id) => get_page(pool, id, viewer).await,
         None => Ok(None),
     }
 }
@@ -385,12 +457,14 @@ pub async fn get_revision(
     pool: &PgPool,
     page_id: Uuid,
     version: i64,
+    viewer: Uuid,
 ) -> Result<Option<RevisionView>, AppError> {
-    Ok(sqlx::query_as::<_, RevisionView>(
+    Ok(sqlx::query_as::<_, RevisionView>(&format!(
         r#"
         SELECT revision.version, revision.title, revision.body,
                author.display_name AS author, via_client.client_name AS via,
-               revision.note, revision.created_at::text AS created_at
+               revision.note, revision.created_at::text AS created_at,
+               {REVISION_SESSION_COLUMNS}
         FROM project_page_revisions revision
         JOIN project_pages page ON page.id = revision.page_id
         LEFT JOIN project_memberships author
@@ -398,11 +472,14 @@ pub async fn get_revision(
         LEFT JOIN mcp_oauth_grants via_grant
           ON via_grant.id = revision.via_oauth_grant_id AND via_grant.show_via
         LEFT JOIN mcp_oauth_clients via_client ON via_client.id = via_grant.client_id
+        {joins}
         WHERE revision.page_id = $1 AND revision.version = $2
         "#,
-    )
+        joins = revision_session_joins("$3"),
+    ))
     .bind(page_id)
     .bind(version)
+    .bind(viewer)
     .fetch_optional(pool)
     .await?)
 }
@@ -737,7 +814,7 @@ pub(crate) async fn record_revision(
     if let Some(minutes) = merge_minutes
         && note.is_none()
     {
-        let merged = sqlx::query(
+        let merged = sqlx::query(&format!(
             r#"
             UPDATE project_page_revisions revision
             SET version = $2, title = $3, body = $4
@@ -748,10 +825,12 @@ pub(crate) async fn record_revision(
               )
               AND revision.actor_id = $5
               AND revision.via_oauth_grant_id IS NOT DISTINCT FROM $6
+              AND revision.agent_session_id IS NOT DISTINCT FROM {session}
               AND revision.note IS NULL
               AND revision.created_at > now() - make_interval(mins => $7)
             "#,
-        )
+            session = writer_session("$1", "$5"),
+        ))
         .bind(page_id)
         .bind(version)
         .bind(title)
@@ -779,13 +858,14 @@ async fn insert_revision(
     body: &str,
     note: Option<&str>,
 ) -> Result<(), AppError> {
-    sqlx::query(
+    sqlx::query(&format!(
         r#"
         INSERT INTO project_page_revisions (
-            page_id, version, title, body, actor_id, via_oauth_grant_id, note
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+            page_id, version, title, body, actor_id, via_oauth_grant_id, note, agent_session_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, {session})
         "#,
-    )
+        session = writer_session("$1", "$5"),
+    ))
     .bind(page_id)
     .bind(version)
     .bind(title)
@@ -1213,7 +1293,7 @@ async fn create_page_http(
     )
     .await?;
     transaction.commit().await?;
-    get_page(&state.pool, page_id)
+    get_page(&state.pool, page_id, principal.actor_id)
         .await?
         .map(Json)
         .ok_or(AppError::NotFound("page"))
@@ -1242,7 +1322,7 @@ async fn get_page_http(
     )
     .await
     .map_err(|_| AppError::NotFound("page"))?;
-    get_page(&state.pool, page_id)
+    get_page(&state.pool, page_id, principal.actor_id)
         .await?
         .map(Json)
         .ok_or(AppError::NotFound("page"))
@@ -1279,7 +1359,7 @@ async fn update_page_http(
     )
     .await?;
     transaction.commit().await?;
-    get_page(&state.pool, page_id)
+    get_page(&state.pool, page_id, principal.actor_id)
         .await?
         .map(Json)
         .ok_or(AppError::NotFound("page"))
@@ -1300,7 +1380,7 @@ async fn get_revision_http(
     )
     .await
     .map_err(|_| AppError::NotFound("page"))?;
-    get_revision(&state.pool, page_id, version)
+    get_revision(&state.pool, page_id, version, principal.actor_id)
         .await?
         .map(Json)
         .ok_or(AppError::NotFound("page version"))

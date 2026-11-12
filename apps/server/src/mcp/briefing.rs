@@ -618,7 +618,7 @@ pub(super) async fn project_open(
         .bind(project_id)
         .fetch_one(&state.pool)
         .await?;
-        let guide = memory::guide_page(&state.pool, project_id)
+        let guide = memory::guide_page(&state.pool, project_id, principal.actor_id)
             .await?
             .map(|page| {
                 let (body, truncated) = truncate_text(&page.body, GUIDE_CHARACTERS);
