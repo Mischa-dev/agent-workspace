@@ -3607,6 +3607,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "project_export",
     "project_members",
     "project_open",
+    "project_template_list",
     "projects_list",
     "pull_request_get",
     "pull_request_list",
@@ -3696,6 +3697,7 @@ fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         by_project("role_list"),
         by_project("my_permissions"),
         by_project("workspace_template_list"),
+        by_project("project_template_list"),
         case(
             "role_get",
             vec![

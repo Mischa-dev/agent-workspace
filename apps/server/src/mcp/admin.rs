@@ -665,6 +665,10 @@ pub(super) struct ProjectCreateArguments {
     pub key: String,
     /// The project's name.
     pub name: String,
+    /// A project template of the workspace to start from, by ID or name
+    /// (project_template_list): its workflow, labels, channels, settings and
+    /// task templates are set up in the new project.
+    pub template: Option<String>,
 }
 
 const PROJECT_CREATE_ONLY: &str = "Only people can create projects, through an app connected for their whole account, in a workspace where they may create projects.";
@@ -772,6 +776,37 @@ pub(super) async fn project_create(
             }
             Err(error) => return Err(error),
         };
+        if let Some(wanted) = arguments.template.as_deref() {
+            let Some((template_id, _)) = super::project_template_tools::find_template(
+                &mut transaction,
+                organization_id,
+                wanted,
+            )
+            .await?
+            else {
+                return Ok(ToolResult::not_found(
+                    "That project template (pass its ID if two share a name; see project_template_list)",
+                ));
+            };
+            let mut actor = super::writes::mcp_actor(principal, String::new());
+            actor.project_id = project_id;
+            match crate::work_items::project_templates::apply_to_new_project(
+                &mut transaction,
+                actor,
+                organization_id,
+                template_id,
+            )
+            .await
+            {
+                Ok(_) => {}
+                Err(AppError::NotFound(_)) => {
+                    return Ok(ToolResult::conflict(
+                        "That project template is archived. Restore it first, or pick another.",
+                    ));
+                }
+                Err(error) => return Err(error),
+            }
+        }
         insert_audit(
             &mut transaction,
             principal,
@@ -779,7 +814,11 @@ pub(super) async fn project_create(
             "project.mcp_created",
             "project",
             project_id,
-            serde_json::json!({ "organization_id": organization_id, "project_key": key }),
+            serde_json::json!({
+                "organization_id": organization_id,
+                "project_key": key,
+                "template": arguments.template,
+            }),
         )
         .await?;
         transaction.commit().await?;
