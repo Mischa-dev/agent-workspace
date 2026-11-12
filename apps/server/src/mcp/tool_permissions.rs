@@ -15,10 +15,10 @@
 //! ones, so a new tool must say what it needs.
 
 use crate::policy::Permission::{
-    self, ChannelsCreate, ChannelsPost, CodeView, CollectionsBuild, CollectionsEdit, MembersManage,
-    MembersView, PagesEdit, ProjectsCreate, ProjectsManage, RolesManage, RunsApprove,
-    RunsInterrupt, RunsLaunch, SettingsManage, SheetsEdit, TasksCreate, TasksDelete, TasksEdit,
-    TasksView, TasksWorkflow, WhiteboardsEdit,
+    self, ChannelsCreate, ChannelsPost, CodeView, CollectionsBuild, CollectionsEdit, MembersInvite,
+    MembersManage, MembersView, PagesEdit, ProjectsCreate, ProjectsManage, RolesManage,
+    RunsApprove, RunsInterrupt, RunsLaunch, SettingsManage, SheetsEdit, TasksCreate, TasksDelete,
+    TasksEdit, TasksView, TasksWorkflow, WhiteboardsEdit,
 };
 
 pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
@@ -33,6 +33,8 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("usage_batch_launch", Some(RunsLaunch)),
     ("project_members", Some(MembersView)),
     ("project_member_set", Some(MembersManage)),
+    ("invitation_list", Some(MembersInvite)),
+    ("invitation_write", Some(MembersInvite)),
     ("role_list", None),
     ("role_get", None),
     ("my_permissions", None),
