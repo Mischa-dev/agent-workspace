@@ -16,8 +16,9 @@
 
 use crate::policy::Permission::{
     self, ChannelsCreate, ChannelsPost, CodeView, CollectionsBuild, CollectionsEdit, MembersManage,
-    MembersView, PagesEdit, ProjectsCreate, ProjectsManage, RolesManage, RunsApprove, RunsLaunch,
-    SettingsManage, TasksCreate, TasksDelete, TasksEdit, TasksView, TasksWorkflow, WhiteboardsEdit,
+    MembersView, PagesEdit, ProjectsCreate, ProjectsManage, RolesManage, RunsApprove,
+    RunsInterrupt, RunsLaunch, SettingsManage, TasksCreate, TasksDelete, TasksEdit, TasksView,
+    TasksWorkflow, WhiteboardsEdit,
 };
 
 pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
@@ -37,6 +38,9 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("my_permissions", None),
     ("role_write", Some(RolesManage)),
     ("role_assign", Some(MembersManage)),
+    ("workspace_template_list", None),
+    ("workspace_template_apply", Some(SettingsManage)),
+    ("workspace_template_save", Some(SettingsManage)),
     ("project_create", Some(ProjectsCreate)),
     ("project_update", Some(ProjectsManage)),
     ("project_archive", Some(ProjectsManage)),
@@ -162,11 +166,14 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("run_start", Some(RunsLaunch)),
     ("task_launch", Some(RunsLaunch)),
     ("run_get", None),
+    ("run_stop", Some(RunsInterrupt)),
+    ("run_retry", Some(RunsLaunch)),
     ("run_list", None),
     ("run_steps", None),
     ("run_usage", None),
     ("agent_profile_list", None),
     ("launch_list", None),
+    ("launch_cancel", Some(RunsLaunch)),
     ("environment_list", None),
     ("repository_list", Some(CodeView)),
     ("pull_request_list", Some(CodeView)),

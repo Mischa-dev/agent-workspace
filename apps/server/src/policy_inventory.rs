@@ -323,6 +323,24 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/organizations/{organization_id}/members/{actor_id}/agent-limit",
         MembershipManage
     ),
+    policy_route!(
+        "workspace_templates",
+        Post,
+        "/api/v1/organizations/{organization_id}/workspace-templates",
+        SettingsManage
+    ),
+    policy_route!(
+        "workspace_templates",
+        Post,
+        "/api/v1/organizations/{organization_id}/workspace-templates/apply",
+        SettingsManage
+    ),
+    policy_route!(
+        "workspace_templates",
+        Delete,
+        "/api/v1/organizations/{organization_id}/workspace-templates/{template_id}",
+        SettingsManage
+    ),
     boundary_route!(
         "workspace",
         Post,

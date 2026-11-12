@@ -353,6 +353,11 @@ pub(crate) async fn preset_is_known(
         .is_some_and(|preset| !preset.removed))
 }
 
+/// A built-in preset's name, such as "Software team" (AWD-76).
+pub(crate) fn builtin_preset_name(id: &str) -> Option<&'static str> {
+    builtin(id).map(|preset| preset.name.as_str())
+}
+
 /// Whether a part id is in the layout registry.
 pub(crate) fn part_is_known(id: &str) -> bool {
     part_known(id)

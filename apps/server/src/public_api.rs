@@ -139,6 +139,7 @@ pub(crate) fn tag_for(tool: &str) -> &'static str {
         "briefing" | "inbox" | "notification" | "mark" => "Inbox and notifications",
         "project" | "projects" | "workflow" | "settings" => "Projects",
         "role" => "Roles and access",
+        "workspace" => "Workspace",
         "conversation" | "message" | "file" | "thread" | "channel" | "pin" | "people" => {
             "Conversations"
         }
@@ -146,7 +147,9 @@ pub(crate) fn tag_for(tool: &str) -> &'static str {
         "task" | "label" | "field" | "milestone" | "view" | "my" | "template" => "Tasks",
         "page" | "skill" | "decision" | "search" => "Pages and search",
         "collection" | "record" => "Collections",
-        "run" | "approval" | "environment" | "external" | "usage" => "Runs and launching",
+        "run" | "launch" | "approval" | "environment" | "external" | "usage" => {
+            "Runs and launching"
+        }
         "repository" | "pull" => "Code",
         "webhook" => "Webhooks",
         "automation" => "Automations",
@@ -179,12 +182,6 @@ const ERROR_STATUSES: &[(&str, &str)] = &[
         "Agent Workspace couldn't finish that. Try again shortly.",
     ),
 ];
-
-/// Whether an error status answers with the operation's own result (its
-/// `outcome` says what went wrong), rather than the shared `Error`.
-fn carries_outcome(status: &str) -> bool {
-    matches!(status, "403" | "404" | "409" | "422" | "503")
-}
 
 /// Moves a schema's `$defs` into `components.schemas` under the tool's name,
 /// and points its references there.
@@ -256,6 +253,7 @@ pub(crate) fn document() -> Value {
     let mut components = Map::new();
     let mut paths = Map::new();
     let mut tags = BTreeMap::new();
+    let mut results: BTreeMap<String, String> = BTreeMap::new();
     for tool in tools {
         let name = tool.name.to_string();
         let tag = tag_for(&name);
@@ -278,11 +276,20 @@ pub(crate) fn document() -> Value {
             .as_ref()
             .map(|schema| {
                 // Six responses share it, so it's referenced rather than
-                // repeated: inline, the document passes a megabyte.
-                let root = format!("{name}_result");
-                let hoisted = hoist(&root, schema, &mut components);
-                let key = pascal(&root);
-                components.insert(key.clone(), hoisted);
+                // repeated: inline, the document passes a megabyte. Tools
+                // with the same result (run_get, run_stop, ...) share one.
+                let raw = serde_json::to_string(schema.as_ref()).unwrap_or_default();
+                let key = match results.get(&raw) {
+                    Some(key) => String::clone(key),
+                    None => {
+                        let root = format!("{name}_result");
+                        let hoisted = hoist(&root, schema, &mut components);
+                        let key = pascal(&root);
+                        components.insert(key.clone(), hoisted);
+                        results.insert(raw, key.clone());
+                        key
+                    }
+                };
                 json!({ "$ref": format!("#/components/schemas/{key}") })
             })
             .unwrap_or_else(|| json!({ "type": "object" }));
@@ -295,13 +302,14 @@ pub(crate) fn document() -> Value {
             }),
         );
         for (status, description) in ERROR_STATUSES {
-            let response = if carries_outcome(status) {
+            let response = if matches!(*status, "403" | "404" | "409" | "422" | "503") {
                 json!({
                     "description": description,
                     "content": { "application/json": { "schema": output.clone() } },
                 })
             } else {
-                // The same for every operation, so it's written once.
+                // The same for every operation, so referenced rather than
+                // repeated, which keeps the document small as tools are added.
                 json!({ "$ref": format!("#/components/responses/Error{status}") })
             };
             responses.insert((*status).to_owned(), response);
@@ -342,19 +350,6 @@ pub(crate) fn document() -> Value {
             },
         }),
     );
-    let shared_responses: Map<String, Value> = ERROR_STATUSES
-        .iter()
-        .filter(|(status, _)| !carries_outcome(status))
-        .map(|(status, description)| {
-            (
-                format!("Error{status}"),
-                json!({
-                    "description": description,
-                    "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } },
-                }),
-            )
-        })
-        .collect();
     json!({
         "openapi": "3.1.0",
         "info": {
@@ -368,7 +363,23 @@ pub(crate) fn document() -> Value {
         "paths": paths,
         "components": {
             "schemas": components,
-            "responses": shared_responses,
+            "responses": ERROR_STATUSES
+                .iter()
+                .filter(|(status, _)| !matches!(*status, "403" | "404" | "409" | "422" | "503"))
+                .map(|(status, description)| {
+                    (
+                        format!("Error{status}"),
+                        json!({
+                            "description": description,
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/Error" },
+                                },
+                            },
+                        }),
+                    )
+                })
+                .collect::<Map<_, _>>(),
             "securitySchemes": {
                 "bearerToken": {
                     "type": "http",

@@ -1,0 +1,33 @@
+{
+  "id": "small_team",
+  "name": "Small team",
+  "description": "A few people and their agents: channels, tasks, pages and whiteboards, without code and runs. Everyone joins as a member.",
+  "modules": [
+    "messages",
+    "projects",
+    "channels",
+    "tasks",
+    "pages",
+    "whiteboards",
+    "collections",
+    "agents",
+    "inbox",
+    "automations",
+    "suggestions"
+  ],
+  "layout": "minimal",
+  "roles": [
+    {
+      "name": "Read only",
+      "description": "Reads everything they're given and changes nothing, across the whole workspace.",
+      "baseRole": "viewer",
+      "permissions": ["projects.view", "tasks.view", "code.view", "directory.view"]
+    }
+  ],
+  "defaultRole": "Member",
+  "project": {
+    "name": "Team",
+    "key": "TEAM",
+    "channels": ["general", "random", "announcements"]
+  }
+}

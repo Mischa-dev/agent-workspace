@@ -97,6 +97,7 @@ mod runs;
 mod settings_tools;
 mod talk;
 mod task_batch;
+mod workspace_template_tools;
 pub(crate) use task_batch::{ImportTask, create_for_import};
 mod task_drafts;
 mod task_move;
@@ -433,6 +434,72 @@ impl McpServer {
     ) -> Json<common::ToolResult<role_tools::RoleWriteValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(role_tools::role_write(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "List the workspace's templates: the built-in ones (Everything first, then Chat with my agents, Personal, Small team, Software team and Company) and any the workspace saved. Each says in plain words what using it does (modules on and off, the layout, roles, the role new members get, a starter project with channels and collections) and carries its full definition. Agents can suggest one to a workspace owner or admin; canUse says whether this connection may use it.",
+        annotations(
+            title = "List workspace templates",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn workspace_template_list(
+        &self,
+        Parameters(arguments): Parameters<workspace_template_tools::WorkspaceTemplateListArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<workspace_template_tools::WorkspaceTemplateListValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(
+            workspace_template_tools::workspace_template_list(&self.state, principal, arguments)
+                .await,
+        )
+    }
+
+    #[tool(
+        description = "Use a workspace template: switches modules on and off, sets the default layout, adds or updates roles and the role new members start with, and makes its starter project with channels and collections. Nothing is deleted; what's already there by name or key is reused, so using it twice changes nothing the second time. Only a person who manages the workspace's settings and roles, through an app connected as themselves; agents suggest a template instead. Audited.",
+        annotations(
+            title = "Use workspace template",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn workspace_template_apply(
+        &self,
+        Parameters(arguments): Parameters<
+            workspace_template_tools::WorkspaceTemplateApplyArguments,
+        >,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<crate::workspace_templates::Applied>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(
+            workspace_template_tools::workspace_template_apply(&self.state, principal, arguments)
+                .await,
+        )
+    }
+
+    #[tool(
+        description = "Save the workspace as a template (its modules, layout, changed roles and default role, and optionally the project's channels and collections), or remove a saved one. Only a person who manages the workspace's settings and roles, through an app connected as themselves. Audited.",
+        annotations(
+            title = "Save workspace template",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn workspace_template_save(
+        &self,
+        Parameters(arguments): Parameters<workspace_template_tools::WorkspaceTemplateSaveArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<workspace_template_tools::WorkspaceTemplateSaveValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(
+            workspace_template_tools::workspace_template_save(&self.state, principal, arguments)
+                .await,
+        )
     }
 
     #[tool(
@@ -2658,6 +2725,44 @@ impl McpServer {
     }
 
     #[tool(
+        description = "Stop a run that's queued, working or waiting for an answer, as the run's Stop button does. Its workspace is kept and its open questions are withdrawn; stopping one already stopped changes nothing. Start it again with run_retry (people) or run_request (agents).",
+        annotations(
+            title = "Stop run",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn run_stop(
+        &self,
+        Parameters(arguments): Parameters<runs::RunControlArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<runs::RunValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(runs::run_stop(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Start a finished, failed or stopped run again: a new run in the same thread with the same prompt, repository and settings, on your own account. Returns the new run. People with full access only; agents ask with run_request.",
+        annotations(
+            title = "Retry run",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
+    )]
+    async fn run_retry(
+        &self,
+        Parameters(arguments): Parameters<runs::RunControlArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<runs::RunValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(runs::run_retry(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
         description = "List Codex runs you can see, newest first: active ones by default, or finished, failed, or all. mine: true for only runs you started.",
         annotations(title = "List runs", read_only_hint = true, open_world_hint = false)
     )]
@@ -2736,6 +2841,25 @@ impl McpServer {
     ) -> Json<common::ToolResult<launch_tools::LaunchListValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(launch_tools::launch_list(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Take a launch out of the queue before it starts, as the queue's Cancel button does: your own, or anyone's if you own or administer the project. Pass its launchId from launch_list. One that already started can't be cancelled; stop its run with run_stop.",
+        annotations(
+            title = "Cancel launch",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn launch_cancel(
+        &self,
+        Parameters(arguments): Parameters<launch_tools::LaunchCancelArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<launch_tools::LaunchValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(launch_tools::launch_cancel(&self.state, principal, arguments).await)
     }
 
     #[tool(
@@ -5060,6 +5184,7 @@ const OTHER_SCOPES: &[(&str, &str)] = &[
         "decisionId",
         "SELECT project_id FROM project_decisions WHERE id = $1",
     ),
+    ("launchId", "SELECT project_id FROM launches WHERE id = $1"),
     // Secondary: what to use, not what to act on.
     (
         "repositoryId",

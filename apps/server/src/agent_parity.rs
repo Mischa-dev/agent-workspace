@@ -245,6 +245,21 @@ mod tests {
         ),
         (
             Post,
+            "/api/v1/organizations/{organization_id}/workspace-templates",
+            Tool("workspace_template_save"),
+        ),
+        (
+            Post,
+            "/api/v1/organizations/{organization_id}/workspace-templates/apply",
+            Tool("workspace_template_apply"),
+        ),
+        (
+            Delete,
+            "/api/v1/organizations/{organization_id}/workspace-templates/{template_id}",
+            Tool("workspace_template_save"),
+        ),
+        (
+            Post,
             "/api/v1/organizations/{organization_id}/leave",
             Person("a person's own account"),
         ),
@@ -414,20 +429,16 @@ mod tests {
             "/api/v1/threads/{id}/agent-runs",
             Tool("run_start, run_request"),
         ),
-        (
-            Post,
-            "/api/v1/agent-runs/{id}/interrupt",
-            Gap("run_stop and run_retry"),
-        ),
+        (Post, "/api/v1/agent-runs/{id}/interrupt", Tool("run_stop")),
         (
             Post,
             "/api/v1/agent-runs/{id}/retry",
-            Gap("run_stop and run_retry"),
+            Tool("run_retry, run_request"),
         ),
         (
             Post,
             "/api/v1/agent-runs/{id}/acknowledge-failure",
-            Gap("run_stop and run_retry"),
+            Gap("dismissing a failed run's notice"),
         ),
         (
             Post,
@@ -1052,7 +1063,7 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/launches/{launch_id}/cancel",
-            Gap("launch_cancel"),
+            Tool("launch_cancel"),
         ),
         (
             Post,

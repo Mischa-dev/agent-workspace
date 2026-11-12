@@ -133,6 +133,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/organizations/{organization_id}/project-templates",
     "/api/v1/organizations/{organization_id}/roles",
     "/api/v1/organizations/{organization_id}/secrets",
+    "/api/v1/organizations/{organization_id}/workspace-templates",
     "/api/v1/organizations/{organization_id}/server",
     "/api/v1/pages/{id}",
     "/api/v1/pages/{id}/discussion",
@@ -1857,6 +1858,27 @@ async fn build_workspace(
         "{label} bug report link: {status} {created}"
     );
 
+    // AWD-76: a saved workspace template, carrying the project's channels.
+    let (status, created) = send(
+        app,
+        browser.request(
+            "POST",
+            &format!("/api/v1/organizations/{organization}/workspace-templates"),
+            None,
+            json!({
+                "name": format!("Our setup{m}"),
+                "description": format!("How we work{m}"),
+                "projectId": project,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "{label} workspace template: {created}"
+    );
+
     // Layouts: a saved preset, the workspace's default and the project's
     // layout, and rules for viewers and for Rook.
     let (status, created) = send(
@@ -2999,6 +3021,18 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             vec![],
         ),
         case(
+            "/api/v1/organizations/{organization_id}/workspace-templates",
+            vec![format!(
+                "/api/v1/organizations/{}/workspace-templates",
+                a.organization
+            )],
+            vec![format!(
+                "/api/v1/organizations/{}/workspace-templates",
+                b.organization
+            )],
+            vec![],
+        ),
+        case(
             "/api/v1/things/{kind}/{id}",
             vec![
                 format!("/api/v1/things/task/{}", a.task),
@@ -3589,6 +3623,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "whiteboard_read",
     "whiteboard_render",
     "workflow_get",
+    "workspace_template_list",
 ];
 
 fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
@@ -3647,6 +3682,7 @@ fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         by_project("project_members"),
         by_project("role_list"),
         by_project("my_permissions"),
+        by_project("workspace_template_list"),
         case(
             "role_get",
             vec![

@@ -6,7 +6,7 @@
 // same name in two groups (General, Members, Runs and models) shares one. A renamed
 // page's old id redirects in ./route.ts.
 import { lazy, type ComponentType, type LazyExoticComponent } from 'react'
-import { ArrowDownUp, Bell, Blocks, BookOpen, Bug, Cpu, LayoutTemplate, Mail, PanelsTopLeft, Plug, ScrollText, Server, User, UserCog, Webhook, Zap } from 'lucide-react'
+import { ArrowDownUp, Bell, Blocks, BookOpen, Bug, Cpu, LayoutTemplate, Mail, Package, PanelsTopLeft, Plug, ScrollText, Server, User, UserCog, Webhook, Zap } from 'lucide-react'
 import settingsClaims from 'virtual:modules/slots/settings'
 
 import type { PartId } from '../experience/parts'
@@ -76,6 +76,7 @@ export const SETTINGS_PAGES: SettingsPage[] = [
   page('workspace', 'harnesses', 'Harnesses', 'terminal', ['custom harness', 'adapter', 'manifest', 'runner', 'command', 'agents'], () => import('./workspace/HarnessesPage')),
   page('workspace', 'project-templates', 'Project templates', LayoutTemplate, ['templates', 'new project', 'setup', 'starter'], () => import('./workspace/ProjectTemplatesPage')),
   page('workspace', 'layout', 'Layout', PanelsTopLeft, ['layout', 'presets', 'hide', 'show', 'simplify', 'personal', 'words', 'rename', 'sidebar', 'my view', 'hidden parts', 'default layout'], () => import('./workspace/LayoutPage')),
+  page('workspace', 'templates', 'Workspace templates', Package, ['templates', 'workspace template', 'starter', 'setup', 'packages', 'software team', 'personal', 'company', 'small team', 'save as template'], () => import('./workspace/TemplatesPage')),
   page('workspace', 'modules', 'Modules', Blocks, ['modules', 'features', 'turn off', 'switch off', 'presets', 'projects', 'pages only', 'dms only', 'chat with my agents'], () => import('./workspace/ModulesPage')),
   page('workspace', 'github', 'GitHub', 'pull-request', ['installation', 'app', 'repositories'], () => import('./workspace/GitHubPage'), { visible: manager }),
   page('workspace', 'audit-log', 'Audit log', ScrollText, ['history', 'activity', 'who changed', 'events'], () => import('./workspace/AuditLogPage'), { visible: manager }),

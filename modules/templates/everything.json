@@ -1,0 +1,20 @@
+{
+  "id": "everything",
+  "name": "Everything",
+  "description": "Every module on: chat, projects, tasks, pages, whiteboards, collections, runs, code and automations. Change anything later.",
+  "modules": [
+    "messages",
+    "projects",
+    "channels",
+    "tasks",
+    "pages",
+    "whiteboards",
+    "collections",
+    "runs",
+    "code",
+    "agents",
+    "inbox",
+    "automations",
+    "suggestions"
+  ]
+}
