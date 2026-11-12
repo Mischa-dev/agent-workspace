@@ -138,6 +138,7 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("view_write", Some(TasksView)),
     ("my_work", None),
     ("template_list", None),
+    ("template_write", Some(TasksEdit)),
     ("task_from_template", Some(TasksCreate)),
     ("task_import", Some(TasksCreate)),
     ("project_export", Some(TasksView)),

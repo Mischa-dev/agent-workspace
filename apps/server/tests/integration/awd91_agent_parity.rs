@@ -872,3 +872,134 @@ async fn an_agent_saves_shares_and_deletes_task_views() {
 
     f.close().await;
 }
+
+/// AWD-111: an agent keeps a project's task templates: makes one, changes
+/// part of it, makes tasks from it, and retires it.
+#[tokio::test]
+async fn an_agent_writes_task_templates_and_uses_them() {
+    let Some(f) = fixture().await else {
+        return;
+    };
+    let project = f.seed.project_id.to_string();
+
+    let made = f
+        .call(
+            "template_write",
+            json!({
+                "projectId": project,
+                "name": "Bug report",
+                "title": "Fix this",
+                "description": "What happened, and what should have.",
+                "priority": "high",
+                "labels": ["bug"],
+                "acceptanceCriteria": ["Reproduced in a test", "Fixed"],
+                "subtasks": [{"title": "Write a failing test"}, {"title": "Fix it", "description": "Smallest change."}]
+            }),
+        )
+        .await;
+    assert_eq!(made["value"]["created"], true, "{made}");
+    let template = &made["value"]["template"];
+    let template_id = template["id"].as_str().expect("template id").to_owned();
+    assert_eq!(template["subtasks"].as_array().map(Vec::len), Some(2));
+    assert_eq!(
+        f.author(
+            "SELECT created_by_actor_id FROM task_templates WHERE id = $1",
+            &template_id
+        )
+        .await,
+        f.agent
+    );
+
+    // The same name again is refused.
+    let twin = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "template_write",
+        json!({"projectId": project, "name": "bug report", "title": "Again"}),
+    )
+    .await;
+    assert_eq!(twin["outcome"], "invalid_request", "{twin}");
+
+    // Changing one field keeps the rest.
+    let changed = f
+        .call(
+            "template_write",
+            json!({"projectId": project, "template": "Bug report", "priority": "urgent", "expectedVersion": template["version"]}),
+        )
+        .await;
+    let template = &changed["value"]["template"];
+    assert_eq!(template["priority"], "urgent", "{changed}");
+    assert_eq!(template["title"], "Fix this");
+    assert_eq!(template["labels"], json!(["bug"]));
+    assert_eq!(template["subtasks"].as_array().map(Vec::len), Some(2));
+    // An old version is a conflict.
+    let stale = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "template_write",
+        json!({"projectId": project, "template": template_id, "title": "Stale", "expectedVersion": made["value"]["template"]["version"]}),
+    )
+    .await;
+    assert_eq!(stale["outcome"], "conflict", "{stale}");
+
+    // Tasks made from it get its subtasks.
+    let task = f
+        .call(
+            "task_from_template",
+            json!({"projectId": project, "template": "Bug report", "title": "Fix: login loop"}),
+        )
+        .await;
+    assert_eq!(task["value"]["subtasks"], 2, "{task}");
+
+    // The person sees the same template in the app.
+    let listed = f
+        .web(
+            "GET",
+            &format!("/api/v1/projects/{project}/task-templates"),
+            Value::Null,
+        )
+        .await;
+    assert!(
+        listed["templates"]
+            .as_array()
+            .expect("templates")
+            .iter()
+            .any(|row| row["id"] == template_id.as_str() && row["priority"] == "urgent"),
+        "{listed}"
+    );
+
+    // Archived, it can't be used until it's restored.
+    let archived = f
+        .call(
+            "template_write",
+            json!({"projectId": project, "template": "Bug report", "archived": true}),
+        )
+        .await;
+    assert_eq!(
+        archived["value"]["template"]["archived"], true,
+        "{archived}"
+    );
+    let refused = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "task_from_template",
+        json!({"projectId": project, "template": "Bug report"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "not_found", "{refused}");
+    f.call(
+        "template_write",
+        json!({"projectId": project, "template": template_id, "archived": false}),
+    )
+    .await;
+    f.call(
+        "task_from_template",
+        json!({"projectId": project, "template": "Bug report"}),
+    )
+    .await;
+
+    f.close().await;
+}

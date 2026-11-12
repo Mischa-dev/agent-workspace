@@ -2220,6 +2220,25 @@ impl McpServer {
     }
 
     #[tool(
+        description = "Make a task template in a project, or change one (pass template: its name or ID): name, title, description, type, priority, labels, acceptance criteria, subtasks, estimate. Fields you leave out keep what the template has. archived: true retires it and pauses schedules that use it. Make tasks from it with task_from_template.",
+        annotations(
+            title = "Write task template",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn template_write(
+        &self,
+        Parameters(arguments): Parameters<views_data::TemplateWriteArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<views_data::TemplateWriteValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(views_data::template_write(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
         description = "Create a task, with its subtasks, labels and acceptance criteria, from a task template (by name or ID). You can give it its own title, assignee, milestone and dates.",
         annotations(
             title = "Task from template",
