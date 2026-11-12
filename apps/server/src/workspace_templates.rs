@@ -1019,7 +1019,11 @@ fn limit_matches(wanted: Option<&[String]>, held: Option<&[&'static str]>) -> bo
     match (wanted, held) {
         (None, None) => true,
         (Some(wanted), Some(held)) => {
-            sorted(wanted) == sorted(&held.iter().map(|key| (*key).to_owned()).collect::<Vec<_>>())
+            // Stored limits always carry the permissions every role needs,
+            // so compare the template's the same way.
+            let wanted = crate::policy::PermissionSet::from_keys(wanted)
+                .union(crate::policy::PermissionSet::required());
+            wanted == crate::policy::PermissionSet::from_keys(held)
         }
         _ => false,
     }

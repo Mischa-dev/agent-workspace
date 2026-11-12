@@ -209,6 +209,10 @@ async fn a_template_sets_up_the_workspace_and_using_it_again_changes_nothing() {
     assert_eq!(default_role, "Employee");
     assert!(contractor_limit.is_some_and(|limit| !limit.contains(&"tasks.create".to_owned())));
     assert_eq!(contractor_off, ["automations"]);
+    // Using Company again changes nothing, roles with agent limits included.
+    let (status, again) = apply(&setup, "company").await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["changes"], json!([]), "{again}");
 
     // Chat with my agents: projects go off, and with them every setup step
     // that belongs to a project. Nothing is deleted.
