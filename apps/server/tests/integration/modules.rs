@@ -1524,4 +1524,30 @@ async fn boards_across_a_workspace_follow_its_modules_and_credential_scope() {
         !ids.contains(&across) && !ids.contains(&in_work),
         "{listed}"
     );
+
+    // Emptying the trash leaves the boards where Whiteboards is off alone.
+    sqlx::query("UPDATE whiteboards SET deleted_at = now(), deleted_by_actor_id = created_by_actor_id WHERE id = ANY($1)")
+        .bind(
+            [&across, &in_work, &in_second]
+                .iter()
+                .map(|id| id.parse::<Uuid>().expect("board"))
+                .collect::<Vec<_>>(),
+        )
+        .execute(&setup.pool)
+        .await
+        .expect("trash the boards");
+    let emptied = call("whiteboard_trash_empty", json!({})).await;
+    assert_eq!(emptied["outcome"], "ok", "{emptied}");
+    assert_eq!(emptied["value"]["deleted"], 1, "{emptied}");
+    let kept = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM whiteboards WHERE id = ANY($1)")
+        .bind(
+            [&across, &in_work]
+                .iter()
+                .map(|id| id.parse::<Uuid>().expect("board"))
+                .collect::<Vec<_>>(),
+        )
+        .fetch_one(&setup.pool)
+        .await
+        .expect("kept boards");
+    assert_eq!(kept, 2);
 }

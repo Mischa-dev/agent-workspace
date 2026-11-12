@@ -508,12 +508,14 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "workflow_update",
     "workspace_template_apply",
     "workspace_template_save",
+    "project_template_write",
 ];
 
 /// Write tools this suite deliberately doesn't call, and why.
 const MCP_WRITE_EXCLUSIONS: &[(&str, &str)] = &[(
     "project_create",
-    "makes a project in the caller's own workspace and takes no workspace ID",
+    "makes a project in the caller's own workspace and takes no workspace ID; a template it \
+     names is looked up only in that workspace",
 )];
 
 // ---------------------------------------------------------------------------
@@ -5685,6 +5687,14 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"projectId": b.project, "name": "Net tool template b"})],
         )
         .rejecting(vec![json!({"projectId": a.project, "remove": bx.workspace_template})]),
+        mcp_case(
+            "project_template_write",
+            json!({"projectId": a.project, "name": "Net mcp setup"}),
+            vec![json!({"projectId": b.project, "name": "Net mcp setup b"})],
+        )
+        .rejecting(vec![
+            json!({"projectId": a.project, "template": bx.project_template, "name": "Net"}),
+        ]),
         mcp_case(
             "role_assign",
             json!({"projectId": a.project, "person": "@wren", "role": ax.custom_role}),

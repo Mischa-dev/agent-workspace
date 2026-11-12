@@ -42,6 +42,8 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("workspace_template_apply", Some(SettingsManage)),
     ("workspace_template_save", Some(SettingsManage)),
     ("project_create", Some(ProjectsCreate)),
+    ("project_template_list", None),
+    ("project_template_write", None),
     ("project_update", Some(ProjectsManage)),
     ("project_archive", Some(ProjectsManage)),
     ("project_layout_set", Some(SettingsManage)),
