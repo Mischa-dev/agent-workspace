@@ -871,7 +871,8 @@ pub(super) struct WhiteboardTrashEmptyValue {
 }
 
 /// Empty the trash, as the web's "Empty trash" does: every trashed board the
-/// caller may change, in the scope asked for, goes for good.
+/// caller may change, in the scope asked for and where Whiteboards is on
+/// for them, goes for good.
 pub(super) async fn whiteboard_trash_empty(
     state: &AppState,
     principal: &McpPrincipal,
@@ -892,10 +893,18 @@ pub(super) async fn whiteboard_trash_empty(
     };
     let caller = caller(principal);
     let result = async {
+        // Only where Whiteboards is on for the caller, as whiteboard_list
+        // shows: a trashed board elsewhere stays.
+        let on = whiteboards_on(state, principal).await?;
         let mut transaction = state.pool.begin().await?;
-        let deleted =
-            whiteboards::empty_trash(&mut transaction, &caller, organization_id, project_id)
-                .await?;
+        let deleted = whiteboards::empty_trash(
+            &mut transaction,
+            &caller,
+            organization_id,
+            project_id,
+            Some(&on),
+        )
+        .await?;
         transaction.commit().await?;
         Ok::<_, AppError>(deleted)
     }
