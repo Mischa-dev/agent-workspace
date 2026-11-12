@@ -591,6 +591,96 @@ pub(super) async fn run_retry(
     }
 }
 
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct RunDismissFailureArguments {
+    /// The failed run's ID.
+    pub run_id: String,
+}
+
+/// Dismiss a failed run's notice for the caller, as the notice's Dismiss
+/// button does: it stops showing as needing attention for them. Read state
+/// only, like mark_read: the run and its failure stay.
+pub(super) async fn run_dismiss_failure(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: RunDismissFailureArguments,
+) -> ToolResult<RunValue> {
+    if !principal.can_write() {
+        return ToolResult::read_only();
+    }
+    let Some(run_id) = parse_id(&arguments.run_id) else {
+        return ToolResult::invalid("runId", "Pass the run's ID.");
+    };
+    let result = async {
+        // Only a run the caller can see: its thread is visible to them and
+        // its project open to this connection.
+        if load_run(state, principal, run_id).await?.is_none() {
+            return Err(AppError::NotFound("agent_run"));
+        }
+        let mut transaction = state.pool.begin().await?;
+        super::common::mark_via(&mut transaction, principal).await?;
+        let failure = sqlx::query_as::<_, (Uuid, Uuid, Uuid)>(
+            r#"
+            SELECT event.id, run.project_id, run.conversation_id
+              FROM agent_runs run
+              JOIN agent_run_events event ON event.agent_run_id = run.id
+              JOIN conversation_entries entry
+                ON entry.agent_run_event_id = event.id
+               AND entry.conversation_id = run.conversation_id
+             WHERE run.id = $1
+               AND run.state = 'failed'
+               AND event.kind = 'run_failed'
+             ORDER BY event.id DESC
+             LIMIT 1
+            "#,
+        )
+        .bind(run_id)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        let Some((event_id, project_id, conversation_id)) = failure else {
+            return Err(AppError::Conflict(
+                "agent_run",
+                "That run hasn't failed, so there's no notice to dismiss.",
+            ));
+        };
+        let inserted = sqlx::query(
+            r#"
+            INSERT INTO agent_run_acknowledgements (
+                id, project_id, agent_run_id, actor_id, acknowledged_event_id
+            )
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (agent_run_id, actor_id) DO NOTHING
+            "#,
+        )
+        .bind(Uuid::now_v7())
+        .bind(project_id)
+        .bind(run_id)
+        .bind(principal.actor_id)
+        .bind(event_id)
+        .execute(&mut *transaction)
+        .await?;
+        if inserted.rows_affected() == 1 {
+            crate::outbox::enqueue_agent_run_updated(
+                &mut transaction,
+                project_id,
+                conversation_id,
+                run_id,
+            )
+            .await?;
+        }
+        transaction.commit().await?;
+        load_run(state, principal, run_id)
+            .await?
+            .ok_or(AppError::NotFound("agent_run"))
+    }
+    .await;
+    match result {
+        Ok(run) => ToolResult::ok(run),
+        Err(error) => control_error(error, "run_dismiss_failure"),
+    }
+}
+
 pub(super) async fn run_get(
     state: &AppState,
     principal: &McpPrincipal,

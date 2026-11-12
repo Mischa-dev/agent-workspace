@@ -3101,6 +3101,25 @@ impl McpServer {
     }
 
     #[tool(
+        description = "Dismiss a failed run's notice for yourself, as the notice's Dismiss button does: the run stops showing as needing your attention. The run and its failure stay; dismissing twice changes nothing.",
+        annotations(
+            title = "Dismiss run failure",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn run_dismiss_failure(
+        &self,
+        Parameters(arguments): Parameters<runs::RunDismissFailureArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<runs::RunValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(runs::run_dismiss_failure(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
         description = "List Codex runs you can see, newest first: active ones by default, or finished, failed, or all. mine: true for only runs you started.",
         annotations(title = "List runs", read_only_hint = true, open_world_hint = false)
     )]

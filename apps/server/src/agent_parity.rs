@@ -434,7 +434,7 @@ mod tests {
         (
             Post,
             "/api/v1/agent-runs/{id}/acknowledge-failure",
-            Gap("dismissing a failed run's notice"),
+            Tool("run_dismiss_failure"),
         ),
         (
             Post,

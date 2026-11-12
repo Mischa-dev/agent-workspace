@@ -472,6 +472,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "repository_write",
     "role_assign",
     "role_write",
+    "run_dismiss_failure",
     "run_request",
     "run_retry",
     "run_start",
@@ -6759,6 +6760,11 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "run_retry",
             json!({"runId": sp.run_retry, "clientRequestId": "net-retry-own"}),
             vec![json!({"runId": bx.failed_run, "clientRequestId": "net-retry-b"})],
+        ),
+        mcp_case(
+            "run_dismiss_failure",
+            json!({"runId": ax.failed_run}),
+            vec![json!({"runId": bx.failed_run})],
         ),
         mcp_case(
             "launch_cancel",

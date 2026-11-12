@@ -188,6 +188,7 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("run_get", None),
     ("run_stop", Some(RunsInterrupt)),
     ("run_retry", Some(RunsLaunch)),
+    ("run_dismiss_failure", None),
     ("run_list", None),
     ("run_steps", None),
     ("run_usage", None),
