@@ -310,17 +310,6 @@ pub(super) async fn view_write(
                 }
             },
         };
-        if view_id.is_none()
-            && let Some(name) = &checked.name
-            && views::visible_views(&state.pool, project_id, reader)
-                .await?
-                .iter()
-                .any(|row| row.name.eq_ignore_ascii_case(name))
-        {
-            return Ok(ToolResult::conflict(format!(
-                "There's already a view called “{name}” here. Pass view (its name or ID, see view_list) to change it instead."
-            )));
-        }
         let mut transaction = state.pool.begin().await?;
         match check_access_for(&mut transaction, principal, Action::WorkItemView).await? {
             WriteAccess::Allowed => {}
@@ -346,6 +335,19 @@ pub(super) async fn view_write(
         };
         if arguments.shared == Some(true) && !sharing {
             return Ok(shared_denied());
+        }
+        // Checked under the project lock check_access_for took, so two calls
+        // saving one new name can't both pass.
+        if view_id.is_none()
+            && let Some(name) = &checked.name
+            && views::visible_views(&mut *transaction, project_id, reader)
+                .await?
+                .iter()
+                .any(|row| row.name.eq_ignore_ascii_case(name))
+        {
+            return Ok(ToolResult::conflict(format!(
+                "There's already a view called “{name}” here. Pass view (its name or ID, see view_list) to change it instead."
+            )));
         }
         let actor = command_actor(principal, project_id);
         let mut created = false;
