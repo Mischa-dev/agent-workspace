@@ -463,6 +463,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "reply_send",
     "recurring_write",
     "reply_stop",
+    "reply_retry",
     "role_assign",
     "role_write",
     "run_request",
@@ -504,6 +505,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "whiteboard_edit",
     "whiteboard_link",
     "whiteboard_update",
+    "whiteboard_trash_empty",
     "workflow_update",
     "workspace_template_apply",
     "workspace_template_save",
@@ -1754,6 +1756,8 @@ struct Spares {
     reply_pass: Uuid,
     reply_release: Uuid,
     reply_stop_mcp: Uuid,
+    /// Stopped, for A's own reply_retry.
+    reply_retry_mcp: Uuid,
     /// The project's statuses and types as they are, as workflow drafts.
     statuses: Vec<Value>,
     types: Vec<Value>,
@@ -2297,7 +2301,14 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
     let oauth_client = string_at(&registration, "/client_id");
 
     let mut replies = Vec::new();
-    for status in ["pending", "pending", "pending", "claimed", "pending"] {
+    for status in [
+        "pending",
+        "pending",
+        "pending",
+        "claimed",
+        "pending",
+        "cancelled",
+    ] {
         replies.push(reply_request(app, pool, browser, ax.agent, status).await.0);
     }
     // The agent's own upload, in the group of the request it answers.
@@ -2404,6 +2415,7 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         reply_pass: replies[2],
         reply_release: replies[3],
         reply_stop_mcp: replies[4],
+        reply_retry_mcp: replies[5],
         statuses,
         types,
         session,
@@ -5908,6 +5920,11 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"requestId": bx.reply})],
         ),
         mcp_case(
+            "reply_retry",
+            json!({"requestId": sp.reply_retry_mcp}),
+            vec![json!({"requestId": bx.stopped_reply})],
+        ),
+        mcp_case(
             "session_bind",
             json!({"conversationId": ax.claimed_conversation, "externalRef": "net-session", "harness": "codex"}),
             vec![json!({"conversationId": bx.claimed_conversation, "externalRef": "net-session-b", "harness": "codex"})],
@@ -6347,6 +6364,15 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"whiteboardId": b.project_whiteboard, "title": "Net"})],
         )
         .rejecting(vec![json!({"whiteboardId": a.project_whiteboard, "projectId": b.project})]),
+        mcp_case(
+            "whiteboard_trash_empty",
+            json!({"workspaceId": a.organization}),
+            Vec::new(),
+        )
+        .no_effect(vec![
+            json!({"workspaceId": b.organization}),
+            json!({"projectId": b.project}),
+        ]),
         mcp_case(
             "whiteboard_duplicate",
             json!({"whiteboardId": a.whiteboard, "title": "Net mcp copy"}),
