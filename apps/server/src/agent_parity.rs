@@ -857,17 +857,17 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/repositories",
-            Gap("repository_write"),
+            Tool("repository_write"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/repositories/{repository_id}/prepare",
-            Gap("repository_write"),
+            Tool("repository_write"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/repositories/{repository_id}/archive",
-            Gap("repository_write"),
+            Tool("repository_write"),
         ),
         (
             Post,

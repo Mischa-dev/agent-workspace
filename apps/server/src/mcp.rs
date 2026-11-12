@@ -95,6 +95,7 @@ mod project_template_tools;
 mod reactions;
 mod reads;
 mod replies;
+mod repository_tools;
 mod role_tools;
 mod run_pages;
 mod runs;
@@ -3215,7 +3216,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "List repositories in a project, or in every project you can reach: default branch, whether its copy on the server is prepared, whether GitHub is connected, and whether Codex can run on it now (readyForRuns, with notReadyBecause if not). Repositories are added and changed in project settings (settingsUrl), not through MCP.",
+        description = "List repositories in a project, or in every project you can reach: default branch, whether its copy on the server is prepared, whether GitHub is connected, and whether Codex can run on it now (readyForRuns, with notReadyBecause if not). People add, prepare and archive them with repository_write.",
         annotations(
             title = "List repositories",
             read_only_hint = true,
@@ -3229,6 +3230,25 @@ impl McpServer {
     ) -> Json<common::ToolResult<code::RepositoryListValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(code::repository_list(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "People: add a GitHub repository to a project (owner, name, GitHub's ID, default branch, and that you trust its code to run here), prepare its copy on the server, or archive it. Those who manage code in the project, through an app connected as themselves; agents read repositories only.",
+        annotations(
+            title = "Change a repository",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
+    )]
+    async fn repository_write(
+        &self,
+        Parameters(arguments): Parameters<repository_tools::RepositoryWriteArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<repository_tools::RepositoryWriteValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(repository_tools::repository_write(&self.state, principal, arguments).await)
     }
 
     #[tool(

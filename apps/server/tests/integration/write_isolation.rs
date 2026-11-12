@@ -467,6 +467,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "recurring_write",
     "reply_stop",
     "reply_retry",
+    "repository_write",
     "role_assign",
     "role_write",
     "run_request",
@@ -5675,6 +5676,15 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"projectId": b.project, "person": "@wren", "role": "viewer"})],
         )
         .rejecting(vec![json!({"projectId": a.project, "person": bx.wren, "role": "viewer"})]),
+        mcp_case(
+            "repository_write",
+            json!({"projectId": a.project, "owner": "net-org", "name": "net-mcp", "githubRepositoryId": 990_001, "defaultBranch": "main", "trustAcknowledged": true}),
+            vec![json!({"projectId": b.project, "owner": "net-org", "name": "net-mcp-b", "githubRepositoryId": 990_002, "defaultBranch": "main", "trustAcknowledged": true})],
+        )
+        .rejecting(vec![
+            json!({"projectId": a.project, "repository": b.repository, "archive": true}),
+            json!({"projectId": a.project, "repository": b.repository, "prepare": true}),
+        ]),
         mcp_case(
             "agent_profile_write",
             json!({"projectId": a.project, "template": "reviewer", "name": "Net mcp reviewer"}),

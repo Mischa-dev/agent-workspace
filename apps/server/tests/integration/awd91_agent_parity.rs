@@ -2148,3 +2148,88 @@ async fn people_make_agents_and_agents_only_read_them() {
     );
     f.close().await;
 }
+
+#[tokio::test]
+async fn people_add_and_archive_repositories_and_agents_only_read_them() {
+    let Some(f) = fixture().await else {
+        return;
+    };
+    let project = f.seed.project_id.to_string();
+    let app = connect_app(&f.app, &f.browser, "Owner's app", "full").await;
+    let session = initialize(&f.app, &app).await.expect("owner MCP");
+    let person = |name: &'static str, arguments: Value| {
+        let app = app.clone();
+        let session = session.clone();
+        let router = f.app.clone();
+        async move { tool(&router, &app, &session, name, arguments).await }
+    };
+    let adding = json!({
+        "projectId": project,
+        "owner": "octo-org",
+        "name": "app",
+        "githubRepositoryId": 4242,
+        "defaultBranch": "main",
+    });
+
+    let untrusted = person("repository_write", adding.clone()).await;
+    assert_eq!(untrusted["outcome"], "invalid_request", "{untrusted}");
+    let mut trusted = adding.clone();
+    trusted["trustAcknowledged"] = json!(true);
+    let added = person("repository_write", trusted.clone()).await;
+    assert_eq!(added["outcome"], "ok", "{added}");
+    assert_eq!(added["value"]["done"], "added", "{added}");
+    assert_eq!(
+        added["value"]["repository"]["cloneUrl"], "https://github.com/octo-org/app.git",
+        "{added}"
+    );
+    let repository = string(&added, "/value/repository/id");
+    let again = person("repository_write", trusted).await;
+    assert_eq!(again["outcome"], "conflict", "{again}");
+
+    // Agents read repositories and change none.
+    let refused = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "repository_write",
+        json!({"projectId": project, "repository": repository, "archive": true}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+
+    let stale = person(
+        "repository_write",
+        json!({"projectId": project, "repository": repository, "archive": true, "expectedVersion": 99}),
+    )
+    .await;
+    assert_eq!(stale["outcome"], "conflict", "{stale}");
+    let archived = person(
+        "repository_write",
+        json!({"projectId": project, "repository": repository, "archive": true}),
+    )
+    .await;
+    assert_eq!(archived["value"]["done"], "archived", "{archived}");
+    assert!(
+        archived["value"]["repository"]["archivedAt"].is_string(),
+        "{archived}"
+    );
+    // An archived repository isn't prepared.
+    let prepared = person(
+        "repository_write",
+        json!({"projectId": project, "repository": repository, "prepare": true}),
+    )
+    .await;
+    assert_eq!(prepared["outcome"], "not_found", "{prepared}");
+
+    let audited = sqlx::query_scalar::<_, String>(
+        "SELECT action FROM audit_events WHERE target_kind = 'repository' AND channel = 'mcp' ORDER BY id",
+    )
+    .fetch_all(&f.pool)
+    .await
+    .expect("audit");
+    assert_eq!(
+        audited[..2],
+        ["repository.registered", "repository.archived"]
+    );
+    f.close().await;
+}
