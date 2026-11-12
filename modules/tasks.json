@@ -43,6 +43,7 @@
     "my_work": "query",
     "template_list": "query",
     "template_write": "change",
+    "recurring_write": "change",
     "milestone_list": "query",
     "milestone_write": "change",
     "dependency_graph": "query",

@@ -1196,20 +1196,20 @@ async fn recurring_for_update(
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ScheduleRequest {
-    frequency: String,
+pub(crate) struct ScheduleRequest {
+    pub frequency: String,
     #[serde(default = "one")]
-    every: u32,
+    pub every: u32,
     #[serde(default)]
-    weekdays: Vec<u32>,
-    month_day: Option<u32>,
+    pub weekdays: Vec<u32>,
+    pub month_day: Option<u32>,
     /// HH:MM.
     #[serde(default = "nine")]
-    time_of_day: String,
+    pub time_of_day: String,
     #[serde(default = "utc")]
-    timezone: String,
+    pub timezone: String,
     /// The first day it may run; today when left out.
-    starts_on: Option<NaiveDate>,
+    pub starts_on: Option<NaiveDate>,
 }
 
 fn one() -> u32 {
@@ -1257,19 +1257,16 @@ pub(super) struct DeleteRecurringRequest {
 async fn read_schedule(
     connection: &mut PgConnection,
     request: &ScheduleRequest,
-) -> Result<Result<(Schedule, String), Response>, AppError> {
+) -> Result<Result<(Schedule, String), (&'static str, &'static str)>, AppError> {
     let Some(frequency) = Frequency::parse(&request.frequency) else {
-        return Ok(Err(invalid(
-            "frequency",
-            "Repeat daily, weekly or monthly.",
-        )));
+        return Ok(Err(("frequency", "Repeat daily, weekly or monthly.")));
     };
     let Ok(time) = NaiveTime::parse_from_str(&request.time_of_day, "%H:%M") else {
-        return Ok(Err(invalid("timeOfDay", "Use a time such as 09:00.")));
+        return Ok(Err(("timeOfDay", "Use a time such as 09:00.")));
     };
     let timezone = request.timezone.trim().to_owned();
     if !valid_timezone(connection, &timezone).await? {
-        return Ok(Err(invalid(
+        return Ok(Err((
             "timezone",
             "Use a time zone such as Europe/Amsterdam or UTC.",
         )));
@@ -1294,16 +1291,19 @@ async fn read_schedule(
         time,
         starts_on: request.starts_on.unwrap_or(today),
     };
-    if let Err((field, message)) = schedule.check() {
-        return Ok(Err(invalid(field, message)));
+    if let Err(refused) = schedule.check() {
+        return Ok(Err(refused));
     }
     Ok(Ok((schedule, timezone)))
 }
 
-fn check_due_in_days(value: Option<i32>) -> Option<Response> {
-    value
-        .filter(|days| !(0..=365).contains(days))
-        .map(|_| invalid("dueInDays", "Make it due 0 to 365 days after it's created."))
+fn check_due_in_days(value: Option<i32>) -> Result<(), (&'static str, &'static str)> {
+    match value {
+        Some(days) if !(0..=365).contains(&days) => {
+            Err(("dueInDays", "Make it due 0 to 365 days after it's created."))
+        }
+        _ => Ok(()),
+    }
 }
 
 async fn assignable(
@@ -1322,81 +1322,76 @@ fn weekdays_column(schedule: &Schedule) -> Vec<i16> {
         .collect()
 }
 
-pub(super) async fn create_recurring(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<CreateRecurringRequest>,
-) -> Result<Response, AppError> {
-    if let Some(refused) = check_due_in_days(request.due_in_days) {
-        return Ok(refused);
+/// What a recurring-task write came to, when it wasn't an error: the web
+/// and recurring_write each make their own answer from it.
+pub(crate) enum RecurringOutcome<T = Box<RecurringView>> {
+    Done(T),
+    Invalid(&'static str, &'static str),
+    TooMany,
+    VersionConflict(Box<RecurringView>),
+}
+
+const ASSIGNEE_MESSAGE: &str = "That person or agent can't be assigned tasks in this project.";
+
+/// A new schedule's settings.
+pub(crate) struct NewRecurring<'a> {
+    pub template_id: Uuid,
+    pub schedule: &'a ScheduleRequest,
+    pub assignee_actor_id: Option<Uuid>,
+    pub due_in_days: Option<i32>,
+}
+
+/// Makes a schedule that makes a task from a template. It acts as
+/// `actor_id`, whoever set it up.
+pub(crate) async fn create_recurring_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    project_id: Uuid,
+    actor_id: Uuid,
+    new: NewRecurring<'_>,
+) -> Result<RecurringOutcome, AppError> {
+    if let Err((field, message)) = check_due_in_days(new.due_in_days) {
+        return Ok(RecurringOutcome::Invalid(field, message));
     }
-    let mut write = begin!(
-        start_write(
-            &state,
-            &headers,
-            &principal,
-            project_id,
-            Action::WorkItemCreate,
-            None,
-            resource_bound_scope("projects", project_id, "recurring_tasks_create")?,
-            &request,
-        )
-        .await
-    );
-    let (schedule, timezone) =
-        match read_schedule(&mut write.transaction, &request.schedule).await? {
-            Ok(read) => read,
-            Err(refused) => return Ok(refused),
-        };
-    let Some(template) =
-        template_for_update(&mut write.transaction, project_id, request.template_id).await?
+    let (schedule, timezone) = match read_schedule(transaction, new.schedule).await? {
+        Ok(read) => read,
+        Err((field, message)) => return Ok(RecurringOutcome::Invalid(field, message)),
+    };
+    let Some(template) = template_for_update(transaction, project_id, new.template_id).await?
     else {
-        return Ok(invalid(
+        return Ok(RecurringOutcome::Invalid(
             "templateId",
             "That template isn't in this project.",
         ));
     };
     if template.archived {
-        return Ok(invalid(
+        return Ok(RecurringOutcome::Invalid(
             "templateId",
             "That template is archived. Restore it first.",
         ));
     }
-    if !assignable(
-        &mut write.transaction,
-        project_id,
-        request.assignee_actor_id,
-    )
-    .await?
-    {
-        return Ok(invalid(
+    if !assignable(transaction, project_id, new.assignee_actor_id).await? {
+        return Ok(RecurringOutcome::Invalid(
             "assigneeActorId",
-            "That person or agent can't be assigned tasks in this project.",
+            ASSIGNEE_MESSAGE,
         ));
     }
     let count =
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM recurring_tasks WHERE project_id = $1")
             .bind(project_id)
-            .fetch_one(&mut *write.transaction)
+            .fetch_one(&mut **transaction)
             .await?;
     if count >= MAX_RECURRING {
-        return Ok(refusal(
-            StatusCode::CONFLICT,
-            "too_many_recurring_tasks",
-            "This project has 100 recurring tasks. Delete one you no longer need first.".to_owned(),
-            json!({}),
-        ));
+        return Ok(RecurringOutcome::TooMany);
     }
     let after = instant(
-        &mut write.transaction,
+        transaction,
         schedule.starts_on.and_time(NaiveTime::MIN),
         &timezone,
     )
     .await?
         - Duration::seconds(1);
-    let next = next_run(&mut write.transaction, &schedule, &timezone, after).await?;
+    let next = next_run(transaction, &schedule, &timezone, after).await?;
     let id = Uuid::now_v7();
     sqlx::query(
         r#"
@@ -1409,8 +1404,8 @@ pub(super) async fn create_recurring(
     )
     .bind(id)
     .bind(project_id)
-    .bind(request.template_id)
-    .bind(principal.actor_id)
+    .bind(new.template_id)
+    .bind(actor_id)
     .bind(schedule.frequency.as_str())
     .bind(schedule.every as i32)
     .bind(weekdays_column(&schedule))
@@ -1418,95 +1413,83 @@ pub(super) async fn create_recurring(
     .bind(schedule.time)
     .bind(&timezone)
     .bind(schedule.starts_on)
-    .bind(request.assignee_actor_id)
-    .bind(request.due_in_days)
+    .bind(new.assignee_actor_id)
+    .bind(new.due_in_days)
     .bind(next)
-    .execute(&mut *write.transaction)
+    .execute(&mut **transaction)
     .await?;
-    let actor = write.actor.clone();
     record_audit_for(
-        &mut write.transaction,
-        &actor,
+        transaction,
+        actor,
         "recurring_task",
         "recurring_task.created",
         id,
         json!({}),
     )
     .await?;
-    let row = recurring_for_update(&mut write.transaction, Some(project_id), id)
+    let row = recurring_for_update(transaction, Some(project_id), id)
         .await?
         .ok_or(AppError::Internal("recurring task just made is missing"))?;
-    write
-        .finish(StatusCode::CREATED, &RecurringView::from(row))
-        .await
+    Ok(RecurringOutcome::Done(Box::new(row.into())))
 }
 
-fn recurring_conflict(row: RecurringRow) -> Response {
-    let version = row.version;
-    refusal(
-        StatusCode::CONFLICT,
-        "version_conflict",
-        "Someone changed this schedule first. You’re now looking at the latest version.".to_owned(),
-        json!({ "resource": "recurring_task", "currentVersion": version, "current": RecurringView::from(row) }),
-    )
+/// Changes to a schedule. `None` keeps what it has; `Some(None)` clears
+/// the assignee or due days.
+#[derive(Default)]
+pub(crate) struct RecurringChange<'a> {
+    pub expected_version: Option<i64>,
+    pub schedule: Option<&'a ScheduleRequest>,
+    pub assignee_actor_id: Option<Option<Uuid>>,
+    pub due_in_days: Option<Option<i32>>,
+    pub enabled: Option<bool>,
 }
 
-pub(super) async fn update_recurring(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, recurring_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(request): ApiJson<UpdateRecurringRequest>,
-) -> Result<Response, AppError> {
-    if let Some(refused) = check_due_in_days(request.due_in_days.flatten()) {
-        return Ok(refused);
+/// Changes a schedule. Whoever changes it is who it acts as from then on.
+pub(crate) async fn change_recurring_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    project_id: Uuid,
+    recurring_id: Uuid,
+    actor_id: Uuid,
+    change: RecurringChange<'_>,
+) -> Result<RecurringOutcome, AppError> {
+    if let Err((field, message)) = check_due_in_days(change.due_in_days.flatten()) {
+        return Ok(RecurringOutcome::Invalid(field, message));
     }
-    let mut write = begin!(
-        start_write(
-            &state,
-            &headers,
-            &principal,
-            project_id,
-            Action::WorkItemCreate,
-            None,
-            resource_bound_scope("recurring_tasks", recurring_id, "update")?,
-            &request,
-        )
-        .await
-    );
-    let row = recurring_for_update(&mut write.transaction, Some(project_id), recurring_id)
+    let row = recurring_for_update(transaction, Some(project_id), recurring_id)
         .await?
         .ok_or(AppError::NotFound("recurring_task"))?;
-    if row.version != request.expected_version {
-        return Ok(recurring_conflict(row));
+    if change
+        .expected_version
+        .is_some_and(|expected| expected != row.version)
+    {
+        return Ok(RecurringOutcome::VersionConflict(Box::new(row.into())));
     }
-    let (schedule, timezone) = match &request.schedule {
-        Some(schedule) => match read_schedule(&mut write.transaction, schedule).await? {
+    let (schedule, timezone) = match change.schedule {
+        Some(schedule) => match read_schedule(transaction, schedule).await? {
             Ok(read) => read,
-            Err(refused) => return Ok(refused),
+            Err((field, message)) => return Ok(RecurringOutcome::Invalid(field, message)),
         },
         None => (row.schedule(), row.timezone.clone()),
     };
-    let assignee = request.assignee_actor_id.unwrap_or(row.assignee_actor_id);
-    if request.assignee_actor_id.is_some()
-        && !assignable(&mut write.transaction, project_id, assignee).await?
-    {
-        return Ok(invalid(
+    let assignee = change.assignee_actor_id.unwrap_or(row.assignee_actor_id);
+    if change.assignee_actor_id.is_some() && !assignable(transaction, project_id, assignee).await? {
+        return Ok(RecurringOutcome::Invalid(
             "assigneeActorId",
-            "That person or agent can't be assigned tasks in this project.",
+            ASSIGNEE_MESSAGE,
         ));
     }
-    let enabled = request.enabled.unwrap_or(row.enabled);
+    let enabled = change.enabled.unwrap_or(row.enabled);
     if enabled {
         let template_archived = sqlx::query_scalar::<_, bool>(
             "SELECT archived_at IS NOT NULL FROM task_templates WHERE project_id = $1 AND id = $2",
         )
         .bind(project_id)
         .bind(row.template_id)
-        .fetch_one(&mut *write.transaction)
+        .fetch_one(&mut **transaction)
         .await?;
         if template_archived {
-            return Ok(invalid(
+            return Ok(RecurringOutcome::Invalid(
                 "enabled",
                 "Its template is archived. Restore the template to start it again.",
             ));
@@ -1516,7 +1499,7 @@ pub(super) async fn update_recurring(
         Some(last) => last,
         None => {
             instant(
-                &mut write.transaction,
+                transaction,
                 schedule.starts_on.and_time(NaiveTime::MIN),
                 &timezone,
             )
@@ -1525,7 +1508,7 @@ pub(super) async fn update_recurring(
         }
     };
     let next = if enabled {
-        next_run(&mut write.transaction, &schedule, &timezone, after).await?
+        next_run(transaction, &schedule, &timezone, after).await?
     } else {
         None
     };
@@ -1543,7 +1526,7 @@ pub(super) async fn update_recurring(
     )
     .bind(project_id)
     .bind(recurring_id)
-    .bind(principal.actor_id)
+    .bind(actor_id)
     .bind(schedule.frequency.as_str())
     .bind(schedule.every as i32)
     .bind(weekdays_column(&schedule))
@@ -1552,27 +1535,167 @@ pub(super) async fn update_recurring(
     .bind(&timezone)
     .bind(schedule.starts_on)
     .bind(assignee)
-    .bind(request.due_in_days.unwrap_or(row.due_in_days))
+    .bind(change.due_in_days.unwrap_or(row.due_in_days))
     .bind(enabled)
     .bind(next)
-    .execute(&mut *write.transaction)
+    .execute(&mut **transaction)
     .await?;
-    let actor = write.actor.clone();
     record_audit_for(
-        &mut write.transaction,
-        &actor,
+        transaction,
+        actor,
         "recurring_task",
         "recurring_task.updated",
         recurring_id,
         json!({ "enabled": enabled }),
     )
     .await?;
-    let row = recurring_for_update(&mut write.transaction, Some(project_id), recurring_id)
+    let row = recurring_for_update(transaction, Some(project_id), recurring_id)
         .await?
         .ok_or(AppError::Internal("recurring task just changed is missing"))?;
-    write
-        .finish(StatusCode::OK, &RecurringView::from(row))
+    Ok(RecurringOutcome::Done(Box::new(row.into())))
+}
+
+/// Deletes a schedule. The tasks it made stay; only the record of which
+/// occurrence made them goes with it.
+pub(crate) async fn delete_recurring_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    project_id: Uuid,
+    recurring_id: Uuid,
+    expected_version: Option<i64>,
+) -> Result<RecurringOutcome<()>, AppError> {
+    let row = recurring_for_update(transaction, Some(project_id), recurring_id)
+        .await?
+        .ok_or(AppError::NotFound("recurring_task"))?;
+    if expected_version.is_some_and(|expected| expected != row.version) {
+        return Ok(RecurringOutcome::VersionConflict(Box::new(row.into())));
+    }
+    sqlx::query("DELETE FROM recurring_tasks WHERE project_id = $1 AND id = $2")
+        .bind(project_id)
+        .bind(recurring_id)
+        .execute(&mut **transaction)
+        .await?;
+    record_audit_for(
+        transaction,
+        actor,
+        "recurring_task",
+        "recurring_task.deleted",
+        recurring_id,
+        json!({}),
+    )
+    .await?;
+    Ok(RecurringOutcome::Done(()))
+}
+
+/// The web's answer to a recurring-task write that didn't go through.
+fn recurring_refusal<T>(outcome: RecurringOutcome<T>) -> Result<Response, AppError> {
+    Ok(match outcome {
+        RecurringOutcome::Done(_) => {
+            return Err(AppError::Internal("a recurring task write wasn't refused"));
+        }
+        RecurringOutcome::Invalid(field, message) => invalid(field, message),
+        RecurringOutcome::TooMany => refusal(
+            StatusCode::CONFLICT,
+            "too_many_recurring_tasks",
+            "This project has 100 recurring tasks. Delete one you no longer need first.".to_owned(),
+            json!({}),
+        ),
+        RecurringOutcome::VersionConflict(current) => refusal(
+            StatusCode::CONFLICT,
+            "version_conflict",
+            "Someone changed this schedule first. You’re now looking at the latest version."
+                .to_owned(),
+            json!({ "resource": "recurring_task", "currentVersion": current.version, "current": current }),
+        ),
+    })
+}
+
+pub(super) async fn create_recurring(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath(project_id): ApiPath<Uuid>,
+    ApiJson(request): ApiJson<CreateRecurringRequest>,
+) -> Result<Response, AppError> {
+    if let Err((field, message)) = check_due_in_days(request.due_in_days) {
+        return Ok(invalid(field, message));
+    }
+    let mut write = begin!(
+        start_write(
+            &state,
+            &headers,
+            &principal,
+            project_id,
+            Action::WorkItemCreate,
+            None,
+            resource_bound_scope("projects", project_id, "recurring_tasks_create")?,
+            &request,
+        )
         .await
+    );
+    let actor = write.actor.clone();
+    match create_recurring_in(
+        &mut write.transaction,
+        &actor,
+        project_id,
+        principal.actor_id,
+        NewRecurring {
+            template_id: request.template_id,
+            schedule: &request.schedule,
+            assignee_actor_id: request.assignee_actor_id,
+            due_in_days: request.due_in_days,
+        },
+    )
+    .await?
+    {
+        RecurringOutcome::Done(view) => write.finish(StatusCode::CREATED, &view).await,
+        refused => recurring_refusal(refused),
+    }
+}
+
+pub(super) async fn update_recurring(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath((project_id, recurring_id)): ApiPath<(Uuid, Uuid)>,
+    ApiJson(request): ApiJson<UpdateRecurringRequest>,
+) -> Result<Response, AppError> {
+    if let Err((field, message)) = check_due_in_days(request.due_in_days.flatten()) {
+        return Ok(invalid(field, message));
+    }
+    let mut write = begin!(
+        start_write(
+            &state,
+            &headers,
+            &principal,
+            project_id,
+            Action::WorkItemCreate,
+            None,
+            resource_bound_scope("recurring_tasks", recurring_id, "update")?,
+            &request,
+        )
+        .await
+    );
+    let actor = write.actor.clone();
+    match change_recurring_in(
+        &mut write.transaction,
+        &actor,
+        project_id,
+        recurring_id,
+        principal.actor_id,
+        RecurringChange {
+            expected_version: Some(request.expected_version),
+            schedule: request.schedule.as_ref(),
+            assignee_actor_id: request.assignee_actor_id,
+            due_in_days: request.due_in_days,
+            enabled: request.enabled,
+        },
+    )
+    .await?
+    {
+        RecurringOutcome::Done(view) => write.finish(StatusCode::OK, &view).await,
+        refused => recurring_refusal(refused),
+    }
 }
 
 pub(super) async fn delete_recurring(
@@ -1595,35 +1718,23 @@ pub(super) async fn delete_recurring(
         )
         .await
     );
-    let row = recurring_for_update(&mut write.transaction, Some(project_id), recurring_id)
-        .await?
-        .ok_or(AppError::NotFound("recurring_task"))?;
-    if request
-        .expected_version
-        .is_some_and(|expected| expected != row.version)
-    {
-        return Ok(recurring_conflict(row));
-    }
-    // The tasks it made stay; only the record of which occurrence made them
-    // goes with it.
-    sqlx::query("DELETE FROM recurring_tasks WHERE project_id = $1 AND id = $2")
-        .bind(project_id)
-        .bind(recurring_id)
-        .execute(&mut *write.transaction)
-        .await?;
     let actor = write.actor.clone();
-    record_audit_for(
+    match delete_recurring_in(
         &mut write.transaction,
         &actor,
-        "recurring_task",
-        "recurring_task.deleted",
+        project_id,
         recurring_id,
-        json!({}),
+        request.expected_version,
     )
-    .await?;
-    write
-        .finish(StatusCode::OK, &json!({ "deleted": true }))
-        .await
+    .await?
+    {
+        RecurringOutcome::Done(()) => {
+            write
+                .finish(StatusCode::OK, &json!({ "deleted": true }))
+                .await
+        }
+        refused => recurring_refusal(refused),
+    }
 }
 
 // ---------------------------------------------------------------------------

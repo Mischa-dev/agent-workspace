@@ -2239,6 +2239,25 @@ impl McpServer {
     }
 
     #[tool(
+        description = "Schedule a task template to make a task daily, weekly or monthly, or change, pause (enabled: false), restart or delete a schedule (pass recurring: its ID from template_list). Fields you leave out keep what the schedule has. A schedule acts as whoever last set it up, so the tasks it makes are created as you.",
+        annotations(
+            title = "Write recurring task",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn recurring_write(
+        &self,
+        Parameters(arguments): Parameters<views_data::RecurringWriteArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<views_data::RecurringWriteValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(views_data::recurring_write(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
         description = "Create a task, with its subtasks, labels and acceptance criteria, from a task template (by name or ID). You can give it its own title, assignee, milestone and dates.",
         annotations(
             title = "Task from template",
