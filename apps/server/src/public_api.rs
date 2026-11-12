@@ -147,7 +147,9 @@ pub(crate) fn tag_for(tool: &str) -> &'static str {
         "task" | "label" | "field" | "milestone" | "view" | "my" | "template" => "Tasks",
         "page" | "skill" | "decision" | "search" => "Pages and search",
         "collection" | "record" => "Collections",
-        "run" | "approval" | "environment" | "external" | "usage" => "Runs and launching",
+        "run" | "launch" | "approval" | "environment" | "external" | "usage" => {
+            "Runs and launching"
+        }
         "repository" | "pull" => "Code",
         "webhook" => "Webhooks",
         "automation" => "Automations",
@@ -251,6 +253,7 @@ pub(crate) fn document() -> Value {
     let mut components = Map::new();
     let mut paths = Map::new();
     let mut tags = BTreeMap::new();
+    let mut results: BTreeMap<String, String> = BTreeMap::new();
     for tool in tools {
         let name = tool.name.to_string();
         let tag = tag_for(&name);
@@ -273,11 +276,20 @@ pub(crate) fn document() -> Value {
             .as_ref()
             .map(|schema| {
                 // Six responses share it, so it's referenced rather than
-                // repeated: inline, the document passes a megabyte.
-                let root = format!("{name}_result");
-                let hoisted = hoist(&root, schema, &mut components);
-                let key = pascal(&root);
-                components.insert(key.clone(), hoisted);
+                // repeated: inline, the document passes a megabyte. Tools
+                // with the same result (run_get, run_stop, ...) share one.
+                let raw = serde_json::to_string(schema.as_ref()).unwrap_or_default();
+                let key = match results.get(&raw) {
+                    Some(key) => String::clone(key),
+                    None => {
+                        let root = format!("{name}_result");
+                        let hoisted = hoist(&root, schema, &mut components);
+                        let key = pascal(&root);
+                        components.insert(key.clone(), hoisted);
+                        results.insert(raw, key.clone());
+                        key
+                    }
+                };
                 json!({ "$ref": format!("#/components/schemas/{key}") })
             })
             .unwrap_or_else(|| json!({ "type": "object" }));

@@ -13,7 +13,7 @@ use super::{
 };
 use crate::{
     AppState,
-    api::{StartRunRequest, start_run_in},
+    api::{StartRunRequest, interrupt_run_in, retry_run_in, start_run_in},
     error::AppError,
     idempotency::IdempotencyKey,
     policy::ActorKind,
@@ -79,6 +79,15 @@ pub(super) struct RunStartArguments {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct RunGetArguments {
     pub run_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct RunControlArguments {
+    /// The run's ID.
+    pub run_id: String,
+    /// A stable ID so a retry of this call does the same thing once.
+    pub client_request_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
@@ -478,6 +487,108 @@ pub(super) async fn run_start(
         ),
         error => ToolResult::from_error(error, "run_start"),
     })
+}
+
+fn control_key(
+    arguments: &RunControlArguments,
+) -> Result<(Uuid, String, IdempotencyKey), Box<ToolResult<RunValue>>> {
+    let Some(run_id) = parse_id(&arguments.run_id) else {
+        return Err(Box::new(ToolResult::invalid("runId", "Pass the run's ID.")));
+    };
+    let request_id = arguments
+        .client_request_id
+        .clone()
+        .unwrap_or_else(|| Uuid::now_v7().to_string());
+    let Ok(key) = IdempotencyKey::parse(&request_id) else {
+        return Err(Box::new(ToolResult::invalid(
+            "clientRequestId",
+            "Use up to 128 plain characters.",
+        )));
+    };
+    Ok((run_id, request_id, key))
+}
+
+/// What a refused stop or retry says, the same for a missing run and one
+/// the caller can't see.
+fn control_error(error: AppError, tool: &'static str) -> ToolResult<RunValue> {
+    match error {
+        AppError::NotFound(_) => ToolResult::not_found("That run"),
+        AppError::Forbidden => ToolResult::denied(if tool == "run_stop" {
+            "You can't stop runs in that project."
+        } else {
+            "You can't start runs in that project (it needs a member or above)."
+        }),
+        AppError::ProjectArchived => ToolResult::conflict("That project is archived."),
+        AppError::Conflict(_, message) => ToolResult::conflict(message),
+        AppError::RepositoryBindingConflict => ToolResult::conflict(
+            "That thread now works in a different repository. Start a new run instead.",
+        ),
+        AppError::ExecutionProfileRequired => ToolResult::conflict(
+            "You have no signed-in provider account for that harness in this project.",
+        ),
+        error => ToolResult::from_error(error, tool),
+    }
+}
+
+/// Stop a run that's queued, working or waiting for an answer, as the run
+/// page's Stop button does. Its workspace is kept and its open questions
+/// are withdrawn.
+pub(super) async fn run_stop(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: RunControlArguments,
+) -> ToolResult<RunValue> {
+    if !principal.can_write() {
+        return ToolResult::read_only();
+    }
+    let (run_id, request_id, key) = match control_key(&arguments) {
+        Ok(parts) => parts,
+        Err(refused) => return *refused,
+    };
+    let caller = RunCaller::mcp(principal, request_id);
+    let result = async {
+        interrupt_run_in(state, &caller, run_id, Ok(key)).await?;
+        load_run(state, principal, run_id)
+            .await?
+            .ok_or(AppError::NotFound("agent_run"))
+    }
+    .await;
+    match result {
+        Ok(run) => ToolResult::ok(run),
+        Err(error) => control_error(error, "run_stop"),
+    }
+}
+
+/// Start a finished, failed or stopped run again: a new run in the same
+/// thread with the same prompt, repository and settings. People only, as
+/// it spends their own account.
+pub(super) async fn run_retry(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: RunControlArguments,
+) -> ToolResult<RunValue> {
+    if !principal.can_write() {
+        return ToolResult::read_only();
+    }
+    if principal.actor_kind != ActorKind::Human {
+        return ToolResult::denied(NOT_FOR_AGENTS);
+    }
+    let (run_id, request_id, key) = match control_key(&arguments) {
+        Ok(parts) => parts,
+        Err(refused) => return *refused,
+    };
+    let caller = RunCaller::mcp(principal, request_id);
+    let result = async {
+        let (_, started) = retry_run_in(state, &caller, run_id, Ok(key)).await?;
+        load_run(state, principal, started.run_id)
+            .await?
+            .ok_or(AppError::NotFound("agent_run"))
+    }
+    .await;
+    match result {
+        Ok(run) => ToolResult::ok(run),
+        Err(error) => control_error(error, "run_retry"),
+    }
 }
 
 pub(super) async fn run_get(

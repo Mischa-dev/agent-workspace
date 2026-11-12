@@ -428,6 +428,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "record_write",
     "later_save",
     "later_update",
+    "launch_cancel",
     "mark_read",
     "message_delete",
     "message_edit",
@@ -453,7 +454,9 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "role_assign",
     "role_write",
     "run_request",
+    "run_retry",
     "run_start",
+    "run_stop",
     "scheduled_message_update",
     "session_bind",
     "task_claim",
@@ -1719,6 +1722,12 @@ struct Spares {
     approvals: [Uuid; 2],
     /// Dismissed over HTTP and through MCP.
     suggestions: [Uuid; 2],
+    /// The owner's approval run, stopped through MCP once its approval is
+    /// answered, and a failed run in its own thread, retried after that.
+    run_stop: Uuid,
+    run_retry: Uuid,
+    /// A launch queued for next year, cancelled through MCP.
+    launch: Uuid,
     /// A second connected app, revoked.
     grant: Uuid,
     oauth_client: String,
@@ -2148,6 +2157,66 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         approvals.push(approval);
     }
 
+    // Run control through MCP: a failed run to retry, in its own thread, and
+    // a launch queued for next year. The run stopped through MCP is the
+    // owner's approval run, after its approval is answered over HTTP: the
+    // stop makes room under the owner's cap of five runs at once through
+    // apps for the retry, which runs after it.
+    let retry_thread = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO conversations (id, project_id, kind, parent_channel_id, repository_id, name)
+        VALUES ($1, $2, 'thread', $3::uuid, $4, 'Net run retry')
+        "#,
+    )
+    .bind(retry_thread)
+    .bind(project)
+    .bind(&a.channel)
+    .bind(a.repository)
+    .execute(pool)
+    .await
+    .expect("retry thread");
+    let retry_run = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO agent_runs (
+            id, conversation_id, execution_worker_id, requesting_actor_id,
+            execution_profile_id, repository_id, state, prompt,
+            authorization_snapshot, failure_reason, started_at, finished_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, 'failed', 'Net run', '{}'::jsonb,
+                'Net failure.', now(), now())
+        "#,
+    )
+    .bind(retry_run)
+    .bind(retry_thread)
+    .bind(worker)
+    .bind(ax.owner)
+    .bind(a.profile)
+    .bind(a.repository)
+    .execute(pool)
+    .await
+    .expect("retry run");
+    let queued_launch = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO launches (
+            id, organization_id, project_id, work_item_id, requested_by_actor_id,
+            source, start_when, start_at, position
+        )
+        SELECT $1, organization_id, id, $3, $4, 'button', 'at', now() + interval '1 year',
+               (SELECT COALESCE(max(position), 0) + 1 FROM launches WHERE project_id = $2)
+        FROM projects WHERE id = $2
+        "#,
+    )
+    .bind(queued_launch)
+    .bind(project)
+    .bind(a.subtask)
+    .bind(ax.owner)
+    .execute(pool)
+    .await
+    .expect("queued launch");
+
     let mut suggestions = Vec::new();
     for (work_item, other) in [(a.task, task), (a.subtask, task)] {
         let suggestion = Uuid::now_v7();
@@ -2304,6 +2373,9 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         agent_connection,
         approvals: [approvals[0], approvals[1]],
         suggestions: [suggestions[0], suggestions[1]],
+        run_stop: runs[0],
+        run_retry: retry_run,
+        launch: queued_launch,
         grant,
         oauth_client,
         reply_stop: replies[0],
@@ -6401,6 +6473,21 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             }),
         ])
         .by_requester(),
+        mcp_case(
+            "run_stop",
+            json!({"runId": sp.run_stop, "clientRequestId": "net-stop-own"}),
+            vec![json!({"runId": b.run, "clientRequestId": "net-stop-b"})],
+        ),
+        mcp_case(
+            "run_retry",
+            json!({"runId": sp.run_retry, "clientRequestId": "net-retry-own"}),
+            vec![json!({"runId": bx.failed_run, "clientRequestId": "net-retry-b"})],
+        ),
+        mcp_case(
+            "launch_cancel",
+            json!({"launchId": sp.launch}),
+            vec![json!({"launchId": bx.launch})],
+        ),
         mcp_case(
             "approval_respond",
             json!({
