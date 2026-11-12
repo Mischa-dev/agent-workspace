@@ -141,7 +141,8 @@ export function patched(body: SheetBody, result: ChangeResult): SheetBody | null
     if (change.tab !== tab.name) continue
     const key = cellKey(change.row, change.column)
     const previous = cells.get(key)
-    const input = change.input ?? previous?.input ?? ''
+    // A cleared cell comes back with no input; one whose value alone changed keeps its own.
+    const input = change.input ?? ''
     if (!input) {
       cells.delete(key)
       continue
@@ -152,7 +153,7 @@ export function patched(body: SheetBody, result: ChangeResult): SheetBody | null
       input,
       kind: change.kind,
       value: change.value,
-      revision: change.input === null ? (previous?.revision ?? result.revision) : result.revision,
+      revision: previous && previous.input === input ? previous.revision : result.revision,
     })
     rows = Math.max(rows, change.row)
     columns = Math.max(columns, change.column)

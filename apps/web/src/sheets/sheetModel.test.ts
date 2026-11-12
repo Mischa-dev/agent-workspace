@@ -106,7 +106,7 @@ describe('sheet model', () => {
           tab: 'Sheet1',
           row: 2,
           column: 2,
-          input: '',
+          input: null,
           kind: 'empty',
           value: null,
         },
