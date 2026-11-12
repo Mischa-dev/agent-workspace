@@ -426,6 +426,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "conversation_start",
     "conversation_update",
     "decision_record",
+    "environment_write",
     "file_delete",
     "file_upload",
     "invitation_write",
@@ -5673,6 +5674,16 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"projectId": b.project, "person": "@wren", "role": "viewer"})],
         )
         .rejecting(vec![json!({"projectId": a.project, "person": bx.wren, "role": "viewer"})]),
+        mcp_case(
+            "environment_write",
+            json!({"projectId": a.project, "name": "Net mcp cloud", "harness": "codex_cloud", "providerEnvironmentId": "env-mcp"}),
+            vec![json!({"projectId": b.project, "name": "Net mcp cloud", "harness": "codex_cloud", "providerEnvironmentId": "env-mcp"})],
+        )
+        .rejecting(vec![
+            json!({"projectId": a.project, "environment": bx.environment, "name": "Net"}),
+            json!({"projectId": a.project, "environment": bx.environment, "archive": true}),
+            json!({"projectId": a.project, "name": "Net mcp b", "harness": "codex_cloud", "providerEnvironmentId": "env-b", "repositoryId": b.repository}),
+        ]),
         mcp_case(
             "workspace_update",
             json!({"projectId": a.project, "modules": {"whiteboards": true}}),

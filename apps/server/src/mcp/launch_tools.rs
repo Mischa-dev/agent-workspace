@@ -133,6 +133,33 @@ pub(super) struct EnvironmentValue {
     pub is_default: bool,
     pub last_check_ok: Option<bool>,
     pub last_check_message: Option<String>,
+    /// Pass as expectedVersion to change it (environment_write).
+    pub version: i64,
+}
+
+pub(super) fn environment_value(
+    environment: crate::environments::EnvironmentView,
+) -> EnvironmentValue {
+    EnvironmentValue {
+        id: environment.id.to_string(),
+        name: environment.name,
+        harness: environment.harness,
+        harness_name: environment.harness_name,
+        runs_on: environment.runs_on.map(|runs_on| {
+            serde_json::to_value(runs_on)
+                .ok()
+                .and_then(|value| value.as_str().map(str::to_owned))
+                .unwrap_or_default()
+        }),
+        provider_environment_id: environment.provider_environment_id,
+        repository_id: environment.repository_id.map(|id| id.to_string()),
+        branch: environment.branch,
+        setup_notes: environment.setup_notes,
+        is_default: environment.is_default,
+        last_check_ok: environment.last_check_ok,
+        last_check_message: environment.last_check_message,
+        version: environment.version,
+    }
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -399,25 +426,7 @@ pub(super) async fn environment_list(
             environments: list
                 .environments
                 .into_iter()
-                .map(|environment| EnvironmentValue {
-                    id: environment.id.to_string(),
-                    name: environment.name,
-                    harness: environment.harness,
-                    harness_name: environment.harness_name,
-                    runs_on: environment.runs_on.map(|runs_on| {
-                        serde_json::to_value(runs_on)
-                            .ok()
-                            .and_then(|value| value.as_str().map(str::to_owned))
-                            .unwrap_or_default()
-                    }),
-                    provider_environment_id: environment.provider_environment_id,
-                    repository_id: environment.repository_id.map(|id| id.to_string()),
-                    branch: environment.branch,
-                    setup_notes: environment.setup_notes,
-                    is_default: environment.is_default,
-                    last_check_ok: environment.last_check_ok,
-                    last_check_message: environment.last_check_message,
-                })
+                .map(environment_value)
                 .collect(),
         }),
         Err(AppError::NotFound(_) | AppError::Forbidden) => ToolResult::not_found("That project"),

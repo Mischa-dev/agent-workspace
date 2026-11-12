@@ -1790,6 +1790,23 @@ async fn people_change_settings_and_agents_only_read_them() {
     .await;
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
 
+    // An explicit null chooses "not chosen" over the workspace's value.
+    let cleared = person(
+        "settings_set",
+        json!({"projectId": project, "key": "run.model", "value": null}),
+    )
+    .await;
+    assert_eq!(cleared["outcome"], "ok", "{cleared}");
+    assert_eq!(
+        cleared["value"]["setting"]["value"],
+        Value::Null,
+        "{cleared}"
+    );
+    assert_eq!(
+        cleared["value"]["setting"]["source"], "project",
+        "{cleared}"
+    );
+
     // Resetting the project's value falls back to the workspace's.
     let reset = person(
         "settings_set",
@@ -1813,7 +1830,12 @@ async fn people_change_settings_and_agents_only_read_them() {
     .expect("audit");
     assert_eq!(
         audited,
-        ["setting.changed", "setting.changed", "setting.reset"]
+        [
+            "setting.changed",
+            "setting.changed",
+            "setting.changed",
+            "setting.reset"
+        ]
     );
     f.close().await;
 }
@@ -1892,6 +1914,128 @@ async fn people_rename_the_workspace_and_switch_its_modules() {
     assert_eq!(
         audited,
         ["workspace.renamed", "modules.changed", "modules.changed"]
+    );
+    f.close().await;
+}
+
+#[tokio::test]
+async fn people_set_up_environments_and_agents_only_read_them() {
+    let Some(f) = fixture().await else {
+        return;
+    };
+    let project = f.seed.project_id.to_string();
+    let app = connect_app(&f.app, &f.browser, "Owner's app", "full").await;
+    let session = initialize(&f.app, &app).await.expect("owner MCP");
+    let person = |name: &'static str, arguments: Value| {
+        let app = app.clone();
+        let session = session.clone();
+        let router = f.app.clone();
+        async move { tool(&router, &app, &session, name, arguments).await }
+    };
+
+    let first = person(
+        "environment_write",
+        json!({"projectId": project, "name": "Cloud", "harness": "codex_cloud", "providerEnvironmentId": "env-one"}),
+    )
+    .await;
+    assert_eq!(first["outcome"], "ok", "{first}");
+    assert_eq!(first["value"]["done"], "added", "{first}");
+    assert_eq!(first["value"]["environment"]["isDefault"], true, "{first}");
+    let missing = person(
+        "environment_write",
+        json!({"projectId": project, "name": "No id", "harness": "codex_cloud"}),
+    )
+    .await;
+    assert_eq!(missing["outcome"], "invalid_request", "{missing}");
+
+    // A change keeps what it doesn't name; a stale version is refused.
+    let stale = person(
+        "environment_write",
+        json!({"projectId": project, "environment": "Cloud", "branch": "main", "expectedVersion": 9}),
+    )
+    .await;
+    assert_eq!(stale["outcome"], "conflict", "{stale}");
+    let changed = person(
+        "environment_write",
+        json!({"projectId": project, "environment": "cloud", "branch": "main"}),
+    )
+    .await;
+    assert_eq!(changed["value"]["done"], "changed", "{changed}");
+    assert_eq!(
+        changed["value"]["environment"]["branch"], "main",
+        "{changed}"
+    );
+    assert_eq!(
+        changed["value"]["environment"]["providerEnvironmentId"], "env-one",
+        "{changed}"
+    );
+
+    let second = person(
+        "environment_write",
+        json!({"projectId": project, "name": "Other", "harness": "codex_cloud", "providerEnvironmentId": "env-two", "makeDefault": true}),
+    )
+    .await;
+    assert_eq!(
+        second["value"]["environment"]["isDefault"], true,
+        "{second}"
+    );
+    let back = person(
+        "environment_write",
+        json!({"projectId": project, "environment": "Cloud", "makeDefault": true}),
+    )
+    .await;
+    assert_eq!(back["value"]["done"], "made_default", "{back}");
+    assert_eq!(back["value"]["environment"]["isDefault"], true, "{back}");
+
+    // Checking runs as the person; with no account signed in it says so.
+    let checked = person(
+        "environment_write",
+        json!({"projectId": project, "environment": "Cloud", "check": true}),
+    )
+    .await;
+    assert_eq!(checked["value"]["done"], "checked", "{checked}");
+    assert_eq!(checked["value"]["checkOk"], false, "{checked}");
+
+    // Agents read environments and change none.
+    let listed = f
+        .call("environment_list", json!({"projectId": project}))
+        .await;
+    assert_eq!(
+        listed["value"]["environments"].as_array().map(Vec::len),
+        Some(2),
+        "{listed}"
+    );
+    let refused = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "environment_write",
+        json!({"projectId": project, "environment": "Other", "archive": true}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+
+    let archived = person(
+        "environment_write",
+        json!({"projectId": project, "environment": "Other", "archive": true}),
+    )
+    .await;
+    assert_eq!(archived["value"]["done"], "archived", "{archived}");
+    let audited = sqlx::query_scalar::<_, String>(
+        "SELECT action FROM audit_events WHERE target_kind = 'project_environment' AND channel = 'mcp' ORDER BY id",
+    )
+    .fetch_all(&f.pool)
+    .await
+    .expect("audit");
+    assert_eq!(
+        audited,
+        [
+            "environment.created",
+            "environment.updated",
+            "environment.created",
+            "environment.made_default",
+            "environment.archived"
+        ]
     );
     f.close().await;
 }

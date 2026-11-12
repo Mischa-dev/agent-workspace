@@ -74,6 +74,7 @@ mod collection_tools;
 mod comment_tools;
 mod common;
 mod criteria;
+mod environment_tools;
 mod field_tools;
 mod file_tools;
 mod groups;
@@ -3172,6 +3173,25 @@ impl McpServer {
     ) -> Json<common::ToolResult<launch_tools::EnvironmentListValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(launch_tools::environment_list(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "People: add an environment where a project's runs execute (name and harness), change one, make it the default, archive it, or check it with your own signed-in account. The project's owners and admins, through an app connected as themselves; agents read environments with environment_list. Audited.",
+        annotations(
+            title = "Change environment",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
+    )]
+    async fn environment_write(
+        &self,
+        Parameters(arguments): Parameters<environment_tools::EnvironmentWriteArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<environment_tools::EnvironmentWriteValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(environment_tools::environment_write(&self.state, principal, arguments).await)
     }
 
     #[tool(

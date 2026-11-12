@@ -86,27 +86,27 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/environments",
-            Gap("environment_write"),
+            Tool("environment_write"),
         ),
         (
             Put,
             "/api/v1/projects/{project_id}/environments/{environment_id}",
-            Gap("environment_write"),
+            Tool("environment_write"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/environments/{environment_id}/archive",
-            Gap("environment_write"),
+            Tool("environment_write"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/environments/{environment_id}/default",
-            Gap("environment_write"),
+            Tool("environment_write"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/environments/{environment_id}/check",
-            Gap("environment_write"),
+            Tool("environment_write"),
         ),
         (
             Post,

@@ -193,6 +193,7 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("launch_list", None),
     ("launch_cancel", Some(RunsLaunch)),
     ("environment_list", None),
+    ("environment_write", Some(SettingsManage)),
     ("repository_list", Some(CodeView)),
     ("pull_request_list", Some(CodeView)),
     ("repository_get", Some(CodeView)),
