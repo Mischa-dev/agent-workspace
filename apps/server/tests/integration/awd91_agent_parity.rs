@@ -1144,3 +1144,176 @@ async fn an_agent_schedules_recurring_tasks() {
 
     f.close().await;
 }
+
+#[tokio::test]
+async fn an_agent_forwards_messages_and_removes_files() {
+    let Some(f) = fixture().await else {
+        return;
+    };
+    let project = f.seed.project_id.to_string();
+    let channel = f.seed.channel_id.to_string();
+    let posted = f
+        .web(
+            "POST",
+            &format!("/api/v1/channels/{channel}/messages"),
+            json!({"content": {"version": 1, "nodes": [{"type": "text", "text": "The release moves to Thursday."}]}}),
+        )
+        .await;
+    let original = string(&posted, "/message/id");
+    let thread = f
+        .call(
+            "thread_start",
+            json!({"conversationId": channel, "name": "Release notes", "text": "Collecting notes."}),
+        )
+        .await;
+    let thread_id = string(&thread, "/value/id");
+
+    // Forwarding: quoted where it goes, sent as the agent, once per request.
+    let arguments = json!({
+        "messageId": original,
+        "conversationId": thread_id,
+        "text": "For the notes",
+        "clientRequestId": "awd111-forward"
+    });
+    let forwarded = f.call("message_forward", arguments.clone()).await;
+    let forward_id = string(&forwarded, "/value/messageId");
+    assert_eq!(forwarded["value"]["idempotentReplay"], false, "{forwarded}");
+    assert_eq!(
+        f.author(
+            "SELECT author_actor_id FROM messages WHERE id = $1",
+            &forward_id
+        )
+        .await,
+        f.agent
+    );
+    assert_eq!(
+        f.author(
+            "SELECT forwarded_message_id FROM messages WHERE id = $1",
+            &forward_id
+        )
+        .await,
+        original.parse::<Uuid>().expect("original id")
+    );
+    let again = f.call("message_forward", arguments).await;
+    assert_eq!(again["value"]["idempotentReplay"], true, "{again}");
+    assert_eq!(string(&again, "/value/messageId"), forward_id);
+    let read = f
+        .call("conversation_read", json!({"conversationId": thread_id}))
+        .await;
+    let shown = read["value"]["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .find(|message| message["messageId"] == forward_id.as_str())
+        .cloned()
+        .unwrap_or_else(|| panic!("the forward: {read}"));
+    assert_eq!(shown["text"], "For the notes", "{shown}");
+    assert_eq!(
+        shown["forwarded"]["text"], "The release moves to Thursday.",
+        "{shown}"
+    );
+
+    // An agent's reply quotes what it answers, as a person's does.
+    let reply = f
+        .call(
+            "message_send",
+            json!({"conversationId": channel, "text": "Noted", "replyToMessageId": original}),
+        )
+        .await;
+    let reply_id = string(&reply, "/value/messageId");
+    let read = f
+        .call("conversation_read", json!({"conversationId": channel}))
+        .await;
+    let replied = read["value"]["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .find(|message| message["messageId"] == reply_id.as_str())
+        .cloned()
+        .unwrap_or_else(|| panic!("the reply: {read}"));
+    assert_eq!(
+        replied["replyTo"]["text"], "The release moves to Thursday.",
+        "{replied}"
+    );
+
+    // Not into the conversation it's already in.
+    let same = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "message_forward",
+        json!({"messageId": original, "conversationId": channel}),
+    )
+    .await;
+    assert_eq!(same["outcome"], "invalid_request", "{same}");
+
+    // Removing files: an upload it hasn't sent, and a task's own file.
+    let upload = f
+        .call(
+            "file_upload",
+            json!({"conversationId": channel, "name": "draft.txt", "text": "Draft"}),
+        )
+        .await;
+    let upload_id = string(&upload, "/value/fileId");
+    let removed = f.call("file_delete", json!({"fileId": upload_id})).await;
+    assert_eq!(removed["value"]["removed"], true, "{removed}");
+    assert_eq!(
+        f.author(
+            "SELECT removed_by_actor_id FROM files WHERE id = $1",
+            &upload_id
+        )
+        .await,
+        f.agent
+    );
+    let gone = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "file_delete",
+        json!({"fileId": upload_id}),
+    )
+    .await;
+    assert_eq!(gone["outcome"], "not_found", "{gone}");
+
+    let task = f
+        .call(
+            "task_create",
+            json!({"projectId": project, "title": "Ship the notes"}),
+        )
+        .await;
+    let key = string(&task, "/key");
+    let on_task = f
+        .call(
+            "file_upload",
+            json!({"taskId": key, "name": "notes.txt", "text": "Notes"}),
+        )
+        .await;
+    let task_file = string(&on_task, "/value/fileId");
+    f.call("file_delete", json!({"fileId": task_file})).await;
+    let listed = f.call("file_list", json!({"taskId": key})).await;
+    assert!(!listed.to_string().contains(&task_file), "{listed}");
+
+    // A file sent in a message goes with the message, not on its own.
+    let sent_upload = f
+        .call(
+            "file_upload",
+            json!({"conversationId": channel, "name": "sent.txt", "text": "Sent"}),
+        )
+        .await;
+    let sent_file = string(&sent_upload, "/value/fileId");
+    f.call(
+        "message_send",
+        json!({"conversationId": channel, "attachmentIds": [sent_file]}),
+    )
+    .await;
+    let kept = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "file_delete",
+        json!({"fileId": sent_file}),
+    )
+    .await;
+    assert_eq!(kept["outcome"], "permission_denied", "{kept}");
+    f.close().await;
+}

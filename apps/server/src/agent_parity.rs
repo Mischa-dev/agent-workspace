@@ -743,7 +743,7 @@ mod tests {
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/files",
             Tool("file_upload"),
         ),
-        (Delete, "/api/v1/files/{id}", Gap("file_delete")),
+        (Delete, "/api/v1/files/{id}", Tool("file_delete")),
         (
             Delete,
             "/api/v1/conversations/{id}/messages/{message_id}/link-previews/{preview_id}",
@@ -801,7 +801,7 @@ mod tests {
         (
             Post,
             "/api/v1/messages/{id}/forward",
-            Gap("message_forward"),
+            Tool("message_forward"),
         ),
         (
             Post,

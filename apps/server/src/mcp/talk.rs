@@ -131,6 +131,21 @@ pub(super) struct MessageSendArguments {
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct MessageForwardArguments {
+    /// The message to forward (an ID or a link). You must be able to see it.
+    pub message_id: String,
+    /// Where it goes: a channel, thread, DM or group you can post in, other
+    /// than the one it's in.
+    pub conversation_id: String,
+    /// An optional comment sent with it, as plain text (up to 4,000
+    /// characters).
+    pub text: Option<String>,
+    /// A stable ID for this forward, so retrying never sends it twice.
+    pub client_request_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct MarkReadArguments {
     pub conversation_id: String,
     /// Mark read up to this sequence number. Defaults to the newest message.
@@ -296,6 +311,10 @@ pub(super) struct MessageItem {
     /// The message this one replies to, quoted as you may see it now.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_to: Option<ReplyQuote>,
+    /// The message this one forwards (message_forward), quoted as you may
+    /// see it now: only its ID when you can't.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forwarded: Option<ReplyQuote>,
 }
 
 /// The message a reply answers (AWD-70).
@@ -340,6 +359,7 @@ struct MessageRow {
     remover_name: Option<String>,
     remover_handle: Option<String>,
     reply_to_message_id: Option<Uuid>,
+    forwarded_message_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -868,8 +888,7 @@ pub(super) async fn conversation_open(
         let highest = conversation.next_entry_sequence - 1;
         let last_read = read_sequence(state, conversation.id, principal.actor_id).await?;
         let from = (highest - limit + 1).max(1);
-        let messages =
-            message_items(state, conversation.id, principal.actor_id, from, highest).await?;
+        let messages = message_items(state, conversation.id, principal, from, highest).await?;
         let detail = conversation_detail(state, principal, &conversation).await?;
         let pinned = pinned_items(state, conversation.id, principal.actor_id).await?;
         let (open_threads, recently_settled_threads) = if conversation.kind == "thread" {
@@ -944,7 +963,7 @@ pub(super) async fn conversation_read(
             ((highest - limit + 1).max(1), highest)
         };
         let messages = if from <= to {
-            message_items(state, conversation.id, principal.actor_id, from, to).await?
+            message_items(state, conversation.id, principal, from, to).await?
         } else {
             Vec::new()
         };
@@ -966,14 +985,15 @@ pub(super) async fn conversation_read(
 }
 
 /// Entries `from..=to` of a conversation the viewer can see, with each
-/// message's reactions as `viewer` sees them.
+/// message's reactions as the viewer sees them.
 pub(super) async fn message_items(
     state: &AppState,
     conversation_id: Uuid,
-    viewer: Uuid,
+    principal: &McpPrincipal,
     from: i64,
     to: i64,
 ) -> Result<Vec<MessageItem>, AppError> {
+    let viewer = principal.actor_id;
     let rows = sqlx::query_as::<_, MessageRow>(
         r#"
         SELECT entry.sequence, entry.created_at::text AS at,
@@ -985,7 +1005,7 @@ pub(super) async fn message_items(
                message.revision, message.edited_at::text AS edited_at,
                message.removed_at IS NOT NULL AS removed,
                remover.display_name AS remover_name, remover.handle AS remover_handle,
-               message.reply_to_message_id,
+               message.reply_to_message_id, message.forwarded_message_id,
                (SELECT jsonb_agg(jsonb_build_object(
                         'id', thread.id, 'name', thread.name, 'status', thread.thread_status)
                         ORDER BY thread.created_at)
@@ -1021,14 +1041,57 @@ pub(super) async fn message_items(
         .collect::<Vec<_>>();
     let mut reactions = reaction_rows(&state.pool, conversation_id, &live, viewer).await?;
     let mut attachments = super::file_tools::message_attachments(state, &live).await?;
-    // What replies answer, read for the viewer: a quote they can't see now
-    // shows only its ID.
-    let replied_to = rows
+    // What replies answer and forwards carry, read for the viewer through
+    // the connection they use: a quote they can't see now shows only its ID.
+    let quoted = rows
         .iter()
         .filter(|row| !row.removed.unwrap_or(false))
-        .filter_map(|row| row.reply_to_message_id)
+        .flat_map(|row| [row.reply_to_message_id, row.forwarded_message_id])
+        .flatten()
         .collect::<Vec<_>>();
-    let quotes = crate::forwarding::quotes(&state.pool, &replied_to, viewer).await?;
+    let mut quotes = crate::forwarding::quotes(
+        &state.pool,
+        &quoted,
+        viewer,
+        principal.external_agent_connection_id,
+    )
+    .await?;
+    // A forward's original lives in another conversation, often another
+    // project: it shows only where this connection could read it there
+    // directly (conversation_read's own check, which also keeps an older
+    // grant in its project). Anything else shows only its ID.
+    if !quotes.is_empty() {
+        let ids = quotes.keys().copied().collect::<Vec<_>>();
+        let elsewhere = sqlx::query_as::<_, (Uuid, Uuid, Uuid)>(
+            "SELECT id, conversation_id, project_id FROM messages WHERE id = ANY($1) AND conversation_id <> $2",
+        )
+        .bind(&ids)
+        .bind(conversation_id)
+        .fetch_all(&state.pool)
+        .await?;
+        let mut readable = std::collections::HashMap::<Uuid, bool>::new();
+        for (id, source_conversation, source_project) in elsewhere {
+            let allowed = match readable.get(&source_conversation) {
+                Some(allowed) => *allowed,
+                None => {
+                    let allowed = super::common::confined_project(principal)
+                        .is_none_or(|home| home == source_project)
+                        && readable_conversation(
+                            state,
+                            &super::tasks::scoped(principal, source_project),
+                            &source_conversation.to_string(),
+                        )
+                        .await?
+                        .is_ok();
+                    readable.insert(source_conversation, allowed);
+                    allowed
+                }
+            };
+            if !allowed {
+                quotes.remove(&id);
+            }
+        }
+    }
     Ok(rows
         .into_iter()
         .map(|row| {
@@ -1044,10 +1107,15 @@ pub(super) async fn message_items(
                 .reply_to_message_id
                 .filter(|_| !row.removed.unwrap_or(false))
                 .map(|id| reply_quote(id, quotes.get(&id)));
+            let forwarded = row
+                .forwarded_message_id
+                .filter(|_| !row.removed.unwrap_or(false))
+                .map(|id| reply_quote(id, quotes.get(&id)));
             let mut item = message_item(row);
             item.reactions = reaction_summaries(summaries);
             item.attachments = files;
             item.reply_to = reply_to;
+            item.forwarded = forwarded;
             item
         })
         .collect())
@@ -1127,6 +1195,7 @@ fn message_item(row: MessageRow) -> MessageItem {
         reactions: Vec::new(),
         attachments: Vec::new(),
         reply_to: None,
+        forwarded: None,
     }
 }
 
@@ -1534,6 +1603,120 @@ pub(super) async fn message_send(
         reply_to_message_id,
     )
     .await
+}
+
+/// Forward a message into another conversation, as the web's Forward does:
+/// it shows there quoted, with a jump back to the original for whoever can
+/// see it. The caller must be able to read the original through this
+/// connection now, and post where it goes.
+pub(super) async fn message_forward(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: MessageForwardArguments,
+) -> ToolResult<SentMessage> {
+    if !principal.can_write() {
+        return ToolResult::read_only();
+    }
+    let Some(message_id) = parse_message_id(&arguments.message_id) else {
+        return ToolResult::invalid("messageId", "Pass a message ID or link.");
+    };
+    let Some(conversation_id) = parse_id(&arguments.conversation_id) else {
+        return ToolResult::invalid("conversationId", "Pass a conversation ID or link.");
+    };
+    if arguments
+        .text
+        .as_deref()
+        .is_some_and(|text| text.trim().chars().count() > crate::forwarding::COMMENT_CHARACTERS)
+    {
+        return ToolResult::invalid("text", "Write a comment of up to 4,000 characters.");
+    }
+    let key = arguments
+        .client_request_id
+        .unwrap_or_else(|| Uuid::now_v7().to_string());
+    let Ok(idempotency_key) = IdempotencyKey::parse(&key) else {
+        return ToolResult::invalid(
+            "clientRequestId",
+            "Use letters, numbers, dashes or dots, up to 128 characters.",
+        );
+    };
+    let actor = match message_actor(principal) {
+        Ok(actor) => actor,
+        Err(message) => return ToolResult::denied(message),
+    };
+    let result = async {
+        // The original, read as this connection may: in a project it can
+        // reach, in a conversation it may read. Anything else is "not found",
+        // the same as a message that doesn't exist.
+        let source = sqlx::query_as::<_, (Uuid, Uuid)>(
+            r#"
+            SELECT message.project_id, message.conversation_id
+            FROM messages message
+            WHERE message.id = $1 AND message.removed_at IS NULL
+              AND conversation_visible_to(message.conversation_id, $2)
+              AND actor_can_access_project($2, $3, message.project_id)
+            "#,
+        )
+        .bind(message_id)
+        .bind(principal.actor_id)
+        .bind(principal.external_agent_connection_id)
+        .fetch_optional(&state.pool)
+        .await?;
+        let Some((source_project, source_conversation)) = source else {
+            return Ok(ToolResult::not_found("That message"));
+        };
+        if super::common::confined_project(principal).is_some_and(|home| home != source_project) {
+            return Ok(ToolResult::not_found("That message"));
+        }
+        let at_source = super::tasks::scoped(principal, source_project);
+        match readable_conversation(state, &at_source, &source_conversation.to_string()).await? {
+            Ok(_) => {}
+            Err(_) => return Ok(ToolResult::not_found("That message")),
+        }
+        // Where it goes: a module that's off there says so, as message_send
+        // does; anything else is left to the send command.
+        if let Ok(row) = readable_conversation(state, principal, &arguments.conversation_id).await?
+            && let Some(module) =
+                conversation_module_off(state, principal.actor_id, row.project_id).await?
+        {
+            return Ok(ToolResult::module_off("message_forward", module));
+        }
+        let outcome = crate::forwarding::forward(
+            state,
+            actor,
+            message_id,
+            conversation_id,
+            arguments.text.as_deref(),
+            idempotency_key,
+        )
+        .await?;
+        let body = outcome.body;
+        Ok::<_, AppError>(ToolResult::ok(SentMessage {
+            conversation_id: body.conversation_id.to_string(),
+            message_id: body.message.id.to_string(),
+            sequence: body.entry.sequence,
+            text: snippet(&body.message.plain_text, SNIPPET_CHARACTERS),
+            sent_at: body.message.created_at,
+            idempotent_replay: outcome.idempotent_replay,
+        }))
+    }
+    .await;
+    match result {
+        Ok(result) => result,
+        Err(AppError::Conflict(..)) => ToolResult::conflict(
+            "That clientRequestId was already used for a different message. Use a new one.",
+        ),
+        Err(AppError::NotFound(_)) => {
+            ToolResult::not_found("That message or conversation (or you can't post there)")
+        }
+        Err(AppError::Validation("conversationId")) => ToolResult::invalid(
+            "conversationId",
+            "Forward it to a different conversation than the one it's in.",
+        ),
+        Err(AppError::Validation("text")) => {
+            ToolResult::invalid("text", "Write a comment of up to 4,000 characters.")
+        }
+        Err(error) => ToolResult::from_error(error, "message_forward"),
+    }
 }
 
 /// Message content from a tool's `text` or `content` argument (exactly one):

@@ -426,6 +426,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "conversation_start",
     "conversation_update",
     "decision_record",
+    "file_delete",
     "file_upload",
     "label_write",
     "field_write",
@@ -437,6 +438,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "mark_read",
     "message_delete",
     "message_edit",
+    "message_forward",
     "message_react",
     "message_schedule",
     "message_send",
@@ -1718,6 +1720,8 @@ struct Spares {
     /// task comment, and the agent's, in the group its reply goes to.
     tool_upload: Uuid,
     tool_comment_upload: Uuid,
+    /// An unsent upload A's own file_delete removes.
+    tool_delete_upload: Uuid,
     reply_upload: Uuid,
     later: Uuid,
     /// Sent now over HTTP, and changed through MCP.
@@ -1880,6 +1884,10 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         format!(
             "/api/v1/projects/{project}/work-items/{}/files?name=net-tool.txt&for=comment",
             a.task
+        ),
+        format!(
+            "/api/v1/conversations/{}/files?name=net-delete.txt",
+            a.channel
         ),
     ] {
         uploads.push(upload(app, browser, &uri, "text/plain", b"Net unsent".to_vec()).await);
@@ -2375,6 +2383,7 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         file,
         tool_upload: uploads[0],
         tool_comment_upload: uploads[1],
+        tool_delete_upload: uploads[2],
         reply_upload,
         later,
         scheduled: [scheduled[0], scheduled[1]],
@@ -5721,6 +5730,28 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![
                 json!({"conversationId": b.channel, "name": "net.txt", "text": "Net"}),
                 json!({"taskId": b.task, "name": "net.txt", "text": "Net"}),
+            ],
+        ),
+        mcp_case(
+            "file_delete",
+            json!({"fileId": sp.tool_delete_upload}),
+            vec![
+                json!({"fileId": bx.channel_upload}),
+                json!({"fileId": b.task_file}),
+            ],
+        ),
+        mcp_case(
+            "message_forward",
+            json!({
+                "messageId": a.message,
+                "conversationId": a.group,
+                "text": "Net forward",
+                "clientRequestId": "net-forward-own",
+            }),
+            vec![
+                json!({"messageId": b.message, "conversationId": a.group, "clientRequestId": "net-forward-b1"}),
+                json!({"messageId": a.message, "conversationId": b.channel, "clientRequestId": "net-forward-b2"}),
+                json!({"messageId": a.message, "conversationId": b.group, "clientRequestId": "net-forward-b3"}),
             ],
         ),
         mcp_case(

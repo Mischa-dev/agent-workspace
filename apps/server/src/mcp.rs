@@ -689,6 +689,25 @@ impl McpServer {
     }
 
     #[tool(
+        description = "Forward a message you can see into another channel, thread, DM or group you can post in. It shows there quoted, with who wrote it and where, and a link back that works for whoever can see the original. Add an optional plain-text comment. Pass a clientRequestId so a retry never sends twice.",
+        annotations(
+            title = "Forward message",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn message_forward(
+        &self,
+        Parameters(arguments): Parameters<talk::MessageForwardArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<talk::SentMessage>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(talk::message_forward(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
         description = "Upload a file (text or base64, up to 4 MiB) to a conversation, then send it by passing the returned fileId in message_send's or reply_send's attachmentIds; or keep it on a task (taskId), such as a run's output, report or screenshot.",
         annotations(
             title = "Upload file",
@@ -705,6 +724,25 @@ impl McpServer {
     ) -> Json<common::ToolResult<file_tools::FileSummary>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(file_tools::file_upload(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Remove a file: an upload of yours you haven't sent yet, or one of a task's own files when you can edit the task. A file sent in a message goes with the message (message_delete), and a comment's with the comment (task_comment_delete).",
+        annotations(
+            title = "Remove file",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn file_delete(
+        &self,
+        Parameters(arguments): Parameters<file_tools::FileDeleteArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<file_tools::DeletedFile>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(file_tools::file_delete(&self.state, principal, arguments).await)
     }
 
     #[tool(
