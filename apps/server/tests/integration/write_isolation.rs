@@ -5774,10 +5774,14 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         mcp_case(
             "role_assign",
             json!({"projectId": a.project, "person": "@wren", "role": ax.custom_role}),
-            vec![json!({"projectId": b.project, "person": "@wren", "role": "member"})],
+            vec![
+                json!({"projectId": b.project, "person": "@wren", "role": "member"}),
+                json!({"projectId": b.project, "person": "@wren", "agentLimit": ["tasks.view"]}),
+            ],
         )
         .rejecting(vec![
             json!({"projectId": a.project, "person": bx.wren, "role": "member"}),
+            json!({"projectId": a.project, "person": bx.wren, "agentLimit": null}),
             json!({"projectId": a.project, "person": "@wren", "role": bx.custom_role}),
         ]),
         mcp_case(

@@ -237,7 +237,7 @@ mod tests {
         (
             Put,
             "/api/v1/organizations/{organization_id}/members/{actor_id}/agent-limit",
-            Gap("an agent limit in role_assign"),
+            Tool("role_assign"),
         ),
         (
             Post,

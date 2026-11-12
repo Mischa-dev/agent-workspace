@@ -460,11 +460,28 @@ pub(super) struct RoleAssignArguments {
     /// Who: an @handle or actor ID of someone in the workspace.
     pub person: String,
     /// The workspace role to give them, by name, key or ID. For a role in
-    /// one project only, use project_member_set.
-    pub role: String,
+    /// one project only, use project_member_set. Leave it out to change only
+    /// agentLimit.
+    #[serde(default)]
+    pub role: Option<String>,
     /// True gives them the role in each of their projects too (where they
     /// aren't the owner).
     pub apply_to_projects: Option<bool>,
+    /// Cap what apps connected by this person may do, as permission keys
+    /// (my_permissions lists them), whatever their role allows; null
+    /// removes the cap. People only, not agents; your own, or anyone's if
+    /// you manage members (an owner for an admin's).
+    #[serde(default, deserialize_with = "given")]
+    #[schemars(with = "Option<Vec<String>>")]
+    pub agent_limit: Option<serde_json::Value>,
+}
+
+/// A value that was given, even as JSON null: only a missing field is None.
+fn given<'de, D>(deserializer: D) -> Result<Option<serde_json::Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    serde_json::Value::deserialize(deserializer).map(Some)
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -480,6 +497,11 @@ pub(super) struct AssignmentLine {
     pub projects_skipped: usize,
     /// Each project left as it was, and why.
     pub skipped_projects: Vec<SkippedProjectLine>,
+    /// When this call set agentLimit: the permission keys their apps are
+    /// capped to now, or null for no cap.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<Vec<String>>")]
+    pub agent_limit: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -500,6 +522,25 @@ pub(super) async fn role_assign(
     if principal.actor_kind != ActorKind::Human {
         return ToolResult::denied(AGENTS_DONT_CHANGE_ROLES);
     }
+    if arguments.role.is_none() && arguments.agent_limit.is_none() {
+        return ToolResult::invalid("role", "Give a role, an agentLimit, or both.");
+    }
+    if arguments.role.is_none() && arguments.apply_to_projects.is_some() {
+        return ToolResult::invalid("applyToProjects", "applyToProjects goes with a role.");
+    }
+    let limit = match &arguments.agent_limit {
+        None => None,
+        Some(serde_json::Value::Null) => Some(None),
+        Some(value) => match serde_json::from_value::<Vec<String>>(value.clone()) {
+            Ok(keys) => Some(Some(keys)),
+            Err(_) => {
+                return ToolResult::invalid(
+                    "agentLimit",
+                    "Give a list of permission keys, or null to remove the cap.",
+                );
+            }
+        },
+    };
     let result = async {
         let Some(organization_id) = workspace_of(state, principal, &arguments.project_id).await?
         else {
@@ -526,37 +567,70 @@ pub(super) async fn role_assign(
                 "{person} in your workspace"
             )));
         };
-        let Some(role_id) =
-            roles::find_role(&mut transaction, organization_id, &arguments.role).await?
-        else {
-            return Ok(ToolResult::not_found("That role"));
+        let mut line = AssignmentLine {
+            actor_id: actor_id.to_string(),
+            workspace_role: String::new(),
+            projects_changed: 0,
+            projects_skipped: 0,
+            skipped_projects: Vec::new(),
+            agent_limit: None,
         };
-        let assignment = roles::assign(
-            &mut transaction,
-            &Auditor::App(principal),
-            caller,
-            organization_id,
-            actor_id,
-            role_id,
-            arguments.apply_to_projects.unwrap_or(false),
-            None,
-        )
-        .await?;
-        transaction.commit().await?;
-        Ok::<_, AppError>(ToolResult::ok(AssignmentLine {
-            actor_id: assignment.actor_id.to_string(),
-            workspace_role: assignment.role_name,
-            projects_changed: assignment.projects_changed,
-            projects_skipped: assignment.projects_skipped,
-            skipped_projects: assignment
+        if let Some(role) = arguments.role.as_deref() {
+            let Some(role_id) = roles::find_role(&mut transaction, organization_id, role).await?
+            else {
+                return Ok(ToolResult::not_found("That role"));
+            };
+            let assignment = roles::assign(
+                &mut transaction,
+                &Auditor::App(principal),
+                caller,
+                organization_id,
+                actor_id,
+                role_id,
+                arguments.apply_to_projects.unwrap_or(false),
+                None,
+            )
+            .await?;
+            line.workspace_role = assignment.role_name;
+            line.projects_changed = assignment.projects_changed;
+            line.projects_skipped = assignment.projects_skipped;
+            line.skipped_projects = assignment
                 .skipped_projects
                 .iter()
                 .map(|skipped| SkippedProjectLine {
                     project_id: skipped.project_id.to_string(),
                     reason: skipped.reason.to_owned(),
                 })
-                .collect(),
-        }))
+                .collect();
+        }
+        if let Some(limit) = limit {
+            let keys = roles::set_agent_limit(
+                &mut transaction,
+                &Auditor::App(principal),
+                caller,
+                organization_id,
+                actor_id,
+                limit,
+            )
+            .await?;
+            line.agent_limit = Some(serde_json::json!(keys));
+        }
+        if arguments.role.is_none() {
+            line.workspace_role = sqlx::query_scalar::<_, String>(
+                r#"
+                SELECT coalesce(role.name, membership.role)
+                FROM organization_memberships membership
+                LEFT JOIN workspace_roles role ON role.id = membership.role_id
+                WHERE membership.organization_id = $1 AND membership.actor_id = $2
+                "#,
+            )
+            .bind(organization_id)
+            .bind(actor_id)
+            .fetch_one(&mut *transaction)
+            .await?;
+        }
+        transaction.commit().await?;
+        Ok::<_, AppError>(ToolResult::ok(line))
     }
     .await;
     result.unwrap_or_else(|error| match error {
