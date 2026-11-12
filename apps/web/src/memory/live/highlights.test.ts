@@ -41,6 +41,11 @@ function open() {
           ],
         },
         { type: 'paragraph', content: [{ type: 'text', text: 'Unsaved' }] },
+        {
+          type: 'paragraph',
+          attrs: { id: 'para0002' },
+          content: [{ type: 'text', text: 'first' }, { type: 'hardBreak' }, { type: 'text', text: 'second' }],
+        },
       ],
     },
   })
@@ -89,6 +94,16 @@ describe('comment anchors', () => {
     const { offset, node } = block(instance, 3)
     instance.view.dispatch(instance.state.tr.setSelection(TextSelection.create(instance.state.doc, offset + 1, offset + node.nodeSize - 1)))
     expect(selectionAnchor(instance.state)).toBe('unsaved')
+  })
+
+  it('reads a line break inside a paragraph as a break, as the server does', () => {
+    const instance = open()
+    const { node, offset } = block(instance, 4)
+    instance.view.dispatch(instance.state.tr.setSelection(TextSelection.create(instance.state.doc, offset + 1, offset + node.nodeSize - 1)))
+    expect(selectionAnchor(instance.state)).toEqual({ blockId: 'para0002', quote: 'first\nsecond' })
+    const found = findQuote(node, offset, 'first second')
+    expect(found).not.toBeNull()
+    expect(findQuote(node, offset, 'firstsecond')).toBeNull()
   })
 
   it('marks open threads and suggested blocks without changing the page', () => {

@@ -332,6 +332,29 @@ async fn agents_suggest_on_other_peoples_pages_and_comments_follow_the_words() {
         after["threads"][0]["comments"].as_array().map(Vec::len),
         Some(3)
     );
+    // The thread still resolves through its first comment, deleted or not,
+    // but the deleted comment itself can't be edited.
+    let (status, resolved) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            &format!(
+                "/api/v1/pages/{page}/comments/{}",
+                first_comment.as_str().expect("id")
+            ),
+            None,
+            json!({"resolved": true}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{resolved}");
+    assert_eq!(discussion().await["threads"][0]["resolved"], true);
+    let edited = call(
+        "page_comment_update",
+        json!({"pageId": page, "commentId": first_comment, "text": "Back again"}),
+    )
+    .await;
+    assert_eq!(edited["outcome"], "not_found", "{edited}");
 
     // Someone outside the project sees and changes nothing.
     let other = create_project(&setup, "SIDE", "Side").await;

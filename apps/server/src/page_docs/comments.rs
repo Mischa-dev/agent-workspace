@@ -490,7 +490,10 @@ pub async fn change(
     let Some((thread_id, author, deleted)) = row else {
         return Ok(Err(Refusal::NotFound));
     };
-    if deleted {
+    // A deleted first comment stays as the thread's tombstone while replies
+    // remain, and the thread still resolves and reopens through it.
+    let resolving_thread = matches!(change, CommentChange::Resolve(_)) && thread_id == comment_id;
+    if deleted && !resolving_thread {
         return Ok(Err(Refusal::NotFound));
     }
     match change {

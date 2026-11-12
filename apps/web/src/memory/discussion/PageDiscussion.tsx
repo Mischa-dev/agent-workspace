@@ -348,19 +348,29 @@ function Thread({
   const [reply, setReply] = useState('')
   const [busy, setBusy] = useState(false)
   const first = thread.comments[0]
+  /** Makes the change; true once it's saved, so a failed reply keeps its text. */
   const run = (title: string, change: Promise<unknown>) => {
     setBusy(true)
     return change
-      .then(() => onChanged())
-      .catch((error: unknown) => {
-        toastError(title, error)
+      .then(
+        () => true,
+        (error: unknown) => {
+          toastError(title, error)
+          return false
+        },
+      )
+      .then(async (saved) => {
+        // A failed refresh still leaves the change made.
+        if (saved) await onChanged().catch(() => undefined)
+        return saved
       })
       .finally(() => setBusy(false))
   }
   const sendReply = (event: FormEvent) => {
     event.preventDefault()
     if (!reply.trim()) return
-    void run('That reply wasn’t added', addComment(pageId, { body: reply, replyTo: thread.id })).then(() => {
+    void run('That reply wasn’t added', addComment(pageId, { body: reply, replyTo: thread.id })).then((saved) => {
+      if (!saved) return
       setReply('')
       setReplying(false)
     })

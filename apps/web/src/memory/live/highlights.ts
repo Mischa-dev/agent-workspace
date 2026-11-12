@@ -56,6 +56,8 @@ export function findQuote(block: ProseMirrorNode, offset: number, quote: string)
       if (started) push('\n', -1)
       started = true
     }
+    // A line break inside a paragraph (Shift+Enter) separates words, as on the server.
+    if (node.type.name === 'hardBreak') push('\n', -1)
     if (node.isText && node.text) {
       const start = offset + 1 + position
       for (let index = 0; index < node.text.length; index += 1) push(node.text[index], start + index)
@@ -105,7 +107,8 @@ export function selectionAnchor(state: EditorState): { blockId: string; quote: s
   // A block typed a moment ago gets its id when it reaches the server.
   if (typeof id !== 'string') return 'unsaved'
   const end = Math.min(to, start + block.nodeSize - 1)
-  const quote = state.doc.textBetween(from, end, '\n').trim().slice(0, 1000).trim()
+  // Line breaks (Shift+Enter) read as new lines, as the server reads them.
+  const quote = state.doc.textBetween(from, end, '\n', '\n').trim().slice(0, 1000).trim()
   if (!quote) return 'empty'
   return { blockId: id, quote }
 }
