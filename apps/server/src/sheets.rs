@@ -8,7 +8,7 @@
 //!   renames behave as in any spreadsheet.
 //! * [`address`]: A1 cell and range names.
 //! * [`apply`] is the one way cells and tabs change, for agents (the
-//!   `sheet_write` tool) and, later, the web app. A cell edit can name the
+//!   `sheet_write` tool) and the web app ([`http`]). A cell edit can name the
 //!   revision it was read at: it's refused only if that cell, or its tab's
 //!   rows and columns, changed since. Edits to different cells never clash.
 //!
@@ -19,6 +19,7 @@
 
 pub mod address;
 pub mod engine;
+pub mod http;
 
 use std::collections::{BTreeMap, HashMap};
 
