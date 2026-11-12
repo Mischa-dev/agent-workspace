@@ -255,6 +255,7 @@ pub(crate) fn document() -> Value {
     let mut paths = Map::new();
     let mut tags = BTreeMap::new();
     let mut results: BTreeMap<String, String> = BTreeMap::new();
+    let mut refusals = Map::new();
     for tool in tools {
         let name = tool.name.to_string();
         let tag = tag_for(&name);
@@ -302,12 +303,21 @@ pub(crate) fn document() -> Value {
                 "content": { "application/json": { "schema": output.clone() } },
             }),
         );
-        for (status, description) in ERROR_STATUSES {
+        // A refusal is the operation's own result with its `outcome`: one
+        // response per operation that its refusing statuses point at, so the
+        // document stays small as tools are added. The introduction says
+        // what each status means.
+        let refused = format!("{}Refused", pascal(&name));
+        refusals.insert(
+            refused.clone(),
+            json!({
+                "description": "Refused: the status and the result's `outcome` and `message` say why.",
+                "content": { "application/json": { "schema": output.clone() } },
+            }),
+        );
+        for (status, _) in ERROR_STATUSES {
             let response = if matches!(*status, "403" | "404" | "409" | "422" | "503") {
-                json!({
-                    "description": description,
-                    "content": { "application/json": { "schema": output.clone() } },
-                })
+                json!({ "$ref": format!("#/components/responses/{refused}") })
             } else {
                 // The same for every operation, so referenced rather than
                 // repeated, which keeps the document small as tools are added.
@@ -356,7 +366,14 @@ pub(crate) fn document() -> Value {
         "info": {
             "title": "Agent Workspace API",
             "version": API_VERSION,
-            "description": DESCRIPTION,
+            "description": format!(
+                "{DESCRIPTION}\n\nStatuses: {}.",
+                ERROR_STATUSES
+                    .iter()
+                    .map(|(status, description)| format!("{status}, {}", description.trim_end_matches('.')))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ),
         },
         "servers": [{ "url": BASE_PATH }],
         "security": [{ "bearerToken": [] }],
@@ -380,6 +397,7 @@ pub(crate) fn document() -> Value {
                         }),
                     )
                 })
+                .chain(refusals)
                 .collect::<Map<_, _>>(),
             "securitySchemes": {
                 "bearerToken": {
