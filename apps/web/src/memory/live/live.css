@@ -260,3 +260,21 @@
     max-width: 40%;
   }
 }
+
+/* Comments and suggestions (AWD-53): the words an open thread is about, and
+   blocks an agent suggested changing. */
+.aw-live__doc .aw-live__comment {
+  background: var(--warning-soft);
+  border-bottom: 2px solid color-mix(in oklab, var(--warning) 60%, transparent);
+  cursor: pointer;
+}
+
+.aw-live__doc .aw-live__comment.is-active {
+  background: color-mix(in oklab, var(--warning) 35%, transparent);
+  border-bottom-color: var(--warning);
+}
+
+.aw-live__doc .aw-live__suggested {
+  box-shadow: -3px 0 0 var(--accent);
+  border-radius: 0;
+}

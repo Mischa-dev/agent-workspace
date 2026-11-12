@@ -611,6 +611,22 @@ mod tests {
             "/api/v1/pages/{id}/document/updates",
             Tool("page_edit"),
         ),
+        (Post, "/api/v1/pages/{id}/comments", Tool("page_comment")),
+        (
+            Patch,
+            "/api/v1/pages/{id}/comments/{comment_id}",
+            Tool("page_comment_update"),
+        ),
+        (
+            Delete,
+            "/api/v1/pages/{id}/comments/{comment_id}",
+            Tool("page_comment_update"),
+        ),
+        (
+            Post,
+            "/api/v1/pages/{id}/suggestions/{suggestion_id}/decision",
+            Tool("page_suggestion_decide"),
+        ),
         (Post, "/api/v1/whiteboards", Tool("whiteboard_create")),
         (Patch, "/api/v1/whiteboards/{id}", Tool("whiteboard_update")),
         (

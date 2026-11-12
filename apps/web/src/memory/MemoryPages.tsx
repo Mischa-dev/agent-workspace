@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
@@ -52,7 +52,9 @@ import {
   type Decision,
   type Page,
 } from './api'
+import { discussionKey, getDiscussion, type CommentAnchor } from './discussion/api'
 import { PageEmbed } from './embeds/PageEmbed'
+import type { LiveDiscussion } from './live/LivePage'
 import './memory.css'
 
 /** A collection's view, or whatever else a page embeds, live where the page is read. */
@@ -64,6 +66,8 @@ const LinkedWhiteboards = lazy(() =>
 )
 // The live editor (AWD-53) loads in its own chunks when a page opens for writing.
 const LivePage = lazy(() => import('./live/LivePage'))
+// Comments and suggested changes (AWD-53) load in their own chunk.
+const PageDiscussion = lazy(() => import('./discussion/PageDiscussion'))
 
 /** "5 min ago", with the full date on hover. */
 function When({ at }: { at: string }) {
@@ -287,6 +291,32 @@ function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
   const viewer = useRef<HTMLDivElement>(null)
   const canEdit = Boolean(pages.data?.canEdit)
   const experience = useProjectExperience(projectId)
+  const showsDiscussion = experience.shows('page.comments')
+  const discussion = useQuery({
+    queryKey: discussionKey(projectId, pageId),
+    queryFn: () => getDiscussion(pageId),
+    enabled: showsDiscussion,
+  })
+  const [draft, setDraft] = useState<CommentAnchor | null>(null)
+  const [activeThread, setActiveThread] = useState<string | null>(null)
+  const startComment = useCallback((anchor: CommentAnchor) => {
+    setDraft(anchor)
+    window.requestAnimationFrame(() => document.getElementById('page-discussion')?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+  }, [])
+  const liveDiscussion = useMemo<LiveDiscussion | null>(() => {
+    if (!showsDiscussion || !discussion.data?.canComment) return null
+    return {
+      threads: discussion.data.threads.flatMap((thread) =>
+        !thread.resolved && thread.blockId && thread.quote ? [{ id: thread.id, blockId: thread.blockId, quote: thread.quote }] : [],
+      ),
+      active: activeThread,
+      suggested: discussion.data.suggestions.flatMap((suggestion) =>
+        suggestion.status === 'pending' ? suggestion.edits.flatMap((edit) => (edit.blockId && (edit.op === 'replace' || edit.op === 'delete') ? [edit.blockId] : [])) : [],
+      ),
+      onComment: startComment,
+      onOpenThread: setActiveThread,
+    }
+  }, [showsDiscussion, discussion.data, activeThread, startComment])
 
   // Opening an old version shows it where the page is, so bring it into view.
   useEffect(() => {
@@ -409,6 +439,7 @@ function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
         <Suspense fallback={<div className="aw-memory__live-wait">{read}</div>}>
           <LivePage
             collections={experience.shows('area.collections')}
+            discussion={liveDiscussion}
             fallback={read}
             pageId={pageId}
             projectId={projectId}
@@ -418,6 +449,19 @@ function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
       ) : (
         read
       )}
+      {showsDiscussion && discussion.data && !editing ? (
+        <Suspense fallback={null}>
+          <PageDiscussion
+            active={activeThread}
+            discussion={discussion.data}
+            draft={draft}
+            onActivate={setActiveThread}
+            onDraftDone={() => setDraft(null)}
+            pageId={pageId}
+            projectId={projectId}
+          />
+        </Suspense>
+      ) : null}
       <Suspense fallback={null}>
         <LinkedWhiteboards canEdit={canEdit && !current.archived} projectId={projectId} targetId={current.id} targetKind="page" />
       </Suspense>

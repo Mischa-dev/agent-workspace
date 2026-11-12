@@ -38,6 +38,7 @@ export const PART_IDS = [
   'talk.threads',
   'talk.replies',
   'page.live_editing',
+  'page.comments',
   'tech.task_keys',
   'tech.run_usage',
   'tech.ids',

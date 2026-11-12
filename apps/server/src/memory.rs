@@ -12,7 +12,7 @@ use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, State},
     http::HeaderMap,
-    routing::{delete, get, post},
+    routing::{delete, get, patch, post},
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
@@ -65,6 +65,23 @@ pub fn router() -> Router<AppState> {
             post(page_docs::http::update_document).layer(DefaultBodyLimit::max(
                 page_docs::http::MAX_UPDATE_REQUEST_BYTES,
             )),
+        )
+        .route(
+            "/api/v1/pages/{id}/discussion",
+            get(page_docs::discussion::get_discussion),
+        )
+        .route(
+            "/api/v1/pages/{id}/comments",
+            post(page_docs::discussion::create_comment),
+        )
+        .route(
+            "/api/v1/pages/{id}/comments/{comment_id}",
+            patch(page_docs::discussion::update_comment)
+                .delete(page_docs::discussion::delete_comment),
+        )
+        .route(
+            "/api/v1/pages/{id}/suggestions/{suggestion_id}/decision",
+            post(page_docs::discussion::decide_suggestion),
         )
         .route(
             "/api/v1/projects/{id}/decisions",
@@ -417,7 +434,7 @@ fn normalize_title(value: &str, max: usize) -> Result<String, AppError> {
     Ok(title)
 }
 
-fn normalize_body(value: &str, max: usize) -> Result<String, AppError> {
+pub(crate) fn normalize_body(value: &str, max: usize) -> Result<String, AppError> {
     if value.chars().count() > max || value.contains('\0') {
         return Err(AppError::Validation("body"));
     }
