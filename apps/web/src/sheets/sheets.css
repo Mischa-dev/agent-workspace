@@ -11,6 +11,14 @@
   min-height: 0;
 }
 
+/* A wide screen gives the grid the rest of the page. */
+@media (min-width: 641px) {
+  .aw-sheet {
+    flex: 1 0 auto;
+    padding-bottom: var(--space-4);
+  }
+}
+
 .aw-sheet__description {
   margin: var(--space-1) 0 0;
   font: var(--t-small);

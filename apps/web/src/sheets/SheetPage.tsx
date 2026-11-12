@@ -40,6 +40,8 @@ type Dialogs =
 
 /** Each sheet's writes go one at a time, in order, so a later edit never lands first. */
 const writes = new Map<string, Promise<unknown>>()
+/** Revisions this screen's own writes made, by sheet: an edit made before one landed isn't a clash with it. */
+const own = new Map<string, Set<number>>()
 
 const START: Selection = {
   anchor: { row: 1, column: 1 },
@@ -136,7 +138,18 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
   const send = (changes: SheetChange[], shown?: Map<string, string>) => {
     const run = (writes.get(sheetId) ?? Promise.resolve()).then(async () => {
       try {
-        const result = await changeSheet(projectId, sheetId, changes)
+        const mine = own.get(sheetId) ?? new Set<number>()
+        const known = cellMap(client.getQueryData<SheetBody>(key)?.cells ?? [])
+        const result = await changeSheet(
+          projectId,
+          sheetId,
+          changes.map((change) => {
+            if (change.type !== 'cell' || change.ifRevision === undefined) return change
+            const seen = known.get(cellKey(change.row, change.column))?.revision ?? 0
+            return seen > change.ifRevision && mine.has(seen) ? { ...change, ifRevision: seen } : change
+          }),
+        )
+        own.set(sheetId, mine.add(result.revision))
         const current = client.getQueryData<SheetBody>(key)
         const next = current ? patched(current, result) : null
         if (next) client.setQueryData(key, next)

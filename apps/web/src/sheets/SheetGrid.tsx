@@ -59,6 +59,7 @@ export function SheetGrid({
     position: Position
     text: string
   } | null>(null)
+  const committed = useRef(false)
   const [dragging, setDragging] = useState(false)
   const [resizing, setResizing] = useState<{
     column: number
@@ -126,6 +127,7 @@ export function SheetGrid({
 
   const startEdit = (text?: string) => {
     if (!editable) return
+    committed.current = false
     const current = cells.get(cellKey(focus.row, focus.column))
     setEditing({
       position: focus,
@@ -134,7 +136,9 @@ export function SheetGrid({
   }
 
   const commit = (then?: Position) => {
-    if (!editing) return
+    // Enter and Tab save, and the editor's blur that follows must not save again.
+    if (!editing || committed.current) return
+    committed.current = true
     const { position, text } = editing
     const before = pending.get(cellKey(position.row, position.column)) ?? cells.get(cellKey(position.row, position.column))?.input ?? ''
     setEditing(null)
@@ -282,6 +286,7 @@ export function SheetGrid({
             key={column}
             onDoubleClick={() => {
               move({ row, column })
+              committed.current = false
               if (editable)
                 setEditing({
                   position: { row, column },
@@ -315,6 +320,7 @@ export function SheetGrid({
                     commit({ row, column: column + (event.shiftKey ? -1 : 1) })
                   } else if (event.key === 'Escape') {
                     event.preventDefault()
+                    committed.current = true
                     setEditing(null)
                     scroller.current?.focus()
                   }
