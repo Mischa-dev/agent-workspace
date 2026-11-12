@@ -258,7 +258,7 @@ pub(crate) struct Standing {
 }
 
 impl Standing {
-    fn may(self, permission: Permission) -> bool {
+    pub(crate) fn may(self, permission: Permission) -> bool {
         self.permissions.contains(permission)
     }
 
@@ -906,7 +906,7 @@ pub(crate) enum Auditor<'a> {
 }
 
 impl Auditor<'_> {
-    async fn record(
+    pub(crate) async fn record(
         &self,
         transaction: &mut Transaction<'_, Postgres>,
         organization_id: Uuid,

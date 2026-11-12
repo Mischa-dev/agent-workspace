@@ -1,0 +1,44 @@
+{
+  "id": "personal",
+  "name": "Personal",
+  "description": "Your own life: to-dos, notes, goals and lists, with agents to help. Nothing that feels like work software.",
+  "modules": [
+    "messages",
+    "projects",
+    "channels",
+    "tasks",
+    "pages",
+    "whiteboards",
+    "collections",
+    "agents",
+    "inbox",
+    "suggestions"
+  ],
+  "layout": "personal_life",
+  "project": {
+    "name": "Life",
+    "key": "LIFE",
+    "channels": ["general", "ideas"],
+    "collections": [
+      {
+        "name": "Reading list",
+        "description": "Books and articles to read, and what you made of them.",
+        "titleName": "Title",
+        "fields": [
+          { "name": "Author", "type": "text" },
+          {
+            "name": "Status",
+            "type": "single_choice",
+            "options": [
+              { "name": "To read", "color": "gray" },
+              { "name": "Reading", "color": "blue" },
+              { "name": "Done", "color": "green" }
+            ]
+          },
+          { "name": "Rating", "type": "number" }
+        ],
+        "views": [{ "name": "All records", "type": "table" }]
+      }
+    ]
+  }
+}

@@ -212,38 +212,16 @@ async fn change_modules(
     let mut transaction = state.pool.begin().await?;
     settings::authorize_workspace_manage(&mut *transaction, &principal, organization_id).await?;
     let before = state::switches(&mut transaction, organization_id).await?;
-    let mut changed = BTreeMap::new();
-    for (module, on) in &wanted {
-        if before.is_off(module) == !on {
-            continue;
-        }
-        let target = Target::Workspace { organization_id };
-        let key = state::setting_key(module);
-        if *on {
-            // On is the default: clear the switch rather than store it.
-            settings::reset(&mut transaction, target, &key, None).await?;
-        } else {
-            settings::set(
-                &mut transaction,
-                target,
-                &key,
-                json!(false),
-                None,
-                principal.actor_id,
-            )
-            .await?;
-        }
-        changed.insert(module.clone(), *on);
-    }
+    let changed = write_switches(
+        &mut transaction,
+        organization_id,
+        principal.actor_id,
+        &wanted,
+    )
+    .await?;
     if !changed.is_empty() {
         let after = state::switches(&mut transaction, organization_id).await?;
-        let off = |switches: &state::Switches| {
-            manifest::core()
-                .iter()
-                .filter(|module| switches.is_off(&module.id))
-                .map(|module| module.id.clone())
-                .collect::<Vec<_>>()
-        };
+        let off = |switches: &state::Switches| switched_off(switches);
         settings::audit(
             &mut transaction,
             &headers,
@@ -265,6 +243,42 @@ async fn change_modules(
     let response = view(&mut transaction, &principal, organization_id).await?;
     transaction.commit().await?;
     Ok(Json(response))
+}
+
+/// The modules a workspace's switches have off, by id.
+pub(crate) fn switched_off(switches: &state::Switches) -> Vec<String> {
+    manifest::core()
+        .iter()
+        .filter(|module| switches.is_off(&module.id))
+        .map(|module| module.id.clone())
+        .collect()
+}
+
+/// Sets a workspace's module switches to `wanted` (module id to on), and
+/// returns the ones that changed. The caller has checked who may, and
+/// audits. On is the default, so switching one on clears its setting.
+pub(crate) async fn write_switches(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    organization_id: Uuid,
+    actor_id: Uuid,
+    wanted: &BTreeMap<String, bool>,
+) -> Result<BTreeMap<String, bool>, AppError> {
+    let before = state::switches(transaction, organization_id).await?;
+    let mut changed = BTreeMap::new();
+    for (module, on) in wanted {
+        if before.is_off(module) == !on {
+            continue;
+        }
+        let target = Target::Workspace { organization_id };
+        let key = state::setting_key(module);
+        if *on {
+            settings::reset(transaction, target, &key, None).await?;
+        } else {
+            settings::set(transaction, target, &key, json!(false), None, actor_id).await?;
+        }
+        changed.insert(module.clone(), *on);
+    }
+    Ok(changed)
 }
 
 #[derive(Debug, Serialize)]

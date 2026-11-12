@@ -3,6 +3,11 @@
 //! repository, connect a provider account, choose an environment and run
 //! defaults, add tasks, optionally add an agent, then launch.
 //!
+//! AWD-76: it starts with picking a template (Everything first), which sets
+//! the modules, roles, layout and a starter project, and then says who gets
+//! what in plain words. Steps of modules the workspace has off don't show,
+//! so a workspace without Code never sees "Connect GitHub".
+//!
 //! Each step is read from what exists, as the person sees it, so doing a
 //! step anywhere in the app ticks it here. Only what can't be read is
 //! stored: the project the path sets up, the steps a person confirmed
@@ -29,8 +34,10 @@ pub fn router() -> Router<AppState> {
 }
 
 /// The steps, in order.
-pub const STEPS: [&str; 9] = [
+pub const STEPS: [&str; 11] = [
+    "template",
     "workspace",
+    "roles",
     "project",
     "github",
     "repository",
@@ -44,7 +51,7 @@ pub const STEPS: [&str; 9] = [
 /// Steps a person may skip.
 const OPTIONAL: [&str; 1] = ["agent"];
 /// Steps only a person's word can tick.
-const CONFIRMED: [&str; 1] = ["workspace"];
+const CONFIRMED: [&str; 2] = ["workspace", "roles"];
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -251,17 +258,25 @@ pub async fn onboarding_for(
         .as_ref()
         .map(|progress| progress.skipped_steps.clone())
         .unwrap_or_default();
+    let used_template = can_manage_workspace
+        && crate::workspace_templates::used_any(&state.pool, organization_id).await?;
     let mut done = vec![
-        // Members can't rename the workspace, so it isn't theirs to do.
+        // Members don't pick the workspace's template, rename it or decide
+        // its roles, so those steps aren't theirs to do.
+        ("template", !can_manage_workspace || used_template),
         (
             "workspace",
             !can_manage_workspace || confirmed.iter().any(|step| step == "workspace"),
+        ),
+        (
+            "roles",
+            !can_manage_workspace || confirmed.iter().any(|step| step == "roles"),
         ),
         ("project", project.is_some()),
     ];
     match &project {
         Some((project_id, _)) => done.extend(project_steps(state, *project_id, actor_id).await?),
-        None => done.extend(STEPS[2..].iter().map(|step| (*step, false))),
+        None => done.extend(STEPS[4..].iter().map(|step| (*step, false))),
     }
     // AWD-75: steps of modules that are off don't show.
     let modules = {

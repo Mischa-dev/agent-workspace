@@ -1,0 +1,6 @@
+{
+  "id": "chat_with_agents",
+  "name": "Chat with my agents",
+  "description": "Just you and your agents talking: messages, the inbox and Later. No projects, tasks or runs to set up.",
+  "modules": ["messages", "agents", "inbox", "suggestions"]
+}

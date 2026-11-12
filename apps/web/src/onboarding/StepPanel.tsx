@@ -22,7 +22,9 @@ type PanelProps = { onboarding: Onboarding; project: Project | null; projects: P
 type GoTo = (step: OnboardingStepId) => void
 
 const INTRO: Record<OnboardingStepId, string> = {
+  template: 'Start from a ready-made setup: which features are on, the layout everyone sees, roles and a first project. Everything turns it all on. Nothing is deleted if you change your mind later.',
   workspace: 'This is the name everyone in the workspace sees. You can change it later in settings.',
+  roles: 'Who can do what here, in plain words, and the role new people start with. Agents acting for someone never do more than that person.',
   project: 'A project holds its own tasks, channels, repositories and agents. Agents start work from a project’s tasks.',
   github: 'Install the GitHub App so agents can read the code and open pull requests. This ticks as soon as GitHub reports the install.',
   repository: 'Pick the repository agents work in for this project.',
@@ -74,7 +76,7 @@ function useChange(onboarding: Onboarding) {
 }
 
 function Body({ onGoTo, onboarding, project, projects, step }: PanelProps & { onGoTo: GoTo; step: OnboardingStepId }) {
-  const needsProject = !['workspace', 'project', 'account'].includes(step)
+  const needsProject = !['template', 'workspace', 'roles', 'project', 'account'].includes(step)
   if (needsProject && !project) {
     return (
       <EmptyState
@@ -91,6 +93,13 @@ function Body({ onGoTo, onboarding, project, projects, step }: PanelProps & { on
     )
   }
   switch (step) {
+    case 'template':
+    case 'roles':
+      return (
+        <Suspense fallback={<SettingsSkeleton label="Loading" sections={1} />}>
+          {step === 'template' ? <TemplateStep onboarding={onboarding} /> : <RolesStep onboarding={onboarding} />}
+        </Suspense>
+      )
     case 'workspace':
       return <WorkspaceStep onboarding={onboarding} projects={projects} />
     case 'project':
@@ -127,6 +136,9 @@ function Embedded({ group, id, onboarding, project, projects, after }: PanelProp
     </div>
   )
 }
+
+const TemplateStep = lazy(() => import('../workspace-templates/SetupSteps').then((module) => ({ default: module.TemplateStep })))
+const RolesStep = lazy(() => import('../workspace-templates/SetupSteps').then((module) => ({ default: module.RolesStep })))
 
 const RunSetup = lazy(() => import('../settings/project/RunsPage').then((module) => ({ default: module.RunSetup })))
 
