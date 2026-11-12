@@ -1643,5 +1643,69 @@ async fn people_invite_to_a_project_and_agents_never_do() {
             "project.invitation.revoke"
         ]
     );
+
+    // The same tool invites to the workspace, which can't be replaced.
+    let to_workspace = person(
+        "invitation_write",
+        json!({"projectId": project, "workspace": true, "role": "member", "note": "For the launch"}),
+    )
+    .await;
+    assert_eq!(to_workspace["outcome"], "ok", "{to_workspace}");
+    assert_eq!(
+        to_workspace["value"]["invitation"]["note"],
+        "For the launch"
+    );
+    assert!(
+        string(&to_workspace, "/value/joinUrl").contains("/join#token="),
+        "{to_workspace}"
+    );
+    let workspace_invitation = string(&to_workspace, "/value/invitation/id");
+    let workspace_list = person(
+        "invitation_list",
+        json!({"projectId": project, "workspace": true}),
+    )
+    .await;
+    assert_eq!(
+        workspace_list["value"]["invitations"][0]["id"], workspace_invitation,
+        "{workspace_list}"
+    );
+    let no_replace = person(
+        "invitation_write",
+        json!({"projectId": project, "workspace": true, "invitation": workspace_invitation, "replace": true}),
+    )
+    .await;
+    assert_eq!(no_replace["outcome"], "invalid_request", "{no_replace}");
+    // A project invitation isn't found as a workspace one, nor the reverse.
+    let crossed = person(
+        "invitation_write",
+        json!({"projectId": project, "invitation": workspace_invitation, "revoke": true}),
+    )
+    .await;
+    assert_eq!(crossed["outcome"], "not_found", "{crossed}");
+    let refused = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "invitation_write",
+        json!({"projectId": project, "workspace": true, "invitation": workspace_invitation, "revoke": true}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    let revoked = person(
+        "invitation_write",
+        json!({"projectId": project, "workspace": true, "invitation": workspace_invitation, "revoke": true}),
+    )
+    .await;
+    assert_eq!(
+        revoked["value"]["invitation"]["status"], "revoked",
+        "{revoked}"
+    );
+    let workspace_audit = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM audit_events WHERE target_kind = 'workspace_invitation' AND channel = 'mcp'",
+    )
+    .fetch_one(&f.pool)
+    .await
+    .expect("workspace audit");
+    assert_eq!(workspace_audit, 2);
     f.close().await;
 }

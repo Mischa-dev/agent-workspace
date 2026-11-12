@@ -169,6 +169,17 @@ pub(crate) async fn caller_role(
     organization_id: Uuid,
     lock: bool,
 ) -> Result<WorkspaceRole, AppError> {
+    role_of(connection, principal.actor_id, organization_id, lock).await
+}
+
+/// `caller_role` for any actor: their role in the workspace, if they're an
+/// active person in it.
+pub(crate) async fn role_of(
+    connection: &mut sqlx::PgConnection,
+    actor_id: Uuid,
+    organization_id: Uuid,
+    lock: bool,
+) -> Result<WorkspaceRole, AppError> {
     let sql = if lock {
         r#"
         SELECT membership.role
@@ -189,7 +200,7 @@ pub(crate) async fn caller_role(
     };
     let role = sqlx::query_scalar::<_, String>(sql)
         .bind(organization_id)
-        .bind(principal.actor_id)
+        .bind(actor_id)
         .fetch_optional(&mut *connection)
         .await?
         .ok_or(AppError::NotFound("workspace"))?;
@@ -1011,21 +1022,21 @@ async fn leave_workspace(
 
 #[derive(Debug, FromRow, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct InvitationView {
-    id: Uuid,
-    role: String,
+pub(crate) struct InvitationView {
+    pub(crate) id: Uuid,
+    pub(crate) role: String,
     /// A custom role it gives (AWD-74), and that role's name.
-    role_id: Option<Uuid>,
-    role_name: Option<String>,
-    token_prefix: String,
-    status: String,
-    version: i64,
-    issued_by_display_name: String,
-    expires_at: DateTime<Utc>,
-    accepted_by_display_name: Option<String>,
-    accepted_at: Option<DateTime<Utc>>,
-    created_at: DateTime<Utc>,
-    note: Option<String>,
+    pub(crate) role_id: Option<Uuid>,
+    pub(crate) role_name: Option<String>,
+    pub(crate) token_prefix: String,
+    pub(crate) status: String,
+    pub(crate) version: i64,
+    pub(crate) issued_by_display_name: String,
+    pub(crate) expires_at: DateTime<Utc>,
+    pub(crate) accepted_by_display_name: Option<String>,
+    pub(crate) accepted_at: Option<DateTime<Utc>>,
+    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) note: Option<String>,
 }
 
 const INVITATION_COLUMNS: &str = r#"
@@ -1061,28 +1072,36 @@ async fn list_invitations(
     ApiPath(organization_id): ApiPath<Uuid>,
 ) -> Result<Json<InvitationsResponse>, AppError> {
     let mut connection = state.pool.acquire().await?;
-    let role = caller_role(&mut connection, &principal, organization_id, false).await?;
+    let invitations =
+        workspace_invitations_for(&mut connection, principal.actor_id, organization_id).await?;
+    Ok(Json(InvitationsResponse { invitations }))
+}
+
+/// A workspace's invitations, newest first, for an owner or admin who may
+/// invite people.
+pub(crate) async fn workspace_invitations_for(
+    connection: &mut sqlx::PgConnection,
+    actor_id: Uuid,
+    organization_id: Uuid,
+) -> Result<Vec<InvitationView>, AppError> {
+    let role = role_of(&mut *connection, actor_id, organization_id, false).await?;
     if !role.manages()
-        || !caller_may(
-            &mut connection,
-            &principal,
-            organization_id,
-            crate::policy::Permission::MembersInvite,
-        )
-        .await?
+        || !crate::roles::standing(&mut *connection, organization_id, actor_id)
+            .await?
+            .permissions
+            .contains(crate::policy::Permission::MembersInvite)
     {
         return Err(AppError::Forbidden);
     }
-    let invitations = sqlx::query_as::<_, InvitationView>(&format!(
+    Ok(sqlx::query_as::<_, InvitationView>(&format!(
         "SELECT {INVITATION_COLUMNS} WHERE invitation.organization_id = $1 ORDER BY invitation.created_at DESC LIMIT 200"
     ))
     .bind(organization_id)
     .fetch_all(&mut *connection)
-    .await?;
-    Ok(Json(InvitationsResponse { invitations }))
+    .await?)
 }
 
-async fn fetch_invitation(
+pub(crate) async fn fetch_invitation(
     connection: &mut sqlx::PgConnection,
     invitation_id: Uuid,
 ) -> Result<InvitationView, AppError> {
@@ -1142,12 +1161,64 @@ async fn issue_invitation(
     ApiJson(request): ApiJson<IssueRequest>,
 ) -> Result<(StatusCode, Json<IssuedInvitation>), AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    if !(1..=MAX_EXPIRY_HOURS).contains(&request.expires_in_hours) {
+    let mut transaction = state.pool.begin().await?;
+    let issued = issue_workspace_invitation_in(
+        &mut transaction,
+        principal.actor_id,
+        organization_id,
+        &request.role,
+        request.role_id,
+        request.expires_in_hours,
+        request.note.as_deref(),
+    )
+    .await?;
+    audit(
+        &mut transaction,
+        &headers,
+        &principal,
+        organization_id,
+        "workspace.invitation.issue",
+        "workspace_invitation",
+        Some(issued.invitation_id),
+        issued.metadata,
+    )
+    .await?;
+    let invitation = fetch_invitation(&mut transaction, issued.invitation_id).await?;
+    transaction.commit().await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(IssuedInvitation {
+            invitation,
+            invitation_url: crate::invitations::join_url(&state, &issued.token),
+        }),
+    ))
+}
+
+/// A new workspace invitation's ID, its one-time token (only the link
+/// carries it) and what the caller's audit row records.
+pub(crate) struct IssuedWorkspaceInvitation {
+    pub invitation_id: Uuid,
+    pub token: String,
+    pub metadata: serde_json::Value,
+}
+
+/// Invite someone into the workspace with `role` (admin or member) or a
+/// custom role, for `expires_in_hours`: owners invite admins and members,
+/// admins invite members, and nobody invites to a role holding more than
+/// they do. The caller records the audit row.
+pub(crate) async fn issue_workspace_invitation_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    organization_id: Uuid,
+    role: &str,
+    role_id: Option<Uuid>,
+    expires_in_hours: i32,
+    note: Option<&str>,
+) -> Result<IssuedWorkspaceInvitation, AppError> {
+    if !(1..=MAX_EXPIRY_HOURS).contains(&expires_in_hours) {
         return Err(AppError::Validation("invitation expiry"));
     }
-    let note = request
-        .note
-        .as_deref()
+    let note = note
         .map(str::trim)
         .filter(|note| !note.is_empty())
         .map(str::to_owned);
@@ -1157,11 +1228,9 @@ async fn issue_invitation(
     {
         return Err(AppError::Validation("invitation note"));
     }
-    let mut transaction = state.pool.begin().await?;
-    let role = caller_role(&mut transaction, &principal, organization_id, true).await?;
-    let standing =
-        crate::roles::standing(&mut transaction, organization_id, principal.actor_id).await?;
-    if !role.manages()
+    let caller = role_of(&mut *transaction, actor_id, organization_id, true).await?;
+    let standing = crate::roles::standing(&mut *transaction, organization_id, actor_id).await?;
+    if !caller.manages()
         || !standing
             .permissions
             .contains(crate::policy::Permission::MembersInvite)
@@ -1170,16 +1239,16 @@ async fn issue_invitation(
     }
     // A custom role is invited as the workspace role it's based on, and
     // nobody invites to a role holding more than they do.
-    let (invited_role, role_id) = match request.role_id {
+    let (invited_role, role_id) = match role_id {
         None => {
-            if matches!(request.role.as_str(), "admin" | "member")
-                && !crate::policy::RoleGrant::stored(&request.role, None::<&[String]>)?
+            if matches!(role, "admin" | "member")
+                && !crate::policy::RoleGrant::stored(role, None::<&[String]>)?
                     .permissions()
                     .is_subset_of(standing.permissions)
             {
                 return Err(AppError::Forbidden);
             }
-            (request.role.clone(), None)
+            (role.to_owned(), None)
         }
         Some(role_id) => {
             let (built_in, base, permissions) =
@@ -1188,7 +1257,7 @@ async fn issue_invitation(
                 )
                 .bind(organization_id)
                 .bind(role_id)
-                .fetch_optional(&mut *transaction)
+                .fetch_optional(&mut **transaction)
                 .await?
                 .ok_or(AppError::NotFound("role"))?;
             let grant = if built_in {
@@ -1207,7 +1276,7 @@ async fn issue_invitation(
             }
         }
     };
-    if !may_invite(role, &invited_role) {
+    if !may_invite(caller, &invited_role) {
         return Err(if matches!(invited_role.as_str(), "admin" | "member") {
             AppError::Forbidden
         } else {
@@ -1230,36 +1299,20 @@ async fn issue_invitation(
     .bind(&note)
     .bind(&token_prefix)
     .bind(token_digest.to_vec())
-    .bind(principal.actor_id)
-    .bind(request.expires_in_hours)
+    .bind(actor_id)
+    .bind(expires_in_hours)
     .bind(role_id)
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
-    audit(
-        &mut transaction,
-        &headers,
-        &principal,
-        organization_id,
-        "workspace.invitation.issue",
-        "workspace_invitation",
-        Some(invitation_id),
-        serde_json::json!({
+    Ok(IssuedWorkspaceInvitation {
+        invitation_id,
+        token,
+        metadata: serde_json::json!({
             "role": invited_role,
             "roleId": role_id,
-            "expiresInHours": request.expires_in_hours,
+            "expiresInHours": expires_in_hours,
         }),
-    )
-    .await?;
-    let invitation = fetch_invitation(&mut transaction, invitation_id).await?;
-    transaction.commit().await?;
-    let origin = crate::invitations::public_origin(&state);
-    Ok((
-        StatusCode::CREATED,
-        Json(IssuedInvitation {
-            invitation,
-            invitation_url: format!("{origin}/join#token={token}"),
-        }),
-    ))
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -1277,29 +1330,57 @@ async fn revoke_invitation(
 ) -> Result<Json<InvitationView>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
     let mut transaction = state.pool.begin().await?;
+    let (organization_id, role) = revoke_workspace_invitation_in(
+        &mut transaction,
+        principal.actor_id,
+        invitation_id,
+        request.expected_version,
+    )
+    .await?;
+    audit(
+        &mut transaction,
+        &headers,
+        &principal,
+        organization_id,
+        "workspace.invitation.revoke",
+        "workspace_invitation",
+        Some(invitation_id),
+        serde_json::json!({ "role": role }),
+    )
+    .await?;
+    let view = fetch_invitation(&mut transaction, invitation_id).await?;
+    transaction.commit().await?;
+    Ok(Json(view))
+}
+
+/// Revoke an active workspace invitation, for someone who may send one with
+/// its role. Returns its workspace and role for the caller's audit row.
+pub(crate) async fn revoke_workspace_invitation_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    invitation_id: Uuid,
+    expected_version: i64,
+) -> Result<(Uuid, String), AppError> {
     let (organization_id, role, status, version) =
         sqlx::query_as::<_, (Uuid, String, String, i64)>(
             "SELECT organization_id, role, status, version FROM workspace_invitations WHERE id = $1 FOR UPDATE",
         )
         .bind(invitation_id)
-        .fetch_optional(&mut *transaction)
+        .fetch_optional(&mut **transaction)
         .await?
         .ok_or(AppError::NotFound("workspace_invitation"))?;
-    let caller = caller_role(&mut transaction, &principal, organization_id, true)
+    let caller = role_of(&mut *transaction, actor_id, organization_id, true)
         .await
         .map_err(|_| AppError::NotFound("workspace_invitation"))?;
     if !may_invite(caller, &role)
-        || !caller_may(
-            &mut transaction,
-            &principal,
-            organization_id,
-            crate::policy::Permission::MembersInvite,
-        )
-        .await?
+        || !crate::roles::standing(&mut *transaction, organization_id, actor_id)
+            .await?
+            .permissions
+            .contains(crate::policy::Permission::MembersInvite)
     {
         return Err(AppError::Forbidden);
     }
-    if version != request.expected_version {
+    if version != expected_version {
         return Err(AppError::VersionConflict {
             resource: "workspace_invitation",
             current_version: version,
@@ -1316,22 +1397,9 @@ async fn revoke_invitation(
         "#,
     )
     .bind(invitation_id)
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
-    audit(
-        &mut transaction,
-        &headers,
-        &principal,
-        organization_id,
-        "workspace.invitation.revoke",
-        "workspace_invitation",
-        Some(invitation_id),
-        serde_json::json!({ "role": role }),
-    )
-    .await?;
-    let view = fetch_invitation(&mut transaction, invitation_id).await?;
-    transaction.commit().await?;
-    Ok(Json(view))
+    Ok((organization_id, role))
 }
 
 #[derive(Deserialize)]

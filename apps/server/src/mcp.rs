@@ -377,7 +377,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "People: a project's invitations, newest first, with each one's role, status and version (not its link). Workspace owners and admins who may invite people to the project, through an app connected as themselves.",
+        description = "People: a project's invitations (or, with workspace: true, its workspace's), newest first, with each one's role, status and version (not its link). Workspace owners and admins who may invite people, through an app connected as themselves.",
         annotations(
             title = "List invitations",
             read_only_hint = true,
@@ -394,7 +394,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "People: invite someone to a project with a join link (role admin, member, viewer or a custom role; never above yours, and only owners invite admins), or revoke or replace an invitation (invitation_list). The link is returned once, for you to pass on privately. Workspace owners and admins who may invite people, through an app connected as themselves; agents never invite. Audited.",
+        description = "People: invite someone to a project with a join link (role admin, member, viewer or a custom role; never above yours, and only owners invite admins), or to its workspace (workspace: true), or revoke or replace an invitation (invitation_list). The link is returned once, for you to pass on privately. Workspace owners and admins who may invite people, through an app connected as themselves; agents never invite. Audited.",
         annotations(
             title = "Invite to project",
             read_only_hint = false,

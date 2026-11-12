@@ -266,12 +266,12 @@ mod tests {
         (
             Post,
             "/api/v1/organizations/{organization_id}/invitations",
-            Gap("invitation_write"),
+            Tool("invitation_write"),
         ),
         (
             Post,
             "/api/v1/workspace-invitations/{invitation_id}/revoke",
-            Gap("invitation_write"),
+            Tool("invitation_write"),
         ),
         (
             Post,

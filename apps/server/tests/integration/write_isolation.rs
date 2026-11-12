@@ -5679,6 +5679,8 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "invitation": bx.project_invitation, "revoke": true}),
             json!({"projectId": a.project, "invitation": bx.project_invitation, "replace": true}),
             json!({"projectId": a.project, "role": bx.custom_role}),
+            json!({"projectId": a.project, "workspace": true, "invitation": bx.workspace_invitation, "revoke": true}),
+            json!({"projectId": a.project, "workspace": true, "role": bx.custom_role}),
         ]),
         mcp_case(
             "role_write",
