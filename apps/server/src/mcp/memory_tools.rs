@@ -20,7 +20,7 @@ use crate::{
     memory::{self, DecisionInput, PageInput, Writer},
     page_docs::{
         edits::{self, Edit, EditError, EditOp, Target},
-        store,
+        store, suggestions,
         tree::{Block, Node, plain_text},
         ydoc,
     },
@@ -319,6 +319,20 @@ pub(super) struct PageValue {
     /// Recent versions, newest first. Restore one with page_write.
     pub history: Vec<RevisionLine>,
     pub url: String,
+    /// Open comment threads on the page (page_comments reads them).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub open_comments: i64,
+    /// Suggested edits waiting on someone (page_suggestions reads them).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub pending_suggestions: i64,
+    /// Set when your change to the text was kept as a suggestion instead
+    /// (the page is someone else's); the page above doesn't have it yet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggestion: Option<SuggestionMade>,
+}
+
+fn is_zero(value: &i64) -> bool {
+    *value == 0
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -372,7 +386,25 @@ pub(super) async fn page_get(
             _ => (page.title.clone(), page.body.clone()),
         };
         let (body, truncated) = truncate_text(&body, PAGE_BODY_CHARACTERS);
+        let (open_comments, pending_suggestions) = sqlx::query_as::<_, (i64, i64)>(
+            r#"
+            SELECT
+                (SELECT count(*) FROM project_page_comments
+                 WHERE page_id = $1 AND thread_id = id AND resolved_at IS NULL
+                   AND EXISTS (SELECT 1 FROM project_page_comments reply
+                               WHERE reply.thread_id = project_page_comments.id
+                                 AND reply.deleted_at IS NULL)),
+                (SELECT count(*) FROM project_page_suggestions
+                 WHERE page_id = $1 AND status = 'pending')
+            "#,
+        )
+        .bind(page_id)
+        .fetch_one(&state.pool)
+        .await?;
         Ok::<_, AppError>(ToolResult::ok(PageValue {
+            open_comments,
+            pending_suggestions,
+            suggestion: None,
             url: public_url(
                 state,
                 &format!("/projects/{}/pages/{}", page.project_id, page.id),
@@ -465,7 +497,7 @@ pub(super) async fn page_write(
         },
         None => None,
     };
-    let input = PageInput {
+    let mut input = PageInput {
         title: arguments.title,
         body: arguments.body,
         is_guide: arguments.is_guide,
@@ -495,6 +527,7 @@ pub(super) async fn page_write(
                 "Pages live in projects, not in Messages. Pick a project.",
             ));
         }
+        let mut suggestion = None;
         let page_id = match page_id {
             Some(page_id) => {
                 let owner = sqlx::query_scalar::<_, Uuid>(
@@ -506,7 +539,32 @@ pub(super) async fn page_write(
                 if owner != Some(project_id) {
                     return Ok(ToolResult::not_found("That page"));
                 }
-                memory::update_page(&mut transaction, writer(principal), page_id, &input).await?;
+                // An agent's new text for someone else's page is kept as a
+                // suggestion; anything else it changes applies.
+                let changes_text = input.body.is_some() || input.restore_version.is_some();
+                if changes_text
+                    && suggestions::must_suggest(
+                        &writer(principal),
+                        suggestions::page_creator(&mut transaction, page_id).await?,
+                    )
+                {
+                    match suggest_text(&mut transaction, principal, page_id, &input).await? {
+                        Ok(made) => suggestion = made,
+                        Err(refused) => return Ok(refused),
+                    }
+                    input.body = None;
+                    input.restore_version = None;
+                }
+                let more = input.title.is_some()
+                    || input.is_guide.is_some()
+                    || input.skill_description.is_some()
+                    || input.archived.is_some()
+                    || input.body.is_some()
+                    || input.restore_version.is_some();
+                if more {
+                    memory::update_page(&mut transaction, writer(principal), page_id, &input)
+                        .await?;
+                }
                 page_id
             }
             None => {
@@ -535,20 +593,105 @@ pub(super) async fn page_write(
         )
         .await?;
         transaction.commit().await?;
-        Ok::<_, AppError>(
-            page_get(
-                state,
-                principal,
-                PageGetArguments {
-                    page_id: page_id.to_string(),
-                    version: None,
-                },
-            )
-            .await,
+        let mut value = page_get(
+            state,
+            principal,
+            PageGetArguments {
+                page_id: page_id.to_string(),
+                version: None,
+            },
         )
+        .await;
+        if let (Some(made), ToolResult::Ok { value: page }) = (suggestion, &mut value) {
+            page.suggestion = Some(made);
+        }
+        Ok::<_, AppError>(value)
     }
     .await;
     result.unwrap_or_else(|error| ToolResult::from_error(error, "page_write"))
+}
+
+/// Keeps an agent's new text for someone else's page as a suggestion: the
+/// block edits that turn the page into it. `None` when the text is what the
+/// page already says.
+async fn suggest_text(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    principal: &McpPrincipal,
+    page_id: Uuid,
+    input: &PageInput,
+) -> Result<Result<Option<SuggestionMade>, ToolResult<PageValue>>, AppError> {
+    let Some(page) = store::lock_page(transaction, page_id).await? else {
+        return Ok(Err(ToolResult::not_found("That page")));
+    };
+    if let Some(expected) = input.expected_version
+        && expected != page.version
+    {
+        return Err(AppError::VersionConflict {
+            resource: "page",
+            current_version: page.version,
+        });
+    }
+    if page.archived {
+        return Ok(Err(ToolResult::invalid(
+            "pageId",
+            "That page is archived. Bring it back with page_write (archived: false) to edit it.",
+        )));
+    }
+    let markdown = match (input.restore_version, input.body.as_deref()) {
+        (_, Some(body)) => memory::normalize_body(body, memory::MAX_PAGE_BODY)?,
+        (Some(restore), None) => sqlx::query_scalar::<_, String>(
+            "SELECT body FROM project_page_revisions WHERE page_id = $1 AND version = $2",
+        )
+        .bind(page_id)
+        .bind(restore)
+        .fetch_optional(&mut **transaction)
+        .await?
+        .ok_or(AppError::NotFound("page version"))?,
+        (None, None) => return Ok(Ok(None)),
+    };
+    let note = memory::normalize_note(input.note.as_deref())?.or_else(|| {
+        input
+            .restore_version
+            .map(|restore| format!("Restore version {restore}"))
+    });
+    let stored = store::document(transaction, page_id, &page).await?;
+    let current = store::read_blocks(&stored.state)?;
+    let Some(edits) = suggestions::diff(&current, &markdown) else {
+        return Ok(Ok(None));
+    };
+    if edits.len() > edits::MAX_EDITS {
+        return Ok(Err(ToolResult::invalid(
+            "body",
+            format!(
+                "That changes more than {} blocks of someone else's page at once. Suggest it in parts with page_edit.",
+                edits::MAX_EDITS
+            ),
+        )));
+    }
+    let stored_edits = match suggestions::resolve(&current, &edits) {
+        Ok(stored) => stored,
+        Err(error) => return Ok(Err(ToolResult::invalid("body", error.to_string()))),
+    };
+    let id = suggestions::create(
+        transaction,
+        writer(principal),
+        page_id,
+        &page,
+        &stored_edits,
+        note.as_deref(),
+    )
+    .await?;
+    insert_audit(
+        transaction,
+        principal,
+        page.project_id,
+        "page.suggestion_created",
+        "page",
+        page_id,
+        serde_json::json!({ "edits": stored_edits.len(), "fromVersion": page.version, "suggestionId": id }),
+    )
+    .await?;
+    Ok(Ok(Some(SuggestionMade::pending(id))))
 }
 
 // ---------------------------------------------------------------------------
@@ -608,6 +751,30 @@ pub(super) struct PageBlocksValue {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub truncated: bool,
     pub url: String,
+    /// Set when your edits were kept as a suggestion instead of changing
+    /// the page (it's someone else's): the page above is unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggestion: Option<SuggestionMade>,
+}
+
+/// Edits kept as a suggestion for the page's owner to accept or reject.
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct SuggestionMade {
+    pub suggestion_id: String,
+    /// pending until someone decides; see page_suggestions.
+    pub status: String,
+    pub message: String,
+}
+
+impl SuggestionMade {
+    pub(super) fn pending(id: Uuid) -> Self {
+        Self {
+            suggestion_id: id.to_string(),
+            status: "pending".to_owned(),
+            message: "This page is someone else's, so your edits were kept as a suggestion for them to accept or reject. The page hasn't changed yet; page_suggestions shows what happens to it. Withdraw it with page_suggestion_decide.".to_owned(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -855,6 +1022,7 @@ fn blocks_value(
         blocks: lines,
         markdown,
         truncated,
+        suggestion: None,
     }
 }
 
@@ -969,6 +1137,10 @@ pub(super) struct PageEditArguments {
     pub edits: Vec<PageEditInput>,
     /// A short note on what changed, kept with the version.
     pub note: Option<String>,
+    /// Keep the edits as a suggestion for someone to accept, even on a page
+    /// you may change directly. On a page someone else made, an agent's
+    /// edits are always suggestions.
+    pub suggest: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
@@ -1089,6 +1261,46 @@ pub(super) async fn page_edit(
             ) => return Ok(ToolResult::conflict(error.to_string())),
             Err(error) => return Ok(ToolResult::invalid("edits", error.to_string())),
         };
+        let writer = writer(principal);
+        let creator = suggestions::page_creator(&mut transaction, page_id).await?;
+        if arguments.suggest == Some(true) || suggestions::must_suggest(&writer, creator) {
+            let stored_edits = match suggestions::resolve(&current, &edits) {
+                Ok(stored) => stored,
+                Err(error) => return Ok(ToolResult::invalid("edits", error.to_string())),
+            };
+            let id = suggestions::create(
+                &mut transaction,
+                writer,
+                page_id,
+                &page,
+                &stored_edits,
+                note.as_deref(),
+            )
+            .await?;
+            insert_audit(
+                &mut transaction,
+                principal,
+                project_id,
+                "page.suggestion_created",
+                "page",
+                page_id,
+                serde_json::json!({ "edits": edits.len(), "fromVersion": page.version, "suggestionId": id }),
+            )
+            .await?;
+            transaction.commit().await?;
+            let derived = store::derive_markdown(&page.body, &current);
+            let now = PageAsBlocks {
+                page_id,
+                project_id,
+                title: page.title,
+                version: page.version,
+                blocks: current,
+                derived,
+            };
+            let mut value = blocks_value(state, &now, None, false);
+            value.suggestion = Some(SuggestionMade::pending(id));
+            return Ok(ToolResult::ok(value));
+        }
         // Keep the words of the Markdown sent, for the blocks it says.
         let sent: Vec<&str> = edits
             .iter()
@@ -1100,7 +1312,7 @@ pub(super) async fn page_edit(
         })?;
         let (version, _) = store::save(
             &mut transaction,
-            writer(principal),
+            writer,
             page_id,
             &page,
             &change,

@@ -14,6 +14,11 @@
     "page_blocks": "describe",
     "page_write": "change",
     "page_edit": "change",
+    "page_comments": "query",
+    "page_comment": "create",
+    "page_comment_update": "change",
+    "page_suggestions": "query",
+    "page_suggestion_decide": "change",
     "skill_list": "query",
     "skill_get": "describe",
     "decision_list": "query",
@@ -25,7 +30,7 @@
     "/api/v1/projects/{id}/decisions"
   ],
   "events": { "emits": [], "listens": [] },
-  "notifications": [],
+  "notifications": ["page_suggestion", "page_comment"],
   "search": ["pages", "decisions"],
   "automations": { "triggers": [], "actions": [] },
   "things": [
@@ -56,7 +61,7 @@
   ],
   "slots": {
     "pages": ["/projects/:projectId/pages", "/projects/:projectId/pages/:pageId", "/projects/:projectId/decisions"],
-    "parts": ["area.pages", "area.decisions", "page.live_editing"],
+    "parts": ["area.pages", "area.decisions", "page.live_editing", "page.comments"],
     "sidebar": [],
     "home": [],
     "settings": [],

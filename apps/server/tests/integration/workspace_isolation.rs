@@ -136,6 +136,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/organizations/{organization_id}/workspace-templates",
     "/api/v1/organizations/{organization_id}/server",
     "/api/v1/pages/{id}",
+    "/api/v1/pages/{id}/discussion",
     "/api/v1/pages/{id}/document",
     "/api/v1/pages/{id}/revisions/{version}",
     "/api/v1/projects",
@@ -459,6 +460,10 @@ pub(super) struct World {
     /// A comment on `task`, edited once.
     pub(super) comment: Uuid,
     pub(super) page: String,
+    /// A comment thread on `page` (AWD-53), and two edits the agent
+    /// suggested to it, pending: the page is a person's.
+    pub(super) page_thread: Uuid,
+    pub(super) page_suggestions: [Uuid; 2],
     pub(super) repository: Uuid,
     pub(super) pull_request: Uuid,
     pub(super) pull_request_url: String,
@@ -1157,6 +1162,13 @@ async fn build_workspace(
         .execute(pool)
         .await
         .expect("page document generation");
+    let page_thread = call(
+        "page_comment",
+        json!({"pageId": page, "text": format!("Launch page comment{m}")}),
+    )
+    .await;
+    let page_thread =
+        Uuid::parse_str(&string_at(&page_thread, "/value/threadId")).expect("page thread");
 
     // Collections (AWD-90): fields that point at a person, a task and a
     // page, a saved view, and a record that uses them, changed once so it
@@ -1304,6 +1316,24 @@ async fn build_workspace(
         succeeded(&structured(&claimed)["outcome"]),
         "{label} claim: {claimed}"
     );
+    let mut page_suggestions = [Uuid::nil(); 2];
+    for (index, slot) in page_suggestions.iter_mut().enumerate() {
+        let (_, suggested) = call_tool(
+            app,
+            &agent_token,
+            &agent_session,
+            "page_edit",
+            json!({"pageId": page, "edits": [{"op": "append", "markdown": format!("Launch suggestion {index}{m}")}]}),
+        )
+        .await;
+        let suggested = structured(&suggested);
+        assert!(
+            succeeded(&suggested["outcome"]),
+            "{label} suggestion: {suggested}"
+        );
+        *slot = Uuid::parse_str(&string_at(&suggested, "/value/suggestion/suggestionId"))
+            .expect("suggestion id");
+    }
 
     let (status, invitation) = send(
         app,
@@ -2068,6 +2098,8 @@ async fn build_workspace(
         subtask,
         comment,
         page,
+        page_thread,
+        page_suggestions,
         repository,
         pull_request,
         pull_request_url,
@@ -3305,6 +3337,12 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
         vec![format!("/api/v1/pages/{}/document", b.page)],
         vec![],
     ));
+    cases.push(case(
+        "/api/v1/pages/{id}/discussion",
+        vec![format!("/api/v1/pages/{}/discussion", a.page)],
+        vec![format!("/api/v1/pages/{}/discussion", b.page)],
+        vec![],
+    ));
     let boards = |w: &World, suffix: &str| {
         vec![
             format!("/api/v1/whiteboards/{}{suffix}", w.whiteboard),
@@ -3548,7 +3586,9 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "my_work",
     "notification_list",
     "page_blocks",
+    "page_comments",
     "page_get",
+    "page_suggestions",
     "page_list",
     "people_search",
     "project_export",
@@ -3987,6 +4027,18 @@ fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
                 json!({"pageId": b.page}),
                 json!({"pageId": b.page, "includeMarkdown": true}),
             ],
+            vec![],
+        ),
+        case(
+            "page_comments",
+            vec![json!({"pageId": a.page, "includeResolved": true})],
+            vec![json!({"pageId": b.page, "includeResolved": true})],
+            vec![],
+        ),
+        case(
+            "page_suggestions",
+            vec![json!({"pageId": a.page, "includeDecided": true})],
+            vec![json!({"pageId": b.page, "includeDecided": true})],
             vec![],
         ),
         case(

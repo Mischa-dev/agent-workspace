@@ -151,8 +151,12 @@ const WRITE_ROUTES: &[&str] = &[
     "PUT /api/v1/organizations/{organization_id}/secrets/{name}",
     "POST /api/v1/organizations/{organization_id}/transfer-ownership",
     "PATCH /api/v1/pages/{id}",
+    "POST /api/v1/pages/{id}/comments",
+    "DELETE /api/v1/pages/{id}/comments/{comment_id}",
+    "PATCH /api/v1/pages/{id}/comments/{comment_id}",
     "POST /api/v1/pages/{id}/document/sync",
     "POST /api/v1/pages/{id}/document/updates",
+    "POST /api/v1/pages/{id}/suggestions/{suggestion_id}/decision",
     "POST /api/v1/project-invitations/{invitation_id}/replace",
     "POST /api/v1/project-invitations/{invitation_id}/revoke",
     "POST /api/v1/projects",
@@ -437,7 +441,10 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "message_send",
     "milestone_write",
     "notification_update",
+    "page_comment",
+    "page_comment_update",
     "page_edit",
+    "page_suggestion_decide",
     "page_write",
     "pin_set",
     "plan_import",
@@ -3965,6 +3972,32 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             &[id(&a.page, &b.page)],
             versioned("project_pages", 0, json!({"title": "Launch page"})),
         ),
+        // Comments and suggestions on a page (AWD-53). Deleting the thread's
+        // comment comes last, after the tools reopen it.
+        path_case(
+            "POST /api/v1/pages/{id}/comments",
+            &[id(&a.page, &b.page)],
+            json_body(json!({"body": "Net comment"})),
+        ),
+        path_case(
+            "PATCH /api/v1/pages/{id}/comments/{comment_id}",
+            &[id(&a.page, &b.page), id(a.page_thread, b.page_thread)],
+            json_body(json!({"resolved": true})),
+        ),
+        path_case(
+            "DELETE /api/v1/pages/{id}/comments/{comment_id}",
+            &[id(&a.page, &b.page), id(a.page_thread, b.page_thread)],
+            empty(),
+        )
+        .last(),
+        path_case(
+            "POST /api/v1/pages/{id}/suggestions/{suggestion_id}/decision",
+            &[
+                id(&a.page, &b.page),
+                id(a.page_suggestions[0], b.page_suggestions[0]),
+            ],
+            json_body(json!({"decision": "reject"})),
+        ),
         // A page's live document: its generation is the page's ID (see the
         // fixture), and the change adds a paragraph to any document.
         path_case(
@@ -6196,6 +6229,30 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "page_edit",
             json!({"pageId": a.page, "expectedVersion": version("project_pages", &a.page), "edits": [{"op": "append", "markdown": "Net block"}]}),
             vec![json!({"pageId": b.page, "expectedVersion": version("project_pages", &b.page), "edits": [{"op": "append", "markdown": "Net"}]})],
+        ),
+        mcp_case(
+            "page_comment",
+            json!({"pageId": a.page, "text": "Net mcp comment"}),
+            vec![
+                json!({"pageId": b.page, "text": "Net"}),
+                json!({"pageId": a.page, "text": "Net", "replyTo": b.page_thread}),
+            ],
+        ),
+        mcp_case(
+            "page_comment_update",
+            json!({"pageId": a.page, "commentId": a.page_thread, "resolved": false}),
+            vec![
+                json!({"pageId": b.page, "commentId": b.page_thread, "resolved": true}),
+                json!({"pageId": a.page, "commentId": b.page_thread, "resolved": true}),
+            ],
+        ),
+        mcp_case(
+            "page_suggestion_decide",
+            json!({"pageId": a.page, "suggestionId": a.page_suggestions[1], "decision": "reject"}),
+            vec![
+                json!({"pageId": b.page, "suggestionId": b.page_suggestions[1], "decision": "reject"}),
+                json!({"pageId": a.page, "suggestionId": b.page_suggestions[1], "decision": "reject"}),
+            ],
         ),
         mcp_case(
             "page_write",

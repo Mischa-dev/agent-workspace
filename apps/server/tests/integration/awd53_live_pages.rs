@@ -196,6 +196,14 @@ async fn two_people_and_an_agent_edit_one_page_at_once_without_losing_text() {
     let (mara, mara_token) =
         create_agent(app, &setup.browser, &space(&setup).await, "Mara", "mara").await;
     add_member(&setup, &work, mara, "member").await;
+    // The page is Mara's, so her edits change it directly; on a page someone
+    // else made they'd be suggestions (awd53_discussion).
+    sqlx::query("UPDATE project_pages SET created_by_actor_id = $2 WHERE id = $1::uuid")
+        .bind(&page)
+        .bind(mara)
+        .execute(&setup.pool)
+        .await
+        .expect("Mara's page");
     let mara_session = initialize(app, &mara_token).await.expect("Mara MCP");
     let call = |name: &'static str, arguments: Value| {
         let token = mara_token.clone();
