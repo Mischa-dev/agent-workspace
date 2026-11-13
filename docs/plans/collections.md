@@ -191,3 +191,31 @@ inside another block, one with content, and one whose path leaves the app
 - **Agents**: `page_blocks` lists an embed as a block of type `embed`, and
   `page_write` or `page_edit` adds one from the line above.
   `collection_describe` says how.
+
+## Forms (AWD-110)
+
+A form is a public page that adds a record to one collection. It grew from
+bug report links: a form is a `bug_report_links` row with `collection_id` and
+`form` set (migration `20261113063000_collection_forms.sql`), so it shares
+the secret token (only its SHA-256 is stored), the rate limit, pausing,
+replacing, and turning itself off when its maker loses the right to add
+records.
+
+- `form` holds `{intro, fields: [{field, required}], thanks}`. A form can ask
+  any active field except people and links, which point inside the
+  workspace; the title is always asked. `collection_forms::check` validates
+  it on every write.
+- `GET /api/v1/forms/{token}` (public, rate limited, no-store) returns only
+  the collection's name, the title's name, and the asked fields with their
+  options. A task link's token is a 404 there.
+- Answers go to `POST /api/v1/bug-reports/{token}` like any report, as JSON
+  or a plain HTML form post. Each one calls `record_write` as the link's
+  maker, so the record's history says who shared the form. A resend of the
+  same answers on the same day comes back as a duplicate, not a second
+  record.
+- Making or editing a form needs the right to add records in that
+  collection. In the app it's "Forms…" in the collection's menu; agents use
+  `bug_report_link_write` with `collection` and `form`. Project settings ›
+  Bug reports lists only the task links.
+- The page is `/forms/{token}` in the web app, lazy loaded and outside the
+  signed-in shell.

@@ -29,8 +29,8 @@ type Props = {
   groupable: readonly FieldDefinition[]
 }
 
-/** A card moved to another column, shown there until the column loads it. */
-type Moved = { record: CollectionRecord; key: string; at: number }
+/** A card moved to another column, shown there until the column loads it or reloads after the save. */
+type Moved = { record: CollectionRecord; key: string; at: number; savedAt?: number }
 
 /**
  * A collection as a board (AWD-110): a column for each value of the field
@@ -71,21 +71,41 @@ function Board({ body, config, editable, edits, field, filtered, onClearFilters,
   const columns = useMemo(() => boardColumns(field, first?.groups ?? []), [field, first?.groups])
   const shown = viewColumns(body.fields, config).filter((column) => column.field.id !== field.id)
   const [moved, setMoved] = useState<Moved[]>([])
+  // Another search or filter is another board: a move waiting on a column
+  // that won't load it under the new query is dropped, not shown.
+  const boardQuery = recordsParams({ ...query, groupBy: field.id })
+  const [movedFor, setMovedFor] = useState(boardQuery)
+  if (movedFor !== boardQuery) {
+    setMovedFor(boardQuery)
+    setMoved([])
+  }
   const ghostRef = useRef<HTMLDivElement>(null)
   const scrollerRef = useRef<HTMLDivElement>(null)
   // Each column's cards as it shows them, to find the one a drop names.
   const [shownCards, setShownCards] = useState<Record<string, readonly CollectionRecord[]>>({})
   const onCards = useCallback((key: string, cards: readonly CollectionRecord[]) => setShownCards((current) => (current[key] === cards ? current : { ...current, [key]: cards })), [])
   const findCard = (id: string) => Object.values(shownCards).flat().find((record) => record.id === id)
-  // Moves the next refetch has already counted are in their column's list by then.
-  const countedAt = counts.dataUpdatedAt
-  const pending = useMemo(() => moved.filter((entry) => entry.at > countedAt), [countedAt, moved])
+  // A moved card stays in its new column until that column's own list has
+  // it, or has reloaded since the save landed (then the list is the truth:
+  // the card may sort past its loaded page, or have been archived since).
+  // Not by a timer: the save patches every list at once, so a timestamp
+  // passes before the destination ever loads the card (#244 review).
+  const arrived = useCallback((id: string) => setMoved((current) => current.filter((entry) => entry.record.id !== id)), [])
 
   const move = (record: CollectionRecord, key: string) => {
     if (boardKey(record, field, columns) === key) return
     const value = boardValue(field, key)
-    setMoved((current) => [...current.filter((entry) => entry.record.id !== record.id), { record: { ...record, values: withValues(record.values, { [field.id]: value }) }, key, at: Date.now() }])
-    void edits.save(record, { values: { [field.id]: value } })
+    const at = Date.now()
+    setMoved((current) => [...current.filter((entry) => entry.record.id !== record.id), { record: { ...record, values: withValues(record.values, { [field.id]: value }) }, key, at }])
+    // A failed save goes back where it was: the lists refetch, and this move is forgotten.
+    void edits.save(record, { values: { [field.id]: value } }).then((saved) => {
+      const now = Date.now()
+      setMoved((current) =>
+        saved
+          ? current.map((entry) => (entry.record.id === record.id && entry.at === at ? { ...entry, savedAt: now } : entry))
+          : current.filter((entry) => entry.record.id !== record.id || entry.at !== at),
+      )
+    })
   }
   const drag = useBoardDrag({
     enabled: editable,
@@ -128,7 +148,8 @@ function Board({ body, config, editable, edits, field, filtered, onClearFilters,
             editable={editable}
             field={field}
             key={column.key}
-            moved={pending}
+            moved={moved}
+            onArrived={arrived}
             onMove={move}
             onOpenRecord={(id) => {
               if (!drag.justDragged()) onOpenRecord(id)
@@ -161,6 +182,7 @@ function Column({
   editable,
   field,
   moved,
+  onArrived,
   onMove,
   onOpenRecord,
   onPointerDown,
@@ -178,6 +200,7 @@ function Column({
   editable: boolean
   field: FieldDefinition
   moved: readonly Moved[]
+  onArrived: (id: string) => void
   onMove: (record: CollectionRecord, key: string) => void
   onOpenRecord: (id: string) => void
   onPointerDown: (event: ReactPointerEvent<HTMLElement>, id: string) => void
@@ -199,6 +222,30 @@ function Column({
     return [...here, ...joined]
   }, [column.key, columns, field, loaded, moved])
   useEffect(() => onCards(column.key, cards), [cards, column.key, onCards])
+  // When the newest fetch from the server that worked began. Patches to the
+  // cache (an edit elsewhere) aren't fetches, so they don't count.
+  const [fetchedFrom, setFetchedFrom] = useState(0)
+  const fetchStarted = useRef<number | null>(null)
+  const fetching = records.isFetching
+  const failed = records.isError
+  useEffect(() => {
+    if (fetching) {
+      fetchStarted.current ??= Date.now()
+      return
+    }
+    const started = fetchStarted.current
+    fetchStarted.current = null
+    if (started !== null && !failed) setFetchedFrom(started)
+  }, [failed, fetching])
+  // Once this column's list has a card moved here, or has been fetched
+  // again since its save landed, the list shows what's true on its own.
+  useEffect(() => {
+    for (const entry of moved) {
+      if (entry.key !== column.key) continue
+      const listed = loaded.some((record) => record.id === entry.record.id && boardKey(record, field, columns) === column.key)
+      if (listed || (entry.savedAt !== undefined && fetchedFrom > entry.savedAt)) onArrived(entry.record.id)
+    }
+  }, [column.key, columns, fetchedFrom, field, loaded, moved, onArrived])
   const label = column.label || 'No value'
 
   return (

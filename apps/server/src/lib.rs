@@ -13,6 +13,7 @@ pub mod auth;
 pub mod automations;
 pub mod bootstrap;
 pub mod bug_reports;
+pub mod collection_forms;
 pub mod collections;
 pub mod config;
 pub mod connected_apps;

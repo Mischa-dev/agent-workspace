@@ -1,0 +1,92 @@
+/* A collection's public form (AWD-110): one centred card, no app chrome. */
+.aw-pform {
+  display: grid;
+  align-content: start;
+  justify-items: center;
+  gap: var(--space-4);
+  min-height: 100dvh;
+  padding: var(--space-10) var(--space-4);
+  background: var(--surface-sunken);
+}
+
+.aw-pform__card {
+  display: grid;
+  gap: var(--space-4);
+  width: min(560px, 100%);
+  padding: var(--space-8) var(--space-6);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+  background: var(--content-bg);
+  box-shadow: var(--shadow-card);
+}
+
+.aw-pform__kicker {
+  margin: 0;
+  font: var(--t-label);
+  color: var(--accent);
+}
+
+.aw-pform__title {
+  margin: 0;
+  font: var(--t-title);
+  color: var(--content-fg);
+}
+
+.aw-pform__intro,
+.aw-pform__quiet {
+  margin: 0;
+  font: var(--t-body);
+  color: var(--content-fg-muted);
+  white-space: pre-wrap;
+}
+
+.aw-pform__fields {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.aw-pform__group {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.aw-pform__legend {
+  padding: 0;
+  margin-bottom: var(--space-1);
+  font: var(--t-ui-strong);
+  color: var(--content-fg);
+}
+
+.aw-pform__hint {
+  margin: 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-pform__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.aw-pform__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+@media (max-width: 640px) {
+  .aw-pform {
+    padding: var(--space-4) var(--space-3);
+  }
+
+  .aw-pform__card {
+    padding: var(--space-6) var(--space-4);
+  }
+}

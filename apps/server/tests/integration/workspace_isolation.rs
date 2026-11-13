@@ -249,6 +249,12 @@ const HTTP_EXCLUSIONS: &[(&str, &str)] = &[
          subscribes as A and checks no B event arrives",
     ),
     (
+        "/api/v1/forms/{token}",
+        "a form's public page reads it by the link's secret token, not a session; it holds \
+         only the form (the collection's name and the asked fields), never records or \
+         people; covered in awd110_collection_forms",
+    ),
+    (
         "/api/v1/integrations/github/callback",
         "GitHub's redirect back after sign-in: returns a redirect, never data, and \
          only for a state bound to the caller's browser; covered in settings_accounts",

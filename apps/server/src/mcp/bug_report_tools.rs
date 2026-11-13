@@ -11,9 +11,12 @@ use super::{
     McpPrincipal,
     common::{ToolResult, parse_id},
 };
+use uuid::Uuid;
+
 use crate::{
     AppState,
     bug_reports::{self, CreateLink, UpdateLink},
+    collection_forms::{FormConfig, FormField},
     error::AppError,
     events::Caller,
 };
@@ -74,6 +77,69 @@ pub(super) struct BugReportLinkWriteArguments {
     /// Delete the link; its URL stops working and its tasks stay.
     #[serde(default)]
     pub delete: Option<bool>,
+    /// Make a form instead (AWD-110): a link whose answers become records
+    /// in this collection (by name or ID), filled in by anyone with its
+    /// formUrl. Needs "Edit records" here.
+    #[serde(default)]
+    pub collection: Option<String>,
+    /// A form's settings: making one, or changing one's. Each field is the
+    /// collection's, by name or ID; people and links can't be asked.
+    #[serde(default)]
+    pub form: Option<FormWrite>,
+}
+
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct FormWrite {
+    /// Shown above the fields: what the form is for.
+    #[serde(default)]
+    pub intro: Option<String>,
+    /// The fields it asks for, in order, after the title.
+    #[serde(default)]
+    pub fields: Vec<FormFieldWrite>,
+    /// Shown once an answer is in.
+    #[serde(default)]
+    pub thanks: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct FormFieldWrite {
+    /// The field, by name or ID.
+    pub field: String,
+    #[serde(default)]
+    pub required: bool,
+}
+
+/// A form as written, by the collection's field names, as it's stored.
+async fn form_from_written(
+    state: &AppState,
+    project_id: Uuid,
+    collection_id: Uuid,
+    written: &FormWrite,
+) -> Result<Result<FormConfig, String>, AppError> {
+    let definitions =
+        crate::collections::field_definitions(&state.pool, project_id, collection_id, false)
+            .await?;
+    let mut fields = Vec::with_capacity(written.fields.len());
+    for asked in &written.fields {
+        let Some(field) = crate::fields::find(&definitions, &asked.field) else {
+            return Ok(Err(format!(
+                "The collection has no field called \"{}\". Its fields: {}.",
+                asked.field.chars().take(80).collect::<String>(),
+                crate::fields::active_names(&definitions)
+            )));
+        };
+        fields.push(FormField {
+            field: field.id,
+            required: asked.required,
+        });
+    }
+    Ok(Ok(FormConfig {
+        intro: written.intro.clone().unwrap_or_default(),
+        fields,
+        thanks: written.thanks.clone().unwrap_or_default(),
+    }))
 }
 
 pub(super) async fn bug_report_link_write(
@@ -92,7 +158,7 @@ pub(super) async fn bug_report_link_write(
     }
     let replace = arguments.replace == Some(true);
     let delete = arguments.delete == Some(true);
-    let edits = arguments.name.is_some() || arguments.state.is_some();
+    let edits = arguments.name.is_some() || arguments.state.is_some() || arguments.form.is_some();
     if usize::from(replace) + usize::from(delete) + usize::from(edits) > 1 {
         return ToolResult::invalid(
             "linkId",
@@ -112,7 +178,55 @@ pub(super) async fn bug_report_link_write(
             let Some(name) = arguments.name.clone() else {
                 return Ok(ToolResult::invalid("name", "A new link needs a name."));
             };
-            let made = bug_reports::create(state, &caller, project_id, CreateLink { name }).await?;
+            let (collection_id, form) = match arguments.collection.as_deref() {
+                None if arguments.form.is_some() => {
+                    return Ok(ToolResult::invalid(
+                        "collection",
+                        "A form adds records to a collection: name it with collection.",
+                    ));
+                }
+                None => (None, None),
+                Some(reference) => {
+                    let Some(collection) =
+                        crate::collections::find(&state.pool, project_id, reference).await?
+                    else {
+                        return Ok(ToolResult::not_found("That collection"));
+                    };
+                    let written = arguments.form.clone().unwrap_or(FormWrite {
+                        intro: None,
+                        fields: Vec::new(),
+                        thanks: None,
+                    });
+                    let form = match form_from_written(state, project_id, collection.id, &written)
+                        .await?
+                    {
+                        Ok(form) => form,
+                        Err(message) => return Ok(ToolResult::invalid("form", message)),
+                    };
+                    if let Some(message) = bug_reports::form_problem(
+                        &state.pool,
+                        project_id,
+                        Some(collection.id),
+                        Some(&form),
+                    )
+                    .await?
+                    {
+                        return Ok(ToolResult::invalid("form", message));
+                    }
+                    (Some(collection.id), Some(form))
+                }
+            };
+            let made = bug_reports::create(
+                state,
+                &caller,
+                project_id,
+                CreateLink {
+                    name,
+                    collection_id,
+                    form,
+                },
+            )
+            .await?;
             return Ok(ToolResult::ok(to_value(made)?));
         };
         let Some(link_id) = parse_id(link) else {
@@ -128,6 +242,35 @@ pub(super) async fn bug_report_link_write(
         } else if replace {
             to_value(bug_reports::replace(state, &caller, link_id).await?)?
         } else if edits {
+            let form = match &arguments.form {
+                None => None,
+                Some(written) => {
+                    let Some(collection_id) =
+                        bug_reports::link_collection(&state.pool, link_id).await?
+                    else {
+                        return Ok(ToolResult::invalid(
+                            "form",
+                            "That link makes tasks, not records: only a form has form settings.",
+                        ));
+                    };
+                    let form =
+                        match form_from_written(state, project_id, collection_id, written).await? {
+                            Ok(form) => form,
+                            Err(message) => return Ok(ToolResult::invalid("form", message)),
+                        };
+                    if let Some(message) = bug_reports::form_problem(
+                        &state.pool,
+                        project_id,
+                        Some(collection_id),
+                        Some(&form),
+                    )
+                    .await?
+                    {
+                        return Ok(ToolResult::invalid("form", message));
+                    }
+                    Some(form)
+                }
+            };
             to_value(
                 bug_reports::update(
                     state,
@@ -136,6 +279,7 @@ pub(super) async fn bug_report_link_write(
                     UpdateLink {
                         name: arguments.name.clone(),
                         state: arguments.state.clone(),
+                        form,
                     },
                 )
                 .await?,

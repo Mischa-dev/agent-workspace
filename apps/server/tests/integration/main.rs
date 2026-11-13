@@ -3,6 +3,7 @@
 
 mod agent_interface;
 mod awd102_task_move;
+mod awd110_collection_forms;
 mod awd110_collection_views;
 mod awd53_attribution;
 mod awd53_discussion;
