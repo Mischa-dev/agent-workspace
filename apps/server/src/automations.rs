@@ -2196,13 +2196,18 @@ impl Context {
         // "run now" in the browser or through automation_write) comes through
         // here: nothing about a task, pull request or thread is loaded unless
         // the rule's maker may see it now, by their role ("see tasks", "see
-        // code") and the thread's members. What the firing is about, when
+        // code") and the thread's members, nor a record of an archived
+        // collection. What the firing is about, when
         // they can't, skips it (None). A rule made through an app is also
         // held to the app's limit (`fire`, `limit_hides`).
         let about = Subject {
             work_item_id: subject.work_item_id,
             pull_request_id: subject.pull_request_id,
             conversation_id: subject.conversation_id,
+            // A record whose collection was archived since the event queued
+            // fires nothing, as webhooks don't deliver it.
+            record_id: subject.record_id,
+            collection_id: subject.collection_id,
             ..Subject::default()
         };
         if !crate::webhooks::visible_to(&state.pool, rule.owner_actor_id, rule.project_id, &about)

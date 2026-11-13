@@ -413,6 +413,33 @@ async fn record_events_reach_rules_and_webhooks_for_their_collection() {
         update["data"]["record"]["collection"]["id"],
         requests.as_str()
     );
+
+    // A firing queued before its collection is archived does nothing after.
+    let late = call(
+        "record_write",
+        json!({"projectId": "WORK", "collection": "Requests", "records": [{"title": "Too late"}], "clientRequestId": "r3"}),
+    )
+    .await;
+    assert_eq!(late["outcome"], "ok", "{late}");
+    publish_ready_outbox_batch(&state.pool, &state.realtime, "awd110-test")
+        .await
+        .expect("publish outbox");
+    sqlx::query(
+        "UPDATE collections SET archived_at = now(), archived_by_actor_id = created_by_actor_id \
+         WHERE id = $1::uuid",
+    )
+    .bind(requests.as_str())
+    .execute(&setup.pool)
+    .await
+    .expect("archive Requests");
+    pump(&state).await;
+    let fired = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM notifications WHERE kind = 'automation'",
+    )
+    .fetch_one(&setup.pool)
+    .await
+    .expect("notifications");
+    assert_eq!(fired, 1);
 }
 
 /// A link field can hold another collection's records: only that
