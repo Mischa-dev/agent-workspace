@@ -295,7 +295,7 @@
       "id": "page.references",
       "group": "pages",
       "label": "Referenced in",
-      "description": "Where each task, page and whiteboard is linked from: the conversations, pages and tasks that mention it.",
+      "description": "Where each task, page, whiteboard and record is linked from: the conversations, pages and tasks that mention it.",
       "default": true
     },
     {

@@ -14,10 +14,11 @@ const KIND_WORDS: Record<string, string> = {
   channel: 'Channel',
   conversation: 'Conversation',
   project: 'Project',
+  record: 'Record',
 }
 
 /**
- * Where a task, page or whiteboard is mentioned (AWD-58): the conversations,
+ * Where a task, page, whiteboard or record is mentioned (AWD-58, AWD-112): the conversations,
  * pages and tasks that link to it, as far as the reader can see them. It
  * shows nothing until there's something to list.
  */

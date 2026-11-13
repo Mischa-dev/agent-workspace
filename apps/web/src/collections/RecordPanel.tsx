@@ -1,4 +1,6 @@
-import { useRef, useState } from 'react'
+import { Suspense, lazy, useRef, useState } from 'react'
+
+import { useProjectExperience } from '../experience/layout'
 
 import { FieldEditor } from '../fields/FieldEditor'
 import { FieldValueView } from '../fields/FieldValueView'
@@ -7,6 +9,9 @@ import { Banner, DocumentSkeleton, ErrorState, Icon, IconButton, Menu, TextArea,
 import { useRecord, type CollectionBody, type HistoryEntry } from './api'
 import { historyValue, recordName, referenceKind } from './collectionModel'
 import type { RecordEdits } from './useRecordEdits'
+
+// Where the record is linked from loads beside it (AWD-112).
+const ReferencedIn = lazy(() => import('../modules/references/ReferencedIn'))
 
 const ACTIONS: Record<string, string> = { created: 'added this', updated: 'changed', archived: 'archived this', restored: 'restored this' }
 
@@ -32,6 +37,7 @@ export function RecordPanel({
   recordId: string
 }) {
   const record = useRecord(projectId, body.collection.id, recordId)
+  const linkedFrom = useProjectExperience(projectId).shows('page.references')
   const [editing, setEditing] = useState<{ field: FieldDefinition; anchor: HTMLElement } | null>(null)
   const picked = useRef<string | null>(null)
   const close = <IconButton icon="x" label="Close" onClick={onClose} size="sm" />
@@ -186,6 +192,11 @@ export function RecordPanel({
           </>
         ) : null}
       </p>
+      {linkedFrom ? (
+        <Suspense fallback={null}>
+          <ReferencedIn id={current.id} kind="record" />
+        </Suspense>
+      ) : null}
       <History entries={history} types={new Map(body.fields.map((field) => [field.id, field.type]))} />
       {editing ? (
         <FieldEditor
