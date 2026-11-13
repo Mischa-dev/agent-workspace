@@ -1598,6 +1598,12 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     policy_route!(
         "sheets/http",
         Post,
+        "/api/v1/projects/{project_id}/sheets/import",
+        SheetEdit
+    ),
+    policy_route!(
+        "sheets/http",
+        Post,
         "/api/v1/projects/{project_id}/sheets/{sheet_id}/changes",
         SheetEdit
     ),

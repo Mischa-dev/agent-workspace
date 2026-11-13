@@ -197,3 +197,31 @@ export function cards(body: SheetBody, frozenRows: number) {
   }
   return result
 }
+
+export type Range = { top: number; left: number; bottom: number; right: number }
+
+/** A1 → 1; AA → 27; anything else → 0. */
+function columnNumber(name: string) {
+  let number = 0
+  for (const character of name) number = number * 26 + (character.charCodeAt(0) - 64)
+  return number
+}
+
+/** `B2:D9` (either corner first) or one cell such as `C4`, or `null` when it isn't a range of the grid. */
+export function parseRange(text: string): Range | null {
+  const match = /^\s*([A-Za-z]{1,3})(\d{1,5})(?::([A-Za-z]{1,3})(\d{1,5}))?\s*$/.exec(text)
+  if (!match) return null
+  const first = { column: columnNumber(match[1].toUpperCase()), row: Number(match[2]) }
+  const second = match[3] ? { column: columnNumber(match[3].toUpperCase()), row: Number(match[4]) } : first
+  const range = {
+    top: Math.min(first.row, second.row),
+    bottom: Math.max(first.row, second.row),
+    left: Math.min(first.column, second.column),
+    right: Math.max(first.column, second.column),
+  }
+  if (range.top < 1 || range.left < 1 || range.bottom > MAX_ROWS || range.right > MAX_COLUMNS) return null
+  return range
+}
+
+export const rangeName = ({ top, left, bottom, right }: Range) =>
+  top === bottom && left === right ? cellName({ row: top, column: left }) : `${cellName({ row: top, column: left })}:${cellName({ row: bottom, column: right })}`

@@ -723,8 +723,22 @@ pub(super) struct SheetWriteArguments {
     /// Rows to add or change by header, after the cells.
     #[serde(default)]
     pub rows: Vec<RowWrite>,
+    /// Fill a new sheet from a file instead of tabs, cells and rows: its
+    /// tabs and what was typed in them, formulas included.
+    pub import: Option<SheetImport>,
     /// A stable ID, so a retry doesn't apply the change twice.
     pub client_request_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct SheetImport {
+    /// An Excel (.xlsx) or CSV file in this project, by ID (file_upload
+    /// puts one here; file_list shows them). Up to 5 MB.
+    pub file_id: Option<String>,
+    /// CSV text, instead of a file: one row a line, fields split by commas
+    /// (or tabs).
+    pub csv: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -1005,6 +1019,22 @@ pub(super) async fn sheet_write(
     let Some(key) = request_key(arguments.client_request_id.as_deref()) else {
         return ToolResult::invalid("clientRequestId", REQUEST_ID_MESSAGE);
     };
+    let imported = match &arguments.import {
+        None => None,
+        Some(import) => {
+            if arguments.sheet.is_some() || !changes.is_empty() {
+                return ToolResult::invalid(
+                    "import",
+                    "Import into a new sheet, on its own: leave out sheet, tabs, cells and rows.",
+                );
+            }
+            match read_import(state, principal, import).await {
+                Ok(Ok(tabs)) => Some(tabs),
+                Ok(Err((field, message))) => return ToolResult::invalid(&field, message),
+                Err(error) => return ToolResult::from_error(error, "sheet_write"),
+            }
+        }
+    };
     let project_id = principal.project_id;
     let result = async {
         if module_off(state, principal).await? {
@@ -1122,7 +1152,10 @@ pub(super) async fn sheet_write(
         }
         // A new sheet starts with one tab; a first entry that adds a tab
         // names that one instead of adding a second.
-        let mut changes = changes;
+        let mut changes = match &imported {
+            Some(tabs) => sheets::transfer::changes_for(sheets::FIRST_TAB_NAME, tabs),
+            None => changes,
+        };
         if created
             && let Some(Change::AddTab { name }) = changes.first().cloned()
         {
@@ -1134,18 +1167,33 @@ pub(super) async fn sheet_write(
         let applied = if changes.is_empty() {
             None
         } else {
-            match sheets::apply(
-                &mut transaction,
-                &sheet,
-                principal.actor_id,
-                &changes,
-                MAX_ECHOED_CELLS,
-            )
-            .await?
-            {
+            let outcome = if imported.is_some() {
+                sheets::apply_import(
+                    &mut transaction,
+                    &sheet,
+                    principal.actor_id,
+                    &changes,
+                    MAX_ECHOED_CELLS,
+                )
+                .await?
+            } else {
+                sheets::apply(
+                    &mut transaction,
+                    &sheet,
+                    principal.actor_id,
+                    &changes,
+                    MAX_ECHOED_CELLS,
+                )
+                .await?
+            };
+            match outcome {
                 Ok(applied) => Some(applied),
                 Err(problem) => {
-                    let at = change_field(&arguments, problem.index, &changes);
+                    let at = if imported.is_some() {
+                        "import".to_owned()
+                    } else {
+                        change_field(&arguments, problem.index, &changes)
+                    };
                     let message = format!("Nothing was written. {}", problem.message);
                     return Ok(match problem.kind {
                         ProblemKind::Invalid => ToolResult::invalid(&at, message),
@@ -1213,6 +1261,76 @@ pub(super) async fn sheet_write(
     }
     .await;
     result.unwrap_or_else(|error| ToolResult::from_error(error, "sheet_write"))
+}
+
+/// The tabs an import asks for, read and checked, or the field and why not.
+async fn read_import(
+    state: &AppState,
+    principal: &McpPrincipal,
+    import: &SheetImport,
+) -> Result<Result<Vec<sheets::engine::TabInput>, (String, String)>, AppError> {
+    use sheets::transfer::{self, Format};
+    let refuse = |field: &str, message: &str| Ok(Err((field.to_owned(), message.to_owned())));
+    let (format, bytes) = match (&import.file_id, &import.csv) {
+        (Some(_), Some(_)) | (None, None) => {
+            return refuse("import", "Pass fileId or csv, one of them.");
+        }
+        (None, Some(text)) => (Format::Csv, text.as_bytes().to_vec()),
+        (Some(file_id), None) => {
+            let Some(file_id) = parse_id(file_id) else {
+                return refuse("import.fileId", "Pass a file ID from file_list.");
+            };
+            let row = match crate::files::readable_file(
+                &state.pool,
+                super::file_tools::reader(principal),
+                file_id,
+            )
+            .await
+            {
+                Ok(row) if row.project_id == principal.project_id => row,
+                Ok(_) | Err(AppError::NotFound(_)) => {
+                    return refuse(
+                        "import.fileId",
+                        "That file isn't in this project, or you can't see it.",
+                    );
+                }
+                Err(error) => return Err(error),
+            };
+            let lower = row.name.to_lowercase();
+            let format =
+                if lower.ends_with(".xlsx") || row.content_type == Format::Xlsx.content_type() {
+                    Format::Xlsx
+                } else if lower.ends_with(".csv")
+                    || lower.ends_with(".tsv")
+                    || row.content_type.starts_with("text/")
+                {
+                    Format::Csv
+                } else {
+                    return refuse("import.fileId", "Import an Excel (.xlsx) or CSV file.");
+                };
+            if row.byte_size > transfer::MAX_IMPORT_BYTES as i64 {
+                return refuse("import.fileId", &transfer::too_large());
+            }
+            let bytes = crate::files::FileStore::from_config(&state.config)
+                .read_all(&row.storage_key, transfer::MAX_IMPORT_BYTES as u64)
+                .await?;
+            (format, bytes)
+        }
+    };
+    let read = tokio::task::spawn_blocking(move || {
+        transfer::read(
+            &sheets::engine::IronCalc,
+            format,
+            &bytes,
+            sheets::FIRST_TAB_NAME,
+        )
+    })
+    .await
+    .map_err(|error| {
+        tracing::error!(%error, "sheet import stopped");
+        AppError::Internal("sheet import stopped")
+    })?;
+    Ok(read.map_err(|message| ("import".to_owned(), message)))
 }
 
 #[cfg(test)]

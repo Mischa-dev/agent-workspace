@@ -1,0 +1,7 @@
+/* A sheet's range inside a page (AWD-54), on top of the collection embed's
+   table. Numbers line up on the right, as in the grid. */
+
+.aw-cembed table.aw-cembed__table td.aw-cembed__number {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}

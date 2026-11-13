@@ -180,6 +180,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{project_id}/collections/{collection_id}/records/{record_id}",
     "/api/v1/projects/{project_id}/sheets",
     "/api/v1/projects/{project_id}/sheets/{sheet_id}",
+    "/api/v1/projects/{project_id}/sheets/{sheet_id}/export",
     "/api/v1/projects/{project_id}/launches",
     "/api/v1/projects/{project_id}/layout",
     "/api/v1/projects/{project_id}/member-candidates",
@@ -2828,6 +2829,18 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             own.push(format!("{}/sheets/{}?tab=Sheet1", p(a), a.sheet));
             case(
                 "/api/v1/projects/{project_id}/sheets/{sheet_id}",
+                own,
+                foreign,
+                vec![],
+            )
+        },
+        {
+            let (mut own, foreign) = pair(&|outer, inner| {
+                format!("{}/sheets/{}/export?format=csv", p(outer), inner.sheet)
+            });
+            own.push(format!("{}/sheets/{}/export?format=xlsx", p(a), a.sheet));
+            case(
+                "/api/v1/projects/{project_id}/sheets/{sheet_id}/export",
                 own,
                 foreign,
                 vec![],

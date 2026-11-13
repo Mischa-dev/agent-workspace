@@ -8,8 +8,9 @@
 
 use axum::{
     Json, Router,
-    extract::State,
-    http::{HeaderMap, StatusCode},
+    body::Bytes,
+    extract::{DefaultBodyLimit, State},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -21,6 +22,7 @@ use uuid::Uuid;
 use super::{
     Change, ChangeOutcome, CreateOutcome, ProblemKind, Sheet, SheetChange, SheetSummary,
     StoredCell, Tab,
+    transfer::{self, Format},
 };
 use crate::{
     AppState,
@@ -53,8 +55,16 @@ pub fn router() -> Router<AppState> {
             get(get_sheet).patch(update_sheet),
         )
         .route(
+            "/api/v1/projects/{project_id}/sheets/import",
+            post(import_sheet).layer(DefaultBodyLimit::max(transfer::MAX_IMPORT_BYTES + 1024)),
+        )
+        .route(
             "/api/v1/projects/{project_id}/sheets/{sheet_id}/changes",
             post(change_sheet),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/sheets/{sheet_id}/export",
+            get(export_sheet),
         )
 }
 
@@ -860,6 +870,262 @@ async fn change_sheet(
     write.finish(StatusCode::OK, &body).await
 }
 
+// ---------------------------------------------------------------------------
+// Files
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ImportQuery {
+    name: String,
+    /// "xlsx" or "csv".
+    format: String,
+}
+
+/// What an import's idempotency key is bound to: the file by its digest.
+#[derive(Serialize)]
+struct ImportRecord<'a> {
+    name: &'a str,
+    format: &'a str,
+    sha256: String,
+}
+
+/// A new sheet from an Excel (.xlsx) or CSV file sent as the body.
+async fn import_sheet(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath(project_id): ApiPath<Uuid>,
+    ApiQuery(query): ApiQuery<ImportQuery>,
+    body: Bytes,
+) -> Result<Response, AppError> {
+    let Some(name) = super::normalize_name(&query.name) else {
+        return Ok(invalid("name", name_message()));
+    };
+    let Some(format) = Format::parse(&query.format) else {
+        return Ok(invalid("format", "Import an Excel (.xlsx) or CSV file."));
+    };
+    if body.is_empty() {
+        return Ok(invalid("file", "That file is empty."));
+    }
+    if body.len() > transfer::MAX_IMPORT_BYTES {
+        return Ok(invalid("file", transfer::too_large()));
+    }
+    let record = ImportRecord {
+        name: &name,
+        format: format.extension(),
+        sha256: hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&body)),
+    };
+    // Read the file before taking any lock: it's the slow part.
+    let bytes = body.clone();
+    let read = tokio::task::spawn_blocking(move || {
+        transfer::read(
+            &super::engine::IronCalc,
+            format,
+            &bytes,
+            super::FIRST_TAB_NAME,
+        )
+    })
+    .await
+    .map_err(|error| {
+        tracing::error!(%error, "sheet import stopped");
+        AppError::Internal("sheet import stopped")
+    })?;
+    let tabs = match read {
+        Ok(tabs) => tabs,
+        Err(message) => return Ok(invalid("file", message)),
+    };
+    let mut write = begin!(
+        start_write(
+            &state,
+            &headers,
+            &principal,
+            project_id,
+            resource_bound_scope("projects", project_id, "sheets_import")?,
+            &record,
+        )
+        .await
+    );
+    let sheet = match super::create(
+        &mut write.transaction,
+        project_id,
+        principal.actor_id,
+        &name,
+        "",
+        super::FIRST_TAB_NAME,
+    )
+    .await?
+    {
+        CreateOutcome::Created(sheet) => sheet,
+        CreateOutcome::NameTaken(sheet) => {
+            return Ok(refusal(
+                StatusCode::CONFLICT,
+                "sheet_name_taken",
+                format!("A sheet is already called \"{}\".", sheet.name),
+                json!({ "field": "name" }),
+            ));
+        }
+        CreateOutcome::ProjectFull => {
+            return Ok(refusal(
+                StatusCode::CONFLICT,
+                "sheet_limit",
+                full_message(),
+                Json_::Null,
+            ));
+        }
+    };
+    let changes = transfer::changes_for(super::FIRST_TAB_NAME, &tabs);
+    let applied = match super::apply_import(
+        &mut write.transaction,
+        &sheet,
+        principal.actor_id,
+        &changes,
+        0,
+    )
+    .await?
+    {
+        Ok(applied) => applied,
+        Err(problem) => {
+            return Ok(invalid(
+                "file",
+                format!("That file can't be a sheet. {}", problem.message),
+            ));
+        }
+    };
+    record_audit_for(
+        &mut write.transaction,
+        &write.actor,
+        "sheet",
+        "sheet.created",
+        sheet.id,
+        json!({
+            "revision": applied.revision,
+            "cells": applied.inputs_changed,
+            "importedFrom": format.extension(),
+        }),
+    )
+    .await?;
+    outbox::enqueue_sheet_updated(
+        &mut write.transaction,
+        project_id,
+        sheet.id,
+        applied.revision,
+    )
+    .await?;
+    let sheet = write.sheet(sheet.id).await?;
+    let body = sheet_body(&mut write.transaction, &sheet, None, true).await?;
+    write.finish(StatusCode::CREATED, &body).await
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExportQuery {
+    /// "xlsx" (every tab) or "csv" (one tab).
+    format: String,
+    /// For CSV, the tab by ID or name; the first by default.
+    tab: Option<String>,
+}
+
+/// A file name made of the sheet's name, safe in a header.
+fn file_name(name: &str, extension: &str) -> String {
+    let stem = name
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, ' ' | '-' | '_' | '.') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    let stem = stem.trim_matches(|character| character == ' ' || character == '.');
+    format!(
+        "{}.{extension}",
+        if stem.is_empty() { "sheet" } else { stem }
+    )
+}
+
+/// The sheet as an Excel file, or one tab's values as CSV, to download.
+async fn export_sheet(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath((project_id, sheet_id)): ApiPath<(Uuid, Uuid)>,
+    ApiQuery(query): ApiQuery<ExportQuery>,
+) -> Result<Response, AppError> {
+    let Some(format) = Format::parse(&query.format) else {
+        return Ok(invalid("format", "Export as xlsx or csv."));
+    };
+    let mut connection = state.pool.acquire().await?;
+    reader(&mut connection, &headers, &principal, project_id).await?;
+    let sheet = super::find(&mut *connection, project_id, &sheet_id.to_string())
+        .await?
+        .filter(|sheet| sheet.id == sheet_id)
+        .ok_or(AppError::NotFound("sheet"))?;
+    let tabs = super::tabs(&mut *connection, sheet.id).await?;
+    let cells = super::cells(&mut *connection, sheet.id).await?;
+    let of = |tab: &Tab| {
+        cells
+            .iter()
+            .filter(|cell| cell.tab_id == tab.id)
+            .collect::<Vec<_>>()
+    };
+    let (bytes, name) = match format {
+        Format::Csv => {
+            let tab = pick_tab(&tabs, query.tab.as_deref()).ok_or(AppError::NotFound("tab"))?;
+            let bytes = transfer::csv_of(&of(tab)).map_err(|error| {
+                tracing::error!(%error, "sheet CSV export failed");
+                AppError::Internal("sheet CSV export failed")
+            })?;
+            let name = if tabs.len() > 1 {
+                format!("{} - {}", sheet.name, tab.name)
+            } else {
+                sheet.name.clone()
+            };
+            (bytes, name)
+        }
+        Format::Xlsx => {
+            let inputs = tabs
+                .iter()
+                .map(|tab| transfer::input_of(&tab.name, &of(tab)))
+                .collect::<Vec<_>>();
+            let bytes = tokio::task::spawn_blocking(move || {
+                use super::engine::FormulaEngine;
+                super::engine::IronCalc.to_xlsx(&inputs)
+            })
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, "sheet export stopped");
+                AppError::Internal("sheet export stopped")
+            })?
+            .map_err(|error| {
+                tracing::error!(message = %error.message, "sheet export failed");
+                AppError::Internal("sheet export failed")
+            })?;
+            (bytes, sheet.name.clone())
+        }
+    };
+    let disposition = format!(
+        "attachment; filename=\"{}\"",
+        file_name(&name, format.extension())
+    );
+    let mut response = bytes.into_response();
+    let response_headers = response.headers_mut();
+    response_headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static(format.content_type()),
+    );
+    response_headers.insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_str(&disposition).map_err(|_| AppError::Internal("export file name"))?,
+    );
+    response_headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response_headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    Ok(response)
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::Map;
@@ -893,6 +1159,13 @@ mod tests {
             "changes": [{"type": "cell", "tab": "Sheet1", "row": 1, "column": 1, "input": "", "extra": 1}]
         }));
         assert!(unknown.is_err());
+    }
+
+    #[test]
+    fn export_file_names_are_safe_in_a_header() {
+        assert_eq!(file_name("Budget 2026", "xlsx"), "Budget 2026.xlsx");
+        assert_eq!(file_name("Q1 \"plan\"/é", "csv"), "Q1 _plan___.csv");
+        assert_eq!(file_name("...", "csv"), "sheet.csv");
     }
 
     #[test]

@@ -1248,6 +1248,11 @@ mod tests {
         ),
         (
             Post,
+            "/api/v1/projects/{project_id}/sheets/import",
+            Tool("sheet_write"),
+        ),
+        (
+            Post,
             "/api/v1/projects/{project_id}/sheets/{sheet_id}/changes",
             Tool("sheet_write"),
         ),

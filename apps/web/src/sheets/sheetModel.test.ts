@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { SheetBody } from './api'
-import { cards, columnName, display, formatTable, parseTable, patched } from './sheetModel'
+import { cards, columnName, display, formatTable, parseRange, parseTable, patched, rangeName } from './sheetModel'
 
 const body = (): SheetBody => ({
   sheet: {
@@ -135,5 +135,14 @@ describe('sheet model', () => {
 
   it('turns rows into cards named by the header row', () => {
     expect(cards(body(), 1)).toEqual([{ row: 2, fields: [{ column: 2, label: 'Cost', text: '2' }] }])
+  })
+
+  it('reads a range either way round, and refuses what is off the grid', () => {
+    expect(parseRange('d9:b2')).toEqual({ top: 2, bottom: 9, left: 2, right: 4 })
+    expect(rangeName(parseRange('C4')!)).toBe('C4')
+    expect(rangeName(parseRange(' AA1:B3 ')!)).toBe('B1:AA3')
+    expect(parseRange('GS1')).toBeNull()
+    expect(parseRange('A0')).toBeNull()
+    expect(parseRange('Sheet1!A1')).toBeNull()
   })
 })
