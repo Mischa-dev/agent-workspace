@@ -73,7 +73,8 @@ export default async function globalSetup() {
     AGENT_WORKSPACE_PUBLIC_ORIGIN: webOrigin,
     AGENT_WORKSPACE_DATA_ROOT: path.join(runtimeRoot, 'data'),
     AGENT_WORKSPACE_WEB_ROOT: path.join(runtimeRoot, 'web'),
-    AGENT_WORKSPACE_CODEX_HOME_ROOT: path.join(runtimeRoot, 'codex'),
+    // Account homes must sit inside the data root.
+    AGENT_WORKSPACE_CODEX_HOME_ROOT: path.join(runtimeRoot, 'data', 'codex', 'profiles'),
     AGENT_WORKSPACE_MINIMUM_FREE_BYTES: String(1024 * 1024 * 1024),
     AGENT_WORKSPACE_LOG_FILTER: 'agent_workspace=info,tower_http=warn',
     AGENT_WORKSPACE_WORKOS_CLIENT_ID: workOsStandIn.clientId,

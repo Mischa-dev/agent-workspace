@@ -234,10 +234,12 @@ impl AppConfig {
         let minimum_free_bytes = parse(values, "MINIMUM_FREE_BYTES", "5368709120")?;
         let web_root = PathBuf::from(optional(values, "WEB_ROOT", "apps/web/dist"));
         let codex_binary = PathBuf::from(optional(values, "CODEX_BINARY", "codex"));
+        // Harness account homes live in the data root unless placed elsewhere
+        // inside it.
         let codex_home_root = PathBuf::from(optional(
             values,
             "CODEX_HOME_ROOT",
-            ".agent-workspace/codex/profiles",
+            &data_root.join("codex/profiles").to_string_lossy(),
         ));
         let codex_host_concurrency_limit = parse(values, "CODEX_HOST_CONCURRENCY_LIMIT", "1")?;
         let codex_max_line_bytes = parse(values, "CODEX_MAX_LINE_BYTES", "1048576")?;
@@ -354,6 +356,17 @@ impl AppConfig {
             return Err(ConfigError::Invalid {
                 key: format!("{PREFIX}CODEX_CLOUD_POLL_MILLISECONDS"),
                 reason: "must be between 10 and 600000".into(),
+            });
+        }
+        // Each harness account gets a private home beneath this root, which
+        // must sit inside the data root; checked here so a misplaced root
+        // stops the server at start instead of refusing every new account.
+        if crate::profile_runtime::resolve_path_within_data_root(&data_root, &codex_home_root)
+            .is_err()
+        {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}CODEX_HOME_ROOT"),
+                reason: format!("must be a folder inside {PREFIX}DATA_ROOT"),
             });
         }
         if demo_executor && !environment.is_development() {
@@ -1102,6 +1115,29 @@ mod tests {
         let error = AppConfig::from_values(&values).expect_err("keyring in a checkout");
         assert!(error.to_string().contains("Git work tree"), "{error}");
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn harness_account_homes_must_sit_inside_the_data_root() {
+        let mut values = base_values();
+        values.insert(format!("{PREFIX}DATA_ROOT"), "/srv/aw/data".to_owned());
+        values.insert(
+            format!("{PREFIX}CODEX_HOME_ROOT"),
+            "/srv/aw/codex".to_owned(),
+        );
+        let error = AppConfig::from_values(&values).expect_err("home root outside the data root");
+        assert!(error.to_string().contains("CODEX_HOME_ROOT"), "{error}");
+        values.insert(
+            format!("{PREFIX}CODEX_HOME_ROOT"),
+            "/srv/aw/data/codex/profiles".to_owned(),
+        );
+        AppConfig::from_values(&values).expect("home root inside the data root");
+        values.remove(&format!("{PREFIX}CODEX_HOME_ROOT"));
+        let config = AppConfig::from_values(&values).expect("default home root");
+        assert_eq!(
+            config.codex_home_root,
+            std::path::Path::new("/srv/aw/data/codex/profiles")
+        );
     }
 
     #[test]
