@@ -58,6 +58,7 @@ pub const KINDS: &[&str] = &[
     "channel",
     "conversation",
     "project",
+    "record",
 ];
 
 #[derive(Debug, FromRow)]
@@ -73,17 +74,26 @@ struct ThingRow {
     organization_id: Option<Uuid>,
     /// For conversations: whether they're in the hidden direct project.
     direct: bool,
-    /// For a thread: the conversation it was started in.
+    /// For a thread: the conversation it was started in. For a record: its
+    /// collection.
     #[sqlx(default)]
     parent_id: Option<Uuid>,
 }
 
-fn href(kind: &str, id: Uuid, project_id: Option<Uuid>) -> String {
+/// A thing's path from its manifest's template: `{id}`, `{projectId}`, and
+/// `{parentId}` for one that opens inside another (a record's collection).
+fn href(kind: &str, id: Uuid, project_id: Option<Uuid>, parent_id: Option<Uuid>) -> String {
     let template = manifest::thing_decl(kind).map_or("/", |decl| decl.href.as_str());
-    template.replace("{id}", &id.to_string()).replace(
-        "{projectId}",
-        &project_id.map(|id| id.to_string()).unwrap_or_default(),
-    )
+    template
+        .replace("{id}", &id.to_string())
+        .replace(
+            "{projectId}",
+            &project_id.map(|id| id.to_string()).unwrap_or_default(),
+        )
+        .replace(
+            "{parentId}",
+            &parent_id.map(|id| id.to_string()).unwrap_or_default(),
+        )
 }
 
 impl ThingRow {
@@ -96,7 +106,7 @@ impl ThingRow {
                 Some(parent) if self.kind == "thread" && self.direct => {
                     format!("/messages/{parent}?thread={}", self.id)
                 }
-                _ => href(&self.kind, self.id, self.project_id),
+                _ => href(&self.kind, self.id, self.project_id, self.parent_id),
             },
             id: self.id,
             module,
@@ -190,6 +200,24 @@ const PROJECTS_SQL: &str = r#"
     WHERE project.id = ANY($1) AND project.id = ANY($2) AND project.kind = 'standard'
 "#;
 
+/// A collection's records (AWD-110), in collections that aren't archived.
+const RECORDS_SQL: &str = r#"
+    SELECT record.id, 'record' AS kind,
+           collection.name || ' › ' ||
+               CASE WHEN record.title = '' THEN 'Untitled #' || record.number::text
+                    ELSE record.title END AS title,
+           NULL::text AS status, record.updated_by_actor_id AS owner_id,
+           editor.display_name AS owner_name, record.project_id,
+           NULL::uuid AS organization_id, false AS direct, record.collection_id AS parent_id
+    FROM collection_records record
+    JOIN collections collection
+      ON collection.project_id = record.project_id AND collection.id = record.collection_id
+    LEFT JOIN project_memberships editor
+      ON editor.project_id = record.project_id AND editor.actor_id = record.updated_by_actor_id
+    WHERE record.id = ANY($1) AND record.project_id = ANY($2)
+      AND record.archived_at IS NULL AND collection.archived_at IS NULL
+"#;
+
 fn resolver(kind: &str) -> Option<&'static str> {
     Some(match kind {
         "task" => TASKS_SQL,
@@ -198,6 +226,7 @@ fn resolver(kind: &str) -> Option<&'static str> {
         "whiteboard" => WHITEBOARDS_SQL,
         "thread" | "channel" | "conversation" => CONVERSATIONS_SQL,
         "project" => PROJECTS_SQL,
+        "record" => RECORDS_SQL,
         _ => return None,
     })
 }
@@ -454,9 +483,42 @@ fn links_sql(kind: &str) -> Option<&'static str> {
             FROM whiteboard_links WHERE target_kind = 'project' AND target_id = $1
             "#
         }
+        // What a record's link fields point at (AWD-110).
+        "record" => {
+            r#"
+            SELECT 'about' AS link, 'outgoing' AS direction,
+                   definition.config->>'target' AS other_kind,
+                   (record.field_values->>definition.id::text)::uuid AS other_id
+            FROM collection_records record
+            JOIN field_definitions definition
+              ON definition.project_id = record.project_id
+             AND definition.collection_id = record.collection_id
+             AND definition.field_type = 'link' AND definition.archived_at IS NULL
+            WHERE record.id = $1
+              AND definition.config->>'target' IN ('task', 'page')
+              AND record.field_values->>definition.id::text ~ '^[0-9a-fA-F-]{36}$'
+            "#
+        }
         _ => return None,
     })
 }
+
+/// Records whose link fields point at a task or page (AWD-110): read apart
+/// from `links_sql`, so a thing's stored links and these change on their own.
+/// `$1` is the thing, `$2` its kind.
+const RECORDS_LINKING_SQL: &str = r#"
+    SELECT 'about' AS link, 'incoming' AS direction, 'record' AS other_kind, record.id AS other_id
+    FROM field_definitions definition
+    JOIN collection_records record
+      ON record.project_id = definition.project_id
+     AND record.collection_id = definition.collection_id
+    WHERE definition.field_type = 'link' AND definition.archived_at IS NULL
+      AND definition.collection_id IS NOT NULL
+      AND definition.config->>'target' = $2
+      AND record.field_values->>definition.id::text = $1::text
+      AND record.archived_at IS NULL
+    LIMIT 200
+"#;
 
 fn link_kind(key: &str) -> Option<LinkKind> {
     LinkKind::ALL.into_iter().find(|kind| kind.key() == key)
@@ -472,10 +534,19 @@ pub async fn links(
     let Some(sql) = links_sql(&thing.kind) else {
         return Ok(Vec::new());
     };
-    let rows = sqlx::query_as::<_, LinkRow>(sql)
+    let mut rows = sqlx::query_as::<_, LinkRow>(sql)
         .bind(thing.id)
         .fetch_all(&mut *connection)
         .await?;
+    if matches!(thing.kind.as_str(), "task" | "page") {
+        rows.extend(
+            sqlx::query_as::<_, LinkRow>(RECORDS_LINKING_SQL)
+                .bind(thing.id)
+                .bind(&thing.kind)
+                .fetch_all(&mut *connection)
+                .await?,
+        );
+    }
     let mut seen = BTreeSet::new();
     let rows = rows
         .into_iter()
@@ -573,6 +644,7 @@ mod tests {
             ("channel", 3),
             ("conversation", 3),
             ("project", 2),
+            ("record", 2),
         ];
         for (kind, count) in expected {
             let sql = super::resolver(kind).expect(kind);
@@ -595,12 +667,17 @@ mod tests {
         let id = uuid::Uuid::nil();
         let project = uuid::Uuid::max();
         assert_eq!(
-            super::href("task", id, Some(project)),
+            super::href("task", id, Some(project), None),
             format!("/projects/{project}/work-items/{id}")
         );
         assert_eq!(
-            super::href("whiteboard", id, None),
+            super::href("whiteboard", id, None, None),
             format!("/whiteboards/{id}")
+        );
+        let collection = uuid::Uuid::from_u128(7);
+        assert_eq!(
+            super::href("record", id, Some(project), Some(collection)),
+            format!("/projects/{project}/collections/{collection}?record={id}")
         );
     }
 }

@@ -46,7 +46,7 @@ pub(super) fn writer(principal: &McpPrincipal) -> Writer {
 pub(super) struct SearchArguments {
     /// What to look for. Quotes match a phrase; -word excludes a word.
     pub query: String,
-    /// Any of: messages, threads, tasks, pages, decisions. Default: all.
+    /// Any of: messages, threads, tasks, pages, decisions, records, files. Default: all.
     pub kinds: Option<Vec<String>>,
     // Read by the MCP middleware, which scopes the call to this project.
     #[allow(dead_code)]
@@ -108,7 +108,7 @@ pub(super) async fn search_tool(
             None => {
                 return ToolResult::invalid(
                     "kinds",
-                    "Use messages, threads, tasks, pages, decisions, or files.",
+                    "Use messages, threads, tasks, pages, decisions, records, or files.",
                 );
             }
         }

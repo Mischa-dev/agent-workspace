@@ -18,9 +18,17 @@
   "routes": ["/api/v1/projects/{project_id}/collections*", "/api/v1/forms/*"],
   "events": { "emits": [], "listens": [] },
   "notifications": [],
-  "search": [],
+  "search": ["records"],
   "automations": { "triggers": [], "actions": [] },
-  "things": [],
+  "things": [
+    {
+      "kind": "record",
+      "one": "Record",
+      "many": "Records",
+      "href": "/projects/{projectId}/collections/{parentId}?record={id}",
+      "fields": [{ "id": "updatedAt", "label": "Edited", "type": "date" }]
+    }
+  ],
   "links": [],
   "embeds": [],
   "slots": {

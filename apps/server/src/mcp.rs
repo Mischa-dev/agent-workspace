@@ -2135,7 +2135,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Search messages, threads, tasks, pages and decisions you can see. Settled things (decisions, pages, thread outcomes) rank first. Narrow by kind, project, conversation, author (from), or dates.",
+        description = "Search messages, threads, tasks, pages, decisions and collection records you can see. Settled things (decisions, pages, thread outcomes) rank first. Narrow by kind, project, conversation, author (from), or dates.",
         annotations(title = "Search", read_only_hint = true, open_world_hint = false)
     )]
     async fn search(
