@@ -2359,7 +2359,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Draw on a whiteboard with operations: add shapes and text, connect them with arrows, update, move, delete, align, distribute, lay out, group and order. All or nothing; people with the board open see it at once. Pass expectedSceneSeq from whiteboard_read so you don't overwrite someone's change.",
+        description = "Draw on a whiteboard with operations: add shapes, text and images, connect them with arrows, update, move, delete, align, distribute, lay out, group and order. All or nothing; people with the board open see it at once. Pass expectedSceneSeq from whiteboard_read so you don't overwrite someone's change.",
         annotations(
             title = "Edit whiteboard",
             read_only_hint = false,

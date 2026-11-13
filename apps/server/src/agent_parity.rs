@@ -658,7 +658,7 @@ mod tests {
         (
             Post,
             "/api/v1/whiteboards/{id}/files",
-            Gap("images on a whiteboard"),
+            Tool("whiteboard_edit"),
         ),
         (
             Post,
