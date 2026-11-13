@@ -656,6 +656,7 @@ async fn deliver_job(state: &AppState, job: &DeliverJob) -> Result<(), JobError>
     let topic = notification.id.simple().to_string();
     let urgency = if Group::of(&notification.kind) == Group::Usage
         || notification.kind == notifications::kind::APPROVAL_REQUESTED
+        || notification.kind == notifications::kind::QUESTION_ASKED
     {
         "high"
     } else {

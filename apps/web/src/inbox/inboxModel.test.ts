@@ -19,6 +19,7 @@ const base: InboxNotification = {
   href: '/projects/p1/channels/c1',
   launchHref: null,
   approval: null,
+  question: null,
   batch: null,
 }
 
@@ -33,6 +34,20 @@ describe('inbox model', () => {
     expect(needs.items.map((item) => item.id)).toEqual(['m', 'p'])
     expect(fyi.items.map((item) => item.id)).toEqual(['d', 'x'])
     expect(needs.groups).toHaveLength(1)
+  })
+
+  it('counts a question as needing you until it is answered', () => {
+    const asked = {
+      ...base,
+      id: 'q',
+      kind: 'question_asked',
+      question: { id: 'q1', status: 'pending' as const, question: 'Ship it?', options: [], answer: null },
+    }
+    const answered = {
+      ...asked,
+      question: { ...asked.question, status: 'answered' as const, answer: { optionId: null, label: null, text: 'Yes' } },
+    }
+    expect([asked, answered].map(needsYou)).toEqual([true, false])
   })
 
   it('keeps hrefs in the app or on https', () => {

@@ -355,6 +355,7 @@ mod tests {
             kind::COMMENT_MENTION,
             kind::ASSIGNED,
             kind::APPROVAL_REQUESTED,
+            kind::QUESTION_ASKED,
             kind::RUN_WAITING,
             kind::RUN_COMPLETED,
             kind::RUN_FAILED,
