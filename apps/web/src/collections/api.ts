@@ -32,8 +32,16 @@ export type ViewConfig = {
   groupBy: string | null
   columns: ViewColumn[]
   titleWidth: number | null
+  /** The date field a calendar puts records on. */
+  dateField: string | null
 }
-export type CollectionView = { id: string; name: string; type: string; config: ViewConfig; position: number; version: number }
+
+/** How a view lays out its records. */
+export type ViewType = 'table' | 'board' | 'gallery' | 'calendar'
+export const VIEW_TYPES: readonly ViewType[] = ['table', 'board', 'gallery', 'calendar']
+const asViewType = (value: unknown): ViewType => (VIEW_TYPES as readonly unknown[]).includes(value) ? (value as ViewType) : 'table'
+
+export type CollectionView = { id: string; name: string; type: ViewType; config: ViewConfig; position: number; version: number }
 
 export type CollectionBody = {
   collection: CollectionSummary
@@ -122,6 +130,7 @@ export function normalizeConfig(value: unknown): ViewConfig {
       return [{ field: column.field, ...(column.hidden === true ? { hidden: true } : {}), ...(typeof column.width === 'number' ? { width: column.width } : {}) }]
     }),
     titleWidth: typeof raw.titleWidth === 'number' ? raw.titleWidth : null,
+    dateField: typeof raw.dateField === 'string' && raw.dateField ? raw.dateField : null,
   }
 }
 
@@ -130,7 +139,7 @@ function normalizeView(value: unknown): CollectionView {
   return {
     id: asString(raw.id),
     name: asString(raw.name),
-    type: asString(raw.type) || 'table',
+    type: asViewType(raw.type),
     // The view's settings sit beside its name, as the server flattens them.
     config: normalizeConfig(raw),
     position: asNumber(raw.position),
@@ -257,15 +266,16 @@ export function configJson(config: ViewConfig) {
     ...(config.groupBy ? { groupBy: config.groupBy } : {}),
     ...(config.columns.length ? { columns: config.columns } : {}),
     ...(config.titleWidth ? { titleWidth: config.titleWidth } : {}),
+    ...(config.dateField ? { dateField: config.dateField } : {}),
   }
 }
 
-export async function createView(projectId: string, collectionId: string, input: { name: string; config: ViewConfig }) {
+export async function createView(projectId: string, collectionId: string, input: { name: string; type?: ViewType; config: ViewConfig }) {
   return normalizeView(
     await requestJson<unknown>(`${collectionPath(projectId, collectionId)}/views`, {
       method: 'POST',
       idempotencyKey: crypto.randomUUID(),
-      json: { name: input.name, type: 'table', config: configJson(input.config) },
+      json: { name: input.name, type: input.type ?? 'table', config: configJson(input.config) },
     }),
   )
 }
@@ -288,7 +298,18 @@ export async function deleteView(projectId: string, collectionId: string, viewId
 }
 
 /** What a list of records asks for: a saved view, and whatever the person changed on top of it. */
-export type RecordsQuery = { view: string | null; filters?: FieldClause[]; sort?: SortRule[]; groupBy?: string | null; search?: string; archived?: 'only' }
+export type RecordsQuery = {
+  view: string | null
+  filters?: FieldClause[]
+  sort?: SortRule[]
+  groupBy?: string | null
+  search?: string
+  archived?: 'only'
+  /** One group of the grouping: a board's column. */
+  group?: string
+  /** Records whose date field is from `from` up to `to` (YYYY-MM-DD, `to` left out): a calendar's weeks. */
+  dates?: { field: string; from: string; to: string }
+}
 
 /** The records list's parameters, in a fixed order, so one query has one cache entry. */
 export function recordsParams(query: RecordsQuery) {
@@ -299,14 +320,20 @@ export function recordsParams(query: RecordsQuery) {
   if (query.groupBy !== undefined) params.set('groupBy', query.groupBy ?? '')
   if (query.search?.trim()) params.set('search', query.search.trim())
   if (query.archived) params.set('archived', query.archived)
+  if (query.group !== undefined) params.set('group', query.group)
+  if (query.dates) {
+    params.set('dateField', query.dates.field)
+    params.set('from', query.dates.from)
+    params.set('to', query.dates.to)
+  }
   return params.toString()
 }
 
 export const RECORDS_PAGE = 100
 
-export async function listRecords(projectId: string, collectionId: string, params: string, cursor: string | null) {
+export async function listRecords(projectId: string, collectionId: string, params: string, cursor: string | null, limit = RECORDS_PAGE) {
   const query = new URLSearchParams(params)
-  query.set('limit', String(RECORDS_PAGE))
+  query.set('limit', String(limit))
   if (cursor) query.set('cursor', cursor)
   return normalizePage(await requestJson<unknown>(`${collectionPath(projectId, collectionId)}/records?${query.toString()}`))
 }
@@ -354,10 +381,10 @@ export function useCollection(projectId: string, collectionId: string) {
  * sort or search loads, the list it replaces stays (one collection's: the
  * page that shows it remounts for another).
  */
-export function useRecords(projectId: string, collectionId: string, params: string, enabled = true) {
+export function useRecords(projectId: string, collectionId: string, params: string, enabled = true, limit = RECORDS_PAGE) {
   return useInfiniteQuery({
-    queryKey: collectionKeys.records(projectId, collectionId, params),
-    queryFn: ({ pageParam }) => listRecords(projectId, collectionId, params, pageParam),
+    queryKey: collectionKeys.records(projectId, collectionId, limit === RECORDS_PAGE ? params : `${params}&limit=${limit}`),
+    queryFn: ({ pageParam }) => listRecords(projectId, collectionId, params, pageParam, limit),
     initialPageParam: null as string | null,
     getNextPageParam: (last) => last.nextCursor,
     placeholderData: keepPreviousData,

@@ -3,7 +3,7 @@ import { useQueryClient, type InfiniteData } from '@tanstack/react-query'
 
 import { isApiError } from '../api/errors'
 import { toastError } from '../app/toastError'
-import type { FieldReference } from '../fields/fieldModel'
+import type { FieldReference, FieldValue } from '../fields/fieldModel'
 import {
   collectionKeys,
   createRecord,
@@ -143,9 +143,9 @@ export function useRecordEdits(projectId: string, collectionId: string) {
 
   /** Adds a record, then refetches the lists so it shows where the view sorts it. */
   const add = useCallback(
-    async (title: string) => {
+    async (title: string, values?: Record<string, FieldValue>) => {
       try {
-        const body = await createRecord(projectId, collectionId, { title })
+        const body = await createRecord(projectId, collectionId, { title, values })
         void refresh()
         return body.record
       } catch (error) {

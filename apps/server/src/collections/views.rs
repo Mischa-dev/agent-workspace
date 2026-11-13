@@ -1,5 +1,5 @@
-//! A collection's views (AWD-90): a name, a type (tables first; boards,
-//! galleries and calendars come later) and what it shows, kept in
+//! A collection's views (AWD-90, AWD-110): a name, a type (a table, a
+//! board, a gallery or a calendar) and what it shows, kept in
 //! `collection_views.config` as JSON. The filters, sort, grouping and
 //! columns name fields by ID and are checked against the collection's
 //! fields on every write. A field archived since is left out when a view is
@@ -28,26 +28,39 @@ pub const MAX_COLUMN_WIDTH: u16 = 1_200;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ViewType {
     Table,
+    /// A column for each value of the field it groups by; moving a card to
+    /// another column changes that value.
+    Board,
+    /// A card for each record, with the view's shown fields.
+    Gallery,
+    /// A month, with each record on the day its date field holds.
+    Calendar,
 }
 
 impl ViewType {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Table => "table",
+            Self::Board => "board",
+            Self::Gallery => "gallery",
+            Self::Calendar => "calendar",
         }
     }
 
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "table" => Some(Self::Table),
+            "board" => Some(Self::Board),
+            "gallery" => Some(Self::Gallery),
+            "calendar" => Some(Self::Calendar),
             _ => None,
         }
     }
 }
 
-/// What a view or a query asks for when the type isn't one there is yet.
+/// What a view or a query asks for when the type isn't one there is.
 pub const VIEW_TYPE_MESSAGE: &str =
-    "Views are tables for now (\"table\"); boards, galleries and calendars come later.";
+    "A view is a \"table\", \"board\", \"gallery\" or \"calendar\".";
 
 #[derive(
     Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, schemars::JsonSchema,
@@ -134,6 +147,9 @@ pub struct ViewConfig {
     /// The title column's width, in pixels.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title_width: Option<u16>,
+    /// The date field a calendar puts records on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub date_field: Option<Uuid>,
 }
 
 impl ViewConfig {
@@ -170,7 +186,42 @@ impl ViewConfig {
                 .cloned()
                 .collect(),
             title_width: self.title_width,
+            date_field: self.date_field.filter(active),
         }
+    }
+
+    /// The view made ready for its type when it's created: a board groups
+    /// by a field and a calendar has a date field, so one written without
+    /// them takes the collection's first that fits. The message says what
+    /// the collection needs first.
+    pub fn for_type(
+        mut self,
+        view_type: ViewType,
+        definitions: &[FieldDefinition],
+    ) -> Result<Self, String> {
+        let first = |fits: &dyn Fn(&FieldDefinition) -> bool| {
+            let mut found = definitions
+                .iter()
+                .filter(|field| !field.archived && fits(field))
+                .collect::<Vec<_>>();
+            found.sort_by_key(|field| field.position);
+            found.first().map(|field| field.id)
+        };
+        match view_type {
+            ViewType::Board if self.group_by.is_none() => {
+                self.group_by = Some(first(&|field| field.field_type.can_group()).ok_or(
+                    "A board needs a single choice, person or checkbox field for its columns. Add one first.",
+                )?);
+            }
+            ViewType::Calendar if self.date_field.is_none() => {
+                self.date_field = Some(
+                    first(&|field| field.field_type == FieldType::Date)
+                        .ok_or("A calendar needs a date field. Add one first.")?,
+                );
+            }
+            _ => {}
+        }
+        Ok(self)
     }
 }
 
@@ -251,6 +302,20 @@ pub fn check(config: &ViewConfig, definitions: &[FieldDefinition]) -> Result<(),
             }
             None => {
                 return Err("The grouping names a field this collection doesn't have.".to_owned());
+            }
+        }
+    }
+    if let Some(date) = config.date_field {
+        match active(date) {
+            Some(field) if field.field_type == FieldType::Date => {}
+            Some(field) => {
+                return Err(format!(
+                    "\"{}\" isn't a date field. A calendar shows records by a date field.",
+                    field.name
+                ));
+            }
+            None => {
+                return Err("The date field names a field this collection doesn't have.".to_owned());
             }
         }
     }
@@ -765,7 +830,7 @@ async fn move_to(
 mod tests {
     use uuid::Uuid;
 
-    use super::{Column, SortBy, SortRule, ViewConfig, check};
+    use super::{Column, SortBy, SortRule, ViewConfig, ViewType, check};
     use crate::fields::{FieldClause, FieldConfig, FieldDefinition, FieldOp, FieldType};
 
     fn field(name: &str, field_type: FieldType, archived: bool) -> FieldDefinition {
@@ -804,6 +869,7 @@ mod tests {
                 width: Some(200),
             }],
             title_width: None,
+            date_field: None,
         };
         assert_eq!(check(&mine, &fields), Ok(()));
         let elsewhere = ViewConfig {
@@ -857,5 +923,59 @@ mod tests {
         let id = Uuid::now_v7();
         assert_eq!(SortBy::parse(&id.to_string()), Some(SortBy::Field(id)));
         assert_eq!(SortBy::parse("size"), None);
+    }
+
+    #[test]
+    fn boards_and_calendars_start_on_a_field_that_fits() {
+        let notes = field("Notes", FieldType::Text, false);
+        let old_date = field("Was due", FieldType::Date, true);
+        let due = field("Due", FieldType::Date, false);
+        let status = field("Status", FieldType::SingleChoice, false);
+        let fields = vec![notes.clone(), old_date.clone(), due.clone(), status.clone()];
+        let board = ViewConfig::default()
+            .for_type(ViewType::Board, &fields)
+            .expect("a board");
+        assert_eq!(board.group_by, Some(status.id));
+        let calendar = ViewConfig::default()
+            .for_type(ViewType::Calendar, &fields)
+            .expect("a calendar");
+        assert_eq!(calendar.date_field, Some(due.id));
+        assert_eq!(check(&calendar, &fields), Ok(()));
+        // What the writer chose stays.
+        let chosen = ViewConfig {
+            group_by: Some(status.id),
+            ..ViewConfig::default()
+        };
+        assert_eq!(
+            chosen.clone().for_type(ViewType::Board, &fields),
+            Ok(chosen)
+        );
+        // Nothing that fits: the message says what to add.
+        assert!(
+            ViewConfig::default()
+                .for_type(ViewType::Board, std::slice::from_ref(&notes))
+                .is_err()
+        );
+        assert!(
+            ViewConfig::default()
+                .for_type(ViewType::Calendar, &[notes.clone(), old_date.clone()])
+                .is_err()
+        );
+        // A calendar's dates come from a date field, an active one.
+        for wrong in [notes.id, old_date.id, Uuid::now_v7()] {
+            let config = ViewConfig {
+                date_field: Some(wrong),
+                ..ViewConfig::default()
+            };
+            assert!(check(&config, &fields).is_err());
+        }
+        // Archived since, it drops out of reads until it's back.
+        let stored = ViewConfig {
+            date_field: Some(old_date.id),
+            ..ViewConfig::default()
+        };
+        assert_eq!(stored.active(&fields).date_field, None);
+        assert_eq!(ViewType::parse(" Calendar "), Some(ViewType::Calendar));
+        assert_eq!(ViewType::parse("list"), None);
     }
 }

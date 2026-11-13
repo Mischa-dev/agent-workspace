@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 
-import { Banner, Button, Dialog, TextField, describeError } from '../ui'
-import { collectionKeys, createCollection, updateCollection, type CollectionBody, type CollectionSummary } from './api'
+import { Banner, Button, Dialog, SegmentedControl, TextField, describeError } from '../ui'
+import { collectionKeys, createCollection, updateCollection, type CollectionBody, type CollectionSummary, type ViewType } from './api'
 
 /**
  * Makes a collection, or changes one's name, description and what its title
@@ -86,10 +86,18 @@ export function CollectionDetailsDialog({
   )
 }
 
-/** Names a new view, or renames one. */
+const LAYOUTS: { value: ViewType; label: string; icon: 'table' | 'board' | 'list' | 'clock'; hint: string }[] = [
+  { value: 'table', label: 'Table', icon: 'table', hint: 'Rows and columns, each value edited in place.' },
+  { value: 'board', label: 'Board', icon: 'board', hint: 'A column for each value of a choice, person or checkbox field. Drag a card to change it.' },
+  { value: 'gallery', label: 'Gallery', icon: 'list', hint: 'A card for each record, with the fields you choose.' },
+  { value: 'calendar', label: 'Calendar', icon: 'clock', hint: 'A month, with each record on the day of a date field.' },
+]
+
+/** Names a new view (and picks its layout, when `layout` is given), or renames one. */
 export function ViewNameDialog({
   description,
   initial,
+  layout,
   onClose,
   onSubmit,
   submitLabel,
@@ -97,13 +105,16 @@ export function ViewNameDialog({
 }: {
   description?: string
   initial: string
+  /** The layout a new view starts with; left out, the dialog only names. */
+  layout?: ViewType
   onClose: () => void
   /** Resolves once saved; a rejection shows its message. */
-  onSubmit: (name: string) => Promise<unknown>
+  onSubmit: (name: string, layout: ViewType) => Promise<unknown>
   submitLabel: string
   title: string
 }) {
   const [name, setName] = useState(initial)
+  const [type, setType] = useState<ViewType>(layout ?? 'table')
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
   const submit = async () => {
@@ -111,7 +122,7 @@ export function ViewNameDialog({
     if (!name.trim()) return setProblem('Give the view a name.')
     setBusy(true)
     try {
-      await onSubmit(name.trim())
+      await onSubmit(name.trim(), type)
       onClose()
     } catch (error) {
       setProblem(describeError(error).message)
@@ -142,6 +153,12 @@ export function ViewNameDialog({
     >
       {problem ? <Banner tone="danger">{problem}</Banner> : null}
       <TextField autoFocus label="Name" maxLength={80} onChange={(event) => setName(event.target.value)} required value={name} />
+      {layout ? (
+        <div className="aw-collection__layout">
+          <SegmentedControl label="Layout" onChange={setType} options={LAYOUTS} value={type} />
+          <p className="aw-collection__layouthint">{LAYOUTS.find((entry) => entry.value === type)?.hint}</p>
+        </div>
+      ) : null}
     </Dialog>
   )
 }

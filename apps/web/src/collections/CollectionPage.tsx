@@ -22,6 +22,7 @@ import {
   deleteView,
   fieldScope,
   recordsParams,
+  type RecordsQuery,
   updateCollection,
   updateView,
   useCollection,
@@ -29,16 +30,19 @@ import {
   type CollectionView,
   type ViewConfig,
 } from './api'
-import { activeConfig, sameConfig, withColumnHidden } from './collectionModel'
+import { activeConfig, dateFields, groupableFields, sameConfig, withColumnHidden } from './collectionModel'
 import { CollectionDetailsDialog, ViewNameDialog } from './CollectionDialogs'
 import { CollectionToolbar } from './CollectionToolbar'
 import type { ColumnActions } from './ColumnMenus'
+import { RecordBoard } from './RecordBoard'
+import { RecordCalendar } from './RecordCalendar'
 import { RecordCards } from './RecordCards'
+import { RecordGallery } from './RecordGallery'
 import { RecordPanel } from './RecordPanel'
 import { RecordTable } from './RecordTable'
 import { useRecordEdits } from './useRecordEdits'
 
-const NO_CONFIG: ViewConfig = { filters: [], sort: [], groupBy: null, columns: [], titleWidth: null }
+const NO_CONFIG: ViewConfig = { filters: [], sort: [], groupBy: null, columns: [], titleWidth: null, dateField: null }
 
 type Dialogs =
   | { kind: 'details' }
@@ -50,7 +54,8 @@ type Dialogs =
 type Filtering = { field: FieldDefinition; index: number | null; anchor: HTMLElement }
 
 /** Whether two views find the same records: the same filters, sort and grouping. */
-const sameQuery = (left: ViewConfig, right: ViewConfig) => sameConfig({ ...left, columns: [], titleWidth: null }, { ...right, columns: [], titleWidth: null })
+const sameQuery = (left: ViewConfig, right: ViewConfig) =>
+  sameConfig({ ...left, columns: [], titleWidth: null, dateField: null }, { ...right, columns: [], titleWidth: null, dateField: null })
 
 /** One collection: its views as tabs, a table you edit in place (cards on a phone), and a record beside it. */
 export function CollectionPage() {
@@ -165,11 +170,17 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
   const editable = body.canEditRecords && !readOnly && !showArchived
   const filtered = config.filters.length > 0 || Boolean(searched.trim())
   const archived = showArchived ? ('only' as const) : undefined
-  const recordQuery = recordsParams(
+  const recordsQuery: RecordsQuery =
     view && draft && !sameQuery(draft, viewConfig)
       ? { view: view.id, filters: config.filters, sort: config.sort, groupBy: config.groupBy, search: searched, archived }
-      : { view: view?.id ?? null, search: searched, archived },
-  )
+      : { view: view?.id ?? null, search: searched, archived }
+  const recordQuery = recordsParams(recordsQuery)
+  const layout = view?.type ?? 'table'
+  const recordHref = (id: string) => {
+    const next = new URLSearchParams(params)
+    next.set('record', id)
+    return `?${next.toString()}`
+  }
 
   const setConfig = (next: ViewConfig) => {
     if (view) setDrafts((current) => ({ ...current, [view.id]: next }))
@@ -338,6 +349,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
           canSave={canBuild}
           changed={changed}
           config={config}
+          layout={layout}
           onAddField={() => setDialog({ kind: 'field', field: null })}
           onArchived={setShowArchived}
           onChange={setConfig}
@@ -358,7 +370,29 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
             Showing archived records. Open one to restore it.
           </Banner>
         ) : null}
-        {phone ? <RecordCards {...shared} /> : <RecordTable {...shared} actions={actions} />}
+        {layout === 'board' ? (
+          <RecordBoard
+            {...shared}
+            groupable={groupableFields(body.fields)}
+            onGroupBy={(fieldId) => setConfig({ ...config, groupBy: fieldId })}
+            query={recordsQuery}
+            recordHref={recordHref}
+          />
+        ) : layout === 'gallery' ? (
+          <RecordGallery {...shared} params={recordsParams({ ...recordsQuery, groupBy: null })} recordHref={recordHref} />
+        ) : layout === 'calendar' ? (
+          <RecordCalendar
+            {...shared}
+            dateFields={dateFields(body.fields)}
+            onDateField={(fieldId) => setConfig({ ...config, dateField: fieldId })}
+            query={recordsQuery}
+            recordHref={recordHref}
+          />
+        ) : phone ? (
+          <RecordCards {...shared} />
+        ) : (
+          <RecordTable {...shared} actions={actions} />
+        )}
       </div>
       {filtering ? (
         <FieldFilterEditor
@@ -379,11 +413,12 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
       ) : null}
       {dialog?.kind === 'new-view' ? (
         <ViewNameDialog
-          description="It starts with the filters, sort and columns showing now."
+          description="It starts with the filters, sort and fields showing now."
           initial={`View ${views.length + 1}`}
+          layout="table"
           onClose={() => setDialog(null)}
-          onSubmit={async (name) => {
-            const created = await createView(projectId, collectionId, { name, config })
+          onSubmit={async (name, type) => {
+            const created = await createView(projectId, collectionId, { name, type, config })
             keepView(created)
             if (view) dropDraft(view.id)
             void navigate(`?view=${encodeURIComponent(created.id)}`)
