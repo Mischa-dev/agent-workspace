@@ -26,6 +26,7 @@ pub mod definition;
 pub mod http;
 pub mod query;
 pub mod records;
+pub mod tasks;
 pub mod views;
 
 use rmcp::schemars;
@@ -57,14 +58,26 @@ pub fn kind(collection_id: Uuid) -> RecordKind {
 }
 
 /// A collection's fields: active ones in order, then archived ones when
-/// asked for.
+/// asked for. The built-in Tasks collection's are the tasks' own
+/// (`tasks::fields`).
 pub async fn field_definitions(
-    executor: impl sqlx::PgExecutor<'_>,
+    connection: &mut PgConnection,
     project_id: Uuid,
     collection_id: Uuid,
     include_archived: bool,
 ) -> Result<Vec<FieldDefinition>, AppError> {
-    fields::list(executor, project_id, kind(collection_id), include_archived).await
+    let builtin = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT builtin FROM collections WHERE project_id = $1 AND id = $2",
+    )
+    .bind(project_id)
+    .bind(collection_id)
+    .fetch_optional(&mut *connection)
+    .await?
+    .flatten();
+    if builtin.as_deref() == Some(tasks::BUILTIN) {
+        return tasks::fields(connection, project_id, include_archived).await;
+    }
+    fields::list(&mut *connection, project_id, kind(collection_id), include_archived).await
 }
 
 // ---------------------------------------------------------------------------
@@ -140,12 +153,22 @@ pub struct Collection {
     pub version: i64,
     pub created_at: String,
     pub updated_at: String,
+    /// "tasks" for the project's built-in Tasks collection.
+    pub builtin: Option<String>,
+}
+
+impl Collection {
+    /// The built-in collection whose records are the project's tasks.
+    pub fn is_tasks(&self) -> bool {
+        self.builtin.as_deref() == Some(tasks::BUILTIN)
+    }
 }
 
 const COLUMNS: &str = "collection.id, collection.project_id, collection.name, \
      collection.description, collection.title_name, collection.next_number, \
      collection.position, collection.archived_at IS NOT NULL AS archived, collection.version, \
-     collection.created_at::text AS created_at, collection.updated_at::text AS updated_at";
+     collection.created_at::text AS created_at, collection.updated_at::text AS updated_at, \
+     collection.builtin";
 
 /// A collection as the web app and agents see it.
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -165,6 +188,10 @@ pub struct CollectionSummary {
     pub version: i64,
     pub created_at: String,
     pub updated_at: String,
+    /// "tasks" for the built-in collection of the project's tasks, whose
+    /// records and fields change on task screens; only its views change here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub builtin: Option<String>,
 }
 
 impl CollectionSummary {
@@ -180,6 +207,7 @@ impl CollectionSummary {
             version: collection.version,
             created_at: collection.created_at.clone(),
             updated_at: collection.updated_at.clone(),
+            builtin: collection.builtin.clone(),
         }
     }
 }
@@ -200,11 +228,15 @@ pub async fn list(
 ) -> Result<Vec<CollectionSummary>, AppError> {
     Ok(sqlx::query_as::<_, CountedRow>(&format!(
         "SELECT {COLUMNS}, \
-           (SELECT count(*) FROM collection_records record \
-            WHERE record.collection_id = collection.id AND record.archived_at IS NULL) AS records \
+           CASE WHEN collection.builtin = 'tasks' THEN \
+             (SELECT count(*) FROM work_items task \
+              WHERE task.project_id = collection.project_id AND task.archived_at IS NULL) \
+           ELSE (SELECT count(*) FROM collection_records record \
+            WHERE record.collection_id = collection.id AND record.archived_at IS NULL) END AS records \
          FROM collections collection \
          WHERE collection.project_id = $1 AND ($2 OR collection.archived_at IS NULL) \
-         ORDER BY collection.archived_at IS NOT NULL, collection.position, collection.id \
+         ORDER BY collection.archived_at IS NOT NULL, collection.builtin IS NULL, \
+           collection.position, collection.id \
          LIMIT {MAX_COLLECTION_ROWS}"
     ))
     .bind(project_id)
@@ -284,7 +316,9 @@ pub async fn link_target(
         return Ok(Ok(target.to_owned()));
     }
     match find(executor, project_id, collection).await? {
-        Some(found) if !found.archived => Ok(Ok(format!("record:{}", found.id))),
+        Some(found) if !found.archived && !found.is_tasks() => {
+            Ok(Ok(format!("record:{}", found.id)))
+        }
         _ => Ok(Err(format!(
             "No collection here is called \"{}\".",
             collection.trim()

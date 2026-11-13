@@ -110,14 +110,24 @@ pub struct Record {
     pub updated_at: String,
 }
 
-/// The tables a record is read from, aliased `record`.
-pub(super) const RECORD_FROM: &str = "FROM collection_records record \
-     LEFT JOIN project_memberships record_creator \
-       ON record_creator.project_id = record.project_id \
-      AND record_creator.actor_id = record.created_by_actor_id \
-     LEFT JOIN project_memberships record_editor \
-       ON record_editor.project_id = record.project_id \
-      AND record_editor.actor_id = record.updated_by_actor_id";
+/// The tables a record is read from, aliased `record`: the collection's
+/// records, or the project's tasks for the built-in Tasks collection.
+pub(super) fn record_from(tasks: bool) -> String {
+    format!(
+        "FROM {} record \
+         LEFT JOIN project_memberships record_creator \
+           ON record_creator.project_id = record.project_id \
+          AND record_creator.actor_id = record.created_by_actor_id \
+         LEFT JOIN project_memberships record_editor \
+           ON record_editor.project_id = record.project_id \
+          AND record_editor.actor_id = record.updated_by_actor_id",
+        if tasks {
+            super::tasks::source()
+        } else {
+            "collection_records".to_owned()
+        }
+    )
+}
 
 pub(super) const RECORD_COLUMNS: &str = "record.id, record.collection_id, record.number, \
      record.title, record.field_values, record.created_by_actor_id, \
@@ -132,13 +142,15 @@ pub async fn by_ids(
     project_id: Uuid,
     collection_id: Uuid,
     ids: &[Uuid],
+    tasks: bool,
 ) -> Result<Vec<Record>, AppError> {
     if ids.is_empty() {
         return Ok(Vec::new());
     }
     let mut found = sqlx::query_as::<_, Record>(&format!(
         "SELECT {RECORD_COLUMNS} {RECORD_FROM} \
-         WHERE record.project_id = $1 AND record.collection_id = $2 AND record.id = ANY($3)"
+         WHERE record.project_id = $1 AND record.collection_id = $2 AND record.id = ANY($3)",
+        RECORD_FROM = record_from(tasks),
     ))
     .bind(project_id)
     .bind(collection_id)
@@ -157,6 +169,7 @@ pub async fn find(
     project_id: Uuid,
     collection_id: Uuid,
     reference: RecordRef,
+    tasks: bool,
 ) -> Result<Option<Record>, AppError> {
     let (id, number) = match reference {
         RecordRef::Id(id) => (Some(id), None),
@@ -165,7 +178,8 @@ pub async fn find(
     Ok(sqlx::query_as::<_, Record>(&format!(
         "SELECT {RECORD_COLUMNS} {RECORD_FROM} \
          WHERE record.project_id = $1 AND record.collection_id = $2 \
-           AND (record.id = $3 OR record.number = $4)"
+           AND (record.id = $3 OR record.number = $4)",
+        RECORD_FROM = record_from(tasks),
     ))
     .bind(project_id)
     .bind(collection_id)
@@ -182,6 +196,7 @@ pub async fn ids_of(
     project_id: Uuid,
     collection_id: Uuid,
     references: &[RecordRef],
+    tasks: bool,
 ) -> Result<Vec<Option<Uuid>>, AppError> {
     let ids = references
         .iter()
@@ -197,10 +212,12 @@ pub async fn ids_of(
             RecordRef::Id(_) => None,
         })
         .collect::<Vec<_>>();
-    let rows = sqlx::query_as::<_, (Uuid, i64)>(
-        "SELECT id, number FROM collection_records \
-         WHERE project_id = $1 AND collection_id = $2 AND (id = ANY($3) OR number = ANY($4))",
-    )
+    let rows = sqlx::query_as::<_, (Uuid, i64)>(&format!(
+        "SELECT record.id, record.number {} \
+         WHERE record.project_id = $1 AND record.collection_id = $2 \
+           AND (record.id = ANY($3) OR record.number = ANY($4))",
+        record_from(tasks)
+    ))
     .bind(project_id)
     .bind(collection_id)
     .bind(&ids)
@@ -234,7 +251,8 @@ async fn lock(
         "SELECT {RECORD_COLUMNS} {RECORD_FROM} \
          WHERE record.project_id = $1 AND record.collection_id = $2 \
            AND (record.id = $3 OR record.number = $4) \
-         FOR UPDATE OF record"
+         FOR UPDATE OF record",
+        RECORD_FROM = record_from(false),
     ))
     .bind(project_id)
     .bind(collection_id)
@@ -975,6 +993,7 @@ pub async fn write(
             project_id,
             collection.id,
             RecordRef::Id(current.id),
+            false,
         )
         .await?
         .ok_or(AppError::Internal("changed record is missing"))?;
@@ -1024,6 +1043,7 @@ async fn create(
         project_id,
         collection.id,
         RecordRef::Id(id),
+        false,
     )
     .await?
     .ok_or(AppError::Internal("created record is missing"))
