@@ -52,6 +52,10 @@ pub fn router() -> Router<AppState> {
             post(rotate_credential),
         )
         .route(
+            "/api/v1/projects/{project_id}/external-agents/{connection_id}/setup-link",
+            post(create_setup_link),
+        )
+        .route(
             "/api/v1/projects/{project_id}/external-agents/{connection_id}/remove",
             post(remove_connection),
         )
@@ -113,6 +117,10 @@ struct CreateConnectionRequest {
     /// Optional: where to send wakeups, so a runner is set up in one form.
     #[serde(default)]
     webhook_url: Option<String>,
+    /// AWD-63: hand the token to the agent through a one-time setup link
+    /// for this app instead of showing it.
+    #[serde(default)]
+    setup_app: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -128,6 +136,13 @@ struct UpdateConnectionRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ExpectedVersionRequest {
     expected_version: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SetupLinkRequest {
+    expected_version: i64,
+    app: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -180,6 +195,9 @@ struct OneTimeCredential {
 struct ConnectionMutationResponse {
     connection: ConnectionView,
     one_time_credential: Option<OneTimeCredential>,
+    /// AWD-63: the one-time link that hands the new token to the agent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    setup_link: Option<crate::agent_setup_links::SetupLinkView>,
     /// Shown once, when the agent was created with a webhook.
     #[serde(skip_serializing_if = "Option::is_none")]
     webhook_secret: Option<String>,
@@ -215,6 +233,13 @@ async fn create_connection(
         request.webhook_url.clone(),
         &state.config.webhook_trusted_origins,
     )?;
+    let setup_app = request.setup_app.clone();
+    if setup_app
+        .as_deref()
+        .is_some_and(|app| !crate::agent_setup_links::APPS.contains(&app))
+    {
+        return Err(AppError::Validation("app"));
+    }
     let normalized = validate_create(request)?;
     let mut transaction = state.pool.begin().await?;
     lock_project(&mut transaction, project_id).await?;
@@ -296,11 +321,30 @@ async fn create_connection(
         }
         None => None,
     };
+    let (one_time_credential, setup_link) = match setup_app.as_deref() {
+        Some(app) => {
+            let link = crate::agent_setup_links::store(
+                &mut transaction,
+                &state.config,
+                &crate::events::public_origin(&state),
+                access.organization_id,
+                project_id,
+                created.connection_id,
+                principal.actor_id,
+                app,
+                &created.credential.token,
+            )
+            .await?;
+            (None, Some(link))
+        }
+        None => (Some(created.credential), None),
+    };
     let row = load_connection_tx(&mut transaction, project_id, created.connection_id).await?;
     transaction.commit().await?;
     Ok(Json(ConnectionMutationResponse {
         connection: row.into(),
-        one_time_credential: Some(created.credential),
+        one_time_credential,
+        setup_link,
         webhook_secret,
     }))
 }
@@ -491,6 +535,7 @@ pub async fn provision(
         role: "member".to_owned(),
         scopes: vec!["read".to_owned(), "write".to_owned(), "events".to_owned()],
         webhook_url: None,
+        setup_app: None,
     })?;
     let mut transaction = pool.begin().await?;
     lock_project(&mut transaction, project_id).await?;
@@ -574,6 +619,7 @@ async fn update_connection(
         scopes,
         false,
         false,
+        None,
     )
     .await
     .map(Json)
@@ -770,6 +816,35 @@ async fn rotate_credential(
         None,
         true,
         false,
+        None,
+    )
+    .await
+    .map(Json)
+}
+
+/// AWD-63: issue the agent a new token behind a one-time setup link for the
+/// app it runs in. It is a rotation: the old token stops working.
+async fn create_setup_link(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath((project_id, connection_id)): ApiPath<(Uuid, Uuid)>,
+    ApiJson(request): ApiJson<SetupLinkRequest>,
+) -> Result<Json<ConnectionMutationResponse>, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    mutate_connection(
+        &state,
+        &headers,
+        &principal,
+        project_id,
+        connection_id,
+        request.expected_version,
+        None,
+        None,
+        None,
+        true,
+        false,
+        Some(request.app.as_str()),
     )
     .await
     .map(Json)
@@ -795,6 +870,7 @@ async fn remove_connection(
         None,
         false,
         true,
+        None,
     )
     .await
     .map(Json)
@@ -813,7 +889,11 @@ async fn mutate_connection(
     requested_scopes: Option<Vec<String>>,
     force_rotate: bool,
     remove: bool,
+    setup_app: Option<&str>,
 ) -> Result<ConnectionMutationResponse, AppError> {
+    if setup_app.is_some_and(|app| !crate::agent_setup_links::APPS.contains(&app)) {
+        return Err(AppError::Validation("app"));
+    }
     if expected_version < 1 {
         return Err(AppError::Invalid("expected_version"));
     }
@@ -904,6 +984,7 @@ async fn mutate_connection(
         return Ok(ConnectionMutationResponse {
             connection: current.into(),
             one_time_credential: None,
+            setup_link: None,
             webhook_secret: None,
         });
     }
@@ -1062,11 +1143,32 @@ async fn mutate_connection(
         }),
     )
     .await?;
+    // A setup link holds the new token for the agent to fetch once, so the
+    // person never sees it.
+    let (one_time_credential, setup_link) = match (setup_app, one_time_credential) {
+        (Some(app), Some(credential)) => {
+            let link = crate::agent_setup_links::store(
+                &mut transaction,
+                &state.config,
+                &crate::events::public_origin(state),
+                access.organization_id,
+                project_id,
+                connection_id,
+                principal.actor_id,
+                app,
+                &credential.token,
+            )
+            .await?;
+            (None, Some(link))
+        }
+        (_, credential) => (credential, None),
+    };
     let row = load_connection_tx(&mut transaction, project_id, connection_id).await?;
     transaction.commit().await?;
     Ok(ConnectionMutationResponse {
         connection: row.into(),
         one_time_credential,
+        setup_link,
         webhook_secret: None,
     })
 }
@@ -1390,6 +1492,8 @@ async fn revoke_credentials(
     .bind(connection_id)
     .execute(&mut **transaction)
     .await?;
+    // Open setup links hold a token that is no longer the agent's.
+    crate::agent_setup_links::close_for_connection(transaction, connection_id).await?;
     Ok(())
 }
 
@@ -1629,6 +1733,7 @@ mod tests {
             role: "member".to_owned(),
             scopes: vec!["write".to_owned(), "read".to_owned()],
             webhook_url: None,
+            setup_app: None,
         })
         .expect("valid member");
         assert_eq!(normalized.handle, "hermes_agent");
@@ -1641,6 +1746,7 @@ mod tests {
                 role: "viewer".to_owned(),
                 scopes: vec!["read".to_owned(), "write".to_owned()],
                 webhook_url: None,
+                setup_app: None,
             })
             .is_err()
         );

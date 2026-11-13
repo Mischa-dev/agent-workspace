@@ -1260,6 +1260,12 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     policy_route!(
         "external_agents",
         Post,
+        "/api/v1/projects/{project_id}/external-agents/{connection_id}/setup-link",
+        ExternalAgentManage
+    ),
+    policy_route!(
+        "external_agents",
+        Post,
         "/api/v1/projects/{project_id}/external-agents/{connection_id}/remove",
         ExternalAgentManage
     ),

@@ -966,6 +966,11 @@ mod tests {
         ),
         (
             Post,
+            "/api/v1/projects/{project_id}/external-agents/{connection_id}/setup-link",
+            Person("adding an agent makes its credential"),
+        ),
+        (
+            Post,
             "/api/v1/projects/{project_id}/external-agents/{connection_id}/remove",
             Person("adding an agent makes its credential"),
         ),

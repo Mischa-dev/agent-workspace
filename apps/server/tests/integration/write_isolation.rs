@@ -205,6 +205,7 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{project_id}/external-agents",
     "PATCH /api/v1/projects/{project_id}/external-agents/{connection_id}",
     "POST /api/v1/projects/{project_id}/external-agents/{connection_id}/credentials/rotate",
+    "POST /api/v1/projects/{project_id}/external-agents/{connection_id}/setup-link",
     "POST /api/v1/projects/{project_id}/external-agents/{connection_id}/remove",
     "POST /api/v1/projects/{project_id}/external-agents/{connection_id}/webhook",
     "POST /api/v1/projects/{project_id}/external-agents/{connection_id}/webhook/test",
@@ -4460,6 +4461,14 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
                 id(sp.agent_connection, b.agent_connection),
             ],
             versioned("external_agent_connections", 1, json!({})),
+        ),
+        path_case(
+            "POST /api/v1/projects/{project_id}/external-agents/{connection_id}/setup-link",
+            &[
+                id(&a.project, &b.space),
+                id(sp.agent_connection, b.agent_connection),
+            ],
+            versioned("external_agent_connections", 1, json!({"app": "codex"})),
         ),
         path_case(
             "POST /api/v1/projects/{project_id}/external-agents/{connection_id}/webhook",

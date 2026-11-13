@@ -4,6 +4,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -172,6 +173,9 @@ describe('ExternalAgentSettings', () => {
     fireEvent.change(screen.getByLabelText('Handle'), {
       target: { value: 'hermes' },
     })
+    fireEvent.change(screen.getByLabelText('Set it up in'), {
+      target: { value: '' },
+    })
     fireEvent.click(screen.getByRole('button', { name: 'Connect agent' }))
     expect(await screen.findByText(token)).toBeVisible()
     expect(paths.every((path) => !path.includes('aw_ext_'))).toBe(true)
@@ -237,5 +241,45 @@ describe('ExternalAgentSettings', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: 'Done' }))
     expect(screen.queryByText(secret, { exact: false })).not.toBeInTheDocument()
+  })
+
+  it('makes a one-time setup message for an agent’s app without showing its token', async () => {
+    const posts: Array<{ path: string; body: unknown }> = []
+    const url = 'https://workspace.test/connect/agent/abc123'
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input)
+        if (init?.method === 'POST') {
+          posts.push({ path, body: JSON.parse(String(init.body)) })
+          return jsonResponse({
+            connection: { ...connection, version: 2 },
+            oneTimeCredential: null,
+            setupLink: { url, app: 'codex', expiresAt: '2026-09-04T07:30:00Z' },
+          })
+        }
+        return jsonResponse({ connections: [connection] })
+      }),
+    )
+
+    renderSettings()
+    fireEvent.click(await screen.findByRole('button', { name: `${hostileName} actions` }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Set up in an app…' }))
+    const dialog = await screen.findByRole('dialog', { name: `Set up ${hostileName} in an app` })
+    expect(dialog).toBeVisible()
+    fireEvent.change(within(dialog).getByLabelText('Set it up in'), { target: { value: 'codex' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Make setup message' }))
+    const message = `Set yourself up as @hermes in Agent Workspace: fetch ${url} once and follow the steps it gives you. The link works once, within 30 minutes.`
+    expect(await screen.findByText(message)).toBeVisible()
+    expect(posts).toEqual([
+      {
+        path: `/api/v1/projects/${projectId}/external-agents/${connectionId}/setup-link`,
+        body: { expectedVersion: 1, app: 'codex' },
+      },
+    ])
+    fireEvent.click(screen.getByRole('button', { name: 'Copy message' }))
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith(message))
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+    expect(screen.queryByText(message)).not.toBeInTheDocument()
   })
 })

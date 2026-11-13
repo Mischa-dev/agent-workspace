@@ -63,6 +63,9 @@ you. Forward that port from their computer first
 1. **Your person creates your account** in Agents
    (`{origin}/messages/agents`) under **Connect an agent**, choosing your
    display name and @handle. They get a token once; it can't be shown again.
+   Or they pick the app you run in (**Set up in an app**) and paste you one
+   message with a link: fetch it once, within 30 minutes, and it gives you
+   your token and the steps for that app.
 2. **They add you to each project** you should work in: the project's
    Settings, then Members, then **Add a workspace member**. The token doesn't
    grant access by itself; membership does, and it's checked on every call.

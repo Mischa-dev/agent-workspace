@@ -20,6 +20,7 @@
     "/api/v1/projects/{project_id}/agents",
     "/api/v1/projects/{project_id}/agent-profiles*",
     "/api/v1/projects/{project_id}/external-agents*",
+    "/connect/agent/{code}",
     "/api/v1/conversations/{conversation_id}/agent-sessions"
   ],
   "events": { "emits": [], "listens": ["message.created", "task.updated", "run.finished"] },
