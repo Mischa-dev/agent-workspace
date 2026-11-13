@@ -349,9 +349,22 @@ impl FormulaEngine for IronCalc {
         // Rename through the model so formulas follow; a pass through
         // placeholder names lets two tabs swap names.
         if wanted != original {
+            let taken = original
+                .iter()
+                .chain(&wanted)
+                .map(|name| name.to_lowercase())
+                .collect::<std::collections::HashSet<_>>();
+            let mut next = 0;
             for index in 0..original.len() {
+                let placeholder = loop {
+                    let candidate = format!("~import {next}");
+                    next += 1;
+                    if !taken.contains(&candidate) {
+                        break candidate;
+                    }
+                };
                 model
-                    .rename_sheet_by_index(index as u32, &format!("aw import {index}"))
+                    .rename_sheet_by_index(index as u32, &placeholder)
                     .map_err(whole)?;
             }
             for (index, name) in wanted.iter().enumerate() {

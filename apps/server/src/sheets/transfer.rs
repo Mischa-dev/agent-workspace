@@ -298,6 +298,10 @@ mod tests {
                     name: "Total".to_owned(),
                     cells: vec![(1, 1, "='Q1  Sales'!A1*2".to_owned())],
                 },
+                TabInput {
+                    name: "~import 0".to_owned(),
+                    cells: vec![(1, 1, "x".to_owned())],
+                },
             ])
             .expect("written");
         let tabs = read(&IronCalc, Format::Xlsx, &bytes, "Import").expect("read");
