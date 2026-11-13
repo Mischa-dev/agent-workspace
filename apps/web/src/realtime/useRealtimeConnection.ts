@@ -112,8 +112,9 @@ export function useRealtimeConnection(): RealtimeContextValue {
         void queryClient.invalidateQueries({
           predicate: (query) =>
             query.queryKey[0] === 'things' &&
-            CONVERSATION_THINGS.has(String(query.queryKey[1])) &&
-            query.queryKey[2] === conversationId,
+            ((CONVERSATION_THINGS.has(String(query.queryKey[1])) && query.queryKey[2] === conversationId) ||
+              // A message may have added or dropped a link: "Referenced in" lists refetch.
+              query.queryKey[3] === 'references'),
         })
       }, INVALIDATION_DELAY_MS)
       invalidationTimers.set(key, timer)
@@ -150,8 +151,13 @@ export function useRealtimeConnection(): RealtimeContextValue {
         })
         // My work lists tasks across projects, so it isn't under the project key.
         void queryClient.invalidateQueries({ queryKey: ['my-work'] })
-        // A task embedded in a page as a card.
-        void queryClient.invalidateQueries({ queryKey: ['things', 'task', workItemId] })
+        // A task embedded in a page as a card, and "Referenced in" lists its
+        // description or comments may have changed.
+        void queryClient.invalidateQueries({
+          predicate: (query) =>
+            query.queryKey[0] === 'things' &&
+            ((query.queryKey[1] === 'task' && query.queryKey[2] === workItemId) || query.queryKey[3] === 'references'),
+        })
       }, INVALIDATION_DELAY_MS)
       invalidationTimers.set(key, timer)
     }

@@ -51,6 +51,7 @@ const LinkedWhiteboards = lazy(() =>
 // Managing labels loads when someone opens it.
 const LabelManager = lazy(() => import('./LabelManager').then((module) => ({ default: module.LabelManager })))
 // Links load the first time a task has one.
+const ReferencedIn = lazy(() => import('../modules/references/ReferencedIn'))
 const TaskLinks = lazy(() => import('./TaskLinks').then((module) => ({ default: module.TaskLinks })))
 // What to do about a save that stopped loads only when one does.
 const TaskSaveNotices = lazy(() => import('./TaskSaveNotices').then((module) => ({ default: module.TaskSaveNotices })))
@@ -237,6 +238,7 @@ function TaskDetailBody({
     whiteboards: experience.shows('area.whiteboards'),
     runs: experience.shows('task.runs'),
     suggestions: experience.shows('task.suggestions'),
+    references: experience.shows('page.references'),
   }
   const canLink = shown.threadLinks || shown.codeLinks
   const hasLinks =
@@ -512,6 +514,11 @@ function TaskDetailBody({
                 targetId={item.id}
                 targetKind="task"
               />
+            </Suspense>
+          ) : null}
+          {shown.references ? (
+            <Suspense fallback={null}>
+              <ReferencedIn id={item.id} kind="task" />
             </Suspense>
           ) : null}
           {wide ? null : start}

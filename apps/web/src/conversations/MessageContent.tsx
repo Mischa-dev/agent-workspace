@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 
+import { thingLink } from '../modules/references/thingLinks'
 import { Markdown } from '../ui/markdown/Markdown'
 import { parseMessageContent } from './messageContentModel'
 import type { ConversationActor, ConversationWorkItemChip } from './types'
@@ -157,5 +158,5 @@ export function MessageContent({ actors, content, fallbackPlainText, workItems =
 
   const codeText = (value: string) => value.replace(PLACEHOLDER, (_, index: string) => chipText(Number(index)))
 
-  return <Markdown className="aw-content" codeText={codeText} renderText={renderText} source={source} />
+  return <Markdown className="aw-content" codeText={codeText} renderLink={thingLink} renderText={renderText} source={source} />
 }

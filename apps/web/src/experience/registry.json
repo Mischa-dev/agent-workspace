@@ -292,6 +292,13 @@
       "default": true
     },
     {
+      "id": "page.references",
+      "group": "pages",
+      "label": "Referenced in",
+      "description": "Where each task, page and whiteboard is linked from: the conversations, pages and tasks that mention it.",
+      "default": true
+    },
+    {
       "id": "tech.task_keys",
       "group": "technical",
       "label": "Task keys",
@@ -338,6 +345,13 @@
       "group": "workspace",
       "label": "Later",
       "description": "Saved messages, reminders and messages scheduled to send.",
+      "default": true
+    },
+    {
+      "id": "workspace.inbox_triage",
+      "group": "workspace",
+      "label": "Needs you and FYI",
+      "description": "The inbox puts what asks something of you first, and the rest under FYI to clear in one go.",
       "default": true
     },
     {
@@ -395,8 +409,10 @@
         "page.live_editing",
         "page.comments",
         "page.import_export",
+        "page.references",
         "workspace.my_work",
-        "workspace.later"
+        "workspace.later",
+        "workspace.inbox_triage"
       ],
       "words": {
         "task": { "one": "to-do", "many": "to-dos" },
@@ -427,8 +443,10 @@
         "page.live_editing",
         "page.comments",
         "page.import_export",
+        "page.references",
         "workspace.my_work",
-        "workspace.later"
+        "workspace.later",
+        "workspace.inbox_triage"
       ],
       "words": {
         "task": { "one": "to-do", "many": "to-dos" },
@@ -502,8 +520,10 @@
         "page.live_editing",
         "page.comments",
         "page.import_export",
+        "page.references",
         "workspace.my_work",
-        "workspace.later"
+        "workspace.later",
+        "workspace.inbox_triage"
       ],
       "words": {
         "task": { "one": "to-do", "many": "to-dos" },
@@ -538,9 +558,11 @@
         "page.live_editing",
         "page.comments",
         "page.import_export",
+        "page.references",
         "home.working_now",
         "workspace.my_work",
         "workspace.later",
+        "workspace.inbox_triage",
         "workspace.runs"
       ],
       "words": {
@@ -570,8 +592,10 @@
         "page.live_editing",
         "page.comments",
         "page.import_export",
+        "page.references",
         "workspace.my_work",
-        "workspace.later"
+        "workspace.later",
+        "workspace.inbox_triage"
       ],
       "words": {
         "task": { "one": "assignment", "many": "assignments" },
@@ -607,8 +631,10 @@
         "page.live_editing",
         "page.comments",
         "page.import_export",
+        "page.references",
         "workspace.my_work",
-        "workspace.later"
+        "workspace.later",
+        "workspace.inbox_triage"
       ],
       "words": {
         "task": { "one": "to-do", "many": "to-dos" }
@@ -637,8 +663,10 @@
         "page.live_editing",
         "page.comments",
         "page.import_export",
+        "page.references",
         "workspace.my_work",
-        "workspace.later"
+        "workspace.later",
+        "workspace.inbox_triage"
       ],
       "words": {
         "task": { "one": "post", "many": "posts" },
@@ -674,9 +702,11 @@
         "page.live_editing",
         "page.comments",
         "page.import_export",
+        "page.references",
         "tech.task_keys",
         "workspace.my_work",
-        "workspace.later"
+        "workspace.later",
+        "workspace.inbox_triage"
       ],
       "words": {
         "task": { "one": "ticket", "many": "tickets" }
@@ -718,6 +748,7 @@
         "page.live_editing",
         "page.comments",
         "page.import_export",
+        "page.references",
         "tech.task_keys",
         "workspace.my_work"
       ]
@@ -742,6 +773,7 @@
         "page.live_editing",
         "page.comments",
         "page.import_export",
+        "page.references",
         "workspace.my_work"
       ]
     },

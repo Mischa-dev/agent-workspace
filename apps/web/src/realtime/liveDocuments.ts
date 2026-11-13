@@ -176,7 +176,10 @@ export function documentChanged(queryClient: QueryClient, event: RealtimeEnvelop
     // The project's page details, and the page embedded in another page as a card.
     const pageQuery = isPageQuery(event.projectId)
     later(`pages:${event.projectId}:${page.pageId}`, PAGE_DETAILS_DELAY_MS, () =>
-      void queryClient.invalidateQueries({ predicate: (query) => pageQuery(query) || isThing(query.queryKey, 'page', page.pageId) }),
+      void queryClient.invalidateQueries({
+        // ...and "Referenced in" lists, since the page may link differently now.
+        predicate: (query) => pageQuery(query) || isThing(query.queryKey, 'page', page.pageId) || (query.queryKey[0] === 'things' && query.queryKey[3] === 'references'),
+      }),
     )
   }
 }

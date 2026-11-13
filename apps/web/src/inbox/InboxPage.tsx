@@ -4,6 +4,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 
 import { toastError } from '../app/mutations'
 import { useAuthenticatedSession } from '../auth/session'
+import { useHomeExperience } from '../experience/layout'
 import { atPhrase } from '../later/when'
 import { AppShell } from '../shell/AppShell'
 import {
@@ -31,7 +32,9 @@ import {
   invalidateInbox,
   isExternalHref,
   postUpdate,
+  needsYou,
   respondToApproval,
+  sectionsByNeed,
   snoozeChoices,
   unreadIds,
   useInbox,
@@ -126,9 +129,20 @@ export function InboxPage() {
     return [...loaded, ...extra].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0))
   }, [kept, loaded, view])
   const unreadCount = inbox.data?.pages[0]?.unreadCount ?? 0
-  const groups = useMemo(() => groupBySubject(notifications), [notifications])
+  // The inbox and Unread split into what needs you and what's for your
+  // information; Snoozed and Archived stay one list.
+  // A layout can turn the Needs you / FYI split off; the inbox is one list then.
+  const triage = useHomeExperience().shows('workspace.inbox_triage')
+  const split = triage && (view === 'inbox' || view === 'unread')
+  const sections = useMemo(
+    () =>
+      split
+        ? sectionsByNeed(notifications)
+        : [{ key: 'all' as const, title: '', groups: groupBySubject(notifications), items: notifications }],
+    [notifications, split],
+  )
   // Keyboard order follows the grouped order on screen.
-  const ordered = useMemo(() => groups.flatMap((group) => group.items), [groups])
+  const ordered = useMemo(() => sections.flatMap((section) => section.groups.flatMap((group) => group.items)), [sections])
   const selectedIndex = ordered.findIndex((item) => item.id === selectedId)
   const selected = selectedIndex >= 0 ? ordered[selectedIndex] : null
   const canMarkAll =
@@ -243,6 +257,29 @@ export function InboxPage() {
     [advance, change, keep, selectedId, undo, view],
   )
 
+  /** Archives every FYI notification on screen at once, with Undo. */
+  const archiveFyi = (items: InboxNotification[]) => {
+    const ids = items.map((item) => item.id)
+    if (ids.length === 0) return
+    setKept(new Map())
+    change(
+      { action: 'archive', ids },
+      {
+        success: (result) => ({
+          tone: 'success',
+          title: `Archived ${countLabel(result.updated.length || ids.length, 'notification')}`,
+          onUndo: () => undo({ action: 'restore', ids }),
+        }),
+        failed: 'They weren’t archived',
+      },
+    )
+    if (selected && ids.includes(selected.id)) {
+      const next = ordered.find((item) => !ids.includes(item.id))
+      setSelectedId(next ? next.id : null)
+      if (!next) setDetailOpen(false)
+    }
+  }
+
   const snooze = useCallback(
     (item: InboxNotification, until: Date) => {
       const ids = [item.id]
@@ -332,6 +369,13 @@ export function InboxPage() {
       } else if (key === 'k' || key === 'ArrowUp') {
         event.preventDefault()
         select(ordered[Math.max(selectedIndex - 1, 0)])
+      } else if (key === 'n' && split) {
+        // The next one that needs you, from the top again after the last.
+        const after = ordered.slice(selectedIndex + 1).find(needsYou) ?? ordered.find(needsYou)
+        if (after) {
+          event.preventDefault()
+          select(after)
+        }
       } else if (key === 'Home' || key === 'End') {
         event.preventDefault()
         select(key === 'Home' ? ordered[0] : ordered[ordered.length - 1])
@@ -403,6 +447,7 @@ export function InboxPage() {
         {helpOpen ? (
           <ul aria-label="Keyboard shortcuts" className="aw-inbox__help">
             <li><Kbd>j</Kbd> <Kbd>k</Kbd> or <Kbd>↓</Kbd> <Kbd>↑</Kbd> next, previous</li>
+            {split ? <li><Kbd>n</Kbd> next that needs you</li> : null}
             <li><Kbd>Home</Kbd> <Kbd>End</Kbd> first, last</li>
             <li><Kbd>Enter</Kbd> open</li>
             <li><Kbd>Esc</Kbd> close the preview</li>
@@ -435,24 +480,30 @@ export function InboxPage() {
         {notifications.length > 0 ? (
           <div className="aw-inbox__panes">
             <div aria-label="Notifications" className="aw-inbox__list" ref={listRef} role="list">
-              {groups.map((group) => (
-                <section aria-label={group.title} className="aw-inbox__group" key={group.key}>
-                  <h2 className="aw-inbox__group-title">
-                    <span>{group.title}</span>
-                    <span className="aw-inbox__group-project">{group.projectName}</span>
-                  </h2>
-                  {group.items.map((item) => (
-                    <NotificationRow
-                      item={item}
-                      key={item.id}
-                      onArchive={() => archive(item)}
-                      onSelect={() => select(item, true)}
-                      selected={item.id === selectedId}
-                      view={view}
-                    />
-                  ))}
-                </section>
-              ))}
+              {sections.map((section) =>
+                section.key === 'all' ? (
+                  <SubjectGroups groups={section.groups} heading="h2" key={section.key} onArchive={archive} onSelect={(item) => select(item, true)} selectedId={selectedId} view={view} />
+                ) : section.items.length === 0 && section.key === 'fyi' ? null : (
+                  <section aria-labelledby={`inbox-${section.key}`} className="aw-inbox__section" key={section.key}>
+                    <div className="aw-inbox__section-head">
+                      <h2 className="aw-inbox__section-title" id={`inbox-${section.key}`}>
+                        {section.title}
+                        <span className="aw-inbox__section-count">{section.items.length}</span>
+                      </h2>
+                      {section.key === 'fyi' && view === 'inbox' ? (
+                        <Button disabled={mutation.isPending} icon="archive" onClick={() => archiveFyi(section.items)} size="sm" variant="ghost">
+                          Archive these
+                        </Button>
+                      ) : null}
+                    </div>
+                    {section.items.length === 0 ? (
+                      <p className="aw-inbox__section-empty">Nothing needs you right now.</p>
+                    ) : (
+                      <SubjectGroups groups={section.groups} heading="h3" onArchive={archive} onSelect={(item) => select(item, true)} selectedId={selectedId} view={view} />
+                    )}
+                  </section>
+                ),
+              )}
               {inbox.hasNextPage ? (
                 <div className="aw-inbox__more">
                   <Button busy={inbox.isFetchingNextPage} onClick={() => void inbox.fetchNextPage()}>
@@ -502,6 +553,46 @@ function emptyText(view: InboxView, category: InboxCategory) {
   if (view === 'snoozed') return 'Snooze a notification to bring it back later.'
   if (view === 'unread') return 'You’ve read everything in your inbox.'
   return 'When someone mentions you, assigns you a task, needs your approval or a run of yours ends, it shows up here.'
+}
+
+/** Notifications under the subject they're about. */
+function SubjectGroups({
+  groups,
+  heading: Heading,
+  onArchive,
+  onSelect,
+  selectedId,
+  view,
+}: {
+  groups: ReturnType<typeof groupBySubject>
+  heading: 'h2' | 'h3'
+  onArchive: (item: InboxNotification) => void
+  onSelect: (item: InboxNotification) => void
+  selectedId: string | null
+  view: InboxView
+}) {
+  return (
+    <>
+      {groups.map((group) => (
+        <section aria-label={group.title} className="aw-inbox__group" key={group.key}>
+          <Heading className="aw-inbox__group-title">
+            <span>{group.title}</span>
+            <span className="aw-inbox__group-project">{group.projectName}</span>
+          </Heading>
+          {group.items.map((item) => (
+            <NotificationRow
+              item={item}
+              key={item.id}
+              onArchive={() => onArchive(item)}
+              onSelect={() => onSelect(item)}
+              selected={item.id === selectedId}
+              view={view}
+            />
+          ))}
+        </section>
+      ))}
+    </>
+  )
 }
 
 function NotificationRow({
