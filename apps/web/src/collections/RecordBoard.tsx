@@ -29,8 +29,8 @@ type Props = {
   groupable: readonly FieldDefinition[]
 }
 
-/** A card moved to another column, shown there until the column loads it. */
-type Moved = { record: CollectionRecord; key: string; at: number }
+/** A card moved to another column, shown there until the column loads it or reloads after the save. */
+type Moved = { record: CollectionRecord; key: string; at: number; savedAt?: number }
 
 /**
  * A collection as a board (AWD-110): a column for each value of the field
@@ -86,7 +86,9 @@ function Board({ body, config, editable, edits, field, filtered, onClearFilters,
   const onCards = useCallback((key: string, cards: readonly CollectionRecord[]) => setShownCards((current) => (current[key] === cards ? current : { ...current, [key]: cards })), [])
   const findCard = (id: string) => Object.values(shownCards).flat().find((record) => record.id === id)
   // A moved card stays in its new column until that column's own list has
-  // it. Not by time: the save patches every list at once, so a timestamp
+  // it, or has reloaded since the save landed (then the list is the truth:
+  // the card may sort past its loaded page, or have been archived since).
+  // Not by a timer: the save patches every list at once, so a timestamp
   // passes before the destination ever loads the card (#244 review).
   const arrived = useCallback((id: string) => setMoved((current) => current.filter((entry) => entry.record.id !== id)), [])
 
@@ -97,7 +99,12 @@ function Board({ body, config, editable, edits, field, filtered, onClearFilters,
     setMoved((current) => [...current.filter((entry) => entry.record.id !== record.id), { record: { ...record, values: withValues(record.values, { [field.id]: value }) }, key, at }])
     // A failed save goes back where it was: the lists refetch, and this move is forgotten.
     void edits.save(record, { values: { [field.id]: value } }).then((saved) => {
-      if (!saved) setMoved((current) => current.filter((entry) => entry.record.id !== record.id || entry.at !== at))
+      const now = Date.now()
+      setMoved((current) =>
+        saved
+          ? current.map((entry) => (entry.record.id === record.id && entry.at === at ? { ...entry, savedAt: now } : entry))
+          : current.filter((entry) => entry.record.id !== record.id || entry.at !== at),
+      )
     })
   }
   const drag = useBoardDrag({
@@ -215,12 +222,16 @@ function Column({
     return [...here, ...joined]
   }, [column.key, columns, field, loaded, moved])
   useEffect(() => onCards(column.key, cards), [cards, column.key, onCards])
-  // Once this column's list has a card moved here, the list shows it on its own.
+  // Once this column's list has a card moved here, or has reloaded since
+  // its save landed, the list shows what's true on its own.
+  const updatedAt = records.dataUpdatedAt
   useEffect(() => {
     for (const entry of moved) {
-      if (entry.key === column.key && loaded.some((record) => record.id === entry.record.id && boardKey(record, field, columns) === column.key)) onArrived(entry.record.id)
+      if (entry.key !== column.key) continue
+      const listed = loaded.some((record) => record.id === entry.record.id && boardKey(record, field, columns) === column.key)
+      if (listed || (entry.savedAt !== undefined && updatedAt > entry.savedAt)) onArrived(entry.record.id)
     }
-  }, [column.key, columns, field, loaded, moved, onArrived])
+  }, [column.key, columns, field, loaded, moved, onArrived, updatedAt])
   const label = column.label || 'No value'
 
   return (
