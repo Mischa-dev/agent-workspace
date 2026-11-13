@@ -380,6 +380,16 @@ async fn a_form_shows_only_itself_and_each_answer_is_one_record_of_its_fields() 
         .await
         .expect("state");
     assert_eq!(state, "disabled");
+    // Still its maker, but without record edit: the questions can't change.
+    let (status, refused) = write(
+        &setup,
+        &mel_browser,
+        "PATCH",
+        &format!("/api/v1/bug-report-links/{}", mels["link"]["id"].as_str().expect("id")),
+        json!({"form": {"fields": []}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
 
     // An app connected as a person makes one by field names; a person field
     // is refused there too.

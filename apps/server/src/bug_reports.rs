@@ -509,6 +509,14 @@ pub(crate) async fn update(
         Some(value @ ("active" | "paused")) => Some(value),
         Some(_) => return Err(AppError::Validation("state")),
     };
+    // A form's answers become records as its maker, so changing its
+    // questions takes the same right as making it.
+    if request.form.is_some()
+        && row.collection_id.is_some()
+        && !can_add_records(&state.pool, caller, row.project_id).await
+    {
+        return Err(AppError::Forbidden);
+    }
     let form = match (&request.form, row.collection_id) {
         (None, _) => None,
         (Some(_), None) => return Err(AppError::Validation("form")),
