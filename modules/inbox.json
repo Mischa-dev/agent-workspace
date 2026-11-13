@@ -23,7 +23,7 @@
   "embeds": [],
   "slots": {
     "pages": ["/inbox", "/later"],
-    "parts": ["workspace.later"],
+    "parts": ["workspace.later", "workspace.inbox_triage"],
     "sidebar": ["home.inbox"],
     "home": ["needsYou"],
     "settings": [],

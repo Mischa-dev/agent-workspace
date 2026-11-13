@@ -455,6 +455,25 @@ async fn scrub_create_replays(
     .bind(tombstone.as_bytes().as_slice())
     .execute(&mut **transaction)
     .await?;
+    // Replies to it (AWD-95) stored its first lines as their quote.
+    sqlx::query(
+        r#"
+        UPDATE idempotency_keys
+        SET response_body = jsonb_set(
+                jsonb_set(response_body, '{comment,replyTo,text}', 'null'::jsonb),
+                '{comment,replyTo,removed}', 'true'::jsonb
+            )
+        WHERE scope = $1 AND response_body->'comment'->'replyTo'->>'commentId' = $2
+        "#,
+    )
+    .bind(crate::idempotency::resource_bound_scope(
+        "work_items",
+        locked.work_item_id,
+        "comment_create",
+    )?)
+    .bind(locked.id.to_string())
+    .execute(&mut **transaction)
+    .await?;
     Ok(())
 }
 

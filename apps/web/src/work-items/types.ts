@@ -411,6 +411,8 @@ export type WorkItemTimelineEntry = {
     editedAt: string | null
     /** Set once it's deleted; its text is gone then. */
     removed: { removedAt: string; removedBy: AssignableActor | null } | null
+    /** The comment on this task it answers, read live: no text once that one is deleted. */
+    replyTo: { commentId: string; authorName: string | null; text: string | null; removed: boolean } | null
   } | null
 }
 

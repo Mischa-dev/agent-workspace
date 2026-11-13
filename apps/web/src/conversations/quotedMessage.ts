@@ -28,7 +28,8 @@ export function readForwarded(value: unknown): ForwardedMessage | null {
 
 /** Scroll to a message on this page and flash it, the way a copied link does. False when it isn't here. */
 export function revealMessage(messageId: string) {
-  const element = document.getElementById(`message-${messageId}`)
+  // Task comments (AWD-95) are replied to the same way as messages.
+  const element = document.getElementById(`message-${messageId}`) ?? document.getElementById(`comment-${messageId}`)
   if (!element) return false
   element.scrollIntoView({ block: 'center', behavior: 'smooth' })
   element.classList.add('is-linked')

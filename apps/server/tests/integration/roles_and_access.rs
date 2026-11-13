@@ -4209,6 +4209,45 @@ async fn comment_references_show_titles_only_with_see_tasks() {
         "{edited}"
     );
 
+    // AWD-95: replying to someone else's comment quotes it only for those
+    // who may see tasks; Bea gets its id, without its author or words, now
+    // and on a retry.
+    let (status, owners) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &comments,
+            Some("owner-private-words"),
+            json!({"content": {"version": 1, "nodes": [{"type": "text", "text": "Budget is 40k"}]}}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{owners}");
+    let owners = owners["comment"]["id"]
+        .as_str()
+        .expect("owner comment")
+        .to_owned();
+    for _ in 0..2 {
+        let (status, replied) = send(
+            app,
+            bea_browser.request(
+                "POST",
+                &comments,
+                Some("bea-blind-reply"),
+                json!({"content": content("Noted, "), "replyToCommentId": owners}),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{replied}");
+        assert_eq!(replied["comment"]["replyTo"]["commentId"], owners.as_str());
+        assert!(replied["comment"]["replyTo"]["text"].is_null(), "{replied}");
+        assert!(
+            replied["comment"]["replyTo"]["authorName"].is_null(),
+            "{replied}"
+        );
+        assert!(!replied.to_string().contains("40k"), "{replied}");
+    }
+
     // With "see tasks": the title and status come back.
     let (status, seeing) = create_role(
         &setup,
