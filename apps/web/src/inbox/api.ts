@@ -323,3 +323,45 @@ export function groupBySubject(notifications: InboxNotification[]) {
   }
   return groups
 }
+
+/**
+ * Kinds that ask something of you: someone mentioned or messaged you, gave
+ * you a task or a review, an approval or a waiting run is yours to answer,
+ * or something of yours failed. Everything else is for your information.
+ */
+const NEEDS_YOU_KINDS = new Set([
+  'mention',
+  'comment_mention',
+  'conversation_message',
+  'assigned',
+  'approval_requested',
+  'review_requested',
+  'run_waiting',
+  'run_failed',
+  'checks_failed',
+  'scheduled_send_failed',
+  'reminder',
+])
+
+/** Whether a notification asks something of you; an approval someone already answered no longer does. */
+export function needsYou(notification: InboxNotification) {
+  if (notification.approval && notification.approval.status !== 'pending') return false
+  return NEEDS_YOU_KINDS.has(notification.kind)
+}
+
+export type InboxSection = {
+  key: 'needs' | 'fyi'
+  title: string
+  groups: ReturnType<typeof groupBySubject>
+  items: InboxNotification[]
+}
+
+/** The inbox in two parts, each grouped by subject: what needs you first, then the rest. */
+export function sectionsByNeed(notifications: InboxNotification[]): InboxSection[] {
+  const needs = notifications.filter(needsYou)
+  const fyi = notifications.filter((notification) => !needsYou(notification))
+  return [
+    { key: 'needs', title: 'Needs you', groups: groupBySubject(needs), items: needs },
+    { key: 'fyi', title: 'FYI', groups: groupBySubject(fyi), items: fyi },
+  ]
+}

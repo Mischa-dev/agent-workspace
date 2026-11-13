@@ -343,3 +343,36 @@
     opacity: 1;
   }
 }
+
+/* Needs you, then FYI (AWD-61): each a heading with its count over its groups. */
+.aw-inbox__section {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.aw-inbox__section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: var(--size-control);
+}
+
+.aw-inbox__section-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0;
+  font: var(--t-ui-strong);
+}
+
+.aw-inbox__section-count {
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+}
+
+.aw-inbox__section-empty {
+  margin: 0;
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+}
