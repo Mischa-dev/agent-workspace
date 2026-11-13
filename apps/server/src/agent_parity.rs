@@ -8,8 +8,8 @@
 //!   devices, a secret, or a provider sign-in.
 //! - `Plumbing`: not an action in a project at all, such as sign-in, OAuth,
 //!   an invitation link or a webhook from GitHub.
-//! - `Gap`: no tool yet. These are tracked in AWD-111 and only shrink: each
-//!   one closed moves to `Tool`.
+//!
+//! AWD-111 closed the last gaps: there's no "not yet" any more.
 //!
 //! A new web write fails the test until it's listed here, and the way to
 //! list it is with its tool. The scenario that walks an agent through a
@@ -22,7 +22,7 @@ mod tests {
     use crate::policy_inventory::{MUTATING_ENTRY_POINTS, MutationMethod};
 
     use MutationMethod::{Delete, Patch, Post, Put};
-    use Parity::{Gap, Person, Plumbing, Tool};
+    use Parity::{Person, Plumbing, Tool};
 
     enum Parity {
         /// The MCP tools that do it, separated by ", ".
@@ -31,8 +31,6 @@ mod tests {
         Person(&'static str),
         /// Why it isn't an action in a project.
         Plumbing(&'static str),
-        /// The tool it needs (AWD-111).
-        Gap(&'static str),
     }
 
     /// Every web write, in `MUTATING_ENTRY_POINTS` order.
@@ -469,7 +467,9 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{id}/execution-profiles",
-            Gap("agent_profile_write"),
+            // Puts the caller's own harness account to use here, the first
+            // step of signing it in: a person's, like the sign-in itself.
+            Person("signing in to a provider is a person's"),
         ),
         (
             Post,
@@ -1454,7 +1454,7 @@ mod tests {
                         );
                     }
                 }
-                Person(why) | Plumbing(why) | Gap(why) => {
+                Person(why) | Plumbing(why) => {
                     assert!(!why.trim().is_empty(), "{method:?} {path} needs a reason");
                 }
             }
