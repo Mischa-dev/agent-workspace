@@ -1,18 +1,20 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { Eye, Reply } from 'lucide-react'
-import { Suspense, lazy, useState, type ReactNode } from 'react'
+import { Suspense, lazy, useCallback, useState, type ReactNode } from 'react'
 
 import { useAuthenticatedSession } from '../auth/session'
 
 import { searchMentionableActors } from '../conversations/api'
 import { MessageContent } from '../conversations/MessageContent'
 import { ReplyQuote } from '../conversations/ReplyQuote'
+import { RevealInThread } from '../conversations/quotedMessage'
 import type { ReplyTarget } from '../conversations/types'
 import { StructuredComposer } from '../conversations/StructuredComposer'
 import { useProjectExperience } from '../experience/layout'
 import { Attachments } from '../files/Attachments'
 import { uploadFile, type FileAttachment } from '../files/api'
 import { useProject } from '../projects/hooks'
+import { useRevealInThread } from '../threads/useRevealInThread'
 import {
   ActorTag,
   Avatar,
@@ -129,6 +131,21 @@ export function TaskActivity({ disabled, item, projectArchived }: { disabled: bo
   const [history, setHistory] = useState<PostedComment | null>(null)
   // The comment the next one answers, shown above the comment box.
   const [replying, setReplying] = useState<ReplyTarget | null>(null)
+  // Replies follow the layout's reply setting, as they do in conversations.
+  const replies = experience.shows('talk.replies')
+  // A quote of a comment further back loads older activity until it's there.
+  const { fetchNextPage } = timeline
+  const loadOlder = useCallback(async () => {
+    await fetchNextPage()
+  }, [fetchNextPage])
+  const revealComment = useRevealInThread({
+    threadId: item.id,
+    cursor: timeline.data?.pages.at(-1)?.nextCursor ?? null,
+    error: timeline.isFetchNextPageError ? 'failed' : null,
+    loading: timeline.isFetchingNextPage,
+    loadOlder,
+    olderCount: timeline.data?.pages.length ?? 0,
+  })
   const commentFiles = new Map<string, FileAttachment[]>()
   for (const file of files.data ?? []) {
     if (file.commentId) commentFiles.set(file.commentId, [...(commentFiles.get(file.commentId) ?? []), file])
@@ -169,7 +186,7 @@ export function TaskActivity({ disabled, item, projectArchived }: { disabled: bo
     const removedBy = posted.removed?.removedBy
     const actions: MenuEntry[] = []
     const reply = () => setReplying({ messageId: posted.id, authorName: posted.author.displayName, text: posted.plainText.slice(0, 300) })
-    const canReply = !posted.removed && !disabled
+    const canReply = replies && !posted.removed && !disabled
     if (canReply) actions.push({ label: 'Reply', icon: Reply, onSelect: reply })
     if (!posted.removed) {
       if (own && !disabled) actions.push({ label: 'Edit', icon: 'pencil', onSelect: () => setEditing(posted.id) })
@@ -291,7 +308,11 @@ export function TaskActivity({ disabled, item, projectArchived }: { disabled: bo
           {timeline.isFetchNextPageError ? <span className="aw-prop__error">Older activity didn’t load. Try again.</span> : null}
         </div>
       ) : null}
-      {rows.length ? <ol className="aw-activity">{rows}</ol> : null}
+      {rows.length ? (
+        <RevealInThread.Provider value={revealComment}>
+          <ol className="aw-activity">{rows}</ol>
+        </RevealInThread.Provider>
+      ) : null}
       <Suspense fallback={null}>
         {deleting ? (
           <DeleteCommentDialog comment={deleting} onClose={() => setDeleting(null)} projectId={item.projectId} viewerId={viewerId} workItemId={item.id} />
@@ -304,14 +325,14 @@ export function TaskActivity({ disabled, item, projectArchived }: { disabled: bo
           draftKey={`comment:${item.id}`}
           label="Add a comment"
           outbox={{ kind: 'comment', projectId: item.projectId, workItemId: item.id, href: workItemHref(item.projectId, item.id) }}
-          onReplyChange={setReplying}
+          onReplyChange={replies ? setReplying : undefined}
           onSubmit={async ({ attachments, content, idempotencyKey, replyTo, text }) => {
             const words = commentContent({ attachments, content, text })
             await createComment.mutateAsync({ projectId: item.projectId, workItemId: item.id, content: words, idempotencyKey, attachments, replyTo })
             if (attachments?.length) void queryClient.invalidateQueries({ queryKey: taskFilesKey(item.projectId, item.id) })
           }}
           peopleOnly={!experience.shows('talk.agent_mentions')}
-          replyTo={replying}
+          replyTo={replies ? replying : null}
           placeholder={`Leave a comment. @mention someone or reference a ${experience.word('task')}.`}
           searchActors={async (query) => (await searchMentionableActors(item.projectId, query)).actors}
           searchWorkItems={(query) => searchWorkItemReferences(item.projectId, query)}
