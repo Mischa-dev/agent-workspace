@@ -41,7 +41,9 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("role_get", None),
     ("my_permissions", None),
     ("role_write", Some(RolesManage)),
-    ("role_assign", Some(MembersManage)),
+    // Anyone may cap their own apps (agentLimit); assigning roles and
+    // changing others' limits is checked inside, against MembersManage.
+    ("role_assign", None),
     ("workspace_template_list", None),
     ("workspace_template_apply", Some(SettingsManage)),
     ("workspace_template_save", Some(SettingsManage)),
