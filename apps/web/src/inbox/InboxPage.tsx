@@ -4,6 +4,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 
 import { toastError } from '../app/mutations'
 import { useAuthenticatedSession } from '../auth/session'
+import { useHomeExperience } from '../experience/layout'
 import { atPhrase } from '../later/when'
 import { AppShell } from '../shell/AppShell'
 import {
@@ -130,7 +131,9 @@ export function InboxPage() {
   const unreadCount = inbox.data?.pages[0]?.unreadCount ?? 0
   // The inbox and Unread split into what needs you and what's for your
   // information; Snoozed and Archived stay one list.
-  const split = view === 'inbox' || view === 'unread'
+  // A layout can turn the Needs you / FYI split off; the inbox is one list then.
+  const triage = useHomeExperience().shows('workspace.inbox_triage')
+  const split = triage && (view === 'inbox' || view === 'unread')
   const sections = useMemo(
     () =>
       split
@@ -444,7 +447,7 @@ export function InboxPage() {
         {helpOpen ? (
           <ul aria-label="Keyboard shortcuts" className="aw-inbox__help">
             <li><Kbd>j</Kbd> <Kbd>k</Kbd> or <Kbd>↓</Kbd> <Kbd>↑</Kbd> next, previous</li>
-            <li><Kbd>n</Kbd> next that needs you</li>
+            {split ? <li><Kbd>n</Kbd> next that needs you</li> : null}
             <li><Kbd>Home</Kbd> <Kbd>End</Kbd> first, last</li>
             <li><Kbd>Enter</Kbd> open</li>
             <li><Kbd>Esc</Kbd> close the preview</li>
