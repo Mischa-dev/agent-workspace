@@ -10,7 +10,6 @@ import { Dialog } from './overlays'
  * toast instead. Focus starts on Cancel, so a stray Enter never destroys.
  */
 export function ConfirmDialog({
-  body,
   busy = false,
   children,
   confirmLabel,
@@ -21,8 +20,6 @@ export function ConfirmDialog({
   title,
   tone = 'danger',
 }: {
-  /** Fields to fill in before confirming, below the description. */
-  body?: ReactNode
   busy?: boolean
   /** What happens, in a sentence or two: "It stops working right away." */
   children?: ReactNode
@@ -54,7 +51,6 @@ export function ConfirmDialog({
       title={title}
       width={440}
     >
-      {body}
       {error ? <Banner tone="danger">{error}</Banner> : null}
     </Dialog>
   )

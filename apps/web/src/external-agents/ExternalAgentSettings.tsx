@@ -11,6 +11,7 @@ import {
   Banner,
   Button,
   ConfirmDialog,
+  Dialog,
   EmptyState,
   ErrorState,
   Icon,
@@ -209,8 +210,7 @@ export function ExternalAgentSettings({
       await refresh()
     },
   })
-  const confirmMutation =
-    confirming?.kind === 'rotate' ? rotateMutation : confirming?.kind === 'setup' ? setupMutation : removeMutation
+  const confirmMutation = confirming?.kind === 'rotate' ? rotateMutation : removeMutation
   const pending =
     createMutation.isPending ||
     enableMutation.isPending ||
@@ -295,20 +295,8 @@ export function ExternalAgentSettings({
         />
       </Section>
       <ConfirmDialog
-        body={
-          confirming?.kind === 'setup' ? (
-            <SetupAppField
-              disabled={setupMutation.isPending}
-              id="external-agent-setup-app"
-              onChange={(value) => setSetupApp(value || 'other')}
-              value={setupApp}
-            />
-          ) : null
-        }
         busy={confirmMutation.isPending}
-        confirmLabel={
-          confirming?.kind === 'rotate' ? 'Make a new token' : confirming?.kind === 'setup' ? 'Make setup message' : 'Remove'
-        }
+        confirmLabel={confirming?.kind === 'rotate' ? 'Make a new token' : 'Remove'}
         error={
           confirmMutation.isError
             ? `${confirming?.kind === 'remove' ? 'It wasn’t removed.' : 'No new token was made.'} ${describeError(confirmMutation.error).message}`
@@ -318,27 +306,55 @@ export function ExternalAgentSettings({
         onConfirm={() => {
           if (!confirming) return
           if (confirming.kind === 'rotate') rotateMutation.mutate(confirming.connection)
-          else if (confirming.kind === 'setup') setupMutation.mutate({ connection: confirming.connection, app: setupApp })
           else removeMutation.mutate(confirming.connection)
         }}
-        open={confirming !== null}
+        open={confirming !== null && confirming.kind !== 'setup'}
         title={
           confirming?.kind === 'rotate'
             ? `Make a new token for ${confirming.connection.displayName}?`
-            : confirming?.kind === 'setup'
-              ? `Set up ${confirming.connection.displayName} in an app`
-              : `Remove ${confirming?.connection.displayName ?? 'this agent'}?`
+            : `Remove ${confirming?.connection.displayName ?? 'this agent'}?`
         }
         tone={confirming?.kind === 'remove' ? 'danger' : 'primary'}
       >
-        {confirming?.kind === 'rotate' ? (
-          `${confirming.connection.displayName} stops working until you give it the new one. The old token stops working right away.`
-        ) : confirming?.kind === 'setup' ? (
-          `This gives ${confirming.connection.displayName} a new token. The old one stops working right away.`
-        ) : (
-          'Its token stops working and it can’t connect here again. What it already posted stays.'
-        )}
+        {confirming?.kind === 'rotate'
+          ? `${confirming.connection.displayName} stops working until you give it the new one. The old token stops working right away.`
+          : 'Its token stops working and it can’t connect here again. What it already posted stays.'}
       </ConfirmDialog>
+      <Dialog
+        description={
+          confirming?.kind === 'setup'
+            ? `This gives ${confirming.connection.displayName} a new token. The old one stops working right away.`
+            : undefined
+        }
+        footer={
+          <>
+            <Button data-autofocus disabled={setupMutation.isPending} onClick={() => setConfirming(null)}>
+              Cancel
+            </Button>
+            <Button busy={setupMutation.isPending} type="submit" variant="primary">
+              Make setup message
+            </Button>
+          </>
+        }
+        onClose={() => setConfirming(null)}
+        onSubmit={(event) => {
+          event.preventDefault()
+          if (confirming?.kind === 'setup') setupMutation.mutate({ connection: confirming.connection, app: setupApp })
+        }}
+        open={confirming?.kind === 'setup'}
+        title={`Set up ${confirming?.connection.displayName ?? 'this agent'} in an app`}
+        width={440}
+      >
+        <SetupAppField
+          disabled={setupMutation.isPending}
+          id="external-agent-setup-app"
+          onChange={(value) => setSetupApp(value || 'other')}
+          value={setupApp}
+        />
+        {setupMutation.isError ? (
+          <Banner tone="danger">{`No new token was made. ${describeError(setupMutation.error).message}`}</Banner>
+        ) : null}
+      </Dialog>
     </div>
   )
 }
