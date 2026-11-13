@@ -69,7 +69,9 @@ pub fn read(
     let tabs = match format {
         Format::Xlsx => {
             unpacks_safely(bytes)?;
-            engine.read_xlsx(bytes).map_err(|error| error.message)?
+            engine
+                .read_xlsx(bytes, &tab_names)
+                .map_err(|error| error.message)?
         }
         Format::Csv => {
             let text = std::str::from_utf8(bytes)
@@ -160,6 +162,24 @@ fn cells_message() -> String {
     format!("A sheet holds up to {MAX_CELLS} filled cells.")
 }
 
+/// The names tabs take in a sheet: tidied, with a stand-in for one that
+/// can't be used, and none twice. Tidy names come back as they were.
+fn tab_names(raw: &[String]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    raw.iter()
+        .enumerate()
+        .map(|(index, raw)| {
+            let mut name = normalize_tab_name(raw).unwrap_or_else(|| format!("Sheet{}", index + 1));
+            let mut suffix = 2;
+            while !seen.insert(name.to_lowercase()) {
+                name = format!("{} {suffix}", name.chars().take(28).collect::<String>());
+                suffix += 1;
+            }
+            name
+        })
+        .collect()
+}
+
 /// The tabs, with names a sheet takes, inside every limit.
 fn checked(mut tabs: Vec<TabInput>) -> Result<Vec<TabInput>, String> {
     if tabs.is_empty() {
@@ -168,16 +188,9 @@ fn checked(mut tabs: Vec<TabInput>) -> Result<Vec<TabInput>, String> {
     if tabs.len() > MAX_TABS {
         return Err(format!("A sheet holds up to {MAX_TABS} tabs."));
     }
-    let mut names = HashSet::new();
+    let names = tab_names(&tabs.iter().map(|tab| tab.name.clone()).collect::<Vec<_>>());
     let mut total = 0;
-    for (index, tab) in tabs.iter_mut().enumerate() {
-        let mut name =
-            normalize_tab_name(&tab.name).unwrap_or_else(|| format!("Sheet{}", index + 1));
-        let mut suffix = 2;
-        while !names.insert(name.to_lowercase()) {
-            name = format!("{} {suffix}", name.chars().take(28).collect::<String>());
-            suffix += 1;
-        }
+    for (tab, name) in tabs.iter_mut().zip(names) {
         tab.name = name;
         for (row, column, input) in &tab.cells {
             if *row < 1 || *row > MAX_ROWS {
@@ -271,7 +284,38 @@ pub fn csv_of(cells: &[&StoredCell]) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sheets::engine::IronCalc;
+    use crate::sheets::engine::{FormulaEngine, IronCalc, Value};
+
+    #[test]
+    fn renamed_tabs_keep_their_formulas() {
+        let bytes = IronCalc
+            .to_xlsx(&[
+                TabInput {
+                    name: "Q1  Sales".to_owned(),
+                    cells: vec![(1, 1, "5".to_owned())],
+                },
+                TabInput {
+                    name: "Total".to_owned(),
+                    cells: vec![(1, 1, "='Q1  Sales'!A1*2".to_owned())],
+                },
+                TabInput {
+                    name: "~import 0".to_owned(),
+                    cells: vec![(1, 1, "x".to_owned())],
+                },
+            ])
+            .expect("written");
+        let tabs = read(&IronCalc, Format::Xlsx, &bytes, "Import").expect("read");
+        assert_eq!(tabs[0].name, "Q1 Sales");
+        assert!(
+            tabs[1].cells[0].2.contains("Q1 Sales"),
+            "{:?}",
+            tabs[1].cells
+        );
+        assert_eq!(
+            IronCalc.apply(&tabs, &[]).expect("computed")[1].cells[0].value,
+            Value::Number(10.0)
+        );
+    }
 
     #[test]
     fn csv_reads_as_typed_and_tabs_get_names_a_sheet_takes() {
