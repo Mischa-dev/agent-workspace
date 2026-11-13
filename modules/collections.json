@@ -15,7 +15,7 @@
     "record_query": "query",
     "record_write": "change"
   },
-  "routes": ["/api/v1/projects/{project_id}/collections*"],
+  "routes": ["/api/v1/projects/{project_id}/collections*", "/api/v1/forms/*"],
   "events": { "emits": [], "listens": [] },
   "notifications": [],
   "search": [],
@@ -24,7 +24,7 @@
   "links": [],
   "embeds": [],
   "slots": {
-    "pages": ["/projects/:projectId/collections/*"],
+    "pages": ["/projects/:projectId/collections/*", "/forms/:token"],
     "parts": ["area.collections"],
     "sidebar": [],
     "home": [],

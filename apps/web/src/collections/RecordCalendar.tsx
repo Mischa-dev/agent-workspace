@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 
 import type { FieldDefinition } from '../fields/fieldModel'
-import { Button, EmptyState, IconButton, ListSkeleton, countLabel } from '../ui'
+import { Banner, Button, EmptyState, IconButton, ListSkeleton, countLabel } from '../ui'
 import { addDays, addMonths, monthGrid, toIsoDate } from '../ui/dateModel'
 import { useBoardDrag } from '../work-items/useBoardDrag'
 import { usePhoneWidth } from '../work-items/useCoarsePointer'
@@ -138,6 +138,19 @@ function Calendar({ body, editable, edits, field, onOpenRecord, openRecordId, pr
           {records.isPending ? 'Loading…' : `${countLabel(records.data?.pages[0]?.total ?? 0, 'record')} by ${field.name}`}
         </span>
       </div>
+      {isFetchNextPageError ? (
+        // A busy month loads in pages; one that failed says so rather than leave days looking empty (#244 review).
+        <Banner
+          action={
+            <Button busy={isFetchingNextPage} onClick={() => void fetchNextPage()} size="sm">
+              Load the rest
+            </Button>
+          }
+          tone="warning"
+        >
+          Only {countLabel(loaded.length, 'record')} of {records.data?.pages[0]?.total ?? loaded.length} loaded for this month.
+        </Banner>
+      ) : null}
       {records.isPending ? (
         <ListSkeleton label="Loading the month" rows={5} />
       ) : records.isError && !records.data ? (

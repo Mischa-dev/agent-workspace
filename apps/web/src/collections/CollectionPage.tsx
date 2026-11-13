@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { Suspense, lazy, useCallback, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
@@ -42,10 +42,14 @@ import { RecordPanel } from './RecordPanel'
 import { RecordTable } from './RecordTable'
 import { useRecordEdits } from './useRecordEdits'
 
+// Forms are managed now and then, so their dialog loads when it opens.
+const FormsDialog = lazy(() => import('./FormsDialog').then((module) => ({ default: module.FormsDialog })))
+
 const NO_CONFIG: ViewConfig = { filters: [], sort: [], groupBy: null, columns: [], titleWidth: null, dateField: null }
 
 type Dialogs =
   | { kind: 'details' }
+  | { kind: 'forms' }
   | { kind: 'field'; field: FieldDefinition | null }
   | { kind: 'new-view' }
   | { kind: 'rename-view'; view: CollectionView }
@@ -274,14 +278,17 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
     if (added) openRecord(added.id)
   }
 
-  const collectionMenu: MenuEntry[] = canBuild
-    ? [
-        { label: 'Edit details…', icon: 'pencil', onSelect: () => setDialog({ kind: 'details' }) },
-        { label: 'Add a field…', icon: 'plus', onSelect: () => setDialog({ kind: 'field', field: null }) },
-        { separator: true },
-        { label: 'Archive collection', icon: 'archive', onSelect: () => void setCollectionArchived(true) },
-      ]
-    : []
+  const collectionMenu: MenuEntry[] = [
+    ...(body.canEditRecords ? [{ label: 'Forms…', icon: 'list' as const, onSelect: () => setDialog({ kind: 'forms' }) }] : []),
+    ...(canBuild
+      ? ([
+          { label: 'Edit details…', icon: 'pencil', onSelect: () => setDialog({ kind: 'details' }) },
+          { label: 'Add a field…', icon: 'plus', onSelect: () => setDialog({ kind: 'field', field: null }) },
+          { separator: true },
+          { label: 'Archive collection', icon: 'archive', onSelect: () => void setCollectionArchived(true) },
+        ] satisfies MenuEntry[])
+      : []),
+  ]
   const viewMenu: MenuEntry[] = view
     ? [
         { label: 'Rename view…', icon: 'pencil', onSelect: () => setDialog({ kind: 'rename-view', view }) },
@@ -407,6 +414,11 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
       ) : null}
       {dialog?.kind === 'details' ? (
         <CollectionDetailsDialog collection={body.collection} onClose={() => setDialog(null)} onSaved={() => undefined} projectId={projectId} />
+      ) : null}
+      {dialog?.kind === 'forms' ? (
+        <Suspense fallback={null}>
+          <FormsDialog body={body} onClose={() => setDialog(null)} projectId={projectId} />
+        </Suspense>
       ) : null}
       {dialog?.kind === 'field' ? (
         <FieldDialog field={dialog.field} onClose={() => setDialog(null)} records="records" scope={fieldScope(projectId, collectionId)} />

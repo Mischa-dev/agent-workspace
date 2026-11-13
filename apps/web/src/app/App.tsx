@@ -28,6 +28,7 @@ const ForgotPasswordPage = lazy(() => import('../auth/PasswordResetPages').then(
 const ResetPasswordPage = lazy(() => import('../auth/PasswordResetPages').then((module) => ({ default: module.ResetPasswordPage })))
 const VerifyEmailPage = lazy(() => import('../auth/PasswordResetPages').then((module) => ({ default: module.VerifyEmailPage })))
 const JoinPage = lazy(() => import('../invitations/JoinPage').then((module) => ({ default: module.JoinPage })))
+const FormPage = lazy(() => import('../forms/Form'))
 const CreateProjectPage = lazy(() => import('../projects/CreateProjectPage').then((module) => ({ default: module.CreateProjectPage })))
 const ProjectsPage = lazy(() => import('../projects/ProjectsPage').then((module) => ({ default: module.ProjectsPage })))
 const ChannelPage = lazy(() => import('../conversations/ChannelPage').then((module) => ({ default: module.ChannelPage })))
@@ -128,6 +129,14 @@ export function App() {
                     </PublicRouteBoundary>
                   }
                   path="/join"
+                />
+                <Route
+                  element={
+                    <PublicRouteBoundary>
+                      <FormPage />
+                    </PublicRouteBoundary>
+                  }
+                  path="/forms/:token"
                 />
                 <Route element={<SessionBoundary />}>
                   <Route path="/settings/*" element={<AuthenticatedRouteBoundary><SettingsArea /></AuthenticatedRouteBoundary>} />
