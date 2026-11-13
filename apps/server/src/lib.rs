@@ -214,6 +214,11 @@ pub fn router(state: AppState) -> Router {
         .merge(bug_reports::router())
         .route("/api/v1", any(api_not_found))
         .route("/api/v1/{*path}", any(api_not_found))
+        // A module's routes answer "turned off" where it's off (AWD-97).
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            modules::gate::refuse_off_modules,
+        ))
         .fallback_service(
             ServeDir::new(web_root)
                 .append_index_html_on_directories(true)

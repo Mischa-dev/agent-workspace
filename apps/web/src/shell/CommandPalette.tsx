@@ -93,7 +93,9 @@ export function CommandPalette() {
   const direct = useDirectOverview()
   const { mutateAsync: updateNavigation } = useUpdateProjectNavigation()
   const { mutateAsync: switchProject } = useSwitchProject()
-  const sidebar = useProjectConversationSidebar(state.open === 'commands' ? current?.id ?? '' : '')
+  const sidebar = useProjectConversationSidebar(
+    state.open === 'commands' && !current?.modulesOff?.includes('channels') ? current?.id ?? '' : '',
+  )
   const [query, setQuery] = useState('')
   const tasks = useTaskResults(state.open === 'commands' ? query : '', current)
   // The rail lists the first 100 Projects; the server finds the rest by name.

@@ -138,6 +138,10 @@ pub enum AppError {
     DevelopmentAuthUnavailable,
     #[error("encrypted secrets are not configured")]
     SecretsNotConfigured,
+    /// The route belongs to a module that's off where the request acts
+    /// (AWD-97); `module` is its id, such as `tasks`.
+    #[error("the {module} module is turned off")]
+    ModuleOff { module: &'static str },
     #[error("internal invariant failed: {0}")]
     Internal(&'static str),
 }
@@ -174,6 +178,7 @@ impl AppError {
             Self::PayloadTooLarge => "payload_too_large",
             Self::DevelopmentAuthUnavailable => "development_auth_unavailable",
             Self::SecretsNotConfigured => "secrets_not_configured",
+            Self::ModuleOff { .. } => "module_off",
             Self::Internal(_) => "internal",
         }
     }
@@ -221,6 +226,9 @@ enum ErrorDetails {
     Action {
         action: &'static str,
     },
+    Module {
+        module: &'static str,
+    },
 }
 
 impl IntoResponse for AppError {
@@ -244,6 +252,7 @@ impl IntoResponse for AppError {
             Self::ExecutionProfileRequired => Some(ErrorDetails::Action {
                 action: "connect_personal_codex_account",
             }),
+            Self::ModuleOff { module } => Some(ErrorDetails::Module { module }),
             _ => None,
         };
         let (status, code, message, retry_after_seconds) = match self {
@@ -379,6 +388,12 @@ impl IntoResponse for AppError {
                 StatusCode::SERVICE_UNAVAILABLE,
                 "secrets_not_configured",
                 "This server can't store keys yet: its administrator needs to set up the secrets keyring.",
+                None,
+            ),
+            Self::ModuleOff { .. } => (
+                StatusCode::FORBIDDEN,
+                "module_off",
+                "This part of the workspace is turned off.",
                 None,
             ),
             Self::Database(error) => {
