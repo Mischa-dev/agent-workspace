@@ -230,6 +230,9 @@ const WRITE_ROUTES: &[&str] = &[
     "DELETE /api/v1/projects/{project_id}/collections/{collection_id}/views/{view_id}",
     "POST /api/v1/projects/{project_id}/collections/{collection_id}/records",
     "PATCH /api/v1/projects/{project_id}/collections/{collection_id}/records/{record_id}",
+    "POST /api/v1/projects/{project_id}/sheets",
+    "PATCH /api/v1/projects/{project_id}/sheets/{sheet_id}",
+    "POST /api/v1/projects/{project_id}/sheets/{sheet_id}/changes",
     "POST /api/v1/projects/{project_id}/launches",
     "POST /api/v1/projects/{project_id}/launches/{launch_id}/cancel",
     "PUT /api/v1/projects/{project_id}/layout",
@@ -4670,6 +4673,25 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
                 "expectedVersion": version("collection_records", a.record),
             }),
         ]),
+        // Sheets (AWD-54 slice 2): a tab is found within the sheet named in
+        // the path, so B's sheet is never reached.
+        path_case(
+            "POST /api/v1/projects/{project_id}/sheets",
+            &[project()],
+            json_body(json!({"name": "Net sheet"})),
+        ),
+        path_case(
+            "PATCH /api/v1/projects/{project_id}/sheets/{sheet_id}",
+            &[project(), id(a.sheet, b.sheet)],
+            json_body(json!({"description": "Net"})),
+        ),
+        path_case(
+            "POST /api/v1/projects/{project_id}/sheets/{sheet_id}/changes",
+            &[project(), id(a.sheet, b.sheet)],
+            json_body(json!({"changes": [
+                {"type": "cell", "tab": "Sheet1", "row": 1, "column": 4, "input": "Net http"},
+            ]})),
+        ),
         path_case(
             "POST /api/v1/projects/{project_id}/launches",
             &[project()],

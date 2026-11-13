@@ -130,6 +130,7 @@ export function CommandPalette() {
         { id: 'p:board', group: current.name, label: 'Board', icon: 'board', shortcut: 'G B', onSelect: go(projectPath(id, '/work-items?view=board')) },
         { id: 'p:pages', group: current.name, label: 'Pages', icon: 'list', shortcut: 'G P', keywords: ['docs', 'wiki'], onSelect: go(projectPath(id, '/pages')) },
         { id: 'p:collections', group: current.name, label: 'Collections', icon: 'table', keywords: ['records', 'tables', 'database', 'spreadsheet'], onSelect: go(projectPath(id, '/collections')) },
+        { id: 'p:sheets', group: current.name, label: 'Sheets', icon: 'table', keywords: ['spreadsheet', 'formulas', 'cells', 'budget'], onSelect: go(projectPath(id, '/sheets')) },
         { id: 'p:milestones', group: current.name, label: 'Milestones', icon: 'checklist', keywords: ['releases', 'goals'], onSelect: go(projectPath(id, '/milestones')) },
         { id: 'p:timeline', group: current.name, label: 'Timeline', icon: 'clock', keywords: ['gantt', 'roadmap', 'schedule', 'milestones'], onSelect: go(projectPath(id, '/timeline')) },
         { id: 'p:next', group: current.name, label: 'Planning', icon: 'branch', keywords: ['up next', 'ready', 'what to do', 'ranking', 'priorities'], onSelect: go(projectPath(id, '/next')) },

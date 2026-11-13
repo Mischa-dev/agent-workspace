@@ -192,6 +192,7 @@ pub fn router(state: AppState) -> Router {
         .merge(memory::router())
         .merge(whiteboards::router())
         .merge(collections::http::router())
+        .merge(sheets::http::router())
         .merge(search::router())
         .merge(connected_apps::router())
         .merge(agent_docs::router())

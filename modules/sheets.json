@@ -13,7 +13,7 @@
     "sheet_read": "query",
     "sheet_write": "change"
   },
-  "routes": [],
+  "routes": ["/api/v1/projects/{project_id}/sheets*"],
   "events": { "emits": [], "listens": [] },
   "notifications": [],
   "search": [],
@@ -22,12 +22,12 @@
   "links": [],
   "embeds": [],
   "slots": {
-    "pages": [],
-    "parts": [],
+    "pages": ["/projects/:projectId/sheets/*"],
+    "parts": ["area.sheets"],
     "sidebar": [],
     "home": [],
     "settings": [],
-    "palette": [],
+    "palette": ["p:sheets"],
     "shortcuts": [],
     "slash": [],
     "setup": []

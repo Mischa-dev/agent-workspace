@@ -52,6 +52,7 @@ const PagesPage = lazy(() => import('../memory/MemoryPages').then((module) => ({
 const PageDetailPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.PageDetailPage })))
 const DecisionsPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.DecisionsPage })))
 const CollectionsArea = lazy(() => import('../collections/CollectionsArea'))
+const SheetsArea = lazy(() => import('../sheets/SheetsArea'))
 const MyWorkPage = lazy(() => import('../views/MyWorkPage').then((module) => ({ default: module.MyWorkPage })))
 const RunsPage = lazy(() => import('../runs/RunsPage').then((module) => ({ default: module.RunsPage })))
 const RunPage = lazy(() => import('../runs/RunPage').then((module) => ({ default: module.RunPage })))
@@ -339,6 +340,14 @@ export function App() {
                       </AuthenticatedRouteBoundary>
                     }
                     path="/projects/:projectId/collections/*"
+                  />
+                  <Route
+                    element={
+                      <AuthenticatedRouteBoundary>
+                        <SheetsArea />
+                      </AuthenticatedRouteBoundary>
+                    }
+                    path="/projects/:projectId/sheets/*"
                   />
                   <Route
                     element={

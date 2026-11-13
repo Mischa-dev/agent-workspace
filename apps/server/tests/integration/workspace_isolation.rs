@@ -178,6 +178,8 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{project_id}/collections/{collection_id}",
     "/api/v1/projects/{project_id}/collections/{collection_id}/records",
     "/api/v1/projects/{project_id}/collections/{collection_id}/records/{record_id}",
+    "/api/v1/projects/{project_id}/sheets",
+    "/api/v1/projects/{project_id}/sheets/{sheet_id}",
     "/api/v1/projects/{project_id}/launches",
     "/api/v1/projects/{project_id}/layout",
     "/api/v1/projects/{project_id}/member-candidates",
@@ -2811,6 +2813,26 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
         ),
         project_route("/api/v1/projects/{project_id}/labels", "/labels"),
         project_route("/api/v1/projects/{project_id}/fields", "/fields"),
+        case(
+            "/api/v1/projects/{project_id}/sheets",
+            vec![
+                format!("{}/sheets", p(a)),
+                format!("{}/sheets?includeArchived=true", p(a)),
+            ],
+            vec![format!("{}/sheets", p(b))],
+            vec![],
+        ),
+        {
+            let (mut own, foreign) =
+                pair(&|outer, inner| format!("{}/sheets/{}", p(outer), inner.sheet));
+            own.push(format!("{}/sheets/{}?tab=Sheet1", p(a), a.sheet));
+            case(
+                "/api/v1/projects/{project_id}/sheets/{sheet_id}",
+                own,
+                foreign,
+                vec![],
+            )
+        },
         case(
             "/api/v1/projects/{project_id}/collections",
             vec![

@@ -317,7 +317,8 @@ export function useRealtimeConnection(): RealtimeContextValue {
             envelope.type === 'whiteboard.updated' ||
             envelope.type === 'page.updated' ||
             envelope.type === 'page.discussion.updated' ||
-            envelope.type === 'collection.updated'
+            envelope.type === 'collection.updated' ||
+            envelope.type === 'sheet.updated'
           ) {
             // An open board or page fetches what changed itself, and lists
             // (and a collection's records) refetch; that code loads with the
