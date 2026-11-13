@@ -1,6 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
 import { readLocal, writeLocal } from '../app/localDrafts'
@@ -10,7 +10,7 @@ import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageSta
 import { useProject } from '../projects/hooks'
 import { RememberPlace } from '../projects/RememberPlace'
 import type { Project, ProjectLocation } from '../projects/types'
-import { useProjectExperience } from '../experience/layout'
+import { useHomeWorkspaceId, useProjectExperience } from '../experience/layout'
 import { AppShell } from '../shell/AppShell'
 import { MemoryTabs } from '../shell/ProjectTabs'
 import { usePageTitle } from '../shell/documentTitleModel'
@@ -53,6 +53,7 @@ import {
   type Decision,
   type Page,
   type PageRevision,
+  workspacePagesSpace,
 } from './api'
 import { discussionKey, getDiscussion, type CommentAnchor } from './discussion/api'
 import { PageEmbed } from './embeds/PageEmbed'
@@ -125,11 +126,35 @@ function ProjectFrame({ children, place }: { children: (project: Project) => Rea
 
 const pagesHref = (projectId: string) => `/projects/${encodeURIComponent(projectId)}/pages`
 
-export function PagesPage() {
-  return <ProjectFrame place={{ kind: 'pages' }}>{(project) => <PagesList projectId={project.id} />}</ProjectFrame>
+/** The workspace's own pages, outside any project: they live in its hidden space. */
+function WorkspacePagesPage() {
+  const session = useAuthenticatedSession()
+  const organizationId = useHomeWorkspaceId()
+  const space = useQuery({
+    queryKey: ['organization', organizationId, 'pages-space'],
+    queryFn: () => workspacePagesSpace(organizationId ?? ''),
+    enabled: Boolean(organizationId),
+    staleTime: Infinity,
+  })
+  if (space.data) return <Navigate replace to={pagesHref(space.data.projectId)} />
+  return (
+    <AppShell user={session.user}>
+      {space.isError ? (
+        <ErrorState error={space.error} onRetry={() => void space.refetch()} title="Pages didn’t load" />
+      ) : (
+        <ListSkeleton label="Loading pages" rows={3} />
+      )}
+    </AppShell>
+  )
 }
 
-function PagesList({ projectId }: { projectId: string }) {
+export function PagesPage() {
+  // `/pages`: the workspace's own pages, not a project's.
+  if (!useParams().projectId) return <WorkspacePagesPage />
+  return <ProjectFrame place={{ kind: 'pages' }}>{(project) => <PagesList projectId={project.id} space={project.workspaceSpace} />}</ProjectFrame>
+}
+
+function PagesList({ projectId, space }: { projectId: string; space?: boolean }) {
   const pages = useQuery({ queryKey: memoryKeys.pages(projectId), queryFn: () => listPages(projectId) })
   const [creating, setCreating] = useState<{ title: string } | null>(null)
   const base = pagesHref(projectId)
@@ -159,15 +184,17 @@ function PagesList({ projectId }: { projectId: string }) {
         <EmptyState
           action={
             canEdit ? (
-              <Button icon="pencil" onClick={() => setCreating({ title: 'Project guide' })} variant="primary">
-                Write the guide
+              <Button icon="pencil" onClick={() => setCreating({ title: space ? '' : 'Project guide' })} variant="primary">
+                {space ? 'New page' : 'Write the guide'}
               </Button>
             ) : null
           }
           icon="list"
           title="No pages yet"
         >
-          Start with a guide: what this project is and how people and agents should work in it. Agents read it first.
+          {space
+            ? 'Pages here belong to the whole workspace: everyone in it, people and agents, can read them.'
+            : 'Start with a guide: what this project is and how people and agents should work in it. Agents read it first.'}
         </EmptyState>
       ) : null}
       {pages.data && pages.data.pages.length > 0 ? (
@@ -196,7 +223,7 @@ function PagesList({ projectId }: { projectId: string }) {
           })}
         </RowList>
       ) : null}
-      {creating ? <NewPageDialog hasGuide={hasGuide} initialTitle={creating.title} onClose={() => setCreating(null)} projectId={projectId} /> : null}
+      {creating ? <NewPageDialog hasGuide={hasGuide || Boolean(space)} initialTitle={creating.title} onClose={() => setCreating(null)} projectId={projectId} space={space} /> : null}
     </>
   )
 }
@@ -207,11 +234,13 @@ function NewPageDialog({
   initialTitle,
   onClose,
   projectId,
+  space,
 }: {
   hasGuide: boolean
   initialTitle: string
   onClose: () => void
   projectId: string
+  space?: boolean
 }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -261,12 +290,14 @@ function NewPageDialog({
         placeholder={hasGuide ? 'Theming, How we deploy…' : 'Project guide'}
         value={title}
       />
-      <Checkbox
-        checked={guide}
-        description={hasGuide ? 'It takes over from the current guide.' : 'The guide is what people and agents read first in this project.'}
-        label="Make it the project guide"
-        onChange={setGuide}
-      />
+      {space ? null : (
+        <Checkbox
+          checked={guide}
+          description={hasGuide ? 'It takes over from the current guide.' : 'The guide is what people and agents read first in this project.'}
+          label="Make it the project guide"
+          onChange={setGuide}
+        />
+      )}
     </Dialog>
   )
 }
@@ -428,6 +459,7 @@ function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
           }}
           page={current}
           projectId={projectId}
+          space={project.workspaceSpace}
         />
       ) : viewing ? (
         <div className="aw-memory__viewing" ref={viewer} tabIndex={-1}>
@@ -530,11 +562,13 @@ function PageEditor({
   onSaved,
   page,
   projectId,
+  space,
 }: {
   onCancel: () => void
   onSaved: (page: Page) => Promise<void>
   page: Page
   projectId: string
+  space?: boolean
 }) {
   // The version this edit started from, kept even when the page refetches
   // underneath, so a save can't quietly replace someone else's newer one.
@@ -637,12 +671,14 @@ function PageEditor({
         rows={20}
         value={body}
       />
-      <Checkbox
-        checked={guide}
-        description="The guide is what people and agents read first in this project."
-        label="This is the project guide"
-        onChange={setGuide}
-      />
+      {space ? null : (
+        <Checkbox
+          checked={guide}
+          description="The guide is what people and agents read first in this project."
+          label="This is the project guide"
+          onChange={setGuide}
+        />
+      )}
       <Checkbox
         checked={skill}
         description="Agents see the list of skills in a project and follow one when its description fits their work."

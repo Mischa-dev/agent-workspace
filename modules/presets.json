@@ -29,8 +29,8 @@
   {
     "id": "pages_only",
     "name": "Pages only",
-    "description": "Projects that hold pages and decisions, and nothing else.",
-    "on": ["projects", "pages"]
+    "description": "Pages and decisions for the whole workspace, and nothing else.",
+    "on": ["pages"]
   },
   {
     "id": "dms_only",

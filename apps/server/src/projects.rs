@@ -91,6 +91,9 @@ pub struct ProjectView {
     /// they'd lead to without a request per project.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     modules_off: Vec<String>,
+    /// AWD-96: this is the workspace's own space for pages, not a project.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    workspace_space: bool,
 }
 
 /// AWD-75: a module set's off modules, by id.
@@ -531,6 +534,7 @@ async fn create_project(
         },
         attention_count: 0,
         modules_off: Vec::new(),
+        workspace_space: false,
     };
     insert_audit_event(
         &mut transaction,
@@ -1177,6 +1181,9 @@ async fn fetch_project(
             .await?
             .map(off_ids)
             .unwrap_or_default();
+    view.workspace_space = crate::workspace_space::find(&mut connection, view.organization_id)
+        .await?
+        == Some(project_id);
     Ok(view)
 }
 
@@ -1378,6 +1385,7 @@ fn project_view(row: ProjectRow) -> Result<ProjectView, AppError> {
         navigation,
         attention_count: 0,
         modules_off: Vec::new(),
+        workspace_space: false,
     })
 }
 

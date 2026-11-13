@@ -6,7 +6,6 @@ import {
   Route,
   Routes,
   useLocation,
-  useNavigate,
   useParams,
 } from 'react-router-dom'
 
@@ -18,7 +17,7 @@ import { AppShell } from '../shell/AppShell'
 import { inHomeSpace } from '../shell/homeSpace'
 import { MobileNavigationProvider } from '../shell/MobileNavigationProvider'
 import { ThemeProvider } from '../theme/ThemeProvider'
-import { Button, EmptyState, PageSkeleton, ToastViewport } from '../ui'
+import { PageSkeleton, ToastViewport } from '../ui'
 import { AppErrorBoundary } from './AppErrorBoundary'
 import { ModuleGate } from '../modules/ModuleGate'
 
@@ -50,6 +49,7 @@ const GraphPage = lazy(() => import('../ai/GraphPage').then((module) => ({ defau
 const PlanImportPage = lazy(() => import('../ai/PlanImportPage').then((module) => ({ default: module.PlanImportPage })))
 const ProjectRunsPage = lazy(() => import('../runs/RunsPage').then((module) => ({ default: module.ProjectRunsPage })))
 const PagesPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.PagesPage })))
+const NotFoundPage = lazy(() => import('./NotFoundPage').then((module) => ({ default: module.NotFoundPage })))
 const PageDetailPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.PageDetailPage })))
 const DecisionsPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.DecisionsPage })))
 const CollectionsArea = lazy(() => import('../collections/CollectionsArea'))
@@ -199,6 +199,14 @@ export function App() {
                       </AuthenticatedRouteBoundary>
                     }
                     path="/whiteboards"
+                  />
+                  <Route
+                    element={
+                      <AuthenticatedRouteBoundary>
+                        <PagesPage />
+                      </AuthenticatedRouteBoundary>
+                    }
+                    path="/pages"
                   />
                   <Route
                     element={
@@ -369,7 +377,7 @@ export function App() {
                   <Route element={<AuthenticatedRouteBoundary><DesignSystemPage /></AuthenticatedRouteBoundary>} path="/design-system" />
                   <Route element={<AuthenticatedRouteBoundary><PieceGallery /></AuthenticatedRouteBoundary>} path="/design-system/pieces" />
                   <Route element={<AuthenticatedRouteBoundary><TaskKeyRedirect /></AuthenticatedRouteBoundary>} path="/:taskKey" />
-                  <Route element={<NotFoundPage />} path="*" />
+                  <Route element={<AuthenticatedRouteBoundary><NotFoundPage /></AuthenticatedRouteBoundary>} path="*" />
                 </Route>
               </Routes>
             </MobileNavigationProvider>
@@ -442,26 +450,4 @@ function LegacyProjectSettingsRedirect() {
   const { projectId = '' } = useParams()
   const location = useLocation()
   return <Navigate replace to={`/settings/projects/${encodeURIComponent(projectId)}${location.search}`} />
-}
-
-function NotFoundPage() {
-  const session = useAuthenticatedSession()
-  const navigate = useNavigate()
-  return (
-    <AppShell mainClassName="aw-main--page" user={session.user}>
-      <div className="aw-page" role="alert">
-        <EmptyState
-          action={
-            <Button onClick={() => navigate('/home')} variant="primary">
-              Go to Home
-            </Button>
-          }
-          icon="search"
-          title="Page not found"
-        >
-          That address isn’t part of this workspace. It may have moved, or the link may be old.
-        </EmptyState>
-      </div>
-    </AppShell>
-  )
 }

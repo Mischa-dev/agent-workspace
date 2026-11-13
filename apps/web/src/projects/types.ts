@@ -46,6 +46,8 @@ export type Project = {
   attentionCount: number
   /** AWD-75: the modules off for you in this project (its workspace, or your role there). */
   modulesOff?: string[]
+  /** AWD-96: the workspace's own space for pages, not a project. */
+  workspaceSpace?: boolean
   capabilities: ProjectCapabilities
   navigation: ProjectNavigation
 }

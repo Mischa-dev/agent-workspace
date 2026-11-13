@@ -81,7 +81,7 @@ something that exists.
 - A module is on when its switch is and everything it `needs` is on.
 - Presets (`modules/presets.json`): Everything, Chat with my agents
   (projects off, so channels, tasks, pages, whiteboards, code, runs and
-  automations go too), Pages only (projects and pages), DMs only (messages).
+  automations go too), Pages only (the workspace's own pages, with Projects off), DMs only (messages).
 - Roles narrow modules (AWD-74's roles): a role's `modules_off` turns
   modules off for its holders and their agents, on top of the workspace's
   switches. In a project the project role counts, elsewhere the workspace
@@ -203,7 +203,6 @@ Core pages don't use the pieces yet; they move onto them over time.
 
 - **Server routes** of an off module answer "turned off" too, not only the
   app and the tools.
-- **Pages outside projects**, so "Pages only" doesn't need Projects.
 - **Built and connected modules** (AWD-90, M5) fill in the same manifest from
   data; packages (AWD-76) set modules, roles and layouts at once.
 - **Core pages on the pieces**, starting with the smallest lists.

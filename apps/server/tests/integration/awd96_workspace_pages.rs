@@ -79,6 +79,12 @@ async fn workspace_pages_reach_the_whole_workspace_and_nobody_else() {
     assert_eq!(status, StatusCode::OK, "{projects}");
     assert!(!projects.to_string().contains(&space), "{projects}");
 
+    // Opened, it says it's the workspace's space; a project doesn't.
+    let (_, opened) = get(&setup, &bea_browser, &format!("/api/v1/projects/{space}")).await;
+    assert_eq!(opened["workspaceSpace"], true, "{opened}");
+    let (_, opened) = get(&setup, &bea_browser, &format!("/api/v1/projects/{work}")).await;
+    assert!(opened.get("workspaceSpace").is_none(), "{opened}");
+
     // The space holds pages and nothing else.
     let (status, body) = get(
         &setup,
@@ -210,4 +216,78 @@ async fn workspace_pages_reach_the_whole_workspace_and_nobody_else() {
     )
     .await;
     assert_ne!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn workspace_pages_are_found_linked_and_referenced() {
+    let Some(setup) = setup("awd96_refs").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    // Cyd was in the workspace before its space was made; Bea joins after.
+    let (_, cy_browser) = add_person(&setup, &[&work], "cyd").await;
+    let (_, space) = pages_space(&setup, &setup.browser).await;
+    let space = space["projectId"].as_str().expect("space").to_owned();
+    let (status, page) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{space}/pages"),
+            Some("awd96-handbook"),
+            json!({"title": "Handbook", "body": "Our quokkaword rules."}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{page}");
+    let page = page["id"].as_str().expect("page").to_owned();
+
+    // A task in a project links to it; someone in that project finds the
+    // page by search, opens the link, and sees the task under Referenced in.
+    let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
+    let (status, task) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/work-items"),
+            Some("awd96-task"),
+            json!({
+                "title": "Read the handbook",
+                "description": format!("See https://example.test/projects/{space}/pages/{page}"),
+            }),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{task}");
+    let task = task["id"].as_str().expect("task").to_owned();
+
+    for browser in [&bea_browser, &cy_browser] {
+        let (status, hits) = get(&setup, browser, "/api/v1/search?q=quokkaword").await;
+        assert_eq!(status, StatusCode::OK, "{hits}");
+        assert!(hits.to_string().contains(&page), "{hits}");
+    }
+
+    let (status, opened) = get(&setup, &bea_browser, &format!("/api/v1/things/page/{page}")).await;
+    assert_eq!(status, StatusCode::OK, "{opened}");
+    assert_eq!(opened["thing"]["title"], "Handbook", "{opened}");
+    let referenced = opened["links"]
+        .as_array()
+        .expect("links")
+        .iter()
+        .filter(|link| link["label"] == "Referenced in")
+        .map(|link| link["other"]["id"].as_str().unwrap_or_default().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(referenced, vec![task.clone()], "{opened}");
+
+    // Once they leave the workspace, none of it reaches them.
+    sqlx::query(
+        "UPDATE organization_memberships SET enabled = false WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(setup.organization_id)
+    .bind(bea)
+    .execute(&setup.pool)
+    .await
+    .expect("bea leaves");
+    let (_, hits) = get(&setup, &bea_browser, "/api/v1/search?q=quokkaword").await;
+    assert!(!hits.to_string().contains(&page), "{hits}");
 }

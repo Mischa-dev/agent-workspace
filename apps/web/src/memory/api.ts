@@ -92,6 +92,11 @@ export const memoryKeys = {
     ['project', projectId, 'memory', 'pins', conversationId] as const,
 }
 
+/** The workspace's own pages live in its hidden space; this finds (or makes) it. */
+export function workspacePagesSpace(organizationId: string) {
+  return requestJson<{ projectId: string }>(`/api/v1/organizations/${encodeURIComponent(organizationId)}/pages-space`)
+}
+
 export function listPages(projectId: string) {
   return requestJson<{ pages: PageSummary[]; canEdit: boolean }>(`${project(projectId)}/pages`)
 }
