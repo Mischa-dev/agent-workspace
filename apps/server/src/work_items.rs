@@ -2902,7 +2902,18 @@ async fn create_work_item_comment(
     .await?
     {
         IdempotencyOutcome::Replay(replay) => {
-            let body: CommentAppendResponse = replay.decode()?;
+            let mut body: CommentAppendResponse = replay.decode()?;
+            // Someone who can no longer see tasks gets no more from a replay
+            // than from a new comment.
+            if !crate::conversations::sees_tasks_in(
+                &mut *transaction,
+                principal.actor_id,
+                project_id,
+            )
+            .await?
+            {
+                hide_reference_details(&mut body.comment);
+            }
             transaction.commit().await?;
             return Ok((replay.status(), Json(body)).into_response());
         }
@@ -3364,6 +3375,12 @@ fn hide_reference_details(comment: &mut WorkItemCommentView) {
     for reference in &mut comment.referenced_work_items {
         reference.title = String::new();
         reference.status_category = String::new();
+    }
+    // The comment it answers is someone else's words on the task: only its
+    // id stays, without who wrote it or what it says.
+    if let Some(quoted) = &mut comment.reply_to {
+        quoted.author_name = None;
+        quoted.text = None;
     }
 }
 
