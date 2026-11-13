@@ -892,17 +892,17 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/agent-runs/{run_id}/publish",
-            Gap("run_publish and pull_request_create"),
+            Tool("run_publish"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/agent-runs/{run_id}/pull-request",
-            Gap("run_publish and pull_request_create"),
+            Tool("pull_request_create"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/pull-requests/{pull_request_id}/refresh",
-            Gap("run_publish and pull_request_create"),
+            Tool("pull_request_refresh"),
         ),
         (
             Post,

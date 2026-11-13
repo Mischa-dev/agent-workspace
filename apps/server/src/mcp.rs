@@ -96,6 +96,7 @@ mod oauth;
 mod page_discussion;
 mod planning;
 mod project_template_tools;
+mod publish_tools;
 mod reactions;
 mod reads;
 mod replies;
@@ -3160,6 +3161,44 @@ impl McpServer {
     }
 
     #[tool(
+        description = "Push a finished run's branch to GitHub, as the run page's Publish button does. It's queued for the GitHub worker; run_get shows when it's published. Publishing the same commit again returns the job already queued. Then pull_request_create opens a pull request from it.",
+        annotations(
+            title = "Publish run branch",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
+    )]
+    async fn run_publish(
+        &self,
+        Parameters(arguments): Parameters<publish_tools::RunPublishArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<publish_tools::QueuedValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(publish_tools::run_publish(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Open a pull request on GitHub from a finished run's published branch (run_publish first), with a title, a body and the tasks it delivers. It's queued for the GitHub worker; run_get and pull_request_get show it once it's open. A run's workspace gets one pull request: asking again returns that one.",
+        annotations(
+            title = "Open pull request",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
+    )]
+    async fn pull_request_create(
+        &self,
+        Parameters(arguments): Parameters<publish_tools::PullRequestCreateArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<publish_tools::QueuedValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(publish_tools::pull_request_create(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
         description = "List Codex runs you can see, newest first: active ones by default, or finished, failed, or all. mine: true for only runs you started.",
         annotations(title = "List runs", read_only_hint = true, open_world_hint = false)
     )]
@@ -3455,6 +3494,25 @@ impl McpServer {
             }
         );
         Json(reads::pull_request_get(&self.state, principal, &arguments.identifier).await)
+    }
+
+    #[tool(
+        description = "Read a pull request's checks and review from GitHub again, as its Refresh button does. It's queued for the GitHub worker; pull_request_get shows the result.",
+        annotations(
+            title = "Refresh pull request",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
+    )]
+    async fn pull_request_refresh(
+        &self,
+        Parameters(arguments): Parameters<publish_tools::PullRequestRefreshArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<publish_tools::QueuedValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(publish_tools::pull_request_refresh(&self.state, principal, arguments).await)
     }
 
     #[tool(

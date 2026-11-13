@@ -467,6 +467,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "project_layout_set",
     "project_member_set",
     "project_update",
+    "pull_request_create",
+    "pull_request_refresh",
     "reply_claim",
     "reply_pass",
     "reply_progress",
@@ -479,6 +481,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "role_assign",
     "role_write",
     "run_dismiss_failure",
+    "run_publish",
     "run_request",
     "run_retry",
     "run_start",
@@ -789,6 +792,8 @@ struct McpCase {
     /// Called as A's connected app and as A's agent, and as `caller` too.
     foreign: Vec<(Value, Expect)>,
     last: bool,
+    /// Why A's own call can't succeed here, when it can't.
+    own_skip: Option<&'static str>,
 }
 
 /// Who makes a tool call.
@@ -1100,10 +1105,16 @@ fn mcp_case(tool: &'static str, own: Value, foreign: Vec<Value>) -> McpCase {
             .map(|arguments| (arguments, Expect::Refused))
             .collect(),
         last: false,
+        own_skip: None,
     }
 }
 
 impl McpCase {
+    fn without_own(mut self, reason: &'static str) -> Self {
+        self.own_skip = Some(reason);
+        self
+    }
+
     fn rejecting(mut self, arguments: Vec<Value>) -> Self {
         self.foreign
             .extend(arguments.into_iter().map(|value| (value, Expect::Rejected)));
@@ -5609,6 +5620,12 @@ async fn check_own_mcp(
     b_ids: &HashSet<String>,
     report: &mut Report,
 ) {
+    if let Some(reason) = case.own_skip {
+        report
+            .notes
+            .push(format!("{} has no own call: {reason}", case.tool));
+        return;
+    }
     let arguments = resolve(pool, case.own.clone()).await;
     let (who, (token, session)) = callers.of(case.caller);
     report.mcp_calls += 1;
@@ -6826,6 +6843,27 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"runId": ax.failed_run}),
             vec![json!({"runId": bx.failed_run})],
         ),
+        mcp_case(
+            "run_publish",
+            json!({"runId": a.run}),
+            vec![json!({"runId": b.run})],
+        )
+        .without_own(NEEDS_GITHUB),
+        mcp_case(
+            "pull_request_create",
+            json!({"runId": a.run, "title": "Net"}),
+            vec![
+                json!({"runId": b.run, "title": "Net"}),
+                json!({"runId": a.run, "title": "Net", "taskIds": [b.task]}),
+            ],
+        )
+        .without_own(NEEDS_GITHUB),
+        mcp_case(
+            "pull_request_refresh",
+            json!({"pullRequestId": a.pull_request}),
+            vec![json!({"pullRequestId": b.pull_request})],
+        )
+        .without_own(NEEDS_GITHUB),
         mcp_case(
             "launch_cancel",
             json!({"launchId": sp.launch}),

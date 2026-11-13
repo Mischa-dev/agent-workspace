@@ -15,10 +15,10 @@
 //! ones, so a new tool must say what it needs.
 
 use crate::policy::Permission::{
-    self, ChannelsCreate, ChannelsPost, CodeManage, CodeView, CollectionsBuild, CollectionsEdit,
-    MembersInvite, MembersManage, MembersView, PagesEdit, ProjectsCreate, ProjectsManage,
-    RolesManage, RunsApprove, RunsInterrupt, RunsLaunch, SettingsManage, SheetsEdit, TasksCreate,
-    TasksDelete, TasksEdit, TasksView, TasksWorkflow, WhiteboardsEdit,
+    self, ChannelsCreate, ChannelsPost, CodeManage, CodePublish, CodeView, CollectionsBuild,
+    CollectionsEdit, MembersInvite, MembersManage, MembersView, PagesEdit, ProjectsCreate,
+    ProjectsManage, RolesManage, RunsApprove, RunsInterrupt, RunsLaunch, SettingsManage,
+    SheetsEdit, TasksCreate, TasksDelete, TasksEdit, TasksView, TasksWorkflow, WhiteboardsEdit,
 };
 
 pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
@@ -193,6 +193,7 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("run_stop", Some(RunsInterrupt)),
     ("run_retry", Some(RunsLaunch)),
     ("run_dismiss_failure", None),
+    ("run_publish", Some(CodePublish)),
     ("run_list", None),
     ("run_steps", None),
     ("run_usage", None),
@@ -209,6 +210,8 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("pull_request_list", Some(CodeView)),
     ("repository_get", Some(CodeView)),
     ("pull_request_get", Some(CodeView)),
+    ("pull_request_create", Some(CodePublish)),
+    ("pull_request_refresh", Some(CodePublish)),
     ("run_request", Some(RunsLaunch)),
     ("approval_get", None),
     ("approval_respond", Some(RunsApprove)),

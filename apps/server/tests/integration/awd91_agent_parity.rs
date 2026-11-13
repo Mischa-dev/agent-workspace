@@ -2313,6 +2313,32 @@ async fn people_switch_the_github_automation_and_agents_never_do() {
     .await
     .expect("audit");
     assert_eq!(audited, 2);
+
+    // Publishing and pull requests: a run or pull request the caller can't
+    // see is "not found" before anything about GitHub is said.
+    let missing = Uuid::now_v7().to_string();
+    for (name, arguments) in [
+        ("run_publish", json!({"runId": missing})),
+        (
+            "pull_request_create",
+            json!({"runId": missing, "title": "Ship it"}),
+        ),
+        ("pull_request_refresh", json!({"pullRequestId": missing})),
+    ] {
+        let unseen = tool(&f.app, &f.token, &f.session, name, arguments.clone()).await;
+        assert_eq!(unseen["outcome"], "not_found", "{name}: {unseen}");
+        let unseen = person(name, arguments).await;
+        assert_eq!(unseen["outcome"], "not_found", "{name}: {unseen}");
+    }
+    let unparsed = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "run_publish",
+        json!({"runId": "nope"}),
+    )
+    .await;
+    assert_eq!(unparsed["outcome"], "invalid_request", "{unparsed}");
     f.close().await;
 }
 
