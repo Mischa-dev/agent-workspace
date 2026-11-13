@@ -476,6 +476,51 @@ async fn fields_are_typed_checked_recorded_and_filtered_the_same_for_agents_and_
         "{board}"
     );
     assert_eq!(board["columns"][0]["items"][0]["key"], "WORK-2", "{board}");
+    // A board already carrying the most field filters a request takes still
+    // splits into field columns, and each column's own request pages
+    // (AWD-113).
+    let full = serde_urlencoded::to_string([
+        ("columnsBy", format!("field:{risk}")),
+        (
+            "fieldFilters",
+            json!(vec![json!({"field": points, "op": "empty"}); 8]).to_string(),
+        ),
+    ])
+    .expect("query");
+    let (status, board) = send(
+        app,
+        setup.browser.request(
+            "GET",
+            &format!("/api/v1/projects/{work}/work-items/board?{full}"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{board}");
+    for column in board["columns"].as_array().expect("columns") {
+        let filter = column["filter"].as_object().expect("filter");
+        assert!(filter.contains_key("groupField"), "{column}");
+        let query = serde_urlencoded::to_string(
+            filter
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_str().unwrap_or_default()))
+                .collect::<Vec<_>>(),
+        )
+        .expect("query");
+        let (status, page) = send(
+            app,
+            setup.browser.request(
+                "GET",
+                &format!("/api/v1/projects/{work}/work-items?{query}"),
+                None,
+                Value::Null,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{query}: {page}");
+        assert_eq!(page["total"], column["total"], "{query}: {page}");
+    }
     // Only a single-choice field of this project makes columns.
     for field in [&points, &uuid::Uuid::now_v7().to_string()] {
         let (status, body) = send(
