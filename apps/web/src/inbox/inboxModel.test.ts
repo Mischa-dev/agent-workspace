@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { applyUpdate, groupBySubject, normalizePage, safeHref, snoozeChoices, type InboxNotification } from './api'
+import { applyUpdate, groupBySubject, needsYou, normalizePage, safeHref, sectionsByNeed, snoozeChoices, type InboxNotification } from './api'
 
 const base: InboxNotification = {
   id: 'n1',
@@ -23,6 +23,18 @@ const base: InboxNotification = {
 }
 
 describe('inbox model', () => {
+  it('puts what asks something of you first, and the rest under FYI', () => {
+    const mention = { ...base, id: 'm' }
+    const done = { ...base, id: 'd', kind: 'run_completed' }
+    const pending = { ...base, id: 'p', kind: 'approval_requested', approval: { id: 'a1', kind: 'approval' as const, status: 'pending', options: [] } }
+    const answered = { ...pending, id: 'x', approval: { ...pending.approval, status: 'approved' } }
+    expect([mention, done, pending, answered].map(needsYou)).toEqual([true, false, true, false])
+    const [needs, fyi] = sectionsByNeed([done, mention, answered, pending])
+    expect(needs.items.map((item) => item.id)).toEqual(['m', 'p'])
+    expect(fyi.items.map((item) => item.id)).toEqual(['d', 'x'])
+    expect(needs.groups).toHaveLength(1)
+  })
+
   it('keeps hrefs in the app or on https', () => {
     expect(safeHref('/projects/p1', 'p1')).toBe('/projects/p1')
     expect(safeHref('https://github.com/o/r/pull/1', 'p1')).toBe('https://github.com/o/r/pull/1')
