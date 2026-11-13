@@ -76,6 +76,7 @@ const PERMITTED_EVENTS: [&str; 6] = [
 ];
 
 mod connect;
+pub(crate) use connect::add_picked_repository_as;
 
 pub fn router() -> Router<AppState> {
     connect::routes(Router::new())

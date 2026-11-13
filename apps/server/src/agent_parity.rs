@@ -882,7 +882,7 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/integrations/github/repositories",
-            Gap("repository_write"),
+            Tool("repository_write"),
         ),
         (
             Put,

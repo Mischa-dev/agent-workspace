@@ -3390,7 +3390,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "People: add a GitHub repository to a project (owner, name, GitHub's ID, default branch, and that you trust its code to run here), prepare its copy on the server, or archive it. Those who manage code in the project, through an app connected as themselves; agents read repositories only.",
+        description = "People: add a GitHub repository to a project (owner, name, GitHub's ID, default branch, and that you trust its code to run here; or installationId and GitHub's ID for one the project's GitHub App installation reaches), prepare its copy on the server, or archive it. Those who manage code in the project, through an app connected as themselves; agents read repositories only.",
         annotations(
             title = "Change a repository",
             read_only_hint = false,

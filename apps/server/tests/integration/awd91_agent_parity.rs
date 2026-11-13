@@ -2171,6 +2171,21 @@ async fn people_add_and_archive_repositories_and_agents_only_read_them() {
         "defaultBranch": "main",
     });
 
+    // From the GitHub installation: GitHub names it, so owner and the rest
+    // don't go with it; without GitHub set up here, it's a conflict.
+    let mixed = person(
+        "repository_write",
+        json!({"projectId": project, "installationId": 7, "githubRepositoryId": 4242, "owner": "octo-org", "trustAcknowledged": true}),
+    )
+    .await;
+    assert_eq!(mixed["outcome"], "invalid_request", "{mixed}");
+    let picked = person(
+        "repository_write",
+        json!({"projectId": project, "installationId": 7, "githubRepositoryId": 4242, "trustAcknowledged": true}),
+    )
+    .await;
+    assert_eq!(picked["outcome"], "conflict", "{picked}");
+
     let untrusted = person("repository_write", adding.clone()).await;
     assert_eq!(untrusted["outcome"], "invalid_request", "{untrusted}");
     let mut add_and_prepare = adding.clone();
