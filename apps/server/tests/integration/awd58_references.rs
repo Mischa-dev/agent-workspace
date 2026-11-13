@@ -181,6 +181,48 @@ async fn links_written_anywhere_show_where_the_reader_can_see_them() {
         "{opened}"
     );
 
+    // A task whose comment links another reads "About" it.
+    let (status, opened) = send(
+        app,
+        setup.browser.request(
+            "GET",
+            &format!("/api/v1/things/task/{commented}"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{opened}");
+    assert!(
+        opened["links"]
+            .as_array()
+            .expect("links")
+            .iter()
+            .any(|link| link["direction"] == "outgoing" && link["other"]["id"] == task.as_str()),
+        "{opened}"
+    );
+
+    // A thread in a DM opens at its parent's address; the link counts as the
+    // thread.
+    let parent = uuid::Uuid::now_v7();
+    let thread = uuid::Uuid::now_v7();
+    let found: Vec<(String, uuid::Uuid)> = sqlx::query_as(
+        "SELECT target_kind, target_id FROM thing_reference_targets($1) ORDER BY target_kind",
+    )
+    .bind(format!(
+        "See https://work.example/messages/{parent}?view=all&thread={thread} and /messages/{parent}."
+    ))
+    .fetch_all(&setup.pool)
+    .await
+    .expect("targets");
+    assert_eq!(
+        found,
+        vec![
+            ("conversation".to_owned(), parent),
+            ("thread".to_owned(), thread)
+        ]
+    );
+
     // Editing the link out of a message takes it off the list.
     let (status, edited) = edit(
         &setup,

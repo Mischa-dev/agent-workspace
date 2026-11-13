@@ -397,7 +397,13 @@ fn links_sql(kind: &str) -> Option<&'static str> {
             FROM thing_references WHERE target_id = $1 AND target_kind = 'task'
             UNION ALL
             SELECT 'about', 'outgoing', target_kind, target_id
-            FROM thing_references WHERE source_kind = 'task' AND source_id = $1
+            FROM thing_references WHERE thing_id = $1 AND thing_kind = 'task'
+            UNION ALL
+            SELECT 'about', 'outgoing', 'task', reference.referenced_work_item_id
+            FROM work_item_comment_references reference
+            JOIN work_item_comments comment ON comment.id = reference.comment_id
+            WHERE reference.source_work_item_id = $1 AND comment.removed_at IS NULL
+              AND reference.referenced_work_item_id <> $1
             "#
         }
         "page" | "decision" => {
@@ -413,7 +419,7 @@ fn links_sql(kind: &str) -> Option<&'static str> {
             FROM thing_references WHERE target_id = $1 AND target_kind = 'page'
             UNION ALL
             SELECT 'about', 'outgoing', target_kind, target_id
-            FROM thing_references WHERE source_kind = 'page' AND source_id = $1
+            FROM thing_references WHERE thing_id = $1 AND thing_kind = 'page'
             "#
         }
         "whiteboard" => {

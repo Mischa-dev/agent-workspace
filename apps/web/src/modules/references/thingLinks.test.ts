@@ -18,6 +18,7 @@ describe('thingAt', () => {
     expect(thingAt(`/projects/${project}/channels/${id}`, origin)?.kind).toBe('channel')
     expect(thingAt(`/whiteboards/${id}`, origin)?.kind).toBe('whiteboard')
     expect(thingAt(`/messages/${id}/`, origin)?.kind).toBe('conversation')
+    expect(thingAt(`/messages/${project}?thread=${id}`, origin)).toMatchObject({ kind: 'thread', id: id.toLowerCase() })
   })
 
   it('leaves every other address alone', () => {

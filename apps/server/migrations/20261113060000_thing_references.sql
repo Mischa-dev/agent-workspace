@@ -33,24 +33,28 @@ CREATE INDEX thing_references_project ON thing_references (project_id);
 
 -- The things a text links to, as (kind, id): app paths such as
 -- /projects/{project}/work-items/{id} or /whiteboards/{id}, absolute or
--- relative. At most 100 per text; the same thing once.
+-- relative. A thread in a DM or group opens at /messages/{parent}?thread={id}
+-- and counts as that thread. At most 100 per text; the same thing once.
 CREATE FUNCTION thing_reference_targets(body TEXT)
 RETURNS TABLE (target_kind TEXT, target_id UUID)
 LANGUAGE sql IMMUTABLE AS $$
     SELECT DISTINCT kind, id
     FROM (
-        SELECT CASE COALESCE(m[1], m[2])
-                 WHEN 'work-items' THEN 'task'
-                 WHEN 'pages' THEN 'page'
-                 WHEN 'threads' THEN 'thread'
-                 WHEN 'channels' THEN 'channel'
-                 WHEN 'whiteboards' THEN 'whiteboard'
-                 WHEN 'messages' THEN 'conversation'
+        SELECT CASE
+                 WHEN m[4] IS NOT NULL THEN 'thread'
+                 ELSE CASE COALESCE(m[1], m[2])
+                   WHEN 'work-items' THEN 'task'
+                   WHEN 'pages' THEN 'page'
+                   WHEN 'threads' THEN 'thread'
+                   WHEN 'channels' THEN 'channel'
+                   WHEN 'whiteboards' THEN 'whiteboard'
+                   WHEN 'messages' THEN 'conversation'
+                 END
                END AS kind,
-               lower(m[3])::uuid AS id
+               lower(COALESCE(m[4], m[3]))::uuid AS id
         FROM regexp_matches(
             COALESCE(body, ''),
-            '(?:/projects/[0-9a-fA-F-]{36}/(work-items|pages|threads|channels)|/(whiteboards|messages))/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})',
+            '(?:/projects/[0-9a-fA-F-]{36}/(work-items|pages|threads|channels)|/(whiteboards|messages))/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?:\?(?:[^\s#&?]*&)*thread=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}))?',
             'g'
         ) AS m
         LIMIT 400

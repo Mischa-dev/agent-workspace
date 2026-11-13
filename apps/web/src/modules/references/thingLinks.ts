@@ -32,7 +32,11 @@ export function thingAt(href: string, origin = window.location.origin): ThingAdd
   if (!match) return null
   const kind = KINDS[match[1] ?? match[2] ?? '']
   if (!kind) return null
-  return { kind, id: match[3].toLowerCase(), path: `${url.pathname}${url.search}${url.hash}` }
+  const path = `${url.pathname}${url.search}${url.hash}`
+  // A thread in a DM or group opens at its parent's address.
+  const thread = kind === 'conversation' ? url.searchParams.get('thread') : null
+  if (thread && new RegExp(`^${UUID}$`).test(thread)) return { kind: 'thread', id: thread.toLowerCase(), path }
+  return { kind, id: match[3].toLowerCase(), path }
 }
 
 /** For `Markdown`'s `renderLink`: a chip for a link to a thing, null for any other link. */
