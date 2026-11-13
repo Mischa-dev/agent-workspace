@@ -780,5 +780,6 @@ function ColumnMark({ assigneeKinds, column, columnsBy }: { assigneeKinds: Map<s
   }
   if (columnsBy === 'milestone') return <TaskGlyph name="milestone" />
   if (columnsBy === 'label') return <TaskGlyph name="tag" />
+  if (column.color) return <span aria-hidden="true" className="aw-label__dot" style={{ backgroundColor: column.color }} />
   return null
 }

@@ -387,14 +387,16 @@ pub(super) enum Grouping {
     Parent,
     Type,
     /// By a custom field (`field:<id>`) that can group (choice, person,
-    /// checkbox); its type is filled in by `resolve_fields`. Lists only.
+    /// checkbox); its type is filled in by `resolve_fields`. Board columns
+    /// take only a single-choice field (`resolve_board_grouping`).
     Field(Uuid, Option<FieldType>),
 }
 
 impl Grouping {
     fn parse(value: &str, board: bool) -> Result<Self, AppError> {
-        if !board && let Some(id) = value.strip_prefix("field:") {
-            let id = Uuid::parse_str(id).map_err(|_| AppError::Validation("groupBy"))?;
+        if let Some(id) = value.strip_prefix("field:") {
+            let id = Uuid::parse_str(id)
+                .map_err(|_| AppError::Validation(if board { "columnsBy" } else { "groupBy" }))?;
             return Ok(Self::Field(id, None));
         }
         Ok(match value {
@@ -420,6 +422,14 @@ impl Grouping {
             Self::Parent => "parent",
             Self::Type => "type",
             Self::Field(..) => "field",
+        }
+    }
+
+    /// The grouping as a request names it: `field:<id>` for a field.
+    fn param(self) -> String {
+        match self {
+            Self::Field(id, _) => format!("field:{id}"),
+            other => other.as_str().to_owned(),
         }
     }
 
@@ -666,6 +676,36 @@ fn resolve_grouping(
         .find(|field| field.id == id && !field.archived && field.field_type.can_group())
         .ok_or(AppError::Validation("groupBy"))?;
     Ok(Grouping::Field(id, Some(field.field_type)))
+}
+
+/// Board columns by a field (AWD-103): only a single-choice field, whose
+/// active options are the columns a card can be dropped on.
+fn resolve_board_grouping(
+    grouping: Grouping,
+    definitions: &[FieldDefinition],
+) -> Result<(Grouping, Vec<GroupCount>), AppError> {
+    let Grouping::Field(id, _) = grouping else {
+        return Ok((grouping, Vec::new()));
+    };
+    let field = definitions
+        .iter()
+        .find(|field| {
+            field.id == id && !field.archived && field.field_type == FieldType::SingleChoice
+        })
+        .ok_or(AppError::Validation("columnsBy"))?;
+    let options = field
+        .config
+        .options
+        .iter()
+        .filter(|option| !option.archived)
+        .map(|option| GroupCount {
+            key: option.id.to_string(),
+            label: option.name.clone(),
+            count: 0,
+            color: Some(option.color.clone()),
+        })
+        .collect();
+    Ok((Grouping::Field(id, Some(field.field_type)), options))
 }
 
 /// Board swimlanes a saved view can keep beside the list query.
@@ -2217,7 +2257,7 @@ pub(super) async fn list_work_item_groups(
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct BoardResponse {
-    columns_by: &'static str,
+    columns_by: String,
     columns: Vec<BoardColumn>,
 }
 
@@ -2260,6 +2300,15 @@ pub(super) async fn get_work_item_board(
         return Err(AppError::Validation("board query"));
     }
     let grouping = Grouping::parse(query.columns_by.as_deref().unwrap_or("status"), true)?;
+    // A field's columns are its active options, the values a card can be given.
+    let (grouping, options) = if matches!(grouping, Grouping::Field(..)) {
+        resolve_board_grouping(
+            grouping,
+            &work_item_fields::definitions(&state.pool, project_id, false).await?,
+        )?
+    } else {
+        (grouping, Vec::new())
+    };
     let mut filters = Filters::parse(&query)?;
     // "me" in a person field's filter is whoever is reading.
     filters
@@ -2314,8 +2363,12 @@ pub(super) async fn get_work_item_board(
             .into_iter()
             .map(|group| (group.key.clone(), group))
             .collect::<HashMap<_, _>>();
-        let mut columns = column_values(&state.pool, project_id, grouping, &filters)
-            .await?
+        let values = if matches!(grouping, Grouping::Field(..)) {
+            options.clone()
+        } else {
+            column_values(&state.pool, project_id, grouping, &filters).await?
+        };
+        let mut columns = values
             .into_iter()
             .map(|empty| (count_of.remove(&empty.key).unwrap_or(empty), None))
             .collect::<Vec<_>>();
@@ -2335,6 +2388,7 @@ pub(super) async fn get_work_item_board(
                     label: match grouping {
                         Grouping::Assignee => "No assignee",
                         Grouping::Label => "No label",
+                        Grouping::Field(..) => "No value",
                         _ => "No milestone",
                     }
                     .into(),
@@ -2351,6 +2405,8 @@ pub(super) async fn get_work_item_board(
     // The values a card can still be given, whatever the filters.
     let assignable = if grouping == Grouping::Status {
         None
+    } else if matches!(grouping, Grouping::Field(..)) {
+        Some(options.into_iter().map(|value| value.key).collect())
     } else {
         Some(
             column_values(&state.pool, project_id, grouping, &Filters::default())
@@ -2413,7 +2469,7 @@ pub(super) async fn get_work_item_board(
         })
         .collect();
     Ok(Json(BoardResponse {
-        columns_by: grouping.as_str(),
+        columns_by: grouping.param(),
         columns,
     }))
 }

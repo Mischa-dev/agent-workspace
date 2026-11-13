@@ -189,7 +189,8 @@ export function readListState(parameters: URLSearchParams): ListState {
   const task = parameters.get('task')
   const savedView = parameters.get('savedView')
   const fields = parameters.get('fields')
-  const columnsBy = oneOf(parameters.get('columnsBy'), COLUMN_FIELDS, 'status')
+  const columnsParameter = parameters.get('columnsBy')
+  const columnsBy = FIELD_KEY.test(columnsParameter ?? '') ? (columnsParameter as BoardColumnsBy) : oneOf(columnsParameter, COLUMN_FIELDS, 'status')
   const lanes = oneOf(parameters.get('lanes'), LANE_FIELDS, 'none')
   return {
     view: parameters.get('view') === 'board' ? 'board' : 'list',

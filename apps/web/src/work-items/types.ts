@@ -230,7 +230,8 @@ export type WorkItemSort = 'newest' | 'oldest' | 'updated' | 'priority' | 'due' 
 /** A custom field (choice, person or checkbox) groups as `field:<id>`. */
 export type WorkItemGroupBy = 'status' | 'assignee' | 'priority' | 'label' | 'milestone' | 'parent' | 'type' | `field:${string}`
 
-export type BoardColumnsBy = 'status' | 'assignee' | 'priority' | 'milestone' | 'type' | 'label'
+/** A single-choice custom field makes columns as `field:<id>` (AWD-103). */
+export type BoardColumnsBy = 'status' | 'assignee' | 'priority' | 'milestone' | 'type' | 'label' | `field:${string}`
 
 /**
  * Query parameters for GET /work-items, /work-items/groups and /work-items/board.
@@ -286,6 +287,8 @@ export type WorkItemGroup = { key: string; label: string; count: number; color?:
 export type BoardColumn = {
   key: string
   label: string
+  /** A choice option's colour, when the columns are a field's options. */
+  color?: string
   status: WorkItemStatus | null
   items: WorkItemCard[]
   hasMore: boolean
