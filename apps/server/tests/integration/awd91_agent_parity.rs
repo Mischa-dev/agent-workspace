@@ -2171,6 +2171,21 @@ async fn people_add_and_archive_repositories_and_agents_only_read_them() {
         "defaultBranch": "main",
     });
 
+    // From the GitHub installation: GitHub names it, so owner and the rest
+    // don't go with it; without GitHub set up here, it's a conflict.
+    let mixed = person(
+        "repository_write",
+        json!({"projectId": project, "installationId": 7, "githubRepositoryId": 4242, "owner": "octo-org", "trustAcknowledged": true}),
+    )
+    .await;
+    assert_eq!(mixed["outcome"], "invalid_request", "{mixed}");
+    let picked = person(
+        "repository_write",
+        json!({"projectId": project, "installationId": 7, "githubRepositoryId": 4242, "trustAcknowledged": true}),
+    )
+    .await;
+    assert_eq!(picked["outcome"], "conflict", "{picked}");
+
     let untrusted = person("repository_write", adding.clone()).await;
     assert_eq!(untrusted["outcome"], "invalid_request", "{untrusted}");
     let mut add_and_prepare = adding.clone();
@@ -2236,6 +2251,109 @@ async fn people_add_and_archive_repositories_and_agents_only_read_them() {
         audited[..2],
         ["repository.registered", "repository.archived"]
     );
+    f.close().await;
+}
+
+#[tokio::test]
+async fn people_switch_the_github_automation_and_agents_never_do() {
+    let Some(f) = fixture().await else {
+        return;
+    };
+    let project = f.seed.project_id.to_string();
+    let app = connect_app(&f.app, &f.browser, "Owner's app", "full").await;
+    let session = initialize(&f.app, &app).await.expect("owner MCP");
+    let person = |name: &'static str, arguments: Value| {
+        let app = app.clone();
+        let session = session.clone();
+        let router = f.app.clone();
+        async move { tool(&router, &app, &session, name, arguments).await }
+    };
+
+    // One switch at a time keeps the other as it was.
+    let off = person(
+        "github_integration_write",
+        json!({"projectId": project, "pullRequestMerge": false}),
+    )
+    .await;
+    assert_eq!(off["outcome"], "ok", "{off}");
+    assert_eq!(off["value"]["automation"]["pullRequestMergeEnabled"], false);
+    let version = off["value"]["automation"]["version"]
+        .as_i64()
+        .expect("version");
+    let on = person(
+        "github_integration_write",
+        json!({"projectId": project, "pullRequestOpen": true, "expectedVersion": version}),
+    )
+    .await;
+    assert_eq!(on["outcome"], "ok", "{on}");
+    assert_eq!(on["value"]["automation"]["pullRequestOpenEnabled"], true);
+    assert_eq!(on["value"]["automation"]["pullRequestMergeEnabled"], false);
+    let stale = person(
+        "github_integration_write",
+        json!({"projectId": project, "pullRequestOpen": false, "expectedVersion": version}),
+    )
+    .await;
+    assert_eq!(stale["outcome"], "conflict", "{stale}");
+
+    // A sync and a switch don't go in one call; without GitHub set up on
+    // the server, a sync is a conflict, not a failure.
+    let both = person(
+        "github_integration_write",
+        json!({"projectId": project, "installationId": 7, "repositories": [], "pullRequestOpen": true}),
+    )
+    .await;
+    assert_eq!(both["outcome"], "invalid_request", "{both}");
+    let unconfigured = person(
+        "github_integration_write",
+        json!({"projectId": project, "installationId": 7, "repositories": [Uuid::now_v7().to_string()]}),
+    )
+    .await;
+    assert_eq!(unconfigured["outcome"], "conflict", "{unconfigured}");
+
+    // Agents never change it.
+    let refused = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "github_integration_write",
+        json!({"projectId": project, "pullRequestOpen": false}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+
+    let audited = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM audit_events WHERE action = 'github.automation_settings_update' AND channel = 'mcp'",
+    )
+    .fetch_one(&f.pool)
+    .await
+    .expect("audit");
+    assert_eq!(audited, 2);
+
+    // Publishing and pull requests: a run or pull request the caller can't
+    // see is "not found" before anything about GitHub is said.
+    let missing = Uuid::now_v7().to_string();
+    for (name, arguments) in [
+        ("run_publish", json!({"runId": missing})),
+        (
+            "pull_request_create",
+            json!({"runId": missing, "title": "Ship it"}),
+        ),
+        ("pull_request_refresh", json!({"pullRequestId": missing})),
+    ] {
+        let unseen = tool(&f.app, &f.token, &f.session, name, arguments.clone()).await;
+        assert_eq!(unseen["outcome"], "not_found", "{name}: {unseen}");
+        let unseen = person(name, arguments).await;
+        assert_eq!(unseen["outcome"], "not_found", "{name}: {unseen}");
+    }
+    let unparsed = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "run_publish",
+        json!({"runId": "nope"}),
+    )
+    .await;
+    assert_eq!(unparsed["outcome"], "invalid_request", "{unparsed}");
     f.close().await;
 }
 

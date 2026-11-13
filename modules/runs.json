@@ -15,6 +15,7 @@
     "run_stop": "change",
     "run_retry": "create",
     "run_dismiss_failure": "change",
+    "run_publish": "change",
     "run_list": "query",
     "run_steps": "query",
     "run_usage": "query",

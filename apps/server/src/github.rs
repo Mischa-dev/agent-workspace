@@ -76,6 +76,7 @@ const PERMITTED_EVENTS: [&str; 6] = [
 ];
 
 mod connect;
+pub(crate) use connect::add_picked_repository_as;
 
 pub fn router() -> Router<AppState> {
     connect::routes(Router::new())
@@ -253,12 +254,12 @@ struct GitHubCapabilities {
 
 #[derive(Clone, Debug, Deserialize, Serialize, FromRow)]
 #[serde(rename_all = "camelCase")]
-struct GitHubAutomationSettingsView {
-    project_id: Uuid,
-    pull_request_open_enabled: bool,
-    pull_request_merge_enabled: bool,
-    version: i64,
-    updated_at: String,
+pub(crate) struct GitHubAutomationSettingsView {
+    pub project_id: Uuid,
+    pub pull_request_open_enabled: bool,
+    pub pull_request_merge_enabled: bool,
+    pub version: i64,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -271,13 +272,13 @@ struct UpdateGitHubAutomationSettingsRequest {
 
 #[derive(Clone, Debug, Deserialize, Serialize, FromRow)]
 #[serde(rename_all = "camelCase")]
-struct PublishJobView {
-    job_id: Uuid,
-    agent_run_id: Uuid,
-    repository_workspace_id: Uuid,
-    intended_commit: String,
-    state: String,
-    failure_category: Option<String>,
+pub(crate) struct PublishJobView {
+    pub job_id: Uuid,
+    pub agent_run_id: Uuid,
+    pub repository_workspace_id: Uuid,
+    pub intended_commit: String,
+    pub state: String,
+    pub failure_category: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -292,21 +293,21 @@ struct CreatePullRequestRequest {
 
 #[derive(Clone, Debug, Deserialize, Serialize, FromRow)]
 #[serde(rename_all = "camelCase")]
-struct PullRequestRequestView {
-    request_id: Uuid,
-    agent_run_id: Uuid,
-    repository_workspace_id: Uuid,
-    head_ref: String,
-    head_sha: String,
-    base_ref: String,
-    state: String,
-    failure_category: Option<String>,
-    github_pull_request_id: Option<Uuid>,
+pub(crate) struct PullRequestRequestView {
+    pub request_id: Uuid,
+    pub agent_run_id: Uuid,
+    pub repository_workspace_id: Uuid,
+    pub head_ref: String,
+    pub head_sha: String,
+    pub base_ref: String,
+    pub state: String,
+    pub failure_category: Option<String>,
+    pub github_pull_request_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, FromRow)]
 #[serde(rename_all = "camelCase")]
-struct PullRequestRefreshView {
+pub(crate) struct PullRequestRefreshView {
     job_id: Uuid,
     pull_request_id: Uuid,
     state: String,
@@ -1262,34 +1263,14 @@ async fn update_github_automation_settings(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
-    let updated = sqlx::query_as::<_, GitHubAutomationSettingsView>(
-        r#"
-        UPDATE project_github_automation_settings
-        SET pull_request_open_enabled = $3,
-            pull_request_merge_enabled = $4,
-            version = version + 1, updated_at = now()
-        WHERE project_id = $1 AND version = $2
-        RETURNING project_id, pull_request_open_enabled,
-                  pull_request_merge_enabled, version, updated_at::text AS updated_at
-        "#,
+    let settings = set_automation_in(
+        &mut transaction,
+        project_id,
+        Some(request.expected_version),
+        Some(request.pull_request_open_enabled),
+        Some(request.pull_request_merge_enabled),
     )
-    .bind(project_id)
-    .bind(request.expected_version)
-    .bind(request.pull_request_open_enabled)
-    .bind(request.pull_request_merge_enabled)
-    .fetch_optional(&mut *transaction)
     .await?;
-    let Some(settings) = updated else {
-        let current = fetch_github_automation_settings(&mut transaction, project_id).await?;
-        return Err(AppError::Conflict(
-            "github_automation_settings",
-            if current.version == request.expected_version {
-                "update_failed"
-            } else {
-                "version"
-            },
-        ));
-    };
     sqlx::query(
         r#"
         INSERT INTO audit_events (
@@ -1327,6 +1308,47 @@ async fn update_github_automation_settings(
     Ok((StatusCode::OK, Json(settings)).into_response())
 }
 
+/// Turns the project's pull request automation on or off, for a caller
+/// already allowed to manage its GitHub integration. A switch left out keeps
+/// its setting; without `expected_version`, the current one. Not audited here.
+pub(crate) async fn set_automation_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    expected_version: Option<i64>,
+    pull_request_open_enabled: Option<bool>,
+    pull_request_merge_enabled: Option<bool>,
+) -> Result<GitHubAutomationSettingsView, AppError> {
+    let updated = sqlx::query_as::<_, GitHubAutomationSettingsView>(
+        r#"
+        UPDATE project_github_automation_settings
+        SET pull_request_open_enabled = coalesce($3, pull_request_open_enabled),
+            pull_request_merge_enabled = coalesce($4, pull_request_merge_enabled),
+            version = version + 1, updated_at = now()
+        WHERE project_id = $1 AND ($2::bigint IS NULL OR version = $2)
+        RETURNING project_id, pull_request_open_enabled,
+                  pull_request_merge_enabled, version, updated_at::text AS updated_at
+        "#,
+    )
+    .bind(project_id)
+    .bind(expected_version)
+    .bind(pull_request_open_enabled)
+    .bind(pull_request_merge_enabled)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    let Some(settings) = updated else {
+        let current = fetch_github_automation_settings(transaction, project_id).await?;
+        return Err(AppError::Conflict(
+            "github_automation_settings",
+            if Some(current.version) == expected_version {
+                "update_failed"
+            } else {
+                "version"
+            },
+        ));
+    };
+    Ok(settings)
+}
+
 async fn fetch_github_automation_settings(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
@@ -1347,24 +1369,35 @@ async fn fetch_github_automation_settings(
     .ok_or(AppError::NotFound("project"))
 }
 
-async fn sync_installation(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    headers: HeaderMap,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<SyncInstallationRequest>,
-) -> Result<Json<GitHubStatusResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
-    if request.installation_id == 0
-        || request.repository_ids.is_empty()
-        || request.repository_ids.len() > 50
-    {
+/// A project's GitHub installation linked or re-checked, with the
+/// repositories it reaches, still in its transaction for the caller to audit
+/// and commit.
+pub(crate) struct SyncedInstallation {
+    pub transaction: Transaction<'static, Postgres>,
+    pub installation_id: Uuid,
+    pub repository_count: usize,
+    pub role: RoleGrant,
+}
+
+/// Links (or re-checks) the project's GitHub App installation and the
+/// repositories it reaches, after checking with GitHub that it does, for a
+/// caller allowed to manage the project's GitHub integration. Not audited
+/// here.
+pub(crate) async fn sync_installation_as(
+    state: &AppState,
+    actor_id: Uuid,
+    kind: ActorKind,
+    project_id: Uuid,
+    installation_id: u64,
+    repository_ids: &[Uuid],
+) -> Result<SyncedInstallation, AppError> {
+    if installation_id == 0 || repository_ids.is_empty() || repository_ids.len() > 50 {
         return Err(AppError::Validation("githubInstallation"));
     }
-    let mut requested_repository_ids = request.repository_ids.clone();
+    let mut requested_repository_ids = repository_ids.to_vec();
     requested_repository_ids.sort_unstable();
     requested_repository_ids.dedup();
-    if requested_repository_ids.len() != request.repository_ids.len() {
+    if requested_repository_ids.len() != repository_ids.len() {
         return Err(AppError::Validation("repositoryIds"));
     }
     let github_config = state
@@ -1374,9 +1407,10 @@ async fn sync_installation(
         .ok_or(AppError::Conflict("github_integration", "not_configured"))?;
 
     let mut transaction = state.pool.begin().await?;
-    let role = require_project_access(
+    let role = require_project_access_as(
         &mut transaction,
-        &principal,
+        actor_id,
+        kind,
         project_id,
         Action::GithubIntegrationManage,
     )
@@ -1384,8 +1418,8 @@ async fn sync_installation(
     let repositories =
         load_requested_repositories(&mut transaction, project_id, &requested_repository_ids)
             .await?;
-    let typed_installation_id = i64::try_from(request.installation_id)
-        .map_err(|_| AppError::Validation("installationId"))?;
+    let typed_installation_id =
+        i64::try_from(installation_id).map_err(|_| AppError::Validation("installationId"))?;
     // Where people can sign in to GitHub, only installations the workspace
     // proved access to can be linked; knowing the number is not enough.
     if github_config.connect.is_some()
@@ -1405,7 +1439,7 @@ async fn sync_installation(
 
     let client = GitHubClient::new(github_config).map_err(map_github_error)?;
     let installation = client
-        .installation(request.installation_id)
+        .installation(installation_id)
         .await
         .map_err(map_github_error)?;
     validate_installation(github_config, &installation).map_err(map_github_error)?;
@@ -1418,7 +1452,7 @@ async fn sync_installation(
         .collect::<Result<Vec<_>, _>>()?;
     let token = client
         .installation_token(
-            request.installation_id,
+            installation_id,
             &github_repository_ids,
             InstallationTokenScope::VerifyInstallation,
         )
@@ -1432,9 +1466,10 @@ async fn sync_installation(
     drop(token);
 
     let mut transaction = state.pool.begin().await?;
-    require_project_access(
+    require_project_access_as(
         &mut transaction,
-        &principal,
+        actor_id,
+        kind,
         project_id,
         Action::GithubIntegrationManage,
     )
@@ -1446,16 +1481,11 @@ async fn sync_installation(
         return Err(AppError::Conflict("repository", "changed_during_sync"));
     }
     if github_config.connect.is_none() {
-        connect::record_operator_claim(
-            &mut transaction,
-            project_id,
-            principal.actor_id,
-            &installation,
-        )
-        .await?;
+        connect::record_operator_claim(&mut transaction, project_id, actor_id, &installation)
+            .await?;
     }
     let actor_id = ensure_github_actor(&mut transaction, project_id).await?;
-    let installation_id = persist_installation(
+    let stored_installation_id = persist_installation(
         &mut transaction,
         project_id,
         actor_id,
@@ -1467,7 +1497,7 @@ async fn sync_installation(
         "UPDATE github_installation_repositories SET access_state = 'missing', last_verified_at = NULL, updated_at = now() WHERE project_id = $1 AND github_installation_id = $2",
     )
     .bind(project_id)
-    .bind(installation_id)
+    .bind(stored_installation_id)
     .execute(&mut *transaction)
     .await?;
     if !repositories.is_empty() {
@@ -1497,7 +1527,7 @@ async fn sync_installation(
             "#,
         )
         .bind(project_id)
-        .bind(installation_id)
+        .bind(stored_installation_id)
         .bind(&repository_ids)
         .bind(&github_repository_ids)
         .execute(&mut *transaction)
@@ -1511,13 +1541,40 @@ async fn sync_installation(
         )
         .bind(project_id)
         .bind(&repository_ids)
-        .bind(
-            i64::try_from(request.installation_id)
-                .map_err(|_| AppError::Validation("installationId"))?,
-        )
+        .bind(i64::try_from(installation_id).map_err(|_| AppError::Validation("installationId"))?)
         .execute(&mut *transaction)
         .await?;
     }
+    Ok(SyncedInstallation {
+        transaction,
+        installation_id: stored_installation_id,
+        repository_count: repositories.len(),
+        role,
+    })
+}
+
+async fn sync_installation(
+    State(state): State<AppState>,
+    principal: AuthenticatedActor,
+    headers: HeaderMap,
+    ApiPath(project_id): ApiPath<Uuid>,
+    ApiJson(request): ApiJson<SyncInstallationRequest>,
+) -> Result<Json<GitHubStatusResponse>, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    let SyncedInstallation {
+        mut transaction,
+        installation_id,
+        repository_count,
+        role,
+    } = sync_installation_as(
+        &state,
+        principal.actor_id,
+        actor_kind(&principal.actor_kind)?,
+        project_id,
+        request.installation_id,
+        &request.repository_ids,
+    )
+    .await?;
     let request_id = headers
         .get(crate::REQUEST_ID_HEADER)
         .and_then(|value| value.to_str().ok())
@@ -1540,7 +1597,7 @@ async fn sync_installation(
     .bind(principal.session_id)
     .bind(installation_id)
     .bind(request_id)
-    .bind(i32::try_from(repositories.len()).map_err(|_| AppError::Internal("repository count"))?)
+    .bind(i32::try_from(repository_count).map_err(|_| AppError::Internal("repository count"))?)
     .execute(&mut *transaction)
     .await?;
     let installation_row = load_installation(&mut transaction, project_id)
@@ -1558,6 +1615,208 @@ async fn sync_installation(
             manage: role_allows_manage(role),
         },
     }))
+}
+
+/// What a publish, pull request or refresh request queued: a new job, or
+/// the one already queued (or done) for the same thing.
+pub(crate) struct Queued<T> {
+    pub view: T,
+    pub new: bool,
+}
+
+/// Queues pushing a finished run's branch to GitHub, for a caller allowed to
+/// publish in the project who can see the run's thread. Not audited here;
+/// the caller commits and then calls `kick_jobs`.
+pub(crate) async fn queue_publish_in(
+    state: &AppState,
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    project_id: Uuid,
+    run_id: Uuid,
+) -> Result<Queued<PublishJobView>, AppError> {
+    let candidate = sqlx::query_as::<_, PublishCandidate>(
+        r#"
+        SELECT run.id AS agent_run_id, run.conversation_id,
+               run.repository_id, workspace.id AS repository_workspace_id,
+               run.state AS run_state, repository.mirror_path,
+               worktree.path AS worktree_path, workspace.branch_name,
+               workspace.base_commit
+        FROM agent_runs run
+        JOIN repositories repository
+          ON repository.project_id = run.project_id
+         AND repository.id = run.repository_id
+        JOIN repository_workspaces workspace
+          ON workspace.project_id = run.project_id
+         AND workspace.id = run.repository_workspace_id
+         AND workspace.repository_id = run.repository_id
+         AND workspace.conversation_id = run.conversation_id
+        JOIN git_worktrees worktree
+          ON worktree.repository_workspace_id = workspace.id
+         AND worktree.state IN ('ready', 'dirty')
+        WHERE run.project_id = $1
+          AND run.id = $2
+          AND conversation_visible_to(run.conversation_id, $3)
+          AND repository.enabled
+          AND repository.trusted
+          AND repository.archived_at IS NULL
+          AND workspace.state IN ('active', 'retained')
+        FOR SHARE OF run, repository, workspace, worktree
+        "#,
+    )
+    .bind(project_id)
+    .bind(run_id)
+    .bind(actor_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(AppError::NotFound("agent_run"))?;
+    if !matches!(
+        candidate.run_state.as_str(),
+        "completed" | "failed" | "canceled" | "interrupted"
+    ) {
+        return Err(AppError::Conflict("agent_run", "not_terminal"));
+    }
+    let workspace_active = sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM agent_runs active
+            WHERE active.repository_workspace_id = $1
+              AND active.state IN ('created', 'queued', 'starting', 'working', 'blocked', 'recovering')
+        )
+        "#,
+    )
+    .bind(candidate.repository_workspace_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if workspace_active {
+        return Err(AppError::Conflict("repository_workspace", "active_run"));
+    }
+    let github_installation_id = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT installation.id
+        FROM github_installations installation
+        JOIN github_installation_repositories access
+          ON access.project_id = installation.project_id
+         AND access.github_installation_id = installation.id
+        JOIN repositories repository
+          ON repository.project_id = access.project_id
+         AND repository.id = access.repository_id
+         AND repository.github_repository_id = access.github_repository_id
+        WHERE installation.project_id = $1
+          AND access.repository_id = $2
+          AND installation.enabled
+          AND installation.state = 'available'
+          AND access.access_state = 'selected'
+        FOR SHARE OF installation, access, repository
+        "#,
+    )
+    .bind(project_id)
+    .bind(candidate.repository_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(AppError::Conflict(
+        "github_installation",
+        "repository_unavailable",
+    ))?;
+    let expected_mirror =
+        expected_repository_mirror_path(&state.config.data_root, candidate.repository_id)?;
+    let expected_worktree = managed_worktree_path(
+        &state.config.data_root,
+        candidate.repository_id,
+        candidate.repository_workspace_id,
+    )?;
+    if Path::new(&candidate.mirror_path) != expected_mirror
+        || Path::new(&candidate.worktree_path) != expected_worktree
+    {
+        return Err(AppError::Conflict(
+            "repository_workspace",
+            "stored runtime path mismatch",
+        ));
+    }
+    let branch_name = candidate.branch_name.clone();
+    let base_commit = candidate.base_commit.clone();
+    let inspection = tokio::task::spawn_blocking(move || {
+        inspect_publishable_worktree(
+            &expected_mirror,
+            &expected_worktree,
+            &branch_name,
+            &base_commit,
+        )
+    })
+    .await
+    .map_err(|_| AppError::Internal("join Git publication inspection"))??;
+    sqlx::query(
+        "UPDATE git_worktrees SET state = 'ready', dirty = false, last_inspected_at = now(), updated_at = now() WHERE repository_workspace_id = $1",
+    )
+    .bind(candidate.repository_workspace_id)
+    .execute(&mut **transaction)
+    .await?;
+
+    if let Some(existing) = sqlx::query_as::<_, PublishJobView>(
+        r#"
+        SELECT id AS job_id, agent_run_id, repository_workspace_id,
+               intended_commit, state, failure_category
+        FROM github_jobs
+        WHERE project_id = $1
+          AND repository_workspace_id = $2
+          AND intended_commit = $3
+          AND kind = 'workspace_publish'
+          AND state IN ('queued', 'running', 'failed', 'completed')
+        ORDER BY created_at DESC
+        LIMIT 1
+        FOR SHARE
+        "#,
+    )
+    .bind(project_id)
+    .bind(candidate.repository_workspace_id)
+    .bind(&inspection.head_commit)
+    .fetch_optional(&mut **transaction)
+    .await?
+    {
+        return Ok(Queued {
+            view: existing,
+            new: false,
+        });
+    }
+
+    let job_id = Uuid::now_v7();
+    let view = PublishJobView {
+        job_id,
+        agent_run_id: candidate.agent_run_id,
+        repository_workspace_id: candidate.repository_workspace_id,
+        intended_commit: inspection.head_commit,
+        state: "queued".to_owned(),
+        failure_category: None,
+    };
+    sqlx::query(
+        r#"
+        INSERT INTO github_jobs (
+            id, project_id, github_installation_id, repository_id,
+            kind, payload, repository_workspace_id, agent_run_id,
+            requesting_actor_id, intended_commit
+        ) VALUES (
+            $1, $2, $3, $4, 'workspace_publish', '{}'::jsonb,
+            $5, $6, $7, $8
+        )
+        "#,
+    )
+    .bind(job_id)
+    .bind(project_id)
+    .bind(github_installation_id)
+    .bind(candidate.repository_id)
+    .bind(candidate.repository_workspace_id)
+    .bind(candidate.agent_run_id)
+    .bind(actor_id)
+    .bind(&view.intended_commit)
+    .execute(&mut **transaction)
+    .await?;
+    outbox::enqueue_agent_run_updated(
+        transaction,
+        project_id,
+        candidate.conversation_id,
+        candidate.agent_run_id,
+    )
+    .await?;
+    Ok(Queued { view, new: true })
 }
 
 async fn publish_agent_run(
@@ -1597,185 +1856,24 @@ async fn publish_agent_run(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
-    let candidate = sqlx::query_as::<_, PublishCandidate>(
-        r#"
-        SELECT run.id AS agent_run_id, run.conversation_id,
-               run.repository_id, workspace.id AS repository_workspace_id,
-               run.state AS run_state, repository.mirror_path,
-               worktree.path AS worktree_path, workspace.branch_name,
-               workspace.base_commit
-        FROM agent_runs run
-        JOIN repositories repository
-          ON repository.project_id = run.project_id
-         AND repository.id = run.repository_id
-        JOIN repository_workspaces workspace
-          ON workspace.project_id = run.project_id
-         AND workspace.id = run.repository_workspace_id
-         AND workspace.repository_id = run.repository_id
-         AND workspace.conversation_id = run.conversation_id
-        JOIN git_worktrees worktree
-          ON worktree.repository_workspace_id = workspace.id
-         AND worktree.state IN ('ready', 'dirty')
-        WHERE run.project_id = $1
-          AND run.id = $2
-          AND conversation_visible_to(run.conversation_id, $3)
-          AND repository.enabled
-          AND repository.trusted
-          AND repository.archived_at IS NULL
-          AND workspace.state IN ('active', 'retained')
-        FOR SHARE OF run, repository, workspace, worktree
-        "#,
+    let Queued { view, new } = queue_publish_in(
+        &state,
+        &mut transaction,
+        principal.actor_id,
+        project_id,
+        run_id,
     )
-    .bind(project_id)
-    .bind(run_id)
-    .bind(principal.actor_id)
-    .fetch_optional(&mut *transaction)
-    .await?
-    .ok_or(AppError::NotFound("agent_run"))?;
-    if !matches!(
-        candidate.run_state.as_str(),
-        "completed" | "failed" | "canceled" | "interrupted"
-    ) {
-        return Err(AppError::Conflict("agent_run", "not_terminal"));
-    }
-    let workspace_active = sqlx::query_scalar::<_, bool>(
-        r#"
-        SELECT EXISTS (
-            SELECT 1 FROM agent_runs active
-            WHERE active.repository_workspace_id = $1
-              AND active.state IN ('created', 'queued', 'starting', 'working', 'blocked', 'recovering')
-        )
-        "#,
-    )
-    .bind(candidate.repository_workspace_id)
-    .fetch_one(&mut *transaction)
     .await?;
-    if workspace_active {
-        return Err(AppError::Conflict("repository_workspace", "active_run"));
-    }
-    let github_installation_id = sqlx::query_scalar::<_, Uuid>(
-        r#"
-        SELECT installation.id
-        FROM github_installations installation
-        JOIN github_installation_repositories access
-          ON access.project_id = installation.project_id
-         AND access.github_installation_id = installation.id
-        JOIN repositories repository
-          ON repository.project_id = access.project_id
-         AND repository.id = access.repository_id
-         AND repository.github_repository_id = access.github_repository_id
-        WHERE installation.project_id = $1
-          AND access.repository_id = $2
-          AND installation.enabled
-          AND installation.state = 'available'
-          AND access.access_state = 'selected'
-        FOR SHARE OF installation, access, repository
-        "#,
-    )
-    .bind(project_id)
-    .bind(candidate.repository_id)
-    .fetch_optional(&mut *transaction)
-    .await?
-    .ok_or(AppError::Conflict(
-        "github_installation",
-        "repository_unavailable",
-    ))?;
-    let expected_mirror =
-        expected_repository_mirror_path(&state.config.data_root, candidate.repository_id)?;
-    let expected_worktree = managed_worktree_path(
-        &state.config.data_root,
-        candidate.repository_id,
-        candidate.repository_workspace_id,
-    )?;
-    if Path::new(&candidate.mirror_path) != expected_mirror
-        || Path::new(&candidate.worktree_path) != expected_worktree
-    {
-        return Err(AppError::Conflict(
-            "repository_workspace",
-            "stored runtime path mismatch",
-        ));
-    }
-    let branch_name = candidate.branch_name.clone();
-    let base_commit = candidate.base_commit.clone();
-    let inspection = tokio::task::spawn_blocking(move || {
-        inspect_publishable_worktree(
-            &expected_mirror,
-            &expected_worktree,
-            &branch_name,
-            &base_commit,
-        )
-    })
-    .await
-    .map_err(|_| AppError::Internal("join Git publication inspection"))??;
-    sqlx::query(
-        "UPDATE git_worktrees SET state = 'ready', dirty = false, last_inspected_at = now(), updated_at = now() WHERE repository_workspace_id = $1",
-    )
-    .bind(candidate.repository_workspace_id)
-    .execute(&mut *transaction)
-    .await?;
-
-    if let Some(existing) = sqlx::query_as::<_, PublishJobView>(
-        r#"
-        SELECT id AS job_id, agent_run_id, repository_workspace_id,
-               intended_commit, state, failure_category
-        FROM github_jobs
-        WHERE project_id = $1
-          AND repository_workspace_id = $2
-          AND intended_commit = $3
-          AND kind = 'workspace_publish'
-          AND state IN ('queued', 'running', 'failed', 'completed')
-        ORDER BY created_at DESC
-        LIMIT 1
-        FOR SHARE
-        "#,
-    )
-    .bind(project_id)
-    .bind(candidate.repository_workspace_id)
-    .bind(&inspection.head_commit)
-    .fetch_optional(&mut *transaction)
-    .await?
-    {
-        let status = if existing.state == "completed" {
+    if !new {
+        let status = if view.state == "completed" {
             StatusCode::OK
         } else {
             StatusCode::ACCEPTED
         };
-        complete(&mut transaction, &reservation, status, &existing).await?;
+        complete(&mut transaction, &reservation, status, &view).await?;
         transaction.commit().await?;
-        return Ok((status, Json(existing)).into_response());
+        return Ok((status, Json(view)).into_response());
     }
-
-    let job_id = Uuid::now_v7();
-    let view = PublishJobView {
-        job_id,
-        agent_run_id: candidate.agent_run_id,
-        repository_workspace_id: candidate.repository_workspace_id,
-        intended_commit: inspection.head_commit,
-        state: "queued".to_owned(),
-        failure_category: None,
-    };
-    sqlx::query(
-        r#"
-        INSERT INTO github_jobs (
-            id, project_id, github_installation_id, repository_id,
-            kind, payload, repository_workspace_id, agent_run_id,
-            requesting_actor_id, intended_commit
-        ) VALUES (
-            $1, $2, $3, $4, 'workspace_publish', '{}'::jsonb,
-            $5, $6, $7, $8
-        )
-        "#,
-    )
-    .bind(job_id)
-    .bind(project_id)
-    .bind(github_installation_id)
-    .bind(candidate.repository_id)
-    .bind(candidate.repository_workspace_id)
-    .bind(candidate.agent_run_id)
-    .bind(principal.actor_id)
-    .bind(&view.intended_commit)
-    .execute(&mut *transaction)
-    .await?;
     let request_id = headers
         .get(crate::REQUEST_ID_HEADER)
         .and_then(|value| value.to_str().ok())
@@ -1797,18 +1895,11 @@ async fn publish_agent_run(
     .bind(principal.actor_id)
     .bind(project_id)
     .bind(principal.session_id)
-    .bind(job_id)
+    .bind(view.job_id)
     .bind(request_id)
-    .bind(candidate.agent_run_id)
-    .bind(candidate.repository_workspace_id)
+    .bind(view.agent_run_id)
+    .bind(view.repository_workspace_id)
     .execute(&mut *transaction)
-    .await?;
-    outbox::enqueue_agent_run_updated(
-        &mut transaction,
-        project_id,
-        candidate.conversation_id,
-        candidate.agent_run_id,
-    )
     .await?;
     complete(&mut transaction, &reservation, StatusCode::ACCEPTED, &view).await?;
     transaction.commit().await?;
@@ -1816,73 +1907,51 @@ async fn publish_agent_run(
     Ok((StatusCode::ACCEPTED, Json(view)).into_response())
 }
 
-async fn create_pull_request(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, run_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(mut request): ApiJson<CreatePullRequestRequest>,
-) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
-    if state.config.github.is_none() {
-        return Err(AppError::Conflict("github_integration", "not_configured"));
-    }
-    request.title = request.title.trim().to_owned();
-    if request.title.is_empty()
-        || request.title.chars().count() > 256
-        || request.title.chars().any(char::is_control)
-        || request.body.chars().count() > 10_000
-        || request
-            .body
+/// A pull request's title (trimmed), body and tasks, as GitHub and the app
+/// take them.
+pub(crate) fn checked_pull_request_input(
+    title: &str,
+    body: &str,
+    work_item_ids: &[Uuid],
+) -> Result<String, AppError> {
+    let title = title.trim();
+    if title.is_empty()
+        || title.chars().count() > 256
+        || title.chars().any(char::is_control)
+        || body.chars().count() > 10_000
+        || body
             .chars()
             .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
-        || request.work_item_ids.len() > 20
-        || request
-            .work_item_ids
-            .iter()
-            .copied()
-            .collect::<BTreeSet<_>>()
-            .len()
-            != request.work_item_ids.len()
+        || work_item_ids.len() > 20
+        || work_item_ids.iter().copied().collect::<BTreeSet<_>>().len() != work_item_ids.len()
     {
         return Err(AppError::Invalid("pull request input"));
     }
-    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
-    let scope = resource_bound_scope("agent_runs", run_id, "pull_request")?;
-    let request_hash = RequestHash::for_value(&request)?;
-    let mut transaction = state.pool.begin().await?;
-    require_project_access(
-        &mut transaction,
-        &principal,
-        project_id,
-        Action::PullRequestCreate,
-    )
-    .await?;
-    let reservation = match reserve(
-        &mut transaction,
-        principal.actor_id,
-        &scope,
-        &idempotency_key,
-        request_hash,
-    )
-    .await?
-    {
-        IdempotencyOutcome::Replay(replay) => {
-            let view: PullRequestRequestView = replay.decode()?;
-            transaction.commit().await?;
-            return Ok((replay.status(), Json(view)).into_response());
-        }
-        IdempotencyOutcome::Reserved(reservation) => reservation,
-    };
-    if !request.work_item_ids.is_empty() {
+    Ok(title.to_owned())
+}
+
+/// Queues opening a pull request from a finished run's published branch,
+/// for a caller allowed to open pull requests in the project who can see the
+/// run's thread. `title` is already checked (`checked_pull_request_input`).
+/// Not audited here; the caller commits and then calls `kick_jobs`.
+pub(crate) async fn queue_pull_request_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    project_id: Uuid,
+    run_id: Uuid,
+    title: &str,
+    body: &str,
+    work_item_ids: &[Uuid],
+) -> Result<Queued<PullRequestRequestView>, AppError> {
+    if !work_item_ids.is_empty() {
         let count = sqlx::query_scalar::<_, i64>(
             "SELECT count(*) FROM work_items WHERE project_id = $1 AND id = ANY($2) AND archived_at IS NULL",
         )
         .bind(project_id)
-        .bind(&request.work_item_ids)
-        .fetch_one(&mut *transaction)
+        .bind(work_item_ids)
+        .fetch_one(&mut **transaction)
         .await?;
-        if usize::try_from(count).ok() != Some(request.work_item_ids.len()) {
+        if usize::try_from(count).ok() != Some(work_item_ids.len()) {
             return Err(AppError::NotFound("work_item"));
         }
     }
@@ -1930,8 +1999,8 @@ async fn create_pull_request(
     )
     .bind(project_id)
     .bind(run_id)
-    .bind(principal.actor_id)
-    .fetch_optional(&mut *transaction)
+    .bind(actor_id)
+    .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::Conflict("agent_run", "branch_not_published"))?;
     if let Some(existing) = sqlx::query_as::<_, PullRequestRequestView>(
@@ -1946,17 +2015,13 @@ async fn create_pull_request(
     )
     .bind(project_id)
     .bind(candidate.repository_workspace_id)
-    .fetch_optional(&mut *transaction)
+    .fetch_optional(&mut **transaction)
     .await?
     {
-        let status = if existing.state == "completed" {
-            StatusCode::OK
-        } else {
-            StatusCode::ACCEPTED
-        };
-        complete(&mut transaction, &reservation, status, &existing).await?;
-        transaction.commit().await?;
-        return Ok((status, Json(existing)).into_response());
+        return Ok(Queued {
+            view: existing,
+            new: false,
+        });
     }
     let request_id = Uuid::now_v7();
     let view = PullRequestRequestView {
@@ -1985,13 +2050,13 @@ async fn create_pull_request(
     .bind(candidate.repository_id)
     .bind(candidate.repository_workspace_id)
     .bind(run_id)
-    .bind(principal.actor_id)
+    .bind(actor_id)
     .bind(&view.head_ref)
     .bind(&view.head_sha)
     .bind(&view.base_ref)
-    .bind(&request.title)
-    .bind(&request.body)
-    .execute(&mut *transaction)
+    .bind(title)
+    .bind(body)
+    .execute(&mut **transaction)
     .await?;
     let job_id = Uuid::now_v7();
     sqlx::query(
@@ -2011,14 +2076,79 @@ async fn create_pull_request(
     .bind(project_id)
     .bind(candidate.github_installation_id)
     .bind(candidate.repository_id)
-    .bind(&request.work_item_ids)
+    .bind(work_item_ids)
     .bind(candidate.repository_workspace_id)
     .bind(run_id)
-    .bind(principal.actor_id)
+    .bind(actor_id)
     .bind(&view.head_sha)
     .bind(request_id)
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
+    outbox::enqueue_agent_run_updated(transaction, project_id, candidate.conversation_id, run_id)
+        .await?;
+    Ok(Queued { view, new: true })
+}
+
+async fn create_pull_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath((project_id, run_id)): ApiPath<(Uuid, Uuid)>,
+    ApiJson(mut request): ApiJson<CreatePullRequestRequest>,
+) -> Result<Response, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    if state.config.github.is_none() {
+        return Err(AppError::Conflict("github_integration", "not_configured"));
+    }
+    request.title =
+        checked_pull_request_input(&request.title, &request.body, &request.work_item_ids)?;
+    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
+    let scope = resource_bound_scope("agent_runs", run_id, "pull_request")?;
+    let request_hash = RequestHash::for_value(&request)?;
+    let mut transaction = state.pool.begin().await?;
+    require_project_access(
+        &mut transaction,
+        &principal,
+        project_id,
+        Action::PullRequestCreate,
+    )
+    .await?;
+    let reservation = match reserve(
+        &mut transaction,
+        principal.actor_id,
+        &scope,
+        &idempotency_key,
+        request_hash,
+    )
+    .await?
+    {
+        IdempotencyOutcome::Replay(replay) => {
+            let view: PullRequestRequestView = replay.decode()?;
+            transaction.commit().await?;
+            return Ok((replay.status(), Json(view)).into_response());
+        }
+        IdempotencyOutcome::Reserved(reservation) => reservation,
+    };
+    let Queued { view, new } = queue_pull_request_in(
+        &mut transaction,
+        principal.actor_id,
+        project_id,
+        run_id,
+        &request.title,
+        &request.body,
+        &request.work_item_ids,
+    )
+    .await?;
+    if !new {
+        let status = if view.state == "completed" {
+            StatusCode::OK
+        } else {
+            StatusCode::ACCEPTED
+        };
+        complete(&mut transaction, &reservation, status, &view).await?;
+        transaction.commit().await?;
+        return Ok((status, Json(view)).into_response());
+    }
     sqlx::query(
         r#"
         INSERT INTO audit_events (
@@ -2036,7 +2166,7 @@ async fn create_pull_request(
     .bind(principal.actor_id)
     .bind(project_id)
     .bind(principal.session_id)
-    .bind(request_id)
+    .bind(view.request_id)
     .bind(
         headers
             .get(crate::REQUEST_ID_HEADER)
@@ -2044,20 +2174,98 @@ async fn create_pull_request(
             .filter(|value| value.len() <= 128),
     )
     .bind(run_id)
-    .bind(candidate.repository_workspace_id)
+    .bind(view.repository_workspace_id)
     .execute(&mut *transaction)
-    .await?;
-    outbox::enqueue_agent_run_updated(
-        &mut transaction,
-        project_id,
-        candidate.conversation_id,
-        run_id,
-    )
     .await?;
     complete(&mut transaction, &reservation, StatusCode::ACCEPTED, &view).await?;
     transaction.commit().await?;
     kick_jobs(state);
     Ok((StatusCode::ACCEPTED, Json(view)).into_response())
+}
+
+/// Queues reading a pull request's checks and review from GitHub again,
+/// for a caller allowed to refresh pull requests in the project who can see
+/// this one. The caller commits and then calls `kick_jobs`.
+pub(crate) async fn queue_refresh_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    project_id: Uuid,
+    pull_request_id: Uuid,
+) -> Result<Queued<PullRequestRefreshView>, AppError> {
+    let pull_request = sqlx::query_as::<_, (Uuid, Uuid)>(
+        r#"
+        SELECT pull_request.github_installation_id, pull_request.repository_id
+        FROM github_pull_requests pull_request
+        JOIN repositories repository
+          ON repository.project_id = pull_request.project_id
+         AND repository.id = pull_request.repository_id
+         AND repository.enabled
+         AND repository.archived_at IS NULL
+        WHERE pull_request.project_id = $1 AND pull_request.id = $2
+          AND pull_request_visible_to(pull_request.id, $3)
+        FOR SHARE OF pull_request, repository
+        "#,
+    )
+    .bind(project_id)
+    .bind(pull_request_id)
+    .bind(actor_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(AppError::NotFound("github_pull_request"))?;
+    if let Some(existing) = sqlx::query_as::<_, PullRequestRefreshView>(
+        r#"
+        SELECT id AS job_id, github_pull_request_id AS pull_request_id,
+               state, failure_category
+        FROM github_jobs
+        WHERE project_id = $1 AND github_pull_request_id = $2
+          AND kind IN ('pull_request_sync', 'check_review_sync')
+          AND state IN ('queued', 'running', 'failed')
+        ORDER BY created_at DESC
+        LIMIT 1
+        FOR SHARE
+        "#,
+    )
+    .bind(project_id)
+    .bind(pull_request_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    {
+        return Ok(Queued {
+            view: existing,
+            new: false,
+        });
+    }
+    let job_id = Uuid::now_v7();
+    let view = PullRequestRefreshView {
+        job_id,
+        pull_request_id,
+        state: "queued".to_owned(),
+        failure_category: None,
+    };
+    sqlx::query(
+        r#"
+        INSERT INTO github_jobs (
+            id, project_id, github_installation_id, repository_id,
+            kind, requesting_actor_id, github_pull_request_id
+        ) VALUES ($1, $2, $3, $4, 'check_review_sync', $5, $6)
+        "#,
+    )
+    .bind(job_id)
+    .bind(project_id)
+    .bind(pull_request.0)
+    .bind(pull_request.1)
+    .bind(actor_id)
+    .bind(pull_request_id)
+    .execute(&mut **transaction)
+    .await?;
+    sqlx::query(
+        "UPDATE github_pull_requests SET sync_state = 'stale', last_sync_attempt_at = now(), updated_at = now() WHERE project_id = $1 AND id = $2",
+    )
+    .bind(project_id)
+    .bind(pull_request_id)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(Queued { view, new: true })
 }
 
 async fn refresh_pull_request(
@@ -2097,83 +2305,12 @@ async fn refresh_pull_request(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
-    let pull_request = sqlx::query_as::<_, (Uuid, Uuid)>(
-        r#"
-        SELECT pull_request.github_installation_id, pull_request.repository_id
-        FROM github_pull_requests pull_request
-        JOIN repositories repository
-          ON repository.project_id = pull_request.project_id
-         AND repository.id = pull_request.repository_id
-         AND repository.enabled
-         AND repository.archived_at IS NULL
-        WHERE pull_request.project_id = $1 AND pull_request.id = $2
-          AND pull_request_visible_to(pull_request.id, $3)
-        FOR SHARE OF pull_request, repository
-        "#,
-    )
-    .bind(project_id)
-    .bind(pull_request_id)
-    .bind(principal.actor_id)
-    .fetch_optional(&mut *transaction)
-    .await?
-    .ok_or(AppError::NotFound("github_pull_request"))?;
-    if let Some(existing) = sqlx::query_as::<_, PullRequestRefreshView>(
-        r#"
-        SELECT id AS job_id, github_pull_request_id AS pull_request_id,
-               state, failure_category
-        FROM github_jobs
-        WHERE project_id = $1 AND github_pull_request_id = $2
-          AND kind IN ('pull_request_sync', 'check_review_sync')
-          AND state IN ('queued', 'running', 'failed')
-        ORDER BY created_at DESC
-        LIMIT 1
-        FOR SHARE
-        "#,
-    )
-    .bind(project_id)
-    .bind(pull_request_id)
-    .fetch_optional(&mut *transaction)
-    .await?
-    {
-        complete(
-            &mut transaction,
-            &reservation,
-            StatusCode::ACCEPTED,
-            &existing,
-        )
-        .await?;
-        transaction.commit().await?;
-        return Ok((StatusCode::ACCEPTED, Json(existing)).into_response());
-    }
-    let job_id = Uuid::now_v7();
-    let view = PullRequestRefreshView {
-        job_id,
+    let Queued { view, .. } = queue_refresh_in(
+        &mut transaction,
+        principal.actor_id,
+        project_id,
         pull_request_id,
-        state: "queued".to_owned(),
-        failure_category: None,
-    };
-    sqlx::query(
-        r#"
-        INSERT INTO github_jobs (
-            id, project_id, github_installation_id, repository_id,
-            kind, requesting_actor_id, github_pull_request_id
-        ) VALUES ($1, $2, $3, $4, 'check_review_sync', $5, $6)
-        "#,
     )
-    .bind(job_id)
-    .bind(project_id)
-    .bind(pull_request.0)
-    .bind(pull_request.1)
-    .bind(principal.actor_id)
-    .bind(pull_request_id)
-    .execute(&mut *transaction)
-    .await?;
-    sqlx::query(
-        "UPDATE github_pull_requests SET sync_state = 'stale', last_sync_attempt_at = now(), updated_at = now() WHERE project_id = $1 AND id = $2",
-    )
-    .bind(project_id)
-    .bind(pull_request_id)
-    .execute(&mut *transaction)
     .await?;
     complete(&mut transaction, &reservation, StatusCode::ACCEPTED, &view).await?;
     transaction.commit().await?;
@@ -4655,6 +4792,23 @@ async fn load_installation_repositories(
     .await?)
 }
 
+/// The project's GitHub installation and the repositories it reaches, as
+/// the project's settings show it. Null when none is linked.
+pub(crate) async fn installation_value(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+) -> Result<Value, AppError> {
+    let view = match load_installation(transaction, project_id).await? {
+        Some(installation) => {
+            let repositories =
+                load_installation_repositories(transaction, project_id, installation.id).await?;
+            Some(installation_view(installation, repositories))
+        }
+        None => None,
+    };
+    serde_json::to_value(view).map_err(|_| AppError::Internal("GitHub installation view"))
+}
+
 fn installation_view(
     row: InstallationRow,
     repositories: Vec<InstallationRepositoryRow>,
@@ -5143,6 +5297,25 @@ async fn require_project_access(
     project_id: Uuid,
     action: Action,
 ) -> Result<RoleGrant, AppError> {
+    require_project_access_as(
+        transaction,
+        principal.actor_id,
+        actor_kind(&principal.actor_kind)?,
+        project_id,
+        action,
+    )
+    .await
+}
+
+/// `require_project_access` for a caller resolved elsewhere, such as a
+/// person's connected app.
+pub(crate) async fn require_project_access_as(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    kind: ActorKind,
+    project_id: Uuid,
+    action: Action,
+) -> Result<RoleGrant, AppError> {
     let access = sqlx::query_as::<_, ProjectAccess>(
         r#"
         SELECT membership.role, workspace_role_permissions(membership.role_id) AS role_permissions
@@ -5160,14 +5333,14 @@ async fn require_project_access(
         "#,
     )
     .bind(project_id)
-    .bind(principal.actor_id)
+    .bind(actor_id)
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::NotFound("project"))?;
     let role = RoleGrant::stored(&access.role, access.role_permissions.as_deref())?;
     let subject = Subject::new(
-        principal.actor_id,
-        actor_kind(&principal.actor_kind)?,
+        actor_id,
+        kind,
         true,
         Some(Membership::project(project_id, role, true)),
         None,

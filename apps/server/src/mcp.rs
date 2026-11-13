@@ -79,6 +79,7 @@ mod criteria;
 mod environment_tools;
 mod field_tools;
 mod file_tools;
+mod github_tools;
 mod groups;
 mod history;
 mod invitation_tools;
@@ -95,6 +96,7 @@ mod oauth;
 mod page_discussion;
 mod planning;
 mod project_template_tools;
+mod publish_tools;
 mod reactions;
 mod reads;
 mod replies;
@@ -3159,6 +3161,44 @@ impl McpServer {
     }
 
     #[tool(
+        description = "Push a finished run's branch to GitHub, as the run page's Publish button does. It's queued for the GitHub worker; run_get shows when it's published. Publishing the same commit again returns the job already queued. Then pull_request_create opens a pull request from it.",
+        annotations(
+            title = "Publish run branch",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
+    )]
+    async fn run_publish(
+        &self,
+        Parameters(arguments): Parameters<publish_tools::RunPublishArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<publish_tools::QueuedValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(publish_tools::run_publish(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Open a pull request on GitHub from a finished run's published branch (run_publish first), with a title, a body and the tasks it delivers. It's queued for the GitHub worker; run_get and pull_request_get show it once it's open. A run's workspace gets one pull request: asking again returns that one.",
+        annotations(
+            title = "Open pull request",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
+    )]
+    async fn pull_request_create(
+        &self,
+        Parameters(arguments): Parameters<publish_tools::PullRequestCreateArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<publish_tools::QueuedValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(publish_tools::pull_request_create(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
         description = "List Codex runs you can see, newest first: active ones by default, or finished, failed, or all. mine: true for only runs you started.",
         annotations(title = "List runs", read_only_hint = true, open_world_hint = false)
     )]
@@ -3350,7 +3390,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "People: add a GitHub repository to a project (owner, name, GitHub's ID, default branch, and that you trust its code to run here), prepare its copy on the server, or archive it. Those who manage code in the project, through an app connected as themselves; agents read repositories only.",
+        description = "People: add a GitHub repository to a project (owner, name, GitHub's ID, default branch, and that you trust its code to run here; or installationId and GitHub's ID for one the project's GitHub App installation reaches), prepare its copy on the server, or archive it. Those who manage code in the project, through an app connected as themselves; agents read repositories only.",
         annotations(
             title = "Change a repository",
             read_only_hint = false,
@@ -3366,6 +3406,25 @@ impl McpServer {
     ) -> Json<common::ToolResult<repository_tools::RepositoryWriteValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(repository_tools::repository_write(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "People: link a project to its GitHub App installation (installationId, with the project's repositories it should reach; GitHub is asked that it does), or check it again; or switch the project's pull request automation (pullRequestOpen moves a task to review when a pull request naming it opens, pullRequestMerge to done when it merges). Those who manage code in the project, through an app connected as themselves.",
+        annotations(
+            title = "Change the GitHub integration",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
+    )]
+    async fn github_integration_write(
+        &self,
+        Parameters(arguments): Parameters<github_tools::GitHubIntegrationWriteArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<github_tools::GitHubIntegrationWriteValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(github_tools::github_integration_write(&self.state, principal, arguments).await)
     }
 
     #[tool(
@@ -3435,6 +3494,25 @@ impl McpServer {
             }
         );
         Json(reads::pull_request_get(&self.state, principal, &arguments.identifier).await)
+    }
+
+    #[tool(
+        description = "Read a pull request's checks and review from GitHub again, as its Refresh button does. It's queued for the GitHub worker; pull_request_get shows the result.",
+        annotations(
+            title = "Refresh pull request",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
+    )]
+    async fn pull_request_refresh(
+        &self,
+        Parameters(arguments): Parameters<publish_tools::PullRequestRefreshArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<publish_tools::QueuedValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(publish_tools::pull_request_refresh(&self.state, principal, arguments).await)
     }
 
     #[tool(
