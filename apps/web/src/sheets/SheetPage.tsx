@@ -199,11 +199,12 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
   const edit = (edits: GridEdit[]) => {
     if (!tab || !edits.length) return
     const revision = body.sheet.revision
-    const shown = new Map(edits.map((entry) => [`${tab.id}:${cellKey(entry.row, entry.column)}`, entry.input]))
-    setPending((current) => new Map([...current, ...shown]))
+    const at = (entry: GridEdit) => `${tab.id}:${cellKey(entry.row, entry.column)}`
+    setPending((current) => new Map([...current, ...edits.map((entry) => [at(entry), entry.input] as const)]))
     for (let start = 0; start < edits.length; start += 2_000) {
+      const batch = edits.slice(start, start + 2_000)
       void send(
-        edits.slice(start, start + 2_000).map((entry) => ({
+        batch.map((entry) => ({
           type: 'cell',
           tab: tab.id,
           row: entry.row,
@@ -211,7 +212,7 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
           input: entry.input,
           ifRevision: entry.revision ?? revision,
         })),
-        start === 0 ? shown : undefined,
+        new Map(batch.map((entry) => [at(entry), entry.input])),
       )
     }
   }
@@ -242,7 +243,8 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
         archived,
         tab: tab?.id,
       })
-      client.setQueryData(key, next)
+      const current = client.getQueryData<SheetBody>(key)
+      if (!current || next.sheet.revision >= current.sheet.revision) client.setQueryData(key, next)
       void client.invalidateQueries({ queryKey: sheetKeys.list(projectId) })
       showToast({
         tone: 'success',
@@ -501,7 +503,18 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
         </nav>
       </div>
       {dialog?.kind === 'details' ? (
-        <SheetDetailsDialog onClose={() => setDialog(null)} onSaved={(next) => client.setQueryData(key, { ...body, sheet: next.sheet })} projectId={projectId} sheet={body.sheet} />
+        <SheetDetailsDialog
+          onClose={() => setDialog(null)}
+          onSaved={(next) => {
+            // The answer holds this tab's cells as of its revision: keep it
+            // whole, unless the screen has already read further.
+            const current = client.getQueryData<SheetBody>(key)
+            if (!current || next.sheet.revision >= current.sheet.revision) client.setQueryData(key, next)
+          }}
+          projectId={projectId}
+          sheet={body.sheet}
+          tab={tab?.id}
+        />
       ) : null}
       {dialog?.kind === 'add-tab' || dialog?.kind === 'rename-tab' ? (
         <TabNameDialog

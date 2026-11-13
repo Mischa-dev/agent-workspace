@@ -10,11 +10,14 @@ export function SheetDetailsDialog({
   onSaved,
   projectId,
   sheet,
+  tab,
 }: {
   onClose: () => void
   onSaved: (body: SheetBody) => void
   projectId: string
   sheet: SheetSummary | null
+  /** The tab on screen, whose cells come back with the change. */
+  tab?: string
 }) {
   const client = useQueryClient()
   const [name, setName] = useState(sheet?.name ?? '')
@@ -28,7 +31,7 @@ export function SheetDetailsDialog({
     const details = { name: name.trim(), description: description.trim() }
     try {
       const body = sheet
-        ? await updateSheet(projectId, sheet.id, details)
+        ? await updateSheet(projectId, sheet.id, { ...details, tab })
         : await createSheet(projectId, {
             ...details,
             idempotencyKey: crypto.randomUUID(),
