@@ -27,6 +27,28 @@ describe('Markdown', () => {
     expect(screen.queryByRole('link')).toBeNull()
   })
 
+  it('lets a link be drawn by whatever draws it, saying when its text is the address', () => {
+    const seen: Array<[string, boolean]> = []
+    render(
+      <MemoryRouter>
+        <Markdown
+          renderLink={(href, children, bare) => {
+            seen.push([href, bare])
+            return href.includes('/chip/') ? <mark>{children}</mark> : null
+          }}
+          source={'See [the plan](/chip/1), https://app.example/chip/2 and [elsewhere](/other).'}
+        />
+      </MemoryRouter>,
+    )
+    expect(seen).toEqual([
+      ['/chip/1', false],
+      ['https://app.example/chip/2', true],
+      ['/other', false],
+    ])
+    expect(screen.getByText('the plan').tagName).toBe('MARK')
+    expect(screen.getByRole('link', { name: 'elsewhere' })).toHaveAttribute('href', '/other')
+  })
+
   it('shows raw HTML as text and never creates elements from it', () => {
     const { container } = renderMarkdown('<script>alert(1)</script>\n\n<img src=x onerror=alert(1)> **bold**')
     expect(container.querySelector('script')).toBeNull()

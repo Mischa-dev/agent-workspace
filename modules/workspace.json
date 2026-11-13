@@ -87,7 +87,7 @@
       "/design-system/pieces",
       "*"
     ],
-    "parts": ["tech.ids"],
+    "parts": ["tech.ids", "page.references"],
     "sidebar": ["rail.home", "rail.search", "rail.settings", "home.home"],
     "home": ["setup"],
     "settings": [

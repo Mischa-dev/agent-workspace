@@ -40,6 +40,7 @@ import {
 } from '../ui'
 import { Markdown, MarkdownEditor } from '../ui/markdown'
 import type { Embed } from '../ui/markdown/parse'
+import { thingLink } from '../modules/references/thingLinks'
 import {
   createPage,
   getPage,
@@ -66,6 +67,7 @@ const renderEmbed = (embed: Embed) => <PageEmbed href={embed.href} label={embed.
 const LinkedWhiteboards = lazy(() =>
   import('../whiteboards/LinkedWhiteboards').then((module) => ({ default: module.LinkedWhiteboards })),
 )
+const ReferencedIn = lazy(() => import('../modules/references/ReferencedIn'))
 // The live editor (AWD-53) loads in its own chunks when a page opens for writing.
 const LivePage = lazy(() => import('./live/LivePage'))
 // Comments and suggested changes (AWD-53) load in their own chunk.
@@ -372,6 +374,7 @@ function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
       className="aw-doc"
       empty={live ? 'Nothing here yet.' : canEdit ? 'Nothing here yet. Choose Edit to write it.' : 'Nothing here yet.'}
       renderEmbed={renderEmbed}
+      renderLink={thingLink}
       source={current.body}
     />
   )
@@ -443,7 +446,7 @@ function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
             }
             title={`Version ${viewing.version}: ${viewing.title}`}
           >
-            <Markdown className="aw-doc" empty="This version was empty." renderEmbed={renderEmbed} source={viewing.body} />
+            <Markdown className="aw-doc" empty="This version was empty." renderEmbed={renderEmbed} renderLink={thingLink} source={viewing.body} />
           </Section>
         </div>
       ) : live ? (
@@ -477,6 +480,11 @@ function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
       <Suspense fallback={null}>
         <LinkedWhiteboards canEdit={canEdit && !current.archived} projectId={projectId} targetId={current.id} targetKind="page" />
       </Suspense>
+      {experience.shows('page.references') ? (
+        <Suspense fallback={null}>
+          <ReferencedIn id={current.id} kind="page" />
+        </Suspense>
+      ) : null}
       <Section description="Every save is kept. Open an old version to read it or put it back." title="History">
         <RowList label="Versions">
           {current.revisions.map((revision) => (

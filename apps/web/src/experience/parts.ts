@@ -41,6 +41,7 @@ export const PART_IDS = [
   'page.live_editing',
   'page.comments',
   'page.import_export',
+  'page.references',
   'tech.task_keys',
   'tech.run_usage',
   'tech.ids',

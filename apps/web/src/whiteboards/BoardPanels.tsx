@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { Suspense, lazy, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
@@ -12,6 +12,8 @@ import {
   type WhiteboardDetail,
   type WhiteboardLink,
 } from './api'
+
+const ReferencedIn = lazy(() => import('../modules/references/ReferencedIn'))
 
 const KIND_LABEL: Record<WhiteboardLink['targetKind'], string> = {
   project: 'Project',
@@ -115,6 +117,11 @@ export function LinksDialog({
             Link
           </Button>
         </div>
+      ) : null}
+      {open ? (
+        <Suspense fallback={null}>
+          <ReferencedIn id={whiteboard.id} kind="whiteboard" />
+        </Suspense>
       ) : null}
       {error ? <Banner tone="danger">{error}</Banner> : null}
     </Dialog>
