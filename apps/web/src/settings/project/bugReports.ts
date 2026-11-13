@@ -23,10 +23,17 @@ export type BugReportLink = {
   canManage: boolean
   version: number
   createdAt: string
+  /** A collection's form (AWD-110): each answer there becomes a record. */
+  collectionId?: string
+  collectionName?: string
+  form?: FormSettings
 }
 
+/** What a form asks: its fields by ID, in order, after the title. */
+export type FormSettings = { intro?: string; fields: { field: string; required?: boolean }[]; thanks?: string }
+
 export type BugReportLinkList = { links: BugReportLink[]; canCreate: boolean }
-export type BugReportLinkWithUrl = { link: BugReportLink; url: string }
+export type BugReportLinkWithUrl = { link: BugReportLink; url: string; formUrl?: string }
 
 const json = <T>(path: string, method: string, body: unknown = {}) =>
   requestJson<T>(path, { method, json: body, idempotencyKey: crypto.randomUUID() })
@@ -39,7 +46,10 @@ export const listBugReportLinks = (projectId: string) =>
 export const createBugReportLink = (projectId: string, name: string) =>
   json<BugReportLinkWithUrl>(`/api/v1/projects/${encodeURIComponent(projectId)}/bug-report-links`, 'POST', { name })
 
-export const updateBugReportLink = (linkId: string, change: { name?: string; state?: 'active' | 'paused' }) =>
+export const createCollectionForm = (projectId: string, collectionId: string, name: string, form: FormSettings) =>
+  json<BugReportLinkWithUrl>(`/api/v1/projects/${encodeURIComponent(projectId)}/bug-report-links`, 'POST', { name, collectionId, form })
+
+export const updateBugReportLink = (linkId: string, change: { name?: string; state?: 'active' | 'paused'; form?: FormSettings }) =>
   json<BugReportLink>(linkPath(linkId), 'PATCH', change)
 
 export const replaceBugReportLink = (linkId: string) => json<BugReportLinkWithUrl>(`${linkPath(linkId)}/replace`, 'POST')

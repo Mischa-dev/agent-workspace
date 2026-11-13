@@ -92,6 +92,8 @@ function BugReports({ project }: { project: Project }) {
   })
 
   const canCreate = list.data?.canCreate === true
+  // A collection's forms are links too, but they're managed from that collection.
+  const links = list.data?.links.filter((link) => !link.collectionId) ?? []
 
   return (
     <>
@@ -106,7 +108,7 @@ function BugReports({ project }: { project: Project }) {
         icon="circle-alert"
         title="Bug reports"
       >
-        Give another app a link, and every bug report it sends becomes a task in {project.name}. Reports are added as the person who made the link.
+        Give another app a link, and every bug report it sends becomes a task in {project.name}. Reports are added as the person who made the link. Forms that add records are shared from their collection.
       </PageHeader>
       {setup && <SetupCard name={setup.name} onDone={() => setSetup(null)} projectName={project.name} url={setup.url} />}
       {list.isPending ? (
@@ -115,9 +117,9 @@ function BugReports({ project }: { project: Project }) {
         <ErrorState error={list.error} onRetry={() => void list.refetch()} title="Bug report links didn’t load" />
       ) : (
         <Section id="bug-report-links-heading" title="Links">
-          {list.data.links.length ? (
+          {links.length ? (
             <RowList label="Bug report links">
-              {list.data.links.map((link) => (
+              {links.map((link) => (
                 <Row
                   actions={
                     link.canManage ? (

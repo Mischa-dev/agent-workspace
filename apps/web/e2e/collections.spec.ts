@@ -280,6 +280,64 @@ test('a board moves a record between columns, and a calendar shows and adds reco
   expect(errors, 'uncaught errors on the page').toEqual([])
 })
 
+test('a form shared from the collection adds a record for someone who isn’t signed in', async ({ page, context, browser }) => {
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  await page.setViewportSize({ width: 1440, height: 900 })
+  const { projectId, collectionId } = await seed(context, page)
+  await page.goto(`/projects/${projectId}/collections/${collectionId}`)
+  await page.getByRole('button', { name: 'Collection options' }).click()
+  await page.getByRole('menuitem', { name: 'Forms…' }).click()
+  const dialog = page.getByRole('dialog')
+  await dialog.getByRole('button', { name: 'New form' }).click()
+  const formName = `Playtest form ${Date.now()}`
+  await dialog.getByLabel('Form name').fill(formName)
+  await dialog.getByLabel('Intro').fill('Tell us what felt wrong in this build.')
+  await dialog.getByRole('checkbox', { name: 'Severity' }).check()
+  await dialog.getByRole('switch', { name: 'Required (Severity)' }).click()
+  await dialog.getByRole('checkbox', { name: 'Build' }).check()
+  await expect(dialog.getByRole('checkbox', { name: 'Owner' })).toHaveCount(0)
+  await page.screenshot({ path: path.join(screenshotDir, 'collections-form-editor-desktop.png'), animations: 'disabled' })
+  await dialog.getByRole('button', { name: 'Make form' }).click()
+  const url = (await dialog.locator('code').textContent())?.trim() ?? ''
+  expect(url).toContain('/forms/')
+  await dialog.getByRole('button', { name: 'Back to forms' }).click()
+  await expect(dialog.getByText(formName)).toBeVisible()
+
+  // Someone outside the project, with no session at all.
+  const outside = await browser.newContext({ storageState: { cookies: [], origins: [] }, colorScheme: 'light' })
+  const form = await outside.newPage()
+  form.on('pageerror', (error) => errors.push(error.message))
+  await form.setViewportSize({ width: 1440, height: 900 })
+  await form.goto(url)
+  await expect(form.getByRole('heading', { name: formName })).toBeVisible()
+  await expect(form.getByText('Owner')).toHaveCount(0)
+  await form.getByRole('button', { name: 'Send' }).click()
+  await expect(form.getByText('Fill in Note.')).toBeVisible()
+  await form.getByLabel('Note (required)').fill('Checkpoint skipped after the bridge')
+  await form.getByRole('button', { name: 'Send' }).click()
+  await expect(form.getByText('Fill in Severity.')).toBeVisible()
+  await form.getByLabel('Severity (required)').selectOption({ label: 'Medium' })
+  await form.getByLabel('Build').fill('0.4.3')
+  await form.screenshot({ path: path.join(screenshotDir, 'collections-form-light-desktop.png'), fullPage: true, animations: 'disabled' })
+  await form.getByRole('button', { name: 'Send' }).click()
+  await expect(form.getByRole('heading', { name: 'Sent' })).toBeVisible()
+  await form.getByRole('button', { name: 'Send another' }).click()
+  await form.emulateMedia({ colorScheme: 'dark' })
+  await form.setViewportSize({ width: 390, height: 844 })
+  await expect(form.getByLabel('Note (required)')).toHaveValue('')
+  await form.screenshot({ path: path.join(screenshotDir, 'collections-form-dark-phone.png'), fullPage: true, animations: 'disabled' })
+  const overflow = await form.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+  expect(overflow, 'form: horizontal scroll at 390 px').toBeLessThanOrEqual(0)
+  await outside.close()
+
+  // The answer is a record, with only what the form asked.
+  const found = await page.request.get(`/api/v1/projects/${projectId}/collections/${collectionId}/records?search=${encodeURIComponent('Checkpoint skipped')}`)
+  const records = ((await found.json()) as { records: Array<{ title: string }> }).records
+  expect(records.map((record) => record.title)).toEqual(['Checkpoint skipped after the bridge'])
+  expect(errors, 'uncaught errors on the page').toEqual([])
+})
+
 const schemes = [
   { scheme: 'light', theme: 'daylight' },
   { scheme: 'dark', theme: 'midnight' },

@@ -1038,3 +1038,60 @@ button.aw-collection__chiptext:hover,
     scroll-snap-align: start;
   }
 }
+
+/* Forms (AWD-110): the list, the question picker and a delete check. */
+.aw-cforms__fields {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.aw-cforms__fields legend {
+  padding: 0;
+  font: var(--t-ui-strong);
+  color: var(--content-fg);
+}
+
+.aw-cforms__hint {
+  margin: 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-cforms__list {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-cforms__field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: 36px;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+}
+
+.aw-cforms__field:hover {
+  background: var(--content-hover);
+}
+
+.aw-cforms__confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.aw-cforms__confirm p {
+  flex: 1 1 240px;
+  margin: 0;
+  font: var(--t-ui);
+}

@@ -33,6 +33,7 @@ import {
 import { activeConfig, dateFields, groupableFields, sameConfig, withColumnHidden } from './collectionModel'
 import { CollectionDetailsDialog, ViewNameDialog } from './CollectionDialogs'
 import { CollectionToolbar } from './CollectionToolbar'
+import { FormsDialog } from './FormsDialog'
 import type { ColumnActions } from './ColumnMenus'
 import { RecordBoard } from './RecordBoard'
 import { RecordCalendar } from './RecordCalendar'
@@ -46,6 +47,7 @@ const NO_CONFIG: ViewConfig = { filters: [], sort: [], groupBy: null, columns: [
 
 type Dialogs =
   | { kind: 'details' }
+  | { kind: 'forms' }
   | { kind: 'field'; field: FieldDefinition | null }
   | { kind: 'new-view' }
   | { kind: 'rename-view'; view: CollectionView }
@@ -274,14 +276,17 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
     if (added) openRecord(added.id)
   }
 
-  const collectionMenu: MenuEntry[] = canBuild
-    ? [
-        { label: 'Edit details…', icon: 'pencil', onSelect: () => setDialog({ kind: 'details' }) },
-        { label: 'Add a field…', icon: 'plus', onSelect: () => setDialog({ kind: 'field', field: null }) },
-        { separator: true },
-        { label: 'Archive collection', icon: 'archive', onSelect: () => void setCollectionArchived(true) },
-      ]
-    : []
+  const collectionMenu: MenuEntry[] = [
+    ...(body.canEditRecords ? [{ label: 'Forms…', icon: 'list' as const, onSelect: () => setDialog({ kind: 'forms' }) }] : []),
+    ...(canBuild
+      ? ([
+          { label: 'Edit details…', icon: 'pencil', onSelect: () => setDialog({ kind: 'details' }) },
+          { label: 'Add a field…', icon: 'plus', onSelect: () => setDialog({ kind: 'field', field: null }) },
+          { separator: true },
+          { label: 'Archive collection', icon: 'archive', onSelect: () => void setCollectionArchived(true) },
+        ] satisfies MenuEntry[])
+      : []),
+  ]
   const viewMenu: MenuEntry[] = view
     ? [
         { label: 'Rename view…', icon: 'pencil', onSelect: () => setDialog({ kind: 'rename-view', view }) },
@@ -408,6 +413,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
       {dialog?.kind === 'details' ? (
         <CollectionDetailsDialog collection={body.collection} onClose={() => setDialog(null)} onSaved={() => undefined} projectId={projectId} />
       ) : null}
+      {dialog?.kind === 'forms' ? <FormsDialog body={body} onClose={() => setDialog(null)} projectId={projectId} /> : null}
       {dialog?.kind === 'field' ? (
         <FieldDialog field={dialog.field} onClose={() => setDialog(null)} records="records" scope={fieldScope(projectId, collectionId)} />
       ) : null}

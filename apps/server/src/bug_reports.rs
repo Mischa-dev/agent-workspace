@@ -36,6 +36,7 @@ use uuid::Uuid;
 use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
+    collection_forms::{self, FormConfig},
     error::{ApiJson, ApiPath, AppError},
     events::{self, Caller},
     mcp::{self, McpPrincipal},
@@ -70,6 +71,7 @@ pub fn router() -> Router<AppState> {
             "/api/v1/bug-reports/{token}",
             post(report_route).options(preflight_route),
         )
+        .route("/api/v1/forms/{token}", get(form_route))
 }
 
 // ---------------------------------------------------------------------------
@@ -90,6 +92,9 @@ struct LinkRow {
     last_report_at: Option<String>,
     version: i64,
     created_at: String,
+    collection_id: Option<Uuid>,
+    collection_name: Option<String>,
+    form: Option<Value>,
 }
 
 const LINK_SELECT: &str = r#"
@@ -98,9 +103,12 @@ const LINK_SELECT: &str = r#"
            link.disabled_reason, link.report_count,
            to_char(link.last_report_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS last_report_at,
            link.version,
-           to_char(link.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at
+           to_char(link.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at,
+           link.collection_id, collection.name AS collection_name, link.form
     FROM bug_report_links link
     LEFT JOIN users owner ON owner.actor_id = link.owner_actor_id
+    LEFT JOIN collections collection
+      ON collection.project_id = link.project_id AND collection.id = link.collection_id
 "#;
 
 #[derive(Debug, Serialize)]
@@ -121,6 +129,13 @@ pub struct LinkView {
     pub can_manage: bool,
     pub version: i64,
     pub created_at: String,
+    /// A form's collection (AWD-110): each report there is a record.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collection_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collection_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub form: Option<FormConfig>,
 }
 
 #[derive(Debug, Serialize)]
@@ -137,12 +152,21 @@ pub struct LinkList {
 pub struct LinkWithUrl {
     pub link: LinkView,
     pub url: String,
+    /// A form's page, where people fill it in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub form_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateLink {
     pub name: String,
+    /// Makes it a form that adds records to this collection.
+    #[serde(default)]
+    pub collection_id: Option<Uuid>,
+    /// With collectionId: the fields the form asks for.
+    #[serde(default)]
+    pub form: Option<FormConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -151,6 +175,9 @@ pub struct UpdateLink {
     pub name: Option<String>,
     /// active or paused.
     pub state: Option<String>,
+    /// A form's new settings (forms only).
+    #[serde(default)]
+    pub form: Option<FormConfig>,
 }
 
 fn view(row: LinkRow, can_manage: bool) -> LinkView {
@@ -168,6 +195,11 @@ fn view(row: LinkRow, can_manage: bool) -> LinkView {
         can_manage,
         version: row.version,
         created_at: row.created_at,
+        collection_id: row.collection_id,
+        collection_name: row.collection_name,
+        form: row
+            .form
+            .and_then(|form| serde_json::from_value::<FormConfig>(form).ok()),
     }
 }
 
@@ -191,6 +223,67 @@ fn digest(token: &str) -> Vec<u8> {
 
 fn hint(token: &str) -> String {
     token[token.len() - 4..].to_owned()
+}
+
+fn form_url(state: &AppState, token: &str) -> String {
+    format!(
+        "{}/forms/{token}",
+        events::public_origin(state).trim_end_matches('/')
+    )
+}
+
+/// Whether the caller can add records in the project (and so make a form
+/// there). Not found unless they can see the project.
+async fn can_add_records(pool: &PgPool, caller: &Caller, project_id: Uuid) -> bool {
+    caller.actor_kind == ActorKind::Human
+        && crate::memory::project_access(
+            pool,
+            caller.actor_id,
+            caller.actor_kind,
+            project_id,
+            PolicyAction::CollectionRecordEdit,
+        )
+        .await
+        .is_ok()
+}
+
+/// The form checked against its collection's current fields, which must be
+/// an open collection of the project's own; or what to change, in words.
+/// The routes and the tool ask first, for the message; making or changing
+/// a link checks again.
+pub(crate) async fn checked_form(
+    pool: &PgPool,
+    project_id: Uuid,
+    collection_id: Uuid,
+    form: &FormConfig,
+) -> Result<Result<FormConfig, String>, AppError> {
+    let collection = crate::collections::get(pool, project_id, collection_id)
+        .await?
+        .ok_or(AppError::NotFound("collection"))?;
+    if collection.archived {
+        return Ok(Err(
+            "The collection is archived. Restore it to take answers.".to_owned(),
+        ));
+    }
+    let definitions =
+        crate::collections::field_definitions(pool, project_id, collection_id, false).await?;
+    Ok(collection_forms::check(form, &definitions))
+}
+
+/// The form a link would hold, or what's wrong with it: for a route or a
+/// tool to say before it makes or changes the link.
+pub(crate) async fn form_problem(
+    pool: &PgPool,
+    project_id: Uuid,
+    collection_id: Option<Uuid>,
+    form: Option<&FormConfig>,
+) -> Result<Option<String>, AppError> {
+    let (Some(collection_id), Some(form)) = (collection_id, form) else {
+        return Ok(None);
+    };
+    Ok(checked_form(pool, project_id, collection_id, form)
+        .await?
+        .err())
 }
 
 fn link_url(state: &AppState, token: &str) -> String {
@@ -260,6 +353,20 @@ pub(crate) async fn link_project(pool: &PgPool, link_id: Uuid) -> Result<Option<
     )
 }
 
+/// A form's collection, if the link is a form.
+pub(crate) async fn link_collection(
+    pool: &PgPool,
+    link_id: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT collection_id FROM bug_report_links WHERE id = $1",
+    )
+    .bind(link_id)
+    .fetch_optional(pool)
+    .await?
+    .flatten())
+}
+
 /// A link the caller may change: their own, or any in a project they
 /// manage. Not found otherwise.
 async fn manageable(pool: &PgPool, caller: &Caller, link_id: Uuid) -> Result<LinkRow, AppError> {
@@ -306,9 +413,27 @@ pub(crate) async fn create(
 ) -> Result<LinkWithUrl, AppError> {
     let name = normalize_name(&request.name)?;
     let (can_create, _) = project_rights(&state.pool, caller, project_id).await?;
-    if !can_create {
-        return Err(AppError::Forbidden);
-    }
+    let form = match (request.collection_id, &request.form) {
+        (None, None) => {
+            if !can_create {
+                return Err(AppError::Forbidden);
+            }
+            None
+        }
+        (Some(collection_id), form) => {
+            if !can_add_records(&state.pool, caller, project_id).await {
+                return Err(AppError::Forbidden);
+            }
+            let form = form.clone().unwrap_or_default();
+            Some((
+                collection_id,
+                checked_form(&state.pool, project_id, collection_id, &form)
+                    .await?
+                    .map_err(|_| AppError::Validation("form"))?,
+            ))
+        }
+        (None, Some(_)) => return Err(AppError::Validation("collectionId")),
+    };
     let mut transaction = state.pool.begin().await?;
     let organization_id = sqlx::query_scalar::<_, Uuid>(
         "SELECT organization_id FROM projects WHERE id = $1 FOR UPDATE",
@@ -329,8 +454,9 @@ pub(crate) async fn create(
     sqlx::query(
         r#"
         INSERT INTO bug_report_links (
-            id, organization_id, project_id, owner_actor_id, name, token_digest, token_hint
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+            id, organization_id, project_id, owner_actor_id, name, token_digest, token_hint,
+            collection_id, form
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         "#,
     )
     .bind(link_id)
@@ -340,6 +466,13 @@ pub(crate) async fn create(
     .bind(&name)
     .bind(digest(&token))
     .bind(hint(&token))
+    .bind(form.as_ref().map(|(collection_id, _)| *collection_id))
+    .bind(
+        form.as_ref()
+            .map(|(_, form)| serde_json::to_value(form))
+            .transpose()
+            .map_err(|_| AppError::Internal("serialize form"))?,
+    )
     .execute(&mut *transaction)
     .await?;
     events::audit(
@@ -350,14 +483,16 @@ pub(crate) async fn create(
         "bug_report_link.create",
         "bug_report_link",
         link_id,
-        json!({ "name": name }),
+        json!({ "name": name, "collection": form.as_ref().map(|(collection_id, _)| collection_id) }),
     )
     .await?;
     transaction.commit().await?;
     let row = fetch(&state.pool, link_id).await?;
+    let is_form = row.collection_id.is_some();
     Ok(LinkWithUrl {
         link: view(row, true),
         url: link_url(state, &token),
+        form_url: is_form.then(|| form_url(state, &token)),
     })
 }
 
@@ -374,11 +509,28 @@ pub(crate) async fn update(
         Some(value @ ("active" | "paused")) => Some(value),
         Some(_) => return Err(AppError::Validation("state")),
     };
+    let form = match (&request.form, row.collection_id) {
+        (None, _) => None,
+        (Some(_), None) => return Err(AppError::Validation("form")),
+        (Some(form), Some(collection_id)) => Some(
+            serde_json::to_value(
+                checked_form(&state.pool, row.project_id, collection_id, form)
+                    .await?
+                    .map_err(|_| AppError::Validation("form"))?,
+            )
+            .map_err(|_| AppError::Internal("serialize form"))?,
+        ),
+    };
     // Turning a link back on makes the person doing it its maker, so it
-    // acts as someone who can add tasks here now.
+    // acts as someone who can add tasks (or a form's records) here now.
     let owner = if new_state == Some("active") && row.state != "active" {
-        let (can_create, _) = project_rights(&state.pool, caller, row.project_id).await?;
-        if !can_create {
+        let allowed = if row.collection_id.is_some() {
+            project_rights(&state.pool, caller, row.project_id).await?;
+            can_add_records(&state.pool, caller, row.project_id).await
+        } else {
+            project_rights(&state.pool, caller, row.project_id).await?.0
+        };
+        if !allowed {
             return Err(AppError::Forbidden);
         }
         caller.actor_id
@@ -393,6 +545,7 @@ pub(crate) async fn update(
             state = coalesce($3, state),
             disabled_reason = CASE WHEN $3::text IS NULL THEN disabled_reason ELSE NULL END,
             owner_actor_id = $4,
+            form = coalesce($5, form),
             version = version + 1, updated_at = now()
         WHERE id = $1
         "#,
@@ -401,6 +554,7 @@ pub(crate) async fn update(
     .bind(&name)
     .bind(new_state)
     .bind(owner)
+    .bind(&form)
     .execute(&mut *transaction)
     .await?;
     events::audit(
@@ -411,7 +565,7 @@ pub(crate) async fn update(
         "bug_report_link.update",
         "bug_report_link",
         link_id,
-        json!({ "name": name, "state": new_state }),
+        json!({ "name": name, "state": new_state, "form": form.is_some() }),
     )
     .await?;
     transaction.commit().await?;
@@ -450,9 +604,12 @@ pub(crate) async fn replace(
     )
     .await?;
     transaction.commit().await?;
+    let row = fetch(&state.pool, link_id).await?;
+    let is_form = row.collection_id.is_some();
     Ok(LinkWithUrl {
-        link: view(fetch(&state.pool, link_id).await?, true),
+        link: view(row, true),
         url: link_url(state, &token),
+        form_url: is_form.then(|| form_url(state, &token)),
     })
 }
 
@@ -678,10 +835,18 @@ struct ReportLink {
     name: String,
     state: String,
     bug_type: Option<String>,
+    collection_id: Option<Uuid>,
+    form: Option<Value>,
 }
 
-/// Why the maker can't add tasks through it any more, if they can't.
+/// Why the maker can't add tasks (or a form's records) through it any
+/// more, if they can't.
 async fn maker_refusal(pool: &PgPool, link: &ReportLink) -> Result<Option<String>, AppError> {
+    let action = if link.collection_id.is_some() {
+        PolicyAction::CollectionRecordEdit
+    } else {
+        PolicyAction::WorkItemCreate
+    };
     let reachable = sqlx::query_scalar::<_, bool>(
         "SELECT coalesce(actor_can_access_project($1, NULL, $2), false)",
     )
@@ -696,15 +861,21 @@ async fn maker_refusal(pool: &PgPool, link: &ReportLink) -> Result<Option<String
                 link.owner_actor_id,
                 ActorKind::Human,
                 link.project_id,
-                PolicyAction::WorkItemCreate,
+                action,
             )
             .await,
             Ok(false)
         );
     Ok((!allowed).then(|| {
-        "Turned off because the person who made it can no longer add tasks in this project. \
-         Turn it on again to send reports as you."
-            .to_owned()
+        if link.collection_id.is_some() {
+            "Turned off because the person who made it can no longer add records in this \
+             project. Turn it on again to take answers as you."
+                .to_owned()
+        } else {
+            "Turned off because the person who made it can no longer add tasks in this project. \
+             Turn it on again to send reports as you."
+                .to_owned()
+        }
     }))
 }
 
@@ -725,7 +896,8 @@ async fn receive(
                (SELECT item_type.name FROM work_item_types item_type
                 WHERE item_type.project_id = link.project_id AND item_type.enabled
                   AND lower(item_type.name) = 'bug'
-                LIMIT 1) AS bug_type
+                LIMIT 1) AS bug_type,
+               link.collection_id, link.form
         FROM bug_report_links link
         WHERE link.token_digest = $1
         "#,
@@ -737,48 +909,28 @@ async fn receive(
     if link.state != "active" {
         return Ok(refused(
             StatusCode::FORBIDDEN,
-            "This bug report link is turned off.",
+            if link.collection_id.is_some() {
+                "This form isn't taking answers."
+            } else {
+                "This bug report link is turned off."
+            },
         ));
     }
     let content_type = headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok());
+    if let Some(collection_id) = link.collection_id {
+        return receive_answer(state, &link, collection_id, content_type, body).await;
+    }
     let report = parse_report(content_type, body)?;
     let (title, description) = task_text(&report, &link.name)?;
-    if let Some(reason) = maker_refusal(&state.pool, &link).await? {
-        sqlx::query(
-            r#"
-            UPDATE bug_report_links
-            SET state = 'disabled', disabled_reason = $2, version = version + 1, updated_at = now()
-            WHERE id = $1 AND state = 'active'
-            "#,
-        )
-        .bind(link.id)
-        .bind(&reason)
-        .execute(&state.pool)
-        .await?;
+    if turned_off_for_maker(&state.pool, &link).await? {
         return Ok(refused(
             StatusCode::FORBIDDEN,
             "This bug report link is turned off.",
         ));
     }
-    let principal = McpPrincipal {
-        credential_id: link.id,
-        mcp_credential_id: None,
-        oauth_grant_id: None,
-        actor_id: link.owner_actor_id,
-        actor_kind: ActorKind::Human,
-        project_id: link.project_id,
-        external_agent_connection_id: None,
-        client_name: format!("Bug report link: {}", link.name)
-            .chars()
-            .take(80)
-            .collect(),
-        scopes: vec!["read".to_owned(), "write".to_owned()],
-        authentication_class: "bug_report_link",
-        account_wide: false,
-        project_explicit: true,
-    };
+    let principal = link_principal(&link, "Bug report link");
     let mut arguments = json!({
         "projectId": link.project_id,
         "title": title,
@@ -841,6 +993,206 @@ async fn receive(
         })),
     )
         .into_response())
+}
+
+/// The link acting as its maker, through the same tools the app uses.
+fn link_principal(link: &ReportLink, kind: &str) -> McpPrincipal {
+    McpPrincipal {
+        credential_id: link.id,
+        mcp_credential_id: None,
+        oauth_grant_id: None,
+        actor_id: link.owner_actor_id,
+        actor_kind: ActorKind::Human,
+        project_id: link.project_id,
+        external_agent_connection_id: None,
+        client_name: format!("{kind}: {}", link.name).chars().take(80).collect(),
+        scopes: vec!["read".to_owned(), "write".to_owned()],
+        authentication_class: "bug_report_link",
+        account_wide: false,
+        project_explicit: true,
+    }
+}
+
+/// Turns the link off when its maker can't add through it any more.
+async fn turned_off_for_maker(pool: &PgPool, link: &ReportLink) -> Result<bool, AppError> {
+    let Some(reason) = maker_refusal(pool, link).await? else {
+        return Ok(false);
+    };
+    sqlx::query(
+        r#"
+        UPDATE bug_report_links
+        SET state = 'disabled', disabled_reason = $2, version = version + 1, updated_at = now()
+        WHERE id = $1 AND state = 'active'
+        "#,
+    )
+    .bind(link.id)
+    .bind(&reason)
+    .execute(pool)
+    .await?;
+    Ok(true)
+}
+
+/// A form's answer (AWD-110): one record in its collection, made by
+/// `record_write` as the link's maker, of only the fields the form asks.
+async fn receive_answer(
+    state: &AppState,
+    link: &ReportLink,
+    collection_id: Uuid,
+    content_type: Option<&str>,
+    body: &[u8],
+) -> Result<Response, AppError> {
+    let closed = || {
+        Ok(refused(
+            StatusCode::FORBIDDEN,
+            "This form isn't taking answers.",
+        ))
+    };
+    let Some(form) = link
+        .form
+        .clone()
+        .and_then(|form| serde_json::from_value::<FormConfig>(form).ok())
+    else {
+        return closed();
+    };
+    let Some(collection) =
+        crate::collections::get(&state.pool, link.project_id, collection_id).await?
+    else {
+        return closed();
+    };
+    if collection.archived {
+        return closed();
+    }
+    let answer = match collection_forms::parse_answer(content_type, body) {
+        Ok(answer) => answer,
+        Err(message) => return Ok(refused(StatusCode::UNPROCESSABLE_ENTITY, &message)),
+    };
+    let definitions =
+        crate::collections::field_definitions(&state.pool, link.project_id, collection_id, false)
+            .await?;
+    let (title, values) =
+        match collection_forms::record_from_answer(&collection, &form, &definitions, &answer) {
+            Ok(record) => record,
+            Err(message) => return Ok(refused(StatusCode::UNPROCESSABLE_ENTITY, &message)),
+        };
+    if turned_off_for_maker(&state.pool, link).await? {
+        return closed();
+    }
+    let arguments = json!({
+        "projectId": link.project_id,
+        "collection": collection_id.to_string(),
+        "records": [{ "title": title, "fields": values }],
+        "clientRequestId": collection_forms::request_id(link.id, &title, &values),
+    });
+    let result = mcp::call_tool_direct(
+        state,
+        link_principal(link, "Form"),
+        "record_write",
+        arguments,
+    )
+    .await
+    .map_err(|error| match error {
+        mcp::DirectCallError::Refused(error) => error,
+        mcp::DirectCallError::UnknownTool | mcp::DirectCallError::InvalidArguments(_) => {
+            AppError::Internal("form record_write call")
+        }
+    })?;
+    if result.get("outcome").and_then(Value::as_str) != Some("ok") {
+        let outcome = result
+            .get("outcome")
+            .and_then(Value::as_str)
+            .unwrap_or("none");
+        tracing::warn!(outcome, "form answer refused by record_write");
+        // A value the collection refuses (an option that's gone, a bad
+        // date) says why; anything else stays general.
+        let message = match outcome {
+            "invalid_request" => result
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Check the answers and try again."),
+            _ => "This form isn't taking answers.",
+        };
+        return Ok(refused(crate::public_api::status_for(&result), message));
+    }
+    let duplicate = result
+        .pointer("/value/idempotentReplay")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if !duplicate {
+        sqlx::query(
+            "UPDATE bug_report_links SET report_count = report_count + 1, last_report_at = now() WHERE id = $1",
+        )
+        .bind(link.id)
+        .execute(&state.pool)
+        .await?;
+    }
+    Ok((
+        if duplicate {
+            StatusCode::OK
+        } else {
+            StatusCode::CREATED
+        },
+        Json(json!({
+            "ok": true,
+            "record": result.pointer("/value/records/0/number"),
+            "duplicate": duplicate,
+            "thanks": form.thanks,
+        })),
+    )
+        .into_response())
+}
+
+/// `GET /api/v1/forms/{token}`: the form's page reads what to ask. Nothing
+/// but the form: never a record, a person or a task.
+async fn read_form(state: &AppState, token: &str) -> Result<Response, AppError> {
+    let token_digest = digest(token);
+    state.rate_limits.check_bug_report(&token_digest)?;
+    let row = sqlx::query_as::<_, (Uuid, String, String, Option<Uuid>, Option<Value>)>(
+        "SELECT project_id, name, state, collection_id, form FROM bug_report_links WHERE token_digest = $1",
+    )
+    .bind(&token_digest)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((project_id, name, link_state, Some(collection_id), Some(form))) = row else {
+        return Ok(refused(StatusCode::NOT_FOUND, "There's no form here."));
+    };
+    let form = serde_json::from_value::<FormConfig>(form).unwrap_or_default();
+    let collection = crate::collections::get(&state.pool, project_id, collection_id).await?;
+    let Some(collection) = collection.filter(|collection| !collection.archived) else {
+        return Ok(refused(
+            StatusCode::FORBIDDEN,
+            "This form isn't taking answers.",
+        ));
+    };
+    if link_state != "active" {
+        return Ok(refused(
+            StatusCode::FORBIDDEN,
+            "This form isn't taking answers.",
+        ));
+    }
+    let definitions =
+        crate::collections::field_definitions(&state.pool, project_id, collection_id, false)
+            .await?;
+    let mut response = Json(collection_forms::public(
+        &name,
+        &collection,
+        &form,
+        &definitions,
+    ))
+    .into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+async fn form_route(State(state): State<AppState>, Path(token): Path<String>) -> Response {
+    if !token.starts_with(TOKEN_PREFIX) || token.len() > 128 {
+        return refused(StatusCode::NOT_FOUND, "There's no form here.");
+    }
+    match read_form(&state, &token).await {
+        Ok(response) => response,
+        Err(error) => error.into_response(),
+    }
 }
 
 fn refused(status: StatusCode, message: &str) -> Response {
@@ -923,13 +1275,39 @@ async fn create_route(
     principal: AuthenticatedActor,
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<CreateLink>,
-) -> Result<(StatusCode, Json<LinkWithUrl>), AppError> {
+) -> Result<Response, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
     let caller = Caller::browser(&principal)?;
+    project_rights(&state.pool, &caller, project_id).await?;
+    if let Some(message) = form_problem(
+        &state.pool,
+        project_id,
+        request.collection_id,
+        Some(&request.form.clone().unwrap_or_default()),
+    )
+    .await?
+    {
+        return Ok(form_refusal(&message));
+    }
     Ok((
         StatusCode::CREATED,
         Json(create(&state, &caller, project_id, request).await?),
-    ))
+    )
+        .into_response())
+}
+
+fn form_refusal(message: &str) -> Response {
+    (
+        StatusCode::UNPROCESSABLE_ENTITY,
+        Json(json!({
+            "error": {
+                "code": "validation_failed",
+                "message": message,
+                "details": { "field": "form" },
+            }
+        })),
+    )
+        .into_response()
 }
 
 async fn update_route(
@@ -938,10 +1316,23 @@ async fn update_route(
     principal: AuthenticatedActor,
     ApiPath(link_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<UpdateLink>,
-) -> Result<Json<LinkView>, AppError> {
+) -> Result<Response, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
     let caller = Caller::browser(&principal)?;
-    Ok(Json(update(&state, &caller, link_id, request).await?))
+    if request.form.is_some() {
+        let row = manageable(&state.pool, &caller, link_id).await?;
+        if let Some(message) = form_problem(
+            &state.pool,
+            row.project_id,
+            row.collection_id,
+            request.form.as_ref(),
+        )
+        .await?
+        {
+            return Ok(form_refusal(&message));
+        }
+    }
+    Ok(Json(update(&state, &caller, link_id, request).await?).into_response())
 }
 
 async fn replace_route(
