@@ -111,7 +111,8 @@ function FormList({
     onSettled: refresh,
   })
   const forms = list.data?.links.filter((link) => link.collectionId === body.collection.id) ?? []
-  const canMake = body.canEditRecords && list.data?.canCreate === true
+  // Forms need record-edit permission on the collection, not task rights.
+  const canMake = body.canEditRecords
 
   return (
     <Dialog

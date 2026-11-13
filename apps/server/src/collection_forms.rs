@@ -332,7 +332,19 @@ pub fn record_from_answer(
             continue;
         }
         let id = field.id.to_string();
-        let given = lookup(&[id.as_str(), field.name.as_str()]).filter(|value| !is_blank(value));
+        // The title's keys answer the title only: a field named "Title" is
+        // answered by its ID.
+        let by_name = !(field.name.trim().eq_ignore_ascii_case("title")
+            || field
+                .name
+                .trim()
+                .eq_ignore_ascii_case(collection.title_name.trim()));
+        let given = if by_name {
+            lookup(&[id.as_str(), field.name.as_str()])
+        } else {
+            lookup(&[id.as_str()])
+        }
+        .filter(|value| !is_blank(value));
         match given {
             Some(value) => {
                 values.insert(id, value_for(field, value)?);
@@ -486,5 +498,42 @@ mod tests {
         .expect("json");
         assert!(record_from_answer(&collection(), &form, &fields, &wordy).is_err());
         assert!(parse_answer(None, b"plain words").is_err());
+    }
+
+    #[test]
+    fn a_field_named_title_never_takes_the_records_title() {
+        let named_title = field("Title", FieldType::Number);
+        let fields = vec![named_title.clone()];
+        let form = FormConfig {
+            fields: vec![FormField {
+                field: named_title.id,
+                required: false,
+            }],
+            ..FormConfig::default()
+        };
+        let answer = parse_answer(None, br#"{"title": "Crash"}"#).expect("json");
+        let (title, values) =
+            record_from_answer(&collection(), &form, &fields, &answer).expect("record");
+        assert_eq!(title, "Crash");
+        assert!(values.is_empty(), "{values:?}");
+        let required = FormConfig {
+            fields: vec![FormField {
+                field: named_title.id,
+                required: true,
+            }],
+            ..FormConfig::default()
+        };
+        assert_eq!(
+            record_from_answer(&collection(), &required, &fields, &answer),
+            Err("Fill in Title.".to_owned())
+        );
+        let by_id = parse_answer(
+            None,
+            format!(r#"{{"title": "Crash", "{}": 3}}"#, named_title.id).as_bytes(),
+        )
+        .expect("json");
+        let (_, values) =
+            record_from_answer(&collection(), &form, &fields, &by_id).expect("record");
+        assert_eq!(values[&named_title.id.to_string()], json!(3));
     }
 }
