@@ -36,7 +36,7 @@ type Dialogs =
   | { kind: 'add-tab' }
   | { kind: 'rename-tab'; tab: SheetTab }
   | { kind: 'remove-tab'; tab: SheetTab }
-  | { kind: 'cell'; row: number; column: number }
+  | { kind: 'cell'; row: number; column: number; revision: number }
 
 /** Each sheet's writes go one at a time, in order, so a later edit never lands first. */
 const writes = new Map<string, Promise<unknown>>()
@@ -81,6 +81,7 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
   const tabParam = params.get('tab') ?? ''
   const sheet = useSheet(projectId, sheetId, tabParam)
   const [selection, setSelection] = useState<Selection>(START)
+  // Inputs sent and not saved yet, by `tabId:row:column`.
   const [pending, setPending] = useState<Map<string, string>>(() => new Map())
   const [dialog, setDialog] = useState<Dialogs | null>(null)
   const [busy, setBusy] = useState(false)
@@ -132,6 +133,8 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
     columns: Math.max(used.columns, Math.min(200, selection.focus.column + 2)),
   }
   const focusCell = cells.get(cellKey(selection.focus.row, selection.focus.column))
+  const prefix = `${tab?.id ?? ''}:`
+  const tabPending = new Map([...pending].filter(([at]) => at.startsWith(prefix)).map(([at, input]) => [at.slice(prefix.length), input]))
   const scope = sheetKeys.one(projectId, sheetId)
   const key = sheetKeys.tab(projectId, sheetId, tabParam)
 
@@ -196,7 +199,7 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
   const edit = (edits: GridEdit[]) => {
     if (!tab || !edits.length) return
     const revision = body.sheet.revision
-    const shown = new Map(edits.map((entry) => [cellKey(entry.row, entry.column), entry.input]))
+    const shown = new Map(edits.map((entry) => [`${tab.id}:${cellKey(entry.row, entry.column)}`, entry.input]))
     setPending((current) => new Map([...current, ...shown]))
     for (let start = 0; start < edits.length; start += 2_000) {
       void send(
@@ -206,7 +209,7 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
           row: entry.row,
           column: entry.column,
           input: entry.input,
-          ifRevision: revision,
+          ifRevision: entry.revision ?? revision,
         })),
         start === 0 ? shown : undefined,
       )
@@ -445,13 +448,13 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
           </Banner>
         ) : null}
         {phone ? (
-          <SheetCards body={body} onOpen={(row, column) => (writable ? setDialog({ kind: 'cell', row, column }) : undefined)} tab={tab} />
+          <SheetCards body={body} onOpen={(row, column) => (writable ? setDialog({ kind: 'cell', row, column, revision: body.sheet.revision }) : undefined)} tab={tab} />
         ) : (
           <>
             <div className="aw-sheet__bar">
               <span className="aw-sheet__address">{cellName(selection.focus)}</span>
               <span className="aw-sheet__formula" title={focusCell?.input}>
-                {pending.get(cellKey(selection.focus.row, selection.focus.column)) ?? focusCell?.input ?? ''}
+                {tabPending.get(cellKey(selection.focus.row, selection.focus.column)) ?? focusCell?.input ?? ''}
               </span>
               {writable && gridItems.length ? (
                 <Menu
@@ -474,7 +477,8 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
                 onEdits={edit}
                 onResize={(column, width) => void send([{ type: 'columnWidth', tab: tab.id, column, width }])}
                 onSelect={setSelection}
-                pending={pending}
+                pending={tabPending}
+                revision={body.sheet.revision}
                 selection={selection}
                 size={size}
                 tab={tab}
@@ -546,7 +550,7 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
           name={cellName(dialog)}
           onClose={() => setDialog(null)}
           onSave={(input) => {
-            edit([{ row: dialog.row, column: dialog.column, input }])
+            edit([{ row: dialog.row, column: dialog.column, input, revision: dialog.revision }])
             setDialog(null)
           }}
         />

@@ -22,7 +22,8 @@ import {
 /** Rows drawn past the edges of what's in view, so scrolling stays smooth. */
 const OVERSCAN = 12
 
-export type GridEdit = { row: number; column: number; input: string }
+/** A cell's new input; `revision` is the sheet revision the editor opened at. */
+export type GridEdit = { row: number; column: number; input: string; revision?: number }
 
 /**
  * One tab as a grid: a header of column letters and row numbers that stay
@@ -37,6 +38,7 @@ export function SheetGrid({
   onResize,
   onSelect,
   pending,
+  revision,
   selection,
   size,
   tab,
@@ -48,6 +50,8 @@ export function SheetGrid({
   onSelect: (selection: Selection) => void
   /** Inputs sent and not saved yet, shown as typed. */
   pending: Map<string, string>
+  /** The sheet's revision as shown: an edit holds the one it opened at. */
+  revision: number
   selection: Selection
   size: { rows: number; columns: number }
   tab: SheetTab
@@ -58,6 +62,7 @@ export function SheetGrid({
   const [editing, setEditing] = useState<{
     position: Position
     text: string
+    revision: number
   } | null>(null)
   const committed = useRef(false)
   const [dragging, setDragging] = useState(false)
@@ -132,6 +137,7 @@ export function SheetGrid({
     setEditing({
       position: focus,
       text: text ?? pending.get(cellKey(focus.row, focus.column)) ?? current?.input ?? '',
+      revision,
     })
   }
 
@@ -142,7 +148,7 @@ export function SheetGrid({
     const { position, text } = editing
     const before = pending.get(cellKey(position.row, position.column)) ?? cells.get(cellKey(position.row, position.column))?.input ?? ''
     setEditing(null)
-    if (text !== before) onEdits([{ row: position.row, column: position.column, input: text }])
+    if (text !== before) onEdits([{ row: position.row, column: position.column, input: text, revision: editing.revision }])
     if (then) move(then)
     scroller.current?.focus()
   }
@@ -196,7 +202,7 @@ export function SheetGrid({
     const rows: string[][] = []
     for (let row = box.top; row <= box.bottom; row += 1) {
       const line: string[] = []
-      for (let column = box.left; column <= box.right; column += 1) line.push(cells.get(cellKey(row, column))?.input ?? '')
+      for (let column = box.left; column <= box.right; column += 1) line.push(pending.get(cellKey(row, column)) ?? cells.get(cellKey(row, column))?.input ?? '')
       rows.push(line)
     }
     event.clipboardData.setData('text/plain', formatTable(rows))
@@ -293,6 +299,7 @@ export function SheetGrid({
                 setEditing({
                   position: { row, column },
                   text: waiting ?? cell?.input ?? '',
+                  revision,
                 })
             }}
             onPointerDown={(event) => onPointerDown(event, { row, column })}
@@ -309,7 +316,7 @@ export function SheetGrid({
                 onBlur={() => commit()}
                 onChange={(event) =>
                   setEditing({
-                    position: { row, column },
+                    ...editing,
                     text: event.target.value,
                   })
                 }
