@@ -2478,7 +2478,7 @@ async fn an_agent_hides_link_previews_on_its_own_messages_only() {
     let hidden = f
         .call(
             "message_preview_hide",
-            json!({"messageId": mine, "url": "https://example.com/a"}),
+            json!({"messageId": mine, "url": "https://example.com/a#as-written"}),
         )
         .await;
     assert_eq!(hidden["value"]["hidden"], 1, "{hidden}");

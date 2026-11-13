@@ -1133,6 +1133,29 @@ pub(super) struct ProjectLayoutSetArguments {
     /// The layout version you last read. Leave it out to replace whatever
     /// is set.
     pub expected_version: Option<i64>,
+    /// Set the workspace's default layout (with preset, or without it for
+    /// none) instead of this project's: the workspace's owners and admins.
+    #[serde(default)]
+    pub workspace: Option<bool>,
+    /// Instead of the project's layout, set which preset each role or
+    /// person here gets: every rule the project should have (others are
+    /// removed; an empty list removes them all).
+    #[serde(default)]
+    pub rules: Option<Vec<LayoutRuleArgument>>,
+}
+
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct LayoutRuleArgument {
+    /// A role: admin (owners too), member, viewer, or one of the
+    /// workspace's custom roles by name (role_list). Give role or person.
+    #[serde(default)]
+    pub role: Option<String>,
+    /// One person in the project, by @handle or actor ID.
+    #[serde(default)]
+    pub person: Option<String>,
+    /// The preset they get, by name, as for preset.
+    pub preset: String,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -1144,8 +1167,11 @@ pub(super) struct ProjectLayoutValue {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub layout: Option<LayoutLine>,
     /// The project's layout version, for expectedVersion; 0 while it
-    /// follows the workspace.
+    /// follows the workspace. With workspace: true, the workspace's.
     pub version: i64,
+    /// With rules: how many rules the project has now.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rules: Option<usize>,
 }
 
 pub(super) async fn project_layout_set(
@@ -1162,9 +1188,26 @@ pub(super) async fn project_layout_set(
     if parse_id(&arguments.project_id) != Some(principal.project_id) {
         return ToolResult::not_found("That project");
     }
+    if arguments.rules.is_some()
+        && (arguments.preset.is_some()
+            || arguments.expected_version.is_some()
+            || arguments.workspace.is_some())
+    {
+        return ToolResult::invalid(
+            "rules",
+            "Set the rules on their own, without preset, expectedVersion or workspace.",
+        );
+    }
     let project_id = principal.project_id;
     let result = async {
         let mut transaction = state.pool.begin().await?;
+        if arguments.rules.is_some() {
+            // Lock the project first, as the web's rule changes do.
+            sqlx::query("SELECT id FROM projects WHERE id = $1 FOR UPDATE")
+                .bind(project_id)
+                .execute(&mut *transaction)
+                .await?;
+        }
         let Some(row) = admin_row(&mut transaction, principal, project_id).await? else {
             return Ok(ToolResult::not_found("That project"));
         };
@@ -1190,6 +1233,15 @@ pub(super) async fn project_layout_set(
                 "That project is archived. Restore it with project_archive first.",
             ));
         }
+        if let Some(rules) = arguments.rules.as_deref() {
+            let (result, saved) =
+                layout_rules_set(&mut transaction, principal, organization_id, rules).await?;
+            // A refused set may have written some rules: keep none of them.
+            if saved {
+                transaction.commit().await?;
+            }
+            return Ok(result);
+        }
         let wanted = arguments
             .preset
             .as_deref()
@@ -1214,11 +1266,25 @@ pub(super) async fn project_layout_set(
             None => None,
         };
         let preset = layout.as_ref().map(|layout| layout.preset.clone());
+        let workspace = arguments.workspace == Some(true);
+        if workspace {
+            crate::settings::authorize_workspace_manage_as(
+                &mut *transaction,
+                principal.actor_id,
+                ActorKind::Human,
+                organization_id,
+            )
+            .await?;
+        }
         let version = layouts::write_layout(
             &mut transaction,
-            Target::Project {
-                organization_id,
-                project_id,
+            if workspace {
+                Target::Workspace { organization_id }
+            } else {
+                Target::Project {
+                    organization_id,
+                    project_id,
+                }
             },
             layout,
             arguments.expected_version,
@@ -1229,9 +1295,17 @@ pub(super) async fn project_layout_set(
             &mut transaction,
             principal,
             project_id,
-            "layout.project_changed",
-            "project",
-            project_id,
+            if workspace {
+                "layout.workspace_changed"
+            } else {
+                "layout.project_changed"
+            },
+            if workspace { "organization" } else { "project" },
+            if workspace {
+                organization_id
+            } else {
+                project_id
+            },
             serde_json::json!({
                 "preset": preset,
                 "version": version,
@@ -1247,10 +1321,148 @@ pub(super) async fn project_layout_set(
             project_id: project_id.to_string(),
             layout,
             version,
+            rules: None,
         }))
     }
     .await;
     result.unwrap_or_else(|error| ToolResult::from_error(error, "project_layout_set"))
+}
+
+/// Replaces the project's layout rules, by role or person and preset name,
+/// for a caller already checked to manage the project.
+async fn layout_rules_set(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    principal: &McpPrincipal,
+    organization_id: Uuid,
+    wanted: &[LayoutRuleArgument],
+) -> Result<(ToolResult<ProjectLayoutValue>, bool), AppError> {
+    let project_id = principal.project_id;
+    let mut rules = Vec::with_capacity(wanted.len());
+    for rule in wanted {
+        let Some(preset) =
+            layouts::find_preset(&mut *transaction, organization_id, &rule.preset).await?
+        else {
+            let names = layouts::preset_names(&mut *transaction, organization_id).await?;
+            return Ok((
+                ToolResult::invalid(
+                    "rules",
+                    format!(
+                        "There's no preset called \"{}\". Pick one of: {}.",
+                        rule.preset.trim(),
+                        names.join(", ")
+                    ),
+                ),
+                false,
+            ));
+        };
+        let mut input = layouts::RuleInput {
+            role: None,
+            role_id: None,
+            actor_id: None,
+            preset,
+        };
+        match (
+            rule.role.as_deref().map(str::trim),
+            rule.person.as_deref().map(str::trim),
+        ) {
+            (Some(role @ ("admin" | "member" | "viewer")), None) => {
+                input.role = Some(role.to_owned());
+            }
+            (Some(role), None) => {
+                let Some(role_id) =
+                    crate::roles::find_role(&mut *transaction, organization_id, role).await?
+                else {
+                    return Ok((
+                        ToolResult::invalid(
+                            "rules",
+                            format!("There's no role called \"{role}\" in this workspace."),
+                        ),
+                        false,
+                    ));
+                };
+                input.role_id = Some(role_id);
+            }
+            (None, Some(person)) => {
+                let Some(actor_id) = sqlx::query_scalar::<_, Uuid>(
+                    r#"
+                    SELECT membership.actor_id FROM project_memberships membership
+                    WHERE membership.project_id = $1
+                      AND (membership.actor_id::text = $2 OR lower(membership.handle) = lower($3))
+                    LIMIT 1
+                    "#,
+                )
+                .bind(project_id)
+                .bind(person)
+                .bind(person.trim_start_matches('@'))
+                .fetch_optional(&mut **transaction)
+                .await?
+                else {
+                    return Ok((
+                        ToolResult::invalid("rules", format!("{person} isn't in this project.")),
+                        false,
+                    ));
+                };
+                input.actor_id = Some(actor_id);
+            }
+            _ => {
+                return Ok((
+                    ToolResult::invalid("rules", "Each rule names a role or a person, not both."),
+                    false,
+                ));
+            }
+        }
+        rules.push(input);
+    }
+    let metadata = match layouts::set_rules_in(
+        transaction,
+        principal.actor_id,
+        organization_id,
+        project_id,
+        &rules,
+    )
+    .await
+    {
+        Ok(metadata) => metadata,
+        Err(AppError::Validation(_)) => {
+            return Ok((
+                ToolResult::invalid(
+                    "rules",
+                    "Each role and person can have one rule, people must be people in this project, and a project has at most a few dozen rules.",
+                ),
+                false,
+            ));
+        }
+        Err(error) => return Err(error),
+    };
+    insert_audit(
+        transaction,
+        principal,
+        project_id,
+        "layout.rules_changed",
+        "project",
+        project_id,
+        metadata,
+    )
+    .await?;
+    let layout = layouts::project_tone(&mut *transaction, project_id)
+        .await?
+        .map(LayoutLine::from);
+    let version = sqlx::query_scalar::<_, i64>(
+        "SELECT version FROM settings WHERE project_id = $1 AND key = 'layout.default' AND scope = 'project'",
+    )
+    .bind(project_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .unwrap_or(0);
+    Ok((
+        ToolResult::ok(ProjectLayoutValue {
+            project_id: project_id.to_string(),
+            layout,
+            version,
+            rules: Some(rules.len()),
+        }),
+        true,
+    ))
 }
 
 // ---------------------------------------------------------------------------

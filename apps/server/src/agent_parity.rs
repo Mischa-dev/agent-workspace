@@ -51,12 +51,12 @@ mod tests {
         (
             Put,
             "/api/v1/projects/{project_id}/layout/rules",
-            Gap("layout rules per role"),
+            Tool("project_layout_set"),
         ),
         (
             Put,
             "/api/v1/organizations/{organization_id}/layout",
-            Gap("workspace layout and presets"),
+            Tool("project_layout_set"),
         ),
         (
             Put,
@@ -71,17 +71,17 @@ mod tests {
         (
             Post,
             "/api/v1/organizations/{organization_id}/layout/presets",
-            Gap("workspace layout and presets"),
+            Gap("saved layout presets"),
         ),
         (
             Patch,
             "/api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
-            Gap("workspace layout and presets"),
+            Gap("saved layout presets"),
         ),
         (
             Delete,
             "/api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
-            Gap("workspace layout and presets"),
+            Gap("saved layout presets"),
         ),
         (
             Post,

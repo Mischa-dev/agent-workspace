@@ -572,7 +572,14 @@ pub(crate) async fn hide_in(
     }
     let (preview_id, url, all) = match which {
         Hide::Preview(id) => (Some(id), None, false),
-        Hide::Url(url) => (None, url, url.is_none()),
+        // Stored links are normalized (a root slash added, no fragment):
+        // match what someone typed the same way.
+        Hide::Url(Some(url)) => (
+            None,
+            Some(normalize(url.trim()).unwrap_or_else(|| url.trim().to_owned())),
+            false,
+        ),
+        Hide::Url(None) => (None, None, true),
     };
     let matching = r#"
         message.message_id = $1
@@ -591,7 +598,7 @@ pub(crate) async fn hide_in(
     ))
     .bind(locked.id)
     .bind(preview_id)
-    .bind(url)
+    .bind(&url)
     .bind(actor_id)
     .bind(all)
     .execute(&mut **transaction)
@@ -603,7 +610,7 @@ pub(crate) async fn hide_in(
         ))
         .bind(locked.id)
         .bind(preview_id)
-        .bind(url)
+        .bind(&url)
         .bind(actor_id)
         .bind(all)
         .fetch_one(&mut **transaction)

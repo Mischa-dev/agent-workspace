@@ -5695,7 +5695,12 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "preset": "Software team"}),
             vec![json!({"projectId": b.project, "preset": "Software team"})],
         )
-        .rejecting(vec![json!({"projectId": a.project, "preset": bx.layout_preset})]),
+        .rejecting(vec![
+            json!({"projectId": a.project, "preset": bx.layout_preset}),
+            json!({"projectId": a.project, "rules": [{"role": "member", "preset": bx.layout_preset}]}),
+            json!({"projectId": a.project, "rules": [{"person": bx.wren, "preset": "Minimal"}]}),
+            json!({"projectId": a.project, "workspace": true, "preset": bx.layout_preset}),
+        ]),
         mcp_case(
             "project_member_set",
             json!({"projectId": a.project, "person": "@wren", "role": "viewer"}),
