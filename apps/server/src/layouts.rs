@@ -1454,18 +1454,18 @@ async fn change_project_layout(
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RuleInput {
+pub(crate) struct RuleInput {
     /// admin (owners too), member or viewer.
     #[serde(default)]
-    role: Option<String>,
+    pub(crate) role: Option<String>,
     /// One of the workspace's custom roles.
     #[serde(default)]
-    role_id: Option<Uuid>,
+    pub(crate) role_id: Option<Uuid>,
     /// One person in the project.
     #[serde(default)]
-    actor_id: Option<Uuid>,
+    pub(crate) actor_id: Option<Uuid>,
     /// A built-in preset's id or a saved preset's ID.
-    preset: String,
+    pub(crate) preset: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1497,11 +1497,47 @@ async fn change_project_rules(
         .await?;
     let organization_id =
         settings::authorize_project_manage(&mut *transaction, &principal, project_id).await?;
-    let existing = rules(&mut transaction, project_id).await?;
+    let metadata = set_rules_in(
+        &mut transaction,
+        principal.actor_id,
+        organization_id,
+        project_id,
+        &request.rules,
+    )
+    .await?;
+    settings::audit(
+        &mut transaction,
+        &headers,
+        &principal,
+        Some(project_id),
+        "layout.rules_changed",
+        "project",
+        Some(project_id),
+        metadata,
+    )
+    .await?;
+    let view = project_view(&mut transaction, &principal, project_id).await?;
+    transaction.commit().await?;
+    Ok(Json(view))
+}
+
+/// Replaces a project's layout rules (which preset each role, custom role
+/// or named person gets) with these, for a caller already allowed to manage
+/// the project, with the project locked. Returns the audit metadata.
+pub(crate) async fn set_rules_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    organization_id: Uuid,
+    project_id: Uuid,
+    requested: &[RuleInput],
+) -> Result<serde_json::Value, AppError> {
+    if requested.len() > MAX_RULES {
+        return Err(AppError::Validation("rules"));
+    }
+    let existing = rules(transaction, project_id).await?;
 
     // People must be people in the project, or already have a rule here.
-    let people = request
-        .rules
+    let people = requested
         .iter()
         .filter_map(|rule| rule.actor_id)
         .collect::<Vec<_>>();
@@ -1515,7 +1551,7 @@ async fn change_project_rules(
     )
     .bind(project_id)
     .bind(&people)
-    .fetch_all(&mut *transaction)
+    .fetch_all(&mut **transaction)
     .await?
     .into_iter()
     .collect::<BTreeSet<_>>();
@@ -1526,7 +1562,7 @@ async fn change_project_rules(
         "SELECT id FROM workspace_roles WHERE organization_id = $1 AND NOT built_in",
     )
     .bind(organization_id)
-    .fetch_all(&mut *transaction)
+    .fetch_all(&mut **transaction)
     .await?
     .into_iter()
     .collect::<BTreeSet<_>>();
@@ -1535,7 +1571,7 @@ async fn change_project_rules(
     let mut seen_custom_roles = BTreeSet::new();
     let mut seen_people = BTreeSet::new();
     let mut kept = Vec::new();
-    for rule in &request.rules {
+    for rule in requested {
         match (rule.role.as_deref(), rule.role_id, rule.actor_id) {
             (Some(role @ ("admin" | "member" | "viewer")), None, None) => {
                 if !seen_roles.insert(role) {
@@ -1555,7 +1591,7 @@ async fn change_project_rules(
             _ => return Err(AppError::Validation("rule")),
         }
         let (builtin_preset, saved_preset_id) =
-            rule_preset(&mut transaction, organization_id, &rule.preset).await?;
+            rule_preset(transaction, organization_id, &rule.preset).await?;
         let current = existing.iter().find(|candidate| {
             candidate.role.as_deref() == rule.role.as_deref()
                 && candidate.role_id == rule.role_id
@@ -1580,8 +1616,8 @@ async fn change_project_rules(
                 .bind(current.id)
                 .bind(&builtin_preset)
                 .bind(saved_preset_id)
-                .bind(principal.actor_id)
-                .execute(&mut *transaction)
+                .bind(actor_id)
+                .execute(&mut **transaction)
                 .await?;
                 kept.push(current.id);
             }
@@ -1602,9 +1638,9 @@ async fn change_project_rules(
                 .bind(rule.actor_id)
                 .bind(&builtin_preset)
                 .bind(saved_preset_id)
-                .bind(principal.actor_id)
+                .bind(actor_id)
                 .bind(rule.role_id)
-                .execute(&mut *transaction)
+                .execute(&mut **transaction)
                 .await?;
                 kept.push(id);
             }
@@ -1613,27 +1649,14 @@ async fn change_project_rules(
     sqlx::query("DELETE FROM project_layout_rules WHERE project_id = $1 AND NOT (id = ANY($2))")
         .bind(project_id)
         .bind(&kept)
-        .execute(&mut *transaction)
+        .execute(&mut **transaction)
         .await?;
-    settings::audit(
-        &mut transaction,
-        &headers,
-        &principal,
-        Some(project_id),
-        "layout.rules_changed",
-        "project",
-        Some(project_id),
-        json!({
-            "roles": seen_roles.into_iter().collect::<Vec<_>>(),
-            "customRoles": seen_custom_roles.into_iter().collect::<Vec<_>>(),
-            "people": seen_people.len(),
-            "organizationId": organization_id,
-        }),
-    )
-    .await?;
-    let view = project_view(&mut transaction, &principal, project_id).await?;
-    transaction.commit().await?;
-    Ok(Json(view))
+    Ok(json!({
+        "roles": seen_roles.into_iter().collect::<Vec<_>>(),
+        "customRoles": seen_custom_roles.into_iter().collect::<Vec<_>>(),
+        "people": seen_people.len(),
+        "organizationId": organization_id,
+    }))
 }
 
 /// `PUT /api/v1/organizations/{organization_id}/layout`: the workspace's
