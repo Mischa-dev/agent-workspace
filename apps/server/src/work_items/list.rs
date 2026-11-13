@@ -85,6 +85,10 @@ pub(super) struct TaskListQuery {
     /// Custom field filters (AWD-89): a JSON array of
     /// `{"field", "op", "values"}` (crate::fields::FieldClause).
     field_filters: Option<String>,
+    /// A board column's own field clause (one, as JSON), kept apart from
+    /// `fieldFilters` so a column can narrow a request that already carries
+    /// the most field filters a request can (AWD-113).
+    group_field: Option<String>,
     sort: Option<String>,
     group_by: Option<String>,
     columns_by: Option<String>,
@@ -270,6 +274,8 @@ pub(super) struct Filters {
     hide_done: bool,
     /// Custom field filters, all of which must match.
     fields: Vec<FieldClause>,
+    /// The board column's field value (`groupField`), on top of `fields`.
+    group_field: Option<FieldClause>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -962,6 +968,15 @@ impl Filters {
                 }
                 None => Vec::new(),
             },
+            group_field: match query.group_field.as_deref() {
+                Some(param) => Some(
+                    serde_json::from_str::<FieldClause>(param)
+                        .ok()
+                        .filter(FieldClause::shape_is_valid)
+                        .ok_or(AppError::Validation("groupField"))?,
+                ),
+                None => None,
+            },
         })
     }
 
@@ -1036,6 +1051,12 @@ impl Filters {
         if !self.fields.is_empty() {
             put("fieldFilters", fields::clauses_param(&self.fields));
         }
+        if let Some(clause) = &self.group_field {
+            put(
+                "groupField",
+                serde_json::to_string(clause).unwrap_or_default(),
+            );
+        }
         params
     }
 
@@ -1102,10 +1123,7 @@ impl Filters {
                 filters.parent = Some(value()?.map_or(OneOrNone::None, OneOrNone::One));
             }
             Grouping::Field(field, _) => {
-                if filters.fields.len() >= fields::MAX_CLAUSES {
-                    return Err(AppError::Validation("fieldFilters"));
-                }
-                filters.fields.push(fields::group_clause(field, key));
+                filters.group_field = Some(fields::group_clause(field, key));
             }
             Grouping::Label if key == "none" => {
                 filters.labels = Some(LabelFilter::None);
@@ -1261,6 +1279,9 @@ impl Filters {
             builder.push(format!(" AND NOT ({FINISHED})"));
         }
         fields::push_clauses(builder, "item.field_values", &self.fields);
+        if let Some(clause) = &self.group_field {
+            fields::push_clauses(builder, "item.field_values", std::slice::from_ref(clause));
+        }
     }
 }
 
@@ -2117,17 +2138,26 @@ pub(super) async fn validate_filter_ids(
     if let Some(OneOrNone::One(id)) = filters.parent {
         checks.push(("work_items", "id", "parentId", vec![id]));
     }
-    if !filters.fields.is_empty() {
+    if !filters.fields.is_empty() || filters.group_field.is_some() {
         // Every field filter names one of this project's fields, with
         // values that suit it.
         let definitions = work_item_fields::definitions(pool, project_id, true).await?;
-        for clause in &filters.fields {
+        let named = filters
+            .fields
+            .iter()
+            .map(|clause| (clause, "fieldFilters"))
+            .chain(
+                filters
+                    .group_field
+                    .iter()
+                    .map(|clause| (clause, "groupField")),
+            );
+        for (clause, param) in named {
             let field = definitions
                 .iter()
                 .find(|field| field.id == clause.field)
-                .ok_or(AppError::Validation("fieldFilters"))?;
-            fields::check_clause(field, clause)
-                .map_err(|_| AppError::Validation("fieldFilters"))?;
+                .ok_or(AppError::Validation(param))?;
+            fields::check_clause(field, clause).map_err(|_| AppError::Validation(param))?;
         }
     }
     for (table, column, field, ids) in checks {
