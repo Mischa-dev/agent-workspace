@@ -85,10 +85,17 @@
   white-space: nowrap;
 }
 
+/* On a narrow screen the project name gives way first, so the label that
+   says what the group is stays readable (AWD-93). */
 .aw-inbox__group-project {
-  flex: none;
+  flex: 1 1 0;
+  min-width: 6ch;
+  overflow: hidden;
   color: var(--content-fg-muted);
   font-weight: var(--weight-regular);
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .aw-inbox__row {
