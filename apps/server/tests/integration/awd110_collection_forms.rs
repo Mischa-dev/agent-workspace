@@ -16,6 +16,7 @@ use super::{
     agent_interface::{Browser, connect_app, initialize, send, tool},
     mcp_admin::{Setup, create_project, setup},
     message_edits::add_person,
+    modules::switch,
 };
 
 async fn get(setup: &Setup, browser: &Browser, uri: &str) -> (StatusCode, Value) {
@@ -441,4 +442,56 @@ async fn a_form_shows_only_itself_and_each_answer_is_one_record_of_its_fields() 
     .await;
     assert_eq!(changed["outcome"], "ok", "{changed}");
     assert_eq!(changed["value"]["form"]["intro"], "Shorter");
+
+    // With Tasks off and Collections on, the link tools still serve forms
+    // and leave task links out of reach.
+    let (status, switched) = switch(
+        &setup,
+        &setup.browser,
+        json!({"switches": {"tasks": false}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{switched}");
+    let listed = tool(
+        app,
+        &codex,
+        &session,
+        "bug_report_link_list",
+        json!({"projectId": "WORK"}),
+    )
+    .await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    let links = listed["value"]["links"].as_array().expect("links");
+    assert!(!links.is_empty(), "{listed}");
+    assert!(
+        links.iter().all(|link| link["collectionId"].is_string()),
+        "{listed}"
+    );
+    let task_made = tool(
+        app,
+        &codex,
+        &session,
+        "bug_report_link_write",
+        json!({"projectId": "WORK", "name": "More crashes"}),
+    )
+    .await;
+    assert_eq!(task_made["outcome"], "conflict", "{task_made}");
+    let task_paused = tool(
+        app,
+        &codex,
+        &session,
+        "bug_report_link_write",
+        json!({"projectId": "WORK", "linkId": task_link["link"]["id"], "state": "paused"}),
+    )
+    .await;
+    assert_eq!(task_paused["outcome"], "conflict", "{task_paused}");
+    let form_renamed = tool(
+        app,
+        &codex,
+        &session,
+        "bug_report_link_write",
+        json!({"projectId": "WORK", "linkId": made["value"]["link"]["id"], "name": "Agent form, renamed"}),
+    )
+    .await;
+    assert_eq!(form_renamed["outcome"], "ok", "{form_renamed}");
 }

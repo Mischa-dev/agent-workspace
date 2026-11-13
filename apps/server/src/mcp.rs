@@ -3935,6 +3935,14 @@ async fn module_off_here(
     Ok((!modules.contains(&module.id)).then(|| module.name.clone()))
 }
 
+/// Tools a second module also serves: forms (Collections) are bug report
+/// links too, so these work where Collections is on and Tasks is off, and
+/// then leave task links alone.
+const ALSO_SERVED_BY: &[(&str, &str)] = &[
+    ("bug_report_link_list", "collections"),
+    ("bug_report_link_write", "collections"),
+];
+
 /// A call to a tool of a module that's off, in the shape `refusal` uses.
 fn module_refusal(tool: &str, module: &str) -> rmcp::model::CallToolResponse {
     let message = format!(
@@ -4038,7 +4046,25 @@ async fn run_tool(
         match module_off_here(&server.state, &principal, &request.name, module).await {
             Ok(None) => {}
             Ok(Some(name)) => {
-                return Ok(module_refusal(&request.name, &name));
+                // A tool another module also serves is on wherever that
+                // module is; its handler keeps to that module's part.
+                let mut also_on = false;
+                for also in ALSO_SERVED_BY
+                    .iter()
+                    .filter(|(tool, _)| *tool == request.name.as_ref())
+                    .filter_map(|(_, module)| crate::modules::manifest::get(module))
+                {
+                    if matches!(
+                        module_off_here(&server.state, &principal, &request.name, also).await,
+                        Ok(None)
+                    ) {
+                        also_on = true;
+                        break;
+                    }
+                }
+                if !also_on {
+                    return Ok(module_refusal(&request.name, &name));
+                }
             }
             Err(error) => {
                 tracing::error!(category = error.log_category(), "MCP module lookup failed");

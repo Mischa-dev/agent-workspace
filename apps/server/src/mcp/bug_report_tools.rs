@@ -27,6 +27,22 @@ fn to_value(value: impl serde::Serialize) -> Result<Value, AppError> {
     serde_json::to_value(value).map_err(|_| AppError::Internal("serialize tool value"))
 }
 
+/// Whether Tasks is on in the project for the caller. These tools also
+/// serve forms where only Collections is on; task links stay out of reach
+/// there.
+async fn tasks_on(state: &AppState, principal: &McpPrincipal) -> Result<bool, AppError> {
+    let mut connection = state.pool.acquire().await?;
+    Ok(crate::modules::state::for_project(
+        &mut connection,
+        principal.project_id,
+        principal.actor_id,
+    )
+    .await?
+    .is_none_or(|modules| modules.contains("tasks")))
+}
+
+const TASKS_OFF: &str = "Tasks is turned off here, so its bug report links are too: only forms (links with a collection) can be made or changed.";
+
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct BugReportLinkListArguments {
@@ -46,10 +62,14 @@ pub(super) async fn bug_report_link_list(
         return ToolResult::not_found("That project");
     }
     let caller = Caller::mcp(principal);
-    match bug_reports::list(state, &caller, principal.project_id)
-        .await
-        .and_then(to_value)
-    {
+    let listed = async {
+        let mut list = bug_reports::list(state, &caller, principal.project_id).await?;
+        if !tasks_on(state, principal).await? {
+            list.links.retain(|link| link.collection_id.is_some());
+        }
+        to_value(list)
+    };
+    match listed.await {
         Ok(value) => ToolResult::ok(value),
         Err(error) => ToolResult::from_error(error, "bug_report_link_list"),
     }
@@ -185,6 +205,9 @@ pub(super) async fn bug_report_link_write(
                         "A form adds records to a collection: name it with collection.",
                     ));
                 }
+                None if !tasks_on(state, principal).await? => {
+                    return Ok(ToolResult::conflict(TASKS_OFF));
+                }
                 None => (None, None),
                 Some(reference) => {
                     let Some(collection) =
@@ -235,6 +258,13 @@ pub(super) async fn bug_report_link_write(
         // Only links in the project this call names.
         if bug_reports::link_project(&state.pool, link_id).await? != Some(project_id) {
             return Ok(ToolResult::not_found("That bug report link"));
+        }
+        if bug_reports::link_collection(&state.pool, link_id)
+            .await?
+            .is_none()
+            && !tasks_on(state, principal).await?
+        {
+            return Ok(ToolResult::conflict(TASKS_OFF));
         }
         let value = if delete {
             bug_reports::delete(state, &caller, link_id).await?;
