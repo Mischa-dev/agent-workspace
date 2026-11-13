@@ -77,15 +77,20 @@ function Board({ body, config, editable, edits, field, filtered, onClearFilters,
   const [shownCards, setShownCards] = useState<Record<string, readonly CollectionRecord[]>>({})
   const onCards = useCallback((key: string, cards: readonly CollectionRecord[]) => setShownCards((current) => (current[key] === cards ? current : { ...current, [key]: cards })), [])
   const findCard = (id: string) => Object.values(shownCards).flat().find((record) => record.id === id)
-  // Moves the next refetch has already counted are in their column's list by then.
-  const countedAt = counts.dataUpdatedAt
-  const pending = useMemo(() => moved.filter((entry) => entry.at > countedAt), [countedAt, moved])
+  // A moved card stays in its new column until that column's own list has
+  // it. Not by time: the save patches every list at once, so a timestamp
+  // passes before the destination ever loads the card (#244 review).
+  const arrived = useCallback((id: string) => setMoved((current) => current.filter((entry) => entry.record.id !== id)), [])
 
   const move = (record: CollectionRecord, key: string) => {
     if (boardKey(record, field, columns) === key) return
     const value = boardValue(field, key)
-    setMoved((current) => [...current.filter((entry) => entry.record.id !== record.id), { record: { ...record, values: withValues(record.values, { [field.id]: value }) }, key, at: Date.now() }])
-    void edits.save(record, { values: { [field.id]: value } })
+    const at = Date.now()
+    setMoved((current) => [...current.filter((entry) => entry.record.id !== record.id), { record: { ...record, values: withValues(record.values, { [field.id]: value }) }, key, at }])
+    // A failed save goes back where it was: the lists refetch, and this move is forgotten.
+    void edits.save(record, { values: { [field.id]: value } }).then((saved) => {
+      if (!saved) setMoved((current) => current.filter((entry) => entry.record.id !== record.id || entry.at !== at))
+    })
   }
   const drag = useBoardDrag({
     enabled: editable,
@@ -128,7 +133,8 @@ function Board({ body, config, editable, edits, field, filtered, onClearFilters,
             editable={editable}
             field={field}
             key={column.key}
-            moved={pending}
+            moved={moved}
+            onArrived={arrived}
             onMove={move}
             onOpenRecord={(id) => {
               if (!drag.justDragged()) onOpenRecord(id)
@@ -161,6 +167,7 @@ function Column({
   editable,
   field,
   moved,
+  onArrived,
   onMove,
   onOpenRecord,
   onPointerDown,
@@ -178,6 +185,7 @@ function Column({
   editable: boolean
   field: FieldDefinition
   moved: readonly Moved[]
+  onArrived: (id: string) => void
   onMove: (record: CollectionRecord, key: string) => void
   onOpenRecord: (id: string) => void
   onPointerDown: (event: ReactPointerEvent<HTMLElement>, id: string) => void
@@ -199,6 +207,12 @@ function Column({
     return [...here, ...joined]
   }, [column.key, columns, field, loaded, moved])
   useEffect(() => onCards(column.key, cards), [cards, column.key, onCards])
+  // Once this column's list has a card moved here, the list shows it on its own.
+  useEffect(() => {
+    for (const entry of moved) {
+      if (entry.key === column.key && loaded.some((record) => record.id === entry.record.id && boardKey(record, field, columns) === column.key)) onArrived(entry.record.id)
+    }
+  }, [column.key, columns, field, loaded, moved, onArrived])
   const label = column.label || 'No value'
 
   return (
