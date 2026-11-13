@@ -1,7 +1,7 @@
 import { QueryClient } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { collectionChange, documentChanged, lastHeardVersion, onPageChange, onWhiteboardChange, pageChange, whiteboardChange } from './liveDocuments'
+import { collectionChange, sheetChange, documentChanged, lastHeardVersion, onPageChange, onWhiteboardChange, pageChange, whiteboardChange } from './liveDocuments'
 import type { RealtimeEnvelope } from './realtimeModel'
 
 const PROJECT = '0190f5a4-0000-7000-8000-000000000001'
@@ -78,6 +78,22 @@ describe('live documents from the realtime socket', () => {
     expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual([
       ['project', PROJECT, 'collections', COLLECTION],
       ['project', PROJECT, 'collections', 'list'],
+    ])
+  })
+
+  it('refetches an open sheet and the list of sheets once for a burst of changes', () => {
+    vi.useFakeTimers()
+    expect(sheetChange(envelope('sheet.updated', { sheetId: COLLECTION, revision: 3 }))).toEqual({ sheetId: COLLECTION })
+    expect(sheetChange(envelope('sheet.updated', { sheetId: 'nope' }))).toBeNull()
+    const queryClient = new QueryClient()
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries').mockResolvedValue()
+    documentChanged(queryClient, envelope('sheet.updated', { sheetId: COLLECTION, revision: 3 }))
+    documentChanged(queryClient, envelope('sheet.updated', { sheetId: COLLECTION, revision: 4 }))
+    expect(invalidate).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(300)
+    expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual([
+      ['project', PROJECT, 'sheets', COLLECTION],
+      ['project', PROJECT, 'sheets', 'list'],
     ])
   })
 })

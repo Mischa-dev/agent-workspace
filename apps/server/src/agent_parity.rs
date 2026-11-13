@@ -1238,6 +1238,21 @@ mod tests {
         ),
         (
             Post,
+            "/api/v1/projects/{project_id}/sheets",
+            Tool("sheet_write"),
+        ),
+        (
+            Patch,
+            "/api/v1/projects/{project_id}/sheets/{sheet_id}",
+            Tool("sheet_write"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/sheets/{sheet_id}/changes",
+            Tool("sheet_write"),
+        ),
+        (
+            Post,
             "/api/v1/projects/{project_id}/milestones",
             Tool("milestone_write"),
         ),

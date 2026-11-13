@@ -1584,6 +1584,24 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         CollectionRecordEdit
     ),
     policy_route!(
+        "sheets/http",
+        Post,
+        "/api/v1/projects/{project_id}/sheets",
+        SheetEdit
+    ),
+    policy_route!(
+        "sheets/http",
+        Patch,
+        "/api/v1/projects/{project_id}/sheets/{sheet_id}",
+        SheetEdit
+    ),
+    policy_route!(
+        "sheets/http",
+        Post,
+        "/api/v1/projects/{project_id}/sheets/{sheet_id}/changes",
+        SheetEdit
+    ),
+    policy_route!(
         "work_items",
         Post,
         "/api/v1/projects/{project_id}/milestones",
