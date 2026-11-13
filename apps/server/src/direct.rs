@@ -1179,7 +1179,7 @@ async fn reachable_agents(
         FROM projects space
         JOIN projects project
           ON project.organization_id = space.organization_id
-         AND project.kind <> 'direct'
+         AND project.kind NOT IN ('direct', 'workspace')
          AND project.archived_at IS NULL
         JOIN project_memberships mine
           ON mine.project_id = project.id AND mine.actor_id = $2 AND mine.enabled

@@ -49,8 +49,8 @@ const MAX_PROJECTS: usize = 50_000;
 /// Workspaces whose switches are kept at once.
 const MAX_WORKSPACES: usize = 10_000;
 
-/// A project's workspace, and whether it's the hidden project DMs live in.
-static PROJECTS: LazyLock<Mutex<HashMap<Uuid, (Uuid, bool)>>> =
+/// A project's workspace, and its kind (`standard`, `direct` or `workspace`).
+static PROJECTS: LazyLock<Mutex<HashMap<Uuid, (Uuid, &'static str)>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 /// A workspace's modules on, and when they were read.
 static SWITCHES: LazyLock<Mutex<HashMap<Uuid, (ModuleSet, Instant)>>> =
@@ -89,48 +89,54 @@ fn scope<'a>(template: &str, param: impl Fn(&str) -> Option<&'a str>) -> Option<
     }
 }
 
-/// Whether the module is off where the request acts.
+/// The module that's off where the request acts, if any: the route's own,
+/// or Projects for anything in a project while Projects is off.
 async fn off_module(
     state: &AppState,
     module: &'static Manifest,
     scope: &Scope,
-) -> Result<bool, AppError> {
-    let organization_id = match scope {
-        Scope::Workspace(id) => *id,
+) -> Result<Option<&'static str>, AppError> {
+    let (organization_id, kind) = match scope {
+        Scope::Workspace(id) => (*id, None),
         Scope::Project(project_id) => {
             let project_id = *project_id;
             let known = PROJECTS
                 .lock()
                 .ok()
                 .and_then(|projects| projects.get(&project_id).copied());
-            let (organization_id, direct) = match known {
+            let (organization_id, kind) = match known {
                 Some(found) => found,
                 None => {
-                    let Some(found) = sqlx::query_as::<_, (Uuid, bool)>(
-                        "SELECT organization_id, kind = 'direct' FROM projects WHERE id = $1",
+                    let Some((organization_id, kind)) = sqlx::query_as::<_, (Uuid, String)>(
+                        "SELECT organization_id, kind FROM projects WHERE id = $1",
                     )
                     .bind(project_id)
                     .fetch_optional(&state.pool)
                     .await?
                     else {
                         // No such project: the handler answers that.
-                        return Ok(false);
+                        return Ok(None);
+                    };
+                    let kind = match kind.as_str() {
+                        "direct" => "direct",
+                        "workspace" => "workspace",
+                        _ => "standard",
                     };
                     if let Ok(mut projects) = PROJECTS.lock() {
                         if projects.len() >= MAX_PROJECTS {
                             projects.clear();
                         }
-                        projects.insert(project_id, found);
+                        projects.insert(project_id, (organization_id, kind));
                     }
-                    found
+                    (organization_id, kind)
                 }
             };
             // DMs live in a hidden project and follow the Messages switch,
             // which their own handlers check.
-            if direct {
-                return Ok(false);
+            if kind == "direct" {
+                return Ok(None);
             }
-            organization_id
+            (organization_id, Some(kind))
         }
     };
     let kept = SWITCHES.lock().ok().and_then(|switches| {
@@ -159,7 +165,13 @@ async fn off_module(
             set
         }
     };
-    Ok(!set.contains(&module.id))
+    // AWD-96: anything in a project needs Projects; the workspace space
+    // holds only pages.
+    if kind == Some("standard") && !set.contains("projects") && module.id != "projects" {
+        return Ok(Some("projects"));
+    }
+    let here = kind.map_or(set, |kind| set.in_project(kind));
+    Ok((!here.contains(&module.id)).then_some(module.id.as_str()))
 }
 
 /// Whether the signed-in caller may see where the request acts. Only they
@@ -234,17 +246,14 @@ pub async fn refuse_off_modules(
         // Who's asking only matters once something is off, so the common
         // case stays free of the session lookup.
         let refused = match off_module(&state, module, &scope).await {
-            Ok(true) => caller_can_see(&state, request.headers(), &scope).await,
+            Ok(Some(off)) => caller_can_see(&state, request.headers(), &scope)
+                .await
+                .map(|seen| seen.then_some(off)),
             other => other,
         };
         match refused {
-            Ok(false) => {}
-            Ok(true) => {
-                return AppError::ModuleOff {
-                    module: module.id.as_str(),
-                }
-                .into_response();
-            }
+            Ok(None) => {}
+            Ok(Some(off)) => return AppError::ModuleOff { module: off }.into_response(),
             Err(error) => return error.into_response(),
         }
     }

@@ -106,6 +106,7 @@ pub mod work_item_planning;
 pub mod work_item_workflow;
 pub mod work_items;
 pub mod workspace;
+pub mod workspace_space;
 pub mod workspace_templates;
 
 use std::sync::Arc;

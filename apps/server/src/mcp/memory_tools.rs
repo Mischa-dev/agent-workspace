@@ -214,6 +214,7 @@ pub(super) async fn search_tool(
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct PageListArguments {
+    /// The project, or "workspace" for the workspace's own pages.
     pub project_id: String,
     /// Include archived pages.
     pub include_archived: Option<bool>,
@@ -448,6 +449,7 @@ pub(super) struct PageWriteArguments {
     pub page_id: Option<String>,
     // Read by the MCP middleware, which scopes the call to this project.
     #[allow(dead_code)]
+    /// The project, or "workspace" for a page the whole workspace shares.
     pub project_id: Option<String>,
     pub title: Option<String>,
     /// The whole page, in Markdown. It replaces the current text.

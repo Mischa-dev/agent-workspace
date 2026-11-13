@@ -153,6 +153,22 @@ impl ModuleSet {
         }
     }
 
+    /// The modules on in a project of this kind (AWD-96). A project needs
+    /// Projects on for anything in it, Pages included, which doesn't need
+    /// Projects itself; the workspace space holds the workspace's own pages
+    /// and nothing else, so only Pages counts there; the direct space
+    /// follows the set as it is.
+    pub fn in_project(self, project_kind: &str) -> Self {
+        match project_kind {
+            "standard" if !self.contains("projects") => Self::always_on(),
+            "workspace" => {
+                let pages = manifest::index_of("pages").map_or(Self(0), |index| Self(1 << index));
+                self.intersect(pages.union(Self::always_on()))
+            }
+            _ => self,
+        }
+    }
+
     /// Why a module is off in this set, in words, or none when it's on.
     pub fn why_off(self, module: &Manifest, switched_off: bool) -> Option<String> {
         if self.contains(&module.id) {
@@ -335,7 +351,7 @@ async fn project_rows(
                    -- The hidden project DMs live in follows the workspace role.
                    (SELECT {project_off} FROM project_memberships membership
                     WHERE membership.project_id = project.id AND membership.actor_id = $2
-                      AND membership.enabled AND project.kind <> 'direct'),
+                      AND membership.enabled AND project.kind NOT IN ('direct', 'workspace')),
                    (SELECT {workspace_off} FROM organization_memberships membership
                     WHERE membership.organization_id = project.organization_id
                       AND membership.actor_id = $2 AND membership.enabled),
@@ -367,7 +383,9 @@ pub async fn for_project(
         return Ok(None);
     };
     let switches = switches(connection, row.organization_id).await?;
-    Ok(Some(narrowed(&switches, &row.role_off)))
+    Ok(Some(
+        narrowed(&switches, &row.role_off).in_project(&row.kind),
+    ))
 }
 
 /// The modules on for someone in each workspace they're an active member
@@ -414,7 +432,7 @@ pub async fn anywhere(
         SELECT membership.project_id FROM project_memberships membership
         JOIN projects project ON project.id = membership.project_id
         WHERE membership.actor_id = $1 AND membership.enabled AND project.archived_at IS NULL
-          AND project.kind <> 'direct'
+          AND project.kind NOT IN ('direct', 'workspace')
         "#,
     )
     .bind(actor_id)
@@ -462,7 +480,7 @@ impl ProjectModules {
                         .unwrap_or_default();
                     (
                         row.id,
-                        narrowed(&found, &row.role_off),
+                        narrowed(&found, &row.role_off).in_project(&row.kind),
                         row.kind == "direct",
                     )
                 })
@@ -588,6 +606,16 @@ pub fn notification_switches_sql() -> &'static str {
                         sql_array(&required_switches("messages")),
                         sql_array(&required_switches("channels")),
                     )
+                } else if module.id == "pages" {
+                    // AWD-96: a project's pages need Projects; the
+                    // workspace space's don't.
+                    let mut in_projects = required_switches("pages");
+                    in_projects.extend(required_switches("projects"));
+                    format!(
+                        "CASE WHEN module_project.kind = 'standard' THEN {} ELSE {} END",
+                        sql_array(&in_projects),
+                        sql_array(&required_switches("pages")),
+                    )
                 } else {
                     sql_array(&required_switches(&module.id))
                 };
@@ -613,7 +641,7 @@ pub fn notification_switches_sql() -> &'static str {
                       (SELECT {project_off} FROM project_memberships membership
                        WHERE membership.project_id = module_project.id
                          AND membership.actor_id = n.recipient_actor_id
-                         AND membership.enabled AND module_project.kind <> 'direct'),
+                         AND membership.enabled AND module_project.kind NOT IN ('direct', 'workspace')),
                       (SELECT {workspace_off} FROM organization_memberships membership
                        WHERE membership.organization_id = module_project.organization_id
                          AND membership.actor_id = n.recipient_actor_id AND membership.enabled),
@@ -645,7 +673,7 @@ mod tests {
         // workspace role in the direct space.
         assert!(sql.contains("held.modules_off"));
         assert!(sql.contains("membership.actor_id = n.recipient_actor_id"));
-        assert!(sql.contains("module_project.kind <> 'direct'"));
+        assert!(sql.contains("module_project.kind NOT IN ('direct', 'workspace')"));
         assert_eq!(
             super::required_switches("runs"),
             [
@@ -665,7 +693,6 @@ mod tests {
         for module in [
             "channels",
             "tasks",
-            "pages",
             "whiteboards",
             "collections",
             "sheets",
@@ -681,6 +708,12 @@ mod tests {
         for module in ["workspace", "messages", "agents", "inbox", "suggestions"] {
             assert!(set.contains(module), "{module} should stay on");
         }
+        // AWD-96: pages don't need Projects. They stay on for the
+        // workspace's own pages and go with Projects inside a project.
+        assert!(set.contains("pages"));
+        assert!(set.in_project("workspace").contains("pages"));
+        assert!(!set.in_project("standard").contains("pages"));
+        assert!(!set.in_project("workspace").contains("tasks"));
     }
 
     #[test]

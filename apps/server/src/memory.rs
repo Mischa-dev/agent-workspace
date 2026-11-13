@@ -93,6 +93,10 @@ pub fn router() -> Router<AppState> {
             post(page_docs::discussion::decide_suggestion),
         )
         .route(
+            "/api/v1/organizations/{organization_id}/pages-space",
+            get(workspace_pages_space_http),
+        )
+        .route(
             "/api/v1/projects/{id}/decisions",
             get(list_decisions_http).post(record_decision_http),
         )
@@ -1239,6 +1243,30 @@ struct ListQuery {
 struct PagesResponse {
     pages: Vec<PageSummary>,
     can_edit: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PagesSpaceResponse {
+    project_id: Uuid,
+}
+
+/// `GET /api/v1/organizations/{organization_id}/pages-space`: where the
+/// workspace's own pages live (AWD-96), with the caller added to it the
+/// first time. Their pages then work like any project's, at
+/// `/api/v1/projects/{projectId}/pages`.
+async fn workspace_pages_space_http(
+    State(state): State<AppState>,
+    principal: AuthenticatedActor,
+    ApiPath(organization_id): ApiPath<Uuid>,
+) -> Result<Json<PagesSpaceResponse>, AppError> {
+    let mut transaction = state.pool.begin().await?;
+    let project_id =
+        crate::workspace_space::join(&mut transaction, organization_id, principal.actor_id)
+            .await?
+            .ok_or(AppError::NotFound("workspace"))?;
+    transaction.commit().await?;
+    Ok(Json(PagesSpaceResponse { project_id }))
 }
 
 async fn list_pages_http(

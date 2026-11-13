@@ -460,7 +460,7 @@ async fn facets(
     let projects = sqlx::query_as::<_, FacetProject>(
         r#"
         SELECT id, name, project_key AS key FROM projects
-        WHERE organization_id = $1 AND kind <> 'direct'
+        WHERE organization_id = $1 AND kind NOT IN ('direct', 'workspace')
         ORDER BY archived_at NULLS FIRST, lower(name), id
         LIMIT 500
         "#,
