@@ -305,6 +305,27 @@
   overflow-wrap: anywhere;
 }
 
+/* AWD-62: a question someone asked you, answered on the card. */
+.aw-inbox__question {
+  white-space: pre-wrap;
+}
+
+.aw-inbox__answer {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.aw-inbox__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.aw-inbox__answer-send {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .aw-inbox__actions {
   display: flex;
   flex-wrap: wrap;

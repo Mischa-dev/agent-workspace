@@ -69,6 +69,7 @@ pub mod projects;
 pub mod provider;
 pub mod public_api;
 pub mod push;
+pub mod questions;
 pub mod rate_limit;
 pub mod reactions;
 pub mod realtime;
@@ -166,6 +167,7 @@ pub fn router(state: AppState) -> Router {
         .merge(push::router())
         .merge(notification_settings::router())
         .merge(later::router())
+        .merge(questions::router())
         .merge(scheduled_messages::router())
         .merge(forwarding::router())
         .merge(mail::http::router())

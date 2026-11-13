@@ -11,11 +11,14 @@
   "tools": {
     "later_list": "query",
     "later_save": "create",
-    "later_update": "change"
+    "later_update": "change",
+    "ask_person": "create",
+    "question_list": "query",
+    "question_answer": "change"
   },
-  "routes": ["/api/v1/inbox*", "/api/v1/later*"],
+  "routes": ["/api/v1/inbox*", "/api/v1/later*", "/api/v1/questions/*"],
   "events": { "emits": [], "listens": [] },
-  "notifications": ["reminder"],
+  "notifications": ["reminder", "question_asked"],
   "search": [],
   "automations": { "triggers": [], "actions": [] },
   "things": [],

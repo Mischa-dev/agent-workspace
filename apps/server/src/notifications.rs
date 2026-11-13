@@ -59,6 +59,8 @@ pub mod kind {
     pub const COMMENT_MENTION: &str = "comment_mention";
     pub const ASSIGNED: &str = "assigned";
     pub const APPROVAL_REQUESTED: &str = "approval_requested";
+    /// Someone (usually an agent) asked you something on an inbox card (AWD-62).
+    pub const QUESTION_ASKED: &str = "question_asked";
     pub const RUN_WAITING: &str = "run_waiting";
     pub const RUN_COMPLETED: &str = "run_completed";
     pub const RUN_FAILED: &str = "run_failed";
@@ -1386,6 +1388,10 @@ pub struct NotificationView {
     /// A capacity alert's suggested batch, which Launch starts in one tap.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub batch: Option<BatchAction>,
+    /// Set when the notification is a question someone asked you (AWD-62):
+    /// its options, and your answer once you've given it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub question: Option<crate::questions::QuestionView>,
     /// The conversation a Reply from the notification posts in (mentions).
     #[serde(skip)]
     pub reply_conversation_id: Option<Uuid>,
@@ -1484,6 +1490,12 @@ struct NotificationRow {
     pull_request_number: Option<i64>,
     pull_request_title: Option<String>,
     pull_request_url: Option<String>,
+    question_status: Option<String>,
+    question_text: Option<String>,
+    question_options: Option<serde_json::Value>,
+    question_answer_option_id: Option<String>,
+    question_answer_text: Option<String>,
+    question_answered_at: Option<String>,
 }
 
 fn list_sql(view_condition: &str, extra: &str) -> String {
@@ -1523,7 +1535,13 @@ fn list_sql(view_condition: &str, extra: &str) -> String {
                left(approval.summary, {PREVIEW_CHARACTERS}) AS approval_summary,
                approval.options AS approval_options,
                pr.pull_request_number, pr.title AS pull_request_title,
-               pr.html_url AS pull_request_url
+               pr.html_url AS pull_request_url,
+               question.status AS question_status, question.question AS question_text,
+               question.options AS question_options,
+               question.answer_option_id AS question_answer_option_id,
+               question.answer_text AS question_answer_text,
+               to_char(question.answered_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+                   AS question_answered_at
         FROM notifications n
         JOIN projects project ON project.id = n.project_id
         LEFT JOIN project_memberships actor_member
@@ -1539,6 +1557,9 @@ fn list_sql(view_condition: &str, extra: &str) -> String {
           ON run_agent.project_id = n.project_id AND run_agent.actor_id = run_worker.actor_id
         LEFT JOIN agent_approvals approval ON approval.id = n.approval_id
         LEFT JOIN github_pull_requests pr ON pr.id = n.pull_request_id
+        LEFT JOIN person_questions question
+          ON n.subject_kind = 'question' AND question.id = n.subject_id
+         AND question.person_actor_id = n.recipient_actor_id
         WHERE n.recipient_actor_id = $1
           AND {view_condition}
           AND ($2::text[] IS NULL OR n.kind = ANY($2))
@@ -1828,6 +1849,16 @@ fn view(row: NotificationRow) -> NotificationView {
             ),
             row.approval_summary.clone(),
         ),
+        kind::QUESTION_ASKED => (
+            match (&row.conversation_id, &row.work_item_key) {
+                (Some(_), _) => format!("{who} has a question for you in {place}"),
+                (None, Some(key)) => format!("{who} has a question for you on {key}"),
+                _ => format!("{who} has a question for you"),
+            },
+            row.question_text
+                .as_deref()
+                .map(|text| text.chars().take(PREVIEW_CHARACTERS as usize).collect()),
+        ),
         kind::RUN_COMPLETED => (format!("{} in {place} is done", run_owner(&row)), None),
         kind::RUN_FAILED => (
             // Failures and interruptions both land here; say which.
@@ -1900,6 +1931,34 @@ fn view(row: NotificationRow) -> NotificationView {
                 .approval_options
                 .unwrap_or_else(|| serde_json::json!([])),
         }),
+        _ => None,
+    };
+    let question = match (row.question_status.clone(), row.question_text.clone()) {
+        (Some(status), Some(text)) => {
+            let options: Vec<crate::questions::QuestionOption> = row
+                .question_options
+                .clone()
+                .and_then(|options| serde_json::from_value(options).ok())
+                .unwrap_or_default();
+            let answer = (status == "answered").then(|| crate::questions::AnswerView {
+                label: row.question_answer_option_id.as_ref().and_then(|picked| {
+                    options
+                        .iter()
+                        .find(|option| &option.id == picked)
+                        .map(|option| option.label.clone())
+                }),
+                option_id: row.question_answer_option_id.clone(),
+                text: row.question_answer_text.clone(),
+            });
+            Some(crate::questions::QuestionView {
+                id: row.subject_id,
+                status,
+                question: text,
+                options,
+                answer,
+                answered_at: row.question_answered_at.clone(),
+            })
+        }
         _ => None,
     };
     let launch_href = row
@@ -1975,6 +2034,7 @@ fn view(row: NotificationRow) -> NotificationView {
         created_at: row.created_at,
         href,
         approval,
+        question,
         launch_href,
         batch,
         reply_conversation_id,

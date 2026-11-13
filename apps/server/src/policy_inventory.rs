@@ -1023,6 +1023,14 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     boundary_route!("later", Post, "/api/v1/later", SessionAuthentication),
     boundary_route!("later", Patch, "/api/v1/later/{id}", SessionAuthentication),
     boundary_route!("later", Delete, "/api/v1/later/{id}", SessionAuthentication),
+    // AWD-62: only the person a question was asked of answers it, while they
+    // can still see its project and context (checked in the command).
+    boundary_route!(
+        "questions",
+        Post,
+        "/api/v1/questions/{id}/answer",
+        SessionAuthentication
+    ),
     // W21: scheduling, editing and sending run the send command's checks;
     // canceling is the author's own.
     policy_route!(

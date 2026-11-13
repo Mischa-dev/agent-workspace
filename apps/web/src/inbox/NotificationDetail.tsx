@@ -1,3 +1,5 @@
+import { useState } from 'react'
+
 import { atPhrase } from '../later/when'
 import {
   Banner,
@@ -5,6 +7,7 @@ import {
   ButtonLink,
   Menu,
   StatusChip,
+  TextArea,
   countLabel,
   formatDateTime,
   formatFullDate,
@@ -12,7 +15,7 @@ import {
   plainPreview,
 } from '../ui'
 import { BatchLaunch } from './BatchLaunch'
-import { isExternalHref, snoozeChoices, type InboxNotification, type InboxView } from './api'
+import { isExternalHref, snoozeChoices, type InboxNotification, type InboxQuestion, type InboxView } from './api'
 import { KIND_ICON } from './kinds'
 
 /** What became of a question or approval someone already answered. */
@@ -20,6 +23,83 @@ function answeredText(status: string) {
   if (status === 'superseded') return 'A newer request replaced this one.'
   if (status === 'canceled') return 'The run stopped before anyone answered.'
   return 'Answered. Open the thread to see the reply.'
+}
+
+/** What you answered, in one line. */
+function answerText(answer: NonNullable<InboxQuestion['answer']>) {
+  return [answer.label, answer.text].filter(Boolean).join(' · ')
+}
+
+/**
+ * A question someone asked you (AWD-62): pick one of its answers or type
+ * your own. Once answered it shows what you said; an answer is final.
+ */
+function QuestionCard({ onSend, question }: { onSend: (answer: { optionId?: string; text?: string }) => Promise<void>; question: InboxQuestion }) {
+  const [text, setText] = useState('')
+  const [busy, setBusy] = useState<string | null>(null)
+  if (question.status === 'answered' && question.answer) {
+    return (
+      <>
+        <blockquote className="aw-inbox__quote aw-inbox__question">{question.question}</blockquote>
+        <Banner tone="success">You answered: {answerText(question.answer)}</Banner>
+      </>
+    )
+  }
+  const send = async (key: string, answer: { optionId?: string; text?: string }) => {
+    setBusy(key)
+    try {
+      await onSend(answer)
+      setText('')
+    } finally {
+      setBusy(null)
+    }
+  }
+  const typed = text.trim()
+  return (
+    <form
+      className="aw-inbox__answer"
+      onSubmit={(event) => {
+        event.preventDefault()
+        if (typed) void send('text', { text: typed })
+      }}
+    >
+      <blockquote className="aw-inbox__quote aw-inbox__question">{question.question}</blockquote>
+      {question.options.length ? (
+        <div className="aw-inbox__options" role="group" aria-label="Answers">
+          {question.options.map((option) => (
+            <Button
+              busy={busy === option.id}
+              disabled={busy !== null}
+              key={option.id}
+              onClick={() => void send(option.id, typed ? { optionId: option.id, text: typed } : { optionId: option.id })}
+              variant={option.id === question.options[0]?.id ? 'primary' : 'secondary'}
+            >
+              {option.label}
+            </Button>
+          ))}
+        </div>
+      ) : null}
+      <TextArea
+        hint={question.options.length ? 'Typed words go with the answer you pick, or on their own with Send.' : undefined}
+        label={question.options.length ? 'Or answer in your own words' : 'Your answer'}
+        maxLength={4000}
+        onChange={(event) => setText(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && typed) {
+            event.preventDefault()
+            void send('text', { text: typed })
+          }
+        }}
+        rows={3}
+        value={text}
+      />
+      <div className="aw-inbox__answer-send">
+        <Button busy={busy === 'text'} disabled={busy !== null || !typed} icon="send" type="submit" variant={question.options.length ? 'secondary' : 'primary'}>
+          Send
+        </Button>
+      </div>
+    </form>
+  )
 }
 
 /** A time on the snooze menu: the clock for today or tomorrow, the date after that. */
@@ -33,6 +113,7 @@ export function NotificationDetail({
   busyApproval,
   item,
   onAnswer,
+  onAnswerQuestion,
   onArchive,
   onBack,
   onOpen,
@@ -44,6 +125,7 @@ export function NotificationDetail({
   busyApproval: string | null
   item: InboxNotification
   onAnswer: (decision: 'approve' | 'deny') => void
+  onAnswerQuestion: (answer: { optionId?: string; text?: string }) => Promise<void>
   onArchive: () => void
   onBack: () => void
   onOpen: () => void
@@ -78,7 +160,11 @@ export function NotificationDetail({
           <span title={formatFullDate(item.snoozedUntil)}> · Snoozed until {atPhrase(item.snoozedUntil)}</span>
         ) : null}
       </p>
-      {preview ? <blockquote className="aw-inbox__quote">{preview}</blockquote> : null}
+      {item.question ? (
+        <QuestionCard key={item.question.id} onSend={onAnswerQuestion} question={item.question} />
+      ) : preview ? (
+        <blockquote className="aw-inbox__quote">{preview}</blockquote>
+      ) : null}
       {item.approval && item.approval.status !== 'pending' ? <Banner tone="info">{answeredText(item.approval.status)}</Banner> : null}
       <div className="aw-inbox__actions">
         {pendingApproval ? (
@@ -103,7 +189,7 @@ export function NotificationDetail({
             </Button>
           </>
         ) : null}
-        {external ? (
+        {item.question && item.href === '/inbox' ? null : external ? (
           <Button icon="external" onClick={onOpen} variant={pendingApproval ? 'secondary' : 'primary'}>
             Open on GitHub
           </Button>

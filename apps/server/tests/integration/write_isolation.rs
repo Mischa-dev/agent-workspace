@@ -112,6 +112,7 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/later",
     "DELETE /api/v1/later/{id}",
     "PATCH /api/v1/later/{id}",
+    "POST /api/v1/questions/{id}/answer",
     "POST /api/v1/messages/{id}/forward",
     "PUT /api/v1/notification-settings/channels",
     "PUT /api/v1/notification-settings/mutes",
@@ -445,6 +446,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "sheet_write",
     "later_save",
     "later_update",
+    "ask_person",
+    "question_answer",
     "launch_cancel",
     "mark_read",
     "message_delete",
@@ -1240,6 +1243,9 @@ struct Targets {
     trashed_whiteboard: Uuid,
     /// The collection's person, task link and page link fields (AWD-90).
     record_fields: [Uuid; 3],
+    /// Questions the agent asked the owner (AWD-62): one to answer over
+    /// HTTP, one through MCP.
+    questions: [Uuid; 2],
 }
 
 async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targets {
@@ -1403,6 +1409,23 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
     .execute(pool)
     .await
     .expect("notification");
+    let mut questions = [Uuid::nil(); 2];
+    for question in &mut questions {
+        *question = Uuid::now_v7();
+        sqlx::query(
+            r#"
+            INSERT INTO person_questions (id, project_id, asked_by_actor_id, person_actor_id, question, options)
+            VALUES ($1, $2, $3, $4, 'Net: ship it?', '[{"id": "1", "label": "Yes"}]')
+            "#,
+        )
+        .bind(*question)
+        .bind(project)
+        .bind(agent)
+        .bind(owner)
+        .execute(pool)
+        .await
+        .expect("question");
+    }
     let delivery = Uuid::now_v7();
     sqlx::query(
         r#"
@@ -1586,6 +1609,7 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
     let in_project = |sql: &'static str| scalar(pool, sql, project);
     let in_organization = |sql: &'static str| scalar(pool, sql, organization);
     Targets {
+        questions,
         custom_role,
         workspace_template,
         sessions,
@@ -3714,6 +3738,11 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             "DELETE /api/v1/later/{id}",
             &[id(sp.later, bx.later)],
             empty(),
+        ),
+        path_case(
+            "POST /api/v1/questions/{id}/answer",
+            &[id(ax.questions[0], bx.questions[0])],
+            json_body(json!({"optionId": "1"})),
         ),
         path_case(
             "PATCH /api/v1/scheduled-messages/{id}",
@@ -5973,6 +6002,23 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "later_update",
             json!({"id": ax.later, "text": "Net"}),
             vec![json!({"id": bx.later, "text": "Net"})],
+        ),
+        mcp_case(
+            "ask_person",
+            json!({"projectId": a.project, "person": "@wren", "question": "Net?", "taskId": a.task}),
+            vec![
+                json!({"projectId": b.project, "person": "@wren", "question": "Net?"}),
+                json!({"person": "@wren", "question": "Net?", "taskId": b.task}),
+            ],
+        )
+        .rejecting(vec![
+            json!({"projectId": a.project, "person": bx.wren, "question": "Net?"}),
+            json!({"projectId": a.project, "person": "@wren", "question": "Net?", "conversationId": b.channel}),
+        ]),
+        mcp_case(
+            "question_answer",
+            json!({"questionId": ax.questions[1], "text": "Net answer"}),
+            vec![json!({"questionId": bx.questions[1], "text": "Net answer"})],
         ),
         mcp_case(
             "message_schedule",

@@ -25,6 +25,15 @@ export type InboxApproval = {
   options: Array<{ id: string; label: string }>
 }
 
+/** A question someone asked you on a card (AWD-62), and your answer once given. */
+export type InboxQuestion = {
+  id: string
+  status: 'pending' | 'answered'
+  question: string
+  options: Array<{ id: string; label: string }>
+  answer: { optionId: string | null; label: string | null; text: string | null } | null
+}
+
 export type InboxNotification = {
   id: string
   kind: string
@@ -46,6 +55,7 @@ export type InboxNotification = {
   /** Capacity alerts: the suggested batch, which Launch starts in one tap. */
   batch: { accountId: string; size: number; windowKey: string | null } | null
   approval: InboxApproval | null
+  question: InboxQuestion | null
 }
 
 export type InboxPage = {
@@ -93,6 +103,30 @@ function normalizeApproval(value: unknown): InboxApproval | null {
   return { id, kind: record.kind, status, options }
 }
 
+function normalizeQuestion(value: unknown): InboxQuestion | null {
+  const record = asRecord(value)
+  const id = text(record.id)
+  const question = text(record.question)
+  if (!id || !question || (record.status !== 'pending' && record.status !== 'answered')) return null
+  const options = Array.isArray(record.options)
+    ? record.options
+        .map(asRecord)
+        .filter((option) => typeof option.id === 'string' && typeof option.label === 'string')
+        .map((option) => ({ id: option.id as string, label: option.label as string }))
+    : []
+  const answer = asRecord(record.answer)
+  return {
+    id,
+    status: record.status,
+    question,
+    options,
+    answer:
+      record.status === 'answered'
+        ? { optionId: text(answer.optionId), label: text(answer.label), text: text(answer.text) }
+        : null,
+  }
+}
+
 /** Agents read as agents here, whichever way they run. */
 function inboxActorKind(kind: string | null): ActorKind {
   const mapped = actorKind(kind ?? 'human')
@@ -134,6 +168,7 @@ export function normalizeNotification(value: unknown): InboxNotification | null 
     launchHref: inAppPath(text(record.launchHref)),
     batch: normalizeBatch(record.batch),
     approval: normalizeApproval(record.approval),
+    question: normalizeQuestion(record.question),
   }
 }
 
@@ -291,6 +326,17 @@ export function respondToApproval(approvalId: string, decision: 'approve' | 'den
   })
 }
 
+/** Answer a question asked of you: an option, words, or both. */
+export async function answerQuestion(questionId: string, answer: { optionId?: string; text?: string }) {
+  const response = await requestJson<{ question: unknown }>(`/api/v1/questions/${encodeURIComponent(questionId)}/answer`, {
+    method: 'POST',
+    // One key per answer sent; a retry of the same request reuses it.
+    idempotencyKey: `question-${questionId}-${Date.now().toString(36)}`,
+    json: answer,
+  })
+  return normalizeQuestion(response.question)
+}
+
 /**
  * Snooze choices, in the viewer's own time zone and by the same rules as
  * Later's reminders: "Later today" only while the day has some left, and the
@@ -335,6 +381,7 @@ const NEEDS_YOU_KINDS = new Set([
   'conversation_message',
   'assigned',
   'approval_requested',
+  'question_asked',
   'review_requested',
   'run_waiting',
   'run_failed',
@@ -346,6 +393,7 @@ const NEEDS_YOU_KINDS = new Set([
 /** Whether a notification asks something of you; an approval someone already answered no longer does. */
 export function needsYou(notification: InboxNotification) {
   if (notification.approval && notification.approval.status !== 'pending') return false
+  if (notification.question && notification.question.status !== 'pending') return false
   return NEEDS_YOU_KINDS.has(notification.kind)
 }
 
