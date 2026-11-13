@@ -433,6 +433,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "file_upload",
     "invitation_write",
     "label_write",
+    "layout_preset_write",
     "field_write",
     "collection_write",
     "record_write",
@@ -5678,6 +5679,16 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "rules": [{"role": "member", "preset": bx.layout_preset}]}),
             json!({"projectId": a.project, "rules": [{"person": bx.wren, "preset": "Minimal"}]}),
             json!({"projectId": a.project, "workspace": true, "preset": bx.layout_preset}),
+        ]),
+        mcp_case(
+            "layout_preset_write",
+            json!({"projectId": a.project, "name": "Net own", "base": "Software team"}),
+            vec![json!({"projectId": b.project, "name": "Net b", "base": "Software team"})],
+        )
+        .rejecting(vec![
+            json!({"projectId": a.project, "preset": bx.layout_preset, "name": "Mine now"}),
+            json!({"projectId": a.project, "preset": bx.layout_preset, "remove": true}),
+            json!({"projectId": a.project, "name": "Net based", "base": bx.layout_preset}),
         ]),
         mcp_case(
             "project_member_set",

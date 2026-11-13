@@ -85,6 +85,7 @@ mod invitation_tools;
 mod labels;
 mod later_tools;
 mod launch_tools;
+mod layout_preset_tools;
 mod memory_tools;
 mod message_edits;
 mod model_catalog_tools;
@@ -715,6 +716,25 @@ impl McpServer {
     ) -> Json<common::ToolResult<admin::ProjectLayoutValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(admin::project_layout_set(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Save, change or remove one of the workspace's own layout presets: a preset it starts from (base, such as Software team) with parts shown or hidden (show) and nouns renamed (words), for project_layout_set to pick by name. Leave preset out to save a new one; name a saved preset to change it (show and words add to what it has, unless you give base) or remove it (remove: true; layouts using it keep working). Visual only. The workspace's owners and admins, as themselves.",
+        annotations(
+            title = "Save layout preset",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn layout_preset_write(
+        &self,
+        Parameters(arguments): Parameters<layout_preset_tools::LayoutPresetWriteArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<layout_preset_tools::LayoutPresetWriteValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(layout_preset_tools::layout_preset_write(&self.state, principal, arguments).await)
     }
 
     // -- Conversations -------------------------------------------------------

@@ -71,17 +71,17 @@ mod tests {
         (
             Post,
             "/api/v1/organizations/{organization_id}/layout/presets",
-            Gap("saved layout presets"),
+            Tool("layout_preset_write"),
         ),
         (
             Patch,
             "/api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
-            Gap("saved layout presets"),
+            Tool("layout_preset_write"),
         ),
         (
             Delete,
             "/api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
-            Gap("saved layout presets"),
+            Tool("layout_preset_write"),
         ),
         (
             Post,
