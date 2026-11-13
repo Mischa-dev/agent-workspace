@@ -6,6 +6,7 @@ pub mod agent_docs;
 pub mod agent_parity;
 pub mod agent_profiles;
 pub mod agent_sessions;
+pub mod agent_setup_links;
 pub mod ai;
 pub mod api;
 pub mod audit_log;
@@ -198,6 +199,7 @@ pub fn router(state: AppState) -> Router {
         .merge(search::router())
         .merge(connected_apps::router())
         .merge(agent_docs::router())
+        .merge(agent_setup_links::router())
         .merge(settings::router())
         .merge(layouts::router())
         .merge(modules::router())

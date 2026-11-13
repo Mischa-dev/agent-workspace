@@ -167,6 +167,8 @@ export default defineConfig({
       '/health': apiTarget,
       // Single sign-on comes back here from WorkOS, and the server finishes it.
       '/auth/workos': apiTarget,
+      // An agent's one-time setup link (the server answers it, not the app).
+      '/connect/agent': apiTarget,
     },
   },
   test: {

@@ -26,11 +26,13 @@ import {
   formatFullDate,
   formatRelative,
   formatShortDate,
+  formatTime,
   showToast,
   type MenuEntry,
 } from '../ui'
 import {
   createExternalAgent,
+  createExternalAgentSetupLink,
   listExternalAgents,
   removeExternalAgent,
   rotateExternalAgentCredential,
@@ -42,6 +44,8 @@ import {
   type ExternalAgentRole,
   type ExternalAgentScope,
   type OneTimeCredential,
+  type SetupApp,
+  setupMessage,
 } from './api'
 import { RUNNER_PRESETS, runnerSettings, type RunnerPresetId } from './runnerPresets'
 
@@ -67,7 +71,46 @@ function RoleOptions() {
   )
 }
 
-type Confirming = { kind: 'rotate' | 'remove'; connection: ExternalAgentConnection }
+type Confirming = { kind: 'rotate' | 'remove' | 'setup'; connection: ExternalAgentConnection }
+
+const SETUP_APPS: { value: SetupApp; label: string }[] = [
+  { value: 'claude_code', label: 'Claude Code' },
+  { value: 'codex', label: 'Codex' },
+  { value: 'other', label: 'Another app' },
+]
+
+function SetupAppField({
+  disabled,
+  id,
+  onChange,
+  value,
+  withToken = false,
+}: {
+  disabled: boolean
+  id: string
+  onChange: (value: SetupApp | '') => void
+  value: SetupApp | ''
+  /** Offer showing the token instead. */
+  withToken?: boolean
+}) {
+  return (
+    <SelectField
+      disabled={disabled}
+      hint="You get one message to paste there. The agent fetches its token and steps itself."
+      id={id}
+      label="Set it up in"
+      onChange={(event) => onChange(event.target.value as SetupApp | '')}
+      value={value}
+    >
+      {SETUP_APPS.map((app) => (
+        <option key={app.value} value={app.value}>
+          {app.label}
+        </option>
+      ))}
+      {withToken ? <option value="">Show me the token instead</option> : null}
+    </SelectField>
+  )
+}
 
 export function ExternalAgentSettings({
   onBusy,
@@ -88,6 +131,8 @@ export function ExternalAgentSettings({
     /** Set when the agent was just created: what its runner needs. */
     setup?: { handle: string; runner: RunnerPresetId; webhookSecret: string | null }
   } | null>(null)
+  const [setupLink, setSetupLink] = useState<{ agentName: string; message: string; expiresAt: string } | null>(null)
+  const [setupApp, setSetupApp] = useState<SetupApp>('claude_code')
   const [creatingAs, setCreatingAs] = useState<RunnerPresetId>('agent')
   const [createError, setCreateError] = useState<string | null>(null)
   const [confirming, setConfirming] = useState<Confirming | null>(null)
@@ -96,7 +141,17 @@ export function ExternalAgentSettings({
     await queryClient.invalidateQueries({ queryKey: queryKeys.externalAgents(projectId) })
   }
   const showCredential = (result: ExternalAgentMutation, created = false) => {
+    if (result.setupLink) {
+      setOneTimeCredential(null)
+      setSetupLink({
+        agentName: result.connection.displayName,
+        message: setupMessage(result.connection.handle, result.setupLink.url),
+        expiresAt: result.setupLink.expiresAt,
+      })
+      return
+    }
     if (!result.oneTimeCredential) return
+    setSetupLink(null)
     setOneTimeCredential({
       agentName: result.connection.displayName,
       credential: result.oneTimeCredential,
@@ -137,6 +192,15 @@ export function ExternalAgentSettings({
       await refresh()
     },
   })
+  const setupMutation = useMutation({
+    mutationFn: (input: { connection: ExternalAgentConnection; app: SetupApp }) =>
+      createExternalAgentSetupLink(projectId, input.connection.id, input.connection.version, input.app),
+    onSuccess: async (result) => {
+      setConfirming(null)
+      showCredential(result)
+      await refresh()
+    },
+  })
   const removeMutation = useMutation({
     mutationFn: (connection: ExternalAgentConnection) => removeExternalAgent(projectId, connection.id, connection.version),
     onSuccess: async (result) => {
@@ -145,9 +209,15 @@ export function ExternalAgentSettings({
       await refresh()
     },
   })
-  const confirmMutation = confirming?.kind === 'rotate' ? rotateMutation : removeMutation
-  const pending = createMutation.isPending || enableMutation.isPending || rotateMutation.isPending || removeMutation.isPending
-  const holding = pending || oneTimeCredential !== null
+  const confirmMutation =
+    confirming?.kind === 'rotate' ? rotateMutation : confirming?.kind === 'setup' ? setupMutation : removeMutation
+  const pending =
+    createMutation.isPending ||
+    enableMutation.isPending ||
+    rotateMutation.isPending ||
+    setupMutation.isPending ||
+    removeMutation.isPending
+  const holding = pending || oneTimeCredential !== null || setupLink !== null
   useEffect(() => {
     onBusy?.(holding)
   }, [holding, onBusy])
@@ -168,6 +238,19 @@ export function ExternalAgentSettings({
           setup={oneTimeCredential.setup}
         />
       )}
+      {setupLink && (
+        <OneTimeValue
+          copyLabel="Copy message"
+          icon="link"
+          onDone={() => setSetupLink(null)}
+          title={`Setup message ready for ${setupLink.agentName}`}
+          value={setupLink.message}
+        >
+          Paste it into the agent’s app. The link in it works once, until{' '}
+          <span title={formatFullDate(setupLink.expiresAt)}>{formatTime(setupLink.expiresAt)}</span>, and it can’t be
+          shown again after you close this.
+        </OneTimeValue>
+      )}
       <Section description="The agents that can read and post here." title="Connected agents">
         {!connections.data.connections.length ? (
           <EmptyState icon="bot" title="No agents connected yet">
@@ -182,6 +265,7 @@ export function ExternalAgentSettings({
                 key={connection.id}
                 onConfirm={(kind) => {
                   rotateMutation.reset()
+                  setupMutation.reset()
                   removeMutation.reset()
                   setConfirming({ kind, connection })
                 }}
@@ -193,7 +277,7 @@ export function ExternalAgentSettings({
         )}
       </Section>
       <Section
-        description="A runner answers when people tag it in a conversation (for example @reviewer). Any other agent connects over MCP. You’ll see its token once; it can’t be shown again."
+        description="A runner answers when people tag it in a conversation (for example @reviewer). Any other agent connects over MCP: you get one setup message to paste into its app, or its token, shown once."
         title="Connect an agent"
       >
         {createError ? (
@@ -211,30 +295,49 @@ export function ExternalAgentSettings({
         />
       </Section>
       <ConfirmDialog
+        body={
+          confirming?.kind === 'setup' ? (
+            <SetupAppField
+              disabled={setupMutation.isPending}
+              id="external-agent-setup-app"
+              onChange={(value) => setSetupApp(value || 'other')}
+              value={setupApp}
+            />
+          ) : null
+        }
         busy={confirmMutation.isPending}
-        confirmLabel={confirming?.kind === 'rotate' ? 'Make a new token' : 'Remove'}
+        confirmLabel={
+          confirming?.kind === 'rotate' ? 'Make a new token' : confirming?.kind === 'setup' ? 'Make setup message' : 'Remove'
+        }
         error={
           confirmMutation.isError
-            ? `${confirming?.kind === 'rotate' ? 'No new token was made.' : 'It wasn’t removed.'} ${describeError(confirmMutation.error).message}`
+            ? `${confirming?.kind === 'remove' ? 'It wasn’t removed.' : 'No new token was made.'} ${describeError(confirmMutation.error).message}`
             : null
         }
         onClose={() => setConfirming(null)}
         onConfirm={() => {
           if (!confirming) return
           if (confirming.kind === 'rotate') rotateMutation.mutate(confirming.connection)
+          else if (confirming.kind === 'setup') setupMutation.mutate({ connection: confirming.connection, app: setupApp })
           else removeMutation.mutate(confirming.connection)
         }}
         open={confirming !== null}
         title={
           confirming?.kind === 'rotate'
             ? `Make a new token for ${confirming.connection.displayName}?`
-            : `Remove ${confirming?.connection.displayName ?? 'this agent'}?`
+            : confirming?.kind === 'setup'
+              ? `Set up ${confirming.connection.displayName} in an app`
+              : `Remove ${confirming?.connection.displayName ?? 'this agent'}?`
         }
-        tone={confirming?.kind === 'rotate' ? 'primary' : 'danger'}
+        tone={confirming?.kind === 'remove' ? 'danger' : 'primary'}
       >
-        {confirming?.kind === 'rotate'
-          ? `${confirming.connection.displayName} stops working until you give it the new one. The old token stops working right away.`
-          : 'Its token stops working and it can’t connect here again. What it already posted stays.'}
+        {confirming?.kind === 'rotate' ? (
+          `${confirming.connection.displayName} stops working until you give it the new one. The old token stops working right away.`
+        ) : confirming?.kind === 'setup' ? (
+          `This gives ${confirming.connection.displayName} a new token. The old one stops working right away.`
+        ) : (
+          'Its token stops working and it can’t connect here again. What it already posted stays.'
+        )}
       </ConfirmDialog>
     </div>
   )
@@ -252,6 +355,7 @@ function CreateAgentForm({
   const [displayName, setDisplayName] = useState('')
   const [handle, setHandle] = useState('')
   const [webhookUrl, setWebhookUrl] = useState('')
+  const [setupApp, setSetupApp] = useState<SetupApp | ''>('claude_code')
   const [role, setRole] = useState<ExternalAgentRole>('member')
   const [scopes, setScopes] = useState<ExternalAgentScope[]>(memberScopes)
   const runner = RUNNER_PRESETS.find((candidate) => candidate.id === preset)?.runner ?? false
@@ -277,6 +381,7 @@ function CreateAgentForm({
       role,
       scopes,
       ...(runner && webhookUrl.trim() ? { webhookUrl: webhookUrl.trim() } : {}),
+      ...(!runner && setupApp ? { setupApp } : {}),
     })
   }
   const changeRole = (nextRole: ExternalAgentRole) => {
@@ -363,6 +468,9 @@ function CreateAgentForm({
         )}
       </div>
       {runner ? null : <ScopeFields disabled={disabled} onChange={setScopes} role={role} scopes={scopes} />}
+      {runner ? null : (
+        <SetupAppField disabled={disabled} id="external-agent-setup-app-new" onChange={setSetupApp} value={setupApp} withToken />
+      )}
       <div className="aw-form__actions">
         <Button busy={disabled} icon="bot" type="submit" variant="primary">
           {runner ? 'Add runner' : 'Connect agent'}
@@ -426,6 +534,7 @@ function AgentCard({
   const menu: MenuEntry[] = [
     ...(active
       ? [
+          { label: 'Set up in an app…', icon: 'link' as const, disabled, onSelect: () => onConfirm('setup') },
           { label: 'New token…', icon: 'retry' as const, disabled, onSelect: () => onConfirm('rotate') },
           { label: 'Disable', icon: 'circle-minus' as const, disabled, onSelect: () => onEnable(false) },
           { separator: true as const },

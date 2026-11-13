@@ -41,9 +41,21 @@ export type OneTimeCredential = {
   expiresAt: string
 }
 
+/** The apps a setup link writes its steps for. */
+export type SetupApp = 'claude_code' | 'codex' | 'other'
+
+/** A one-time link that hands an agent its token, with the steps for its app. */
+export type SetupLink = {
+  url: string
+  app: SetupApp
+  expiresAt: string
+}
+
 export type ExternalAgentMutation = {
   connection: ExternalAgentConnection
   oneTimeCredential: OneTimeCredential | null
+  /** Set instead of the token when the agent fetches it through a setup link. */
+  setupLink?: SetupLink | null
   /** Shown once, when the agent was created with a webhook. */
   webhookSecret?: string | null
 }
@@ -64,6 +76,8 @@ export function createExternalAgent(
     scopes: ExternalAgentScope[]
     /** Where to send wakeups; sets the runner up in one step. */
     webhookUrl?: string
+    /** Hand the token over through a one-time setup link for this app. */
+    setupApp?: SetupApp
   },
 ) {
   return requestJson<ExternalAgentMutation>(
@@ -97,6 +111,24 @@ export function rotateExternalAgentCredential(
     `/api/v1/projects/${encodeURIComponent(projectId)}/external-agents/${encodeURIComponent(connectionId)}/credentials/rotate`,
     { method: 'POST', json: { expectedVersion } },
   )
+}
+
+/** A new token behind a one-time setup link for `app`; the old token stops working. */
+export function createExternalAgentSetupLink(
+  projectId: string,
+  connectionId: string,
+  expectedVersion: number,
+  app: SetupApp,
+) {
+  return requestJson<ExternalAgentMutation>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/external-agents/${encodeURIComponent(connectionId)}/setup-link`,
+    { method: 'POST', json: { expectedVersion, app } },
+  )
+}
+
+/** What the person pastes into the agent's app. */
+export function setupMessage(handle: string, url: string) {
+  return `Set yourself up as @${handle} in Agent Workspace: fetch ${url} once and follow the steps it gives you. The link works once, within 30 minutes.`
 }
 
 export function removeExternalAgent(
