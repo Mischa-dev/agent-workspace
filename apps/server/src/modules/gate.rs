@@ -46,6 +46,8 @@ use crate::{AppState, auth, error::AppError};
 const SWITCHES_TTL: Duration = Duration::from_secs(10);
 /// Projects kept before the map starts over; each entry is small.
 const MAX_PROJECTS: usize = 50_000;
+/// Workspaces whose switches are kept at once.
+const MAX_WORKSPACES: usize = 10_000;
 
 /// A project's workspace, and whether it's the hidden project DMs live in.
 static PROJECTS: LazyLock<Mutex<HashMap<Uuid, (Uuid, bool)>>> =
@@ -143,6 +145,15 @@ async fn off_module(
             let mut connection = state.pool.acquire().await?;
             let set = state::workspace(&mut connection, organization_id).await?;
             if let Ok(mut switches) = SWITCHES.lock() {
+                // IDs come from the path, so anyone can name new ones:
+                // drop expired entries once full, and start over if that
+                // isn't enough.
+                if switches.len() >= MAX_WORKSPACES {
+                    switches.retain(|_, (_, read)| read.elapsed() < SWITCHES_TTL);
+                    if switches.len() >= MAX_WORKSPACES {
+                        switches.clear();
+                    }
+                }
                 switches.insert(organization_id, (set, Instant::now()));
             }
             set
