@@ -12,7 +12,9 @@ import { tourStatePath, type TourState } from './state'
 // first sees it. Run it with tools/ui-tour/run.sh; the PNGs and a contact
 // sheet go to e2e-output/tour.
 
-const tourDir = path.join(outputRoot, 'tour')
+// Round 1 (AWD-85): UI_TOUR_DIRECTION shows one of the draft directions.
+const direction = process.env.UI_TOUR_DIRECTION ?? ''
+const tourDir = path.join(outputRoot, direction ? `tour-${direction}` : 'tour')
 const state = (): TourState => JSON.parse(readFileSync(tourStatePath, 'utf8')) as TourState
 
 type Screen = {
@@ -154,6 +156,10 @@ for (const scheme of schemes) {
           JSON.stringify({ theme: 'system', overrides: {}, density: 'comfortable', textSize: 'default' }),
         )
       })
+      await page.addInitScript((chosen) => {
+        if (chosen) window.localStorage.setItem('agent-workspace:direction', chosen)
+        else window.localStorage.removeItem('agent-workspace:direction')
+      }, direction)
     })
 
     for (const screen of chosen) {

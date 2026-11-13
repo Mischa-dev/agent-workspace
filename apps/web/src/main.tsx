@@ -16,8 +16,12 @@ import './styles/pages.css'
 import './styles/work.css'
 import './styles/kit.css'
 import './styles/markdown.css'
+import '@fontsource-variable/source-serif-4/opsz.css'
+import './styles/directions.css'
+import { applyDirection } from './theme/direction'
 
 installErrorReporting()
+applyDirection()
 
 const root = document.getElementById('root')
 
