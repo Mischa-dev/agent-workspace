@@ -16,10 +16,10 @@
     "record_write": "change"
   },
   "routes": ["/api/v1/projects/{project_id}/collections*", "/api/v1/forms/*"],
-  "events": { "emits": [], "listens": [] },
+  "events": { "emits": ["record.created", "record.updated"], "listens": [] },
   "notifications": [],
   "search": ["records"],
-  "automations": { "triggers": [], "actions": [] },
+  "automations": { "triggers": ["record_created", "record_changed"], "actions": [] },
   "things": [
     {
       "kind": "record",

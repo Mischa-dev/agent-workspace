@@ -122,6 +122,9 @@ export type Trigger =
       conversationId?: string | null
       contains?: string | null
     }
+  /** A collection's records (AWD-110): one collection, or any. */
+  | { kind: 'record_created'; collectionId?: string | null }
+  | { kind: 'record_changed'; collectionId?: string | null }
   | {
       kind: 'schedule'
       frequency: 'daily' | 'weekly' | 'monthly'

@@ -76,6 +76,10 @@ function describeTrigger(trigger: Trigger): string {
       return 'When checks fail on a pull request'
     case 'capacity_window':
       return 'When an account for runs resets soon with capacity left'
+    case 'record_created':
+      return 'When a record is added'
+    case 'record_changed':
+      return 'When a record changes'
   }
 }
 

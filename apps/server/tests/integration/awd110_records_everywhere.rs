@@ -1,8 +1,23 @@
 //! AWD-110: records everywhere. The silent, costly failures: search that
 //! finds an archived record (or one in an archived collection), a record
 //! opened as a thing with the wrong link, and a task that doesn't list the
-//! records pointing at it.
+//! records pointing at it; a rule or webhook that hears another
+//! collection's records, or a rule on records that changes tasks.
 
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex},
+};
+
+use agent_workspace_server::{
+    AppState,
+    config::AppConfig,
+    jobs::{self, WorkerOptions},
+    provider::SupervisorRegistry,
+    rate_limit::RateLimiters,
+    realtime::{RealtimeHub, publish_ready_outbox_batch},
+    router,
+};
 use axum::http::StatusCode;
 use serde_json::{Value, json};
 
@@ -166,4 +181,236 @@ async fn records_are_searched_and_opened_like_any_other_thing() {
     );
     let gone = call("thing_open", json!({"kind": "record", "id": checkpoint})).await;
     assert_eq!(gone["outcome"], "not_found", "{gone}");
+}
+
+type Received = Arc<Mutex<Vec<Value>>>;
+
+/// A loopback receiver that keeps every body POSTed to it.
+async fn receiver() -> (String, Received) {
+    let received: Received = Arc::default();
+    let store = received.clone();
+    let app = axum::Router::new().route(
+        "/hook",
+        axum::routing::post(move |body: String| {
+            let store = store.clone();
+            async move {
+                store
+                    .lock()
+                    .expect("receiver lock")
+                    .push(serde_json::from_str(&body).unwrap_or(Value::Null));
+                StatusCode::NO_CONTENT
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind receiver");
+    let origin = format!("http://{}", listener.local_addr().expect("address"));
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve receiver");
+    });
+    (origin, received)
+}
+
+/// Publishes the outbox and runs due jobs until both are quiet.
+async fn pump(state: &AppState) {
+    let registry = jobs::default_registry();
+    let options = WorkerOptions {
+        concurrency: 1,
+        poll_interval: std::time::Duration::from_millis(20),
+        lease: std::time::Duration::from_secs(30),
+        worker_id: "awd110-test".to_owned(),
+    };
+    for _ in 0..10 {
+        let published = publish_ready_outbox_batch(&state.pool, &state.realtime, "awd110-test")
+            .await
+            .expect("publish outbox");
+        let ran = jobs::run_due(state, &registry, &options)
+            .await
+            .expect("run jobs");
+        if published == 0 && ran == 0 {
+            return;
+        }
+    }
+}
+
+#[tokio::test]
+async fn record_events_reach_rules_and_webhooks_for_their_collection() {
+    let Some(setup) = setup("awd110_record_events").await else {
+        return;
+    };
+    let (origin, received) = receiver().await;
+    let database_url = std::env::var("AGENT_WORKSPACE_DATABASE_URL").expect("database URL");
+    let config = AppConfig::from_values(&BTreeMap::from([
+        ("AGENT_WORKSPACE_DATABASE_URL".to_owned(), database_url),
+        (
+            "AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS".to_owned(),
+            origin.clone(),
+        ),
+    ]))
+    .expect("configuration");
+    let supervisors = SupervisorRegistry::new(&config).expect("supervisors");
+    let state = AppState {
+        config: Arc::new(config),
+        pool: setup.pool.clone(),
+        rate_limits: RateLimiters::default(),
+        realtime: RealtimeHub::new(64),
+        supervisors,
+    };
+    // The same database through an app that trusts the receiver.
+    let app = &router(state.clone());
+    create_project(&setup, "WORK", "Work").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+
+    let mut collections = Vec::new();
+    for name in ["Requests", "Other"] {
+        let created = call(
+            "collection_write",
+            json!({"projectId": "WORK", "name": name, "fields": [{"name": "Notes", "type": "text"}]}),
+        )
+        .await;
+        assert_eq!(created["outcome"], "ok", "{created}");
+        collections.push(
+            created["value"]["collection"]["id"]
+                .as_str()
+                .expect("id")
+                .to_owned(),
+        );
+    }
+    let requests = collections[0].clone();
+
+    // A record rule takes no task conditions and doesn't touch tasks.
+    for (actions, extra) in [
+        (
+            json!([{"kind": "notify", "recipients": "owner", "message": "x"}]),
+            json!({"conditions": {"filters": {"priority": "high"}}}),
+        ),
+        (
+            json!([{"kind": "set_field", "field": "priority", "value": "high"}]),
+            json!({}),
+        ),
+        (
+            json!([{"kind": "notify", "recipients": "assignee", "message": "x"}]),
+            json!({}),
+        ),
+    ] {
+        let mut arguments = json!({
+            "projectId": "WORK",
+            "operation": "create",
+            "name": "Refused",
+            "trigger": {"kind": "record_created", "collectionId": requests},
+            "actions": actions,
+        });
+        for (key, value) in extra.as_object().expect("extra") {
+            arguments[key] = value.clone();
+        }
+        let refused = call("automation_write", arguments).await;
+        assert_ne!(refused["outcome"], "ok", "{refused}");
+    }
+    let rule = call(
+        "automation_write",
+        json!({
+            "projectId": "WORK",
+            "operation": "create",
+            "name": "New requests",
+            "trigger": {"kind": "record_created", "collectionId": requests},
+            "actions": [{"kind": "notify", "recipients": "owner", "message": "New in {{collection.name}}: {{record.title}}"}],
+        }),
+    )
+    .await;
+    assert_eq!(rule["outcome"], "ok", "{rule}");
+    let hook = call(
+        "webhook_write",
+        json!({
+            "operation": "create",
+            "name": "Records",
+            "url": format!("{origin}/hook"),
+            "eventTypes": ["record.created", "record.updated"],
+        }),
+    )
+    .await;
+    assert_eq!(hook["outcome"], "ok", "{hook}");
+
+    let written = call(
+        "record_write",
+        json!({"projectId": "WORK", "collection": "Requests", "records": [{"title": "Dark mode", "fields": {"Notes": "please"}}], "clientRequestId": "r1"}),
+    )
+    .await;
+    assert_eq!(written["outcome"], "ok", "{written}");
+    let record = written["value"]["records"][0].clone();
+    let elsewhere = call(
+        "record_write",
+        json!({"projectId": "WORK", "collection": "Other", "records": [{"title": "Not a request"}], "clientRequestId": "o1"}),
+    )
+    .await;
+    assert_eq!(elsewhere["outcome"], "ok", "{elsewhere}");
+    pump(&state).await;
+    let changed = call(
+        "record_write",
+        json!({"projectId": "WORK", "collection": "Requests", "records": [{"record": record["id"], "expectedVersion": record["version"], "fields": {"Notes": "please, soon"}}], "clientRequestId": "r2"}),
+    )
+    .await;
+    assert_eq!(changed["outcome"], "ok", "{changed}");
+    pump(&state).await;
+
+    // The rule fired once, for its own collection's new record.
+    let fired = sqlx::query_scalar::<_, Value>(
+        "SELECT detail FROM notifications WHERE kind = 'automation' ORDER BY created_at",
+    )
+    .fetch_all(&setup.pool)
+    .await
+    .expect("notifications");
+    assert_eq!(fired.len(), 1, "{fired:?}");
+    assert!(
+        fired[0].to_string().contains("New in Requests: Dark mode"),
+        "{fired:?}"
+    );
+
+    // The webhook heard both collections, once each, and the change.
+    let bodies = received.lock().expect("receiver lock").clone();
+    let mut seen = bodies
+        .iter()
+        .map(|body| {
+            (
+                body["type"].as_str().unwrap_or_default().to_owned(),
+                body["data"]["record"]["title"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    seen.sort();
+    assert_eq!(
+        seen,
+        vec![
+            ("record.created".to_owned(), "Dark mode".to_owned()),
+            ("record.created".to_owned(), "Not a request".to_owned()),
+            ("record.updated".to_owned(), "Dark mode".to_owned()),
+        ],
+        "{bodies:#?}"
+    );
+    let update = bodies
+        .iter()
+        .find(|body| body["type"] == "record.updated")
+        .expect("update");
+    assert_eq!(
+        update["data"]["record"]["fields"]["Notes"], "please, soon",
+        "{update}"
+    );
+    assert_eq!(
+        update["data"]["record"]["changedFields"],
+        json!(["Notes"]),
+        "{update}"
+    );
+    assert_eq!(
+        update["data"]["record"]["collection"]["id"],
+        requests.as_str()
+    );
 }

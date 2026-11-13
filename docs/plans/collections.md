@@ -219,3 +219,29 @@ records.
   Bug reports lists only the task links.
 - The page is `/forms/{token}` in the web app, lazy loaded and outside the
   signed-in shell.
+
+## Records everywhere (AWD-110)
+
+- **Search.** `collection_records.search_vector` is generated from the title
+  (weight A) and every string value (weight B), with a GIN index (migration
+  `20261113080000_collection_record_search.sql`). `search` has a `records`
+  kind, shown where Collections is on, never from an archived record or
+  collection. A hit's path opens the record beside its collection.
+- **Things.** `record` is a thing kind (`modules/things.rs`), declared by the
+  collections module with the href
+  `/projects/{projectId}/collections/{parentId}?record={id}`; `{parentId}` is
+  the record's collection. `thing_open` takes a record's ID or its link.
+  A record links out to the tasks and pages its link fields name, and those
+  tasks and pages list the record back (read apart from their stored links).
+  "Referenced in" from text that links a record is AWD-58's to add: its
+  `thing_references` table would need `record` as a target kind and the
+  collection link (`?record=`) in `thing_reference_targets`.
+- **Events.** A record write's `collection.updated` outbox event (when it
+  names its records) routes as `record.created` or `record.updated`, one per
+  history entry written with it, keyed by that entry. Webhooks send the
+  record with values by field name and, for an update, `changedFields`.
+- **Automations.** `record_created` and `record_changed` triggers, for one
+  collection or any (migration `20261113081000_record_automation_triggers.sql`).
+  They take no task conditions and only notify (the maker or the project's
+  admins) or post a message; text can use `{{record.title}}`,
+  `{{record.url}}` and `{{collection.name}}`.
