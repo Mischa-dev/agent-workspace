@@ -1677,7 +1677,25 @@ span.aw-taskstart__fix {
 }
 
 .aw-activity__actions {
+  display: inline-flex;
+  align-items: center;
   margin-left: auto;
+}
+
+/* AWD-95: Reply shows on hover or focus with a mouse; on touch it's always there. */
+@media (hover: hover) and (pointer: fine) {
+  .aw-activity__comment:not(:hover, :focus-within) .aw-activity__reply {
+    opacity: 0;
+  }
+}
+
+/* A comment a quote jumps to flashes, the way a linked message does. */
+.aw-activity__comment .aw-activity__body {
+  transition: background-color var(--duration-fade) var(--ease-out);
+}
+
+.aw-activity__comment.is-linked .aw-activity__body {
+  background: var(--highlight-bg);
 }
 
 .aw-activity__removed {
