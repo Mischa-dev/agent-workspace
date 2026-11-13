@@ -1,0 +1,46 @@
+/* Links to things (AWD-58): a chip with the thing's title and status, and
+   the "Referenced in" list on a task, page or whiteboard. */
+
+.aw-md .aw-thingchip,
+.aw-thingchip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-half);
+  max-width: 100%;
+  padding: 0 var(--space-1);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  color: var(--content-fg);
+  text-decoration: none;
+  vertical-align: baseline;
+}
+
+.aw-md .aw-thingchip:hover,
+.aw-thingchip:hover {
+  background: var(--content-hover);
+  text-decoration: none;
+}
+
+.aw-thingchip__icon {
+  align-self: center;
+  flex: none;
+  color: var(--content-fg-muted);
+}
+
+.aw-thingchip__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-thingchip__status {
+  flex: none;
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+}
+
+.aw-references__kind {
+  color: var(--content-fg-muted);
+}

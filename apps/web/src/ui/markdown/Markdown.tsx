@@ -23,6 +23,12 @@ export type MarkdownProps = {
   codeText?: (value: string) => string
   /** Draws an embed, such as a collection's view in a page; without it, an embed is a link. */
   renderEmbed?: (embed: Embed) => ReactNode
+  /**
+   * Draws a link in place of the plain one, such as a chip for a task or a
+   * page (AWD-58); `bare` when its text is the address itself. Return null
+   * to keep the plain link.
+   */
+  renderLink?: (href: string, children: ReactNode, bare: boolean) => ReactNode
 }
 
 const defaultTaskHref = (key: string) => `/${key}`
@@ -33,17 +39,18 @@ type RenderContext = {
   renderText?: (value: string) => ReactNode
   codeText: (value: string) => string
   renderEmbed?: (embed: Embed) => ReactNode
+  renderLink?: (href: string, children: ReactNode, bare: boolean) => ReactNode
 }
 
 const asIs = (value: string) => value
 
 /** Renders Markdown as React elements; never as HTML. */
-export function Markdown({ className, codeText = asIs, empty = null, renderEmbed, renderText, source, taskHref = defaultTaskHref }: MarkdownProps) {
+export function Markdown({ className, codeText = asIs, empty = null, renderEmbed, renderLink: drawLink, renderText, source, taskHref = defaultTaskHref }: MarkdownProps) {
   const router = useInRouterContext()
   const blocks = useMemo(() => parseMarkdown(source), [source])
   const classes = ['aw-md', className].filter(Boolean).join(' ')
   if (!source.trim()) return empty == null ? null : <div className={classes}>{empty}</div>
-  return <div className={classes}>{renderBlocks(blocks, { taskHref, router, renderText, codeText, renderEmbed })}</div>
+  return <div className={classes}>{renderBlocks(blocks, { taskHref, router, renderText, codeText, renderEmbed, renderLink: drawLink })}</div>
 }
 
 function renderBlocks(blocks: Block[], context: RenderContext): ReactNode[] {
@@ -165,8 +172,13 @@ function renderInline(inline: Inline, key: number, context: RenderContext): Reac
       )
     case 'br':
       return <br key={key} />
-    case 'link':
-      return renderLink(inline.href, inline.external, renderInlines(inline.children, context), key, context)
+    case 'link': {
+      const children = renderInlines(inline.children, context)
+      const only = inline.children.length === 1 ? inline.children[0] : null
+      const drawn = context.renderLink?.(inline.href, children, only?.type === 'text' && only.value === inline.href)
+      if (drawn != null) return <Fragment key={key}>{drawn}</Fragment>
+      return renderLink(inline.href, inline.external, children, key, context)
+    }
     case 'taskKey': {
       const target = context.taskHref(inline.key)
       const safe = target ? safeHref(target) : null

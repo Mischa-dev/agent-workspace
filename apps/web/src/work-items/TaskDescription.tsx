@@ -14,6 +14,7 @@ import { Bold, Code, Italic, TextQuote } from '../files/icons'
 import { Button, Icon, IconButton, Tooltip, type IconGlyph } from '../ui'
 import { Markdown } from '../ui/markdown/Markdown'
 import { applyEdit, formatEdit, type FormatAction } from '../ui/markdown/editing'
+import { thingLink } from '../modules/references/thingLinks'
 import { TaskNotice } from './TaskNotice'
 import type { WorkItem } from './types'
 import type { TaskSave } from './useTaskSave'
@@ -321,7 +322,7 @@ export function TaskDescription({
 
   return (
     <div className={disabled ? 'aw-taskdesc' : 'aw-taskdesc is-editable'} onClick={onViewClick}>
-      <Markdown className="aw-taskdesc__body" source={shown} />
+      <Markdown className="aw-taskdesc__body" renderLink={thingLink} source={shown} />
       {disabled ? null : (
         <IconButton className="aw-taskdesc__edit" icon="pencil" label="Edit description" onClick={start} ref={returnTo} shortcut="E" size="sm" />
       )}

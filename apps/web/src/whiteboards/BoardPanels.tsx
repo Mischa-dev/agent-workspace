@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { Suspense, lazy, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
+import { useProjectExperience, useWorkspaceExperience } from '../experience/layout'
 import { useProjects } from '../projects/hooks'
 import { Banner, Button, Dialog, EmptyState, IconButton, Row, RowList, SelectField, countLabel, describeError, formatFullDate, formatRelative } from '../ui'
 import {
@@ -12,6 +13,8 @@ import {
   type WhiteboardDetail,
   type WhiteboardLink,
 } from './api'
+
+const ReferencedIn = lazy(() => import('../modules/references/ReferencedIn'))
 
 const KIND_LABEL: Record<WhiteboardLink['targetKind'], string> = {
   project: 'Project',
@@ -38,6 +41,11 @@ export function LinksDialog({
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const { whiteboard, links } = detail
+  // A board in a project follows that project's layout, one across the
+  // workspace the workspace's.
+  const inProject = useProjectExperience(whiteboard.projectId)
+  const acrossWorkspace = useWorkspaceExperience(whiteboard.projectId ? null : whiteboard.organizationId)
+  const showsReferences = (whiteboard.projectId ? inProject : acrossWorkspace).shows('page.references')
   const linkable = (projects.data?.projects ?? []).filter(
     (candidate) =>
       !candidate.archivedAt &&
@@ -115,6 +123,11 @@ export function LinksDialog({
             Link
           </Button>
         </div>
+      ) : null}
+      {open && showsReferences ? (
+        <Suspense fallback={null}>
+          <ReferencedIn id={whiteboard.id} kind="whiteboard" />
+        </Suspense>
       ) : null}
       {error ? <Banner tone="danger">{error}</Banner> : null}
     </Dialog>
