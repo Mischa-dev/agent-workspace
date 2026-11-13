@@ -85,6 +85,7 @@ export function normalizeProject(value: unknown): Project {
     version: Math.max(0, asNumber(record.version)),
     attentionCount: Math.max(0, asNumber(record.attentionCount)),
     modulesOff: record.modulesOff as string[] | undefined,
+    workspaceSpace: record.workspaceSpace === true || undefined,
     capabilities: normalizeCapabilities(record.capabilities),
     navigation: archivedAt
       ? {

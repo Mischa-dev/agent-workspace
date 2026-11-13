@@ -162,7 +162,7 @@ describe('layout registry', () => {
 
   it('hides the Home sidebar’s rows that the workspace layout hides', () => {
     const view = renderWith([], <HomeSidebar mobileOpen={false} onNavigate={vi.fn()} />)
-    expect(linkNames()).toEqual(['Home', 'Inbox', 'My work', 'Later', 'Runs', 'Whiteboards'])
+    expect(linkNames()).toEqual(['Home', 'Inbox', 'My work', 'Later', 'Runs', 'Pages', 'Whiteboards'])
     view.unmount()
 
     renderWith(PART_IDS, <HomeSidebar mobileOpen={false} onNavigate={vi.fn()} />)

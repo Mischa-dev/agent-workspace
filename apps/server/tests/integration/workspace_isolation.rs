@@ -128,6 +128,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/organizations/{organization_id}/model-catalog",
     "/api/v1/organizations/{organization_id}/modules",
     "/api/v1/organizations/{organization_id}/onboarding",
+    "/api/v1/organizations/{organization_id}/pages-space",
     "/api/v1/organizations/{organization_id}/permissions",
     "/api/v1/organizations/{organization_id}/personal-secrets",
     "/api/v1/organizations/{organization_id}/project-templates",
@@ -2506,6 +2507,18 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             )],
             vec![format!(
                 "/api/v1/organizations/{}/onboarding",
+                b.organization
+            )],
+            vec![],
+        ),
+        case(
+            "/api/v1/organizations/{organization_id}/pages-space",
+            vec![format!(
+                "/api/v1/organizations/{}/pages-space",
+                a.organization
+            )],
+            vec![format!(
+                "/api/v1/organizations/{}/pages-space",
                 b.organization
             )],
             vec![],

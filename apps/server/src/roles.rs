@@ -571,7 +571,7 @@ const ROLE_SELECT: &str = r#"
            (SELECT count(*) FROM project_memberships holder
              JOIN projects project ON project.id = holder.project_id
               AND project.organization_id = role.organization_id
-              AND project.kind <> 'direct' AND project.archived_at IS NULL
+              AND project.kind NOT IN ('direct', 'workspace') AND project.archived_at IS NULL
              JOIN actors actor ON actor.id = holder.actor_id AND actor.status = 'active'
              WHERE holder.enabled
                AND (holder.role_id = role.id
@@ -1671,7 +1671,7 @@ async fn apply_to_their_projects(
         LEFT JOIN project_memberships caller_membership
           ON caller_membership.project_id = project.id AND caller_membership.actor_id = $3
         WHERE project.organization_id = $1 AND membership.actor_id = $2
-          AND membership.enabled AND project.kind <> 'direct' AND project.archived_at IS NULL
+          AND membership.enabled AND project.kind NOT IN ('direct', 'workspace') AND project.archived_at IS NULL
           -- Only projects the caller is in: never one they can't open.
           AND actor_can_access_project($3, NULL, project.id)
         ORDER BY membership.project_id

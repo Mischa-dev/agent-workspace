@@ -1,11 +1,11 @@
 {
   "id": "pages",
   "name": "Pages",
-  "description": "Pages and decisions kept with a project: its guide, notes, plans, agent skills and what it decided. Every version is kept.",
+  "description": "Pages and decisions, in a project or for the whole workspace: guides, notes, plans, agent skills and what was decided. Every version is kept.",
   "version": 1,
   "kind": "core",
   "switchable": true,
-  "needs": ["projects"],
+  "needs": [],
   "worksWith": ["tasks", "whiteboards"],
   "permissions": ["pages.edit"],
   "tools": {
@@ -28,7 +28,8 @@
     "/api/v1/pages/*",
     "/api/v1/projects/{id}/pages",
     "/api/v1/projects/{id}/pages/import",
-    "/api/v1/projects/{id}/decisions"
+    "/api/v1/projects/{id}/decisions",
+    "/api/v1/organizations/{organization_id}/pages-space"
   ],
   "events": { "emits": [], "listens": [] },
   "notifications": ["page_suggestion", "page_comment"],
@@ -61,7 +62,7 @@
     }
   ],
   "slots": {
-    "pages": ["/projects/:projectId/pages", "/projects/:projectId/pages/:pageId", "/projects/:projectId/decisions"],
+    "pages": ["/pages", "/projects/:projectId/pages", "/projects/:projectId/pages/:pageId", "/projects/:projectId/decisions"],
     "parts": ["area.pages", "area.decisions", "page.live_editing", "page.comments", "page.import_export"],
     "sidebar": [],
     "home": [],

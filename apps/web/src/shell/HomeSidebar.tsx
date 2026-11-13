@@ -14,6 +14,7 @@ export function HomeSidebar({ mobileOpen, onNavigate }: { mobileOpen: boolean; o
         {experience.shows('workspace.my_work') ? <SidebarLink icon="checklist" label="My work" onNavigate={onNavigate} to="/my-work" /> : null}
         {experience.shows('workspace.later') ? <SidebarLink icon="bookmark" label="Later" onNavigate={onNavigate} to="/later" /> : null}
         {experience.shows('workspace.runs') ? <SidebarLink icon="activity" label="Runs" onNavigate={onNavigate} to="/runs" /> : null}
+        {experience.shows('area.pages') ? <SidebarLink icon="list" label="Pages" onNavigate={onNavigate} to="/pages" /> : null}
         {experience.shows('area.whiteboards') ? (
           <SidebarLink icon="whiteboard" label="Whiteboards" onNavigate={onNavigate} to="/whiteboards" />
         ) : null}

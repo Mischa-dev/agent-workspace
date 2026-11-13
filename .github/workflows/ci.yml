@@ -33,7 +33,11 @@ jobs:
           POSTGRES_DB: postgres
         ports:
           - 5432:5432
+        # Docker's default 64 MB of shared memory runs out once the test
+        # database is large: parallel queries late in the run then fail
+        # with "could not resize shared memory segment" (53100).
         options: >-
+          --shm-size 512m
           --health-cmd "pg_isready -U aw_ci" --health-interval 5s
           --health-timeout 5s --health-retries 20
     env:

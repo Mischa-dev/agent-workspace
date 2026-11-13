@@ -730,7 +730,7 @@ async fn target_project(
 ) -> Result<(Uuid, Uuid), AppError> {
     let sql = match kind {
         TargetKind::Project => {
-            "SELECT id, organization_id FROM projects WHERE id = $1 AND kind <> 'direct'"
+            "SELECT id, organization_id FROM projects WHERE id = $1 AND kind NOT IN ('direct', 'workspace')"
         }
         TargetKind::WorkItem => {
             "SELECT project.id, project.organization_id FROM work_items item JOIN projects project ON project.id = item.project_id WHERE item.id = $1"

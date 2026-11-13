@@ -2148,7 +2148,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "List a project's pages: the guide first, then the rest by last edit. Stale pages haven't been touched in months.",
+        description = "List a project's pages, or with projectId \"workspace\" the workspace's own pages: the guide first, then the rest by last edit. Stale pages haven't been touched in months.",
         annotations(title = "List pages", read_only_hint = true, open_world_hint = false)
     )]
     async fn page_list(
@@ -2217,7 +2217,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Create or edit a page: what's true now for the project, in Markdown. Edits replace the text and keep every earlier version, so restoreVersion can undo one. Pass expectedVersion when editing. A page with skillDescription is a skill: instructions agents load with skill_get when that one line says they apply. A line `[label](/path \"embed\")` shows the task, page, whiteboard, thread, task list or collection view at that address live.",
+        description = "Create or edit a page: what's true now for the project (or, with projectId \"workspace\", the whole workspace), in Markdown. Edits replace the text and keep every earlier version, so restoreVersion can undo one. Pass expectedVersion when editing. A page with skillDescription is a skill: instructions agents load with skill_get when that one line says they apply. A line `[label](/path \"embed\")` shows the task, page, whiteboard, thread, task list or collection view at that address live.",
         annotations(
             title = "Write page",
             read_only_hint = false,
@@ -5390,6 +5390,14 @@ async fn keys_to_ids(
     arguments: &mut serde_json::Value,
 ) -> Result<bool, AppError> {
     let mut changed = false;
+    // AWD-96: "workspace" names the workspace's own pages.
+    if let Some(name) = unresolved(arguments, "projectId")
+        && name.eq_ignore_ascii_case(WORKSPACE_SPACE_NAME)
+        && let Some(project_id) = workspace_space_of(state, principal).await?
+    {
+        arguments["projectId"] = serde_json::Value::String(project_id.to_string());
+        changed = true;
+    }
     for field in ["projectId", "toProjectId"] {
         if let Some(key) = unresolved(arguments, field)
             && is_project_key(&key)
@@ -5569,6 +5577,34 @@ fn is_project_key(value: &str) -> bool {
     (2..=12).contains(&value.len())
         && value.starts_with(|c: char| c.is_ascii_alphabetic())
         && value.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
+/// What `projectId` says to mean the workspace's own pages (AWD-96).
+const WORKSPACE_SPACE_NAME: &str = "workspace";
+
+/// The workspace space of the caller's workspace, with the caller in it:
+/// the workspace of the project the connection is anchored in. An older
+/// project-scoped credential never reaches it.
+async fn workspace_space_of(
+    state: &AppState,
+    principal: &McpPrincipal,
+) -> Result<Option<Uuid>, AppError> {
+    if common::confined_project(principal).is_some() {
+        return Ok(None);
+    }
+    let mut transaction = state.pool.begin().await?;
+    let Some(organization_id) =
+        sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
+            .bind(principal.project_id)
+            .fetch_optional(&mut *transaction)
+            .await?
+    else {
+        return Ok(None);
+    };
+    let project_id =
+        crate::workspace_space::join(&mut transaction, organization_id, principal.actor_id).await?;
+    transaction.commit().await?;
+    Ok(project_id)
 }
 
 /// The one active project the caller can reach under this key. An older
