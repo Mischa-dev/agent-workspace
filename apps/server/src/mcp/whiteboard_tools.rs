@@ -660,7 +660,8 @@ pub(super) async fn whiteboard_create(
         }
         let edit = match arguments.operations.as_deref() {
             Some(operations) if !operations.is_empty() => {
-                Some(edit::apply(&mut transaction, &caller, id, operations, None, false).await?)
+                let operations = store_images(&mut transaction, &caller, id, operations).await?;
+                Some(edit::apply(&mut transaction, &caller, id, &operations, None, false).await?)
             }
             _ => None,
         };
@@ -690,6 +691,8 @@ pub(super) struct WhiteboardEditArguments {
     /// Applied in order, all or nothing. Each is {op, ...}:
     /// add {type, id?, x?, y?, width?, height?, text?, styles…} draws a
     /// shape (rectangle, ellipse, diamond, frame), text, line or arrow;
+    /// add {type: "image", dataBase64, mimeType?, x?, y?, width?, height?}
+    /// puts an image on the board (or fileId, one already on it);
     /// connect {from, to, text?, id?} draws an arrow bound to both;
     /// update {id, text?, x?, y?, width?, height?, styles…};
     /// delete {ids} (labels and bound arrows go with their shape);
@@ -731,11 +734,13 @@ pub(super) async fn whiteboard_edit(
                     .to_owned(),
             ));
         }
+        let operations =
+            store_images(&mut transaction, &caller, id, &arguments.operations).await?;
         let outcome = edit::apply(
             &mut transaction,
             &caller,
             id,
-            &arguments.operations,
+            &operations,
             arguments.expected_scene_seq,
             arguments.confirm_delete.unwrap_or(false),
         )
@@ -759,6 +764,86 @@ pub(super) async fn whiteboard_edit(
         Ok(outcome) => ToolResult::ok(outcome),
         Err(error) => edit_refused(error, "whiteboard_edit"),
     }
+}
+
+/// Stores the images added operations carry, as the web stores an image
+/// dropped on the board, and points those operations at them by file id.
+/// An image named by fileId must already be on this board.
+async fn store_images(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    caller: &whiteboards::Caller,
+    whiteboard_id: Uuid,
+    operations: &[Operation],
+) -> Result<Vec<Operation>, EditError> {
+    let mut stored = Vec::with_capacity(operations.len());
+    let mut named = Vec::new();
+    for (position, operation) in operations.iter().enumerate() {
+        let mut operation = operation.clone();
+        let image = operation.op == "add" && operation.kind.as_deref() == Some("image");
+        let carries = operation.file_id.is_some()
+            || operation.data_base64.is_some()
+            || operation.mime_type.is_some();
+        if carries && !image {
+            return Err(EditError::Invalid(format!(
+                "Operation {} ({}): fileId, dataBase64 and mimeType are for adding an image.",
+                position + 1,
+                operation.op
+            )));
+        }
+        if let Some(data) = operation.data_base64.take() {
+            if operation.file_id.is_some() {
+                return Err(EditError::Invalid(format!(
+                    "Operation {}: give the image's dataBase64 or the fileId of one on this board, not both.",
+                    position + 1
+                )));
+            }
+            let (file_id, mime_type, bytes) = match store::decode_image(
+                &data,
+                operation.mime_type.take().as_deref(),
+            ) {
+                Ok(image) => image,
+                Err(AppError::PayloadTooLarge) => {
+                    return Err(EditError::Invalid(format!(
+                        "Operation {}: an image is up to 4 MiB.",
+                        position + 1
+                    )));
+                }
+                Err(_) => {
+                    return Err(EditError::Invalid(format!(
+                        "Operation {}: that isn't a PNG, JPEG, GIF, WebP or SVG image in base64 (of the mimeType given, if any).",
+                        position + 1
+                    )));
+                }
+            };
+            store::put_file(
+                transaction,
+                caller,
+                whiteboard_id,
+                &file_id,
+                &mime_type,
+                &bytes,
+            )
+            .await?;
+            operation.file_id = Some(file_id);
+        } else if operation.mime_type.is_some() {
+            return Err(EditError::Invalid(format!(
+                "Operation {}: mimeType goes with dataBase64.",
+                position + 1
+            )));
+        } else if let Some(file_id) = &operation.file_id {
+            named.push(file_id.clone());
+        }
+        stored.push(operation);
+    }
+    if !named.is_empty() {
+        let on_board = store::stored_files(transaction, whiteboard_id, &named).await?;
+        if let Some(missing) = named.iter().find(|file| !on_board.contains(file)) {
+            return Err(EditError::Invalid(format!(
+                "This board has no image {missing}. Send the image itself as dataBase64."
+            )));
+        }
+    }
+    Ok(stored)
 }
 
 // ---------------------------------------------------------------------------

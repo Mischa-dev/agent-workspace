@@ -929,3 +929,107 @@ async fn agents_draw_read_render_and_restore_boards_through_mcp_alone() {
     let unchanged = scene(&setup, &setup.browser, &hidden, None).await;
     assert_eq!(unchanged["elements"], json!([]));
 }
+
+#[tokio::test]
+async fn agents_put_images_on_boards_they_can_edit() {
+    let Some(setup) = setup("w16_images").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let space = space(&setup).await;
+    let (rook, token) = create_agent(app, &setup.browser, &space, "Rook", "rook").await;
+    add_member(&setup, &work, rook, "member").await;
+    let session = initialize(app, &token).await.expect("agent MCP");
+    let png = TINY_PNG
+        .strip_prefix("data:image/png;base64,")
+        .expect("png");
+    let other = create_board(
+        &setup,
+        &setup.browser,
+        json!({"title": "Other", "projectId": work}),
+    )
+    .await;
+
+    // An image in the call that creates the board, stored once by content.
+    let created = tool(
+        app,
+        &token,
+        &session,
+        "whiteboard_create",
+        json!({"title": "Screens", "projectId": work, "operations": [
+            {"op": "add", "type": "image", "id": "shot", "dataBase64": png, "x": 10, "y": 20, "width": 64, "height": 64},
+        ]}),
+    )
+    .await;
+    assert_eq!(created["outcome"], "ok", "{created}");
+    let board = created["value"]["whiteboard"]["id"]
+        .as_str()
+        .expect("board")
+        .to_owned();
+    let read = tool(
+        app,
+        &token,
+        &session,
+        "whiteboard_read",
+        json!({"whiteboardId": board}),
+    )
+    .await;
+    let shot = read["value"]["elements"]
+        .as_array()
+        .expect("elements")
+        .iter()
+        .find(|element| element["id"] == "shot")
+        .unwrap_or_else(|| panic!("{read}"))
+        .clone();
+    assert_eq!(shot["type"], "image");
+    assert_eq!(shot["width"], 64.0);
+    let file_id = shot["fileId"].as_str().expect("fileId").to_owned();
+
+    // People with the board open load it like an image they dropped there.
+    let (status, file) = request(
+        &setup,
+        &setup.browser,
+        "GET",
+        &format!("/api/v1/whiteboards/{board}/files/{file_id}"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{file}");
+    assert_eq!(file["dataURL"], TINY_PNG);
+
+    // Again by fileId, and the same bytes again: still one stored file.
+    let again = tool(
+        app,
+        &token,
+        &session,
+        "whiteboard_edit",
+        json!({"whiteboardId": board, "operations": [
+            {"op": "add", "type": "image", "id": "copy", "fileId": file_id, "x": 200},
+            {"op": "add", "type": "image", "id": "twice", "dataBase64": png, "mimeType": "image/png", "x": 400},
+        ]}),
+    )
+    .await;
+    assert_eq!(again["outcome"], "ok", "{again}");
+    let stored = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM whiteboard_files WHERE whiteboard_id = $1::text::uuid",
+    )
+    .bind(&board)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("files");
+    assert_eq!(stored, 1);
+
+    // A file from another board, bytes that aren't the image they claim,
+    // and image fields on a shape are all refused.
+    for refused in [
+        json!({"whiteboardId": other, "operations": [{"op": "add", "type": "image", "fileId": file_id}]}),
+        json!({"whiteboardId": board, "operations": [{"op": "add", "type": "image", "dataBase64": png, "mimeType": "image/jpeg"}]}),
+        json!({"whiteboardId": board, "operations": [{"op": "add", "type": "image", "dataBase64": "aGVsbG8="}]}),
+        json!({"whiteboardId": board, "operations": [{"op": "add", "type": "rectangle", "fileId": file_id}]}),
+        json!({"whiteboardId": board, "operations": [{"op": "add", "type": "image"}]}),
+    ] {
+        let result = tool(app, &token, &session, "whiteboard_edit", refused.clone()).await;
+        assert_eq!(result["outcome"], "invalid_request", "{refused}: {result}");
+    }
+}

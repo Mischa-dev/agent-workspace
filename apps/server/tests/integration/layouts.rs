@@ -465,4 +465,112 @@ async fn owners_choose_layouts_for_roles_and_people_and_members_only_hide_more()
     .await
     .expect("rules");
     assert_eq!(stored, 1);
+
+    // Saved presets: the workspace's owners save, change and remove them,
+    // and project_layout_set picks them by name. Agents may not.
+    let saved = tool(
+        app,
+        &app_token,
+        &session,
+        "layout_preset_write",
+        json!({"projectId": work, "name": "Desk crew", "base": "Software team",
+            "show": {"area.runs": false},
+            "words": {"task": {"one": "chore", "many": "chores"}}}),
+    )
+    .await;
+    assert_eq!(saved["outcome"], "ok", "{saved}");
+    assert_eq!(saved["value"]["done"], "saved");
+    assert_eq!(saved["value"]["preset"]["words"]["task"]["many"], "chores");
+    let preset_id = saved["value"]["id"].as_str().expect("id").to_owned();
+    let picked = tool(
+        app,
+        &app_token,
+        &session,
+        "project_layout_set",
+        json!({"projectId": work, "preset": "Desk crew"}),
+    )
+    .await;
+    assert_eq!(picked["outcome"], "ok", "{picked}");
+    let taken = tool(
+        app,
+        &app_token,
+        &session,
+        "layout_preset_write",
+        json!({"projectId": work, "name": "desk crew", "base": "Minimal"}),
+    )
+    .await;
+    assert_eq!(taken["outcome"], "conflict", "{taken}");
+    let builtin = tool(
+        app,
+        &app_token,
+        &session,
+        "layout_preset_write",
+        json!({"projectId": work, "preset": "Minimal", "name": "Mine"}),
+    )
+    .await;
+    assert_eq!(builtin["outcome"], "invalid_request", "{builtin}");
+    let bad_part = tool(
+        app,
+        &app_token,
+        &session,
+        "layout_preset_write",
+        json!({"projectId": work, "preset": "Desk crew", "show": {"area.nothing": true}}),
+    )
+    .await;
+    assert_eq!(bad_part["outcome"], "invalid_request", "{bad_part}");
+    let renamed = tool(
+        app,
+        &app_token,
+        &session,
+        "layout_preset_write",
+        json!({"projectId": work, "preset": preset_id, "name": "Desk team",
+            "words": {"page": {"one": "note", "many": "notes"}},
+            "expectedVersion": saved["value"]["preset"]["version"]}),
+    )
+    .await;
+    assert_eq!(renamed["outcome"], "ok", "{renamed}");
+    assert_eq!(renamed["value"]["name"], "Desk team");
+    // Words given on a change add to the ones it had.
+    assert_eq!(renamed["value"]["preset"]["words"]["task"]["one"], "chore");
+    let stale = tool(
+        app,
+        &app_token,
+        &session,
+        "layout_preset_write",
+        json!({"projectId": work, "preset": "Desk team", "description": "Old",
+            "expectedVersion": saved["value"]["preset"]["version"]}),
+    )
+    .await;
+    assert_eq!(stale["outcome"], "conflict", "{stale}");
+    let agent_preset = tool(
+        app,
+        &agent_token,
+        &agent_session,
+        "layout_preset_write",
+        json!({"projectId": work, "name": "Bots", "base": "Minimal"}),
+    )
+    .await;
+    assert_eq!(
+        agent_preset["outcome"], "permission_denied",
+        "{agent_preset}"
+    );
+    let removed = tool(
+        app,
+        &app_token,
+        &session,
+        "layout_preset_write",
+        json!({"projectId": work, "preset": "Desk team", "remove": true}),
+    )
+    .await;
+    assert_eq!(removed["outcome"], "ok", "{removed}");
+    assert_eq!(removed["value"]["done"], "removed");
+    let gone = tool(
+        app,
+        &app_token,
+        &session,
+        "layout_preset_write",
+        json!({"projectId": work, "preset": preset_id, "remove": true}),
+    )
+    .await;
+    assert_eq!(gone["outcome"], "not_found", "{gone}");
 }

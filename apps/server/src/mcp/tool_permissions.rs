@@ -53,6 +53,7 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("project_update", Some(ProjectsManage)),
     ("project_archive", Some(ProjectsManage)),
     ("project_layout_set", Some(SettingsManage)),
+    ("layout_preset_write", Some(SettingsManage)),
     ("conversation_list", None),
     ("conversation_open", None),
     ("conversation_read", None),
