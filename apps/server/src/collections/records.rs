@@ -596,7 +596,7 @@ pub async fn resolve_values(
             }
             Normalized::Link(written) => {
                 let target = field.config.target.unwrap_or(LinkTarget::Task);
-                match work_item_fields::find_link(connection, project_id, writer, target, &written)
+                match work_item_fields::find_link(connection, project_id, writer, field, &written)
                     .await?
                 {
                     Some((id, label)) => FieldValueChange {
@@ -608,6 +608,7 @@ pub async fn resolve_values(
                         let what = match target {
                             LinkTarget::Task => "a task",
                             LinkTarget::Page => "a page",
+                            LinkTarget::Record => "a record of its collection",
                         };
                         return Ok(Err(problem(
                             &at,
@@ -615,10 +616,10 @@ pub async fn resolve_values(
                                 "\"{}\" links to {what} in {}, by ID, link{}. {} isn't one.",
                                 field.name,
                                 writer.project_key,
-                                if target == LinkTarget::Task {
-                                    " or key (such as AWD-12)"
-                                } else {
-                                    ""
+                                match target {
+                                    LinkTarget::Task => " or key (such as AWD-12)",
+                                    LinkTarget::Record => ", #number or title",
+                                    LinkTarget::Page => "",
                                 },
                                 echo(&written)
                             ),

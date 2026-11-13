@@ -28,7 +28,7 @@ export type OptionInput = { id?: string; name: string; color?: string }
 
 export async function createField(
   scope: FieldScope,
-  input: { name: string; type: string; description?: string; options?: OptionInput[]; target?: 'task' | 'page'; idempotencyKey: string },
+  input: { name: string; type: string; description?: string; options?: OptionInput[]; target?: string; idempotencyKey: string },
 ) {
   const { idempotencyKey, ...json } = input
   return normalizeField(await requestJson<unknown>(scopePath(scope), { method: 'POST', idempotencyKey, json }))

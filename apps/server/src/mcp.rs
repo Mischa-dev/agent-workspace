@@ -2018,7 +2018,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Create a collection with its fields and views in one call (name, fields: [{name, type, options}], views: [{name, filters, sort, groupBy, columns}]), or change one (pass collection: its name or ID). Fields and views are matched by name, so writing the same definition again changes nothing; pass field or view to rename one, remove: true to remove a view, archived: true to archive a field or the collection (nothing is deleted) and false to restore it. Field types: text, number, date, single_choice, multiple_choice, person, url, checkbox, link (target task or page). A field's type never changes. Needs collections.build.",
+        description = "Create a collection with its fields and views in one call (name, fields: [{name, type, options}], views: [{name, filters, sort, groupBy, columns}]), or change one (pass collection: its name or ID). Fields and views are matched by name, so writing the same definition again changes nothing; pass field or view to rename one, remove: true to remove a view, archived: true to archive a field or the collection (nothing is deleted) and false to restore it. Field types: text, number, date, single_choice, multiple_choice, person, url, checkbox, link (target task, page, or record:<collection name> for that collection's records). A field's type never changes. Needs collections.build.",
         annotations(
             title = "Write collection",
             read_only_hint = false,
@@ -2135,7 +2135,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Search messages, threads, tasks, pages and decisions you can see. Settled things (decisions, pages, thread outcomes) rank first. Narrow by kind, project, conversation, author (from), or dates.",
+        description = "Search messages, threads, tasks, pages, decisions and collection records you can see. Settled things (decisions, pages, thread outcomes) rank first. Narrow by kind, project, conversation, author (from), or dates.",
         annotations(title = "Search", read_only_hint = true, open_world_hint = false)
     )]
     async fn search(
@@ -3935,6 +3935,14 @@ async fn module_off_here(
     Ok((!modules.contains(&module.id)).then(|| module.name.clone()))
 }
 
+/// Tools a second module also serves: forms (Collections) are bug report
+/// links too, so these work where Collections is on and Tasks is off, and
+/// then leave task links alone.
+const ALSO_SERVED_BY: &[(&str, &str)] = &[
+    ("bug_report_link_list", "collections"),
+    ("bug_report_link_write", "collections"),
+];
+
 /// A call to a tool of a module that's off, in the shape `refusal` uses.
 fn module_refusal(tool: &str, module: &str) -> rmcp::model::CallToolResponse {
     let message = format!(
@@ -4038,7 +4046,25 @@ async fn run_tool(
         match module_off_here(&server.state, &principal, &request.name, module).await {
             Ok(None) => {}
             Ok(Some(name)) => {
-                return Ok(module_refusal(&request.name, &name));
+                // A tool another module also serves is on wherever that
+                // module is; its handler keeps to that module's part.
+                let mut also_on = false;
+                for also in ALSO_SERVED_BY
+                    .iter()
+                    .filter(|(tool, _)| *tool == request.name.as_ref())
+                    .filter_map(|(_, module)| crate::modules::manifest::get(module))
+                {
+                    if matches!(
+                        module_off_here(&server.state, &principal, &request.name, also).await,
+                        Ok(None)
+                    ) {
+                        also_on = true;
+                        break;
+                    }
+                }
+                if !also_on {
+                    return Ok(module_refusal(&request.name, &name));
+                }
             }
             Err(error) => {
                 tracing::error!(category = error.log_category(), "MCP module lookup failed");

@@ -88,7 +88,7 @@ export function FieldManager({ scope }: { scope: FieldScope }) {
       key={field.id}
       meta={[
         typeLabel(field.type),
-        field.type === 'link' ? (field.target === 'page' ? 'to a page' : 'to a task') : null,
+        field.type === 'link' ? (field.target === 'page' ? 'to a page' : field.target === 'record' ? 'to a record' : 'to a task') : null,
         field.options.filter((option) => !option.archived).length
           ? field.options
               .filter((option) => !option.archived)
@@ -153,9 +153,12 @@ export function FieldDialog({
   field,
   onClose,
   onSaved,
+  linkable = [],
   records = 'tasks',
   scope,
 }: {
+  /** Collections a new link field can hold the records of (AWD-110). */
+  linkable?: ReadonlyArray<{ id: string; name: string }>
   field: FieldDefinition | null
   onClose: () => void
   /** The field as it was saved, before the dialog closes. */
@@ -167,7 +170,8 @@ export function FieldDialog({
   const [name, setName] = useState(field?.name ?? '')
   const [type, setType] = useState<FieldType>(field?.type ?? 'text')
   const [description, setDescription] = useState(field?.description ?? '')
-  const [target, setTarget] = useState<'task' | 'page'>(field?.target ?? 'task')
+  // "task", "page", or "record:<collection ID>".
+  const [target, setTarget] = useState('task')
   const [options, setOptions] = useState<OptionDraft[]>(
     () => field?.options.filter((option) => !option.archived).map((option) => ({ key: option.id, id: option.id, name: option.name, color: option.color })) ?? [],
   )
@@ -248,9 +252,14 @@ export function FieldDialog({
         </SelectField>
       )}
       {!field && type === 'link' ? (
-        <SelectField label="Links to" onChange={(event) => setTarget(event.target.value === 'page' ? 'page' : 'task')} value={target}>
+        <SelectField label="Links to" onChange={(event) => setTarget(event.target.value)} value={target}>
           <option value="task">A task</option>
           <option value="page">A page</option>
+          {linkable.map((collection) => (
+            <option key={collection.id} value={`record:${collection.id}`}>
+              A record in {collection.name}
+            </option>
+          ))}
         </SelectField>
       ) : null}
       <TextField

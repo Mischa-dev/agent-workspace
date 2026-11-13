@@ -166,7 +166,7 @@ export function tableItems(
 
 /** What a person, task or page just picked in a field's editor is, so the cell names it before the save lands. */
 export const referenceKind = (field: FieldDefinition): FieldReference['kind'] =>
-  field.type === 'person' ? 'person' : field.target === 'page' ? 'page' : 'task'
+  field.type === 'person' ? 'person' : field.target === 'page' || field.target === 'record' ? field.target : 'task'
 
 /** A record's values with a change applied: null clears a value. */
 export function withValues(values: FieldValues, change: Record<string, FieldValue | null> | undefined): FieldValues {

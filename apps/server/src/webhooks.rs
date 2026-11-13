@@ -1021,6 +1021,16 @@ pub(crate) async fn visible_to(
                WHERE sees_code.project_id = $2 AND sees_code.actor_id = $1
                  AND sees_code.enabled AND custom_role_allows(sees_code.role_id, 'code.view')
            ))
+           -- A record's events (AWD-110) while it's in the project, in a
+           -- collection that isn't archived.
+           AND ($6::uuid IS NULL OR EXISTS (
+               SELECT 1 FROM collection_records record
+               JOIN collections collection
+                 ON collection.project_id = record.project_id
+                AND collection.id = record.collection_id
+               WHERE record.id = $6 AND record.project_id = $2
+                 AND collection.archived_at IS NULL
+           ))
         "#,
     )
     .bind(owner)
@@ -1028,6 +1038,7 @@ pub(crate) async fn visible_to(
     .bind(subject.conversation_id)
     .bind(subject.pull_request_id)
     .bind(subject.work_item_id)
+    .bind(subject.record_id)
     .fetch_one(executor)
     .await?)
 }
@@ -1390,6 +1401,53 @@ pub(crate) async fn task_data(
     })))
 }
 
+/// A record as a webhook sends it (AWD-110): values by field name, as agents
+/// read them.
+pub(crate) async fn record_data(
+    state: &AppState,
+    project_id: Uuid,
+    collection_id: Uuid,
+    record_id: Uuid,
+) -> Result<Option<Value>, AppError> {
+    use crate::collections::{self, records};
+    let mut connection = state.pool.acquire().await?;
+    let Some(collection) = collections::get(&mut *connection, project_id, collection_id).await?
+    else {
+        return Ok(None);
+    };
+    let Some(record) = records::by_ids(&mut *connection, project_id, collection_id, &[record_id])
+        .await?
+        .pop()
+    else {
+        return Ok(None);
+    };
+    let definitions =
+        collections::field_definitions(&mut *connection, project_id, collection_id, false).await?;
+    let references = records::references(
+        &mut connection,
+        project_id,
+        &definitions,
+        std::slice::from_ref(&record),
+    )
+    .await?
+    .into_iter()
+    .map(|reference| (reference.id, reference))
+    .collect();
+    let line = records::RecordLine::of(&record, &definitions, &references, None);
+    let origin = events::public_origin(state);
+    Ok(Some(json!({
+        "id": line.id,
+        "number": line.number,
+        "title": line.title,
+        "collection": { "id": collection.id, "name": collection.name },
+        "fields": line.fields,
+        "archived": line.archived,
+        "version": line.version,
+        "updatedAt": line.updated_at,
+        "url": format!("{origin}/projects/{project_id}/collections/{collection_id}?record={record_id}"),
+    })))
+}
+
 async fn build_body(
     state: &AppState,
     due: &DueDelivery,
@@ -1421,6 +1479,21 @@ async fn build_body(
                 task["changedFields"] = json!(subject.changed_fields);
             }
             json!({ "task": task })
+        }
+        "record.created" | "record.updated" => {
+            let (Some(project_id), Some(record_id), Some(collection_id)) =
+                (due.project_id, subject.record_id, subject.collection_id)
+            else {
+                return Ok(None);
+            };
+            let Some(mut record) = record_data(state, project_id, collection_id, record_id).await?
+            else {
+                return Ok(None);
+            };
+            if !subject.changed_fields.is_empty() {
+                record["changedFields"] = json!(subject.changed_fields);
+            }
+            json!({ "record": record })
         }
         "run.updated" | "run.finished" => {
             let Some(run_id) = subject.agent_run_id else {

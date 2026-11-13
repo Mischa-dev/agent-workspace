@@ -25,7 +25,7 @@ import {
 import { useListKeys } from '../ui/listKeys'
 
 type SearchHit = {
-  kind: 'message' | 'thread' | 'task' | 'page' | 'decision' | 'file'
+  kind: 'message' | 'thread' | 'task' | 'page' | 'decision' | 'record' | 'file'
   id: string
   title: string
   /** A thread's or task's status, or "superseded" for a replaced decision. */
@@ -43,6 +43,7 @@ const KIND_LABEL: Record<SearchHit['kind'], string> = {
   page: 'Page',
   thread: 'Thread',
   task: 'Task',
+  record: 'Record',
   message: 'Message',
   file: 'File',
 }

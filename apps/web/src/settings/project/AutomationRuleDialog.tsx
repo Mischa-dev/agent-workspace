@@ -14,6 +14,7 @@ import {
   type Trigger,
   type TriggerKind,
 } from '../../automations/api'
+import { useCollections } from '../../collections/api'
 import { getProjectConversationSidebar } from '../../conversations/api'
 import { listEnvironments } from '../../launch/api'
 import { Banner, Button, Checkbox, Dialog, IconButton, SelectField, TextArea, TextField, showToast } from '../../ui'
@@ -43,6 +44,8 @@ const TRIGGERS: { kind: TriggerKind; label: string }[] = [
   { kind: 'task_created', label: 'A task is created' },
   { kind: 'task_matches', label: 'A task starts matching the view' },
   { kind: 'message_posted', label: 'Someone posts a message' },
+  { kind: 'record_created', label: 'A record is added to a collection' },
+  { kind: 'record_changed', label: 'A record in a collection changes' },
   { kind: 'schedule', label: 'On a schedule' },
   {
     kind: 'capacity_window',
@@ -57,8 +60,15 @@ const ACTIONS: { kind: RuleActionKind; label: string }[] = [
   { kind: 'post_message', label: 'Post a message' },
 ]
 
+/** Record rules (AWD-110) aren't about tasks: no saved view, and only actions that don't change tasks. */
+const isRecordTrigger = (trigger: Trigger) => trigger.kind === 'record_created' || trigger.kind === 'record_changed'
+const RECORD_ACTIONS: readonly RuleActionKind[] = ['notify', 'post_message']
+
 function defaultTrigger(kind: TriggerKind): Trigger {
   switch (kind) {
+    case 'record_created':
+    case 'record_changed':
+      return { kind, collectionId: null }
     case 'run_finished':
       return { kind, outcomes: ['failed'] }
     case 'message_posted':
@@ -80,7 +90,8 @@ function defaultTrigger(kind: TriggerKind): Trigger {
   }
 }
 
-function defaultAction(kind: RuleActionKind): RuleAction {
+function defaultAction(kind: RuleActionKind, records = false): RuleAction {
+  if (records && kind === 'notify') return { kind, recipients: 'owner', message: '{{rule.name}}: {{record.title}} in {{collection.name}}' }
   switch (kind) {
     case 'launch':
       return { kind }
@@ -131,6 +142,8 @@ export function RuleDialog({
     queryFn: () => getProjectConversationSidebar(projectId),
   })
   const channelList = channels.data?.channels.filter((channel) => !channel.archivedAt) ?? []
+  const records = isRecordTrigger(trigger)
+  const collections = useCollections(records ? projectId : '')
 
   const save = useMutation({
     mutationFn: async () => {
@@ -186,7 +199,18 @@ export function RuleDialog({
           <SelectField
             aria-label="Trigger"
             id="rule-trigger"
-            onChange={(event) => setTrigger(defaultTrigger(event.target.value as TriggerKind))}
+            onChange={(event) => {
+              const next = defaultTrigger(event.target.value as TriggerKind)
+              setTrigger(next)
+              if (isRecordTrigger(next)) {
+                // A record rule changes no tasks and reads no saved view.
+                setViewId('')
+                setActions((current) => {
+                  const kept = current.filter((action) => RECORD_ACTIONS.includes(action.kind) && !(action.kind === 'notify' && action.recipients === 'assignee'))
+                  return kept.length ? kept : [defaultAction('notify', true)]
+                })
+              }
+            }}
             value={trigger.kind}
           >
             {TRIGGERS.map((entry) => (
@@ -195,22 +219,24 @@ export function RuleDialog({
               </option>
             ))}
           </SelectField>
-          <TriggerFields channels={channelList} onChange={setTrigger} trigger={trigger} />
+          <TriggerFields channels={channelList} collections={collections.data?.collections ?? []} onChange={setTrigger} trigger={trigger} />
         </fieldset>
-        <SelectField
-          hint="Only tasks in this saved view count. Left out, every task does."
-          id="rule-view"
-          label="Only for tasks in"
-          onChange={(event) => setViewId(event.target.value)}
-          value={viewId}
-        >
-          <option value="">Any task</option>
-          {views.data?.views.map((view) => (
-            <option key={view.id} value={view.id}>
-              {view.name}
-            </option>
-          ))}
-        </SelectField>
+        {records ? null : (
+          <SelectField
+            hint="Only tasks in this saved view count. Left out, every task does."
+            id="rule-view"
+            label="Only for tasks in"
+            onChange={(event) => setViewId(event.target.value)}
+            value={viewId}
+          >
+            <option value="">Any task</option>
+            {views.data?.views.map((view) => (
+              <option key={view.id} value={view.id}>
+                {view.name}
+              </option>
+            ))}
+          </SelectField>
+        )}
         <fieldset className="aw-fieldset">
           <legend className="aw-field__label">Then</legend>
           {actions.map((action, index) => (
@@ -219,10 +245,10 @@ export function RuleDialog({
                 <SelectField
                   aria-label={`Action ${index + 1}`}
                   id={`rule-action-${index}`}
-                  onChange={(event) => setAction(index, defaultAction(event.target.value as RuleActionKind))}
+                  onChange={(event) => setAction(index, defaultAction(event.target.value as RuleActionKind, records))}
                   value={action.kind}
                 >
-                  {ACTIONS.map((entry) => (
+                  {ACTIONS.filter((entry) => !records || RECORD_ACTIONS.includes(entry.kind)).map((entry) => (
                     <option key={entry.kind} value={entry.kind}>
                       {entry.label}
                     </option>
@@ -245,18 +271,25 @@ export function RuleDialog({
                 profiles={(profiles.data?.profiles ?? []).filter((profile) => profile.enabled)}
                 onChange={(next) => setAction(index, next)}
                 projectId={projectId}
+                records={records}
               />
             </div>
           ))}
           {actions.length < MAX_ACTIONS && (
-            <Button icon="plus" onClick={() => setActions((current) => [...current, defaultAction('notify')])} size="sm" variant="ghost">
+            <Button icon="plus" onClick={() => setActions((current) => [...current, defaultAction('notify', records)])} size="sm" variant="ghost">
               Add an action
             </Button>
           )}
-          <p className="aw-quiet">
-            Text can use {'{{task.key}}'}, {'{{task.title}}'}, {'{{task.url}}'}, {'{{run.state}}'}, {'{{pr.number}}'}, {'{{pr.url}}'} and{' '}
-            {'{{rule.name}}'}.
-          </p>
+          {records ? (
+            <p className="aw-quiet">
+              Text can use {'{{record.title}}'}, {'{{record.url}}'}, {'{{collection.name}}'} and {'{{rule.name}}'}.
+            </p>
+          ) : (
+            <p className="aw-quiet">
+              Text can use {'{{task.key}}'}, {'{{task.title}}'}, {'{{task.url}}'}, {'{{run.state}}'}, {'{{pr.number}}'}, {'{{pr.url}}'} and{' '}
+              {'{{rule.name}}'}.
+            </p>
+          )}
         </fieldset>
         {error && <Banner tone="danger">{error}</Banner>}
       </div>
@@ -268,14 +301,33 @@ type ChannelChoice = { id: string; name: string }
 
 function TriggerFields({
   channels,
+  collections,
   onChange,
   trigger,
 }: {
   channels: ChannelChoice[]
+  collections: { id: string; name: string }[]
   onChange: (trigger: Trigger) => void
   trigger: Trigger
 }) {
   switch (trigger.kind) {
+    case 'record_created':
+    case 'record_changed':
+      return (
+        <SelectField
+          id="rule-trigger-collection"
+          label="In"
+          onChange={(event) => onChange({ ...trigger, collectionId: event.target.value || null })}
+          value={trigger.collectionId ?? ''}
+        >
+          <option value="">Any collection</option>
+          {collections.map((collection) => (
+            <option key={collection.id} value={collection.id}>
+              {collection.name}
+            </option>
+          ))}
+        </SelectField>
+      )
     case 'run_finished':
       return (
         <div className="aw-rule-choices">
@@ -439,6 +491,7 @@ function ActionFields({
   onChange,
   profiles,
   projectId,
+  records,
 }: {
   action: RuleAction
   channels: ChannelChoice[]
@@ -447,6 +500,8 @@ function ActionFields({
   onChange: (action: RuleAction) => void
   profiles: { id: string; name: string; handle: string }[]
   projectId: string
+  /** A record rule: there's no task, so no assignee. */
+  records: boolean
 }) {
   const id = (name: string) => `rule-action-${index}-${name}`
   switch (action.kind) {
@@ -529,7 +584,7 @@ function ActionFields({
             value={action.recipients}
           >
             <option value="owner">Me</option>
-            <option value="assignee">The task’s assignee</option>
+            {records ? null : <option value="assignee">The task’s assignee</option>}
             <option value="project_admins">Project admins</option>
           </SelectField>
           <TextField

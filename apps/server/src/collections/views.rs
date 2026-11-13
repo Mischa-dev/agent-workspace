@@ -344,7 +344,8 @@ pub fn check(config: &ViewConfig, definitions: &[FieldDefinition]) -> Result<(),
 }
 
 /// Checks that the people and records a view's filters name are the
-/// project's own: a person in it (now or before), a task or page in it.
+/// project's own: a person in it (now or before), a task or page in it,
+/// or a record of the link field's collection.
 /// An ID from anywhere else is refused, never kept.
 pub async fn check_references(
     connection: &mut PgConnection,
@@ -381,6 +382,17 @@ pub async fn check_references(
                 )
                 .bind(project_id)
                 .bind(&ids)
+                .fetch_one(&mut *connection)
+                .await?
+            }
+            (FieldType::Link, Some(LinkTarget::Record)) => {
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT count(*) FROM collection_records \
+                     WHERE project_id = $1 AND id = ANY($2) AND collection_id = $3",
+                )
+                .bind(project_id)
+                .bind(&ids)
+                .bind(field.config.collection)
                 .fetch_one(&mut *connection)
                 .await?
             }

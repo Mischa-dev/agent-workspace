@@ -47,6 +47,8 @@ pub const EVENT_TYPES: &[(&str, &str)] = &[
     ("pull_request.merged", "A linked pull request was merged"),
     ("pull_request.closed", "A linked pull request was closed"),
     ("message.created", "A message was posted"),
+    ("record.created", "A record was added to a collection"),
+    ("record.updated", "A record in a collection changed"),
 ];
 
 pub fn is_event_type(value: &str) -> bool {
@@ -80,7 +82,12 @@ pub struct Subject {
     /// A run's state, or a pull request's checks state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<String>,
-    /// For task.updated: what changed.
+    /// A collection's record (AWD-110).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collection_id: Option<Uuid>,
+    /// For task.updated and record.updated: what changed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub changed_fields: Vec<String>,
 }
@@ -130,6 +137,12 @@ pub(crate) enum RouteSource {
         work_item_id: Uuid,
         version: i64,
     },
+    /// Records written in one go (AWD-110). A change too big to name its
+    /// records names none, and routes nothing.
+    Collection {
+        collection_id: Uuid,
+        record_ids: Vec<Uuid>,
+    },
 }
 
 /// Queues the routing job for a published outbox event, when anything in
@@ -160,6 +173,12 @@ pub async fn queue_route(
             work_item_id: updated.work_item_id,
             version: updated.version,
         },
+        OutboxEventPayload::CollectionUpdated(updated) if !updated.record_ids.is_empty() => {
+            RouteSource::Collection {
+                collection_id: updated.collection_id,
+                record_ids: updated.record_ids,
+            }
+        }
         _ => return Ok(false),
     };
     let project_id = claim.project_id();
@@ -537,8 +556,76 @@ async fn expand(pool: &PgPool, payload: &RoutePayload) -> Result<Vec<Event>, App
                     }),
             );
         }
+        RouteSource::Collection {
+            collection_id,
+            record_ids,
+        } => {
+            // The records' history written with this event (same
+            // transaction, same time): one event per record, keyed by its
+            // history entry, so a redelivery lands once.
+            let entries = sqlx::query_as::<_, RecordHistoryRow>(
+                r#"
+                SELECT history.id, history.record_id, history.action, history.actor_id,
+                       history.changes
+                FROM outbox_events event
+                JOIN collection_record_history history
+                  ON history.project_id = event.project_id
+                 AND history.record_id = ANY($2)
+                 AND history.created_at = event.created_at
+                WHERE event.event_id = $1
+                ORDER BY history.created_at, history.id
+                "#,
+            )
+            .bind(payload.event_id)
+            .bind(record_ids)
+            .fetch_all(pool)
+            .await?;
+            for entry in entries {
+                let created = entry.action == "created";
+                let mut changed = if created {
+                    Vec::new()
+                } else {
+                    entry
+                        .changes
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|change| change["name"].as_str().map(str::to_owned))
+                        .collect::<Vec<_>>()
+                };
+                if matches!(entry.action.as_str(), "archived" | "restored") {
+                    changed.push(entry.action.clone());
+                }
+                changed.sort();
+                changed.dedup();
+                events.push(event(
+                    if created {
+                        "record.created"
+                    } else {
+                        "record.updated"
+                    },
+                    format!("record:{}", entry.id),
+                    Some(entry.actor_id),
+                    Subject {
+                        record_id: Some(entry.record_id),
+                        collection_id: Some(*collection_id),
+                        changed_fields: changed,
+                        ..Subject::default()
+                    },
+                ));
+            }
+        }
     }
     Ok(events)
+}
+
+#[derive(FromRow)]
+struct RecordHistoryRow {
+    id: Uuid,
+    record_id: Uuid,
+    action: String,
+    actor_id: Uuid,
+    changes: serde_json::Value,
 }
 
 enum PullRequestLink {

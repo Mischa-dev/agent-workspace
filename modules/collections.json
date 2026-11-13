@@ -16,11 +16,19 @@
     "record_write": "change"
   },
   "routes": ["/api/v1/projects/{project_id}/collections*", "/api/v1/forms/*"],
-  "events": { "emits": [], "listens": [] },
+  "events": { "emits": ["record.created", "record.updated"], "listens": [] },
   "notifications": [],
-  "search": [],
-  "automations": { "triggers": [], "actions": [] },
-  "things": [],
+  "search": ["records"],
+  "automations": { "triggers": ["record_created", "record_changed"], "actions": [] },
+  "things": [
+    {
+      "kind": "record",
+      "one": "Record",
+      "many": "Records",
+      "href": "/projects/{projectId}/collections/{parentId}?record={id}",
+      "fields": [{ "id": "updatedAt", "label": "Edited", "type": "date" }]
+    }
+  ],
   "links": [],
   "embeds": [],
   "slots": {

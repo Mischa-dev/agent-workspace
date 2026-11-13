@@ -268,6 +268,30 @@ pub async fn find(
     .await?)
 }
 
+/// A link field's target as people and agents write it, with a record
+/// link's collection named by name or ID ("record:Requests"), as
+/// `fields::normalize_config` takes it ("record:<collection ID>"). Err with
+/// a message when no live collection has that name.
+pub async fn link_target(
+    executor: impl sqlx::PgExecutor<'_>,
+    project_id: Uuid,
+    target: &str,
+) -> Result<Result<String, String>, AppError> {
+    let Some((kind, collection)) = target.split_once(':') else {
+        return Ok(Ok(target.to_owned()));
+    };
+    if fields::LinkTarget::parse(kind) != Some(fields::LinkTarget::Record) {
+        return Ok(Ok(target.to_owned()));
+    }
+    match find(executor, project_id, collection).await? {
+        Some(found) if !found.archived => Ok(Ok(format!("record:{}", found.id))),
+        _ => Ok(Err(format!(
+            "No collection here is called \"{}\".",
+            collection.trim()
+        ))),
+    }
+}
+
 /// Locks a collection's row for a write. The caller holds the project lock.
 pub async fn lock(
     connection: &mut PgConnection,

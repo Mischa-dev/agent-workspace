@@ -31,7 +31,9 @@ export type FieldDefinition = {
   /** Choice fields: every option in order, archived ones too. */
   options: FieldOption[]
   /** Link fields: what they link to. */
-  target: 'task' | 'page' | null
+  target: LinkTarget | null
+  /** Record links: the collection whose records they hold. */
+  collection?: string | null
   /** 1 is first. */
   position: number
   archived: boolean
@@ -41,7 +43,9 @@ export type FieldDefinition = {
 export type FieldValue = string | number | boolean | string[]
 export type FieldValues = Record<string, FieldValue>
 
-export type FieldReference = { id: string; kind: 'person' | 'task' | 'page'; label: string; key: string | null }
+export type LinkTarget = 'task' | 'page' | 'record'
+
+export type FieldReference = { id: string; kind: 'person' | 'task' | 'page' | 'record'; label: string; key: string | null }
 
 export type FieldOp = 'is' | 'isNot' | 'empty' | 'notEmpty' | 'contains' | 'gt' | 'gte' | 'lt' | 'lte'
 
@@ -57,7 +61,7 @@ export const FIELD_TYPES: Array<{ type: FieldType; label: string; hint: string }
   { type: 'person', label: 'Person', hint: 'Someone in the project' },
   { type: 'url', label: 'Link (URL)', hint: 'A web address' },
   { type: 'checkbox', label: 'Checkbox', hint: 'Yes or no' },
-  { type: 'link', label: 'Task or page', hint: 'Another task or a page in the project' },
+  { type: 'link', label: 'Task, page or record', hint: 'A task, a page or a collection’s record in the project' },
 ]
 
 export function typeLabel(type: FieldType) {
@@ -92,7 +96,8 @@ export function normalizeField(value: unknown): FieldDefinition {
         archived: option.archived === true,
       }
     }),
-    target: field.target === 'page' ? 'page' : field.target === 'task' ? 'task' : null,
+    target: field.target === 'page' || field.target === 'task' || field.target === 'record' ? field.target : null,
+    collection: typeof field.collection === 'string' ? field.collection : null,
     position: typeof field.position === 'number' ? field.position : 0,
     archived: field.archived === true,
     version: typeof field.version === 'number' ? field.version : 1,
@@ -114,7 +119,7 @@ export function normalizeReferences(value: unknown): FieldReference[] {
   return (Array.isArray(value) ? value : []).flatMap((entry) => {
     const reference = asRecord(entry)
     const kind = reference.kind
-    if (kind !== 'person' && kind !== 'task' && kind !== 'page') return []
+    if (kind !== 'person' && kind !== 'task' && kind !== 'page' && kind !== 'record') return []
     return [
       {
         id: asString(reference.id),
