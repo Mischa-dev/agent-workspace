@@ -362,17 +362,25 @@ async fn collection_body(
     let definitions =
         super::field_definitions(&mut *connection, project_id, collection.id, true).await?;
     let views = views::list(&mut *connection, project_id, collection.id).await?;
-    let (records, archived_records) = sqlx::query_as::<_, (i64, i64)>(if collection.is_tasks() {
-        "SELECT count(*) FILTER (WHERE archived_at IS NULL), count(*) FILTER (WHERE archived_at IS NOT NULL) \
-         FROM work_items WHERE project_id = $2"
+    // Each query binds exactly the parameters it names: an extra bind fails
+    // on a reused prepared statement.
+    let (records, archived_records) = if collection.is_tasks() {
+        sqlx::query_as::<_, (i64, i64)>(
+            "SELECT count(*) FILTER (WHERE archived_at IS NULL), count(*) FILTER (WHERE archived_at IS NOT NULL) \
+             FROM work_items WHERE project_id = $1",
+        )
+        .bind(project_id)
+        .fetch_one(&mut *connection)
+        .await?
     } else {
-        "SELECT count(*) FILTER (WHERE archived_at IS NULL), count(*) FILTER (WHERE archived_at IS NOT NULL) \
-         FROM collection_records WHERE collection_id = $1"
-    })
-    .bind(collection.id)
-    .bind(project_id)
-    .fetch_one(&mut *connection)
-    .await?;
+        sqlx::query_as::<_, (i64, i64)>(
+            "SELECT count(*) FILTER (WHERE archived_at IS NULL), count(*) FILTER (WHERE archived_at IS NOT NULL) \
+             FROM collection_records WHERE collection_id = $1",
+        )
+        .bind(collection.id)
+        .fetch_one(&mut *connection)
+        .await?
+    };
     Ok(CollectionBody {
         collection: CollectionSummary::of(collection, records),
         fields: definitions.iter().map(FieldView::from).collect(),
