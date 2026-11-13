@@ -93,6 +93,22 @@ async fn a_setup_link_hands_the_agent_its_token_once() {
     let connection = created["connection"]["id"].as_str().expect("id").to_owned();
     assert_eq!(waiting_secrets(&setup.pool).await, 1);
 
+    // A HEAD first (a link checker) leaves the link unspent.
+    let path = &url[url.find("/connect/agent/").expect("link path")..];
+    let peeked = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("HEAD")
+                .uri(path)
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(peeked.status(), StatusCode::OK);
+    assert_eq!(waiting_secrets(&setup.pool).await, 1);
+
     // The first fetch gets the steps with a working token; the second, nothing.
     let (status, steps) = fetch(app, &url).await;
     assert_eq!(status, StatusCode::OK, "{steps}");

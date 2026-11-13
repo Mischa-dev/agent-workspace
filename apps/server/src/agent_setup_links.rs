@@ -168,7 +168,14 @@ pub async fn purge_expired(connection: &mut PgConnection) -> Result<(), AppError
 }
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/connect/agent/{code}", get(claim))
+    // A HEAD (a link checker, a client peeking first) would otherwise run
+    // the GET handler and spend the link without delivering the token.
+    Router::new().route("/connect/agent/{code}", get(claim).head(peek))
+}
+
+/// Answers a HEAD without touching the link.
+async fn peek() -> Response {
+    markdown(StatusCode::OK, String::new())
 }
 
 #[derive(FromRow)]
