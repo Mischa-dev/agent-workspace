@@ -1995,6 +1995,9 @@ pub(super) struct CommentItem {
     pub at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub via: Option<String>,
+    /// The comment on this task that this one replies to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_to_comment_id: Option<String>,
     /// Files posted with the comment: read them with file_read.
     #[sqlx(skip)]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2151,7 +2154,8 @@ pub(super) async fn task_open(
             SELECT comment.id::text AS id,
                    COALESCE(author.display_name, 'Former member') AS author,
                    comment.plain_text AS text, comment.created_at::text AS at,
-                   via_client.client_name AS via
+                   via_client.client_name AS via,
+                   comment.reply_to_comment_id::text AS reply_to_comment_id
             FROM work_item_comments comment
             LEFT JOIN project_memberships author
               ON author.project_id = comment.project_id AND author.actor_id = comment.author_actor_id

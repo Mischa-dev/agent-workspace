@@ -6,6 +6,8 @@ import { RevealInThread, readForwarded, revealMessage } from './quotedMessage'
 import type { ReplyTarget } from './types'
 import { Icon } from '../ui'
 
+import './replies.css'
+
 /**
  * The message a reply answers, read live for you: its author and its first
  * lines, above the reply. Choosing it jumps to the original: it scrolls there

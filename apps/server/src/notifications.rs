@@ -849,6 +849,8 @@ struct CommentMentionRow {
     comment_id: Uuid,
     author_actor_id: Uuid,
     recipient_actor_id: Uuid,
+    /// The recipient wrote the comment this one replies to (AWD-95).
+    reply: bool,
 }
 
 #[derive(FromRow)]
@@ -882,21 +884,41 @@ async fn work_item_changes(
     let mut notifications = Vec::new();
     let comments = sqlx::query_as::<_, CommentMentionRow>(
         r#"
-        SELECT DISTINCT comment.id AS comment_id, comment.author_actor_id,
-               mention.actor_id AS recipient_actor_id
-        FROM outbox_events event
-        JOIN work_item_comments comment
-          ON comment.project_id = event.project_id
-         AND comment.work_item_id = $3
-         -- A new comment, or an edit (it can add mentions; people already
-         -- told about this comment aren't told again).
-         AND (comment.created_at = event.created_at OR comment.edited_at = event.created_at)
-         AND comment.removed_at IS NULL
-        JOIN work_item_comment_mentions mention ON mention.comment_id = comment.id
-        WHERE event.event_id = $1 AND event.project_id = $2
-          AND mention.actor_id <> comment.author_actor_id
-          AND actor_can_access_project(mention.actor_id, NULL, comment.project_id)
-        ORDER BY comment.id, mention.actor_id
+        SELECT comment_id, author_actor_id, recipient_actor_id, bool_or(reply) AS reply
+        FROM (
+            SELECT comment.id AS comment_id, comment.author_actor_id,
+                   mention.actor_id AS recipient_actor_id, false AS reply,
+                   comment.project_id
+            FROM outbox_events event
+            JOIN work_item_comments comment
+              ON comment.project_id = event.project_id
+             AND comment.work_item_id = $3
+             -- A new comment, or an edit (it can add mentions; people already
+             -- told about this comment aren't told again).
+             AND (comment.created_at = event.created_at OR comment.edited_at = event.created_at)
+             AND comment.removed_at IS NULL
+            JOIN work_item_comment_mentions mention ON mention.comment_id = comment.id
+            WHERE event.event_id = $1 AND event.project_id = $2
+            UNION ALL
+            -- A new reply tells whoever wrote the comment it answers.
+            SELECT comment.id, comment.author_actor_id, quoted.author_actor_id, true,
+                   comment.project_id
+            FROM outbox_events event
+            JOIN work_item_comments comment
+              ON comment.project_id = event.project_id
+             AND comment.work_item_id = $3
+             AND comment.created_at = event.created_at
+             AND comment.removed_at IS NULL
+            JOIN work_item_comments quoted
+              ON quoted.project_id = comment.project_id
+             AND quoted.work_item_id = comment.work_item_id
+             AND quoted.id = comment.reply_to_comment_id
+            WHERE event.event_id = $1 AND event.project_id = $2
+        ) told
+        WHERE recipient_actor_id <> author_actor_id
+          AND actor_can_access_project(recipient_actor_id, NULL, project_id)
+        GROUP BY comment_id, author_actor_id, recipient_actor_id, project_id
+        ORDER BY comment_id, recipient_actor_id
         "#,
     )
     .bind(event_id)
@@ -917,6 +939,9 @@ async fn work_item_changes(
         notification.actor_id = Some(row.author_actor_id);
         notification.work_item_id = Some(work_item_id);
         notification.comment_id = Some(row.comment_id);
+        if row.reply {
+            notification.detail = serde_json::json!({"reply": true});
+        }
         notifications.push(notification);
     }
     let assignments = sqlx::query_as::<_, AssignmentRow>(
@@ -1764,7 +1789,11 @@ fn view(row: NotificationRow) -> NotificationView {
             (title, preview)
         }
         kind::COMMENT_MENTION => (
-            format!("{who} mentioned you on {task_key}"),
+            if row.detail.get("reply").and_then(serde_json::Value::as_bool) == Some(true) {
+                format!("{who} replied to you on {task_key}")
+            } else {
+                format!("{who} mentioned you on {task_key}")
+            },
             row.comment_preview.clone(),
         ),
         kind::ASSIGNED => (

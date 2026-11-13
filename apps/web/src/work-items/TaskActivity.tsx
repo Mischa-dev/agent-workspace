@@ -1,16 +1,20 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { Eye } from 'lucide-react'
-import { Suspense, lazy, useState, type ReactNode } from 'react'
+import { Eye, Reply } from 'lucide-react'
+import { Suspense, lazy, useCallback, useState, type ReactNode } from 'react'
 
 import { useAuthenticatedSession } from '../auth/session'
 
 import { searchMentionableActors } from '../conversations/api'
 import { MessageContent } from '../conversations/MessageContent'
+import { ReplyQuote } from '../conversations/ReplyQuote'
+import { RevealInThread } from '../conversations/quotedMessage'
+import type { ReplyTarget } from '../conversations/types'
 import { StructuredComposer } from '../conversations/StructuredComposer'
 import { useProjectExperience } from '../experience/layout'
 import { Attachments } from '../files/Attachments'
 import { uploadFile, type FileAttachment } from '../files/api'
 import { useProject } from '../projects/hooks'
+import { useRevealInThread } from '../threads/useRevealInThread'
 import {
   ActorTag,
   Avatar,
@@ -125,6 +129,23 @@ export function TaskActivity({ disabled, item, projectArchived }: { disabled: bo
   const [editing, setEditing] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<PostedComment | null>(null)
   const [history, setHistory] = useState<PostedComment | null>(null)
+  // The comment the next one answers, shown above the comment box.
+  const [replying, setReplying] = useState<ReplyTarget | null>(null)
+  // Replies follow the layout's reply setting, as they do in conversations.
+  const replies = experience.shows('talk.replies')
+  // A quote of a comment further back loads older activity until it's there.
+  const { fetchNextPage } = timeline
+  const loadOlder = useCallback(async () => {
+    await fetchNextPage()
+  }, [fetchNextPage])
+  const revealComment = useRevealInThread({
+    threadId: item.id,
+    cursor: timeline.data?.pages.at(-1)?.nextCursor ?? null,
+    error: timeline.isFetchNextPageError ? 'failed' : null,
+    loading: timeline.isFetchingNextPage,
+    loadOlder,
+    olderCount: timeline.data?.pages.length ?? 0,
+  })
   const commentFiles = new Map<string, FileAttachment[]>()
   for (const file of files.data ?? []) {
     if (file.commentId) commentFiles.set(file.commentId, [...(commentFiles.get(file.commentId) ?? []), file])
@@ -164,6 +185,9 @@ export function TaskActivity({ disabled, item, projectArchived }: { disabled: bo
     const own = viewerId !== null && posted.author.id === viewerId
     const removedBy = posted.removed?.removedBy
     const actions: MenuEntry[] = []
+    const reply = () => setReplying({ messageId: posted.id, authorName: posted.author.displayName, text: posted.plainText.slice(0, 300) })
+    const canReply = replies && !posted.removed && !disabled
+    if (canReply) actions.push({ label: 'Reply', icon: Reply, onSelect: reply })
     if (!posted.removed) {
       if (own && !disabled) actions.push({ label: 'Edit', icon: 'pencil', onSelect: () => setEditing(posted.id) })
       if (posted.editedAt) actions.push({ label: 'Edit history', icon: 'clock', onSelect: () => setHistory(posted) })
@@ -171,8 +195,21 @@ export function TaskActivity({ disabled, item, projectArchived }: { disabled: bo
         actions.push({ label: 'Delete', icon: 'trash', danger: true, onSelect: () => setDeleting(posted) })
       }
     }
+    const quoted = posted.replyTo
     const content = (
       <div className="aw-activity__content">
+        {quoted ? (
+          <ReplyQuote
+            value={{
+              messageId: quoted.commentId,
+              available: true,
+              authorName: quoted.authorName ?? 'a former member',
+              text: quoted.text,
+              removed: quoted.removed,
+              href: `${workItemHref(item.projectId, item.id)}#comment-${quoted.commentId}`,
+            }}
+          />
+        ) : null}
         <MessageContent
           actors={posted.mentionedActors.map((mentioned) => ({
             ...mentioned,
@@ -187,7 +224,7 @@ export function TaskActivity({ disabled, item, projectArchived }: { disabled: bo
       </div>
     )
     return (
-      <li className="aw-activity__comment" key={entry.sequence}>
+      <li className="aw-activity__comment" id={`comment-${posted.id}`} key={entry.sequence}>
         <Avatar kind={kind} name={posted.author.displayName} seed={posted.author.id} size={28} />
         <div className="aw-activity__body">
           <p className="aw-activity__line">
@@ -204,6 +241,7 @@ export function TaskActivity({ disabled, item, projectArchived }: { disabled: bo
             ) : null}
             {actions.length ? (
               <span className="aw-activity__actions">
+                {canReply ? <IconButton className="aw-activity__reply" icon={Reply} label="Reply" onClick={reply} size="sm" /> : null}
                 <Menu items={actions} label="Comment actions" placement="bottom-end" trigger={<IconButton icon="more" label="Comment actions" size="sm" />} />
               </span>
             ) : null}
@@ -270,7 +308,11 @@ export function TaskActivity({ disabled, item, projectArchived }: { disabled: bo
           {timeline.isFetchNextPageError ? <span className="aw-prop__error">Older activity didn’t load. Try again.</span> : null}
         </div>
       ) : null}
-      {rows.length ? <ol className="aw-activity">{rows}</ol> : null}
+      {rows.length ? (
+        <RevealInThread.Provider value={revealComment}>
+          <ol className="aw-activity">{rows}</ol>
+        </RevealInThread.Provider>
+      ) : null}
       <Suspense fallback={null}>
         {deleting ? (
           <DeleteCommentDialog comment={deleting} onClose={() => setDeleting(null)} projectId={item.projectId} viewerId={viewerId} workItemId={item.id} />
@@ -283,12 +325,14 @@ export function TaskActivity({ disabled, item, projectArchived }: { disabled: bo
           draftKey={`comment:${item.id}`}
           label="Add a comment"
           outbox={{ kind: 'comment', projectId: item.projectId, workItemId: item.id, href: workItemHref(item.projectId, item.id) }}
-          onSubmit={async ({ attachments, content, idempotencyKey, text }) => {
+          onReplyChange={replies ? setReplying : undefined}
+          onSubmit={async ({ attachments, content, idempotencyKey, replyTo, text }) => {
             const words = commentContent({ attachments, content, text })
-            await createComment.mutateAsync({ projectId: item.projectId, workItemId: item.id, content: words, idempotencyKey, attachments })
+            await createComment.mutateAsync({ projectId: item.projectId, workItemId: item.id, content: words, idempotencyKey, attachments, replyTo })
             if (attachments?.length) void queryClient.invalidateQueries({ queryKey: taskFilesKey(item.projectId, item.id) })
           }}
           peopleOnly={!experience.shows('talk.agent_mentions')}
+          replyTo={replies ? replying : null}
           placeholder={`Leave a comment. @mention someone or reference a ${experience.word('task')}.`}
           searchActors={async (query) => (await searchMentionableActors(item.projectId, query)).actors}
           searchWorkItems={(query) => searchWorkItemReferences(item.projectId, query)}

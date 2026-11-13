@@ -17,6 +17,7 @@ mod awd76_workspace_templates;
 mod awd89_custom_fields;
 mod awd90_collections;
 mod awd91_agent_parity;
+mod awd95_comment_replies;
 mod backbone;
 mod bug_report_links;
 mod bug_sweep;

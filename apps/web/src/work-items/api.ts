@@ -664,15 +664,20 @@ export async function createWorkItemComment(input: {
   content: MessageContentV1
   idempotencyKey: string
   attachments?: { id: string }[]
+  /** The comment on this task it answers (`messageId` is the comment's id). */
+  replyTo?: { messageId: string }
 }) {
   return requestJson<unknown>(
     `/api/v1/projects/${encodeURIComponent(input.projectId)}/work-items/${encodeURIComponent(input.workItemId)}/comments`,
     {
       method: 'POST',
       idempotencyKey: input.idempotencyKey,
-      json: input.attachments?.length
-        ? { content: input.content, attachments: input.attachments.map((file) => file.id) }
-        : { content: input.content },
+      // JSON leaves out `attachments` and `replyToCommentId` when there are none.
+      json: {
+        content: input.content,
+        attachments: input.attachments?.length ? input.attachments.map((file) => file.id) : undefined,
+        replyToCommentId: input.replyTo?.messageId,
+      },
     },
   )
 }
@@ -686,6 +691,18 @@ function commentActor(value: unknown): AssignableActor {
 
 function commentRemoval(removal: Record<string, unknown>) {
   return { removedAt: string(removal.removedAt), removedBy: removal.removedBy ? commentActor(removal.removedBy) : null }
+}
+
+function commentReply(value: unknown) {
+  if (!value || typeof value !== 'object') return null
+  const reply = record(value)
+  if (!string(reply.commentId)) return null
+  return {
+    commentId: string(reply.commentId),
+    authorName: nullableString(reply.authorName),
+    text: reply.removed === true ? null : nullableString(reply.text),
+    removed: reply.removed === true,
+  }
 }
 
 const commentPath = (projectId: string, workItemId: string, commentId: string) =>
@@ -799,6 +816,7 @@ export async function getWorkItemTimeline(
               revision: typeof comment.revision === 'number' ? comment.revision : 1,
               editedAt: nullableString(comment.editedAt),
               removed: comment.removed ? commentRemoval(record(comment.removed)) : null,
+              replyTo: commentReply(comment.replyTo),
             }
           : null,
     }

@@ -26,6 +26,7 @@ function send(target: OutboxTarget, item: QueuedSend) {
     content: commentContent(item),
     idempotencyKey: item.idempotencyKey,
     attachments: item.attachments,
+    replyTo: item.replyTo,
   })
 }
 

@@ -91,6 +91,10 @@ pub struct PostUpdateArguments {
     /// and forComment: true on this task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attachment_ids: Option<Vec<String>>,
+    /// To answer one comment on this task, its id (task_open lists them): it
+    /// shows quoted above yours, and its author is told.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to_comment_id: Option<String>,
 }
 
 // The argument structs below are also each write's idempotency request hash
@@ -1262,6 +1266,15 @@ async fn post_update_inner(
             "Pass up to 10 file IDs returned by file_upload (taskId, forComment: true).",
         ));
     };
+    const REPLY_MESSAGE: &str =
+        "Pass the id of a comment on this task that isn't deleted (task_open lists them).";
+    let reply_to = match arguments.reply_to_comment_id.as_deref() {
+        None => None,
+        Some(raw) => match parse_id(raw) {
+            Some(id) => Some(id),
+            None => return Ok(WriteResult::invalid("replyToCommentId", REPLY_MESSAGE)),
+        },
+    };
     let mut transaction = state.pool.begin().await?;
     if let Some(result) = authorize_write(&mut transaction, principal).await? {
         return Ok(result);
@@ -1305,6 +1318,25 @@ async fn post_update_inner(
             message: Some(archived_task_message(&task)),
         });
     }
+    if let Some(reply_to) = reply_to {
+        let answerable = sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT EXISTS (
+                SELECT 1 FROM work_item_comments
+                WHERE project_id = $1 AND work_item_id = $2 AND id = $3
+                  AND removed_at IS NULL
+            )
+            "#,
+        )
+        .bind(principal.project_id)
+        .bind(work_item_id)
+        .bind(reply_to)
+        .fetch_one(&mut *transaction)
+        .await?;
+        if !answerable {
+            return Ok(WriteResult::invalid("replyToCommentId", REPLY_MESSAGE));
+        }
+    }
     let comment_id = Uuid::now_v7();
     let content = serde_json::to_value(validated.content())
         .map_err(|_| AppError::Internal("serialize MCP update"))?;
@@ -1312,8 +1344,8 @@ async fn post_update_inner(
         r#"
         INSERT INTO work_item_comments (
             id, project_id, work_item_id, author_actor_id, content_version,
-            content, plain_text
-        ) VALUES ($1, $2, $3, $4, 1, $5, $6)
+            content, plain_text, reply_to_comment_id
+        ) VALUES ($1, $2, $3, $4, 1, $5, $6, $7)
         "#,
     )
     .bind(comment_id)
@@ -1322,6 +1354,7 @@ async fn post_update_inner(
     .bind(principal.actor_id)
     .bind(content)
     .bind(update)
+    .bind(reply_to)
     .execute(&mut *transaction)
     .await?;
     let (_sequence, result_id) = finalize_comment(

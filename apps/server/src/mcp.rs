@@ -1643,7 +1643,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Comment on a task: progress, a handoff, or what's left. Keep it useful; skip status-only noise.",
+        description = "Comment on a task: progress, a handoff, or what's left. Keep it useful; skip status-only noise. To answer one comment, pass replyToCommentId: it shows quoted above yours and its author is told.",
         annotations(
             title = "Comment on task",
             read_only_hint = false,

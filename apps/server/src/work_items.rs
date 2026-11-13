@@ -642,6 +642,21 @@ struct CreateCommentRequest {
     /// Files uploaded to the task for this comment (`?for=comment`), in order.
     #[serde(default)]
     attachments: Vec<Uuid>,
+    /// The comment on this task that this one answers: it shows quoted above.
+    #[serde(default)]
+    reply_to_comment_id: Option<Uuid>,
+}
+
+/// The comment a reply answers, read live: who wrote it and how it starts.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CommentReplyView {
+    comment_id: Uuid,
+    /// Null when its author has left the project.
+    author_name: Option<String>,
+    /// Up to 300 characters of its text as it reads now; null once deleted.
+    text: Option<String>,
+    removed: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -683,6 +698,9 @@ struct WorkItemCommentView {
     /// Set once the comment is deleted; its text is then empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     removed: Option<CommentRemovalView>,
+    /// The comment this one replies to. Stored replays predate replies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reply_to: Option<CommentReplyView>,
 }
 
 fn first_comment_revision() -> i32 {
@@ -734,6 +752,11 @@ pub(crate) struct WorkItemTimelineRow {
     pub(crate) comment_removed_by_kind: Option<String>,
     pub(crate) comment_removed_by_name: Option<String>,
     pub(crate) comment_removed_by_handle: Option<String>,
+    /// The comment this one replies to, read live (AWD-95).
+    pub(crate) reply_to_comment_id: Option<Uuid>,
+    pub(crate) reply_to_author_name: Option<String>,
+    pub(crate) reply_to_text: Option<String>,
+    pub(crate) reply_to_removed: Option<bool>,
     pub(crate) actor_id: Uuid,
     pub(crate) actor_kind: String,
     pub(crate) actor_display_name: String,
@@ -2844,13 +2867,17 @@ async fn create_work_item_comment(
     let content = MessageContent::from_json(request.content).map_err(message_content_error)?;
     let key = IdempotencyKey::from_headers(&headers)?;
     let scope = resource_bound_scope("work_items", work_item_id, "comment_create")?;
-    let request_hash = if request.attachments.is_empty() {
+    let request_hash = if request.attachments.is_empty() && request.reply_to_comment_id.is_none() {
         RequestHash::for_value(&content)?
     } else {
-        RequestHash::for_value(&serde_json::json!({
+        let mut hashed = serde_json::json!({
             "content": &content,
             "attachments": &request.attachments,
-        }))?
+        });
+        if let Some(reply_to) = request.reply_to_comment_id {
+            hashed["replyToCommentId"] = serde_json::json!(reply_to);
+        }
+        RequestHash::for_value(&hashed)?
     };
     let mut transaction = state.pool.begin().await?;
     let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
@@ -2875,7 +2902,18 @@ async fn create_work_item_comment(
     .await?
     {
         IdempotencyOutcome::Replay(replay) => {
-            let body: CommentAppendResponse = replay.decode()?;
+            let mut body: CommentAppendResponse = replay.decode()?;
+            // Someone who can no longer see tasks gets no more from a replay
+            // than from a new comment.
+            if !crate::conversations::sees_tasks_in(
+                &mut *transaction,
+                principal.actor_id,
+                project_id,
+            )
+            .await?
+            {
+                hide_reference_details(&mut body.comment);
+            }
             transaction.commit().await?;
             return Ok((replay.status(), Json(body)).into_response());
         }
@@ -2891,6 +2929,11 @@ async fn create_work_item_comment(
     .ok_or(AppError::NotFound("work_item"))?;
     if current.archived_at.is_some() {
         return Err(AppError::Conflict("work_item", "archived"));
+    }
+    if let Some(reply_to) = request.reply_to_comment_id
+        && !comment_can_be_answered(&mut transaction, project_id, work_item_id, reply_to).await?
+    {
+        return Err(AppError::Validation("replyToCommentId"));
     }
     let mention_ids = content.mentioned_actor_ids();
     let mention_rows = fetch_comment_actor_rows(&mut transaction, project_id, &mention_ids).await?;
@@ -2932,8 +2975,8 @@ async fn create_work_item_comment(
         r#"
         INSERT INTO work_item_comments (
             id, project_id, work_item_id, author_actor_id,
-            content_version, content, plain_text
-        ) VALUES ($1, $2, $3, $4, 1, $5, $6)
+            content_version, content, plain_text, reply_to_comment_id
+        ) VALUES ($1, $2, $3, $4, 1, $5, $6, $7)
         RETURNING created_at::text
         "#,
     )
@@ -2943,6 +2986,7 @@ async fn create_work_item_comment(
     .bind(principal.actor_id)
     .bind(&content_json)
     .bind(&plain_text)
+    .bind(request.reply_to_comment_id)
     .fetch_one(&mut *transaction)
     .await?;
     for (node_index, actor_id) in mention_nodes {
@@ -3015,6 +3059,13 @@ async fn create_work_item_comment(
             revision: 1,
             edited_at: None,
             removed: None,
+            reply_to: match request.reply_to_comment_id {
+                Some(reply_to) => {
+                    fetch_comment_reply(&mut transaction, project_id, work_item_id, reply_to)
+                        .await?
+                }
+                None => None,
+            },
         },
     };
     if !sees_tasks {
@@ -3153,6 +3204,11 @@ const TIMELINE_SELECT: &str = r#"
                remover_actor.kind AS comment_removed_by_kind,
                remover.display_name AS comment_removed_by_name,
                remover.handle AS comment_removed_by_handle,
+               quoted.id AS reply_to_comment_id,
+               quoted_author.display_name AS reply_to_author_name,
+               CASE WHEN quoted.removed_at IS NULL THEN left(quoted.plain_text, 300) END
+                   AS reply_to_text,
+               quoted.removed_at IS NOT NULL AS reply_to_removed,
                actor.id AS actor_id, actor.kind AS actor_kind,
                membership.display_name AS actor_display_name,
                membership.handle AS actor_handle,
@@ -3164,6 +3220,13 @@ const TIMELINE_SELECT: &str = r#"
           ON remover.project_id = comment.project_id
          AND remover.actor_id = comment.removed_by_actor_id
         LEFT JOIN actors remover_actor ON remover_actor.id = remover.actor_id
+        LEFT JOIN work_item_comments quoted
+          ON quoted.project_id = comment.project_id
+         AND quoted.work_item_id = comment.work_item_id
+         AND quoted.id = comment.reply_to_comment_id
+        LEFT JOIN project_memberships quoted_author
+          ON quoted_author.project_id = quoted.project_id
+         AND quoted_author.actor_id = quoted.author_actor_id
         JOIN actors actor ON actor.id = COALESCE(activity.actor_id, comment.author_actor_id)
         JOIN project_memberships membership
           ON membership.project_id = entry.project_id AND membership.actor_id = actor.id
@@ -3172,6 +3235,64 @@ const TIMELINE_SELECT: &str = r#"
          AND via_grant.show_via
         LEFT JOIN mcp_oauth_clients via_client ON via_client.id = via_grant.client_id
 "#;
+
+/// Whether a new comment on this task may answer `comment_id`: it's on the
+/// same task and not deleted.
+async fn comment_can_be_answered(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    work_item_id: Uuid,
+    comment_id: Uuid,
+) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM work_item_comments
+            WHERE project_id = $1 AND work_item_id = $2 AND id = $3
+              AND removed_at IS NULL
+        )
+        "#,
+    )
+    .bind(project_id)
+    .bind(work_item_id)
+    .bind(comment_id)
+    .fetch_one(&mut **transaction)
+    .await?)
+}
+
+async fn fetch_comment_reply(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    work_item_id: Uuid,
+    comment_id: Uuid,
+) -> Result<Option<CommentReplyView>, AppError> {
+    Ok(
+        sqlx::query_as::<_, (Uuid, Option<String>, Option<String>, bool)>(
+            r#"
+        SELECT quoted.id, author.display_name,
+               CASE WHEN quoted.removed_at IS NULL THEN left(quoted.plain_text, 300) END,
+               quoted.removed_at IS NOT NULL
+        FROM work_item_comments quoted
+        LEFT JOIN project_memberships author
+          ON author.project_id = quoted.project_id AND author.actor_id = quoted.author_actor_id
+        WHERE quoted.project_id = $1 AND quoted.work_item_id = $2 AND quoted.id = $3
+        "#,
+        )
+        .bind(project_id)
+        .bind(work_item_id)
+        .bind(comment_id)
+        .fetch_optional(&mut **transaction)
+        .await?
+        .map(
+            |(comment_id, author_name, text, removed)| CommentReplyView {
+                comment_id,
+                author_name,
+                text,
+                removed,
+            },
+        ),
+    )
+}
 
 async fn fetch_comment_actor_rows(
     transaction: &mut Transaction<'_, Postgres>,
@@ -3254,6 +3375,12 @@ fn hide_reference_details(comment: &mut WorkItemCommentView) {
     for reference in &mut comment.referenced_work_items {
         reference.title = String::new();
         reference.status_category = String::new();
+    }
+    // The comment it answers is someone else's words on the task: only its
+    // id stays, without who wrote it or what it says.
+    if let Some(quoted) = &mut comment.reply_to {
+        quoted.author_name = None;
+        quoted.text = None;
     }
 }
 
@@ -3393,6 +3520,12 @@ async fn timeline_entry_view(
                             }
                             _ => None,
                         },
+                    }),
+                    reply_to: row.reply_to_comment_id.map(|comment_id| CommentReplyView {
+                        comment_id,
+                        author_name: row.reply_to_author_name,
+                        text: row.reply_to_text,
+                        removed: row.reply_to_removed.unwrap_or(false),
                     }),
                 }),
             })
