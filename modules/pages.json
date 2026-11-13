@@ -41,7 +41,16 @@
       "one": "Page",
       "many": "Pages",
       "href": "/projects/{projectId}/pages/{id}",
-      "fields": [{ "id": "updatedAt", "label": "Edited", "type": "date" }]
+      "fields": [
+        {
+          "id": "tags",
+          "label": "Tags",
+          "type": "labels",
+          "tones": { "Guide": "agent", "Skill": "agent", "Not updated in months": "warning" }
+        },
+        { "id": "updatedAt", "label": "Edited", "type": "date" },
+        { "id": "excerpt", "label": "Start of the page", "type": "long_text" }
+      ]
     },
     {
       "kind": "decision",

@@ -20,7 +20,8 @@ function sampleValue(field: FieldDecl, index: number): FieldValue {
     case 'number':
       return (index * 3) % 13
     case 'date':
-      return new Date(Date.UTC(2026, 10, 4 + index * 5)).toISOString()
+      // A day, as due dates are; a moment would read "5 min ago".
+      return new Date(Date.UTC(2026, 10, 4 + index * 5)).toISOString().slice(0, 10)
     case 'checkbox':
       return index % 2 === 0
     case 'single_choice':

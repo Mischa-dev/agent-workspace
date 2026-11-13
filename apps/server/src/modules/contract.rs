@@ -213,6 +213,23 @@ pub struct FieldDecl {
     /// For choice fields.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<String>,
+    /// How a value reads as a chip (labels and choices), by value; the
+    /// rest read muted (AWD-98).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub tones: std::collections::BTreeMap<String, ChipTone>,
+}
+
+/// The tones a chip comes in, as the app draws them.
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ChipTone {
+    Muted,
+    Agent,
+    Warning,
+    Success,
+    Danger,
 }
 
 /// A kind of thing a module makes.

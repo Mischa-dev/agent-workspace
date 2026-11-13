@@ -197,12 +197,16 @@ piece a manifest declares, plus each kind of piece once, with made-up things
   sideways, or an axe error. A new module's pieces are checked the day it's
   added.
 
-Core pages don't use the pieces yet; they move onto them over time.
+Values read the same in every piece: labels are chips, in the tone a field's
+`tones` gives each value (muted otherwise); a moment reads "5 min ago" and a
+date names itself ("Edited 5 min ago"), with the person after it reading "by
+Ana"; long text sits under the title as a summary, two lines at most.
+
+Core pages move onto the pieces over time. The first is a project's Pages
+list (AWD-98), drawn as a list of `page` things.
 
 ## Next
 
-- **Server routes** of an off module answer "turned off" too, not only the
-  app and the tools.
 - **Built and connected modules** (AWD-90, M5) fill in the same manifest from
   data; packages (AWD-76) set modules, roles and layouts at once.
-- **Core pages on the pieces**, starting with the smallest lists.
+- **More core pages on the pieces**: the decisions list, Home's cards.

@@ -41,6 +41,9 @@ import {
 import { Markdown, MarkdownEditor } from '../ui/markdown'
 import type { Embed } from '../ui/markdown/parse'
 import { thingLink } from '../modules/references/thingLinks'
+import type { Piece, Thing, ThingDecl } from '../modules/contract'
+import { PieceView } from '../modules/pieces/Pieces'
+import pagesManifest from '../../../../modules/pages.json'
 import {
   createPage,
   getPage,
@@ -53,6 +56,7 @@ import {
   type Decision,
   type Page,
   type PageRevision,
+  type PageSummary,
   workspacePagesSpace,
 } from './api'
 import { discussionKey, getDiscussion, type CommentAnchor } from './discussion/api'
@@ -154,6 +158,25 @@ export function PagesPage() {
   return <ProjectFrame place={{ kind: 'pages' }}>{(project) => <PagesList projectId={project.id} space={project.workspaceSpace} />}</ProjectFrame>
 }
 
+/** A page as the pieces see it: its tags, when and by whom it was last edited, and how it starts. */
+const PAGE_THING = pagesManifest.things.find((thing) => thing.kind === 'page') as ThingDecl
+const PAGE_LIST: Piece = { type: 'list', thing: 'page', fields: ['tags', 'updatedAt', 'owner', 'excerpt'] }
+
+function pageThing(page: PageSummary, base: string): Thing {
+  const tags = [page.isGuide && 'Guide', page.skillDescription && 'Skill', page.stale && 'Not updated in months'].filter(
+    (tag): tag is string => Boolean(tag),
+  )
+  return {
+    id: page.id,
+    kind: 'page',
+    module: 'pages',
+    title: page.title,
+    href: `${base}/${encodeURIComponent(page.id)}`,
+    owner: page.updatedBy ? { id: page.updatedBy, name: page.updatedBy } : undefined,
+    fields: { tags, updatedAt: page.updatedAt, excerpt: excerptText(page.excerpt) },
+  }
+}
+
 function PagesList({ projectId, space }: { projectId: string; space?: boolean }) {
   const pages = useQuery({ queryKey: memoryKeys.pages(projectId), queryFn: () => listPages(projectId) })
   const [creating, setCreating] = useState<{ title: string } | null>(null)
@@ -198,30 +221,8 @@ function PagesList({ projectId, space }: { projectId: string; space?: boolean })
         </EmptyState>
       ) : null}
       {pages.data && pages.data.pages.length > 0 ? (
-        <RowList label="Pages">
-          {pages.data.pages.map((page) => {
-            const excerpt = excerptText(page.excerpt)
-            return (
-              <Row
-                key={page.id}
-                meta={
-                  <span className="aw-memory__meta">
-                    {page.isGuide ? <StatusChip tone="agent">Guide</StatusChip> : null}
-                    {page.skillDescription ? <StatusChip tone="agent">Skill</StatusChip> : null}
-                    {page.stale ? <StatusChip tone="warning">Not updated in months</StatusChip> : null}
-                    <span>
-                      Edited <When at={page.updatedAt} />
-                      {page.updatedBy ? ` by ${page.updatedBy}` : ''}
-                    </span>
-                  </span>
-                }
-                title={<Link to={`${base}/${encodeURIComponent(page.id)}`}>{page.title}</Link>}
-              >
-                {excerpt ? <p className="aw-memory__excerpt">{excerpt}</p> : null}
-              </Row>
-            )
-          })}
-        </RowList>
+        // AWD-98: drawn by the list piece every module uses.
+        <PieceView decl={PAGE_THING} label="Pages" piece={PAGE_LIST} things={pages.data.pages.map((page) => pageThing(page, base))} />
       ) : null}
       {creating ? <NewPageDialog hasGuide={hasGuide || Boolean(space)} initialTitle={creating.title} onClose={() => setCreating(null)} projectId={projectId} space={space} /> : null}
     </>
