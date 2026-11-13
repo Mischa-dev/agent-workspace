@@ -128,10 +128,14 @@ export function contains(selection: Selection, row: number, column: number) {
 
 /**
  * A body with a write's changed cells in place, or `null` when the screen
- * should read the sheet again (tabs or rows moved, or too many changed).
+ * should read the sheet again: tabs or rows moved, too many changed, or
+ * someone else wrote in between (each write moves the revision on by one),
+ * whose cells this screen hasn't seen.
  */
 export function patched(body: SheetBody, result: ChangeResult): SheetBody | null {
   if (result.tabsChanged || result.truncated) return null
+  // A screen already read past this write keeps what it read.
+  if (result.revision > body.sheet.revision + 1 || result.revision < body.sheet.revision) return null
   const tab = body.tabs.find((entry) => entry.id === body.tab)
   if (!tab) return null
   const cells = cellMap(body.cells)

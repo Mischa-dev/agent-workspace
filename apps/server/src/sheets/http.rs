@@ -369,7 +369,9 @@ async fn sheet_body(
             .collect(),
         tab: chosen_id,
         cells: cells.into_iter().map(CellBody::from).collect(),
-        can_edit: can_edit && !sheet.archived,
+        // Whether this person may change sheets: an archived one they can
+        // restore. The screen keeps its cells read only while archived.
+        can_edit,
     })
 }
 

@@ -229,6 +229,8 @@ export function SheetGrid({
 
   const onPointerDown = (event: PointerEvent<HTMLTableCellElement>, position: Position) => {
     if (event.button !== 0) return
+    // A click in the cell's own editor moves the caret or selects text.
+    if (event.target instanceof Element && event.target.closest('.aw-grid__editor')) return
     if (editing) commit()
     move(position, event.shiftKey)
     setDragging(true)
