@@ -22,7 +22,9 @@ const KIND_WORDS: Record<string, string> = {
  * shows nothing until there's something to list.
  */
 export default function ReferencedIn({ kind, id }: { kind: string; id: string }) {
-  const query = useQuery(thingQuery(kind, id))
+  // Its own key, under the thing's: realtime refetches every list like this
+  // when any message, page or task changes, as any of them may link here.
+  const query = useQuery({ ...thingQuery(kind, id), queryKey: ['things', kind, id, 'references'] })
   const references = (query.data?.links ?? []).filter((link) => link.kind === 'about' && link.direction === 'incoming')
   if (references.length === 0) return null
   return (

@@ -2,6 +2,7 @@ import { Suspense, lazy, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
+import { useProjectExperience, useWorkspaceExperience } from '../experience/layout'
 import { useProjects } from '../projects/hooks'
 import { Banner, Button, Dialog, EmptyState, IconButton, Row, RowList, SelectField, countLabel, describeError, formatFullDate, formatRelative } from '../ui'
 import {
@@ -40,6 +41,11 @@ export function LinksDialog({
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const { whiteboard, links } = detail
+  // A board in a project follows that project's layout, one across the
+  // workspace the workspace's.
+  const inProject = useProjectExperience(whiteboard.projectId)
+  const acrossWorkspace = useWorkspaceExperience(whiteboard.projectId ? null : whiteboard.organizationId)
+  const showsReferences = (whiteboard.projectId ? inProject : acrossWorkspace).shows('page.references')
   const linkable = (projects.data?.projects ?? []).filter(
     (candidate) =>
       !candidate.archivedAt &&
@@ -118,7 +124,7 @@ export function LinksDialog({
           </Button>
         </div>
       ) : null}
-      {open ? (
+      {open && showsReferences ? (
         <Suspense fallback={null}>
           <ReferencedIn id={whiteboard.id} kind="whiteboard" />
         </Suspense>

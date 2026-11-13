@@ -11,7 +11,6 @@ export function thingQuery(kind: string, id: string) {
     queryKey: ['things', kind, id],
     queryFn: () => requestJson<{ thing: Thing; links: ThingLink[] }>(`/api/v1/things/${encodeURIComponent(kind)}/${encodeURIComponent(id)}`),
     retry: (count: number, error: unknown) => !(isApiError(error) && error.status < 500) && count < 2,
-    staleTime: 30_000,
   }
 }
 
