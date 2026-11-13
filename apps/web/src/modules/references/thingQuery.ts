@@ -23,6 +23,7 @@ const ICONS = {
   channel: 'hash',
   conversation: 'message',
   project: 'board',
+  record: 'table',
 } as const
 
 export function thingIcon(kind: string) {

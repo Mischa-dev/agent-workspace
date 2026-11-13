@@ -3,7 +3,7 @@
 //! removed link still listed.
 
 use super::{
-    agent_interface::{Browser, send},
+    agent_interface::{Browser, connect_app, initialize, send, tool},
     mcp_admin::{Setup, create_project, setup},
     message_edits::{add_person, create_channel, direct_space, edit, say, text},
 };
@@ -255,4 +255,139 @@ async fn links_written_anywhere_show_where_the_reader_can_see_them() {
     .await
     .expect("stored references");
     assert_eq!(stored, 2, "the DM and the other task's description");
+}
+
+/// AWD-112: a collection record lists where it's linked from, and a link
+/// written in a DM stays out of sight for someone outside it.
+#[tokio::test]
+async fn a_record_lists_where_it_is_linked_from() {
+    let Some(setup) = setup("awd112_refs").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let direct = direct_space(&setup).await;
+    let (_bea, bea_browser) = add_person(&setup, &[&work, &direct], "bea").await;
+    let (carl, _) = add_person(&setup, &[&direct], "carl").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let created = tool(
+        app,
+        &codex,
+        &session,
+        "collection_write",
+        json!({"projectId": "WORK", "name": "Playtest notes", "fields": [{"name": "Notes", "type": "text"}]}),
+    )
+    .await;
+    assert_eq!(created["outcome"], "ok", "{created}");
+    let written = tool(
+        app,
+        &codex,
+        &session,
+        "record_write",
+        json!({
+            "projectId": "WORK",
+            "collection": "Playtest notes",
+            "records": [{"title": "Checkpoint skipped"}],
+            "clientRequestId": "awd112-record",
+        }),
+    )
+    .await;
+    assert_eq!(written["outcome"], "ok", "{written}");
+    let record = written["value"]["records"][0]["id"]
+        .as_str()
+        .expect("record")
+        .to_owned();
+    // The record's own address, as the app copies it.
+    let (status, opened) = send(
+        app,
+        setup.browser.request(
+            "GET",
+            &format!("/api/v1/things/record/{record}"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{opened}");
+    let href = opened["thing"]["href"]
+        .as_str()
+        .or_else(|| opened["href"].as_str())
+        .unwrap_or_else(|| panic!("{opened}"))
+        .to_owned();
+    assert!(href.contains(&format!("record={record}")), "{href}");
+    let link = format!("https://example.test{href}");
+
+    // A channel, a DM Bea isn't in, a page, a task's description and a
+    // comment on another task all link to it.
+    let general = create_channel(&setup, &work, "general").await;
+    say(
+        &setup,
+        &setup.browser,
+        &general,
+        "awd112-general",
+        text(&format!("Seen again: {link}")),
+    )
+    .await;
+    let (status, dm) = send(
+        app,
+        setup
+            .browser
+            .request("POST", "/api/v1/direct/dms", None, json!({"actorId": carl})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{dm}");
+    let dm = dm["conversation"]["id"].as_str().expect("dm").to_owned();
+    say(
+        &setup,
+        &setup.browser,
+        &dm,
+        "awd112-dm",
+        text(&format!("Between us: {href}")),
+    )
+    .await;
+    let page = create(
+        &setup,
+        &format!("/api/v1/projects/{work}/pages"),
+        "awd112-page",
+        json!({"title": "Playtest summary", "body": format!("See [the note]({link}).")}),
+    )
+    .await;
+    let described = create(
+        &setup,
+        &format!("/api/v1/projects/{work}/work-items"),
+        "awd112-described",
+        json!({"title": "Fix the checkpoint", "description": format!("Reported in {link}")}),
+    )
+    .await;
+    let commented = create(
+        &setup,
+        &format!("/api/v1/projects/{work}/work-items"),
+        "awd112-commented",
+        json!({"title": "Plan the next playtest"}),
+    )
+    .await;
+    create(
+        &setup,
+        &format!("/api/v1/projects/{work}/work-items/{commented}/comments"),
+        "awd112-comment",
+        json!({"content": {"version": 1, "nodes": [{"type": "text", "text": format!("Like {link}")}]}}),
+    )
+    .await;
+
+    let mut everywhere = vec![
+        ("channel".to_owned(), general.clone()),
+        ("conversation".to_owned(), dm.clone()),
+        ("page".to_owned(), page.clone()),
+        ("task".to_owned(), described.clone()),
+        ("task".to_owned(), commented.clone()),
+    ];
+    everywhere.sort();
+    assert_eq!(
+        referenced_in(&setup, &setup.browser, "record", &record).await,
+        everywhere
+    );
+    let for_bea = referenced_in(&setup, &bea_browser, "record", &record).await;
+    assert!(!for_bea.iter().any(|(_, id)| *id == dm), "{for_bea:?}");
+    assert_eq!(for_bea.len(), everywhere.len() - 1, "{for_bea:?}");
 }

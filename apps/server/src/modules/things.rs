@@ -483,9 +483,14 @@ fn links_sql(kind: &str) -> Option<&'static str> {
             FROM whiteboard_links WHERE target_kind = 'project' AND target_id = $1
             "#
         }
-        // What a record's link fields point at (AWD-110).
+        // What a record's link fields point at (AWD-110), and where it's
+        // linked from (AWD-112).
         "record" => {
             r#"
+            SELECT 'about' AS link, 'incoming' AS direction, thing_kind AS other_kind,
+                   thing_id AS other_id
+            FROM thing_references WHERE target_id = $1 AND target_kind = 'record'
+            UNION ALL
             SELECT 'about' AS link, 'outgoing' AS direction,
                    definition.config->>'target' AS other_kind,
                    (record.field_values->>definition.id::text)::uuid AS other_id
