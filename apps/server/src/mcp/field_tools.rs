@@ -142,7 +142,8 @@ pub(super) struct FieldWriteArguments {
     /// the tasks that have it) by passing its id; one left out is archived,
     /// never removed.
     pub options: Option<Vec<OptionInput>>,
-    /// For a new link field: "task" or "page".
+    /// For a new link field: "task", "page", or "record:<collection name or
+    /// id>" for the records of a collection in this project.
     pub target: Option<String>,
     /// Its place among the project's fields, 1 being first.
     pub position: Option<i32>,
@@ -266,11 +267,23 @@ pub(super) async fn field_write(
                     "archived and expectedVersion are for changing a field; pass field to change one.",
                 ));
             }
+            // Agents name the collection a record link points to.
+            let target = match arguments.target.as_deref() {
+                Some(target) => {
+                    match crate::collections::link_target(&mut *transaction, project_id, target)
+                        .await?
+                    {
+                        Ok(target) => Some(target),
+                        Err(message) => return Ok(ToolResult::invalid("target", message)),
+                    }
+                }
+                None => None,
+            };
             let config = match fields::normalize_config(
                 field_type,
                 None,
                 arguments.options.as_deref(),
-                arguments.target.as_deref(),
+                target.as_deref(),
             ) {
                 Ok(config) => config,
                 Err(problem) => return Ok(ToolResult::invalid(problem.field, problem.message)),
@@ -697,7 +710,7 @@ pub(super) async fn filter_clauses(
                             actor_id: principal.actor_id,
                             project_key,
                         },
-                        target,
+                        field,
                         value,
                     )
                     .await?
@@ -707,10 +720,10 @@ pub(super) async fn filter_clauses(
                             return Ok(Err(format!(
                                 "\"{}\" links to a {} in {project_key}; {} isn't one.",
                                 field.name,
-                                if target == LinkTarget::Page {
-                                    "page"
-                                } else {
-                                    "task"
+                                match target {
+                                    LinkTarget::Page => "page",
+                                    LinkTarget::Task => "task",
+                                    LinkTarget::Record => "record of its collection",
                                 },
                                 echo(value)
                             )));

@@ -28,7 +28,9 @@
       "pull_request.checks_passed",
       "pull_request.merged",
       "pull_request.closed",
-      "message.created"
+      "message.created",
+      "record.created",
+      "record.updated"
     ]
   },
   "notifications": ["automation", "automation_disabled"],

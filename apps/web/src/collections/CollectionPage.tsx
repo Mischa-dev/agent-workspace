@@ -26,6 +26,7 @@ import {
   updateCollection,
   updateView,
   useCollection,
+  useCollections,
   type CollectionBody,
   type CollectionView,
   type ViewConfig,
@@ -98,6 +99,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
   const searched = useDebouncedValue(search, 250)
   const [showArchived, setShowArchived] = useState(false)
   const [dialog, setDialog] = useState<Dialogs | null>(null)
+  const collections = useCollections(projectId)
   const [filtering, setFiltering] = useState<Filtering | null>(null)
   const [saving, setSaving] = useState(false)
   const [deleteProblem, setDeleteProblem] = useState<string | null>(null)
@@ -421,7 +423,13 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
         </Suspense>
       ) : null}
       {dialog?.kind === 'field' ? (
-        <FieldDialog field={dialog.field} onClose={() => setDialog(null)} records="records" scope={fieldScope(projectId, collectionId)} />
+        <FieldDialog
+          field={dialog.field}
+          linkable={(collections.data?.collections ?? []).filter((entry) => !entry.archived)}
+          onClose={() => setDialog(null)}
+          records="records"
+          scope={fieldScope(projectId, collectionId)}
+        />
       ) : null}
       {dialog?.kind === 'new-view' ? (
         <ViewNameDialog

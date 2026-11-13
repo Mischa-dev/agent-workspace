@@ -61,7 +61,8 @@ pub struct FieldWrite {
     /// by name; one left out is archived, never removed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub options: Option<Vec<OptionInput>>,
-    /// For a new link field: "task" or "page".
+    /// For a new link field: "task", "page", or "record:<collection>" for
+    /// the records of one of the project's collections, by name or ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
     /// Its place among the fields, 1 being first.
@@ -296,6 +297,14 @@ pub async fn describe(
     views: &[View],
 ) -> Result<CollectionDefinition, AppError> {
     let names = written_names(connection, project_id, definitions, views).await?;
+    let collection_names: HashMap<Uuid, String> = sqlx::query_as::<_, (Uuid, String)>(
+        "SELECT id, name FROM collections WHERE project_id = $1",
+    )
+    .bind(project_id)
+    .fetch_all(&mut *connection)
+    .await?
+    .into_iter()
+    .collect();
     Ok(CollectionDefinition {
         name: collection.name.clone(),
         description: collection.description.clone(),
@@ -320,12 +329,18 @@ pub async fn describe(
                         })
                         .collect()
                 }),
-                target: field.config.target.map(|target| {
-                    match target {
-                        LinkTarget::Task => "task",
-                        LinkTarget::Page => "page",
-                    }
-                    .to_owned()
+                target: field.config.target.map(|target| match target {
+                    // By name, so the definition reads the same in another
+                    // project that has a collection of that name.
+                    LinkTarget::Record => format!(
+                        "record:{}",
+                        field
+                            .config
+                            .collection
+                            .and_then(|id| collection_names.get(&id).cloned())
+                            .unwrap_or_default()
+                    ),
+                    other => other.written(None),
                 }),
                 ..FieldWrite::default()
             })
@@ -414,7 +429,7 @@ pub async fn clauses_from_written(
                 }
                 FieldType::Link => {
                     let target = field.config.target.unwrap_or(LinkTarget::Task);
-                    match work_item_fields::find_link(connection, project_id, writer, target, value)
+                    match work_item_fields::find_link(connection, project_id, writer, field, value)
                         .await?
                     {
                         Some((id, _)) => values.push(id.to_string()),
@@ -422,10 +437,10 @@ pub async fn clauses_from_written(
                             return Ok(Err(format!(
                                 "\"{}\" links to a {} in {}; {} isn't one.",
                                 field.name,
-                                if target == LinkTarget::Page {
-                                    "page"
-                                } else {
-                                    "task"
+                                match target {
+                                    LinkTarget::Page => "page",
+                                    LinkTarget::Task => "task",
+                                    LinkTarget::Record => "record of its collection",
                                 },
                                 writer.project_key,
                                 echo(value)
@@ -785,11 +800,24 @@ pub async fn apply(
                     ),
                 ));
             }
+            let target = match write.target.as_deref() {
+                Some(target) => {
+                    match crate::collections::link_target(&mut *connection, project_id, target)
+                        .await?
+                    {
+                        Ok(target) => Some(target),
+                        Err(message) => {
+                            return Ok(stop(ProblemKind::Invalid, format!("{at}.target"), message));
+                        }
+                    }
+                }
+                None => None,
+            };
             let config = match fields::normalize_config(
                 field_type,
                 None,
                 write.options.as_deref(),
-                write.target.as_deref(),
+                target.as_deref(),
             ) {
                 Ok(config) => config,
                 Err(problem) => {
@@ -854,9 +882,25 @@ pub async fn apply(
                 ),
             ));
         }
-        if let Some(written) = write.target.as_deref()
-            && LinkTarget::parse(written) != current.config.target
-        {
+        // Compared as stored: a record link's collection resolves by name or
+        // ID, so the definition collection_describe gives replays.
+        let retargeted = match write.target.as_deref() {
+            None => false,
+            Some(written) => {
+                match crate::collections::link_target(&mut *connection, project_id, written).await?
+                {
+                    Ok(resolved) => match resolved.split_once(':') {
+                        Some((kind, collection)) => {
+                            LinkTarget::parse(kind) != current.config.target
+                                || collection.parse::<Uuid>().ok() != current.config.collection
+                        }
+                        None => LinkTarget::parse(&resolved) != current.config.target,
+                    },
+                    Err(_) => true,
+                }
+            }
+        };
+        if retargeted {
             return Ok(stop(
                 ProblemKind::Invalid,
                 format!("{at}.target"),
@@ -1225,6 +1269,7 @@ mod tests {
                     archived: false,
                 }],
                 target: None,
+                collection: None,
             },
             position: 0,
             archived: false,

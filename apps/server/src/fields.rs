@@ -179,6 +179,9 @@ impl RecordKind {
 pub enum LinkTarget {
     Task,
     Page,
+    /// A record in one collection of the project (AWD-110), named by the
+    /// field's `collection`.
+    Record,
 }
 
 impl LinkTarget {
@@ -186,7 +189,19 @@ impl LinkTarget {
         match value.trim().to_ascii_lowercase().as_str() {
             "task" | "tasks" => Some(Self::Task),
             "page" | "pages" => Some(Self::Page),
+            "record" | "records" => Some(Self::Record),
             _ => None,
+        }
+    }
+
+    /// The target as `normalize_config` takes it: "task", "page", or
+    /// "record:<collection ID>".
+    pub fn written(self, collection: Option<Uuid>) -> String {
+        match (self, collection) {
+            (Self::Task, _) => "task".to_owned(),
+            (Self::Page, _) => "page".to_owned(),
+            (Self::Record, Some(collection)) => format!("record:{collection}"),
+            (Self::Record, None) => "record".to_owned(),
         }
     }
 }
@@ -212,6 +227,9 @@ pub struct FieldConfig {
     /// Link fields: what they link to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<LinkTarget>,
+    /// Link fields to records: the collection whose records they name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collection: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -330,9 +348,12 @@ pub struct FieldView {
     /// Choice fields: the options, in order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<OptionView>,
-    /// Link fields: "task" or "page".
+    /// Link fields: "task", "page" or "record".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<LinkTarget>,
+    /// Record links: the collection whose records it holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collection: Option<String>,
     /// 1 is first.
     pub position: i32,
     pub archived: bool,
@@ -368,6 +389,7 @@ impl From<&FieldDefinition> for FieldView {
                 })
                 .collect(),
             target: field.config.target,
+            collection: field.config.collection.map(|id| id.to_string()),
             position: field.position + 1,
             archived: field.archived,
             version: field.version,
@@ -458,20 +480,52 @@ pub fn normalize_config(
         if field_type != FieldType::Link {
             return Err(problem("target", "Only link fields have a target."));
         }
-        let target = LinkTarget::parse(target)
-            .ok_or_else(|| problem("target", "A link field links to \"task\" or \"page\"."))?;
-        if current.is_some_and(|current| current.target != Some(target)) {
+        // A record link names its collection: "record:<collection ID>".
+        let (kind, collection) = match target.split_once(':') {
+            Some((kind, collection)) => (kind, Some(collection.trim())),
+            None => (target, None),
+        };
+        let target = LinkTarget::parse(kind).ok_or_else(|| {
+            problem(
+                "target",
+                "A link field links to \"task\", \"page\" or a collection's records.",
+            )
+        })?;
+        let collection = match (target, collection) {
+            (LinkTarget::Record, Some(collection)) => {
+                Some(collection.parse::<Uuid>().map_err(|_| {
+                    problem("target", "Name the collection whose records it links to.")
+                })?)
+            }
+            (LinkTarget::Record, None) => {
+                return Err(problem(
+                    "target",
+                    "Name the collection whose records it links to.",
+                ));
+            }
+            (_, Some(_)) => {
+                return Err(problem(
+                    "target",
+                    "Only a link to records names a collection.",
+                ));
+            }
+            (_, None) => None,
+        };
+        if current.is_some_and(|current| {
+            current.target != Some(target) || current.collection != collection
+        }) {
             return Err(problem(
                 "target",
                 "A link field's target can't change. Add a new field instead.",
             ));
         }
         config.target = Some(target);
+        config.collection = collection;
     }
     if field_type == FieldType::Link && config.target.is_none() {
         return Err(problem(
             "target",
-            "Say what a link field links to: \"task\" or \"page\".",
+            "Say what a link field links to: \"task\", \"page\" or a collection's records.",
         ));
     }
     if let Some(options) = options {
@@ -789,6 +843,9 @@ pub fn normalize_value_keeping(
             Value::String(text) => Ok(Normalized::Link(text.trim().to_owned())),
             _ => Err(match field.config.target {
                 Some(LinkTarget::Page) => format!("\"{name}\" takes a page: its ID or link."),
+                Some(LinkTarget::Record) => {
+                    format!("\"{name}\" takes a record: its title, #number, ID or link.")
+                }
                 _ => format!("\"{name}\" takes a task: its key (such as AWD-12), ID or link."),
             }),
         },
@@ -1281,6 +1338,14 @@ pub fn sort_keys(field: &FieldDefinition, column: &str, project: &str) -> Vec<So
             "text",
         ),
         FieldType::Link => match field.config.target {
+            Some(LinkTarget::Record) => key(
+                format!(
+                    "left(lower(COALESCE((SELECT sort_record.title FROM collection_records sort_record \
+                     WHERE sort_record.project_id = {project} AND sort_record.id::text = {text}), '')), \
+                     {SORT_PREFIX_CHARACTERS})"
+                ),
+                "text",
+            ),
             Some(LinkTarget::Page) => key(
                 format!(
                     "left(lower(COALESCE((SELECT sort_page.title FROM project_pages sort_page \
@@ -1514,6 +1579,19 @@ pub async fn create(
     }
     if normalize_description(&new.description).as_deref() != Some(new.description.as_str()) {
         return Err(AppError::Validation("description"));
+    }
+    // A link to records names a live collection of this project (AWD-110).
+    if let Some(collection) = new.config.collection {
+        let found = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM collections WHERE project_id = $1 AND id = $2 AND archived_at IS NULL)",
+        )
+        .bind(project_id)
+        .bind(collection)
+        .fetch_one(&mut *connection)
+        .await?;
+        if !found {
+            return Err(AppError::NotFound("collection"));
+        }
     }
     let existing = list(&mut *connection, project_id, kind, false).await?;
     if let Some(taken) = existing

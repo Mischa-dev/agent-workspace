@@ -153,7 +153,7 @@ pub(super) async fn module_list(
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct ThingOpenArguments {
     /// What kind of thing: task, page, decision, whiteboard, thread,
-    /// channel, conversation or project.
+    /// channel, conversation, project or record (a collection's).
     pub kind: String,
     /// Its ID or link.
     pub id: String,
@@ -167,6 +167,15 @@ pub(super) struct ThingOpenValue {
     /// things you can see.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<ThingLink>,
+}
+
+/// The record a collection link opens (`…/collections/<id>?record=<id>`).
+fn record_in_link(value: &str) -> Option<Uuid> {
+    let (_, query) = value.trim().split_once('?')?;
+    query
+        .split(['&', '#'])
+        .find_map(|pair| pair.strip_prefix("record="))
+        .and_then(|id| id.parse::<Uuid>().ok())
 }
 
 pub(super) async fn thing_open(
@@ -184,7 +193,13 @@ pub(super) async fn thing_open(
             format!("Use one of {}.", modules::things::KINDS.join(", ")),
         );
     }
-    let Some(id) = parse_id(&arguments.id) else {
+    // A record's link is its collection's, with ?record=<id> (AWD-110).
+    let id = if kind == "record" {
+        record_in_link(&arguments.id).or_else(|| parse_id(&arguments.id))
+    } else {
+        parse_id(&arguments.id)
+    };
+    let Some(id) = id else {
         return ToolResult::invalid("id", "Pass the thing's ID or link.");
     };
     let result = async {

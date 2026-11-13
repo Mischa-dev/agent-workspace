@@ -1,5 +1,5 @@
 //! Full-text search across messages, thread outcomes, tasks, pages,
-//! decisions and file names. Results only ever include what the viewer can
+//! decisions, collection records and file names. Results only ever include what the viewer can
 //! see: messages, threads and message files go through
 //! `conversation_visible_to`, and a decision from a private conversation
 //! stays as private as it.
@@ -33,15 +33,18 @@ pub enum SearchKind {
     Tasks,
     Pages,
     Decisions,
+    /// A collection's records (AWD-110).
+    Records,
     Files,
 }
 
 impl SearchKind {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Decisions,
         Self::Pages,
         Self::Threads,
         Self::Tasks,
+        Self::Records,
         Self::Messages,
         Self::Files,
     ];
@@ -54,6 +57,7 @@ impl SearchKind {
             Self::Tasks => "tasks",
             Self::Pages => "pages",
             Self::Decisions => "decisions",
+            Self::Records => "records",
             Self::Files => "files",
         }
     }
@@ -65,6 +69,7 @@ impl SearchKind {
             "task" | "tasks" => Some(Self::Tasks),
             "page" | "pages" => Some(Self::Pages),
             "decision" | "decisions" => Some(Self::Decisions),
+            "record" | "records" => Some(Self::Records),
             "file" | "files" => Some(Self::Files),
             _ => None,
         }
@@ -148,6 +153,7 @@ pub async fn search(
             SearchKind::Messages | SearchKind::Threads => modules.with_conversations(projects),
             SearchKind::Tasks => task_projects.clone(),
             SearchKind::Pages | SearchKind::Decisions => modules.with(projects, "pages"),
+            SearchKind::Records => modules.with(projects, "collections"),
             // Files hang off messages and tasks.
             SearchKind::Files => modules.keep(projects, |set, direct| {
                 set.allows_conversations_in(if direct { "direct" } else { "standard" })
@@ -164,6 +170,7 @@ pub async fn search(
             SearchKind::Tasks => TASKS_SQL,
             SearchKind::Pages => PAGES_SQL,
             SearchKind::Decisions => DECISIONS_SQL,
+            SearchKind::Records => RECORDS_SQL,
             SearchKind::Files => FILES_SQL,
         };
         let mut query = sqlx::query_as::<_, SearchHit>(sql)
@@ -350,6 +357,40 @@ const DECISIONS_SQL: &str = r#"
       AND ($5::uuid IS NULL OR decision.decided_by_actor_id = $5)
       AND ($6::timestamptz IS NULL OR decision.created_at >= $6)
       AND ($7::timestamptz IS NULL OR decision.created_at <= $7)
+    ORDER BY rank DESC
+    LIMIT $8
+"#;
+
+/// A collection's records (AWD-110), by title and text values, in
+/// collections that aren't archived. The author filter is who changed it last.
+const RECORDS_SQL: &str = r#"
+    WITH query AS (SELECT websearch_to_tsquery('english', $3) AS q)
+    SELECT 'record' AS kind, record.id,
+           CASE WHEN record.title = '' THEN 'Untitled #' || record.number::text
+                ELSE record.title END AS title,
+           NULL::text AS status,
+           'In ' || collection.name AS snippet,
+           record.project_id, project.name AS project_name,
+           NULL::uuid AS conversation_id, NULL::text AS conversation_name,
+           editor.display_name AS author, record.updated_at::text AS at,
+           '/projects/' || record.project_id::text || '/collections/' ||
+               record.collection_id::text || '?record=' || record.id::text AS path,
+           (ts_rank(record.search_vector, query.q) * 1.2)::real AS rank
+    FROM query, collection_records record
+    JOIN collections collection
+      ON collection.project_id = record.project_id AND collection.id = record.collection_id
+    JOIN projects project ON project.id = record.project_id
+    LEFT JOIN project_memberships editor
+      ON editor.project_id = record.project_id AND editor.actor_id = record.updated_by_actor_id
+    WHERE record.search_vector @@ query.q
+      AND record.project_id = ANY($2)
+      AND record.archived_at IS NULL
+      AND collection.archived_at IS NULL
+      AND $4::uuid IS NULL
+      AND ($5::uuid IS NULL OR record.updated_by_actor_id = $5)
+      AND ($6::timestamptz IS NULL OR record.updated_at >= $6)
+      AND ($7::timestamptz IS NULL OR record.created_at <= $7)
+      AND $1::uuid IS NOT NULL
     ORDER BY rank DESC
     LIMIT $8
 "#;

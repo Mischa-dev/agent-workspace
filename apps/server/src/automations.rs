@@ -158,6 +158,21 @@ pub enum Trigger {
         /// An IANA time zone such as Europe/London.
         timezone: String,
     },
+    /// A record is added to a collection (AWD-110), or to this one. Takes no
+    /// task conditions; its actions notify or post a message.
+    RecordCreated {
+        #[serde(default)]
+        #[schemars(with = "Option<String>")]
+        collection_id: Option<Uuid>,
+    },
+    /// A record changes in a collection, or in this one: its values, title,
+    /// or being archived or restored. Takes no task conditions; its actions
+    /// notify or post a message.
+    RecordChanged {
+        #[serde(default)]
+        #[schemars(with = "Option<String>")]
+        collection_id: Option<Uuid>,
+    },
     /// One of the maker's provider accounts resets soon with capacity left
     /// (the capacity alert's "resets soon" rule). Launches use that account.
     CapacityWindow {
@@ -183,6 +198,8 @@ pub const TRIGGER_KINDS: &[&str] = &[
     "run_finished",
     "pull_request_checks_failed",
     "message_posted",
+    "record_created",
+    "record_changed",
     "schedule",
     "capacity_window",
 ];
@@ -198,9 +215,19 @@ impl Trigger {
             Self::RunFinished { .. } => "run_finished",
             Self::PullRequestChecksFailed {} => "pull_request_checks_failed",
             Self::MessagePosted { .. } => "message_posted",
+            Self::RecordCreated { .. } => "record_created",
+            Self::RecordChanged { .. } => "record_changed",
             Self::Schedule { .. } => "schedule",
             Self::CapacityWindow { .. } => "capacity_window",
         }
+    }
+
+    /// Fired by a collection's records, not tasks (AWD-110).
+    fn about_records(&self) -> bool {
+        matches!(
+            self,
+            Self::RecordCreated { .. } | Self::RecordChanged { .. }
+        )
     }
 
     /// Schedules and capacity windows aren't about one task: their
@@ -294,7 +321,8 @@ pub enum Recipients {
 
 /// What a rule does. Text may use {{task.key}}, {{task.title}},
 /// {{task.url}}, {{task.status}}, {{run.state}}, {{pr.number}},
-/// {{pr.title}}, {{pr.url}}, {{rule.name}} and {{event}}.
+/// {{pr.title}}, {{pr.url}}, {{record.title}}, {{record.url}},
+/// {{collection.name}}, {{rule.name}} and {{event}}.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(
     tag = "kind",
@@ -443,6 +471,13 @@ fn check_shape(
             }
         }
         Trigger::TaskCreated {} | Trigger::PullRequestChecksFailed {} => {}
+        Trigger::RecordCreated { .. } | Trigger::RecordChanged { .. } => {
+            if !conditions.is_empty() {
+                return Err(AppError::Invalid(
+                    "a record rule has no task conditions: name its collection instead",
+                ));
+            }
+        }
         Trigger::TaskMatches {} => {
             if conditions.is_empty() {
                 return Err(AppError::Invalid(
@@ -497,6 +532,20 @@ fn check_shape(
         ) && matches!(trigger, Trigger::MessagePosted { .. })
         {
             return Err(AppError::Invalid("a message has no assignee to notify"));
+        }
+        if trigger.about_records()
+            && (needs_tasks
+                || matches!(
+                    action,
+                    Action::Notify {
+                        recipients: Recipients::Assignee,
+                        ..
+                    }
+                ))
+        {
+            return Err(AppError::Invalid(
+                "a record rule notifies its maker or the project's admins, or posts a message",
+            ));
         }
     }
     Ok(())
@@ -790,6 +839,24 @@ async fn check_references(
     }
     if !conditions.filters.is_empty() {
         views::check_view_query(pool, project_id, maker, &conditions.filters).await?;
+    }
+    if let Trigger::RecordCreated {
+        collection_id: Some(id),
+    }
+    | Trigger::RecordChanged {
+        collection_id: Some(id),
+    } = trigger
+    {
+        let found = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM collections WHERE project_id = $1 AND id = $2 AND archived_at IS NULL)",
+        )
+        .bind(project_id)
+        .bind(id)
+        .fetch_one(pool)
+        .await?;
+        if !found {
+            return Err(AppError::NotFound("collection"));
+        }
     }
     let mut conversations = Vec::new();
     if let Trigger::MessagePosted {
@@ -1343,6 +1410,8 @@ fn kinds_for(event_type: &str) -> &'static [&'static str] {
         "run.finished" => &["run_finished"],
         "pull_request.checks_failed" => &["pull_request_checks_failed"],
         "message.created" => &["message_posted"],
+        "record.created" => &["record_created"],
+        "record.updated" => &["record_changed"],
         _ => &[],
     }
 }
@@ -1476,6 +1545,9 @@ pub async fn on_event(state: &AppState, event: &Event) -> Result<usize, AppError
                         Some(text) => message_contains(pool, subject, text).await?,
                         None => true,
                     }
+            }
+            Trigger::RecordCreated { collection_id } | Trigger::RecordChanged { collection_id } => {
+                collection_id.is_none_or(|only| subject.collection_id == Some(only))
             }
             Trigger::Schedule { .. } | Trigger::CapacityWindow { .. } => false,
         };
@@ -2124,13 +2196,18 @@ impl Context {
         // "run now" in the browser or through automation_write) comes through
         // here: nothing about a task, pull request or thread is loaded unless
         // the rule's maker may see it now, by their role ("see tasks", "see
-        // code") and the thread's members. What the firing is about, when
+        // code") and the thread's members, nor a record of an archived
+        // collection. What the firing is about, when
         // they can't, skips it (None). A rule made through an app is also
         // held to the app's limit (`fire`, `limit_hides`).
         let about = Subject {
             work_item_id: subject.work_item_id,
             pull_request_id: subject.pull_request_id,
             conversation_id: subject.conversation_id,
+            // A record whose collection was archived since the event queued
+            // fires nothing, as webhooks don't deliver it.
+            record_id: subject.record_id,
+            collection_id: subject.collection_id,
             ..Subject::default()
         };
         if !crate::webhooks::visible_to(&state.pool, rule.owner_actor_id, rule.project_id, &about)
@@ -2188,6 +2265,32 @@ impl Context {
                 .get("assigneeActorId")
                 .and_then(Value::as_str)
                 .and_then(|value| value.parse().ok());
+        }
+        if let (Some(record_id), Some(collection_id)) = (subject.record_id, subject.collection_id)
+            && let Some(record) =
+                crate::webhooks::record_data(state, rule.project_id, collection_id, record_id)
+                    .await?
+        {
+            let title = record["title"].as_str().unwrap_or_default();
+            variables.push((
+                "record.title",
+                if title.is_empty() {
+                    format!("Untitled #{}", record["number"])
+                } else {
+                    title.to_owned()
+                },
+            ));
+            variables.push((
+                "record.url",
+                record["url"].as_str().unwrap_or_default().to_owned(),
+            ));
+            variables.push((
+                "collection.name",
+                record["collection"]["name"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+            ));
         }
         if let Some(run_state) = &subject.state
             && subject.agent_run_id.is_some()
