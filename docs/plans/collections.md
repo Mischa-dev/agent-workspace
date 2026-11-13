@@ -224,7 +224,7 @@ records.
 
 - **Search.** `collection_records.search_vector` is generated from the title
   (weight A) and every string value (weight B), with a GIN index (migration
-  `20261113080000_collection_record_search.sql`). `search` has a `records`
+  `20261113082000_collection_record_search.sql`). `search` has a `records`
   kind, shown where Collections is on, never from an archived record or
   collection. A hit's path opens the record beside its collection.
 - **Things.** `record` is a thing kind (`modules/things.rs`), declared by the
