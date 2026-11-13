@@ -32,12 +32,43 @@ as a live block in the page editor (AWD-53).
   brings it back. A collection holds at most 100,000 records. Every change
   is in `collection_record_history`, with who made it, the app they acted
   through and each value before and after, as it read then.
-- A view is a way to look at a collection: a type (only `table` so far),
-  filters, up to three sort keys, a field to group by, and columns (order,
-  width, hidden). A collection keeps at least one view and at most 30. A view
+- A view is a way to look at a collection: a type (`table`, `board`,
+  `gallery` or `calendar`; AWD-110), filters, up to three sort keys, a field
+  to group by, columns (order, width, hidden) and, for a calendar, a date
+  field. A collection keeps at least one view and at most 30. A view
   stores field IDs, so renaming a field never breaks it; a view that names an
   archived field reads as if that part weren't there until the field comes
   back. "me" in a person filter stays "me", and means whoever reads it.
+
+## Boards, galleries and calendars (AWD-110)
+
+The same view settings drive every layout; a view's type doesn't change once
+made (add another view instead).
+
+- **Board:** a column for each value of the field the view groups by (a
+  single choice's options in order, a person, or a checkbox's checked and
+  not), then "No value". A new board written without `groupBy` takes the
+  collection's first field that can group, and is refused when there's
+  none. Each column reads its own records: the records route's `group`
+  parameter keeps only one group's records (a key from `groups`, such as an
+  option's ID or `none`), worked out the same way as the group counts, so
+  a column pages on its own with a cursor no other column takes. Dragging
+  a card to another column, or its menu's Move to (the keyboard's way),
+  sets that value; the card shows there at once and saves like any edit.
+- **Gallery:** a card for each record, in the view's order, with the title
+  and the view's shown fields that have a value. The grouping isn't used.
+- **Calendar:** a month (six weeks from a Monday), each record on the day
+  its `dateField` holds. A new calendar without one takes the first date
+  field. The records route's `dateField`, `from` and `to` (YYYY-MM-DD, `to`
+  not included, at most 62 days) narrow the view's records to the weeks on
+  screen, on top of its filters. A day's + adds a record on that day;
+  dragging a record to another day changes its date. On a phone the month
+  is a list of the days that have records. The month is in the address
+  (`?month=2026-11`).
+
+Agents write layouts with `collection_write` (`type`, `groupBy`,
+`dateField`), and `collection_describe` gives them back by name, so a
+definition carries them to another project.
 
 ## Who does what
 

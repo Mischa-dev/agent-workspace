@@ -11,6 +11,7 @@
 use std::collections::HashSet;
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, Postgres, QueryBuilder};
@@ -19,7 +20,7 @@ use uuid::Uuid;
 use super::views::{Direction, SortBy, ViewConfig};
 use crate::{
     error::AppError,
-    fields::{self, FieldClause, FieldDefinition, FieldType, GroupSql},
+    fields::{self, FieldClause, FieldDefinition, FieldOp, FieldType, GroupSql},
 };
 
 pub const DEFAULT_LIMIT: i64 = 50;
@@ -85,6 +86,9 @@ pub struct Spec {
     pub archived: Archived,
     /// Only these records.
     pub only: Option<Vec<Uuid>>,
+    /// Only records in this group of `group` (a key `group_counts` gives,
+    /// such as an option's ID or "none"): one column of a board.
+    pub in_group: Option<String>,
     /// The collection's text, web address and choice fields, for `words`.
     search_fields: SearchFields,
 }
@@ -235,6 +239,10 @@ impl Spec {
             hasher.update(format!("{:?}", group.config));
         }
         hasher.update(self.archived.as_str());
+        if let Some(key) = &self.in_group {
+            hasher.update(b"in-group:");
+            hasher.update(key.as_bytes());
+        }
         if let Some(only) = &self.only {
             for id in only {
                 hasher.update(id.as_bytes());
@@ -264,6 +272,17 @@ impl Spec {
             builder.push(")");
         }
         fields::push_clauses(builder, "record.field_values", &self.clauses);
+        if let (Some(key), Some(group)) = (&self.in_group, self.group.as_ref().and_then(group_sql))
+        {
+            // The group's key worked out for this record alone, so the page,
+            // the total and the group counts read it the same way.
+            builder.push(format!(
+                " AND (SELECT {key} FROM (SELECT record.field_values, record.project_id) record {join}) = ",
+                key = group.key,
+                join = group.join,
+            ));
+            builder.push_bind(key.clone());
+        }
         for word in &self.words {
             let escaped = word
                 .replace('\\', "\\\\")
@@ -329,6 +348,54 @@ pub fn search_words(value: &str) -> Option<Vec<String>> {
         .map(str::to_owned)
         .collect::<Vec<_>>();
     (words.len() <= MAX_SEARCH_WORDS).then_some(words)
+}
+
+/// The longest group key a query takes: an option's or person's ID, or
+/// "none" or "true".
+pub const MAX_GROUP_KEY_LENGTH: usize = 64;
+
+/// The days of a calendar's range at most: six weeks and a bit.
+pub const MAX_RANGE_DAYS: i64 = 62;
+
+/// The filters for records whose `field` (an active date field) is from
+/// `from` up to, not including, `to`, both YYYY-MM-DD.
+pub fn date_range(
+    definitions: &[FieldDefinition],
+    field: Uuid,
+    from: &str,
+    to: &str,
+) -> Result<Vec<FieldClause>, String> {
+    let Some(definition) = definitions
+        .iter()
+        .find(|definition| definition.id == field && !definition.archived)
+    else {
+        return Err("The date field names a field this collection doesn't have.".to_owned());
+    };
+    if definition.field_type != FieldType::Date {
+        return Err(format!("\"{}\" isn't a date field.", definition.name));
+    }
+    let parse = |value: &str| NaiveDate::parse_from_str(value.trim(), "%Y-%m-%d").ok();
+    let (Some(start), Some(end)) = (parse(from), parse(to)) else {
+        return Err("from and to are dates, YYYY-MM-DD.".to_owned());
+    };
+    let days = (end - start).num_days();
+    if !(1..=MAX_RANGE_DAYS).contains(&days) {
+        return Err(format!(
+            "A date range runs forward, at most {MAX_RANGE_DAYS} days."
+        ));
+    }
+    Ok(vec![
+        FieldClause {
+            field,
+            op: FieldOp::Gte,
+            values: vec![start.format("%Y-%m-%d").to_string()],
+        },
+        FieldClause {
+            field,
+            op: FieldOp::Lt,
+            values: vec![end.format("%Y-%m-%d").to_string()],
+        },
+    ])
 }
 
 fn group_sql(field: &FieldDefinition) -> Option<GroupSql> {

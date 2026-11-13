@@ -63,6 +63,31 @@ async function seed(context: BrowserContext, page: Page) {
   return { projectId, collectionId }
 }
 
+/** A board, a gallery and a calendar of the collection (AWD-110), made once. */
+async function layoutViews(context: BrowserContext, page: Page, projectId: string, collectionId: string) {
+  const { request, headers } = await writer(context, page)
+  const base = `/api/v1/projects/${projectId}/collections/${collectionId}`
+  const body = (await (await request.get(base)).json()) as { views: Array<{ id: string; name: string }>; fields: Array<{ id: string; name: string }> }
+  const fieldId = (name: string) => body.fields.find((field) => field.name === name)?.id
+  const wanted = [
+    { name: 'Triage', type: 'board', config: { groupBy: fieldId('Severity') } },
+    { name: 'Cards', type: 'gallery', config: {} },
+    { name: 'When seen', type: 'calendar', config: { dateField: fieldId('Seen on') } },
+  ]
+  const ids: Record<string, string> = {}
+  for (const view of wanted) {
+    const found = body.views.find((entry) => entry.name === view.name)
+    if (found) {
+      ids[view.type] = found.id
+      continue
+    }
+    const made = await request.post(`${base}/views`, { headers: headers(`collection-view-${view.type}`), data: view })
+    expect(made.ok(), await made.text()).toBe(true)
+    ids[view.type] = ((await made.json()) as { id: string }).id
+  }
+  return ids as { board: string; gallery: string; calendar: string }
+}
+
 const NOTES = 'Playtest notes'
 
 /** A page that shows the collection as an embed, the way an agent writes one; made once. */
@@ -182,6 +207,79 @@ test('a page shows the collection live, and the editor adds another view of it',
   expect(errors, 'uncaught errors on the page').toEqual([])
 })
 
+test('a board moves a record between columns, and a calendar shows and adds records by date', async ({ page, context }) => {
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  await page.setViewportSize({ width: 1440, height: 900 })
+  const { projectId, collectionId } = await seed(context, page)
+  const views = await layoutViews(context, page, projectId, collectionId)
+  const { request } = await writer(context, page)
+  const severity = async (title: string) => {
+    const found = (await (await request.get(`/api/v1/projects/${projectId}/collections/${collectionId}/records?search=${encodeURIComponent(title)}`)).json()) as {
+      records: Array<{ title: string; values: Record<string, unknown> }>
+    }
+    return found.records.find((record) => record.title === title)
+  }
+
+  // A column for every severity, empty ones too, and No value last.
+  await page.goto(`/projects/${projectId}/collections/${collectionId}?view=${views.board}`)
+  const column = (name: string) => page.getByRole('region', { name, exact: true })
+  for (const name of ['Low', 'Medium', 'High', 'No value']) await expect(column(name)).toBeVisible()
+  const boss = 'Boss fight: unclear where to hit'
+  await expect(column('Medium').getByRole('link', { name: boss })).toBeVisible()
+
+  // The card's menu moves it, and it shows in the new column at once.
+  await column('Medium').getByRole('button', { name: `Move ${boss}` }).click()
+  await page.getByRole('menuitemcheckbox', { name: 'High' }).or(page.getByRole('menuitem', { name: 'High' })).click()
+  await expect(column('High').getByRole('link', { name: boss })).toBeVisible()
+  await expect(column('Medium').getByRole('link', { name: boss })).toBeHidden()
+  await expect.poll(async () => JSON.stringify((await severity(boss))?.values)).not.toContain('"Medium"')
+
+  // A drag takes it back.
+  const card = column('High').locator('[data-drag-id]').filter({ hasText: boss })
+  const from = await card.boundingBox()
+  const to = await column('Medium').boundingBox()
+  if (!from || !to) throw new Error('no boxes')
+  await page.mouse.move(from.x + 40, from.y + from.height - 6)
+  await page.mouse.down()
+  await page.mouse.move(from.x + 60, from.y + from.height, { steps: 4 })
+  await page.mouse.move(to.x + to.width / 2, to.y + to.height - 20, { steps: 12 })
+  await page.mouse.up()
+  await expect(column('Medium').getByRole('link', { name: boss })).toBeVisible()
+  await expect(column('High').getByRole('link', { name: boss })).toBeHidden()
+  await page.screenshot({ path: path.join(screenshotDir, 'collections-board-flow-desktop.png'), animations: 'disabled' })
+
+  // The gallery has a card for each record.
+  await page.getByRole('link', { name: 'Cards', exact: true }).click()
+  await expect(page.locator('.aw-gallery__card').filter({ hasText: boss })).toBeVisible()
+
+  // The calendar shows a record on its day, and a day's + adds one there.
+  await page.goto(`/projects/${projectId}/collections/${collectionId}?view=${views.calendar}&month=2026-11`)
+  const day = (label: RegExp) => page.getByRole('group', { name: label })
+  await expect(day(/November 2\b/).getByRole('link', { name: 'Jump feels floaty on the second level' })).toBeVisible()
+  const before = await page.locator('.aw-ccal__record').count()
+  await day(/November 10\b/).hover()
+  await page.getByRole('button', { name: /New record on November 10/ }).click()
+  await expect(page.getByRole('complementary')).toBeVisible()
+  await expect(day(/November 10\b/).locator('.aw-ccal__record')).toHaveCount(1)
+  expect(await page.locator('.aw-ccal__record').count()).toBe(before + 1)
+  await page.screenshot({ path: path.join(screenshotDir, 'collections-calendar-flow-desktop.png'), animations: 'disabled' })
+
+  // Archive the record it added, for the screenshots after this.
+  const { headers } = await writer(context, page)
+  const month = (await (
+    await request.get(`/api/v1/projects/${projectId}/collections/${collectionId}/records?view=${views.calendar}&limit=200`)
+  ).json()) as { records: Array<{ id: string; title: string; version: number }> }
+  for (const record of month.records.filter((entry) => entry.title === '')) {
+    const archived = await request.patch(`/api/v1/projects/${projectId}/collections/${collectionId}/records/${record.id}`, {
+      headers: headers(`collection-record-archive-${record.id}`),
+      data: { expectedVersion: record.version, archived: true },
+    })
+    expect(archived.ok(), await archived.text()).toBe(true)
+  }
+  expect(errors, 'uncaught errors on the page').toEqual([])
+})
+
 const schemes = [
   { scheme: 'light', theme: 'daylight' },
   { scheme: 'dark', theme: 'midnight' },
@@ -213,6 +311,7 @@ for (const { scheme, theme } of schemes) {
         const records = await (await page.request.get(`/api/v1/projects/${projectId}/collections/${collectionId}/records?search=floaty`)).json()
         const recordId = (records as { records: Array<{ id: string }> }).records[0].id
         const pageId = await notesPage(context, page, projectId, collectionId)
+        const views = await layoutViews(context, page, projectId, collectionId)
         const shots = [
           { name: 'list', path: `/projects/${projectId}/collections`, ready: () => expect(page.getByRole('link', { name: NAME })).toBeVisible() },
           {
@@ -224,6 +323,21 @@ for (const { scheme, theme } of schemes) {
             name: 'record',
             path: `/projects/${projectId}/collections/${collectionId}?record=${recordId}`,
             ready: () => expect(page.getByRole('heading', { name: 'History' })).toBeVisible(),
+          },
+          {
+            name: 'board',
+            path: `/projects/${projectId}/collections/${collectionId}?view=${views.board}`,
+            ready: () => expect(page.getByRole('region', { name: 'High', exact: true }).getByText('Jump feels floaty on the second level')).toBeVisible(),
+          },
+          {
+            name: 'gallery',
+            path: `/projects/${projectId}/collections/${collectionId}?view=${views.gallery}`,
+            ready: () => expect(page.locator('.aw-gallery__card').first()).toBeVisible(),
+          },
+          {
+            name: 'calendar',
+            path: `/projects/${projectId}/collections/${collectionId}?view=${views.calendar}&month=2026-11`,
+            ready: () => expect(page.getByRole('link', { name: 'Jump feels floaty on the second level' }).first()).toBeVisible(),
           },
           {
             name: 'page',

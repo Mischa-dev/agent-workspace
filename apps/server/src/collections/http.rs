@@ -1056,13 +1056,12 @@ async fn create_view(
     }
     let definitions =
         super::field_definitions(&mut *write.transaction, project_id, collection_id, true).await?;
-    if let Some(refused) = checked_config(
-        &mut write.transaction,
-        project_id,
-        &request.config,
-        &definitions,
-    )
-    .await?
+    let config = match request.config.clone().for_type(view_type, &definitions) {
+        Ok(config) => config,
+        Err(message) => return Ok(invalid("config", message)),
+    };
+    if let Some(refused) =
+        checked_config(&mut write.transaction, project_id, &config, &definitions).await?
     {
         return Ok(refused);
     }
@@ -1074,7 +1073,7 @@ async fn create_view(
         NewView {
             name,
             view_type,
-            config: request.config.clone(),
+            config,
             position: request.position,
         },
     )
@@ -1287,6 +1286,14 @@ struct RecordsQuery {
     sort: Option<String>,
     /// A field's ID, or "" for no grouping.
     group_by: Option<String>,
+    /// Only records in this group (a key from `groups`): a board's column.
+    group: Option<String>,
+    /// A date field's ID, with `from` and `to`: only records whose date is
+    /// from `from` up to (not including) `to`, both YYYY-MM-DD. A
+    /// calendar's month.
+    date_field: Option<Uuid>,
+    from: Option<String>,
+    to: Option<String>,
     search: Option<String>,
     archived: Option<String>,
     cursor: Option<String>,
@@ -1391,6 +1398,33 @@ async fn list_records(
     let mut spec =
         Spec::from_config(&config, &definitions, principal.actor_id).searching(words, &definitions);
     spec.archived = archived;
+    if let Some(group) = query.group {
+        if spec.group.is_none() {
+            return Ok(invalid("group", "A group is read within a grouping."));
+        }
+        if group.is_empty() || group.len() > query::MAX_GROUP_KEY_LENGTH {
+            return Ok(invalid(
+                "group",
+                "Name a group by a key the groups list gives.",
+            ));
+        }
+        spec.in_group = Some(group);
+    }
+    match (query.date_field, query.from.as_deref(), query.to.as_deref()) {
+        (None, None, None) => {}
+        (Some(field), Some(from), Some(to)) => {
+            match query::date_range(&definitions, field, from, to) {
+                Ok(clauses) => spec.clauses.extend(clauses),
+                Err(message) => return Ok(invalid("dateField", message)),
+            }
+        }
+        _ => {
+            return Ok(invalid(
+                "dateField",
+                "A date range takes dateField, from and to together.",
+            ));
+        }
+    }
     let limit = query.limit.unwrap_or(query::DEFAULT_LIMIT);
     let Ok(page) = query::page(
         &mut *connection,

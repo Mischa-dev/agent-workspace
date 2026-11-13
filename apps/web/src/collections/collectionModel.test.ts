@@ -3,7 +3,22 @@ import { describe, expect, it } from 'vitest'
 import type { FieldDefinition } from '../fields/fieldModel'
 import { formatDateLabel } from '../ui/dateModel'
 import type { CollectionRecord, ViewConfig } from './api'
-import { activeConfig, columnOrder, historyValue, sameConfig, sortText, tableItems, viewColumns, withColumnHidden, withValues } from './collectionModel'
+import {
+  activeConfig,
+  boardColumns,
+  boardKey,
+  boardValue,
+  calendarMonth,
+  columnOrder,
+  historyValue,
+  recordsByDay,
+  sameConfig,
+  sortText,
+  tableItems,
+  viewColumns,
+  withColumnHidden,
+  withValues,
+} from './collectionModel'
 
 const field = (id: string, type: FieldDefinition['type'], position: number, archived = false): FieldDefinition => ({
   id,
@@ -17,7 +32,7 @@ const field = (id: string, type: FieldDefinition['type'], position: number, arch
   version: 1,
 })
 
-const config = (change: Partial<ViewConfig> = {}): ViewConfig => ({ filters: [], sort: [], groupBy: null, columns: [], titleWidth: null, ...change })
+const config = (change: Partial<ViewConfig> = {}): ViewConfig => ({ filters: [], sort: [], groupBy: null, columns: [], titleWidth: null, dateField: null, ...change })
 
 const record = (id: string, group: string | null = null): CollectionRecord => ({
   id,
@@ -142,5 +157,74 @@ describe('values', () => {
     expect(sortText({ field: 'n', direction: 'desc' }, fields, 'Name')).toBe('N, 9 to 1')
     expect(sortText({ field: 'c', direction: 'asc' }, fields, 'Name')).toBe('C, checked first')
     expect(sortText({ field: 's', direction: 'asc' }, fields, 'Name')).toBe('S, in option order')
+  })
+})
+
+describe('a board’s columns', () => {
+  const stage: FieldDefinition = {
+    ...field('stage', 'single_choice', 1),
+    options: [
+      { id: 'queued', name: 'Queued', color: '#888', archived: false },
+      { id: 'old', name: 'Old', color: '#888', archived: true },
+      { id: 'done', name: 'Done', color: '#0a0', archived: false },
+    ],
+  }
+
+  it('shows every option in order, empty ones too, archived ones only while records have them, and No value last', () => {
+    const columns = boardColumns(stage, [{ key: 'done', label: 'Done', count: 2, color: '#0a0' }])
+    expect(columns.map((column) => [column.key, column.count])).toEqual([
+      ['queued', 0],
+      ['done', 2],
+      ['none', 0],
+    ])
+    expect(boardColumns(stage, [{ key: 'old', label: 'Old', count: 1, color: null }]).map((column) => column.key)).toEqual(['queued', 'old', 'done', 'none'])
+  })
+
+  it('puts a record in the column its value says, and a value no column has under No value', () => {
+    const columns = boardColumns(stage, [])
+    expect(boardKey({ values: { stage: 'done' } }, stage, columns)).toBe('done')
+    expect(boardKey({ values: { stage: 'old' } }, stage, columns)).toBe('none')
+    expect(boardKey({ values: {} }, stage, columns)).toBe('none')
+  })
+
+  it('reads a checkbox as checked or not, and moving a card sets or clears the value', () => {
+    const approved = field('ok', 'checkbox', 2)
+    const columns = boardColumns(approved, [{ key: 'true', label: 'Checked', count: 3, color: null }])
+    expect(columns.map((column) => column.key)).toEqual(['none', 'true'])
+    expect(boardKey({ values: { ok: true } }, approved, columns)).toBe('true')
+    expect(boardValue(approved, 'true')).toBe(true)
+    expect(boardValue(approved, 'none')).toBe(false)
+    expect(boardValue(stage, 'none')).toBeNull()
+    expect(boardValue(stage, 'done')).toBe('done')
+  })
+
+  it('lists the people the server found for a person field', () => {
+    const owner = field('owner', 'person', 3)
+    const columns = boardColumns(owner, [
+      { key: 'p1', label: 'Ada', count: 2, color: null },
+      { key: 'none', label: 'No one', count: 1, color: null },
+    ])
+    expect(columns.map((column) => [column.key, column.label, column.count])).toEqual([
+      ['p1', 'Ada', 2],
+      ['none', 'No one', 1],
+    ])
+  })
+})
+
+describe('a calendar', () => {
+  it('reads its month from the address, or shows this month', () => {
+    const today = new Date(2026, 10, 13)
+    expect(calendarMonth('2027-02', today)).toEqual(new Date(2027, 1, 1))
+    expect(calendarMonth('2027-13', today)).toEqual(new Date(2026, 10, 1))
+    expect(calendarMonth(null, today)).toEqual(new Date(2026, 10, 1))
+  })
+
+  it('puts each record on its date’s day and leaves undated ones out', () => {
+    const dated = (id: string, day?: string): CollectionRecord => ({ ...record(id), values: day ? { due: day } : {} })
+    const days = recordsByDay([dated('a', '2026-11-02'), dated('b'), dated('c', '2026-11-02'), dated('d', '2026-11-05')], 'due')
+    expect([...days.entries()].map(([day, records]) => [day, records.map((entry) => entry.id)])).toEqual([
+      ['2026-11-02', ['a', 'c']],
+      ['2026-11-05', ['d']],
+    ])
   })
 })

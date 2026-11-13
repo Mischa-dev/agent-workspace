@@ -60,7 +60,7 @@ export function withColumnHidden(fields: readonly FieldDefinition[], config: Vie
 /** Whether the person changed what a view finds or shows. */
 export function sameConfig(left: ViewConfig, right: ViewConfig) {
   const comparable = (config: ViewConfig) =>
-    JSON.stringify([config.filters.map((clause) => [clause.field, clause.op, clause.values ?? []]), config.sort, config.groupBy, config.columns, config.titleWidth])
+    JSON.stringify([config.filters.map((clause) => [clause.field, clause.op, clause.values ?? []]), config.sort, config.groupBy, config.columns, config.titleWidth, config.dateField])
   return comparable(left) === comparable(right)
 }
 
@@ -77,8 +77,9 @@ export function activeConfig(config: ViewConfig, fields: readonly FieldDefinitio
   const filters = config.filters.filter((clause) => active.has(clause.field))
   const sort = config.sort.filter((rule) => BUILT_IN_SORTS.has(rule.field) || active.has(rule.field))
   const groupBy = config.groupBy !== null && active.has(config.groupBy) ? config.groupBy : null
-  if (filters.length === config.filters.length && sort.length === config.sort.length && groupBy === config.groupBy) return config
-  return { ...config, filters, sort, groupBy }
+  const dateField = config.dateField !== null && active.has(config.dateField) ? config.dateField : null
+  if (filters.length === config.filters.length && sort.length === config.sort.length && groupBy === config.groupBy && dateField === config.dateField) return config
+  return { ...config, filters, sort, groupBy, dateField }
 }
 
 /** What a sort key sorts by, in words: the title column, the record's number or a field. */
@@ -197,4 +198,82 @@ export function historyValue(value: unknown, type?: FieldType): string {
 /** The first few values worth showing on a record's card on a phone, in column order. */
 export function cardValues(record: CollectionRecord, columns: readonly ShownColumn[], limit = 4) {
   return columns.filter(({ field }) => !isEmpty(record.values[field.id])).slice(0, limit)
+}
+
+// ---------------------------------------------------------------------------
+// Boards (AWD-110): a column for each value of the field the view groups by.
+
+/** "none" is the server's key for records with no value (and a checkbox left clear). */
+export const NO_GROUP = 'none'
+
+export type BoardColumn = { key: string; label: string; color: string | null; count: number }
+
+/**
+ * A board's columns: a choice field's options in order (archived ones only
+ * while records still have them), a checkbox's two states, or the people the
+ * server found; then "No value" for the rest. Counts come from the server's
+ * groups, so an empty column still shows, ready to drop a card on.
+ */
+export function boardColumns(field: FieldDefinition, groups: readonly GroupCount[]): BoardColumn[] {
+  const count = (key: string) => groups.find((group) => group.key === key)?.count ?? 0
+  const none: BoardColumn = {
+    key: NO_GROUP,
+    label: field.type === 'person' ? 'No one' : field.type === 'checkbox' ? 'Not checked' : 'No value',
+    color: null,
+    count: count(NO_GROUP),
+  }
+  if (field.type === 'checkbox') return [none, { key: 'true', label: 'Checked', color: null, count: count('true') }]
+  const columns: BoardColumn[] =
+    field.type === 'single_choice'
+      ? field.options
+          .filter((option) => !option.archived || count(option.id) > 0)
+          .map((option) => ({ key: option.id, label: option.name, color: option.color, count: count(option.id) }))
+      : groups.filter((group) => group.key !== NO_GROUP).map((group) => ({ key: group.key, label: group.label, color: group.color, count: group.count }))
+  return [...columns, none]
+}
+
+/** The column a record belongs in by its own value, as it reads now (a move shows before it saves). */
+export function boardKey(record: Pick<CollectionRecord, 'values'>, field: FieldDefinition, columns: readonly BoardColumn[]): string {
+  const value = record.values[field.id]
+  if (field.type === 'checkbox') return value === true ? 'true' : NO_GROUP
+  if (typeof value !== 'string' || !value) return NO_GROUP
+  return columns.some((column) => column.key === value) ? value : NO_GROUP
+}
+
+/** The value a card takes when it's moved to a column: null clears it. */
+export function boardValue(field: FieldDefinition, key: string): FieldValue | null {
+  if (key === NO_GROUP) return field.type === 'checkbox' ? false : null
+  return field.type === 'checkbox' ? true : key
+}
+
+// ---------------------------------------------------------------------------
+// Calendars (AWD-110): a month, each record on its date field's day.
+
+/** The month a calendar shows from a `YYYY-MM` in the address, or this month. */
+export function calendarMonth(value: string | null, today = new Date()): Date {
+  const match = value ? /^(\d{4})-(\d{2})$/.exec(value) : null
+  if (match) {
+    const month = Number(match[2])
+    if (month >= 1 && month <= 12) return new Date(Number(match[1]), month - 1, 1)
+  }
+  return new Date(today.getFullYear(), today.getMonth(), 1)
+}
+
+export const monthKey = (month: Date) => `${month.getFullYear()}-${String(month.getMonth() + 1).padStart(2, '0')}`
+
+/** A calendar's records by day (YYYY-MM-DD), in the order they loaded. */
+export function recordsByDay(records: readonly CollectionRecord[], dateField: string): Map<string, CollectionRecord[]> {
+  const days = new Map<string, CollectionRecord[]>()
+  for (const record of records) {
+    const value = record.values[dateField]
+    if (typeof value !== 'string' || !value) continue
+    const day = value.slice(0, 10)
+    days.set(day, [...(days.get(day) ?? []), record])
+  }
+  return days
+}
+
+/** Fields a calendar can show records by. */
+export function dateFields(fields: readonly FieldDefinition[]) {
+  return fields.filter((field) => !field.archived && field.type === 'date').sort((left, right) => left.position - right.position)
 }
