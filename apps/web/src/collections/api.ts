@@ -22,6 +22,8 @@ export type CollectionSummary = {
   archived: boolean
   version: number
   updatedAt: string
+  /** "tasks" for the project's built-in Tasks collection: its records are tasks, changed on task screens. */
+  builtin?: 'tasks' | null
 }
 
 export type SortRule = { field: string; direction: 'asc' | 'desc' }
@@ -107,6 +109,7 @@ export function normalizeCollection(value: unknown): CollectionSummary {
     archived: raw.archived === true,
     version: asNumber(raw.version, 1),
     updatedAt: asString(raw.updatedAt),
+    builtin: raw.builtin === 'tasks' ? 'tasks' : null,
   }
 }
 
