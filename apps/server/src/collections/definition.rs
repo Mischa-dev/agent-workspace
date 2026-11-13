@@ -123,7 +123,10 @@ pub struct ViewWrite {
     /// Its name, or a new name when `view` names it: 1 to 80 characters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// "table" (boards, galleries and calendars come later).
+    /// "table" (the default), "board", "gallery" or "calendar". A board's
+    /// columns are its groupBy field's values; a calendar puts records on
+    /// its dateField. A new one without them takes the first field that
+    /// fits. The type doesn't change once made.
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub view_type: Option<String>,
     /// Its filters, all of which must hold.
@@ -142,6 +145,9 @@ pub struct ViewWrite {
     /// The title column's width in pixels.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title_width: Option<u16>,
+    /// A calendar's date field, by name or ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub date_field: Option<String>,
     /// Its place among the views, 1 being first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<i32>,
@@ -273,6 +279,10 @@ fn view_written(
             .map(|field| field.name.clone()),
         columns: (!columns.is_empty()).then_some(columns),
         title_width: config.title_width,
+        date_field: config
+            .date_field
+            .and_then(field)
+            .map(|field| field.name.clone()),
         ..ViewWrite::default()
     }
 }
@@ -564,6 +574,24 @@ async fn config_from_written(
     }
     if write.title_width.is_some() {
         config.title_width = write.title_width;
+    }
+    if let Some(date_field) = &write.date_field {
+        if date_field.trim().is_empty() {
+            config.date_field = None;
+        } else {
+            match active_field(collection, definitions, date_field) {
+                Ok(field) if field.field_type == FieldType::Date => {
+                    config.date_field = Some(field.id);
+                }
+                Ok(field) => {
+                    return Ok(Err(format!(
+                        "\"{}\" isn't a date field. A calendar shows records by a date field.",
+                        field.name
+                    )));
+                }
+                Err(message) => return Ok(Err(message)),
+            }
+        }
     }
     Ok(Ok(config))
 }
@@ -1020,6 +1048,21 @@ pub async fn apply(
         {
             Ok(config) => config,
             Err(message) => return Ok(stop(ProblemKind::Invalid, at, message)),
+        };
+        // A new board or calendar takes the first field that fits.
+        let config = match &found {
+            Some(_) => config,
+            None => match config.for_type(
+                write
+                    .view_type
+                    .as_deref()
+                    .and_then(ViewType::parse)
+                    .unwrap_or(ViewType::Table),
+                &definitions,
+            ) {
+                Ok(config) => config,
+                Err(message) => return Ok(stop(ProblemKind::Invalid, at, message)),
+            },
         };
         if let Err(message) = views::check(&config, &definitions) {
             return Ok(stop(ProblemKind::Invalid, at, message));

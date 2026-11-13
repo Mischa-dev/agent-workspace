@@ -1,10 +1,10 @@
-import { ArrowUpDown, Columns3, ListFilter, Rows3 } from 'lucide-react'
+import { ArrowUpDown, CalendarDays, Columns3, ListFilter, Rows3 } from 'lucide-react'
 
 import { clauseText, type FieldDefinition, type FieldReference } from '../fields/fieldModel'
 import { Button, Icon, Menu, TextField, type MenuEntry } from '../ui'
 import { useNamedActors } from '../work-items/hooks'
-import type { CollectionBody, SortRule, ViewConfig } from './api'
-import { columnOrder, groupableFields, sortName, sortText, withColumnHidden } from './collectionModel'
+import type { CollectionBody, SortRule, ViewConfig, ViewType } from './api'
+import { columnOrder, dateFields, groupableFields, sortName, sortText, withColumnHidden } from './collectionModel'
 
 /** What sorts a view: the title column, the record's number, when it last changed, or a field. */
 function sortKeys(body: CollectionBody) {
@@ -29,6 +29,7 @@ export function CollectionToolbar({
   canSave,
   changed,
   config,
+  layout = 'table',
   onAddField,
   onArchived,
   onChange,
@@ -48,6 +49,8 @@ export function CollectionToolbar({
   canSave: boolean
   changed: boolean
   config: ViewConfig
+  /** The view's layout: a board's Group sets its columns, a calendar picks its date field, a gallery doesn't group. */
+  layout?: ViewType
   onAddField: () => void
   onArchived: (archived: boolean) => void
   onChange: (config: ViewConfig) => void
@@ -93,11 +96,16 @@ export function CollectionToolbar({
     ? [
         { heading: 'Group by' },
         ...groupable.map((field) => ({ label: field.name, checked: config.groupBy === field.id, onSelect: () => onChange({ ...config, groupBy: field.id }) })),
-        ...(config.groupBy ? [{ separator: true as const }, { label: 'Don’t group', icon: 'x' as const, onSelect: () => onChange({ ...config, groupBy: null }) }] : []),
+        ...(config.groupBy && layout !== 'board' ? [{ separator: true as const }, { label: 'Don’t group', icon: 'x' as const, onSelect: () => onChange({ ...config, groupBy: null }) }] : []),
       ]
     : [{ label: 'Group by a choice, person or checkbox field', disabled: true, onSelect: () => undefined }]
+  const dated = dateFields(body.fields)
+  const dateItems: MenuEntry[] = dated.length
+    ? [{ heading: 'Show records by' }, ...dated.map((field) => ({ label: field.name, checked: config.dateField === field.id, onSelect: () => onChange({ ...config, dateField: field.id }) }))]
+    : [{ label: 'Add a date field to show records by it', disabled: true, onSelect: () => undefined }]
+  const fieldsWord = layout === 'table' ? 'Columns' : 'Fields'
   const fieldItems: MenuEntry[] = [
-    { heading: 'Columns' },
+    { heading: layout === 'table' ? 'Columns' : 'Fields on cards' },
     ...columnOrder(body.fields, config).map(({ field, hidden }) => ({
       label: field.name,
       checked: !hidden,
@@ -106,7 +114,7 @@ export function CollectionToolbar({
     })),
     ...(canBuild ? [{ separator: true as const }, { label: 'Add a field…', icon: 'plus' as const, onSelect: onAddField }] : []),
   ]
-  const groupField = active.find((field) => field.id === config.groupBy)
+  const groupField = layout === 'gallery' || layout === 'calendar' ? undefined : active.find((field) => field.id === config.groupBy)
 
   return (
     <div className="aw-collection__toolbar">
@@ -124,8 +132,23 @@ export function CollectionToolbar({
         />
         <Menu items={filterItems} label="Filter" trigger={<Button icon={ListFilter} size="sm" variant="ghost">Filter</Button>} />
         <Menu items={sortItems} label="Sort" trigger={<Button icon={ArrowUpDown} size="sm" variant="ghost">Sort</Button>} />
-        <Menu items={groupItems} label="Group" trigger={<Button icon={Rows3} size="sm" variant="ghost">Group</Button>} />
-        <Menu items={fieldItems} label="Columns" trigger={<Button icon={Columns3} size="sm" variant="ghost">Columns</Button>} />
+        {layout === 'gallery' || layout === 'calendar' ? null : (
+          <Menu
+            items={groupItems}
+            label={layout === 'board' ? 'Columns by' : 'Group'}
+            trigger={
+              <Button icon={Rows3} size="sm" variant="ghost">
+                {layout === 'board' ? 'Columns by' : 'Group'}
+              </Button>
+            }
+          />
+        )}
+        {layout === 'calendar' ? (
+          <Menu items={dateItems} label="Dates" trigger={<Button icon={CalendarDays} size="sm" variant="ghost">Dates</Button>} />
+        ) : null}
+        {layout === 'calendar' ? null : (
+          <Menu items={fieldItems} label={fieldsWord} trigger={<Button icon={Columns3} size="sm" variant="ghost">{fieldsWord}</Button>} />
+        )}
         <span className="aw-collection__spacer" />
         {body.archivedRecords > 0 || archived ? (
           <Button aria-pressed={archived} icon="archive" onClick={() => onArchived(!archived)} size="sm" variant="ghost">
@@ -170,7 +193,7 @@ export function CollectionToolbar({
               title={`Sort ${sortName(sorted, body.fields, body.collection.titleName)} the other way`}
             />
           ) : null}
-          {groupField ? <Chip onRemove={() => onChange({ ...config, groupBy: null })} text={`Grouped by ${groupField.name}`} /> : null}
+          {groupField && layout !== 'board' ? <Chip onRemove={() => onChange({ ...config, groupBy: null })} text={`Grouped by ${groupField.name}`} /> : null}
         </ul>
       ) : null}
     </div>
