@@ -87,6 +87,19 @@ export function fieldMove(
         }),
       }
     }
+    default: {
+      // A single-choice field's column (AWD-103): its value is the option's ID.
+      const id = field.slice('field:'.length)
+      return {
+        patch: fromKey === toKey ? {} : { fieldValues: { [id]: none ? null : toKey } },
+        apply: (card) => {
+          const fieldValues = { ...card.fieldValues }
+          if (none) delete fieldValues[id]
+          else fieldValues[id] = toKey
+          return { ...card, fieldValues }
+        },
+      }
+    }
   }
 }
 
@@ -246,6 +259,8 @@ export type NewTaskValues = {
   milestoneId?: string
   typeId?: string
   labelIds?: string[]
+  /** A choice field's column gives its option (AWD-103). */
+  fieldValues?: Record<string, string>
 }
 
 /** The one value a filter names, when it names exactly one a task can have. */
@@ -294,6 +309,8 @@ export function newTaskValues(columnsBy: BoardColumnsBy, columnKey: string, filt
       if (none) labels.clear()
       else labels.add(columnKey)
       break
+    default:
+      if (!none) values.fieldValues = { [columnsBy.slice('field:'.length)]: columnKey }
   }
   if (labels.size) values.labelIds = [...labels]
   return values

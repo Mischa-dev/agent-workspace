@@ -24,7 +24,7 @@ import {
   taskRef,
   taskRefs,
 } from './wire'
-import { normalizeReferences, normalizeValues } from '../fields/fieldModel'
+import { normalizeReferences, normalizeValues, type FieldValue } from '../fields/fieldModel'
 import type {
   AssignableActor,
   CommentRevisions,
@@ -375,10 +375,11 @@ export async function getWorkItemBoard(
   const payload = record(await requestJson<unknown>(projectPath(projectId, `work-items/board?${filterParameters(rest)}`)))
   const columnsBy = string(payload.columnsBy)
   return {
-    columnsBy: (COLUMNS_BY.has(columnsBy) ? columnsBy : 'status') as BoardColumnsBy,
+    columnsBy: (COLUMNS_BY.has(columnsBy) || /^field:[A-Za-z0-9-]{1,64}$/.test(columnsBy) ? columnsBy : 'status') as BoardColumnsBy,
     columns: list(payload.columns).map((value) => {
       const column = record(value)
       const status = column.status ? record(column.status) : null
+      const columnColor = nullableString(column.color)
       const items = list(column.items).map(normalizeCard)
       const filter: Record<string, string> = {}
       for (const [key, entry] of Object.entries(record(column.filter))) {
@@ -387,6 +388,7 @@ export async function getWorkItemBoard(
       return {
         key: string(column.key) || string(status?.id),
         label: string(column.label) || string(status?.name),
+        ...(columnColor ? { color: color(columnColor) } : {}),
         status: status
           ? { id: string(status.id), name: string(status.name), semanticCategory: string(status.semanticCategory) }
           : null,
@@ -515,6 +517,8 @@ export async function createWorkItem(input: {
   dueDate?: string
   estimate?: number
   acceptanceCriteria?: string[]
+  /** Custom field values by field ID or name. */
+  fieldValues?: Record<string, FieldValue>
   /** Made from a message: the task links back to it. */
   sourceMessageId?: string
   idempotencyKey: string

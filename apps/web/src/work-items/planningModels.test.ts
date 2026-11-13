@@ -141,6 +141,17 @@ describe('board moves', () => {
     expect(cleared.patch).toEqual({ removeLabelIds: ['bug', 'ui'] })
   })
 
+  it('sets or clears a choice field when a card moves between its option columns', () => {
+    const set = fieldMove('field:f1', 'none', 'o2', 'Doing')
+    expect(set.patch).toEqual({ fieldValues: { f1: 'o2' } })
+    expect(set.apply(card('1')).fieldValues).toMatchObject({ f1: 'o2' })
+    const cleared = fieldMove('field:f1', 'o2', 'none', 'No value')
+    expect(cleared.patch).toEqual({ fieldValues: { f1: null } })
+    expect(cleared.apply({ ...card('1'), fieldValues: { f1: 'o2' } }).fieldValues).toEqual({})
+    expect(newTaskValues('field:f1', 'o2', {}).fieldValues).toEqual({ f1: 'o2' })
+    expect(newTaskValues('field:f1', 'none', {}).fieldValues).toBeUndefined()
+  })
+
   it('offers a lane for every known value, used or not, with none last', () => {
     const lanes = lanesFor([], 'milestone', [
       { key: 'none', label: 'No milestone' },

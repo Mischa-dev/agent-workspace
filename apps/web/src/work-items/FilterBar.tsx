@@ -217,6 +217,13 @@ export function FilterBar({
               Columns by {field.label.toLocaleLowerCase()}
             </option>
           ))}
+          {customFields
+            .filter((field) => field.type === 'single_choice')
+            .map((field) => (
+              <option key={fieldKey(field.id)} value={fieldKey(field.id)}>
+                Columns by {field.name}
+              </option>
+            ))}
         </SelectField>
         <SelectField
           aria-label="Swimlanes"

@@ -99,6 +99,10 @@ async fn fields_are_typed_checked_recorded_and_filtered_the_same_for_agents_and_
         .as_str()
         .expect("risk")
         .to_owned();
+    let points = listed["value"]["fields"][1]["id"]
+        .as_str()
+        .expect("points")
+        .to_owned();
     let (_, member_browser) = add_person(&setup, &[&work], "pat").await;
     let (status, body) = send(
         app,
@@ -429,6 +433,63 @@ async fn fields_are_typed_checked_recorded_and_filtered_the_same_for_agents_and_
             ("No value".to_owned(), json!(1))
         ]
     );
+    // The board takes a single-choice field's options as its columns, every
+    // active one with "No value" last (AWD-103); a card dropped in a column
+    // gets that value through an ordinary field edit.
+    let (status, board) = send(
+        app,
+        setup.browser.request(
+            "GET",
+            &format!("/api/v1/projects/{work}/work-items/board?columnsBy=field:{risk}"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{board}");
+    assert_eq!(board["columnsBy"], format!("field:{risk}"), "{board}");
+    let columns = board["columns"]
+        .as_array()
+        .expect("columns")
+        .iter()
+        .map(|column| {
+            (
+                column["key"].as_str().unwrap_or_default().to_owned(),
+                column["label"].as_str().unwrap_or_default().to_owned(),
+                column["total"].clone(),
+                column["droppable"].clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        columns,
+        [
+            (low.clone(), "Low".to_owned(), json!(1), json!(true)),
+            (high.clone(), "High".to_owned(), json!(0), json!(true)),
+            (
+                "none".to_owned(),
+                "No value".to_owned(),
+                json!(1),
+                json!(true)
+            ),
+        ],
+        "{board}"
+    );
+    assert_eq!(board["columns"][0]["items"][0]["key"], "WORK-2", "{board}");
+    // Only a single-choice field of this project makes columns.
+    for field in [&points, &uuid::Uuid::now_v7().to_string()] {
+        let (status, body) = send(
+            app,
+            setup.browser.request(
+                "GET",
+                &format!("/api/v1/projects/{work}/work-items/board?columnsBy=field:{field}"),
+                None,
+                Value::Null,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{field}: {body}");
+    }
     let (status, sorted) = send(
         app,
         setup.browser.request(
