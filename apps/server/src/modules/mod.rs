@@ -27,6 +27,7 @@
 //! navigation, palette, shortcuts, slash commands and settings pages.
 
 pub mod contract;
+pub mod gate;
 pub mod http;
 pub mod manifest;
 pub mod state;

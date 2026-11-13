@@ -544,6 +544,9 @@ async fn conversation_tools_follow_the_module_where_the_conversation_lives() {
     let direct = direct_space(&setup).await;
     let (bea, bea_browser) = add_person(&setup, &[&work, &direct], "bea").await;
     let channel = create_channel(&setup, &work, "general").await;
+    // Made now: with Channels off, its route answers "turned off" (AWD-97).
+    let elsewhere = create_project(&setup, "ELSE", "Elsewhere").await;
+    let unseen = create_channel(&setup, &elsewhere, "private-plans").await;
     let in_channel = say(
         &setup,
         &setup.browser,
@@ -769,8 +772,6 @@ async fn conversation_tools_follow_the_module_where_the_conversation_lives() {
     // her app is refused as before (the tool gate answers "forbidden" for a
     // project she isn't in, before any module check), and never told that
     // the module is off or anything about the channel.
-    let elsewhere = create_project(&setup, "ELSE", "Elsewhere").await;
-    let unseen = create_channel(&setup, &elsewhere, "private-plans").await;
     let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
     let bea_session = initialize(app, &bea_app).await.expect("Bea's app");
     let ask = |name: &'static str, conversation: String, key: &'static str| {
@@ -1550,4 +1551,94 @@ async fn boards_across_a_workspace_follow_its_modules_and_credential_scope() {
         .await
         .expect("kept boards");
     assert_eq!(kept, 2);
+}
+
+#[tokio::test]
+async fn an_off_module_s_routes_answer_turned_off_until_it_comes_back() {
+    let Some(setup) = setup("awd97_routes").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "GATE", "Gate").await;
+    let tasks = format!("/api/v1/projects/{work}/work-items");
+    let get = |path: &str| setup.browser.request("GET", path, None, Value::Null);
+    let (status, body) = send(app, get(&tasks)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // Off: the module's routes answer a typed error naming it, reads and
+    // writes alike; the workspace's own routes still answer.
+    let (status, body) = switch(
+        &setup,
+        &setup.browser,
+        json!({"switches": {"tasks": false}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = send(app, get(&tasks)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"]["code"], "module_off", "{body}");
+    assert_eq!(body["error"]["details"]["module"], "tasks", "{body}");
+    let (status, body) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &tasks,
+            Some("awd97-refused"),
+            json!({"title": "Never made"}),
+        ),
+    )
+    .await;
+    assert_eq!(body["error"]["code"], "module_off", "{status}: {body}");
+    let (status, body) = send(app, get(&modules_path(&setup))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // Turning Projects off turns what needs it off too, Tasks included.
+    let (status, body) = switch(
+        &setup,
+        &setup.browser,
+        json!({"switches": {"tasks": true, "projects": false}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, body) = send(app, get(&tasks)).await;
+    assert_eq!(body["error"]["code"], "module_off", "{body}");
+    // The same project spelled with an encoded hyphen is the same route,
+    // and just as off.
+    let encoded = tasks.replacen('-', "%2D", 1);
+    assert_ne!(encoded, tasks);
+    let (_, body) = send(app, get(&encoded)).await;
+    assert_eq!(body["error"]["code"], "module_off", "{body}");
+    // Only people who can see the project learn what's off in it: signed
+    // out, or in the workspace but not the project, the handler answers as
+    // it always has.
+    let signed_out = Browser {
+        cookie: String::new(),
+        csrf: String::new(),
+    };
+    let (status, body) = send(app, signed_out.request("GET", &tasks, None, Value::Null)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    let elsewhere = create_project(&setup, "GATX", "Elsewhere").await;
+    let (_, outsider) = add_person(&setup, &[elsewhere.as_str()], "awd97-outsider").await;
+    let (status, body) = send(app, outsider.request("GET", &tasks, None, Value::Null)).await;
+    assert_ne!(body["error"]["code"], "module_off", "{status}: {body}");
+    let unknown = format!("/api/v1/projects/{}/work-items", Uuid::now_v7());
+    let (unknown_status, _) = send(app, outsider.request("GET", &unknown, None, Value::Null)).await;
+    assert_eq!(status, unknown_status, "{body}");
+
+    // Back on, the routes answer at once: the switch drops what was kept.
+    let (status, body) = switch(
+        &setup,
+        &setup.browser,
+        json!({"switches": {"projects": true}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = send(app, get(&tasks)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // A project that doesn't exist is still the handler's to answer.
+    let (status, _) = send(
+        app,
+        get(&format!("/api/v1/projects/{}/work-items", Uuid::now_v7())),
+    )
+    .await;
+    assert_ne!(status, StatusCode::FORBIDDEN);
 }

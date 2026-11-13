@@ -189,9 +189,10 @@ function ArchivedBanner({ project }: { project: Project }) {
 
 function NeedsYouHere({ base, project }: { base: string; project: Project }) {
   const unread = useProjectUnread(project.id)
-  const sidebar = useProjectConversationSidebar(project.id)
+  const channelsOn = !project.modulesOff?.includes('channels')
+  const sidebar = useProjectConversationSidebar(channelsOn ? project.id : '')
   const update = useUpdateInbox('unread', 'all')
-  if (unread.isPending || sidebar.isPending) {
+  if (unread.isPending || (channelsOn && sidebar.isPending)) {
     return (
       <Section title="Needs you">
         <ListSkeleton label="Loading what needs you" rows={2} />
@@ -269,7 +270,7 @@ function channelMeta(channel: SidebarChannel) {
 }
 
 function Channels({ base, project }: { base: string; project: Project }) {
-  const sidebar = useProjectConversationSidebar(project.id)
+  const sidebar = useProjectConversationSidebar(project.modulesOff?.includes('channels') ? '' : project.id)
   const navigate = useNavigate()
   const [creating, setCreating] = useState(false)
   const canCreate = Boolean(sidebar.data?.capabilities.createChannel) && !project.archivedAt

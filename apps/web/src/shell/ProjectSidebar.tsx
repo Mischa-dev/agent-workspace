@@ -46,7 +46,9 @@ export function ProjectSidebar({
   const threads = experience.shows('talk.threads')
   const updateNavigation = useUpdateProjectNavigation()
   const expandSelected = new URLSearchParams(location.search).get('threads') === 'all'
-  const sidebar = useProjectConversationSidebar(project.id, selectedChannelId, {
+  // Not asked for where Channels is off, which answers "turned off" there
+  // (AWD-97); the project says so before the layout loads.
+  const sidebar = useProjectConversationSidebar(project.modulesOff?.includes('channels') ? '' : project.id, selectedChannelId, {
     expandedChannelId: expandSelected && selectedChannelId ? selectedChannelId : undefined,
   })
   const base = `/projects/${encodeURIComponent(project.id)}`
@@ -70,9 +72,7 @@ export function ProjectSidebar({
     updateNavigation
       .mutateAsync({ projectId: project.id, expectedVersion: project.navigation.version, navigation: project.navigation, pinned: !pinned })
       .then(() => showToast({ tone: 'success', title: pinned ? `${project.name} unpinned from the rail` : `${project.name} pinned to the rail` }))
-      .catch((reason: unknown) =>
-        showToast({ tone: 'danger', title: 'The pin didn’t change', description: reason instanceof Error ? reason.message : undefined }),
-      )
+      .catch((reason: unknown) => toastError('The pin didn’t change', reason))
   }
   const menu: MenuEntry[] = [
     ...(canCreate ? [{ label: 'New channel', icon: 'plus' as const, onSelect: () => setCreating(true) }] : []),
