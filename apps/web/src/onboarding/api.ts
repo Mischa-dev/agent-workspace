@@ -64,9 +64,13 @@ export const STEP_TITLES: Record<OnboardingStepId, string> = {
   launch: 'Start your first run',
 }
 
-/** "4 of 8 done", counting skipped optional steps as out of the way. */
-export function progressText(onboarding: Pick<Onboarding, 'steps'>) {
+/**
+ * "4 of 8 done in Website", counting skipped optional steps as out of the
+ * way. The project steps count in the project the path is on, which follows
+ * the project opened last until one is picked, so the count names it.
+ */
+export function progressText(onboarding: Pick<Onboarding, 'steps' | 'projectName'>) {
   const counted = onboarding.steps.filter((step) => !step.skipped)
   const done = counted.filter((step) => step.done).length
-  return `${done} of ${counted.length} done`
+  return `${done} of ${counted.length} done${onboarding.projectName ? ` in ${onboarding.projectName}` : ''}`
 }
