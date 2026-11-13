@@ -43,9 +43,10 @@ type Dialogs =
 const writes = new Map<string, Promise<unknown>>()
 /** Revisions this screen's own writes made, by sheet: an edit made before one landed isn't a clash with it. */
 const own = new Map<string, Set<number>>()
-// Cells this screen cleared, by sheet then `tab:row:column`, with the
-// revision that cleared them: a queued edit of the same cell builds on it.
-const cleared = new Map<string, Map<string, number>>()
+// Cells this screen wrote, by sheet then `tab:row:column`, with the revision
+// that wrote them: a queued edit of the same cell builds on it, even while the
+// cache waits for a fresh read.
+const written = new Map<string, Map<string, number>>()
 
 const START: Selection = {
   anchor: { row: 1, column: 1 },
@@ -146,28 +147,24 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
     const run = (writes.get(sheetId) ?? Promise.resolve()).then(async () => {
       try {
         const mine = own.get(sheetId) ?? new Set<number>()
-        const clears = cleared.get(sheetId) ?? new Map<string, number>()
+        const wrote = written.get(sheetId) ?? new Map<string, number>()
         const known = cellMap(client.getQueryData<SheetBody>(key)?.cells ?? [])
         const result = await changeSheet(
           projectId,
           sheetId,
           changes.map((change) => {
             if (change.type !== 'cell' || change.ifRevision === undefined) return change
-            const seen = known.get(cellKey(change.row, change.column))?.revision ?? clears.get(`${change.tab}:${change.row}:${change.column}`) ?? 0
+            const seen = Math.max(known.get(cellKey(change.row, change.column))?.revision ?? 0, wrote.get(`${change.tab}:${change.row}:${change.column}`) ?? 0)
             return seen > change.ifRevision && mine.has(seen) ? { ...change, ifRevision: seen } : change
           }),
         )
         // Only a revision this write made is ours; one that changed nothing
         // answers with whatever the sheet was at, maybe someone else's.
         if (result.revision !== result.previousRevision) own.set(sheetId, mine.add(result.revision))
-        for (const change of changes) {
-          if (change.type !== 'cell') continue
-          const at = `${change.tab}:${change.row}:${change.column}`
-          if (result.revision === result.previousRevision) continue
-          if (change.input === '') clears.set(at, result.revision)
-          else clears.delete(at)
+        if (result.revision !== result.previousRevision) {
+          for (const change of changes) if (change.type === 'cell') wrote.set(`${change.tab}:${change.row}:${change.column}`, result.revision)
         }
-        cleared.set(sheetId, clears)
+        written.set(sheetId, wrote)
         const current = client.getQueryData<SheetBody>(key)
         const next = current ? patched(current, result) : null
         if (next) client.setQueryData(key, next)
