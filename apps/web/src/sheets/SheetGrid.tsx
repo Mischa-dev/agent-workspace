@@ -292,7 +292,9 @@ export function SheetGrid({
             aria-selected={selected}
             className={className}
             key={column}
-            onDoubleClick={() => {
+            onDoubleClick={(event) => {
+              // A double-click in the cell's own editor selects a word.
+              if (event.target instanceof Element && event.target.closest('.aw-grid__editor')) return
               move({ row, column })
               committed.current = false
               if (editable)

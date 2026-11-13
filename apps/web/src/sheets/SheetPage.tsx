@@ -156,10 +156,13 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
             return seen > change.ifRevision && mine.has(seen) ? { ...change, ifRevision: seen } : change
           }),
         )
-        own.set(sheetId, mine.add(result.revision))
+        // Only a revision this write made is ours; one that changed nothing
+        // answers with whatever the sheet was at, maybe someone else's.
+        if (result.revision !== result.previousRevision) own.set(sheetId, mine.add(result.revision))
         for (const change of changes) {
           if (change.type !== 'cell') continue
           const at = `${change.tab}:${change.row}:${change.column}`
+          if (result.revision === result.previousRevision) continue
           if (change.input === '') clears.set(at, result.revision)
           else clears.delete(at)
         }

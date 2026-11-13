@@ -91,6 +91,7 @@ describe('sheet model', () => {
   it('puts a write’s cells in place, and asks for a refetch when rows moved', () => {
     const next = patched(body(), {
       revision: 5,
+      previousRevision: 4,
       tabsChanged: false,
       truncated: false,
       changed: [
@@ -116,10 +117,11 @@ describe('sheet model', () => {
     expect(next?.cells.map((cell) => `${cell.row}:${cell.column}`).sort()).toEqual(['1:1', '1:2', '3:1'])
     expect(next?.tabs[0].rows).toBe(3)
     // Revision 5 was someone else's: this screen reads the sheet again.
-    expect(patched(body(), { revision: 6, tabsChanged: false, truncated: false, changed: [] })).toBeNull()
+    expect(patched(body(), { revision: 6, previousRevision: 5, tabsChanged: false, truncated: false, changed: [] })).toBeNull()
     expect(
       patched(body(), {
         revision: 5,
+        previousRevision: 4,
         tabsChanged: true,
         truncated: false,
         changed: [],

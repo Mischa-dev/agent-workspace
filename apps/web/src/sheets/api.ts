@@ -94,6 +94,8 @@ export type ChangedCell = {
 
 export type ChangeResult = {
   revision: number
+  /** The revision the write started from; the same as `revision` when it changed nothing. */
+  previousRevision: number
   tabsChanged: boolean
   truncated: boolean
   changed: ChangedCell[]
@@ -172,6 +174,7 @@ function normalizeResult(value: unknown): ChangeResult {
   const raw = asRecord(value)
   return {
     revision: asNumber(raw.revision, 1),
+    previousRevision: asNumber(raw.previousRevision, asNumber(raw.revision, 1)),
     tabsChanged: raw.tabsChanged === true,
     truncated: raw.truncated === true,
     changed: asArray(raw.changed).map((entry) => {

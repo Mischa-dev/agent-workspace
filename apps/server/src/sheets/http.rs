@@ -738,6 +738,9 @@ struct ChangedCellBody {
 #[serde(rename_all = "camelCase")]
 struct ChangeSheetBody {
     revision: i64,
+    /// The revision this write started from: equal to `revision` when it
+    /// changed nothing, so the caller knows whether the revision is its own.
+    previous_revision: i64,
     inputs_changed: usize,
     values_changed: usize,
     /// Tabs were added, removed, renamed, moved or resized, or rows and
@@ -836,6 +839,7 @@ async fn change_sheet(
     }
     let body = ChangeSheetBody {
         revision: applied.revision,
+        previous_revision: sheet.revision,
         inputs_changed: applied.inputs_changed,
         values_changed: applied.values_changed,
         tabs_changed: applied.tabs_changed,
