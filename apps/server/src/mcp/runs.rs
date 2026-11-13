@@ -350,7 +350,7 @@ fn run_conversation_path(row: &RunRow) -> String {
     }
 }
 
-async fn load_run(
+pub(super) async fn load_run(
     state: &AppState,
     principal: &McpPrincipal,
     run_id: Uuid,

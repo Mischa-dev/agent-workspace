@@ -34,6 +34,11 @@ pub(super) struct RepositoryWriteArguments {
     pub name: Option<String>,
     /// To add: GitHub's numeric ID for the repository.
     pub github_repository_id: Option<i64>,
+    /// To add one the project's GitHub App installation reaches: its
+    /// installation number, with githubRepositoryId and trustAcknowledged.
+    /// GitHub is asked for its owner, name and default branch.
+    #[serde(default)]
+    pub installation_id: Option<i64>,
     /// To add: the branch runs start from.
     pub default_branch: Option<String>,
     /// To add: you trust this repository's code to run on this server's
@@ -70,6 +75,9 @@ pub(super) async fn repository_write(
     }
     if parse_id(&arguments.project_id) != Some(principal.project_id) {
         return ToolResult::not_found("That project");
+    }
+    if let Some(installation_id) = arguments.installation_id {
+        return add_from_installation(state, principal, installation_id, &arguments).await;
     }
     let prepare = arguments.prepare.unwrap_or(false);
     let archive = arguments.archive.unwrap_or(false);
@@ -231,9 +239,97 @@ pub(super) async fn repository_write(
         }))
     }
     .await;
+    refused(result)
+}
+
+/// Adds a repository the project's GitHub installation reaches, by GitHub's
+/// ID, as the settings' repository picker does.
+async fn add_from_installation(
+    state: &AppState,
+    principal: &McpPrincipal,
+    installation_id: i64,
+    arguments: &RepositoryWriteArguments,
+) -> ToolResult<RepositoryWriteValue> {
+    if arguments.repository.is_some()
+        || arguments.owner.is_some()
+        || arguments.name.is_some()
+        || arguments.default_branch.is_some()
+        || arguments.prepare.is_some()
+        || arguments.archive.is_some()
+        || arguments.expected_version.is_some()
+    {
+        return ToolResult::invalid(
+            "installationId",
+            "Adding from the installation takes installationId, githubRepositoryId and trustAcknowledged only: GitHub says the rest.",
+        );
+    }
+    let Some(github_repository_id) = arguments.github_repository_id else {
+        return ToolResult::invalid("githubRepositoryId", "Name the repository by GitHub's ID.");
+    };
+    if arguments.trust_acknowledged != Some(true) {
+        return ToolResult::invalid(
+            "trustAcknowledged",
+            "Adding a repository means trusting its code to run on this server; say so with trustAcknowledged: true.",
+        );
+    }
+    let project_id = principal.project_id;
+    let result = async {
+        let mut picked = crate::github::add_picked_repository_as(
+            state,
+            principal.actor_id,
+            ActorKind::Human,
+            project_id,
+            installation_id,
+            github_repository_id,
+        )
+        .await?;
+        mark_via(&mut picked.transaction, principal).await?;
+        insert_audit(
+            &mut picked.transaction,
+            principal,
+            project_id,
+            "github.repository_connect",
+            "repository",
+            picked.repository_id,
+            serde_json::json!({
+                "installation_id": installation_id,
+                "github_repository_id": github_repository_id,
+            }),
+        )
+        .await?;
+        let repository = repositories::repository_json(
+            &mut picked.transaction,
+            project_id,
+            picked.repository_id,
+            picked.manage,
+        )
+        .await?;
+        picked.transaction.commit().await?;
+        repositories::prepare_in_background(state.clone(), project_id, picked.repository_id);
+        Ok::<_, AppError>(ToolResult::ok(RepositoryWriteValue {
+            done: "added".to_owned(),
+            repository,
+        }))
+    }
+    .await;
+    refused(result)
+}
+
+fn refused(
+    result: Result<ToolResult<RepositoryWriteValue>, AppError>,
+) -> ToolResult<RepositoryWriteValue> {
     match result {
         Ok(result) => result,
         Err(AppError::Forbidden) => ToolResult::denied(PEOPLE_ONLY),
+        Err(AppError::Conflict("github_integration", "not_configured")) => {
+            ToolResult::conflict("GitHub isn't set up on this server yet.")
+        }
+        Err(AppError::NotFound("github_installation")) => ToolResult::not_found(
+            "That GitHub installation for this workspace (connect it on the web first)",
+        ),
+        Err(AppError::Conflict("github_installation", "project_uses_another_installation")) => {
+            ToolResult::conflict("This project already uses another GitHub installation.")
+        }
         Err(AppError::NotFound("project")) => ToolResult::not_found("That project"),
         Err(AppError::NotFound(_)) => ToolResult::not_found("That repository"),
         Err(AppError::RepositoryHasActiveRuns) => {

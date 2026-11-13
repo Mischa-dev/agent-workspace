@@ -834,18 +834,30 @@ impl GitHubClient {
     }
 }
 
-async fn add_repository(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    headers: HeaderMap,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<AddRepositoryRequest>,
-) -> Result<(StatusCode, Json<Value>), AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
-    if request.installation_id <= 0 {
+/// A repository the project's GitHub installation reaches, registered and
+/// linked, still in its transaction for the caller to audit and commit.
+pub(crate) struct PickedRepository {
+    pub transaction: Transaction<'static, Postgres>,
+    pub repository_id: Uuid,
+    pub manage: bool,
+}
+
+/// Registers a repository from the GitHub App installation the workspace
+/// claimed, by GitHub's ID, after asking GitHub for it, for a caller allowed
+/// to manage the project's repositories and GitHub integration and to see
+/// its code. Not audited here; after committing, prepare it.
+pub(crate) async fn add_picked_repository_as(
+    state: &AppState,
+    actor_id: Uuid,
+    kind: ActorKind,
+    project_id: Uuid,
+    installation_id: i64,
+    github_repository_id: i64,
+) -> Result<PickedRepository, AppError> {
+    if installation_id <= 0 {
         return Err(AppError::Validation("installationId"));
     }
-    if request.github_repository_id <= 0 {
+    if github_repository_id <= 0 {
         return Err(AppError::Validation("githubRepositoryId"));
     }
     let github = state
@@ -856,35 +868,37 @@ async fn add_repository(
 
     // Check the person and the claim before asking GitHub anything.
     let mut transaction = state.pool.begin().await?;
-    require_project_access(
+    require_project_access_as(
         &mut transaction,
-        &principal,
+        actor_id,
+        kind,
         project_id,
         Action::RepositoryManage,
     )
     .await?;
-    require_project_access(
+    require_project_access_as(
         &mut transaction,
-        &principal,
+        actor_id,
+        kind,
         project_id,
         Action::GithubIntegrationManage,
     )
     .await?;
     // It answers with the repository it registers: only for someone who
     // also sees code here.
-    require_project_access(
+    require_project_access_as(
         &mut transaction,
-        &principal,
+        actor_id,
+        kind,
         project_id,
         Action::RepositoryView,
     )
     .await?;
-    if !workspace_claims_installation(&mut transaction, project_id, request.installation_id).await?
-    {
+    if !workspace_claims_installation(&mut transaction, project_id, installation_id).await? {
         return Err(AppError::NotFound("github_installation"));
     }
     if let Some(linked) = load_installation(&mut transaction, project_id).await?
-        && linked.installation_id != request.installation_id
+        && linked.installation_id != installation_id
     {
         return Err(AppError::Conflict(
             "github_installation",
@@ -893,29 +907,29 @@ async fn add_repository(
     }
     transaction.commit().await?;
 
-    let installation_id = request.installation_id as u64;
-    let github_repository_id = request.github_repository_id as u64;
+    let installation_number = installation_id as u64;
+    let github_repository_number = github_repository_id as u64;
     let client = GitHubClient::new(github).map_err(map_github_error)?;
     let installation = client
-        .installation(installation_id)
+        .installation(installation_number)
         .await
         .map_err(map_github_error)?;
     validate_installation(github, &installation).map_err(map_github_error)?;
     let token = client
         .installation_token(
-            installation_id,
-            &[github_repository_id],
+            installation_number,
+            &[github_repository_number],
             InstallationTokenScope::VerifyInstallation,
         )
         .await
         // GitHub refuses a token for a repository the installation can't see.
         .map_err(|_| AppError::NotFound("repository"))?;
     let repository = client
-        .repository_by_id(&token, github_repository_id)
+        .repository_by_id(&token, github_repository_number)
         .await
         .map_err(|_| AppError::NotFound("repository"))?;
     drop(token);
-    if repository.id != github_repository_id {
+    if repository.id != github_repository_number {
         return Err(AppError::NotFound("repository"));
     }
     let default_branch = repository
@@ -924,22 +938,22 @@ async fn add_repository(
         .ok_or(AppError::Validation("defaultBranch"))?;
 
     let mut transaction = state.pool.begin().await?;
-    let role = require_project_access(
+    let role = require_project_access_as(
         &mut transaction,
-        &principal,
+        actor_id,
+        kind,
         project_id,
         Action::GithubIntegrationManage,
     )
     .await?;
-    if !workspace_claims_installation(&mut transaction, project_id, request.installation_id).await?
-    {
+    if !workspace_claims_installation(&mut transaction, project_id, installation_id).await? {
         return Err(AppError::NotFound("github_installation"));
     }
     let repository_id = crate::repositories::register_picked_repository(
-        &state,
+        state,
         &mut transaction,
         project_id,
-        request.github_repository_id,
+        github_repository_id,
         &repository.owner.login,
         &repository.name,
         &default_branch,
@@ -968,7 +982,7 @@ async fn add_repository(
     .bind(project_id)
     .bind(installation_row_id)
     .bind(repository_id)
-    .bind(request.github_repository_id)
+    .bind(github_repository_id)
     .execute(&mut *transaction)
     .await?;
     sqlx::query(
@@ -976,8 +990,36 @@ async fn add_repository(
     )
     .bind(project_id)
     .bind(repository_id)
-    .bind(request.installation_id)
+    .bind(installation_id)
     .execute(&mut *transaction)
+    .await?;
+    Ok(PickedRepository {
+        transaction,
+        repository_id,
+        manage: role_allows_manage(role),
+    })
+}
+
+async fn add_repository(
+    State(state): State<AppState>,
+    principal: AuthenticatedActor,
+    headers: HeaderMap,
+    ApiPath(project_id): ApiPath<Uuid>,
+    ApiJson(request): ApiJson<AddRepositoryRequest>,
+) -> Result<(StatusCode, Json<Value>), AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    let PickedRepository {
+        mut transaction,
+        repository_id,
+        manage,
+    } = add_picked_repository_as(
+        &state,
+        principal.actor_id,
+        actor_kind(&principal.actor_kind)?,
+        project_id,
+        request.installation_id,
+        request.github_repository_id,
+    )
     .await?;
     let request_id = headers
         .get(crate::REQUEST_ID_HEADER)
@@ -1005,13 +1047,9 @@ async fn add_repository(
     .bind(request.github_repository_id)
     .execute(&mut *transaction)
     .await?;
-    let view = crate::repositories::repository_json(
-        &mut transaction,
-        project_id,
-        repository_id,
-        role_allows_manage(role),
-    )
-    .await?;
+    let view =
+        crate::repositories::repository_json(&mut transaction, project_id, repository_id, manage)
+            .await?;
     transaction.commit().await?;
     crate::repositories::prepare_in_background(state.clone(), project_id, repository_id);
     Ok((StatusCode::CREATED, Json(view)))
