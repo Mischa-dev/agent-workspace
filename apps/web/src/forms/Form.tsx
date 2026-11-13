@@ -206,3 +206,6 @@ function FieldInput({
       return <Checkbox checked={value === true} description={hint} label={field.name} onChange={(checked) => onChange(checked)} />
   }
 }
+
+// The app loads it lazily, as its default.
+export default FormPage
