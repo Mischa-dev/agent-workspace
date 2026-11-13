@@ -518,4 +518,44 @@ async fn link_fields_point_at_another_collections_records() {
                 && link["direction"] == "incoming"),
         "{customer}"
     );
+
+    // A view filters the link field by a record, and the definition
+    // collection_describe gives replays as no change.
+    let viewed = call(
+        "collection_write",
+        json!({
+            "projectId": "LINKS",
+            "collection": "Requests",
+            "views": [{"name": "Acme's", "filters": [{"field": "Customer", "op": "is", "values": ["Acme"]}]}],
+        }),
+    )
+    .await;
+    assert_eq!(viewed["outcome"], "ok", "{viewed}");
+    let described = call(
+        "collection_describe",
+        json!({"projectId": "LINKS", "collection": "Requests"}),
+    )
+    .await;
+    assert_eq!(described["outcome"], "ok", "{described}");
+    let mut replay = described["value"]["definition"].clone();
+    assert_eq!(
+        replay["fields"][0]["target"], "record:Customers",
+        "{replay}"
+    );
+    replay["projectId"] = json!("LINKS");
+    replay["collection"] = json!("Requests");
+    replay.as_object_mut().expect("definition").remove("name");
+    let again = call("collection_write", replay).await;
+    assert_eq!(again["outcome"], "ok", "{again}");
+    assert_eq!(again["value"]["changes"], json!([]), "{again}");
+    let retarget = call(
+        "collection_write",
+        json!({
+            "projectId": "LINKS",
+            "collection": "Requests",
+            "fields": [{"name": "Customer", "type": "link", "target": "record:Vendors"}],
+        }),
+    )
+    .await;
+    assert_ne!(retarget["outcome"], "ok", "{retarget}");
 }

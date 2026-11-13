@@ -882,9 +882,25 @@ pub async fn apply(
                 ),
             ));
         }
-        if let Some(written) = write.target.as_deref()
-            && LinkTarget::parse(written) != current.config.target
-        {
+        // Compared as stored: a record link's collection resolves by name or
+        // ID, so the definition collection_describe gives replays.
+        let retargeted = match write.target.as_deref() {
+            None => false,
+            Some(written) => {
+                match crate::collections::link_target(&mut *connection, project_id, written).await?
+                {
+                    Ok(resolved) => match resolved.split_once(':') {
+                        Some((kind, collection)) => {
+                            LinkTarget::parse(kind) != current.config.target
+                                || collection.parse::<Uuid>().ok() != current.config.collection
+                        }
+                        None => LinkTarget::parse(&resolved) != current.config.target,
+                    },
+                    Err(_) => true,
+                }
+            }
+        };
+        if retargeted {
             return Ok(stop(
                 ProblemKind::Invalid,
                 format!("{at}.target"),
