@@ -20,6 +20,7 @@
     "message_forward": "create",
     "message_edit": "change",
     "message_delete": "change",
+    "message_preview_hide": "change",
     "message_history": "query",
     "message_react": "change",
     "message_schedule": "create",

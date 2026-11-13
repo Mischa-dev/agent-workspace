@@ -250,6 +250,16 @@ async fn fetch(executor: impl PgExecutor<'_>, link_id: Uuid) -> Result<LinkRow, 
         .ok_or(AppError::NotFound("bug_report_link"))
 }
 
+/// The project a link belongs to, if it exists.
+pub(crate) async fn link_project(pool: &PgPool, link_id: Uuid) -> Result<Option<Uuid>, AppError> {
+    Ok(
+        sqlx::query_scalar::<_, Uuid>("SELECT project_id FROM bug_report_links WHERE id = $1")
+            .bind(link_id)
+            .fetch_optional(pool)
+            .await?,
+    )
+}
+
 /// A link the caller may change: their own, or any in a project they
 /// manage. Not found otherwise.
 async fn manageable(pool: &PgPool, caller: &Caller, link_id: Uuid) -> Result<LinkRow, AppError> {

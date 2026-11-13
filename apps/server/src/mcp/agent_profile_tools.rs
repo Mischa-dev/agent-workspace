@@ -77,22 +77,33 @@ async fn find_profile(
     wanted: &str,
 ) -> Result<Option<Uuid>, AppError> {
     let wanted = wanted.trim();
-    Ok(sqlx::query_scalar::<_, Uuid>(
+    // An ID wins. A handle can match more than one agent when a disabled
+    // one's handle was taken again: refuse rather than guess.
+    let found = sqlx::query_as::<_, (Uuid, bool)>(
         r#"
-        SELECT profile.id
+        SELECT profile.id, profile.id::text = $2 AS by_id
         FROM agent_profiles profile
         JOIN project_memberships membership
           ON membership.project_id = profile.project_id AND membership.actor_id = profile.actor_id
         WHERE profile.project_id = $1 AND profile.hidden_at IS NULL
           AND (profile.id::text = $2 OR lower(membership.handle) = lower($3))
-        LIMIT 1
+        ORDER BY by_id DESC, profile.id
+        LIMIT 2
         "#,
     )
     .bind(project_id)
     .bind(wanted)
     .bind(wanted.trim_start_matches('@'))
-    .fetch_optional(&mut *connection)
-    .await?)
+    .fetch_all(&mut *connection)
+    .await?;
+    match found.as_slice() {
+        [] => Ok(None),
+        [(id, true), ..] | [(id, false)] => Ok(Some(*id)),
+        _ => Err(AppError::Conflict(
+            "agent_profile",
+            "More than one agent here has that handle (one was disabled and its handle reused). Pass the agent's ID from agent_profile_list.",
+        )),
+    }
 }
 
 /// A text argument that clears with an empty string.

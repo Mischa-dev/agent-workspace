@@ -68,6 +68,7 @@ mod approvals;
 mod automation_tools;
 mod batch_tools;
 mod briefing;
+mod bug_report_tools;
 mod channels;
 mod code;
 mod collaboration;
@@ -86,6 +87,7 @@ mod later_tools;
 mod launch_tools;
 mod memory_tools;
 mod message_edits;
+mod model_catalog_tools;
 mod module_tools;
 mod notifications;
 mod oauth;
@@ -932,6 +934,25 @@ impl McpServer {
     ) -> Json<common::ToolResult<message_edits::RemovedMessage>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(message_edits::message_delete(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Hide the link previews under a message, for everyone, as the remove button on a preview does: the one for url, or all of them. Your own messages, or anyone's if you own or administer the project. The message and its links stay.",
+        annotations(
+            title = "Hide link previews",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn message_preview_hide(
+        &self,
+        Parameters(arguments): Parameters<message_edits::MessagePreviewHideArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<message_edits::HiddenPreviews>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(message_edits::message_preview_hide(&self.state, principal, arguments).await)
     }
 
     #[tool(
@@ -2610,6 +2631,44 @@ impl McpServer {
     }
 
     #[tool(
+        description = "A project's bug report links: each is a URL a game, site or form posts reports to, and every report becomes a task. Lists each link's name, state, maker and report count, never its URL.",
+        annotations(
+            title = "List bug report links",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn bug_report_link_list(
+        &self,
+        Parameters(arguments): Parameters<bug_report_tools::BugReportLinkListArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<serde_json::Value>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(bug_report_tools::bug_report_link_list(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "People: make a bug report link (its URL is shown once), rename or pause it, give it a new URL, or delete it, as the project's settings do. Anyone who can add tasks makes one; its maker or the project's owners and admins change it. Agents read links with bug_report_link_list. Audited.",
+        annotations(
+            title = "Change bug report link",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
+    )]
+    async fn bug_report_link_write(
+        &self,
+        Parameters(arguments): Parameters<bug_report_tools::BugReportLinkWriteArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<serde_json::Value>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(bug_report_tools::bug_report_link_write(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
         description = "Import tasks from Markdown, CSV (Linear and Jira exports work as they are) or a connected repository's GitHub issues. It previews first: each row's status, labels, assignee and milestone, and anything that doesn't match. Call again with the importId and commit: true to create them. Rows imported before from the same source are skipped.",
         annotations(
             title = "Import tasks",
@@ -2858,7 +2917,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Ask the project's AI to look for dependencies, blockers and duplicates across the project now (it reads what you can see; suggestions from things only you can see are shown to you alone), or with taskId to triage one task (labels, priority, type, parent, duplicates), or with taskId and criteria: true to draft acceptance criteria. Uses the AI provider set in Runs and models settings, and counts toward the workspace's budget.",
+        description = "Ask the project's AI to look for dependencies, blockers and duplicates across the project now (it reads what you can see; suggestions from things only you can see are shown to you alone), or with taskId to triage one task (labels, priority, type, parent, duplicates), or with taskId and criteria: true to draft acceptance criteria, or with check: true only to test that the AI provider settings work. Uses the AI provider set in Runs and models settings, and counts toward the workspace's budget.",
         annotations(
             title = "Run AI analysis",
             read_only_hint = false,
@@ -3061,6 +3120,25 @@ impl McpServer {
     }
 
     #[tool(
+        description = "Dismiss a failed run's notice for yourself, as the notice's Dismiss button does: the run stops showing as needing your attention. The run and its failure stay; dismissing twice changes nothing.",
+        annotations(
+            title = "Dismiss run failure",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn run_dismiss_failure(
+        &self,
+        Parameters(arguments): Parameters<runs::RunDismissFailureArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<runs::RunValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(runs::run_dismiss_failure(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
         description = "List Codex runs you can see, newest first: active ones by default, or finished, failed, or all. mine: true for only runs you started.",
         annotations(title = "List runs", read_only_hint = true, open_world_hint = false)
     )]
@@ -3213,6 +3291,25 @@ impl McpServer {
     ) -> Json<common::ToolResult<environment_tools::EnvironmentWriteValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(environment_tools::environment_write(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "People: change a workspace's model list for one harness, as its Runs and models settings do: edit a model (name, context size, prices, reasoning levels, speeds, hiding it, making it the default) or add one by hand with model and overrides, remove one with remove, or refresh the list from the harness through your own signed-in account with refresh. The workspace's owners and admins, through an app connected as themselves. Audited.",
+        annotations(
+            title = "Change model list",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
+    )]
+    async fn model_catalog_write(
+        &self,
+        Parameters(arguments): Parameters<model_catalog_tools::ModelCatalogWriteArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<model_catalog_tools::ModelCatalogWriteValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(model_catalog_tools::model_catalog_write(&self.state, principal, arguments).await)
     }
 
     #[tool(

@@ -539,35 +539,81 @@ async fn hide_http(
         Change::Remove,
     )
     .await?;
+    hide_in(
+        &mut transaction,
+        &locked,
+        principal.actor_id,
+        Hide::Preview(preview_id),
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Which of a message's link previews to hide.
+pub(crate) enum Hide<'a> {
+    /// One, by its ID (the web's remove button).
+    Preview(Uuid),
+    /// The one for this link, or all of them.
+    Url(Option<&'a str>),
+}
+
+/// Hides link previews on a message the caller may change (locked with
+/// `Change::Remove`), for everyone, and tells open pages. Returns how many
+/// were newly hidden; not found when none match.
+pub(crate) async fn hide_in(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    locked: &crate::message_edits::LockedMessage,
+    actor_id: Uuid,
+    which: Hide<'_>,
+) -> Result<u64, AppError> {
     if locked.removed {
         return Err(AppError::NotFound("link_preview"));
     }
-    let hidden = sqlx::query(
+    let (preview_id, url, all) = match which {
+        Hide::Preview(id) => (Some(id), None, false),
+        Hide::Url(url) => (None, url, url.is_none()),
+    };
+    let matching = r#"
+        message.message_id = $1
+        AND ($2::uuid IS NULL OR message.link_preview_id = $2)
+        AND ($3::text IS NULL OR EXISTS (
+            SELECT 1 FROM link_previews preview
+            WHERE preview.id = message.link_preview_id AND preview.url = $3))
+        AND ($2::uuid IS NOT NULL OR $3::text IS NOT NULL OR $5)
+    "#;
+    let hidden = sqlx::query(&format!(
         r#"
-        UPDATE message_link_previews
-        SET hidden_at = now(), hidden_by_actor_id = $3
-        WHERE message_id = $1 AND link_preview_id = $2 AND hidden_at IS NULL
-        "#,
-    )
+        UPDATE message_link_previews message
+        SET hidden_at = now(), hidden_by_actor_id = $4
+        WHERE {matching} AND message.hidden_at IS NULL
+        "#
+    ))
     .bind(locked.id)
     .bind(preview_id)
-    .bind(principal.actor_id)
-    .execute(&mut *transaction)
-    .await?;
-    if hidden.rows_affected() == 0 {
-        let exists = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM message_link_previews WHERE message_id = $1 AND link_preview_id = $2)",
-        )
+    .bind(url)
+    .bind(actor_id)
+    .bind(all)
+    .execute(&mut **transaction)
+    .await?
+    .rows_affected();
+    if hidden == 0 {
+        let exists = sqlx::query_scalar::<_, bool>(&format!(
+            "SELECT EXISTS (SELECT 1 FROM message_link_previews message WHERE {matching} AND $4::uuid IS NOT NULL)"
+        ))
         .bind(locked.id)
         .bind(preview_id)
-        .fetch_one(&mut *transaction)
+        .bind(url)
+        .bind(actor_id)
+        .bind(all)
+        .fetch_one(&mut **transaction)
         .await?;
         if !exists {
             return Err(AppError::NotFound("link_preview"));
         }
     } else {
         enqueue_typed(
-            &mut transaction,
+            transaction,
             locked.project_id,
             OutboxEventPayload::MessageUpdated(MessageUpdatedPayload {
                 conversation_id: locked.conversation.id,
@@ -578,8 +624,7 @@ async fn hide_http(
         )
         .await?;
     }
-    transaction.commit().await?;
-    Ok(StatusCode::NO_CONTENT)
+    Ok(hidden)
 }
 
 #[cfg(test)]

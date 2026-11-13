@@ -237,7 +237,7 @@ mod tests {
         (
             Put,
             "/api/v1/organizations/{organization_id}/members/{actor_id}/agent-limit",
-            Gap("an agent limit in role_assign"),
+            Tool("role_assign"),
         ),
         (
             Post,
@@ -393,22 +393,22 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/bug-report-links",
-            Gap("bug_report_link_write"),
+            Tool("bug_report_link_write"),
         ),
         (
             Patch,
             "/api/v1/bug-report-links/{link_id}",
-            Gap("bug_report_link_write"),
+            Tool("bug_report_link_write"),
         ),
         (
             Delete,
             "/api/v1/bug-report-links/{link_id}",
-            Gap("bug_report_link_write"),
+            Tool("bug_report_link_write"),
         ),
         (
             Post,
             "/api/v1/bug-report-links/{link_id}/replace",
-            Gap("bug_report_link_write"),
+            Tool("bug_report_link_write"),
         ),
         (
             Post,
@@ -434,7 +434,7 @@ mod tests {
         (
             Post,
             "/api/v1/agent-runs/{id}/acknowledge-failure",
-            Gap("dismissing a failed run's notice"),
+            Tool("run_dismiss_failure"),
         ),
         (
             Post,
@@ -519,32 +519,32 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{id}/harnesses/{kind}/catalog/refresh",
-            Gap("model_catalog_write"),
+            Tool("model_catalog_write"),
         ),
         (
             Put,
             "/api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
-            Gap("model_catalog_write"),
+            Tool("model_catalog_write"),
         ),
         (
             Delete,
             "/api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
-            Gap("model_catalog_write"),
+            Tool("model_catalog_write"),
         ),
         (
             Post,
             "/api/v1/organizations/{organization_id}/model-catalog/{kind}/refresh",
-            Gap("model_catalog_write"),
+            Tool("model_catalog_write"),
         ),
         (
             Put,
             "/api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
-            Gap("model_catalog_write"),
+            Tool("model_catalog_write"),
         ),
         (
             Delete,
             "/api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
-            Gap("model_catalog_write"),
+            Tool("model_catalog_write"),
         ),
         (
             Post,
@@ -743,7 +743,7 @@ mod tests {
         (
             Delete,
             "/api/v1/conversations/{id}/messages/{message_id}/link-previews/{preview_id}",
-            Gap("removing a link preview"),
+            Tool("message_preview_hide"),
         ),
         (
             Put,
@@ -1249,12 +1249,12 @@ mod tests {
         (
             Post,
             "/api/v1/organizations/{organization_id}/ai/test",
-            Gap("checking the AI provider settings"),
+            Tool("ai_analyze"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/ai/test",
-            Gap("checking the AI provider settings"),
+            Tool("ai_analyze"),
         ),
         (
             Post,

@@ -34,6 +34,8 @@
     "task_ready_list": "query",
     "task_from_template": "create",
     "task_import": "create",
+    "bug_report_link_list": "query",
+    "bug_report_link_write": "change",
     "label_list": "query",
     "label_write": "change",
     "field_list": "query",

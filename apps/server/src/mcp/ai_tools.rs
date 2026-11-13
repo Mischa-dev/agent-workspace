@@ -259,6 +259,10 @@ pub(super) struct AiAnalyzeArguments {
     pub task_id: Option<String>,
     /// For taskId: draft acceptance criteria now, as a suggestion.
     pub criteria: Option<bool>,
+    /// Only check that the AI provider settings this project uses (its own,
+    /// or its workspace's) work: one small request, answering with the
+    /// provider, model and how long it took. Nothing is analyzed.
+    pub check: Option<bool>,
 }
 
 pub(super) async fn ai_analyze(
@@ -282,6 +286,34 @@ pub(super) async fn ai_analyze(
             gateway::resolve(state, scope(principal, organization_id), Tier::Quick).await
         {
             return Ok(ai_refusal(error));
+        }
+        if arguments.check == Some(true) {
+            if arguments.task_id.is_some() || arguments.criteria.is_some() {
+                return Ok(ToolResult::invalid(
+                    "check",
+                    "A check goes on its own, without taskId or criteria.",
+                ));
+            }
+            let started = std::time::Instant::now();
+            return Ok(
+                match gateway::run::<Value>(
+                    state,
+                    scope(principal, organization_id),
+                    &crate::ai::prompts::PING,
+                    &json!({}),
+                    Tier::Quick,
+                )
+                .await
+                {
+                    Ok(answer) => ToolResult::ok(json!({
+                        "ok": true,
+                        "provider": answer.provider,
+                        "model": answer.model,
+                        "latencyMs": u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                    })),
+                    Err(error) => ai_refusal(error),
+                },
+            );
         }
         let task_id = match &arguments.task_id {
             Some(reference) => match task_in_project(state, principal, reference).await? {
