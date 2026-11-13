@@ -2028,7 +2028,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Read a sheet's tab: its filled cells in a range in A1 form (\"A1:D20\", \"B:D\", \"2:10\"), each with its computed value and its formula if it has one; or, with asRows, its rows as {header: value} objects using row 1 as the header, filtered with where and paged with offset and limit. Returns the sheet's revision, to pass back as ifRevision when you change a cell you read.",
+        description = "Read a sheet's tab: its filled cells in a range in A1 form (\"A1:D20\", \"B:D\", \"2:10\"), each with its computed value and its formula if it has one; or, with asRows, its rows as {header: value} objects using row 1 as the header, filtered with where and paged with offset and limit. Returns the sheet's revision, to pass back as ifRevision when you change a cell you read. To show a range live in a page, put `[name](/projects/{projectId}/sheets/{sheetId}?tab={tabId}&range=A1:D9 \"embed\")` on a line of its own.",
         annotations(title = "Read a sheet", read_only_hint = true, open_world_hint = false)
     )]
     async fn sheet_read(

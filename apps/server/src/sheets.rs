@@ -20,6 +20,7 @@
 pub mod address;
 pub mod engine;
 pub mod http;
+pub mod transfer;
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -884,6 +885,30 @@ pub async fn apply_with(
             format!("Send up to {MAX_CHANGES} changes at a time."),
         )));
     }
+    apply_unbounded(connection, sheet, actor_id, changes, limit, engine).await
+}
+
+/// Fills a sheet just created from an imported file (see [`transfer`]),
+/// whose changes can number as many as a sheet has cells. The caller has
+/// checked the file against a sheet's limits.
+pub async fn apply_import(
+    connection: &mut PgConnection,
+    sheet: &Sheet,
+    actor_id: Uuid,
+    changes: &[Change],
+    limit: usize,
+) -> Result<Result<Applied, Problem>, AppError> {
+    apply_unbounded(connection, sheet, actor_id, changes, limit, &IronCalc).await
+}
+
+async fn apply_unbounded(
+    connection: &mut PgConnection,
+    sheet: &Sheet,
+    actor_id: Uuid,
+    changes: &[Change],
+    limit: usize,
+    engine: &(impl FormulaEngine + Clone + 'static),
+) -> Result<Result<Applied, Problem>, AppError> {
     let stored_tabs = tabs(&mut *connection, sheet.id).await?;
     let stored_cells = cells(&mut *connection, sheet.id).await?;
     let mut by_tab: HashMap<Uuid, Vec<&StoredCell>> = HashMap::new();

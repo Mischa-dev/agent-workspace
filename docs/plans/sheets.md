@@ -68,6 +68,10 @@ its own that a workspace or role can switch off.
    in place: formulas, copy and paste, resizing, a frozen header, live updates
    from other people and agents (`sheet.updated` events), and cards on a
    phone.
-3. **Pages and files.** A sheet range embedded live in a page through the
-   embed block, and `.xlsx` and CSV import and export (Google Sheets goes
-   through `.xlsx`).
+3. **Pages and files** (this PR). A sheet's tab or range
+   (`/projects/{p}/sheets/{s}?tab=…&range=A1:D9`) embedded live in a page
+   through the embed block; `.xlsx` (every tab, formulas kept) and CSV (one
+   tab's values) export at `…/sheets/{s}/export`; import of either makes a
+   new sheet at `…/sheets/import` or through `sheet_write`'s `import` (a
+   file ID or CSV text). Google Sheets goes through `.xlsx`. Files are up to
+   5 MB, and an `.xlsx` that unpacks past 100 MB is refused.
