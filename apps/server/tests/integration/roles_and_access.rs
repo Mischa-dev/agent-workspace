@@ -836,6 +836,25 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
     )
     .await;
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    // A member caps their own apps, and nobody else's.
+    let own_cap = tool(
+        app,
+        &bea_app,
+        &session,
+        "role_assign",
+        json!({"projectId": work, "person": "@bea", "agentLimit": ["tasks.view", "tasks.edit"]}),
+    )
+    .await;
+    assert_eq!(own_cap["outcome"], "ok", "{own_cap}");
+    let lifted = tool(
+        app,
+        &bea_app,
+        &session,
+        "role_assign",
+        json!({"projectId": work, "person": "@bea", "agentLimit": null}),
+    )
+    .await;
+    assert_eq!(lifted["outcome"], "permission_denied", "{lifted}");
     let owner_app = connect_app(app, &setup.browser, "Owner's app", "full").await;
     let owner_session = initialize(app, &owner_app).await.expect("owner app");
     let written = tool(

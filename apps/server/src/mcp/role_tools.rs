@@ -470,7 +470,8 @@ pub(super) struct RoleAssignArguments {
     /// Cap what apps connected by this person may do, as permission keys
     /// (my_permissions lists them), whatever their role allows; null
     /// removes the cap. People only, not agents; your own, or anyone's if
-    /// you manage members (an owner for an admin's).
+    /// you manage members (an owner for an admin's). An app can only narrow
+    /// the cap it runs under; lifting it takes the web.
     #[serde(default, deserialize_with = "given")]
     #[schemars(with = "Option<Vec<String>>")]
     pub agent_limit: Option<serde_json::Value>,
@@ -604,6 +605,29 @@ pub(super) async fn role_assign(
                 .collect();
         }
         if let Some(limit) = limit {
+            // An app can narrow the cap it runs under, never lift or widen
+            // it: that takes the person, on the web.
+            if actor_id == principal.actor_id {
+                let current = sqlx::query_scalar::<_, Option<Vec<String>>>(
+                    "SELECT agent_limit FROM organization_memberships WHERE organization_id = $1 AND actor_id = $2",
+                )
+                .bind(organization_id)
+                .bind(actor_id)
+                .fetch_optional(&mut *transaction)
+                .await?
+                .flatten();
+                if let Some(current) = current {
+                    let widens = match &limit {
+                        None => true,
+                        Some(keys) => keys.iter().any(|key| !current.contains(key)),
+                    };
+                    if widens {
+                        return Ok(ToolResult::denied(
+                            "An app can only narrow the cap it runs under. Lift or widen it on the web, in your workspace settings.",
+                        ));
+                    }
+                }
+            }
             let keys = roles::set_agent_limit(
                 &mut transaction,
                 &Auditor::App(principal),

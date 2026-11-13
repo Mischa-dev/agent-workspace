@@ -382,4 +382,87 @@ async fn owners_choose_layouts_for_roles_and_people_and_members_only_hide_more()
     .await;
     assert_eq!(as_admin["outcome"], "ok", "{as_admin}");
     assert_eq!(as_admin["value"]["layout"]["preset"], "Minimal");
+
+    // The workspace's default takes a workspace owner or admin: not a
+    // project admin who is only a member of the workspace.
+    let not_workspace_admin = tool(
+        app,
+        &rook_token,
+        &rook_session,
+        "project_layout_set",
+        json!({"projectId": work, "preset": "Minimal", "workspace": true}),
+    )
+    .await;
+    assert_eq!(
+        not_workspace_admin["outcome"], "permission_denied",
+        "{not_workspace_admin}"
+    );
+    let workspace_default = tool(
+        app,
+        &app_token,
+        &session,
+        "project_layout_set",
+        json!({"projectId": work, "preset": "Software team", "workspace": true}),
+    )
+    .await;
+    assert_eq!(workspace_default["outcome"], "ok", "{workspace_default}");
+
+    // Rules: which preset each role or person here gets, replaced whole.
+    let ruled = tool(
+        app,
+        &app_token,
+        &session,
+        "project_layout_set",
+        json!({"projectId": work, "rules": [
+            {"role": "member", "preset": "Simple to-do list"},
+            {"person": rook.to_string(), "preset": "Minimal"},
+        ]}),
+    )
+    .await;
+    assert_eq!(ruled["outcome"], "ok", "{ruled}");
+    assert_eq!(ruled["value"]["rules"], 2, "{ruled}");
+    let mixed = tool(
+        app,
+        &app_token,
+        &session,
+        "project_layout_set",
+        json!({"projectId": work, "preset": "Minimal", "rules": []}),
+    )
+    .await;
+    assert_eq!(mixed["outcome"], "invalid_request", "{mixed}");
+    let both = tool(
+        app,
+        &app_token,
+        &session,
+        "project_layout_set",
+        json!({"projectId": work, "rules": [{"role": "member", "person": rook.to_string(), "preset": "Minimal"}]}),
+    )
+    .await;
+    assert_eq!(both["outcome"], "invalid_request", "{both}");
+    let agent_rules = tool(
+        app,
+        &agent_token,
+        &agent_session,
+        "project_layout_set",
+        json!({"projectId": work, "rules": []}),
+    )
+    .await;
+    assert_eq!(agent_rules["outcome"], "permission_denied", "{agent_rules}");
+    let cleared = tool(
+        app,
+        &app_token,
+        &session,
+        "project_layout_set",
+        json!({"projectId": work, "rules": [{"role": "viewer", "preset": "Minimal"}]}),
+    )
+    .await;
+    assert_eq!(cleared["value"]["rules"], 1, "{cleared}");
+    let stored = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM project_layout_rules WHERE project_id = $1",
+    )
+    .bind(Uuid::parse_str(&work).expect("project id"))
+    .fetch_one(&setup.pool)
+    .await
+    .expect("rules");
+    assert_eq!(stored, 1);
 }
