@@ -62,6 +62,8 @@ describe('sheet model', () => {
     ])
     expect(parseTable(formatTable(rows))).toEqual(rows)
     expect(parseTable('one')).toEqual([['one']])
+    // A column whose last cell is empty keeps that cell.
+    expect(parseTable(formatTable([['new'], ['']]))).toEqual([['new'], ['']])
   })
 
   it('shows values, not formulas', () => {
@@ -118,6 +120,8 @@ describe('sheet model', () => {
     expect(next?.tabs[0].rows).toBe(3)
     // Revision 5 was someone else's: this screen reads the sheet again.
     expect(patched(body(), { revision: 6, previousRevision: 5, tabsChanged: false, truncated: false, changed: [] })).toBeNull()
+    // A write that changed nothing, made after someone else's revision 5.
+    expect(patched(body(), { revision: 5, previousRevision: 5, tabsChanged: false, truncated: false, changed: [] })).toBeNull()
     expect(
       patched(body(), {
         revision: 5,

@@ -107,7 +107,9 @@ export function parseTable(text: string): string[][] {
 
 /** Cells as text another spreadsheet pastes. */
 export function formatTable(rows: string[][]) {
-  return rows.map((row) => row.map((cell) => (/[\t\n"]/.test(cell) ? `"${cell.replace(/"/g, '""')}"` : cell)).join('\t')).join('\n')
+  const text = rows.map((row) => row.map((cell) => (/[\t\n"]/.test(cell) ? `"${cell.replace(/"/g, '""')}"` : cell)).join('\t')).join('\n')
+  // A last line with nothing on it would read back as no line at all, so end the text with a line break.
+  return rows.length && rows[rows.length - 1].every((cell) => cell === '') ? `${text}\n` : text
 }
 
 export type Selection = { anchor: Position; focus: Position }
@@ -134,8 +136,9 @@ export function contains(selection: Selection, row: number, column: number) {
  */
 export function patched(body: SheetBody, result: ChangeResult): SheetBody | null {
   if (result.tabsChanged || result.truncated) return null
-  // A screen already read past this write keeps what it read.
-  if (result.revision > body.sheet.revision + 1 || result.revision < body.sheet.revision) return null
+  // The write must start from what this screen holds (or end where it already is):
+  // a write that changed nothing can still report a revision someone else made.
+  if (result.previousRevision !== body.sheet.revision && result.revision !== body.sheet.revision) return null
   const tab = body.tabs.find((entry) => entry.id === body.tab)
   if (!tab) return null
   const cells = cellMap(body.cells)
