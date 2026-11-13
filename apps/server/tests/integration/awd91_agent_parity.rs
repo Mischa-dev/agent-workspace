@@ -2173,6 +2173,11 @@ async fn people_add_and_archive_repositories_and_agents_only_read_them() {
 
     let untrusted = person("repository_write", adding.clone()).await;
     assert_eq!(untrusted["outcome"], "invalid_request", "{untrusted}");
+    let mut add_and_prepare = adding.clone();
+    add_and_prepare["trustAcknowledged"] = json!(true);
+    add_and_prepare["prepare"] = json!(true);
+    let both = person("repository_write", add_and_prepare).await;
+    assert_eq!(both["outcome"], "invalid_request", "{both}");
     let mut trusted = adding.clone();
     trusted["trustAcknowledged"] = json!(true);
     let added = person("repository_write", trusted.clone()).await;
@@ -2231,5 +2236,380 @@ async fn people_add_and_archive_repositories_and_agents_only_read_them() {
         audited[..2],
         ["repository.registered", "repository.archived"]
     );
+    f.close().await;
+}
+
+#[tokio::test]
+async fn people_change_the_model_lists_and_agents_never_do() {
+    let Some(f) = fixture().await else {
+        return;
+    };
+    let project = f.seed.project_id.to_string();
+    let app = connect_app(&f.app, &f.browser, "Owner's app", "full").await;
+    let session = initialize(&f.app, &app).await.expect("owner MCP");
+    let person = |name: &'static str, arguments: Value| {
+        let app = app.clone();
+        let session = session.clone();
+        let router = f.app.clone();
+        async move { tool(&router, &app, &session, name, arguments).await }
+    };
+
+    // A refresh lists the models through the caller's own account.
+    let unsigned = person(
+        "model_catalog_write",
+        json!({"projectId": project, "harness": "demo", "refresh": true}),
+    )
+    .await;
+    assert_eq!(unsigned["outcome"], "conflict", "{unsigned}");
+    let account = f
+        .web(
+            "POST",
+            &format!("/api/v1/projects/{project}/provider-accounts"),
+            json!({"adapterKind": "demo"}),
+        )
+        .await;
+    f.web(
+        "POST",
+        &format!(
+            "/api/v1/projects/{project}/provider-accounts/{}/login/api-key",
+            account["id"].as_str().expect("account id")
+        ),
+        json!({"apiKey": "demo-key-for-tests"}),
+    )
+    .await;
+    let refreshed = person(
+        "model_catalog_write",
+        json!({"projectId": project, "harness": "demo", "refresh": true}),
+    )
+    .await;
+    assert_eq!(refreshed["outcome"], "ok", "{refreshed}");
+    assert_eq!(refreshed["value"]["done"], "refreshed", "{refreshed}");
+
+    let bad = person(
+        "model_catalog_write",
+        json!({"projectId": project, "harness": "demo", "model": "house-model", "overrides": {"contextWindow": 0}}),
+    )
+    .await;
+    assert_eq!(bad["outcome"], "invalid_request", "{bad}");
+    let saved = person(
+        "model_catalog_write",
+        json!({"projectId": project, "harness": "demo", "model": "house-model", "overrides": {"displayName": "House model", "contextWindow": 32000}}),
+    )
+    .await;
+    assert_eq!(saved["value"]["done"], "saved", "{saved}");
+    let models = saved["value"]["harness"]["catalog"]["models"]
+        .as_array()
+        .expect("models")
+        .clone();
+    let added = models
+        .iter()
+        .find(|model| model["id"] == "house-model")
+        .expect("added model");
+    assert_eq!(added["source"], "manual", "{added}");
+    assert_eq!(added["overrides"]["displayName"], "House model", "{added}");
+
+    // Agents change no model list.
+    for arguments in [
+        json!({"projectId": project, "harness": "demo", "refresh": true}),
+        json!({"projectId": project, "harness": "demo", "model": "house-model", "remove": true}),
+    ] {
+        let refused = tool(
+            &f.app,
+            &f.token,
+            &f.session,
+            "model_catalog_write",
+            arguments,
+        )
+        .await;
+        assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    }
+
+    let removed = person(
+        "model_catalog_write",
+        json!({"projectId": project, "harness": "demo", "model": "house-model", "remove": true}),
+    )
+    .await;
+    assert_eq!(removed["value"]["done"], "removed", "{removed}");
+    let gone = person(
+        "model_catalog_write",
+        json!({"projectId": project, "harness": "demo", "model": "house-model", "remove": true}),
+    )
+    .await;
+    assert_eq!(gone["outcome"], "not_found", "{gone}");
+    let audited = sqlx::query_scalar::<_, String>(
+        "SELECT action FROM audit_events WHERE target_kind = 'organization' AND channel = 'mcp' AND action LIKE 'harness_%' ORDER BY id",
+    )
+    .fetch_all(&f.pool)
+    .await
+    .expect("audit");
+    assert_eq!(
+        audited,
+        [
+            "harness_catalog.refreshed",
+            "harness_model.saved",
+            "harness_model.removed"
+        ]
+    );
+    f.close().await;
+}
+
+#[tokio::test]
+async fn people_make_bug_report_links_and_agents_only_read_them() {
+    let Some(f) = fixture().await else {
+        return;
+    };
+    let project = f.seed.project_id.to_string();
+    let app = connect_app(&f.app, &f.browser, "Owner's app", "full").await;
+    let session = initialize(&f.app, &app).await.expect("owner MCP");
+    let person = |name: &'static str, arguments: Value| {
+        let app = app.clone();
+        let session = session.clone();
+        let router = f.app.clone();
+        async move { tool(&router, &app, &session, name, arguments).await }
+    };
+
+    let made = person(
+        "bug_report_link_write",
+        json!({"projectId": project, "name": "Game"}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let first_url = string(&made, "/value/url");
+    assert!(first_url.contains("/api/v1/bug-reports/awbr_"), "{made}");
+    let link = string(&made, "/value/link/id");
+
+    let paused = person(
+        "bug_report_link_write",
+        json!({"projectId": project, "linkId": link, "name": "Game beta", "state": "paused"}),
+    )
+    .await;
+    assert_eq!(paused["value"]["state"], "paused", "{paused}");
+    assert_eq!(paused["value"]["name"], "Game beta", "{paused}");
+    let replaced = person(
+        "bug_report_link_write",
+        json!({"projectId": project, "linkId": link, "replace": true}),
+    )
+    .await;
+    assert_ne!(string(&replaced, "/value/url"), first_url, "{replaced}");
+    let both = person(
+        "bug_report_link_write",
+        json!({"projectId": project, "linkId": link, "replace": true, "delete": true}),
+    )
+    .await;
+    assert_eq!(both["outcome"], "invalid_request", "{both}");
+
+    // Agents read the links, never their URLs, and change none.
+    let listed = f
+        .call("bug_report_link_list", json!({"projectId": project}))
+        .await;
+    assert_eq!(listed["value"]["links"][0]["name"], "Game beta", "{listed}");
+    assert_eq!(listed["value"]["canCreate"], false, "{listed}");
+    assert!(!listed.to_string().contains("awbr_"), "{listed}");
+    for arguments in [
+        json!({"projectId": project, "name": "Agent link"}),
+        json!({"projectId": project, "linkId": link, "delete": true}),
+    ] {
+        let refused = tool(
+            &f.app,
+            &f.token,
+            &f.session,
+            "bug_report_link_write",
+            arguments,
+        )
+        .await;
+        assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    }
+
+    let deleted = person(
+        "bug_report_link_write",
+        json!({"projectId": project, "linkId": link, "delete": true}),
+    )
+    .await;
+    assert_eq!(deleted["value"]["deleted"], true, "{deleted}");
+    let audited = sqlx::query_scalar::<_, String>(
+        "SELECT action FROM audit_events WHERE target_kind = 'bug_report_link' AND channel = 'mcp' ORDER BY id",
+    )
+    .fetch_all(&f.pool)
+    .await
+    .expect("audit");
+    assert_eq!(
+        audited,
+        [
+            "bug_report_link.create",
+            "bug_report_link.update",
+            "bug_report_link.replace",
+            "bug_report_link.delete"
+        ]
+    );
+    f.close().await;
+}
+
+#[tokio::test]
+async fn an_agent_hides_link_previews_on_its_own_messages_only() {
+    let Some(f) = fixture().await else {
+        return;
+    };
+    let channel = f.seed.channel_id.to_string();
+    let posted = f
+        .web(
+            "POST",
+            &format!("/api/v1/channels/{channel}/messages"),
+            json!({"content": {"version": 1, "nodes": [{"type": "text", "text": "Notes at https://example.com/notes"}]}}),
+        )
+        .await;
+    let theirs = string(&posted, "/message/id");
+    let refused = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "message_preview_hide",
+        json!({"messageId": theirs}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+
+    let sent = f
+        .call(
+            "message_send",
+            json!({"conversationId": channel, "text": "See https://example.com/a and https://example.com/b"}),
+        )
+        .await;
+    let mine = string(&sent, "/value/messageId");
+    let hidden = f
+        .call(
+            "message_preview_hide",
+            json!({"messageId": mine, "url": "https://example.com/a"}),
+        )
+        .await;
+    assert_eq!(hidden["value"]["hidden"], 1, "{hidden}");
+    let again = f
+        .call(
+            "message_preview_hide",
+            json!({"messageId": mine, "url": "https://example.com/a"}),
+        )
+        .await;
+    assert_eq!(again["value"]["hidden"], 0, "{again}");
+    let missing = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "message_preview_hide",
+        json!({"messageId": mine, "url": "https://example.com/c"}),
+    )
+    .await;
+    assert_eq!(missing["outcome"], "not_found", "{missing}");
+    let rest = f
+        .call("message_preview_hide", json!({"messageId": mine}))
+        .await;
+    assert_eq!(rest["value"]["hidden"], 1, "{rest}");
+    let shown = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM message_link_previews WHERE message_id = $1 AND hidden_at IS NULL",
+    )
+    .bind(Uuid::parse_str(&mine).expect("message id"))
+    .fetch_one(&f.pool)
+    .await
+    .expect("previews");
+    assert_eq!(shown, 0);
+    f.close().await;
+}
+
+#[tokio::test]
+async fn an_agent_checks_the_ai_provider_settings() {
+    let Some(f) = fixture().await else {
+        return;
+    };
+    let project = f.seed.project_id.to_string();
+    f.web(
+        "PUT",
+        "/api/v1/settings/values/ai.provider",
+        json!({"scope": "project", "projectId": project, "value": "fake"}),
+    )
+    .await;
+    let checked = f
+        .call("ai_analyze", json!({"projectId": project, "check": true}))
+        .await;
+    assert_eq!(checked["value"]["ok"], true, "{checked}");
+    assert!(checked["value"]["latencyMs"].is_u64(), "{checked}");
+    let mixed = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "ai_analyze",
+        json!({"projectId": project, "check": true, "criteria": true}),
+    )
+    .await;
+    assert_eq!(mixed["outcome"], "invalid_request", "{mixed}");
+    f.close().await;
+}
+
+#[tokio::test]
+async fn people_cap_their_apps_and_agents_never_do() {
+    let Some(f) = fixture().await else {
+        return;
+    };
+    let project = f.seed.project_id.to_string();
+    let me = f.seed.human_actor_id.to_string();
+    let app = connect_app(&f.app, &f.browser, "Owner's app", "full").await;
+    let session = initialize(&f.app, &app).await.expect("owner MCP");
+    let person = |name: &'static str, arguments: Value| {
+        let app = app.clone();
+        let session = session.clone();
+        let router = f.app.clone();
+        async move { tool(&router, &app, &session, name, arguments).await }
+    };
+
+    let neither = person("role_assign", json!({"projectId": project, "person": me})).await;
+    assert_eq!(neither["outcome"], "invalid_request", "{neither}");
+
+    let capped = person(
+        "role_assign",
+        json!({"projectId": project, "person": me, "agentLimit": ["tasks.view"]}),
+    )
+    .await;
+    assert_eq!(capped["outcome"], "ok", "{capped}");
+    assert!(
+        capped["value"]["agentLimit"]
+            .as_array()
+            .is_some_and(|keys| keys.iter().any(|key| key == "tasks.view")),
+        "{capped}"
+    );
+    assert!(capped["value"]["workspaceRole"].is_string(), "{capped}");
+    let stored = sqlx::query_scalar::<_, Option<Vec<String>>>(
+        "SELECT agent_limit FROM organization_memberships WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(f.seed.organization_id)
+    .bind(f.seed.human_actor_id)
+    .fetch_one(&f.pool)
+    .await
+    .expect("limit");
+    assert!(stored.is_some_and(|keys| keys.contains(&"tasks.view".to_owned())));
+
+    // Agents set no one's cap.
+    let refused = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "role_assign",
+        json!({"projectId": project, "person": me, "agentLimit": null}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+
+    // The cap holds for the capped app too: lifting it takes the web.
+    let capped_out = person(
+        "role_assign",
+        json!({"projectId": project, "person": me, "agentLimit": null}),
+    )
+    .await;
+    assert_eq!(capped_out["outcome"], "permission_denied", "{capped_out}");
+    f.web(
+        "PUT",
+        &format!(
+            "/api/v1/organizations/{}/members/{me}/agent-limit",
+            f.seed.organization_id
+        ),
+        json!({"permissions": null}),
+    )
+    .await;
     f.close().await;
 }

@@ -424,6 +424,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "ai_summarize",
     "approval_respond",
     "automation_write",
+    "bug_report_link_write",
     "channel_create",
     "conversation_continue",
     "conversation_members",
@@ -446,10 +447,12 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "message_delete",
     "message_edit",
     "message_forward",
+    "message_preview_hide",
     "message_react",
     "message_schedule",
     "message_send",
     "milestone_write",
+    "model_catalog_write",
     "notification_update",
     "page_comment",
     "page_comment_update",
@@ -473,6 +476,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "repository_write",
     "role_assign",
     "role_write",
+    "run_dismiss_failure",
     "run_request",
     "run_retry",
     "run_start",
@@ -5728,6 +5732,14 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "name": "Net mcp b", "harness": "codex_cloud", "providerEnvironmentId": "env-b", "repositoryId": b.repository}),
         ]),
         mcp_case(
+            "model_catalog_write",
+            json!({"projectId": a.project, "harness": "codex_cloud", "model": "net-model", "overrides": {"displayName": "Net"}}),
+            vec![
+                json!({"projectId": b.project, "harness": "codex_cloud", "model": "net-model", "overrides": {"displayName": "Net"}}),
+                json!({"projectId": b.project, "harness": "codex_cloud", "model": "net-model", "remove": true}),
+            ],
+        ),
+        mcp_case(
             "workspace_update",
             json!({"projectId": a.project, "modules": {"whiteboards": true}}),
             vec![
@@ -5784,10 +5796,14 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         mcp_case(
             "role_assign",
             json!({"projectId": a.project, "person": "@wren", "role": ax.custom_role}),
-            vec![json!({"projectId": b.project, "person": "@wren", "role": "member"})],
+            vec![
+                json!({"projectId": b.project, "person": "@wren", "role": "member"}),
+                json!({"projectId": b.project, "person": "@wren", "agentLimit": ["tasks.view"]}),
+            ],
         )
         .rejecting(vec![
             json!({"projectId": a.project, "person": bx.wren, "role": "member"}),
+            json!({"projectId": a.project, "person": bx.wren, "agentLimit": null}),
             json!({"projectId": a.project, "person": "@wren", "role": bx.custom_role}),
         ]),
         mcp_case(
@@ -5871,6 +5887,11 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "message_delete",
             json!({"messageId": sp.messages[1]}),
             vec![json!({"messageId": b.message})],
+        ),
+        mcp_case(
+            "message_preview_hide",
+            json!({"messageId": a.file_message}),
+            vec![json!({"messageId": b.file_message})],
         ),
         mcp_case(
             "conversation_members",
@@ -6575,6 +6596,16 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         )
         .rejecting(vec![json!({"operation": "redeliver", "webhookId": a.webhook, "deliveryId": bx.delivery})]),
         mcp_case(
+            "bug_report_link_write",
+            json!({"projectId": a.project, "name": "Net mcp link"}),
+            vec![json!({"projectId": b.project, "name": "Net mcp link"})],
+        )
+        .rejecting(vec![
+            json!({"projectId": a.project, "linkId": bx.bug_link, "name": "Net"}),
+            json!({"projectId": a.project, "linkId": bx.bug_link, "replace": true}),
+            json!({"projectId": a.project, "linkId": bx.bug_link, "delete": true}),
+        ]),
+        mcp_case(
             "automation_write",
             with(&with(&rule, "projectId", json!(a.project)), "operation", json!("create"))
                 .as_object()
@@ -6627,7 +6658,10 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         mcp_case(
             "ai_analyze",
             json!({"projectId": a.project, "taskId": a.task}),
-            vec![json!({"projectId": b.project, "taskId": b.task})],
+            vec![
+                json!({"projectId": b.project, "taskId": b.task}),
+                json!({"projectId": b.project, "check": true}),
+            ],
         )
         .rejecting(vec![json!({"projectId": a.project, "taskId": b.task})]),
         mcp_case(
@@ -6761,6 +6795,11 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "run_retry",
             json!({"runId": sp.run_retry, "clientRequestId": "net-retry-own"}),
             vec![json!({"runId": bx.failed_run, "clientRequestId": "net-retry-b"})],
+        ),
+        mcp_case(
+            "run_dismiss_failure",
+            json!({"runId": ax.failed_run}),
+            vec![json!({"runId": bx.failed_run})],
         ),
         mcp_case(
             "launch_cancel",

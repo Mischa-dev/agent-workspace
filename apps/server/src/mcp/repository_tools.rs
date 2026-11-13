@@ -86,7 +86,13 @@ pub(super) async fn repository_write(
         },
     };
     match (existing, adding, prepare, archive) {
-        (None, true, _, false) => {}
+        (None, true, false, false) => {}
+        (None, true, true, _) => {
+            return ToolResult::invalid(
+                "prepare",
+                "Add the repository first, then prepare it with a second call that names it.",
+            );
+        }
         (Some(_), false, true, false) | (Some(_), false, false, true) => {}
         (Some(_), false, true, true) => {
             return ToolResult::invalid("archive", "Either prepare or archive, not both.");
