@@ -676,6 +676,23 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
     .await;
     assert_eq!(mismatched.0, StatusCode::BAD_REQUEST, "{}", mismatched.1);
 
+    // AWD-94: the demo profile registers through the API by harness alone.
+    let registered = send(
+        &application,
+        owner,
+        "POST",
+        &format!("/api/v1/projects/{}/execution-profiles", seed.project_id),
+        "register-demo-profile",
+        json!({"adapterKind": "demo"}),
+    )
+    .await;
+    assert!(
+        registered.0.is_success(),
+        "register demo: {} {}",
+        registered.0,
+        registered.1
+    );
+
     // Managers see a teammate's profile but not the private account behind it.
     sqlx::query("UPDATE project_memberships SET role = 'admin' WHERE handle = 'w2-member'")
         .execute(&pool)
