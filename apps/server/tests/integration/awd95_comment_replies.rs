@@ -115,6 +115,18 @@ async fn replies_quote_a_comment_on_the_same_task_and_tell_its_author() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{removed}");
+    // Retrying the reply returns its stored response, which no longer
+    // quotes the deleted text either.
+    let (status, replayed) = comment(
+        &setup.browser,
+        task_a,
+        "answered",
+        json!({"content": text("Teal"), "replyToCommentId": asked}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{replayed}");
+    assert!(!replayed.to_string().contains("navy"), "{replayed}");
+    assert_eq!(replayed["comment"]["replyTo"]["removed"], true);
     let (status, timeline) = get(&setup, &mara_browser, &format!("{base}/{task_a}/timeline")).await;
     assert_eq!(status, StatusCode::OK, "{timeline}");
     assert!(!timeline.to_string().contains("navy"), "{timeline}");
