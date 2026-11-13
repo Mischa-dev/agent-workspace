@@ -381,6 +381,23 @@ fn links_sql(kind: &str) -> Option<&'static str> {
             UNION ALL
             SELECT 'about', 'incoming', 'whiteboard', whiteboard_id
             FROM whiteboard_links WHERE target_kind = 'work_item' AND target_id = $1
+            UNION ALL
+            SELECT 'about', 'incoming', 'task', comment.work_item_id
+            FROM work_item_comment_references reference
+            JOIN work_item_comments comment ON comment.id = reference.comment_id
+            WHERE reference.referenced_work_item_id = $1 AND comment.removed_at IS NULL
+              AND comment.work_item_id <> $1
+            UNION ALL
+            SELECT 'about', 'incoming', 'conversation', message.conversation_id
+            FROM message_work_item_references reference
+            JOIN messages message ON message.id = reference.message_id
+            WHERE reference.work_item_id = $1 AND message.removed_at IS NULL
+            UNION ALL
+            SELECT 'about', 'incoming', thing_kind, thing_id
+            FROM thing_references WHERE target_id = $1 AND target_kind = 'task'
+            UNION ALL
+            SELECT 'about', 'outgoing', target_kind, target_id
+            FROM thing_references WHERE source_kind = 'task' AND source_id = $1
             "#
         }
         "page" | "decision" => {
@@ -391,6 +408,12 @@ fn links_sql(kind: &str) -> Option<&'static str> {
             UNION ALL
             SELECT 'about', 'incoming', 'whiteboard', whiteboard_id
             FROM whiteboard_links WHERE target_kind = 'page' AND target_id = $1
+            UNION ALL
+            SELECT 'about', 'incoming', thing_kind, thing_id
+            FROM thing_references WHERE target_id = $1 AND target_kind = 'page'
+            UNION ALL
+            SELECT 'about', 'outgoing', target_kind, target_id
+            FROM thing_references WHERE source_kind = 'page' AND source_id = $1
             "#
         }
         "whiteboard" => {
@@ -399,6 +422,9 @@ fn links_sql(kind: &str) -> Option<&'static str> {
                    CASE target_kind WHEN 'work_item' THEN 'task' ELSE target_kind END AS other_kind,
                    target_id AS other_id
             FROM whiteboard_links WHERE whiteboard_id = $1
+            UNION ALL
+            SELECT 'about', 'incoming', thing_kind, thing_id
+            FROM thing_references WHERE target_id = $1 AND target_kind = 'whiteboard'
             "#
         }
         "thread" | "channel" | "conversation" => {
@@ -409,6 +435,10 @@ fn links_sql(kind: &str) -> Option<&'static str> {
             UNION ALL
             SELECT 'about', 'incoming', 'task', work_item_id
             FROM work_item_links WHERE target_kind = 'conversation' AND target_id = $1
+            UNION ALL
+            SELECT 'about', 'incoming', thing_kind, thing_id
+            FROM thing_references
+            WHERE target_id = $1 AND target_kind IN ('thread', 'channel', 'conversation')
             "#
         }
         "project" => {

@@ -139,8 +139,12 @@ Defined in `apps/server/src/modules/contract.rs`, mirrored in
   "Referenced in"). The links stored today (subtasks, dependencies,
   relations, a task's pages, decisions and threads, a whiteboard's links)
   read through `GET /api/v1/things/{kind}/{id}` and the `thing_open` tool, as
-  far as the reader can see, from modules that are on. This is the seam for
-  "Referenced in" (AWD-58).
+  far as the reader can see, from modules that are on. A link to a task,
+  page, whiteboard, thread, channel or conversation written in a message, a
+  page, a task's description or a task comment is kept in
+  `thing_references` by triggers on those tables (every write path), and
+  reads as "About" from the writer and "Referenced in" on the thing; task
+  chips in messages and comments read the same way (AWD-58).
 - **Embeds.** A module offers live blocks for pages by declaring them
   (`embeds`: an id, a label, the kind of thing, and the piece that draws it),
   never by changing the page editor. Docs (AWD-53) reads these.

@@ -10,6 +10,7 @@ mod awd53_page_blocks;
 mod awd53_transfer;
 mod awd54_sheet_files;
 mod awd54_sheets;
+mod awd58_references;
 mod awd76_workspace_templates;
 mod awd89_custom_fields;
 mod awd90_collections;
