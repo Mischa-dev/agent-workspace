@@ -293,46 +293,48 @@ fn link_url(state: &AppState, token: &str) -> String {
     )
 }
 
-/// What the caller may do with links in a project: (add tasks, manage the
-/// project). Not found unless they can see the project.
+/// What the caller may do with links in a project. Not found unless they
+/// can see the project.
 async fn project_rights(
     pool: &PgPool,
     caller: &Caller,
     project_id: Uuid,
-) -> Result<(bool, bool), AppError> {
+) -> Result<Rights, AppError> {
+    // Seeing the project is enough to reach its forms (collections only
+    // need that); task links also need task view.
     let direct = crate::memory::project_access(
         pool,
         caller.actor_id,
         caller.actor_kind,
         project_id,
-        PolicyAction::WorkItemView,
+        PolicyAction::ProjectView,
     )
     .await?;
     if direct {
         return Err(AppError::NotFound("project"));
     }
+    let allowed = async |action| {
+        crate::memory::project_access(pool, caller.actor_id, caller.actor_kind, project_id, action)
+            .await
+            .is_ok()
+    };
     let human = caller.actor_kind == ActorKind::Human;
-    let can_create = human
-        && crate::memory::project_access(
-            pool,
-            caller.actor_id,
-            caller.actor_kind,
-            project_id,
-            PolicyAction::WorkItemCreate,
-        )
-        .await
-        .is_ok();
-    let admin = human
-        && crate::memory::project_access(
-            pool,
-            caller.actor_id,
-            caller.actor_kind,
-            project_id,
-            PolicyAction::ProjectManage,
-        )
-        .await
-        .is_ok();
-    Ok((can_create, admin))
+    let tasks = allowed(PolicyAction::WorkItemView).await;
+    Ok(Rights {
+        tasks,
+        can_create: human && tasks && allowed(PolicyAction::WorkItemCreate).await,
+        admin: human && allowed(PolicyAction::ProjectManage).await,
+    })
+}
+
+/// What a caller may do with a project's links.
+struct Rights {
+    /// Sees task links (task view).
+    tasks: bool,
+    /// Makes task links.
+    can_create: bool,
+    /// Manages everyone's links.
+    admin: bool,
 }
 
 async fn fetch(executor: impl PgExecutor<'_>, link_id: Uuid) -> Result<LinkRow, AppError> {
@@ -371,10 +373,13 @@ pub(crate) async fn link_collection(
 /// manage. Not found otherwise.
 async fn manageable(pool: &PgPool, caller: &Caller, link_id: Uuid) -> Result<LinkRow, AppError> {
     let row = fetch(pool, link_id).await?;
-    let (_, admin) = project_rights(pool, caller, row.project_id)
+    let rights = project_rights(pool, caller, row.project_id)
         .await
         .map_err(|_| AppError::NotFound("bug_report_link"))?;
-    if caller.actor_kind != ActorKind::Human || !(admin || row.owner_actor_id == caller.actor_id) {
+    if caller.actor_kind != ActorKind::Human
+        || (row.collection_id.is_none() && !rights.tasks)
+        || !(rights.admin || row.owner_actor_id == caller.actor_id)
+    {
         return Err(AppError::NotFound("bug_report_link"));
     }
     Ok(row)
@@ -385,7 +390,11 @@ pub(crate) async fn list(
     caller: &Caller,
     project_id: Uuid,
 ) -> Result<LinkList, AppError> {
-    let (can_create, admin) = project_rights(&state.pool, caller, project_id).await?;
+    let Rights {
+        tasks,
+        can_create,
+        admin,
+    } = project_rights(&state.pool, caller, project_id).await?;
     let rows = sqlx::query_as::<_, LinkRow>(&format!(
         "{LINK_SELECT} WHERE link.project_id = $1 ORDER BY link.created_at DESC, link.id DESC LIMIT 100"
     ))
@@ -396,6 +405,7 @@ pub(crate) async fn list(
     Ok(LinkList {
         links: rows
             .into_iter()
+            .filter(|row| tasks || row.collection_id.is_some())
             .map(|row| {
                 let can_manage = human && (admin || row.owner_actor_id == caller.actor_id);
                 view(row, can_manage)
@@ -412,7 +422,9 @@ pub(crate) async fn create(
     request: CreateLink,
 ) -> Result<LinkWithUrl, AppError> {
     let name = normalize_name(&request.name)?;
-    let (can_create, _) = project_rights(&state.pool, caller, project_id).await?;
+    let can_create = project_rights(&state.pool, caller, project_id)
+        .await?
+        .can_create;
     let form = match (request.collection_id, &request.form) {
         (None, None) => {
             if !can_create {
@@ -536,7 +548,9 @@ pub(crate) async fn update(
             project_rights(&state.pool, caller, row.project_id).await?;
             can_add_records(&state.pool, caller, row.project_id).await
         } else {
-            project_rights(&state.pool, caller, row.project_id).await?.0
+            project_rights(&state.pool, caller, row.project_id)
+                .await?
+                .can_create
         };
         if !allowed {
             return Err(AppError::Forbidden);

@@ -226,6 +226,10 @@ const ALSO_OPENED_BY: &[(&str, Permission)] = &[
     ("task_update", TasksDelete),
     ("task_update_many", TasksDelete),
     ("file_upload", TasksEdit),
+    // Forms add a collection's records (AWD-110); the handler checks each
+    // write against what it makes.
+    ("bug_report_link_list", CollectionsEdit),
+    ("bug_report_link_write", CollectionsEdit),
 ];
 
 /// Whether a caller holding `reach` may use a tool at all. A tool missing

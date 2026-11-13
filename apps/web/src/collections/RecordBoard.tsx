@@ -71,6 +71,14 @@ function Board({ body, config, editable, edits, field, filtered, onClearFilters,
   const columns = useMemo(() => boardColumns(field, first?.groups ?? []), [field, first?.groups])
   const shown = viewColumns(body.fields, config).filter((column) => column.field.id !== field.id)
   const [moved, setMoved] = useState<Moved[]>([])
+  // Another search or filter is another board: a move waiting on a column
+  // that won't load it under the new query is dropped, not shown.
+  const boardQuery = recordsParams({ ...query, groupBy: field.id })
+  const [movedFor, setMovedFor] = useState(boardQuery)
+  if (movedFor !== boardQuery) {
+    setMovedFor(boardQuery)
+    setMoved([])
+  }
   const ghostRef = useRef<HTMLDivElement>(null)
   const scrollerRef = useRef<HTMLDivElement>(null)
   // Each column's cards as it shows them, to find the one a drop names.
