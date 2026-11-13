@@ -1,0 +1,21 @@
+Draft patch — PR #104 project_reference ambiguity (CONFIRMED, verdicts.md item 7). project_reference fetched LIMIT 2 then silently returned matches.first(), so project_archive could archive/restore the wrong organization's project when two of the caller's orgs share a key. Refuses ambiguity (returns None), mirroring project_by_key in mcp.rs. Uncompiled in the authoring sandbox; run cargo check before landing.
+
+diff --git a/apps/server/src/mcp/admin.rs b/apps/server/src/mcp/admin.rs
+index 1224173..d54353f 100644
+--- a/apps/server/src/mcp/admin.rs
++++ b/apps/server/src/mcp/admin.rs
+@@ -1069,7 +1069,13 @@ async fn project_reference(
+     .bind(reference.trim())
+     .fetch_all(&state.pool)
+     .await?;
+-    Ok(matches.first().copied())
++    // Keys are organization-scoped: when two of the caller's organizations
++    // use the same key, refuse to guess — archiving the wrong project is
++    // destructive. Mirrors project_by_key in mcp.rs.
++    match matches.as_slice() {
++        [project_id] => Ok(Some(*project_id)),
++        _ => Ok(None),
++    }
+ }
+ 
+ // ---------------------------------------------------------------------------

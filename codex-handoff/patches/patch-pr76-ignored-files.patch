@@ -1,0 +1,63 @@
+Draft patch — PR #76 ignored files (CONFIRMED, verdicts.md item 42). worktree_is_dirty never lists ignored files, so an ignored-only worktree reported clean and git worktree remove silently deleted the ignored files (they exist in no commit). Adds worktree_has_ignored_files (--ignored=matching, '!!' entries) and refuses removal in both remove paths. Scoped to removal only: publish/retry dirtiness keeps its narrower meaning. Uncompiled in the authoring sandbox; run cargo check + git_runtime tests before landing; a regression test beside the worktree tests (~git_runtime.rs:1516) is recommended when landing.
+
+diff --git a/apps/server/src/git_runtime.rs b/apps/server/src/git_runtime.rs
+index cd8c172..d37dd50 100644
+--- a/apps/server/src/git_runtime.rs
++++ b/apps/server/src/git_runtime.rs
+@@ -563,6 +563,12 @@ pub fn remove_clean_worktree(mirror: &Path, worktree: &Path) -> Result<(), AppEr
+             "dirty worktree is retained",
+         ));
+     }
++    if worktree_has_ignored_files(worktree)? {
++        return Err(AppError::Conflict(
++            "git_worktree",
++            "worktree holding only ignored files is retained",
++        ));
++    }
+     let repository_root = mirror
+         .parent()
+         .ok_or(AppError::Invalid("mirror has no repository root"))?;
+@@ -597,6 +603,12 @@ pub fn remove_published_worktree(
+             "dirty worktree is retained",
+         ));
+     }
++    if worktree_has_ignored_files(worktree)? {
++        return Err(AppError::Conflict(
++            "git_worktree",
++            "worktree holding only ignored files is retained",
++        ));
++    }
+     if inspection.branch != expected_branch {
+         return Err(AppError::Conflict(
+             "git_worktree",
+@@ -771,6 +783,30 @@ pub fn worktree_is_dirty(worktree: &Path) -> Result<bool, AppError> {
+     Ok(!output.stdout.is_empty())
+ }
+ 
++/// Ignored files are invisible to `worktree_is_dirty`, but `git worktree
++/// remove` deletes them along with the worktree — and being ignored, they
++/// exist in no commit, so the loss is silent and unrecoverable. Removal
++/// paths check for them separately and retain the worktree instead.
++/// (Publish/retry dirtiness deliberately keeps the narrower meaning.)
++fn worktree_has_ignored_files(worktree: &Path) -> Result<bool, AppError> {
++    if !worktree.is_absolute() || !worktree.is_dir() {
++        return Err(AppError::Conflict("git_worktree", "worktree is not ready"));
++    }
++    let output = run_git([
++        "-C",
++        &worktree.to_string_lossy(),
++        "status",
++        "--porcelain=v1",
++        "-z",
++        "--untracked-files=all",
++        "--ignored=matching",
++    ])?;
++    Ok(output
++        .stdout
++        .split(|byte| *byte == 0)
++        .any(|entry| entry.starts_with(b"!!")))
++}
++
+ /// One file a run changed, against its base (H5).
+ #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+ #[serde(rename_all = "camelCase")]
