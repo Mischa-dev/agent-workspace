@@ -89,12 +89,28 @@ fn scope<'a>(template: &str, param: impl Fn(&str) -> Option<&'a str>) -> Option<
     }
 }
 
+/// Routes of the Projects module that pages in the workspace space still
+/// use, though only Pages is on there (AWD-96): what the person sees there,
+/// where they were, and who they can mention.
+const SPACE_PLUMBING: [(&str, Option<Method>); 3] = [
+    ("/api/v1/projects/{project_id}/layout", Some(Method::GET)),
+    ("/api/v1/projects/{id}/navigation", None),
+    ("/api/v1/projects/{id}/mentionable-actors", None),
+];
+
+fn space_plumbing(template: &str, method: &Method) -> bool {
+    SPACE_PLUMBING
+        .iter()
+        .any(|(route, only)| *route == template && only.as_ref().is_none_or(|only| only == method))
+}
+
 /// The module that's off where the request acts, if any: the route's own,
 /// or Projects for anything in a project while Projects is off.
 async fn off_module(
     state: &AppState,
     module: &'static Manifest,
     scope: &Scope,
+    plumbing: bool,
 ) -> Result<Option<&'static str>, AppError> {
     let (organization_id, kind) = match scope {
         Scope::Workspace(id) => (*id, None),
@@ -134,6 +150,9 @@ async fn off_module(
             // DMs live in a hidden project and follow the Messages switch,
             // which their own handlers check.
             if kind == "direct" {
+                return Ok(None);
+            }
+            if kind == "workspace" && plumbing {
                 return Ok(None);
             }
             (organization_id, Some(kind))
@@ -240,12 +259,13 @@ pub async fn refuse_off_modules(
                     .iter()
                     .find_map(|(key, value)| (key == name).then_some(value))
             })?;
-            module.switchable.then_some((module, scope))
+            let plumbing = space_plumbing(matched.as_str(), request.method());
+            module.switchable.then_some((module, scope, plumbing))
         });
-    if let Some((module, scope)) = module {
+    if let Some((module, scope, plumbing)) = module {
         // Who's asking only matters once something is off, so the common
         // case stays free of the session lookup.
-        let refused = match off_module(&state, module, &scope).await {
+        let refused = match off_module(&state, module, &scope, plumbing).await {
             Ok(Some(off)) => caller_can_see(&state, request.headers(), &scope)
                 .await
                 .map(|seen| seen.then_some(off)),

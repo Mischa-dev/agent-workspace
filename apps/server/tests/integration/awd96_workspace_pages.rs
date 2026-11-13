@@ -88,6 +88,24 @@ async fn workspace_pages_reach_the_whole_workspace_and_nobody_else() {
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     assert_eq!(body["error"]["code"], "module_off", "{body}");
+    // Its pages still get what the person sees there and where they were,
+    // but not a project's members or settings.
+    for path in ["layout", "navigation"] {
+        let (status, body) = get(
+            &setup,
+            &bea_browser,
+            &format!("/api/v1/projects/{space}/{path}"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{path}: {body}");
+    }
+    let (status, body) = get(
+        &setup,
+        &setup.browser,
+        &format!("/api/v1/projects/{space}/members"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
 
     // Projects off: the workspace's pages stay, a project's pages go.
     let (status, body) = switch(
@@ -103,6 +121,13 @@ async fn workspace_pages_reach_the_whole_workspace_and_nobody_else() {
         &setup,
         &setup.browser,
         &format!("/api/v1/projects/{space}/pages"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = get(
+        &setup,
+        &setup.browser,
+        &format!("/api/v1/projects/{space}/layout"),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
