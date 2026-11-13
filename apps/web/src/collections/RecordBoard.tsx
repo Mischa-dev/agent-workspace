@@ -222,16 +222,30 @@ function Column({
     return [...here, ...joined]
   }, [column.key, columns, field, loaded, moved])
   useEffect(() => onCards(column.key, cards), [cards, column.key, onCards])
-  // Once this column's list has a card moved here, or has reloaded since
-  // its save landed, the list shows what's true on its own.
-  const updatedAt = records.dataUpdatedAt
+  // When the newest fetch from the server that worked began. Patches to the
+  // cache (an edit elsewhere) aren't fetches, so they don't count.
+  const [fetchedFrom, setFetchedFrom] = useState(0)
+  const fetchStarted = useRef<number | null>(null)
+  const fetching = records.isFetching
+  const failed = records.isError
+  useEffect(() => {
+    if (fetching) {
+      fetchStarted.current ??= Date.now()
+      return
+    }
+    const started = fetchStarted.current
+    fetchStarted.current = null
+    if (started !== null && !failed) setFetchedFrom(started)
+  }, [failed, fetching])
+  // Once this column's list has a card moved here, or has been fetched
+  // again since its save landed, the list shows what's true on its own.
   useEffect(() => {
     for (const entry of moved) {
       if (entry.key !== column.key) continue
       const listed = loaded.some((record) => record.id === entry.record.id && boardKey(record, field, columns) === column.key)
-      if (listed || (entry.savedAt !== undefined && updatedAt > entry.savedAt)) onArrived(entry.record.id)
+      if (listed || (entry.savedAt !== undefined && fetchedFrom > entry.savedAt)) onArrived(entry.record.id)
     }
-  }, [column.key, columns, field, loaded, moved, onArrived, updatedAt])
+  }, [column.key, columns, fetchedFrom, field, loaded, moved, onArrived])
   const label = column.label || 'No value'
 
   return (
