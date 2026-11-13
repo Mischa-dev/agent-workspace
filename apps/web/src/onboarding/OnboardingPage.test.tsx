@@ -81,7 +81,8 @@ describe('OnboardingPage', () => {
 
     expect(await screen.findByRole('heading', { name: 'Add your first tasks' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Add your first tasks/ })).toHaveAttribute('aria-current', 'step')
-    expect(screen.getByText(/6 of 9 done/)).toBeInTheDocument()
+    // The count names the project it's for, which follows the project opened last.
+    expect(screen.getByText(new RegExp(`6 of 9 done in ${project.name}`))).toBeInTheDocument()
 
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Add a dark theme' } })
     fireEvent.change(screen.getByLabelText('Acceptance criteria'), { target: { value: '- Follows the system\n\nRemembers the choice' } })
