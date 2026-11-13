@@ -1091,9 +1091,14 @@ pub(super) async fn record_query(
         let groups =
             query::group_counts(&mut *connection, project_id, collection.id, &spec).await?;
         let ids = page.rows.iter().map(|(id, _)| *id).collect::<Vec<_>>();
-        let found =
-            records::by_ids(&mut *connection, project_id, collection.id, &ids, spec.tasks)
-                .await?;
+        let found = records::by_ids(
+            &mut *connection,
+            project_id,
+            collection.id,
+            &ids,
+            spec.tasks,
+        )
+        .await?;
         let references = work_item_fields::references(
             &mut connection,
             project_id,

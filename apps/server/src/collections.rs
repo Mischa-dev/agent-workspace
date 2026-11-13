@@ -77,7 +77,13 @@ pub async fn field_definitions(
     if builtin.as_deref() == Some(tasks::BUILTIN) {
         return tasks::fields(connection, project_id, include_archived).await;
     }
-    fields::list(&mut *connection, project_id, kind(collection_id), include_archived).await
+    fields::list(
+        &mut *connection,
+        project_id,
+        kind(collection_id),
+        include_archived,
+    )
+    .await
 }
 
 // ---------------------------------------------------------------------------

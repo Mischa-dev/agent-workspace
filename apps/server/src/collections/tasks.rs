@@ -82,7 +82,13 @@ fn status_color(category: &str) -> &'static str {
     }
 }
 
-fn builtin(id: Uuid, name: &str, field_type: FieldType, options: Vec<ChoiceOption>, position: i32) -> FieldDefinition {
+fn builtin(
+    id: Uuid,
+    name: &str,
+    field_type: FieldType,
+    options: Vec<ChoiceOption>,
+    position: i32,
+) -> FieldDefinition {
     FieldDefinition {
         id,
         name: name.to_owned(),
@@ -163,19 +169,31 @@ pub async fn fields(
     ];
     let count = found.len() as i32;
     found.extend(
-        fields::list(&mut *connection, project_id, RecordKind::Task, include_archived)
-            .await?
-            .into_iter()
-            // A task field named like a built-in one keeps its own name
-            // only where it can't be confused: built-in names win.
-            .filter(|field| {
-                !["status", "assignee", "priority", "start date", "due date", "labels"]
-                    .contains(&field.name.to_lowercase().as_str())
-            })
-            .map(|mut field| {
-                field.position += count;
-                field
-            }),
+        fields::list(
+            &mut *connection,
+            project_id,
+            RecordKind::Task,
+            include_archived,
+        )
+        .await?
+        .into_iter()
+        // A task field named like a built-in one keeps its own name
+        // only where it can't be confused: built-in names win.
+        .filter(|field| {
+            ![
+                "status",
+                "assignee",
+                "priority",
+                "start date",
+                "due date",
+                "labels",
+            ]
+            .contains(&field.name.to_lowercase().as_str())
+        })
+        .map(|mut field| {
+            field.position += count;
+            field
+        }),
     );
     Ok(found)
 }
@@ -224,11 +242,18 @@ pub fn group_sql(field: &FieldDefinition, column: &str, project: &str) -> Option
                status.position::bigint AS position \
                FROM work_item_statuses status \
                WHERE status.project_id = {project} AND status.id::text = {text}) group_field ON true",
-            colors = ["backlog", "unstarted", "started", "review", "verification", "completed"]
-                .iter()
-                .map(|category| format!("WHEN '{category}' THEN '{}'", status_color(category)))
-                .collect::<Vec<_>>()
-                .join(" "),
+            colors = [
+                "backlog",
+                "unstarted",
+                "started",
+                "review",
+                "verification",
+                "completed"
+            ]
+            .iter()
+            .map(|category| format!("WHEN '{category}' THEN '{}'", status_color(category)))
+            .collect::<Vec<_>>()
+            .join(" "),
         )
     } else if field.id == PRIORITY {
         let values = PRIORITIES

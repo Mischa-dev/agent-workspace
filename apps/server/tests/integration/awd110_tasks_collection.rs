@@ -105,7 +105,11 @@ async fn a_projects_tasks_read_as_its_built_in_collection() {
         .map(|field| field["name"].as_str().unwrap_or_default().to_owned())
         .collect::<Vec<_>>();
     assert!(
-        names.starts_with(&["Status".to_owned(), "Assignee".to_owned(), "Priority".to_owned()]),
+        names.starts_with(&[
+            "Status".to_owned(),
+            "Assignee".to_owned(),
+            "Priority".to_owned()
+        ]),
         "{names:?}"
     );
     let high = call(
@@ -194,13 +198,19 @@ async fn a_projects_tasks_read_as_its_built_in_collection() {
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
-    let tasks_now = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM work_items WHERE project_id = $1::uuid",
+    // Nor does a form add to it.
+    let form = call(
+        "bug_report_link_write",
+        json!({"projectId": "WORK", "name": "Task form", "collection": "Tasks"}),
     )
-    .bind(&work)
-    .fetch_one(&setup.pool)
-    .await
-    .expect("count");
+    .await;
+    assert_eq!(form["outcome"], "invalid_request", "{form}");
+    let tasks_now =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM work_items WHERE project_id = $1::uuid")
+            .bind(&work)
+            .fetch_one(&setup.pool)
+            .await
+            .expect("count");
     assert_eq!(tasks_now, 3);
 
     // Another project's Tasks collection is its own, and this one's ID

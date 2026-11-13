@@ -1470,8 +1470,14 @@ async fn list_records(
     let total = query::total(&mut *connection, project_id, collection_id, &spec).await?;
     let groups = query::group_counts(&mut *connection, project_id, collection_id, &spec).await?;
     let ids = page.rows.iter().map(|(id, _)| *id).collect::<Vec<_>>();
-    let found =
-        records::by_ids(&mut *connection, project_id, collection_id, &ids, spec.tasks).await?;
+    let found = records::by_ids(
+        &mut *connection,
+        project_id,
+        collection_id,
+        &ids,
+        spec.tasks,
+    )
+    .await?;
     let references = records::references(&mut connection, project_id, &definitions, &found).await?;
     let mut groups_by_id = page.rows.into_iter().collect::<HashMap<_, _>>();
     Ok(Json(RecordPage {
