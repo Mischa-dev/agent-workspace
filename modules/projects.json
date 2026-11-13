@@ -21,6 +21,7 @@
     "invitation_list": "query",
     "invitation_write": "change",
     "project_layout_set": "change",
+    "layout_preset_write": "change",
     "project_export": "query"
   },
   "routes": [

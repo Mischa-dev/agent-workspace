@@ -573,19 +573,75 @@ pub fn decode_data_url(data_url: &str, mime_type: &str) -> Result<Vec<u8>, AppEr
     let encoded = data_url
         .strip_prefix(&prefix)
         .ok_or(AppError::Validation("dataURL"))?;
-    if encoded.len() > MAX_FILE_BYTES / 3 * 4 + 8 {
-        return Err(AppError::PayloadTooLarge);
-    }
-    let data = base64::engine::general_purpose::STANDARD
-        .decode(encoded)
-        .map_err(|_| AppError::Validation("dataURL"))?;
-    if data.is_empty() || data.len() > MAX_FILE_BYTES {
-        return Err(AppError::PayloadTooLarge);
-    }
+    let data = decode_base64(encoded).ok_or(AppError::Validation("dataURL"))??;
     if !content_matches(mime_type, &data) {
         return Err(AppError::Validation("mimeType"));
     }
     Ok(data)
+}
+
+/// Up to `MAX_FILE_BYTES` of base64. None when it isn't base64.
+fn decode_base64(encoded: &str) -> Option<Result<Vec<u8>, AppError>> {
+    if encoded.len() > MAX_FILE_BYTES / 3 * 4 + 8 {
+        return Some(Err(AppError::PayloadTooLarge));
+    }
+    let data = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .ok()?;
+    if data.is_empty() || data.len() > MAX_FILE_BYTES {
+        return Some(Err(AppError::PayloadTooLarge));
+    }
+    Some(Ok(data))
+}
+
+/// An image an agent sent as base64, with its type (given, or recognized
+/// from its bytes) and the id Excalidraw would give it: named by content,
+/// so the same image stored twice is stored once.
+pub fn decode_image(
+    encoded: &str,
+    mime_type: Option<&str>,
+) -> Result<(String, String, Vec<u8>), AppError> {
+    let data = decode_base64(encoded.trim()).ok_or(AppError::Validation("dataBase64"))??;
+    let mime_type = match mime_type {
+        Some(mime_type) => mime_type.to_owned(),
+        None => [
+            "image/png",
+            "image/jpeg",
+            "image/gif",
+            "image/webp",
+            "image/svg+xml",
+        ]
+        .into_iter()
+        .find(|mime_type| content_matches(mime_type, &data))
+        .ok_or(AppError::Validation("mimeType"))?
+        .to_owned(),
+    };
+    if !allowed_mime(&mime_type) || !content_matches(&mime_type, &data) {
+        return Err(AppError::Validation("mimeType"));
+    }
+    use sha2::Digest;
+    let digest = sha2::Sha256::digest(&data);
+    let id = digest
+        .iter()
+        .take(20)
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Ok((id, mime_type, data))
+}
+
+/// Which of these files the board has.
+pub async fn stored_files(
+    transaction: &mut Transaction<'_, Postgres>,
+    whiteboard_id: Uuid,
+    file_ids: &[String],
+) -> Result<Vec<String>, AppError> {
+    Ok(sqlx::query_scalar::<_, String>(
+        "SELECT file_id FROM whiteboard_files WHERE whiteboard_id = $1 AND file_id = ANY($2)",
+    )
+    .bind(whiteboard_id)
+    .bind(file_ids)
+    .fetch_all(&mut **transaction)
+    .await?)
 }
 
 pub fn allowed_mime(mime_type: &str) -> bool {

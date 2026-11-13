@@ -1787,22 +1787,54 @@ async fn create_preset(
     ApiJson(request): ApiJson<PresetRequest>,
 ) -> Result<(StatusCode, Json<SavedPreset>), AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let name = preset_name(&request.name)?;
-    let description = preset_description(&request.description)?;
     let mut transaction = state.pool.begin().await?;
     settings::authorize_workspace_manage(&mut *transaction, &principal, organization_id).await?;
+    let preset = create_preset_in(
+        &mut transaction,
+        principal.actor_id,
+        organization_id,
+        &request.name,
+        &request.description,
+        request.layout,
+    )
+    .await?;
+    settings::audit(
+        &mut transaction,
+        &headers,
+        &principal,
+        None,
+        "layout.preset_created",
+        "layout_preset",
+        Some(preset.id),
+        json!({ "name": preset.name, "base": preset.base, "organizationId": organization_id }),
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok((StatusCode::CREATED, Json(preset)))
+}
+
+/// Saves a layout as one of the workspace's presets, for a caller already
+/// allowed to manage the workspace. Not audited here.
+pub(crate) async fn create_preset_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    organization_id: Uuid,
+    name: &str,
+    description: &str,
+    layout: Layout,
+) -> Result<SavedPreset, AppError> {
+    let name = preset_name(name)?;
+    let description = preset_description(description)?;
     let count = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM layout_presets WHERE organization_id = $1 AND removed_at IS NULL",
     )
     .bind(organization_id)
-    .fetch_one(&mut *transaction)
+    .fetch_one(&mut **transaction)
     .await?;
     if count >= MAX_SAVED_PRESETS {
         return Err(AppError::Conflict("layout preset", "too_many"));
     }
-    let (base, changes, words) =
-        flattened(&mut transaction, organization_id, request.layout).await?;
-    let id = Uuid::now_v7();
+    let (base, changes, words) = flattened(transaction, organization_id, layout).await?;
     let preset = sqlx::query_as::<_, SavedRow>(&format!(
         r#"
         INSERT INTO layout_presets (
@@ -1812,30 +1844,18 @@ async fn create_preset(
         RETURNING {SAVED_COLUMNS}
         "#
     ))
-    .bind(id)
+    .bind(Uuid::now_v7())
     .bind(organization_id)
     .bind(&name)
     .bind(&description)
     .bind(&base)
     .bind(to_json(&changes)?)
     .bind(to_json(&words)?)
-    .bind(principal.actor_id)
-    .fetch_one(&mut *transaction)
+    .bind(actor_id)
+    .fetch_one(&mut **transaction)
     .await
     .map_err(unique_name)?;
-    settings::audit(
-        &mut transaction,
-        &headers,
-        &principal,
-        None,
-        "layout.preset_created",
-        "layout_preset",
-        Some(id),
-        json!({ "name": name, "base": base, "organizationId": organization_id }),
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok((StatusCode::CREATED, Json(preset.into())))
+    Ok(preset.into())
 }
 
 #[derive(Debug, Deserialize)]
@@ -1861,6 +1881,14 @@ async fn lock_preset(
     preset_id: Uuid,
 ) -> Result<i64, AppError> {
     settings::authorize_workspace_manage(&mut **transaction, principal, organization_id).await?;
+    lock_preset_row(transaction, organization_id, preset_id).await
+}
+
+async fn lock_preset_row(
+    transaction: &mut Transaction<'_, Postgres>,
+    organization_id: Uuid,
+    preset_id: Uuid,
+) -> Result<i64, AppError> {
     sqlx::query_scalar::<_, i64>(
         r#"
         SELECT version FROM layout_presets
@@ -1884,15 +1912,51 @@ async fn change_preset(
     ApiJson(request): ApiJson<PresetChange>,
 ) -> Result<Json<SavedPreset>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let name = request.name.as_deref().map(preset_name).transpose()?;
-    let description = request
-        .description
-        .as_deref()
-        .map(preset_description)
-        .transpose()?;
     let mut transaction = state.pool.begin().await?;
-    let version = lock_preset(&mut transaction, &principal, organization_id, preset_id).await?;
-    if let Some(expected) = request.expected_version
+    settings::authorize_workspace_manage(&mut *transaction, &principal, organization_id).await?;
+    let preset = change_preset_in(
+        &mut transaction,
+        principal.actor_id,
+        organization_id,
+        preset_id,
+        request.name.as_deref(),
+        request.description.as_deref(),
+        request.layout,
+        request.expected_version,
+    )
+    .await?;
+    settings::audit(
+        &mut transaction,
+        &headers,
+        &principal,
+        None,
+        "layout.preset_changed",
+        "layout_preset",
+        Some(preset_id),
+        json!({ "name": preset.name, "version": preset.version, "organizationId": organization_id }),
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(Json(preset))
+}
+
+/// Changes one of the workspace's saved presets, for a caller already
+/// allowed to manage the workspace. Not audited here.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn change_preset_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    organization_id: Uuid,
+    preset_id: Uuid,
+    name: Option<&str>,
+    description: Option<&str>,
+    layout: Option<Layout>,
+    expected_version: Option<i64>,
+) -> Result<SavedPreset, AppError> {
+    let name = name.map(preset_name).transpose()?;
+    let description = description.map(preset_description).transpose()?;
+    let version = lock_preset_row(transaction, organization_id, preset_id).await?;
+    if let Some(expected) = expected_version
         && expected != version
     {
         return Err(AppError::VersionConflict {
@@ -1900,8 +1964,8 @@ async fn change_preset(
             current_version: version,
         });
     }
-    let shape = match request.layout {
-        Some(layout) => Some(flattened(&mut transaction, organization_id, layout).await?),
+    let shape = match layout {
+        Some(layout) => Some(flattened(transaction, organization_id, layout).await?),
         None => None,
     };
     let (base, changes, words) = match &shape {
@@ -1930,23 +1994,11 @@ async fn change_preset(
     .bind(&base)
     .bind(changes)
     .bind(words)
-    .bind(principal.actor_id)
-    .fetch_one(&mut *transaction)
+    .bind(actor_id)
+    .fetch_one(&mut **transaction)
     .await
     .map_err(unique_name)?;
-    settings::audit(
-        &mut transaction,
-        &headers,
-        &principal,
-        None,
-        "layout.preset_changed",
-        "layout_preset",
-        Some(preset_id),
-        json!({ "name": preset.name, "version": preset.version, "organizationId": organization_id }),
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(Json(preset.into()))
+    Ok(preset.into())
 }
 
 /// `DELETE /api/v1/organizations/{organization_id}/layout/presets/{preset_id}`:
@@ -1960,19 +2012,12 @@ async fn remove_preset(
     require_authenticated_write(&state, &headers, &principal)?;
     let mut transaction = state.pool.begin().await?;
     lock_preset(&mut transaction, &principal, organization_id, preset_id).await?;
-    let name = sqlx::query_scalar::<_, String>(
-        r#"
-        UPDATE layout_presets
-        SET removed_at = now(), version = version + 1, updated_by_actor_id = $3,
-            updated_at = now()
-        WHERE id = $1 AND organization_id = $2
-        RETURNING name
-        "#,
+    let name = remove_preset_in(
+        &mut transaction,
+        principal.actor_id,
+        organization_id,
+        preset_id,
     )
-    .bind(preset_id)
-    .bind(organization_id)
-    .bind(principal.actor_id)
-    .fetch_one(&mut *transaction)
     .await?;
     settings::audit(
         &mut transaction,
@@ -1987,6 +2032,31 @@ async fn remove_preset(
     .await?;
     transaction.commit().await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Takes a saved preset out of pickers, for a caller already allowed to
+/// manage the workspace. Returns its name. Not audited here.
+pub(crate) async fn remove_preset_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    organization_id: Uuid,
+    preset_id: Uuid,
+) -> Result<String, AppError> {
+    lock_preset_row(transaction, organization_id, preset_id).await?;
+    Ok(sqlx::query_scalar::<_, String>(
+        r#"
+        UPDATE layout_presets
+        SET removed_at = now(), version = version + 1, updated_by_actor_id = $3,
+            updated_at = now()
+        WHERE id = $1 AND organization_id = $2
+        RETURNING name
+        "#,
+    )
+    .bind(preset_id)
+    .bind(organization_id)
+    .bind(actor_id)
+    .fetch_one(&mut **transaction)
+    .await?)
 }
 
 #[cfg(test)]

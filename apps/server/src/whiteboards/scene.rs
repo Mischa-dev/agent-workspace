@@ -217,9 +217,18 @@ pub struct Operation {
     /// The elements move, delete, align, distribute, layout, group, ungroup
     /// and order act on. layout without ids lays out every shape.
     pub ids: Option<Vec<String>>,
-    /// For add: rectangle, ellipse, diamond, text, arrow, line, or frame.
+    /// For add: rectangle, ellipse, diamond, text, arrow, line, frame, or
+    /// image.
     #[serde(rename = "type")]
     pub kind: Option<String>,
+    /// For an added image: one already on this board, by its file id.
+    pub file_id: Option<String>,
+    /// Or the image itself, base64 (PNG, JPEG, GIF, WebP or SVG, up to 4
+    /// MiB). Give width and height to size it; it's 320 by 240 otherwise.
+    pub data_base64: Option<String>,
+    /// The image's type, such as image/png; recognized from its bytes when
+    /// left out.
+    pub mime_type: Option<String>,
     pub x: Option<f64>,
     pub y: Option<f64>,
     pub width: Option<f64>,
@@ -766,10 +775,9 @@ impl Scene {
     }
 
     fn add(&mut self, operation: &Operation) -> Result<Vec<String>, OpError> {
-        let kind = operation
-            .kind
-            .as_deref()
-            .ok_or("add needs a type: rectangle, ellipse, diamond, text, arrow, line, or frame.")?;
+        let kind = operation.kind.as_deref().ok_or(
+            "add needs a type: rectangle, ellipse, diamond, text, arrow, line, frame, or image.",
+        )?;
         let new_id = self.new_id(operation.id.as_deref())?;
         let (x, y) = (operation.x.unwrap_or(0.0), operation.y.unwrap_or(0.0));
         let mut created = vec![new_id.clone()];
@@ -860,9 +868,29 @@ impl Scene {
                     created.extend(self.label_of(&new_id));
                 }
             }
+            "image" => {
+                let file_id = operation
+                    .file_id
+                    .as_deref()
+                    .ok_or("An image needs its dataBase64, or the fileId of one on this board.")?;
+                let b = Bounds {
+                    x,
+                    y,
+                    width: positive(operation.width, "width")?.unwrap_or(320.0),
+                    height: positive(operation.height, "height")?.unwrap_or(240.0),
+                };
+                let mut element = self.base(kind, &new_id, b);
+                element.insert("fileId".to_owned(), json!(file_id));
+                element.insert("status".to_owned(), json!("saved"));
+                element.insert("scale".to_owned(), json!([1, 1]));
+                element.insert("crop".to_owned(), Value::Null);
+                element.insert("strokeColor".to_owned(), json!("transparent"));
+                self.insert(element);
+                self.set_common(&new_id, operation)?;
+            }
             other => {
                 return Err(format!(
-                    "{other} can't be added: use rectangle, ellipse, diamond, text, arrow, line, or frame."
+                    "{other} can't be added: use rectangle, ellipse, diamond, text, arrow, line, frame, or image."
                 ));
             }
         }
@@ -1883,6 +1911,9 @@ pub struct ElementSummary {
     /// How many points a line, arrow or freehand stroke has.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub point_count: Option<usize>,
+    /// For an image: its file on this board, to add it again by fileId.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_id: Option<String>,
     /// The stored version: it goes up by one with every change.
     pub version: i64,
 }
@@ -1940,6 +1971,7 @@ pub fn summarize(element: &Object, scene: &Scene) -> ElementSummary {
             .and_then(Value::as_bool)
             .unwrap_or(false),
         point_count: is_linear(&element_kind).then(|| points(element).len()),
+        file_id: text_field(element, "fileId").map(str::to_owned),
         version: element.get("version").and_then(Value::as_i64).unwrap_or(0),
         kind: element_kind,
     }
