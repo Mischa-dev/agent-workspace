@@ -79,6 +79,7 @@ mod criteria;
 mod environment_tools;
 mod field_tools;
 mod file_tools;
+mod github_tools;
 mod groups;
 mod history;
 mod invitation_tools;
@@ -3366,6 +3367,25 @@ impl McpServer {
     ) -> Json<common::ToolResult<repository_tools::RepositoryWriteValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(repository_tools::repository_write(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "People: link a project to its GitHub App installation (installationId, with the project's repositories it should reach; GitHub is asked that it does), or check it again; or switch the project's pull request automation (pullRequestOpen moves a task to review when a pull request naming it opens, pullRequestMerge to done when it merges). Those who manage code in the project, through an app connected as themselves.",
+        annotations(
+            title = "Change the GitHub integration",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
+    )]
+    async fn github_integration_write(
+        &self,
+        Parameters(arguments): Parameters<github_tools::GitHubIntegrationWriteArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<github_tools::GitHubIntegrationWriteValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(github_tools::github_integration_write(&self.state, principal, arguments).await)
     }
 
     #[tool(

@@ -253,12 +253,12 @@ struct GitHubCapabilities {
 
 #[derive(Clone, Debug, Deserialize, Serialize, FromRow)]
 #[serde(rename_all = "camelCase")]
-struct GitHubAutomationSettingsView {
-    project_id: Uuid,
-    pull_request_open_enabled: bool,
-    pull_request_merge_enabled: bool,
-    version: i64,
-    updated_at: String,
+pub(crate) struct GitHubAutomationSettingsView {
+    pub project_id: Uuid,
+    pub pull_request_open_enabled: bool,
+    pub pull_request_merge_enabled: bool,
+    pub version: i64,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1262,34 +1262,14 @@ async fn update_github_automation_settings(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
-    let updated = sqlx::query_as::<_, GitHubAutomationSettingsView>(
-        r#"
-        UPDATE project_github_automation_settings
-        SET pull_request_open_enabled = $3,
-            pull_request_merge_enabled = $4,
-            version = version + 1, updated_at = now()
-        WHERE project_id = $1 AND version = $2
-        RETURNING project_id, pull_request_open_enabled,
-                  pull_request_merge_enabled, version, updated_at::text AS updated_at
-        "#,
+    let settings = set_automation_in(
+        &mut transaction,
+        project_id,
+        Some(request.expected_version),
+        Some(request.pull_request_open_enabled),
+        Some(request.pull_request_merge_enabled),
     )
-    .bind(project_id)
-    .bind(request.expected_version)
-    .bind(request.pull_request_open_enabled)
-    .bind(request.pull_request_merge_enabled)
-    .fetch_optional(&mut *transaction)
     .await?;
-    let Some(settings) = updated else {
-        let current = fetch_github_automation_settings(&mut transaction, project_id).await?;
-        return Err(AppError::Conflict(
-            "github_automation_settings",
-            if current.version == request.expected_version {
-                "update_failed"
-            } else {
-                "version"
-            },
-        ));
-    };
     sqlx::query(
         r#"
         INSERT INTO audit_events (
@@ -1327,6 +1307,47 @@ async fn update_github_automation_settings(
     Ok((StatusCode::OK, Json(settings)).into_response())
 }
 
+/// Turns the project's pull request automation on or off, for a caller
+/// already allowed to manage its GitHub integration. A switch left out keeps
+/// its setting; without `expected_version`, the current one. Not audited here.
+pub(crate) async fn set_automation_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    expected_version: Option<i64>,
+    pull_request_open_enabled: Option<bool>,
+    pull_request_merge_enabled: Option<bool>,
+) -> Result<GitHubAutomationSettingsView, AppError> {
+    let updated = sqlx::query_as::<_, GitHubAutomationSettingsView>(
+        r#"
+        UPDATE project_github_automation_settings
+        SET pull_request_open_enabled = coalesce($3, pull_request_open_enabled),
+            pull_request_merge_enabled = coalesce($4, pull_request_merge_enabled),
+            version = version + 1, updated_at = now()
+        WHERE project_id = $1 AND ($2::bigint IS NULL OR version = $2)
+        RETURNING project_id, pull_request_open_enabled,
+                  pull_request_merge_enabled, version, updated_at::text AS updated_at
+        "#,
+    )
+    .bind(project_id)
+    .bind(expected_version)
+    .bind(pull_request_open_enabled)
+    .bind(pull_request_merge_enabled)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    let Some(settings) = updated else {
+        let current = fetch_github_automation_settings(transaction, project_id).await?;
+        return Err(AppError::Conflict(
+            "github_automation_settings",
+            if Some(current.version) == expected_version {
+                "update_failed"
+            } else {
+                "version"
+            },
+        ));
+    };
+    Ok(settings)
+}
+
 async fn fetch_github_automation_settings(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
@@ -1347,24 +1368,35 @@ async fn fetch_github_automation_settings(
     .ok_or(AppError::NotFound("project"))
 }
 
-async fn sync_installation(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    headers: HeaderMap,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<SyncInstallationRequest>,
-) -> Result<Json<GitHubStatusResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
-    if request.installation_id == 0
-        || request.repository_ids.is_empty()
-        || request.repository_ids.len() > 50
-    {
+/// A project's GitHub installation linked or re-checked, with the
+/// repositories it reaches, still in its transaction for the caller to audit
+/// and commit.
+pub(crate) struct SyncedInstallation {
+    pub transaction: Transaction<'static, Postgres>,
+    pub installation_id: Uuid,
+    pub repository_count: usize,
+    pub role: RoleGrant,
+}
+
+/// Links (or re-checks) the project's GitHub App installation and the
+/// repositories it reaches, after checking with GitHub that it does, for a
+/// caller allowed to manage the project's GitHub integration. Not audited
+/// here.
+pub(crate) async fn sync_installation_as(
+    state: &AppState,
+    actor_id: Uuid,
+    kind: ActorKind,
+    project_id: Uuid,
+    installation_id: u64,
+    repository_ids: &[Uuid],
+) -> Result<SyncedInstallation, AppError> {
+    if installation_id == 0 || repository_ids.is_empty() || repository_ids.len() > 50 {
         return Err(AppError::Validation("githubInstallation"));
     }
-    let mut requested_repository_ids = request.repository_ids.clone();
+    let mut requested_repository_ids = repository_ids.to_vec();
     requested_repository_ids.sort_unstable();
     requested_repository_ids.dedup();
-    if requested_repository_ids.len() != request.repository_ids.len() {
+    if requested_repository_ids.len() != repository_ids.len() {
         return Err(AppError::Validation("repositoryIds"));
     }
     let github_config = state
@@ -1374,9 +1406,10 @@ async fn sync_installation(
         .ok_or(AppError::Conflict("github_integration", "not_configured"))?;
 
     let mut transaction = state.pool.begin().await?;
-    let role = require_project_access(
+    let role = require_project_access_as(
         &mut transaction,
-        &principal,
+        actor_id,
+        kind,
         project_id,
         Action::GithubIntegrationManage,
     )
@@ -1384,8 +1417,8 @@ async fn sync_installation(
     let repositories =
         load_requested_repositories(&mut transaction, project_id, &requested_repository_ids)
             .await?;
-    let typed_installation_id = i64::try_from(request.installation_id)
-        .map_err(|_| AppError::Validation("installationId"))?;
+    let typed_installation_id =
+        i64::try_from(installation_id).map_err(|_| AppError::Validation("installationId"))?;
     // Where people can sign in to GitHub, only installations the workspace
     // proved access to can be linked; knowing the number is not enough.
     if github_config.connect.is_some()
@@ -1405,7 +1438,7 @@ async fn sync_installation(
 
     let client = GitHubClient::new(github_config).map_err(map_github_error)?;
     let installation = client
-        .installation(request.installation_id)
+        .installation(installation_id)
         .await
         .map_err(map_github_error)?;
     validate_installation(github_config, &installation).map_err(map_github_error)?;
@@ -1418,7 +1451,7 @@ async fn sync_installation(
         .collect::<Result<Vec<_>, _>>()?;
     let token = client
         .installation_token(
-            request.installation_id,
+            installation_id,
             &github_repository_ids,
             InstallationTokenScope::VerifyInstallation,
         )
@@ -1432,9 +1465,10 @@ async fn sync_installation(
     drop(token);
 
     let mut transaction = state.pool.begin().await?;
-    require_project_access(
+    require_project_access_as(
         &mut transaction,
-        &principal,
+        actor_id,
+        kind,
         project_id,
         Action::GithubIntegrationManage,
     )
@@ -1446,16 +1480,11 @@ async fn sync_installation(
         return Err(AppError::Conflict("repository", "changed_during_sync"));
     }
     if github_config.connect.is_none() {
-        connect::record_operator_claim(
-            &mut transaction,
-            project_id,
-            principal.actor_id,
-            &installation,
-        )
-        .await?;
+        connect::record_operator_claim(&mut transaction, project_id, actor_id, &installation)
+            .await?;
     }
     let actor_id = ensure_github_actor(&mut transaction, project_id).await?;
-    let installation_id = persist_installation(
+    let stored_installation_id = persist_installation(
         &mut transaction,
         project_id,
         actor_id,
@@ -1467,7 +1496,7 @@ async fn sync_installation(
         "UPDATE github_installation_repositories SET access_state = 'missing', last_verified_at = NULL, updated_at = now() WHERE project_id = $1 AND github_installation_id = $2",
     )
     .bind(project_id)
-    .bind(installation_id)
+    .bind(stored_installation_id)
     .execute(&mut *transaction)
     .await?;
     if !repositories.is_empty() {
@@ -1497,7 +1526,7 @@ async fn sync_installation(
             "#,
         )
         .bind(project_id)
-        .bind(installation_id)
+        .bind(stored_installation_id)
         .bind(&repository_ids)
         .bind(&github_repository_ids)
         .execute(&mut *transaction)
@@ -1511,13 +1540,40 @@ async fn sync_installation(
         )
         .bind(project_id)
         .bind(&repository_ids)
-        .bind(
-            i64::try_from(request.installation_id)
-                .map_err(|_| AppError::Validation("installationId"))?,
-        )
+        .bind(i64::try_from(installation_id).map_err(|_| AppError::Validation("installationId"))?)
         .execute(&mut *transaction)
         .await?;
     }
+    Ok(SyncedInstallation {
+        transaction,
+        installation_id: stored_installation_id,
+        repository_count: repositories.len(),
+        role,
+    })
+}
+
+async fn sync_installation(
+    State(state): State<AppState>,
+    principal: AuthenticatedActor,
+    headers: HeaderMap,
+    ApiPath(project_id): ApiPath<Uuid>,
+    ApiJson(request): ApiJson<SyncInstallationRequest>,
+) -> Result<Json<GitHubStatusResponse>, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    let SyncedInstallation {
+        mut transaction,
+        installation_id,
+        repository_count,
+        role,
+    } = sync_installation_as(
+        &state,
+        principal.actor_id,
+        actor_kind(&principal.actor_kind)?,
+        project_id,
+        request.installation_id,
+        &request.repository_ids,
+    )
+    .await?;
     let request_id = headers
         .get(crate::REQUEST_ID_HEADER)
         .and_then(|value| value.to_str().ok())
@@ -1540,7 +1596,7 @@ async fn sync_installation(
     .bind(principal.session_id)
     .bind(installation_id)
     .bind(request_id)
-    .bind(i32::try_from(repositories.len()).map_err(|_| AppError::Internal("repository count"))?)
+    .bind(i32::try_from(repository_count).map_err(|_| AppError::Internal("repository count"))?)
     .execute(&mut *transaction)
     .await?;
     let installation_row = load_installation(&mut transaction, project_id)
@@ -4655,6 +4711,23 @@ async fn load_installation_repositories(
     .await?)
 }
 
+/// The project's GitHub installation and the repositories it reaches, as
+/// the project's settings show it. Null when none is linked.
+pub(crate) async fn installation_value(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+) -> Result<Value, AppError> {
+    let view = match load_installation(transaction, project_id).await? {
+        Some(installation) => {
+            let repositories =
+                load_installation_repositories(transaction, project_id, installation.id).await?;
+            Some(installation_view(installation, repositories))
+        }
+        None => None,
+    };
+    serde_json::to_value(view).map_err(|_| AppError::Internal("GitHub installation view"))
+}
+
 fn installation_view(
     row: InstallationRow,
     repositories: Vec<InstallationRepositoryRow>,
@@ -5143,6 +5216,25 @@ async fn require_project_access(
     project_id: Uuid,
     action: Action,
 ) -> Result<RoleGrant, AppError> {
+    require_project_access_as(
+        transaction,
+        principal.actor_id,
+        actor_kind(&principal.actor_kind)?,
+        project_id,
+        action,
+    )
+    .await
+}
+
+/// `require_project_access` for a caller resolved elsewhere, such as a
+/// person's connected app.
+pub(crate) async fn require_project_access_as(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    kind: ActorKind,
+    project_id: Uuid,
+    action: Action,
+) -> Result<RoleGrant, AppError> {
     let access = sqlx::query_as::<_, ProjectAccess>(
         r#"
         SELECT membership.role, workspace_role_permissions(membership.role_id) AS role_permissions
@@ -5160,14 +5252,14 @@ async fn require_project_access(
         "#,
     )
     .bind(project_id)
-    .bind(principal.actor_id)
+    .bind(actor_id)
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::NotFound("project"))?;
     let role = RoleGrant::stored(&access.role, access.role_permissions.as_deref())?;
     let subject = Subject::new(
-        principal.actor_id,
-        actor_kind(&principal.actor_kind)?,
+        actor_id,
+        kind,
         true,
         Some(Membership::project(project_id, role, true)),
         None,

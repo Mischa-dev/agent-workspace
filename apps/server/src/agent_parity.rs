@@ -872,7 +872,7 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/integrations/github/sync",
-            Gap("github_sync and the GitHub automation switch"),
+            Tool("github_integration_write"),
         ),
         (
             Post,
@@ -887,7 +887,7 @@ mod tests {
         (
             Put,
             "/api/v1/projects/{project_id}/integrations/github/automation",
-            Gap("github_sync and the GitHub automation switch"),
+            Tool("github_integration_write"),
         ),
         (
             Post,

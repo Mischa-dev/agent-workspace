@@ -205,6 +205,7 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("model_catalog_write", Some(SettingsManage)),
     ("repository_list", Some(CodeView)),
     ("repository_write", Some(CodeManage)),
+    ("github_integration_write", Some(CodeManage)),
     ("pull_request_list", Some(CodeView)),
     ("repository_get", Some(CodeView)),
     ("pull_request_get", Some(CodeView)),

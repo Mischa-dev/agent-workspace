@@ -434,6 +434,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "environment_write",
     "file_delete",
     "file_upload",
+    "github_integration_write",
     "invitation_write",
     "label_write",
     "layout_preset_write",
@@ -5726,6 +5727,14 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         .rejecting(vec![
             json!({"projectId": a.project, "repository": b.repository, "archive": true}),
             json!({"projectId": a.project, "repository": b.repository, "prepare": true}),
+        ]),
+        mcp_case(
+            "github_integration_write",
+            json!({"projectId": a.project, "pullRequestOpen": false}),
+            vec![json!({"projectId": b.project, "pullRequestOpen": false})],
+        )
+        .rejecting(vec![
+            json!({"projectId": a.project, "installationId": 990_003, "repositories": [b.repository]}),
         ]),
         mcp_case(
             "agent_profile_write",
