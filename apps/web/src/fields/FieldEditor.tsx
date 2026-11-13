@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
+import { requestJson } from '../api/client'
 import { listPages, memoryKeys } from '../memory/api'
 import { Avatar, Button, TextArea, TextField, actorKind } from '../ui'
 import { Calendar, ComboboxList, Popover } from '../ui/pickers'
@@ -45,7 +46,7 @@ export function FieldEditor({
     onLabel?.(next === null ? null : label)
     pick(next)
   }
-  if (field.type === 'link' && field.target !== 'page') {
+  if (field.type === 'link' && field.target !== 'page' && field.target !== 'record') {
     return (
       <TaskSearchPicker
         allowTypedKey={false}
@@ -69,7 +70,12 @@ export function FieldEditor({
       body = <PersonEditor field={field} onClose={onClose} onSet={named} value={value} projectId={projectId} />
       break
     case 'link':
-      body = <PageEditor field={field} onClose={onClose} onSet={named} projectId={projectId} value={value} />
+      body =
+        field.target === 'record' ? (
+          <RecordEditor field={field} onClose={onClose} onSet={named} projectId={projectId} value={value} />
+        ) : (
+          <PageEditor field={field} onClose={onClose} onSet={named} projectId={projectId} value={value} />
+        )
       break
     // The task page edits a date with its own DatePicker; here (the bulk bar) it's the same calendar.
     case 'date':
@@ -210,6 +216,63 @@ function PageEditor({
         ...(pages.data?.pages ?? []).map((page) => ({ value: page.id, label: page.title })),
       ]}
       placeholder="Find a page"
+      selected={typeof value === 'string' ? [value] : []}
+    />
+  )
+}
+
+type RecordHit = { id: string; title: string; number: number }
+
+/** A record of the collection a record link holds (AWD-110), found by its title. */
+function RecordEditor({
+  field,
+  onClose,
+  onSet,
+  projectId,
+  value,
+}: {
+  field: FieldDefinition
+  onClose: () => void
+  onSet: (value: FieldValue | null, label: string | null) => void
+  projectId: string
+  value: FieldValue | undefined
+}) {
+  const [query, setQuery] = useState('')
+  const debounced = useDebouncedValue(query, 200)
+  const collection = field.collection ?? ''
+  const records = useQuery({
+    queryKey: ['project', projectId, 'collections', collection, 'records', 'pick', debounced.trim()],
+    enabled: Boolean(collection),
+    queryFn: async () => {
+      const params = new URLSearchParams({ limit: '20' })
+      if (debounced.trim()) params.set('search', debounced.trim())
+      const payload = await requestJson<{ records?: Array<{ id?: unknown; title?: unknown; number?: unknown }> }>(
+        `/api/v1/projects/${encodeURIComponent(projectId)}/collections/${encodeURIComponent(collection)}/records?${params.toString()}`,
+      )
+      return (payload.records ?? []).flatMap((record): RecordHit[] =>
+        typeof record.id === 'string'
+          ? [{ id: record.id, title: typeof record.title === 'string' ? record.title : '', number: typeof record.number === 'number' ? record.number : 0 }]
+          : [],
+      )
+    },
+  })
+  const label = (record: RecordHit) => record.title || `Untitled #${record.number}`
+  return (
+    <ComboboxList
+      emptyText={records.isError ? 'Records didn’t load. Try again.' : 'No records match'}
+      label={field.name}
+      loading={records.isFetching}
+      onClose={onClose}
+      onQueryChange={setQuery}
+      onSelect={(id) => {
+        const record = (records.data ?? []).find((entry) => entry.id === id)
+        onSet(id === '__none' ? null : id, record ? label(record) : null)
+      }}
+      options={[
+        ...(isEmpty(value) || query.trim() ? [] : [{ value: '__none', label: `Clear ${field.name}` }]),
+        ...(records.data ?? []).map((record) => ({ value: record.id, label: label(record), description: `#${record.number}` })),
+      ]}
+      placeholder="Find a record"
       selected={typeof value === 'string' ? [value] : []}
     />
   )

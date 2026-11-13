@@ -2713,6 +2713,7 @@ mod tests {
                     })
                     .collect(),
                 target: (field_type == FieldType::Link).then_some(LinkTarget::Task),
+                collection: None,
             },
             position: 0,
             archived: false,

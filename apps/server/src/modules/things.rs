@@ -495,7 +495,7 @@ fn links_sql(kind: &str) -> Option<&'static str> {
              AND definition.collection_id = record.collection_id
              AND definition.field_type = 'link' AND definition.archived_at IS NULL
             WHERE record.id = $1
-              AND definition.config->>'target' IN ('task', 'page')
+              AND definition.config->>'target' IN ('task', 'page', 'record')
               AND record.field_values->>definition.id::text ~ '^[0-9a-fA-F-]{36}$'
             "#
         }
@@ -503,7 +503,8 @@ fn links_sql(kind: &str) -> Option<&'static str> {
     })
 }
 
-/// Records whose link fields point at a task or page (AWD-110): read apart
+/// Records whose link fields point at a task, page or another record
+/// (AWD-110): read apart
 /// from `links_sql`, so a thing's stored links and these change on their own.
 /// `$1` is the thing, `$2` its kind.
 const RECORDS_LINKING_SQL: &str = r#"
@@ -538,7 +539,7 @@ pub async fn links(
         .bind(thing.id)
         .fetch_all(&mut *connection)
         .await?;
-    if matches!(thing.kind.as_str(), "task" | "page") {
+    if matches!(thing.kind.as_str(), "task" | "page" | "record") {
         rows.extend(
             sqlx::query_as::<_, LinkRow>(RECORDS_LINKING_SQL)
                 .bind(thing.id)

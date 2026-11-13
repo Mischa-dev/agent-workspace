@@ -252,7 +252,7 @@ pub async fn resolve_for(
             }
             Normalized::Link(written) => {
                 let target = field.config.target.unwrap_or(LinkTarget::Task);
-                match find_link(connection, project_id, writer, target, &written).await? {
+                match find_link(connection, project_id, writer, field, &written).await? {
                     Some((id, label)) => FieldValueChange {
                         field: field.clone(),
                         value: Some(Value::String(id.to_string())),
@@ -262,6 +262,7 @@ pub async fn resolve_for(
                         let what = match target {
                             LinkTarget::Task => "a task",
                             LinkTarget::Page => "a page",
+                            LinkTarget::Record => "a record of its collection",
                         };
                         return Ok(Err(value_problem(
                             &at,
@@ -269,10 +270,10 @@ pub async fn resolve_for(
                                 "\"{}\" links to {what} in {}, by ID, link{}. {} isn't one.",
                                 field.name,
                                 writer.project_key,
-                                if target == LinkTarget::Task {
-                                    " or key (such as AWD-12)"
-                                } else {
-                                    ""
+                                match target {
+                                    LinkTarget::Task => " or key (such as AWD-12)",
+                                    LinkTarget::Record => ", #number or title",
+                                    LinkTarget::Page => "",
                                 },
                                 crate::work_item_labels::echo(&written)
                             ),
@@ -377,10 +378,42 @@ pub async fn find_link(
     connection: &mut PgConnection,
     project_id: Uuid,
     writer: Writer<'_>,
-    target: LinkTarget,
+    field: &FieldDefinition,
     written: &str,
 ) -> Result<Option<(Uuid, String)>, AppError> {
-    match target {
+    match field.config.target.unwrap_or(LinkTarget::Task) {
+        // A record of the field's collection (AWD-110): its ID or link, its
+        // #number, or its title (the oldest, when two share one).
+        LinkTarget::Record => {
+            let Some(collection) = field.config.collection else {
+                return Ok(None);
+            };
+            let written = written.trim();
+            let number = written
+                .strip_prefix('#')
+                .and_then(|number| number.parse::<i64>().ok());
+            Ok(sqlx::query_as::<_, (Uuid, String)>(
+                r#"
+                SELECT record.id,
+                       CASE WHEN record.title = '' THEN 'Untitled #' || record.number::text
+                            ELSE record.title END
+                FROM collection_records record
+                WHERE record.project_id = $1 AND record.collection_id = $2
+                  AND record.archived_at IS NULL
+                  AND (record.id = $3 OR record.number = $4
+                       OR ($3 IS NULL AND $4 IS NULL AND lower(record.title) = lower($5)))
+                ORDER BY record.id = $3 DESC, record.number = $4 DESC, record.number
+                LIMIT 1
+                "#,
+            )
+            .bind(project_id)
+            .bind(collection)
+            .bind(uuid_in(written))
+            .bind(number)
+            .bind(written)
+            .fetch_optional(&mut *connection)
+            .await?)
+        }
         LinkTarget::Task => {
             let (id, number) = match (uuid_in(written), task_key(written)) {
                 (Some(id), _) => (Some(id), None),
@@ -426,7 +459,7 @@ pub async fn find_link(
 #[serde(rename_all = "camelCase")]
 pub struct ValueReference {
     pub id: Uuid,
-    /// "person", "task" or "page".
+    /// "person", "task", "page" or "record".
     pub kind: &'static str,
     /// A person's name, a task's title or a page's title.
     pub label: String,
@@ -446,6 +479,7 @@ pub async fn references<'a>(
     let mut people = HashSet::new();
     let mut tasks = HashSet::new();
     let mut pages = HashSet::new();
+    let mut records = HashSet::new();
     let by_id = definitions
         .iter()
         .map(|field| (field.id.to_string(), field))
@@ -464,6 +498,7 @@ pub async fn references<'a>(
             match (field.field_type, field.config.target) {
                 (FieldType::Person, _) => people.insert(id),
                 (FieldType::Link, Some(LinkTarget::Page)) => pages.insert(id),
+                (FieldType::Link, Some(LinkTarget::Record)) => records.insert(id),
                 _ => tasks.insert(id),
             };
         }
@@ -532,6 +567,34 @@ pub async fn references<'a>(
                     kind: "page",
                     label,
                     key: None,
+                },
+            );
+        }
+    }
+    if !records.is_empty() {
+        let ids = records.into_iter().collect::<Vec<_>>();
+        for (id, label, number) in sqlx::query_as::<_, (Uuid, String, i64)>(
+            r#"
+            SELECT record.id,
+                   CASE WHEN record.title = '' THEN 'Untitled #' || record.number::text
+                        ELSE record.title END,
+                   record.number
+            FROM collection_records record
+            WHERE record.project_id = $1 AND record.id = ANY($2) AND record.archived_at IS NULL
+            "#,
+        )
+        .bind(project_id)
+        .bind(&ids)
+        .fetch_all(&mut *executor)
+        .await?
+        {
+            found.insert(
+                id,
+                ValueReference {
+                    id,
+                    kind: "record",
+                    label,
+                    key: Some(format!("#{number}")),
                 },
             );
         }

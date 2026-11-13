@@ -414,3 +414,108 @@ async fn record_events_reach_rules_and_webhooks_for_their_collection() {
         requests.as_str()
     );
 }
+
+/// A link field can hold another collection's records: only that
+/// collection's, found by title or number, and both records list the link.
+#[tokio::test]
+async fn link_fields_point_at_another_collections_records() {
+    let Some(setup) = setup("awd110_record_links").await else {
+        return;
+    };
+    let app = &setup.app;
+    create_project(&setup, "LINKS", "Links").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+
+    let customers = call(
+        "collection_write",
+        json!({"projectId": "LINKS", "name": "Customers", "fields": [{"name": "Plan", "type": "text"}]}),
+    )
+    .await;
+    assert_eq!(customers["outcome"], "ok", "{customers}");
+    let other = call(
+        "collection_write",
+        json!({"projectId": "LINKS", "name": "Vendors", "fields": [{"name": "Plan", "type": "text"}]}),
+    )
+    .await;
+    assert_eq!(other["outcome"], "ok", "{other}");
+    let missing = call(
+        "collection_write",
+        json!({"projectId": "LINKS", "name": "Broken", "fields": [{"name": "Who", "type": "link", "target": "record:Nobody"}]}),
+    )
+    .await;
+    assert_ne!(missing["outcome"], "ok", "{missing}");
+    let requests = call(
+        "collection_write",
+        json!({
+            "projectId": "LINKS",
+            "name": "Requests",
+            "fields": [{"name": "Customer", "type": "link", "target": "record:Customers"}],
+        }),
+    )
+    .await;
+    assert_eq!(requests["outcome"], "ok", "{requests}");
+
+    let acme = call(
+        "record_write",
+        json!({"projectId": "LINKS", "collection": "Customers", "records": [{"title": "Acme"}], "clientRequestId": "acme"}),
+    )
+    .await;
+    assert_eq!(acme["outcome"], "ok", "{acme}");
+    let acme_id = acme["value"]["records"][0]["id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+    let vendor = call(
+        "record_write",
+        json!({"projectId": "LINKS", "collection": "Vendors", "records": [{"title": "Globex"}], "clientRequestId": "globex"}),
+    )
+    .await;
+    assert_eq!(vendor["outcome"], "ok", "{vendor}");
+
+    // Another collection's record isn't one this field can hold.
+    let wrong = call(
+        "record_write",
+        json!({"projectId": "LINKS", "collection": "Requests", "records": [{"title": "Bad", "fields": {"Customer": "Globex"}}], "clientRequestId": "wrong"}),
+    )
+    .await;
+    assert_ne!(wrong["outcome"], "ok", "{wrong}");
+
+    let request = call(
+        "record_write",
+        json!({"projectId": "LINKS", "collection": "Requests", "records": [{"title": "Dark mode", "fields": {"Customer": "acme"}}], "clientRequestId": "dark"}),
+    )
+    .await;
+    assert_eq!(request["outcome"], "ok", "{request}");
+    let request_id = request["value"]["records"][0]["id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+    assert!(request.to_string().contains("Acme"), "{request}");
+
+    let opened = call("thing_open", json!({"kind": "record", "id": request_id})).await;
+    assert_eq!(opened["outcome"], "ok", "{opened}");
+    assert!(
+        opened["value"]["links"]
+            .as_array()
+            .expect("links")
+            .iter()
+            .any(|link| link["other"]["id"] == acme_id.as_str() && link["direction"] == "outgoing"),
+        "{opened}"
+    );
+    let customer = call("thing_open", json!({"kind": "record", "id": acme_id})).await;
+    assert!(
+        customer["value"]["links"]
+            .as_array()
+            .expect("links")
+            .iter()
+            .any(|link| link["other"]["id"] == request_id.as_str()
+                && link["direction"] == "incoming"),
+        "{customer}"
+    );
+}

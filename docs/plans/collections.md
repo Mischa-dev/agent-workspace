@@ -245,3 +245,10 @@ records.
   They take no task conditions and only notify (the maker or the project's
   admins) or post a message; text can use `{{record.title}}`,
   `{{record.url}}` and `{{collection.name}}`.
+- **Links between collections.** A link field's target can be `record`, with
+  the collection it holds in `FieldConfig.collection` (written
+  `record:<collection ID>`; agents and definitions may name the collection,
+  resolved by `collections::link_target`). A value is one record of that
+  collection, found by ID, `#number` or title, and sorts by its title. Both
+  records list the link as things. A definition exports the target as
+  `record:<collection name>`.
