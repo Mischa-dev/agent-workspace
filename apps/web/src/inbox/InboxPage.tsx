@@ -497,7 +497,19 @@ export function InboxPage() {
                       ) : null}
                     </div>
                     {section.items.length === 0 ? (
-                      <p className="aw-inbox__section-empty">Nothing needs you right now.</p>
+                      // Older pages may still hold something that needs you.
+                      <p className="aw-inbox__section-empty">
+                        {inbox.hasNextPage ? (
+                          <>
+                            Nothing loaded so far needs you.{' '}
+                            <button className="aw-inbox__section-more" disabled={inbox.isFetchingNextPage} onClick={() => void inbox.fetchNextPage()} type="button">
+                              Check older ones
+                            </button>
+                          </>
+                        ) : (
+                          'Nothing needs you right now.'
+                        )}
+                      </p>
                     ) : (
                       <SubjectGroups groups={section.groups} heading="h3" onArchive={archive} onSelect={(item) => select(item, true)} selectedId={selectedId} view={view} />
                     )}
