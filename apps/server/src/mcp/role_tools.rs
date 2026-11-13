@@ -607,9 +607,11 @@ pub(super) async fn role_assign(
         if let Some(limit) = limit {
             // An app can narrow the cap it runs under, never lift or widen
             // it: that takes the person, on the web.
+            // Lock the membership before reading the cap, so a change that
+            // commits meanwhile can't be undone by this one.
             if actor_id == principal.actor_id {
                 let current = sqlx::query_scalar::<_, Option<Vec<String>>>(
-                    "SELECT agent_limit FROM organization_memberships WHERE organization_id = $1 AND actor_id = $2",
+                    "SELECT agent_limit FROM organization_memberships WHERE organization_id = $1 AND actor_id = $2 FOR UPDATE",
                 )
                 .bind(organization_id)
                 .bind(actor_id)
