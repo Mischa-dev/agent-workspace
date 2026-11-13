@@ -776,6 +776,11 @@ mod tests {
         (Delete, "/api/v1/later/{id}", Tool("later_update")),
         (
             Post,
+            "/api/v1/questions/{id}/answer",
+            Tool("question_answer"),
+        ),
+        (
+            Post,
             "/api/v1/conversations/{id}/scheduled-messages",
             Tool("message_schedule"),
         ),

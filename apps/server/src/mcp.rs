@@ -97,6 +97,7 @@ mod page_discussion;
 mod planning;
 mod project_template_tools;
 mod publish_tools;
+mod question_tools;
 mod reactions;
 mod reads;
 mod replies;
@@ -1146,6 +1147,63 @@ impl McpServer {
     ) -> Json<common::ToolResult<later_tools::LaterUpdateValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(later_tools::later_update(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Ask one person in a project something, on a card in their inbox: the question, up to 4 answers to pick from (they can always type their own), and optionally the conversation or task it's about. Use it when you need a person's call to go on, instead of a message they might miss. When they answer, your connection gets a question.answered event; read the answer with question_list.",
+        annotations(
+            title = "Ask a person",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn ask_person(
+        &self,
+        Parameters(arguments): Parameters<question_tools::AskPersonArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<question_tools::AskPersonValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(question_tools::ask_person(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "List questions you asked people with ask_person (role asked, the default), with their answers once given, or questions others asked you (role for_me). Filter by status (pending, answered) or one questionId.",
+        annotations(
+            title = "List questions",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn question_list(
+        &self,
+        Parameters(arguments): Parameters<question_tools::QuestionListArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<question_tools::QuestionListValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(question_tools::question_list(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Answer a question someone asked you (question_list role for_me lists them): pick an option by its id, type an answer, or both. An answer is final, and goes back to whoever asked.",
+        annotations(
+            title = "Answer a question",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn question_answer(
+        &self,
+        Parameters(arguments): Parameters<question_tools::QuestionAnswerArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<question_tools::QuestionAnswerValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(question_tools::question_answer(&self.state, principal, arguments).await)
     }
 
     #[tool(
@@ -5690,6 +5748,11 @@ const PRIMARY_SCOPES: &[(&str, &str)] = &[
 ];
 
 const OTHER_SCOPES: &[(&str, &str)] = &[
+    // A question names its project only to who asked it and who it asks.
+    (
+        "questionId",
+        "SELECT project_id FROM person_questions WHERE id = $1 AND (asked_by_actor_id = $2 OR person_actor_id = $2)",
+    ),
     // A reply request names its project only to someone it's for, as the
     // reply tools check: the agent it asks, or a person who can see the
     // conversation (who may stop it). Anyone else, like a missing one, gets

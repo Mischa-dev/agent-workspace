@@ -136,7 +136,9 @@ pub(crate) fn tag_for(tool: &str) -> &'static str {
     }
     let noun = tool.split('_').next().unwrap_or(tool);
     match noun {
-        "briefing" | "inbox" | "notification" | "mark" => "Inbox and notifications",
+        "briefing" | "inbox" | "notification" | "mark" | "ask" | "question" => {
+            "Inbox and notifications"
+        }
         "project" | "projects" | "workflow" | "settings" => "Projects",
         "role" => "Roles and access",
         "workspace" => "Workspace",
@@ -434,9 +436,11 @@ mod tests {
         let schemas = document["components"]["schemas"]
             .as_object()
             .expect("schemas");
-        // The reference page fetches it whole, so keep it well under a megabyte.
+        // The reference page fetches it whole, so keep it under a megabyte.
+        // Raised from 768 KiB with AWD-62's question tools; past this, serve
+        // it compressed or slim the result schemas rather than raise it again.
         let size = serde_json::to_vec(&document).expect("serialize").len();
-        assert!(size < 768 * 1024, "the document is {size} bytes");
+        assert!(size < 896 * 1024, "the document is {size} bytes");
         let mut references = Vec::new();
         collect_refs(&document, &mut references);
         assert!(!references.is_empty());

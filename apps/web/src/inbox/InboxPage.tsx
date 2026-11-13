@@ -33,6 +33,7 @@ import {
   isExternalHref,
   postUpdate,
   needsYou,
+  answerQuestion,
   respondToApproval,
   sectionsByNeed,
   snoozeChoices,
@@ -352,6 +353,18 @@ export function InboxPage() {
     }
   }
 
+  /** Answers a question card; the toast says it went back to whoever asked. */
+  const answerAsked = async (item: InboxNotification, reply: { optionId?: string; text?: string }) => {
+    if (!item.question) return
+    try {
+      await answerQuestion(item.question.id, reply)
+      showToast({ tone: 'success', title: item.actor ? `Sent to ${item.actor.name}` : 'Answer sent' })
+      invalidateInbox(queryClient)
+    } catch (reason) {
+      toastError('Your answer wasn’t sent', reason)
+    }
+  }
+
   const lastG = useRef(0)
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -530,6 +543,7 @@ export function InboxPage() {
                   busyApproval={busyApproval}
                   item={selected}
                   onAnswer={(decision) => void answer(selected, decision)}
+                  onAnswerQuestion={(reply) => answerAsked(selected, reply)}
                   onArchive={() => archive(selected)}
                   onBack={() => setDetailOpen(false)}
                   onOpen={() => open(selected)}

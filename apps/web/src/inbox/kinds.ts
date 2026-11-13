@@ -9,6 +9,7 @@ export const KIND_ICON: Record<string, IconName> = {
   scheduled_send_failed: 'circle-alert',
   assigned: 'work',
   approval_requested: 'shield-check',
+  question_asked: 'circle-help',
   run_waiting: 'clock',
   run_completed: 'circle-check',
   run_failed: 'circle-alert',
