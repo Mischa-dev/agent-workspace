@@ -1601,6 +1601,28 @@ async fn an_off_module_s_routes_answer_turned_off_until_it_comes_back() {
     assert_eq!(status, StatusCode::OK, "{body}");
     let (_, body) = send(app, get(&tasks)).await;
     assert_eq!(body["error"]["code"], "module_off", "{body}");
+    // The same project spelled with an encoded hyphen is the same route,
+    // and just as off.
+    let encoded = tasks.replacen('-', "%2D", 1);
+    assert_ne!(encoded, tasks);
+    let (_, body) = send(app, get(&encoded)).await;
+    assert_eq!(body["error"]["code"], "module_off", "{body}");
+    // Only people who can see the project learn what's off in it: signed
+    // out, or in the workspace but not the project, the handler answers as
+    // it always has.
+    let signed_out = Browser {
+        cookie: String::new(),
+        csrf: String::new(),
+    };
+    let (status, body) = send(app, signed_out.request("GET", &tasks, None, Value::Null)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    let elsewhere = create_project(&setup, "GATX", "Elsewhere").await;
+    let (_, outsider) = add_person(&setup, &[elsewhere.as_str()], "awd97-outsider").await;
+    let (status, body) = send(app, outsider.request("GET", &tasks, None, Value::Null)).await;
+    assert_ne!(body["error"]["code"], "module_off", "{status}: {body}");
+    let unknown = format!("/api/v1/projects/{}/work-items", Uuid::now_v7());
+    let (unknown_status, _) = send(app, outsider.request("GET", &unknown, None, Value::Null)).await;
+    assert_eq!(status, unknown_status, "{body}");
 
     // Back on, the routes answer at once: the switch drops what was kept.
     let (status, body) = switch(
