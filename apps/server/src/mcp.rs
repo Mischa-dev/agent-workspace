@@ -5735,6 +5735,10 @@ const OTHER_SCOPES: &[(&str, &str)] = &[
         "SELECT project_id FROM project_decisions WHERE id = $1",
     ),
     ("launchId", "SELECT project_id FROM launches WHERE id = $1"),
+    (
+        "pullRequestId",
+        "SELECT project_id FROM github_pull_requests WHERE id = $1 AND pull_request_visible_to(id, $2)",
+    ),
     // Secondary: what to use, not what to act on.
     (
         "repositoryId",
