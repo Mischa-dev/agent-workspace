@@ -1427,7 +1427,7 @@ pub(crate) async fn record_data(
         return Ok(None);
     };
     let definitions =
-        collections::field_definitions(&mut *connection, project_id, collection_id, false).await?;
+        collections::field_definitions(&mut connection, project_id, collection_id, false).await?;
     let references = records::references(
         &mut connection,
         project_id,

@@ -404,6 +404,7 @@ mod tests {
             position: 0,
             archived: false,
             version: 1,
+            builtin: None,
             created_at: String::new(),
             updated_at: String::new(),
         }

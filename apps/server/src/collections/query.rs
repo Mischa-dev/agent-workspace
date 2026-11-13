@@ -255,7 +255,7 @@ impl Spec {
 
     /// The table (or the tasks' subquery) records are read from, aliased
     /// `record`.
-    fn from_sql(&self) -> String {
+    fn source_sql(&self) -> String {
         if self.tasks {
             format!("{} record", super::tasks::source())
         } else {
@@ -411,12 +411,11 @@ pub fn date_range(
 }
 
 fn group_sql(field: &FieldDefinition) -> Option<GroupSql> {
-    if super::tasks::is_builtin_field(field.id) {
-        if let Some(group) =
+    if super::tasks::is_builtin_field(field.id)
+        && let Some(group) =
             super::tasks::group_sql(field, "record.field_values", "record.project_id")
-        {
-            return Some(group);
-        }
+    {
+        return Some(group);
     }
     fields::group_sql(
         field.id,
@@ -562,7 +561,7 @@ pub async fn page(
     let mut builder = QueryBuilder::<Postgres>::new(format!(
         "SELECT record.id, {group_key} AS group_key, {group_label} AS group_label, \
          ARRAY[{key_array}] AS keys FROM {from} {join}",
-        from = spec.from_sql(),
+        from = spec.source_sql(),
     ));
     spec.push_where(&mut builder, project_id, collection_id);
     if let Some(after) = after {
@@ -614,7 +613,7 @@ pub async fn total(
     spec: &Spec,
 ) -> Result<i64, AppError> {
     let mut builder =
-        QueryBuilder::<Postgres>::new(format!("SELECT count(*) FROM {}", spec.from_sql()));
+        QueryBuilder::<Postgres>::new(format!("SELECT count(*) FROM {}", spec.source_sql()));
     spec.push_where(&mut builder, project_id, collection_id);
     Ok(builder
         .build_query_scalar::<i64>()
@@ -653,7 +652,7 @@ pub async fn group_counts(
     let mut builder = QueryBuilder::<Postgres>::new(format!(
         "SELECT {key} AS key, min({label}) AS label, count(*) AS count, min({color}) AS color \
          FROM {from} {join}",
-        from = spec.from_sql(),
+        from = spec.source_sql(),
         key = group.key,
         label = group.label,
         color = group.color,

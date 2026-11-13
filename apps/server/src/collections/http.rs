@@ -690,7 +690,7 @@ async fn update_collection(
                 &[],
             )
             .await?;
-            collection
+            *collection
         }
         ChangeOutcome::Unchanged(collection) => collection,
         ChangeOutcome::NotFound => return Err(AppError::NotFound("collection")),
@@ -912,7 +912,7 @@ async fn update_field(
         return Ok(archived_collection(&collection));
     }
     let definitions =
-        super::field_definitions(&mut *write.transaction, project_id, collection_id, true).await?;
+        super::field_definitions(&mut write.transaction, project_id, collection_id, true).await?;
     let Some(current) = definitions.iter().find(|field| field.id == field_id) else {
         return Err(AppError::NotFound("field"));
     };
@@ -1083,7 +1083,7 @@ async fn create_view(
         return Ok(archived_collection(&collection));
     }
     let definitions =
-        super::field_definitions(&mut *write.transaction, project_id, collection_id, true).await?;
+        super::field_definitions(&mut write.transaction, project_id, collection_id, true).await?;
     let config = match request.config.clone().for_type(view_type, &definitions) {
         Ok(config) => config,
         Err(message) => return Ok(invalid("config", message)),
@@ -1185,7 +1185,7 @@ async fn update_view(
         return Ok(archived_collection(&collection));
     }
     let definitions =
-        super::field_definitions(&mut *write.transaction, project_id, collection_id, true).await?;
+        super::field_definitions(&mut write.transaction, project_id, collection_id, true).await?;
     if let Some(config) = &request.config
         && let Some(refused) =
             checked_config(&mut write.transaction, project_id, config, &definitions).await?
@@ -1364,7 +1364,7 @@ async fn list_records(
         .await?
         .ok_or(AppError::NotFound("collection"))?;
     let definitions =
-        super::field_definitions(&mut *connection, project_id, collection_id, true).await?;
+        super::field_definitions(&mut connection, project_id, collection_id, true).await?;
     let mut config = match query.view {
         Some(view_id) => views::list(&mut *connection, project_id, collection_id)
             .await?
@@ -1527,7 +1527,7 @@ async fn get_record(
     .await?
     .ok_or(AppError::NotFound("record"))?;
     let definitions =
-        super::field_definitions(&mut *connection, project_id, collection_id, true).await?;
+        super::field_definitions(&mut connection, project_id, collection_id, true).await?;
     let references = records::references(
         &mut connection,
         project_id,
@@ -1611,7 +1611,7 @@ async fn write_record(
         return Ok(archived_collection(&collection));
     }
     let definitions =
-        super::field_definitions(&mut *write.transaction, project_id, collection_id, true).await?;
+        super::field_definitions(&mut write.transaction, project_id, collection_id, true).await?;
     let project_key = write.project_key.clone();
     let writer = Writer {
         actor_id: write.actor.actor_id,

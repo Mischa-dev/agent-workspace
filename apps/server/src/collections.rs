@@ -477,8 +477,8 @@ impl CollectionChange {
 #[derive(Clone, Debug)]
 pub enum ChangeOutcome {
     Changed {
-        collection: Collection,
-        previous: Collection,
+        collection: Box<Collection>,
+        previous: Box<Collection>,
         /// Any of name, description, titleName, position, archived.
         changed: Vec<&'static str>,
     },
@@ -602,8 +602,8 @@ pub async fn change(
         .await?
         .ok_or(AppError::Internal("changed collection is missing"))?;
     Ok(ChangeOutcome::Changed {
-        collection,
-        previous: current,
+        collection: Box::new(collection),
+        previous: Box::new(current),
         changed,
     })
 }

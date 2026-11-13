@@ -361,7 +361,7 @@ pub(super) async fn collection_describe(
                 Err(refusal) => return Ok(refusal),
             };
         let definitions =
-            collections::field_definitions(&mut *connection, project_id, collection.id, true)
+            collections::field_definitions(&mut connection, project_id, collection.id, true)
                 .await?;
         let saved = views::list(&mut *connection, project_id, collection.id).await?;
         let definition = definition::describe(
@@ -710,7 +710,7 @@ pub(super) async fn collection_write(
                                     changed.join(", ")
                                 ),
                             });
-                            collection
+                            *collection
                         }
                         ChangeOutcome::Unchanged(collection) => collection,
                         ChangeOutcome::NotFound => {
@@ -960,7 +960,7 @@ pub(super) async fn record_query(
                 Err(refusal) => return Ok(refusal),
             };
         let definitions =
-            collections::field_definitions(&mut *connection, project_id, collection.id, true)
+            collections::field_definitions(&mut connection, project_id, collection.id, true)
                 .await?;
         let writer = Writer {
             actor_id: principal.actor_id,
@@ -1322,7 +1322,7 @@ pub(super) async fn record_write(
             )));
         }
         let definitions =
-            collections::field_definitions(&mut *transaction, project_id, collection.id, true)
+            collections::field_definitions(&mut transaction, project_id, collection.id, true)
                 .await?;
         let writer = Writer {
             actor_id: principal.actor_id,
