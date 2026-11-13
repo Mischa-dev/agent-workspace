@@ -40,7 +40,17 @@ export type Piece = {
   actions?: string[]
 }
 
-export type FieldDecl = { id: string; label: string; type: FieldType; options?: string[] }
+/** How a value reads as a chip; as the app's StatusChip draws them. */
+export type ChipTone = 'muted' | 'agent' | 'warning' | 'success' | 'danger'
+
+export type FieldDecl = {
+  id: string
+  label: string
+  type: FieldType
+  options?: string[]
+  /** How a label or choice reads as a chip, by value; the rest read muted. */
+  tones?: Record<string, ChipTone>
+}
 
 export type ThingDecl = { kind: string; one: string; many: string; href: string; fields: FieldDecl[] }
 

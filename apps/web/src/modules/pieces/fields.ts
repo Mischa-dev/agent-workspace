@@ -1,3 +1,4 @@
+import { formatRelative } from '../../ui'
 import { SHARED_FIELDS, type FieldDecl, type FieldValue, type Thing, type ThingDecl } from '../contract'
 
 // Reading a thing's fields for the pieces: the shared ones (title, status,
@@ -29,6 +30,8 @@ export function fieldText(field: FieldDecl, value: FieldValue | undefined): stri
     case 'checkbox':
       return value ? 'Yes' : 'No'
     case 'date': {
+      // A moment ("2026-11-13T21:05:00Z") reads "5 min ago"; a day, its date.
+      if (isMoment(value)) return formatRelative(String(value))
       const date = new Date(String(value))
       return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
     }
@@ -38,3 +41,6 @@ export function fieldText(field: FieldDecl, value: FieldValue | undefined): stri
       return String(value)
   }
 }
+
+/** A date that carries a time of day, so it reads as "5 min ago". */
+export const isMoment = (value: FieldValue | undefined) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(value)

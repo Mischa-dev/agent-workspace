@@ -49,6 +49,51 @@
   min-width: 0;
 }
 
+/* "Edited 5 min ago": the label reads with its value. */
+.aw-piece__meta-item {
+  display: flex;
+  align-items: baseline;
+  gap: 0.25em;
+}
+
+.aw-piece__label {
+  margin: 0;
+}
+
+/* "by Ana" runs on from the date before it. */
+.aw-piece__meta-item--by {
+  margin-left: calc(0.3em - var(--space-3));
+}
+
+.aw-piece__chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  max-width: 100%;
+  min-width: 0;
+}
+
+/* A long label wraps inside its chip rather than running out of a cell. */
+.aw-piece__chips > * {
+  max-width: 100%;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* Long text under the title: a line or two, then it stops. */
+.aw-piece__summary {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
 .aw-piece__group + .aw-piece__group {
   margin-top: var(--space-4);
 }
@@ -68,12 +113,25 @@
   list-style: none;
 }
 
+/* A list sits in one panel, like the app's own row lists. */
+.aw-piece__rows {
+  gap: 0;
+  overflow: hidden;
+  border: var(--border-width) solid var(--content-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-card);
+}
+
 .aw-piece__row {
   display: grid;
   gap: var(--space-1);
-  padding: var(--space-2) var(--space-3);
-  border-bottom: var(--border-width) solid var(--content-border);
+  padding: var(--space-2-5) var(--space-4);
   min-width: 0;
+}
+
+.aw-piece__row + .aw-piece__row {
+  border-top: var(--border-width) solid var(--content-border);
 }
 
 /* Table: real columns when there's room. */
