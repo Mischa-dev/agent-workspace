@@ -25,19 +25,21 @@ export default function SheetEmbedPicker({
   const [range, setRange] = useState('')
   const [error, setError] = useState<string | null>(null)
   const chosen = useSheet(projectId, sheetId, '')
+  // While another sheet loads, the query still holds the last one's data.
+  const picked = chosen.data && !chosen.isPlaceholderData && chosen.data.sheet.id === sheetId ? chosen.data : null
   const open = (sheets.data?.sheets ?? []).filter((sheet) => !sheet.archived)
-  const tabs = [...(chosen.data?.tabs ?? [])].sort((left, right) => left.position - right.position)
+  const tabs = [...(picked?.tabs ?? [])].sort((left, right) => left.position - right.position)
   const tab = tabs.find((entry) => entry.id === tabId) ?? tabs[0] ?? null
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
-    if (!chosen.data) return
+    if (!picked) return
     const parsed = range.trim() ? parseRange(range) : null
     if (range.trim() && !parsed) {
       setError('Write a range such as A1:D9, or leave it empty for the whole tab.')
       return
     }
-    onPick(sheetEmbed(projectId, chosen.data.sheet, tab, tabs.length, parsed ? rangeName(parsed) : null))
+    onPick(sheetEmbed(projectId, picked.sheet, tab, tabs.length, parsed ? rangeName(parsed) : null))
   }
 
   return (
@@ -107,7 +109,7 @@ export default function SheetEmbedPicker({
         </>
       )}
       <span className="aw-live__actions">
-        <Button disabled={!chosen.data} size="sm" type="submit" variant="primary">
+        <Button disabled={!picked} size="sm" type="submit" variant="primary">
           Add to page
         </Button>
         <Button onClick={onClose} size="sm" variant="ghost">

@@ -153,9 +153,15 @@ pub trait FormulaEngine: Send + Sync {
     /// The workbook `tabs` as an Excel file (.xlsx), computed.
     fn to_xlsx(&self, tabs: &[TabInput]) -> Result<Vec<u8>, EngineError>;
 
-    /// The tabs and cell inputs of an Excel file (.xlsx). The caller checks
-    /// the file's size first; the result can be as large as the file allows.
-    fn read_xlsx(&self, bytes: &[u8]) -> Result<Vec<TabInput>, EngineError>;
+    /// The tabs and cell inputs of an Excel file (.xlsx). `names` gives each
+    /// tab the name it takes here, and formulas follow the new names. Text
+    /// stays text. The caller checks the file's size first; the result can
+    /// be as large as the file allows.
+    fn read_xlsx(
+        &self,
+        bytes: &[u8],
+        names: &dyn Fn(&[String]) -> Vec<String>,
+    ) -> Result<Vec<TabInput>, EngineError>;
 }
 
 /// The IronCalc engine, in English, on UTC.
@@ -324,26 +330,63 @@ impl FormulaEngine for IronCalc {
         Ok(writer.into_inner())
     }
 
-    fn read_xlsx(&self, bytes: &[u8]) -> Result<Vec<TabInput>, EngineError> {
+    fn read_xlsx(
+        &self,
+        bytes: &[u8],
+        names: &dyn Fn(&[String]) -> Vec<String>,
+    ) -> Result<Vec<TabInput>, EngineError> {
         let unreadable = |_| whole("That isn't an Excel file (.xlsx) this can read.");
         let workbook = ironcalc::import::load_from_xlsx_bytes(bytes, "import", LOCALE, TIMEZONE)
             .map_err(unreadable)?;
-        let model = Model::from_workbook(workbook, LANGUAGE)
+        let mut model = Model::from_workbook(workbook, LANGUAGE)
             .map_err(|_| whole("That isn't an Excel file (.xlsx) this can read."))?;
-        let mut tabs = model
+        let original = model
             .get_worksheets_properties()
             .into_iter()
-            .map(|properties| TabInput {
-                name: properties.name,
+            .map(|properties| properties.name)
+            .collect::<Vec<_>>();
+        let wanted = names(&original);
+        // Rename through the model so formulas follow; a pass through
+        // placeholder names lets two tabs swap names.
+        if wanted != original {
+            for index in 0..original.len() {
+                model
+                    .rename_sheet_by_index(index as u32, &format!("aw import {index}"))
+                    .map_err(whole)?;
+            }
+            for (index, name) in wanted.iter().enumerate() {
+                model
+                    .rename_sheet_by_index(index as u32, name)
+                    .map_err(whole)?;
+            }
+        }
+        let mut tabs = wanted
+            .into_iter()
+            .map(|name| TabInput {
+                name,
                 cells: Vec::new(),
             })
             .collect::<Vec<_>>();
+        let mut scratch = Model::new_empty("scratch", LOCALE, TIMEZONE, LANGUAGE).map_err(whole)?;
         for cell in model.get_all_cells() {
-            let input = model
+            let mut input = model
                 .get_localized_cell_content(cell.index, cell.row, cell.column)
                 .map_err(whole)?;
             if input.is_empty() {
                 continue;
+            }
+            let formula = model
+                .get_cell_formula(cell.index, cell.row, cell.column)
+                .map_err(whole)?
+                .is_some();
+            let text = matches!(
+                model.get_cell_type(cell.index, cell.row, cell.column),
+                Ok(CellType::Text)
+            );
+            // Text such as 00123 or =x would read back as a number or a
+            // formula, so it keeps a leading apostrophe.
+            if !formula && text && !input.starts_with('\'') && !stays_text(&mut scratch, &input)? {
+                input.insert(0, '\'');
             }
             if let Some(tab) = tabs.get_mut(cell.index as usize) {
                 tab.cells.push((cell.row, cell.column, input));
@@ -354,6 +397,15 @@ impl FormulaEngine for IronCalc {
         }
         Ok(tabs)
     }
+}
+
+/// Whether `input` typed into a cell reads as text.
+fn stays_text(scratch: &mut Model, input: &str) -> Result<bool, EngineError> {
+    scratch
+        .set_user_input(0, 1, 1, input.to_owned())
+        .map_err(whole)?;
+    let formula = scratch.get_cell_formula(0, 1, 1).map_err(whole)?.is_some();
+    Ok(!formula && matches!(scratch.get_cell_type(0, 1, 1), Ok(CellType::Text)))
 }
 
 #[cfg(test)]
@@ -511,7 +563,9 @@ mod tests {
             tab("Notes", &[(1, 1, "'00123"), (2, 1, "=Costs!B3*2")]),
         ];
         let bytes = IronCalc.to_xlsx(&tabs).expect("written");
-        let back = IronCalc.read_xlsx(&bytes).expect("read");
+        let back = IronCalc
+            .read_xlsx(&bytes, &|names| names.to_vec())
+            .expect("read");
         assert_eq!(
             back.iter().map(|tab| tab.name.as_str()).collect::<Vec<_>>(),
             ["Costs", "Notes"]
@@ -522,7 +576,22 @@ mod tests {
             IronCalc.apply(&back, &[]).expect("computed")[1].cells[1].value,
             Value::Number(2400.0)
         );
-        assert!(IronCalc.read_xlsx(b"not a zip").is_err());
+        assert!(
+            IronCalc
+                .read_xlsx(b"not a zip", &|names| names.to_vec())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn imported_text_that_reads_as_something_else_is_quoted() {
+        let mut scratch = Model::new_empty("scratch", LOCALE, TIMEZONE, LANGUAGE).expect("model");
+        for typed in ["00123", "=A1", "TRUE", "-5", "#N/A"] {
+            assert!(!stays_text(&mut scratch, typed).expect("typed"), "{typed}");
+        }
+        for typed in ["Rent", "A1:B2", "Q1 total"] {
+            assert!(stays_text(&mut scratch, typed).expect("typed"), "{typed}");
+        }
     }
 
     #[test]
