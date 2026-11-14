@@ -158,8 +158,9 @@ pub(super) const RECORD_COLUMNS: &str = "record.id, record.collection_id, record
      record_editor.display_name AS updated_by_name, record.archived_at IS NOT NULL AS archived, \
      record.version, record.created_at::text AS created_at, record.updated_at::text AS updated_at";
 
-/// Records of a collection by ID, in the order of `ids`. IDs that aren't
-/// the collection's are left out.
+/// Records of a collection by ID, in the order of `ids`, each once (an ID
+/// named twice, as a record in two groups is, comes back the first time).
+/// IDs that aren't the collection's are left out.
 pub async fn by_ids(
     executor: impl sqlx::PgExecutor<'_>,
     project_id: Uuid,

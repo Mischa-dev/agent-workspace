@@ -2025,7 +2025,7 @@ async fn every_field_type_normalises_filters_sorts_and_groups() {
         return;
     };
     let app = &setup.app;
-    create_project(&setup, "WORK", "Work").await;
+    let work = create_project(&setup, "WORK", "Work").await;
     let codex = connect_app(app, &setup.browser, "Codex", "full").await;
     let session = initialize(app, &codex).await.expect("Codex MCP");
     let call = |name: &'static str, arguments: Value| {
@@ -2273,6 +2273,75 @@ async fn every_field_type_normalises_filters_sorts_and_groups() {
         assert_eq!(page["value"]["groups"], expected, "{group}: {page}");
         assert_eq!(page["value"]["total"], 4, "{group}: {page}");
     }
+    // A record with two tags is a line in each of its groups, in the agent's
+    // query and in the records route the web reads.
+    let lines = |records: &Value, group: &dyn Fn(&Value) -> String| {
+        let mut lines = records
+            .as_array()
+            .unwrap_or_else(|| panic!("no records: {records}"))
+            .iter()
+            .map(|record| {
+                let title = record["title"]
+                    .as_str()
+                    .or_else(|| record["record"]["title"].as_str())
+                    .unwrap_or_default();
+                (group(record), title.to_owned())
+            })
+            .collect::<Vec<_>>();
+        lines.sort();
+        lines
+    };
+    let expected = [
+        ("No value", "Linus"),
+        ("Partner", "Ada"),
+        ("Partner", "Grace"),
+        ("Press", "Ada"),
+        ("Press", "Margaret"),
+    ]
+    .map(|(group, title)| (group.to_owned(), title.to_owned()))
+    .to_vec();
+    let by_tags = call(
+        "record_query",
+        json!({"projectId": "WORK", "collection": "Contacts", "groupBy": "Tags"}),
+    )
+    .await;
+    assert_eq!(
+        lines(&by_tags["value"]["records"], &|record| record["group"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()),
+        expected,
+        "{by_tags}"
+    );
+    let (contacts, tags) = sqlx::query_as::<_, (uuid::Uuid, uuid::Uuid)>(
+        "SELECT collection.id, field.id FROM collections collection \
+         JOIN field_definitions field ON field.collection_id = collection.id \
+         WHERE collection.name = 'Contacts' AND field.name = 'Tags'",
+    )
+    .fetch_one(&setup.pool)
+    .await
+    .expect("contacts");
+    let (status, listed) = send(
+        app,
+        setup.browser.request(
+            "GET",
+            &format!(
+                "/api/v1/projects/{work}/collections/{contacts}/records?groupBy={tags}&limit=50"
+            ),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_eq!(
+        lines(&listed["records"], &|record| record["group"]["label"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()),
+        expected,
+        "{listed}"
+    );
     let by_maker = call(
         "record_query",
         json!({"projectId": "WORK", "collection": "Contacts", "groupBy": "Maker"}),

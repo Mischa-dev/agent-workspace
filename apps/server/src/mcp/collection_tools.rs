@@ -1155,10 +1155,12 @@ pub(super) async fn record_query(
                 .iter(),
         )
         .await?;
-        let mut group_of = page
-            .rows
-            .into_iter()
-            .collect::<HashMap<Uuid, Option<query::GroupRef>>>();
+        // A record grouped by several choices is a line in each of its
+        // groups: one per (record, group) the page found, in its order.
+        let by_id = found
+            .iter()
+            .map(|record| (record.id, record))
+            .collect::<HashMap<Uuid, _>>();
         let mut history = Vec::new();
         if history_wanted {
             for record in &found {
@@ -1177,16 +1179,15 @@ pub(super) async fn record_query(
         Ok::<_, AppError>(ToolResult::ok(RecordQueryValue {
             collection: collection.name.clone(),
             title_name: collection.title_name.clone(),
-            records: found
-                .iter()
-                .map(|record| {
+            records: page
+                .rows
+                .into_iter()
+                .filter_map(|(id, group)| {
+                    let record = by_id.get(&id)?;
                     let mut line =
                         RecordLine::of(record, &definitions, &references, only_fields.as_ref());
-                    line.group = group_of
-                        .remove(&record.id)
-                        .flatten()
-                        .map(|group| group.label);
-                    line
+                    line.group = group.map(|group| group.label);
+                    Some(line)
                 })
                 .collect(),
             total,
