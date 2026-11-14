@@ -25,3 +25,4 @@ slices move.
 | 2026-11-14 | P0.24 | `agent_workspace_server::test_support::source` | each guard's own scanner → one scanner (`rust_files`, `strip_tests`, `routes`) for the policy inventory, the module test, both isolation nets and the structure guards | K1, K2, K4 guards |
 | 2026-11-14 | P0.26 | `apps/server/src/structure_guards/allowances.json` | one rule → fourteen rules with per-file allowances and ceilings | every workstream (lower a number when you remove an offender) |
 | 2026-11-14 | P0.28 | SQL `conversation_readable_by(conversation_id, actor_id)` | new: one call to `conversation_visible_to` (ruling R32) | C2.1, K1, K4.4 |
+| 2026-11-14 | P0.35 | `tools/db/schema-snapshot.sh` → `target/schema.sql` | new: today's schema as `pg_dump --schema-only` prints it; CI keeps it in the `ci-reports` artifact | every workstream that adds a migration |

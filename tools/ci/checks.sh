@@ -449,6 +449,7 @@ if has rust; then
   fi
   step "rust tests" cargo nextest run --workspace --profile ci
   step "doc tests" cargo test --workspace --doc --quiet
+  step "schema snapshot" tools/db/schema-snapshot.sh
   if web_failed; then report_web; fi
   step "install cargo-deny" cargo install cargo-deny --version 0.20.2 --locked --quiet
   step "cargo deny" cargo deny check
