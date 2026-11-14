@@ -1827,48 +1827,25 @@ mod tests {
 
     use super::{MUTATING_ENTRY_POINTS, MutationMethod};
 
-    /// A route registration. Spelled in two parts so this file holds no
-    /// route call of its own for the source scans here and in the
-    /// workspace-isolation test to trip over.
-    const ROUTE_CALL: &str = concat!(".route", "(");
-
     /// Every file under `src/` that adds routes, found when the test runs so
-    /// a new router file can't be missed. Test modules are left out (they
-    /// build throwaway routers), and so is this file.
+    /// a new router file can't be missed, read through the shared scanner
+    /// (test tails cut the same way every guard cuts them). This file is
+    /// left out.
     fn router_sources() -> Vec<(String, String)> {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let mut folders = vec![root.clone()];
-        let mut sources = Vec::new();
-        while let Some(folder) = folders.pop() {
-            for entry in std::fs::read_dir(&folder).expect("read source folder") {
-                let path = entry.expect("source entry").path();
-                if path.is_dir() {
-                    folders.push(path);
-                    continue;
+        use crate::test_support::source::{routes, rust_files, server_src, strip_tests};
+        rust_files(&server_src())
+            .into_iter()
+            .filter(|(path, _)| path != "policy_inventory.rs")
+            .filter_map(|(path, source)| {
+                let source = strip_tests(&source).to_owned();
+                if routes(&source).is_empty() {
+                    return None;
                 }
-                if path.extension().is_none_or(|extension| extension != "rs")
-                    || path.ends_with("policy_inventory.rs")
-                {
-                    continue;
-                }
-                let mut source = std::fs::read_to_string(&path).expect("read source file");
-                if let Some(tests) = source.find("\n#[cfg(test)]\nmod tests") {
-                    source.truncate(tests);
-                }
-                if !source.contains(ROUTE_CALL) {
-                    continue;
-                }
-                let module = path
-                    .strip_prefix(&root)
-                    .expect("file under src")
-                    .with_extension("")
-                    .to_string_lossy()
-                    .replace('\\', "/");
-                let module = module.strip_suffix("/mod").unwrap_or(&module).to_owned();
-                sources.push((module, source));
-            }
-        }
-        sources
+                let module = path.strip_suffix(".rs").unwrap_or(&path);
+                let module = module.strip_suffix("/mod").unwrap_or(module).to_owned();
+                Some((module, source))
+            })
+            .collect()
     }
 
     #[test]
@@ -1894,7 +1871,7 @@ mod tests {
         let expected = MUTATING_ENTRY_POINTS
             .iter()
             .filter(|entry| entry.method != MutationMethod::Protocol)
-            .map(|entry| (entry.module, entry.method, entry.path))
+            .map(|entry| (entry.module, entry.method, entry.path.to_owned()))
             .collect::<BTreeSet<_>>();
 
         assert_eq!(actual, expected);
@@ -1903,69 +1880,24 @@ mod tests {
 
     fn mutation_routes<'a>(
         module: &'a str,
-        source: &'a str,
-    ) -> Vec<(&'a str, MutationMethod, &'a str)> {
-        route_blocks(source)
+        source: &str,
+    ) -> Vec<(&'a str, MutationMethod, String)> {
+        crate::test_support::source::routes(source)
             .into_iter()
-            .flat_map(|block| {
-                let path = first_string_literal(block).expect("route path literal");
-                [
-                    (MutationMethod::Post, "post("),
-                    (MutationMethod::Put, "put("),
-                    (MutationMethod::Patch, "patch("),
-                    (MutationMethod::Delete, "delete("),
-                ]
-                .into_iter()
-                .filter(move |(_, token)| block.contains(token))
-                .map(move |(method, _)| (module, method, path))
+            .flat_map(|route| {
+                route
+                    .methods
+                    .iter()
+                    .filter_map(|method| match *method {
+                        "POST" => Some(MutationMethod::Post),
+                        "PUT" => Some(MutationMethod::Put),
+                        "PATCH" => Some(MutationMethod::Patch),
+                        "DELETE" => Some(MutationMethod::Delete),
+                        _ => None,
+                    })
+                    .map(|method| (module, method, route.path.clone()))
+                    .collect::<Vec<_>>()
             })
             .collect()
-    }
-
-    fn route_blocks(source: &str) -> Vec<&str> {
-        let mut blocks = Vec::new();
-        let mut remaining = source;
-        while let Some(relative_start) = remaining.find(ROUTE_CALL) {
-            let start = source.len() - remaining.len() + relative_start;
-            let open = start + ".route".len();
-            let mut depth = 0_u32;
-            let mut in_string = false;
-            let mut escaped = false;
-            let mut end = None;
-            for (offset, character) in source[open..].char_indices() {
-                if in_string {
-                    if escaped {
-                        escaped = false;
-                    } else if character == '\\' {
-                        escaped = true;
-                    } else if character == '"' {
-                        in_string = false;
-                    }
-                    continue;
-                }
-                match character {
-                    '"' => in_string = true,
-                    '(' => depth += 1,
-                    ')' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            end = Some(open + offset + character.len_utf8());
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            let end = end.expect("balanced route call");
-            blocks.push(&source[start..end]);
-            remaining = &source[end..];
-        }
-        blocks
-    }
-
-    fn first_string_literal(block: &str) -> Option<&str> {
-        let start = block.find('"')? + 1;
-        let end = block[start..].find('"')? + start;
-        Some(&block[start..end])
     }
 }

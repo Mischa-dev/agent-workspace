@@ -42,6 +42,7 @@ use std::{
 use agent_workspace_server::{
     mcp::MCP_PATH,
     realtime::{RealtimeHub, outbox_worker_id, run_outbox_publisher},
+    test_support::source::{routes as shared_routes, rust_files, server_src, strip_tests},
 };
 use axum::{
     body::{Body, to_bytes},
@@ -271,17 +272,14 @@ const READ_TOOLS_THAT_WRITE: &[(&str, &str)] = &[];
 
 #[test]
 fn every_get_route_and_read_tool_has_an_isolation_case() {
-    let source_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut sources = Vec::new();
-    collect_sources(&source_root, &mut sources);
-    assert!(
-        !sources.is_empty(),
-        "no server sources under {source_root:?}"
-    );
+    let sources = rust_files(&server_src());
+    assert!(!sources.is_empty(), "no server sources");
 
     let routes = sources
         .iter()
-        .flat_map(|(_, source)| get_routes(source))
+        .flat_map(|(_, source)| shared_routes(strip_tests(source)))
+        .filter(|route| route.methods.contains(&"GET"))
+        .map(|route| route.path)
         .filter(|path| path.starts_with("/api/v1"))
         .collect::<BTreeSet<_>>();
     let covered = HTTP_ROUTES
@@ -312,7 +310,7 @@ fn every_get_route_and_read_tool_has_an_isolation_case() {
 
     let mcp_source = sources
         .iter()
-        .find(|(path, _)| path.ends_with("src/mcp.rs"))
+        .find(|(path, _)| path == "mcp.rs")
         .map(|(_, source)| source.as_str())
         .expect("src/mcp.rs");
     let read_tools = read_only_tools(mcp_source);
@@ -332,89 +330,6 @@ fn every_get_route_and_read_tool_has_an_isolation_case() {
         stale.is_empty(),
         "isolation cases for tools that aren't read-only tools: {stale:#?}"
     );
-}
-
-pub(super) fn collect_sources(directory: &std::path::Path, sources: &mut Vec<(String, String)>) {
-    let mut entries = std::fs::read_dir(directory)
-        .unwrap_or_else(|error| panic!("read {directory:?}: {error}"))
-        .map(|entry| entry.expect("directory entry").path())
-        .collect::<Vec<_>>();
-    entries.sort();
-    for path in entries {
-        if path.is_dir() {
-            collect_sources(&path, sources);
-        } else if path.extension().is_some_and(|extension| extension == "rs") {
-            let source = std::fs::read_to_string(&path).expect("read source");
-            sources.push((path.to_string_lossy().replace('\\', "/"), source));
-        }
-    }
-}
-
-/// The paths of `.route("...", ...)` calls that register a GET handler.
-fn get_routes(source: &str) -> Vec<String> {
-    route_blocks(source)
-        .into_iter()
-        .filter(|block| has_call(block, "get("))
-        .filter_map(|block| first_string_literal(block).map(str::to_owned))
-        .collect()
-}
-
-/// `token` appears as a call, not as the end of a longer name.
-pub(super) fn has_call(block: &str, token: &str) -> bool {
-    block.match_indices(token).any(|(index, _)| {
-        !block[..index]
-            .chars()
-            .next_back()
-            .is_some_and(|previous| previous.is_ascii_alphanumeric() || previous == '_')
-    })
-}
-
-/// The same balanced-parenthesis scan `policy_inventory`'s test uses.
-pub(super) fn route_blocks(source: &str) -> Vec<&str> {
-    let mut blocks = Vec::new();
-    let mut remaining = source;
-    while let Some(relative_start) = remaining.find(".route(") {
-        let start = source.len() - remaining.len() + relative_start;
-        let open = start + ".route".len();
-        let mut depth = 0_u32;
-        let mut in_string = false;
-        let mut escaped = false;
-        let mut end = None;
-        for (offset, character) in source[open..].char_indices() {
-            if in_string {
-                if escaped {
-                    escaped = false;
-                } else if character == '\\' {
-                    escaped = true;
-                } else if character == '"' {
-                    in_string = false;
-                }
-                continue;
-            }
-            match character {
-                '"' => in_string = true,
-                '(' => depth += 1,
-                ')' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        end = Some(open + offset + character.len_utf8());
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
-        let end = end.expect("balanced route call");
-        blocks.push(&source[start..end]);
-        remaining = &source[end..];
-    }
-    blocks
-}
-
-pub(super) fn first_string_literal(block: &str) -> Option<&str> {
-    let start = block.find('"')? + 1;
-    let end = block[start..].find('"')? + start;
-    Some(&block[start..end])
 }
 
 /// Names of `#[tool(...)]` methods annotated `read_only_hint = true`.

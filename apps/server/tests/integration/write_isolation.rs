@@ -38,6 +38,9 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
+use agent_workspace_server::test_support::source::{
+    routes as shared_routes, rust_files, server_src, strip_tests,
+};
 use agent_workspace_server::{
     domain::allocate_conversation_sequence,
     policy_inventory::{MUTATING_ENTRY_POINTS, MutationMethod},
@@ -60,9 +63,9 @@ use super::{
     agent_interface::{Browser, connect_app, initialize, send},
     message_edits::text,
     workspace_isolation::{
-        MARKER, ORIGIN, TINY_PNG, TwoWorkspaces, World, call_tool, collect_sources,
-        first_string_literal, has_call, json_body as rpc_reply, leaked, login_as, route_blocks,
-        string_at, structured, succeeded, sweep_ids, tiny_png, two_workspaces_with, upload,
+        MARKER, ORIGIN, TINY_PNG, TwoWorkspaces, World, call_tool, json_body as rpc_reply, leaked,
+        login_as, string_at, structured, succeeded, sweep_ids, tiny_png, two_workspaces_with,
+        upload,
     },
 };
 
@@ -552,19 +555,21 @@ const MCP_WRITE_EXCLUSIONS: &[(&str, &str)] = &[(
 
 #[test]
 fn every_write_route_and_write_tool_has_an_isolation_case() {
-    let source_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut sources = Vec::new();
-    collect_sources(&source_root, &mut sources);
-    assert!(
-        !sources.is_empty(),
-        "no server sources under {source_root:?}"
-    );
+    let sources = rust_files(&server_src());
+    assert!(!sources.is_empty(), "no server sources");
 
     // Every mutating route the server registers (test-only fakes at the end
     // of a file aside), and every one the policy inventory lists.
     let mut routes = sources
         .iter()
-        .flat_map(|(_, source)| mutating_routes(without_tests(source)))
+        .flat_map(|(_, source)| shared_routes(strip_tests(source)))
+        .flat_map(|route| {
+            route
+                .methods
+                .into_iter()
+                .filter(|method| *method != "GET")
+                .map(move |method| format!("{method} {}", route.path))
+        })
         .collect::<BTreeSet<_>>();
     routes.extend(MUTATING_ENTRY_POINTS.iter().map(|entry| {
         let method = match entry.method {
@@ -615,7 +620,7 @@ fn every_write_route_and_write_tool_has_an_isolation_case() {
 
     let mcp_source = sources
         .iter()
-        .find(|(path, _)| path.ends_with("src/mcp.rs"))
+        .find(|(path, _)| path == "mcp.rs")
         .map(|(_, source)| source.as_str())
         .expect("src/mcp.rs");
     let write_tools = write_tools(mcp_source);
@@ -654,32 +659,6 @@ fn every_write_route_and_write_tool_has_an_isolation_case() {
         stale.is_empty(),
         "write-isolation cases for tools that aren't write tools: {stale:#?}"
     );
-}
-
-/// The source before a trailing `#[cfg(test)] mod`, so test-only routers
-/// (a provider's fake server) don't count as the app's routes.
-fn without_tests(source: &str) -> &str {
-    agent_workspace_server::test_support::source::strip_tests(source)
-}
-
-/// `"METHOD /path"` for each `.route("...", ...)` call that registers a
-/// POST, PUT, PATCH or DELETE handler.
-fn mutating_routes(source: &str) -> Vec<String> {
-    route_blocks(source)
-        .into_iter()
-        .filter_map(|block| first_string_literal(block).map(|path| (block, path)))
-        .flat_map(|(block, path)| {
-            [
-                ("POST", "post("),
-                ("PUT", "put("),
-                ("PATCH", "patch("),
-                ("DELETE", "delete("),
-            ]
-            .into_iter()
-            .filter(move |(_, token)| has_call(block, token))
-            .map(move |(method, _)| format!("{method} {path}"))
-        })
-        .collect()
 }
 
 /// Names of `#[tool(...)]` methods not annotated `read_only_hint = true`.

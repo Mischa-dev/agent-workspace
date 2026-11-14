@@ -452,43 +452,16 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Reading the routes from the source, as `policy_inventory` does.
-
-    const ROUTE_CALL: &str = concat!(".route", "(");
+    // Reading the routes from the source through the shared scanner (P0.24),
+    // as `policy_inventory` does.
 
     fn route_paths() -> BTreeSet<String> {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let mut folders = vec![root];
-        let mut paths = BTreeSet::new();
-        while let Some(folder) = folders.pop() {
-            for entry in std::fs::read_dir(&folder).expect("read source folder") {
-                let path = entry.expect("source entry").path();
-                if path.is_dir() {
-                    folders.push(path);
-                    continue;
-                }
-                if path.extension().is_none_or(|extension| extension != "rs") {
-                    continue;
-                }
-                let source = std::fs::read_to_string(&path).expect("read source file");
-                // Test modules build throwaway routers.
-                let mut remaining = crate::test_support::source::strip_tests(&source);
-                while let Some(start) = remaining.find(ROUTE_CALL) {
-                    remaining = &remaining[start + ROUTE_CALL.len()..];
-                    let Some(open) = remaining.find('"') else {
-                        break;
-                    };
-                    // The path is the call's first argument.
-                    if !remaining[..open].trim().is_empty() {
-                        continue;
-                    }
-                    let rest = &remaining[open + 1..];
-                    if let Some(close) = rest.find('"') {
-                        paths.insert(rest[..close].to_owned());
-                    }
-                }
-            }
-        }
-        paths
+        use crate::test_support::source::{routes, rust_files, server_src, strip_tests};
+        rust_files(&server_src())
+            .iter()
+            // Test modules build throwaway routers.
+            .flat_map(|(_, source)| routes(strip_tests(source)))
+            .map(|route| route.path)
+            .collect()
     }
 }
