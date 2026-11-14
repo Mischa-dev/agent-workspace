@@ -1085,7 +1085,7 @@ pub async fn apply(
             continue;
         }
         if let Some(written) = write.view_type.as_deref()
-            && ViewType::parse(written).is_none()
+            && views::parse_view_type(written).is_none()
         {
             return Ok(stop(
                 ProblemKind::Invalid,
@@ -1115,7 +1115,7 @@ pub async fn apply(
                 write
                     .view_type
                     .as_deref()
-                    .and_then(ViewType::parse)
+                    .and_then(views::parse_view_type)
                     .unwrap_or(ViewType::Table),
                 &definitions,
             ) {
@@ -1142,7 +1142,7 @@ pub async fn apply(
             let view_type = write
                 .view_type
                 .as_deref()
-                .and_then(ViewType::parse)
+                .and_then(views::parse_view_type)
                 .unwrap_or(ViewType::Table);
             match views::create(
                 connection,
@@ -1183,7 +1183,7 @@ pub async fn apply(
             continue;
         };
         if let Some(written) = write.view_type.as_deref()
-            && ViewType::parse(written) != Some(view.view_type)
+            && views::parse_view_type(written) != Some(view.view_type)
         {
             return Ok(stop(
                 ProblemKind::Invalid,

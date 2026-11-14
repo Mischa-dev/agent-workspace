@@ -60,15 +60,41 @@ const MAX_CLAUSE_VALUE_CHARACTERS: usize = 200;
 // ---------------------------------------------------------------------------
 // Types
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+/// A field's type: the one list every record kind, collection and module
+/// manifest names types from (T1.2; `modules::contract::FieldType` is this
+/// type). [`FieldType::ALL`] are the types a field can be made with; the
+/// rest are named by module manifests only, until the field layer stores
+/// them (`FieldType::is_stored`).
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum FieldType {
     Text,
+    /// Paragraphs of text. Declared by manifests only, for now.
+    LongText,
     Number,
     Date,
     SingleChoice,
     MultipleChoice,
+    /// A status from the thing's workflow. Declared by manifests only, for
+    /// now.
+    Status,
     Person,
+    /// Several people. Declared by manifests only.
+    People,
+    /// The project's labels. Declared by manifests only.
+    Labels,
     Url,
     Checkbox,
     // A link to a task or a page in the same project (`FieldConfig::target`).
@@ -88,9 +114,18 @@ impl FieldType {
         Self::Link,
     ];
 
+    /// Whether fields of this type can be made and stored.
+    pub fn is_stored(self) -> bool {
+        Self::ALL.contains(&self)
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Text => "text",
+            Self::LongText => "long_text",
+            Self::Status => "status",
+            Self::People => "people",
+            Self::Labels => "labels",
             Self::Number => "number",
             Self::Date => "date",
             Self::SingleChoice => "single_choice",
@@ -138,11 +173,15 @@ impl FieldType {
     pub fn ops(self) -> &'static [FieldOp] {
         use FieldOp::*;
         match self {
-            Self::Text | Self::Url => &[Contains, Is, IsNot, Empty, NotEmpty],
+            Self::Text | Self::LongText | Self::Url => &[Contains, Is, IsNot, Empty, NotEmpty],
             Self::Number | Self::Date => &[Is, IsNot, Gt, Gte, Lt, Lte, Empty, NotEmpty],
-            Self::SingleChoice | Self::MultipleChoice | Self::Person | Self::Link => {
-                &[Is, IsNot, Empty, NotEmpty]
-            }
+            Self::SingleChoice
+            | Self::MultipleChoice
+            | Self::Status
+            | Self::Labels
+            | Self::Person
+            | Self::People
+            | Self::Link => &[Is, IsNot, Empty, NotEmpty],
             Self::Checkbox => &[Is, Empty, NotEmpty],
         }
     }
@@ -721,6 +760,12 @@ pub fn normalize_value_keeping(
     let name = &field.name;
     let blank = input.as_str().is_some_and(|text| text.trim().is_empty());
     match field.field_type {
+        FieldType::LongText | FieldType::Status | FieldType::People | FieldType::Labels => {
+            Err(format!(
+                "\"{name}\" is a {} field, which records don't store.",
+                field.field_type.as_str()
+            ))
+        }
         FieldType::Text => {
             let Value::String(text) = input else {
                 return Err(format!("\"{name}\" takes text."));
@@ -1051,6 +1096,10 @@ pub fn check_clause(field: &FieldDefinition, clause: &FieldClause) -> Result<(),
             (FieldType::Person | FieldType::Link, _) => value.parse::<Uuid>().is_ok(),
             (FieldType::Checkbox, _) => value == "true",
             (FieldType::Text | FieldType::Url, _) => true,
+            (
+                FieldType::LongText | FieldType::Status | FieldType::People | FieldType::Labels,
+                _,
+            ) => false,
         };
         if !ok {
             return Err(match field.field_type {
@@ -1300,7 +1349,12 @@ pub fn sort_keys(field: &FieldDefinition, column: &str, project: &str) -> Vec<So
         follows_direction: false,
     };
     let by_value = match field.field_type {
-        FieldType::Text | FieldType::Url => key(
+        FieldType::Text
+        | FieldType::Url
+        | FieldType::LongText
+        | FieldType::Status
+        | FieldType::People
+        | FieldType::Labels => key(
             format!("left(lower(COALESCE({text}, '')), {SORT_PREFIX_CHARACTERS})"),
             "text",
         ),
@@ -1974,22 +2028,6 @@ mod tests {
         assert_eq!(clauses[0].values, vec![reader.to_string()]);
         for clause in &clauses[1..] {
             assert_eq!(clause.values, vec!["me".to_owned()]);
-        }
-    }
-
-    /// The modules contract (AWD-75) names field types as task fields
-    /// store them; every stored type must be one it reads.
-    #[test]
-    fn every_field_type_is_a_contract_field_type() {
-        for field_type in FieldType::ALL {
-            let read = serde_json::from_value::<crate::modules::contract::FieldType>(json!(
-                field_type.as_str()
-            ));
-            assert!(
-                read.is_ok(),
-                "{} isn't a contract field type",
-                field_type.as_str()
-            );
         }
     }
 

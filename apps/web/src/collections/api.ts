@@ -2,6 +2,7 @@ import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-qu
 
 import { requestJson } from '../api/client'
 import { normalizeField, normalizeReferences, normalizeValues, type FieldClause, type FieldDefinition, type FieldReference, type FieldValue, type FieldValues } from '../fields/fieldModel'
+import type { ViewKind } from '../views/kinds'
 
 /**
  * Collections (AWD-90) on the web side: a project's own record types, each
@@ -41,7 +42,8 @@ export type ViewConfig = {
 }
 
 /** How a view lays out its records. */
-export type ViewType = 'table' | 'board' | 'gallery' | 'calendar'
+/** The kinds of view a collection draws today, of the one list (views/kinds.ts). */
+export type ViewType = Extract<ViewKind, 'table' | 'board' | 'gallery' | 'calendar'>
 export const VIEW_TYPES: readonly ViewType[] = ['table', 'board', 'gallery', 'calendar']
 const asViewType = (value: unknown): ViewType => (VIEW_TYPES as readonly unknown[]).includes(value) ? (value as ViewType) : 'table'
 

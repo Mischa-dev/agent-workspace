@@ -293,7 +293,12 @@ fn value_for(field: &FieldDefinition, value: &Value) -> Result<Value, String> {
                     .ok_or_else(|| wrong("a list of its options"))?,
             )
         }
-        FieldType::Person | FieldType::Link => return Err(wrong("nothing on a form")),
+        FieldType::Person
+        | FieldType::Link
+        | FieldType::LongText
+        | FieldType::Status
+        | FieldType::People
+        | FieldType::Labels => return Err(wrong("nothing on a form")),
     })
 }
 

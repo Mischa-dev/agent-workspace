@@ -1124,7 +1124,7 @@ async fn create_view(
     let Some(name) = super::normalize_name(&request.name) else {
         return Ok(invalid("name", view_name_message()));
     };
-    let Some(view_type) = ViewType::parse(&request.view_type) else {
+    let Some(view_type) = views::parse_view_type(&request.view_type) else {
         return Ok(invalid("type", views::VIEW_TYPE_MESSAGE));
     };
     let mut write = begin!(

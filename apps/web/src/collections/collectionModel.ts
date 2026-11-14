@@ -10,11 +10,15 @@ export const TITLE_WIDTH = 280
 
 const WIDTHS: Record<FieldType, number> = {
   text: 240,
+  long_text: 320,
   number: 120,
   date: 140,
   single_choice: 160,
   multiple_choice: 220,
+  status: 160,
   person: 180,
+  people: 220,
+  labels: 220,
   url: 200,
   checkbox: 104,
   link: 220,

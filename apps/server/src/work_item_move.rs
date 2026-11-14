@@ -757,6 +757,8 @@ async fn carry_value(
         return Ok(None);
     }
     Ok(match source.field_type {
+        // Types only manifests declare are never stored, so never carried.
+        FieldType::LongText | FieldType::Status | FieldType::People | FieldType::Labels => None,
         FieldType::Text
         | FieldType::Number
         | FieldType::Date

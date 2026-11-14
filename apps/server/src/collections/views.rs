@@ -25,37 +25,22 @@ pub const MAX_SORTS: usize = 3;
 pub const MIN_COLUMN_WIDTH: u16 = 48;
 pub const MAX_COLUMN_WIDTH: u16 = 1_200;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ViewType {
-    Table,
-    /// A column for each value of the field it groups by; moving a card to
-    /// another column changes that value.
-    Board,
-    /// A card for each record, with the view's shown fields.
-    Gallery,
-    /// A month, with each record on the day its date field holds.
-    Calendar,
-}
+/// A view's kind: the one list in `crate::views` (T1.2).
+pub use crate::views::ViewKind as ViewType;
 
-impl ViewType {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Table => "table",
-            Self::Board => "board",
-            Self::Gallery => "gallery",
-            Self::Calendar => "calendar",
-        }
-    }
+/// The kinds a collection's view can be today: a table, a board (a column
+/// for each value of the field it groups by), a gallery (a card for each
+/// record) or a calendar (a month, each record on its date).
+pub const COLLECTION_VIEW_TYPES: [ViewType; 4] = [
+    ViewType::Table,
+    ViewType::Board,
+    ViewType::Gallery,
+    ViewType::Calendar,
+];
 
-    pub fn parse(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "table" => Some(Self::Table),
-            "board" => Some(Self::Board),
-            "gallery" => Some(Self::Gallery),
-            "calendar" => Some(Self::Calendar),
-            _ => None,
-        }
-    }
+/// A view kind a collection's view can be, by name.
+pub fn parse_view_type(value: &str) -> Option<ViewType> {
+    ViewType::parse(value).filter(|kind| COLLECTION_VIEW_TYPES.contains(kind))
 }
 
 /// What a view or a query asks for when the type isn't one there is.
@@ -457,7 +442,7 @@ impl TryFrom<ViewRow> for View {
             id: row.id,
             collection_id: row.collection_id,
             name: row.name,
-            view_type: ViewType::parse(&row.view_type)
+            view_type: parse_view_type(&row.view_type)
                 .ok_or(AppError::Internal("stored view type"))?,
             config: serde_json::from_value(row.config)
                 .map_err(|_| AppError::Internal("stored view config"))?,
@@ -842,7 +827,7 @@ async fn move_to(
 mod tests {
     use uuid::Uuid;
 
-    use super::{Column, SortBy, SortRule, ViewConfig, ViewType, check};
+    use super::{Column, SortBy, SortRule, ViewConfig, ViewType, check, parse_view_type};
     use crate::fields::{FieldClause, FieldConfig, FieldDefinition, FieldOp, FieldType};
 
     fn field(name: &str, field_type: FieldType, archived: bool) -> FieldDefinition {
@@ -987,7 +972,7 @@ mod tests {
             ..ViewConfig::default()
         };
         assert_eq!(stored.active(&fields).date_field, None);
-        assert_eq!(ViewType::parse(" Calendar "), Some(ViewType::Calendar));
-        assert_eq!(ViewType::parse("list"), None);
+        assert_eq!(parse_view_type(" Calendar "), Some(ViewType::Calendar));
+        assert_eq!(parse_view_type("list"), None);
     }
 }

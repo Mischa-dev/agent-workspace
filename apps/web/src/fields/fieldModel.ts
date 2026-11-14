@@ -10,13 +10,24 @@
  * people, tasks and pages are called.
  */
 
+/**
+ * A field's type: the one list (T1.2) tasks, collections and module
+ * manifests name types from; `modules/contract.ts` re-exports it. The
+ * server's `crate::fields::FieldType` is the same list. `FIELD_TYPES` are
+ * the ones a field can be made with; `long_text`, `status`, `people` and
+ * `labels` are named by manifests only, for now.
+ */
 export type FieldType =
   | 'text'
+  | 'long_text'
   | 'number'
   | 'date'
   | 'single_choice'
   | 'multiple_choice'
+  | 'status'
   | 'person'
+  | 'people'
+  | 'labels'
   | 'url'
   | 'checkbox'
   | 'link'
