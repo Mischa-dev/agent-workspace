@@ -116,7 +116,7 @@ pub async fn home_for(state: &AppState, viewer: Uuid) -> Result<Home, AppError> 
         LEFT JOIN LATERAL (
             SELECT work_item.id, work_item.number, work_item.title
             FROM launches launch
-            JOIN work_items work_item
+            JOIN task_rows work_item
               ON work_item.project_id = launch.project_id AND work_item.id = launch.work_item_id
             WHERE launch.agent_run_id = run.id AND work_item.archived_at IS NULL
               -- The task's key and title only where the reader sees tasks.

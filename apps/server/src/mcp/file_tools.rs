@@ -596,7 +596,7 @@ pub(super) async fn file_delete(
                     check_access_for(&mut transaction, &at_file, Action::WorkItemEdit).await?,
                     WriteAccess::Allowed
                 ) && sqlx::query_scalar::<_, bool>(
-                    "SELECT archived_at IS NULL FROM work_items WHERE project_id = $1 AND id = $2",
+                    "SELECT archived_at IS NULL FROM task_rows WHERE project_id = $1 AND id = $2",
                 )
                 .bind(row.project_id)
                 .bind(work_item_id)
@@ -680,7 +680,7 @@ async fn task_destination(
     let open = sqlx::query_scalar::<_, bool>(
         r#"
         SELECT item.archived_at IS NULL AND project.archived_at IS NULL
-        FROM work_items item
+        FROM task_rows item
         JOIN projects project ON project.id = item.project_id
         WHERE item.project_id = $1 AND item.id = $2
         "#,

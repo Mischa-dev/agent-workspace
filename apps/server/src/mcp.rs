@@ -5831,7 +5831,7 @@ pub(super) async fn task_key_resolution(
         r#"
         SELECT found.id FROM (
             SELECT item.id, 0 AS preference, item.project_id
-            FROM work_items item
+            FROM task_rows item
             JOIN projects project ON project.id = item.project_id
             WHERE upper(project.project_key) = upper($3) AND item.number = $4
               AND project.archived_at IS NULL
@@ -5842,7 +5842,7 @@ pub(super) async fn task_key_resolution(
             UNION ALL
             SELECT alias.work_item_id, 1, item.project_id
             FROM work_item_key_aliases alias
-            JOIN work_items item ON item.id = alias.work_item_id
+            JOIN task_rows item ON item.id = alias.work_item_id
             WHERE upper(alias.project_key) = upper($3) AND alias.number = $4
         ) found
         JOIN project_memberships membership
@@ -5891,7 +5891,7 @@ async fn original_task_by_key(
         r#"
         SELECT found.id FROM (
             SELECT item.id, 0 AS preference, item.project_id
-            FROM work_items item
+            FROM task_rows item
             JOIN projects project ON project.id = item.project_id
             WHERE upper(project.project_key) = upper($3) AND item.number = $4
               AND project.archived_at IS NULL
@@ -6156,7 +6156,7 @@ async fn identifier_project(
             Some(reads::WorkItemReference::Key) => Ok(sqlx::query_scalar::<_, Uuid>(
                 r#"
                     SELECT project.id
-                    FROM work_items item
+                    FROM task_rows item
                     JOIN projects project ON project.id = item.project_id
                     WHERE upper(project.project_key || '-' || item.number::text) = upper($1)
                       AND (project.id = $2 OR actor_can_access_project($3, $4, project.id))

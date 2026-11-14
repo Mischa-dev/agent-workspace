@@ -464,7 +464,7 @@ async fn resolve_work_item_id(
     sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT wi.id
-        FROM work_items wi
+        FROM task_rows wi
         JOIN projects p ON p.id = wi.project_id
         WHERE wi.project_id = $1
           AND upper(p.project_key || '-' || wi.number::text) = upper($2)
@@ -809,7 +809,7 @@ const WORK_ITEM_BY_ID_SELECT: &str = r#"
         wi.blocked_reason,
         wi.blocked_at::text AS blocked_at,
         wi.blocked_by_actor_id
-    FROM work_items wi
+    FROM task_rows wi
     JOIN projects p ON p.id = wi.project_id
     JOIN work_item_types item_type
       ON item_type.project_id = wi.project_id AND item_type.id = wi.type_id

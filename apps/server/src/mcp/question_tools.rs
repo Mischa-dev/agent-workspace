@@ -489,7 +489,7 @@ pub(super) async fn question_list(
               ON asker.project_id = q.project_id AND asker.actor_id = q.asked_by_actor_id
             LEFT JOIN project_memberships person
               ON person.project_id = q.project_id AND person.actor_id = q.person_actor_id
-            LEFT JOIN work_items item ON item.id = q.work_item_id
+            LEFT JOIN task_rows item ON item.id = q.work_item_id
             WHERE q.project_id = ANY($1)
               AND CASE WHEN $4 THEN q.person_actor_id = $2 AND {visible}
                        ELSE q.asked_by_actor_id = $2 END

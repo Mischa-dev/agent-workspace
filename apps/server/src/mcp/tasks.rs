@@ -264,7 +264,7 @@ const READY: &str = r#"
     AND item.blocked_reason IS NULL
     AND NOT EXISTS (SELECT 1
        FROM work_item_dependencies ready_dependency
-       JOIN work_items ready_blocker
+       JOIN task_rows ready_blocker
          ON ready_blocker.project_id = ready_dependency.blocking_project_id
         AND ready_blocker.id = ready_dependency.blocking_work_item_id
        JOIN work_item_statuses ready_status
@@ -612,7 +612,7 @@ const PRIORITY_RANK: &str = "CASE item.priority WHEN 'urgent' THEN 0 WHEN 'high'
 /// The tables every filter reads. Only one claim per task can be live (the
 /// claims primary key), so the join never repeats a task.
 const TASK_FROM: &str = r#"
-    FROM work_items item
+    FROM task_rows item
     JOIN projects project ON project.id = item.project_id
     JOIN work_item_statuses status
       ON status.project_id = item.project_id AND status.id = item.status_id
@@ -1347,7 +1347,7 @@ async fn list_tasks(
                item_type.name AS task_type, item.priority,
                assignee.display_name AS assignee,
                CASE WHEN item.archived_at IS NOT NULL THEN 0::bigint
-                    ELSE 1 + (SELECT count(*) FROM work_items peer
+                    ELSE 1 + (SELECT count(*) FROM task_rows peer
                               WHERE peer.project_id = item.project_id
                                 AND peer.status_id = item.status_id
                                 AND peer.archived_at IS NULL
@@ -1390,7 +1390,7 @@ async fn list_tasks(
                        status.position AS status_position,
                        item.archived_at IS NOT NULL AS archived, item.board_rank, item.id,
                        ({PRIORITY_RANK})::int4 AS priority_rank, item.updated_at, item.number
-                FROM work_items item
+                FROM task_rows item
                 JOIN projects project ON project.id = item.project_id
                 JOIN work_item_statuses status
                   ON status.project_id = item.project_id AND status.id = item.status_id
@@ -1759,7 +1759,7 @@ async fn resolve_among(
     let matches = sqlx::query_as::<_, (Uuid, Uuid)>(
         r#"
         SELECT item.id, item.project_id
-        FROM work_items item
+        FROM task_rows item
         JOIN projects project ON project.id = item.project_id
         WHERE item.project_id = ANY($3)
           AND upper(project.project_key) = upper($1) AND item.number = $2
@@ -2139,7 +2139,7 @@ pub(super) async fn task_open(
                    project.name AS project, item.version, item.updated_at::text AS updated_at,
                    item.archived_at IS NOT NULL AS archived, {TASK_LABELS_COLUMN},
                    {planning_columns}
-            FROM work_items item
+            FROM task_rows item
             JOIN projects project ON project.id = item.project_id
             JOIN work_item_statuses status
               ON status.project_id = item.project_id AND status.id = item.status_id
@@ -2268,7 +2268,7 @@ pub(super) async fn task_open(
                    milestone.target_date AS milestone_target_date,
                    item.start_date, item.due_date, {OVERDUE} AS overdue,
                    item.estimate, item.blocked_reason
-            FROM work_items item
+            FROM task_rows item
             JOIN work_item_statuses status
               ON status.project_id = item.project_id AND status.id = item.status_id
             LEFT JOIN project_milestones milestone
@@ -2291,7 +2291,7 @@ pub(super) async fn task_open(
         let watchers = planning::visible_watchers(&mut connection, project_id, task_id).await?;
         let fields = field_tools::task_fields(&mut connection, project_id, task_id).await?;
         let collection = sqlx::query_scalar::<_, String>(
-            "SELECT collection.name FROM work_items task \
+            "SELECT collection.name FROM task_rows task \
              JOIN collections collection \
                ON collection.project_id = task.project_id AND collection.id = task.collection_id \
              WHERE task.project_id = $1 AND task.id = $2",
@@ -2950,7 +2950,7 @@ async fn task_reorder_inner(
     let status = status_name(status_id);
     if let ReorderPlace::Before(anchor) | ReorderPlace::After(anchor) = place {
         let (anchor_status, anchor_archived) = sqlx::query_as::<_, (Uuid, bool)>(
-            "SELECT status_id, archived_at IS NOT NULL FROM work_items WHERE project_id = $1 AND id = $2",
+            "SELECT status_id, archived_at IS NOT NULL FROM task_rows WHERE project_id = $1 AND id = $2",
         )
         .bind(project_id)
         .bind(anchor)
@@ -2980,7 +2980,7 @@ async fn task_reorder_inner(
     // this can't deadlock.
     let column = sqlx::query_as::<_, (Uuid, i64)>(
         r#"
-        SELECT id, board_rank FROM work_items
+        SELECT id, board_rank FROM task_rows
         WHERE project_id = $1 AND status_id = $2 AND archived_at IS NULL
         ORDER BY board_rank, id
         FOR UPDATE
@@ -3121,7 +3121,7 @@ async fn column_keys(
     Ok(sqlx::query_as::<_, (Uuid, String)>(
         r#"
         SELECT item.id, project.project_key || '-' || item.number::text
-        FROM work_items item JOIN projects project ON project.id = item.project_id
+        FROM task_rows item JOIN projects project ON project.id = item.project_id
         WHERE item.project_id = $1
           AND (item.id = ANY($3) OR (item.status_id = $2 AND item.archived_at IS NULL))
         "#,
@@ -3140,7 +3140,7 @@ async fn task_key_by_id(state: &AppState, task_id: Uuid) -> Result<String, AppEr
     Ok(sqlx::query_scalar::<_, String>(
         r#"
         SELECT project.project_key || '-' || item.number::text
-        FROM work_items item JOIN projects project ON project.id = item.project_id
+        FROM task_rows item JOIN projects project ON project.id = item.project_id
         WHERE item.id = $1
         "#,
     )
@@ -3338,7 +3338,7 @@ pub(super) async fn task_claim(
         // agents claiming at once deadlocked: the winner's activity write
         // waited on the loser's lock while the loser waited on the claim.
         let archived = sqlx::query_scalar::<_, bool>(
-            "SELECT archived_at IS NOT NULL FROM work_items WHERE id = $1 FOR NO KEY UPDATE",
+            "SELECT archived_at IS NOT NULL FROM task_rows WHERE id = $1 FOR NO KEY UPDATE",
         )
         .bind(task_id)
         .fetch_one(&mut *transaction)

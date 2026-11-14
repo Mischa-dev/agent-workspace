@@ -331,7 +331,7 @@ pub(super) async fn agent_list(
                    CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END AS project,
                    claim.claimed_at, claim.expires_at, claim.note
             FROM work_item_claims claim
-            JOIN work_items item
+            JOIN task_rows item
               ON item.project_id = claim.project_id AND item.id = claim.work_item_id
             JOIN projects project ON project.id = item.project_id
             WHERE claim.actor_id = ANY($1) AND claim.project_id = ANY($2)

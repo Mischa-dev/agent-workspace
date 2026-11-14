@@ -518,7 +518,7 @@ pub(super) async fn task_fields(
         return Ok(Vec::new());
     }
     let values = sqlx::query_scalar::<_, Value>(
-        "SELECT field_values FROM work_items WHERE project_id = $1 AND id = $2",
+        "SELECT field_values FROM task_rows WHERE project_id = $1 AND id = $2",
     )
     .bind(project_id)
     .bind(task_id)
@@ -554,7 +554,7 @@ pub(super) async fn fill_summary_fields(
         return Ok(());
     }
     let rows = sqlx::query_as::<_, (Uuid, Uuid, Option<Uuid>, Value)>(
-        "SELECT id, project_id, collection_id, field_values FROM work_items \
+        "SELECT id, project_id, collection_id, field_values FROM task_rows \
          WHERE id = ANY($1) AND field_values <> '{}'::jsonb",
     )
     .bind(&ids)

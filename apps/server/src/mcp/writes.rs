@@ -1978,7 +1978,7 @@ async fn set_archived_inner(
             let moved = sqlx::query_as::<_, (Uuid, String)>(
                 r#"
                 SELECT item.project_id, project.project_key || '-' || item.number::text
-                FROM work_items item JOIN projects project ON project.id = item.project_id
+                FROM task_rows item JOIN projects project ON project.id = item.project_id
                 WHERE item.id = $1
                 "#,
             )
@@ -2541,7 +2541,7 @@ async fn placement_problem(
                 r#"
                 SELECT project.project_key || '-' || item.number::text, item.status_id,
                        item.archived_at IS NOT NULL
-                FROM work_items item JOIN projects project ON project.id = item.project_id
+                FROM task_rows item JOIN projects project ON project.id = item.project_id
                 WHERE item.project_id = $1 AND item.id = $2
                 "#,
             )
@@ -2579,7 +2579,7 @@ async fn parent_in_other_project(
     let found = sqlx::query_as::<_, (Uuid, String, String)>(
         r#"
         SELECT item.project_id, project.project_key || '-' || item.number::text, project.name
-        FROM work_items item JOIN projects project ON project.id = item.project_id
+        FROM task_rows item JOIN projects project ON project.id = item.project_id
         WHERE item.id = $1
         "#,
     )
@@ -2689,7 +2689,7 @@ async fn keys_in_project(
     Ok(sqlx::query_as::<_, (Uuid, String)>(
         r#"
         SELECT item.id, project.project_key || '-' || item.number::text
-        FROM work_items item JOIN projects project ON project.id = item.project_id
+        FROM task_rows item JOIN projects project ON project.id = item.project_id
         WHERE item.project_id = $1 AND item.id = ANY($2)
         "#,
     )
@@ -2724,7 +2724,7 @@ pub(super) async fn locate(
     let key = sqlx::query_scalar::<_, String>(
         r#"
         SELECT project.project_key || '-' || item.number::text
-        FROM work_items item JOIN projects project ON project.id = item.project_id
+        FROM task_rows item JOIN projects project ON project.id = item.project_id
         WHERE item.project_id = $1 AND item.id = $2
         "#,
     )

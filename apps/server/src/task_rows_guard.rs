@@ -26,18 +26,6 @@ const NOT_ALIASES: &[&str] = &[
 /// Today's readers that haven't moved, file by file. Lower a number when a
 /// reader moves; never raise one or add a file.
 const ALLOWED: &[(&str, usize)] = &[
-    // MCP, briefing and My work (T1.4b).
-    ("src/home.rs", 1),
-    ("src/mcp/agents.rs", 1),
-    ("src/mcp/briefing.rs", 4),
-    ("src/mcp/code.rs", 2),
-    ("src/mcp/field_tools.rs", 2),
-    ("src/mcp/file_tools.rs", 2),
-    ("src/mcp/planning.rs", 3),
-    ("src/mcp/reads.rs", 1),
-    ("src/mcp/task_batch.rs", 2),
-    ("src/mcp/tasks.rs", 8),
-    ("src/mcp/writes.rs", 1),
     // Everything else (T1.4c).
     ("src/agent_profiles.rs", 1),
     ("src/ai/detect.rs", 3),
