@@ -147,6 +147,15 @@ async fn allowed(
     Ok(membership.enabled && authorize_mutation(actor, &membership, action, task)?.is_allowed())
 }
 
+/// Whether the actor may make tasks: switching a collection with records
+/// to act like a task makes one for each.
+pub async fn may_create_tasks(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+) -> Result<bool, AppError> {
+    allowed(transaction, actor, Action::WorkItemCreate, None).await
+}
+
 /// Whether the actor may add, change or archive the project's task fields:
 /// the same rule as the task field settings (the workflow permission).
 pub async fn may_change_fields(

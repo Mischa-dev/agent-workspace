@@ -2211,7 +2211,9 @@ pub(crate) async fn export_json(
 ) -> Result<Value, AppError> {
     let context = load_context(connection, project_id, "").await?;
     let mut tasks = export_tasks(connection, project_id, include_archived).await?;
-    name_field_values(connection, project_id, &context.fields, &mut tasks).await?;
+    // Tasks of collections that act like tasks carry their own fields.
+    let named = work_item_fields::all_task_definitions(&mut *connection, project_id, false).await?;
+    name_field_values(connection, project_id, &named, &mut tasks).await?;
     let truncated = tasks.len() as i64 >= MAX_EXPORT_TASKS;
     Ok(json!({
         "project": { "key": context.project_key },
@@ -2255,7 +2257,7 @@ pub(super) async fn export_project(
         ),
         "csv" => {
             let definitions =
-                work_item_fields::definitions(&mut *connection, project_id, false).await?;
+                work_item_fields::all_task_definitions(&mut connection, project_id, false).await?;
             let mut tasks =
                 export_tasks(&mut connection, project_id, query.include_archived).await?;
             name_field_values(&mut connection, project_id, &definitions, &mut tasks).await?;

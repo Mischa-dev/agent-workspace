@@ -641,6 +641,14 @@ pub(super) async fn collection_write(
                         )));
                     }
                 };
+                // Switching on makes a task for each record.
+                if arguments.acts_like_task == Some(true)
+                    && !can_write_in(state, principal, project_id, Action::WorkItemCreate).await?
+                {
+                    return Ok(ToolResult::denied(
+                        "Records that act like tasks are tasks: only people who can make tasks here can switch it on.",
+                    ));
+                }
                 let collection = if arguments.position.is_some()
                     || arguments.acts_like_task == Some(true)
                 {
@@ -671,6 +679,14 @@ pub(super) async fn collection_write(
                     Ok(collection) => collection,
                     Err(refusal) => return Ok(refusal),
                 };
+                // Switching on makes a task for each record.
+                if arguments.acts_like_task == Some(true)
+                    && !can_write_in(state, principal, project_id, Action::WorkItemCreate).await?
+                {
+                    return Ok(ToolResult::denied(
+                        "Records that act like tasks are tasks: only people who can make tasks here can switch it on.",
+                    ));
+                }
                 let change = CollectionChange {
                     name,
                     description,

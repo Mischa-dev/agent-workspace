@@ -652,6 +652,17 @@ async fn update_collection(
     if write.collection(collection_id).await?.is_tasks() {
         return Ok(builtin_collection());
     }
+    // Switching on makes a task for each record.
+    if request.acts_like_task == Some(true)
+        && !super::task_writes::may_create_tasks(&mut write.transaction, &write.actor).await?
+    {
+        return Ok(refusal(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "Records that act like tasks are tasks: only people who can make tasks here can switch it on.",
+            Value::Null,
+        ));
+    }
     let outcome = super::change(
         &mut write.transaction,
         project_id,
