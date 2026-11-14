@@ -68,6 +68,7 @@ mod m7_execution_profiles;
 mod m7_invitations;
 mod m7_memberships;
 mod m9_external_agents;
+mod maintenance_lease;
 mod mcp_admin;
 mod mcp_code;
 mod mcp_groundwork;

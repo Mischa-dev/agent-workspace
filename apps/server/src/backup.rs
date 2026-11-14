@@ -40,6 +40,7 @@ use sqlx::{PgPool, postgres::PgPoolOptions};
 
 use crate::{
     config::AppConfig,
+    maintenance_lease,
     server_status::{BackupRecord, backup_status_path},
 };
 
@@ -49,9 +50,6 @@ use crate::{
 pub const DEFAULT_DATA_PATHS: &[&str] = &["attachments", "artifacts", "files", "codex/profiles"];
 /// Sets kept by `backup schedule` whatever their age.
 const KEEP_AT_LEAST: usize = 3;
-/// The advisory lock a key rotation holds (`secrets.rs`): a dump taken
-/// while one runs could hold secrets under two keys.
-const ROTATION_LOCK: (i32, i32) = (470_127_786, 3);
 
 /// Where `pg_dump` and its kin find the database: the URL's parts as libpq
 /// environment variables, so the password is never an argument.
@@ -343,33 +341,31 @@ async fn create_set(
         .fetch_one(&pool)
         .await
         .context("read the migration version")?;
-        // Hold the key rotation lock for the length of the dump, so it sees
-        // every secret before or after a rotation, never half of each.
-        let mut lock = pool.acquire().await?;
-        sqlx::query("SELECT pg_advisory_lock($1, $2)")
-            .bind(ROTATION_LOCK.0)
-            .bind(ROTATION_LOCK.1)
-            .execute(&mut *lock)
+        // Hold the keyring lease for the length of the dump, so it sees
+        // every secret before or after a key rotation, never half of each.
+        // A rotation running now refuses this backup rather than waiting.
+        let lease = maintenance_lease::Lease::take(&pool, maintenance_lease::KEYRING)
             .await
-            .context("take the key rotation lock")?;
+            .context("take the keyring lease")?;
         let suffix = if options.recipients.is_some() { ".age" } else { "" };
         let dump = work.join(format!("database.dump{suffix}"));
         let mut pg_dump = pg_command("pg_dump", database_url)?;
         pg_dump.arg("--format=custom").arg("--no-password");
         let recipients = options.recipients.clone();
-        let dumped = {
+        let dumping = {
             let dump = dump.clone();
-            tokio::task::spawn_blocking(move || write_stream(pg_dump, &dump, recipients.as_deref(), Producer::Strict))
-                .await
-                .context("the dump stopped")?
+            tokio::task::spawn_blocking(move || {
+                write_stream(pg_dump, &dump, recipients.as_deref(), Producer::Strict)
+            })
         };
-        let _ = sqlx::query("SELECT pg_advisory_unlock($1, $2)")
-            .bind(ROTATION_LOCK.0)
-            .bind(ROTATION_LOCK.1)
-            .execute(&mut *lock)
-            .await;
-        drop(lock);
+        // Lost during the dump, a rotation may have run inside it: the set
+        // is discarded rather than kept with keys no backup holds together.
+        let dumped = lease.hold_while(&pool, dumping).await;
+        let _ = lease.release(&pool).await;
         pool.close().await;
+        let dumped = dumped
+            .context("hold the keyring lease during the dump")?
+            .context("the dump stopped")?;
         dumped.context("dump the database")?;
         if std::fs::metadata(&dump)?.len() == 0 {
             bail!("the database dump is empty");

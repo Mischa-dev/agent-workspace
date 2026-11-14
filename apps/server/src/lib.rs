@@ -52,6 +52,7 @@ pub mod launch;
 pub mod layouts;
 pub mod link_previews;
 pub mod mail;
+pub mod maintenance_lease;
 pub mod mcp;
 pub mod memberships;
 pub mod memory;

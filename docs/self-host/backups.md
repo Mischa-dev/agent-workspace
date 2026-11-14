@@ -26,8 +26,13 @@ in `<name>.partial` and renamed when complete, so a set folder without that
 suffix is always whole.
 
 The database password reaches `pg_dump` and `pg_restore` in their
-environment, never as an argument. The dump holds the key rotation lock, so
-it sees every secret either before or after a rotation, never half of each.
+environment, never as an argument. The dump holds the keyring lease, a
+database row a master key rotation takes too, so it sees every secret either
+before or after a rotation, never half of each. While one holds the lease the
+other is refused with a message to try again; `backup create` renews the
+lease while the dump runs, and it expires a minute after a process holding it
+dies. It is a row rather than a session lock, so it works through a
+connection pooler.
 
 Each run writes `backup-status.json` in the data root; the Server page and
 `preflight` read it.

@@ -118,6 +118,10 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
         "two-factor sign-in challenges, before any workspace is known",
     ),
     (
+        "maintenance_leases",
+        "leases on the server's own maintenance (backups, key rotation)",
+    ),
+    (
         "mcp_oauth_clients",
         "dynamic client registration happens before anyone signs in",
     ),

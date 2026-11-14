@@ -185,6 +185,16 @@ async fn a_set_restores_into_an_empty_target_and_refuses_a_full_one() {
     .execute(&source)
     .await
     .expect("a two-factor seed");
+    // Another process took the keyring lease and died: expired, it doesn't
+    // hold the backup up (`maintenance_lease` covers a live one refusing it).
+    sqlx::query(
+        "INSERT INTO maintenance_leases (name, holder, acquired_at, expires_at) \
+         VALUES ('secrets.keyring', $1, now() - interval '2 minutes', now() - interval '1 minute')",
+    )
+    .bind(Uuid::now_v7())
+    .execute(&source)
+    .await
+    .expect("an expired lease");
     source.close().await;
 
     let sets = tempfile::tempdir().expect("backup folder");
