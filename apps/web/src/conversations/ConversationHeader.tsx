@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 
 import { MenuButton } from '../shell/MenuButton'
 import { Icon, Menu, type IconName, type MenuEntry } from '../ui'
+import '../styles/conversation.css'
 
 /**
  * The bar above a conversation: what you're in, a short subtitle, and tools on the right.

@@ -64,6 +64,7 @@ import { PageEmbed } from './embeds/PageEmbed'
 import { PageDownloadMenu, PageImportButton } from './PageTransfer'
 import type { LiveDiscussion } from './live/LivePage'
 import './memory.css'
+import '../styles/pages.css'
 
 /** A collection's view, or whatever else a page embeds, live where the page is read. */
 const renderEmbed = (embed: Embed) => <PageEmbed href={embed.href} label={embed.label} />

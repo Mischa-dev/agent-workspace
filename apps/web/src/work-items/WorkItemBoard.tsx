@@ -27,6 +27,7 @@ import type { BoardColumn, WorkItem, WorkItemBoardResponse, WorkItemCard, WorkIt
 import { useBoardDrag, type DropTarget } from './useBoardDrag'
 import { PriorityIcon, StatusIcon } from './WorkItemIcons'
 import './board.css'
+import '../styles/work.css'
 
 const PICKER_KEYS: Record<string, PickerField> = { s: 'status', a: 'assignee', l: 'labels', p: 'priority', m: 'milestone' }
 const PAGE = 50

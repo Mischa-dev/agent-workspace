@@ -15,6 +15,7 @@ import {
   type HarnessList,
   type HarnessTransport,
 } from './harnessesApi'
+import '../../styles/pages.css'
 
 /** The server's reason, or a plain one when its refusal carries none we can read. */
 function refusalText(error: unknown) {

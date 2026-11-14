@@ -53,6 +53,7 @@ import {
   type RolesResponse,
   type WorkspaceRoleView,
 } from './roles'
+import '../../styles/pages.css'
 
 const INVITATION_TONES: Record<WorkspaceInvitation['status'], ChipTone> = {
   active: 'success',

@@ -41,6 +41,7 @@ import {
   type BugReportLink,
   type SnippetKind,
 } from './bugReports'
+import '../../styles/pages.css'
 
 const STATE: Record<BugReportLink['state'], { label: string; tone: ChipTone }> = {
   active: { label: 'On', tone: 'success' },

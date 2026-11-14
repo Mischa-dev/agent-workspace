@@ -8,6 +8,7 @@ import { PlanningFrame, PlanningIntro } from './frame'
 import { NODE_HEIGHT, NODE_WIDTH, edgePath, layoutGraph } from './graphLayout'
 import { useAnalyze, useDecideSuggestion, useGraph, useProjectAi } from './hooks'
 import { aiErrorMessage, planningHref } from './links'
+import '../styles/work.css'
 
 type View = 'graph' | 'list'
 

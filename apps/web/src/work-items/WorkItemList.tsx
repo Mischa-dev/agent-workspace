@@ -25,6 +25,7 @@ import { pageHasFocus, useOpenAsYouGo, useTaskShortcuts } from './shortcutKeys'
 import { editErrorMessage, useApplyPick, type EditTarget } from './taskEdits'
 import type { WorkItemCard, WorkItemWorkflow } from './types'
 import { useWindowedRows } from './useWindowedRows'
+import '../styles/work.css'
 
 const PICKER_KEYS: Record<string, PickerField> = { s: 'status', a: 'assignee', l: 'labels', p: 'priority', m: 'milestone' }
 

@@ -34,6 +34,7 @@ import { runAgent } from './runAgent'
 import { normalizeTimeline, useThread } from './threadTimeline'
 import { useThreadRunActions } from './useThreadRunActions'
 import { useRevealInThread } from './useRevealInThread'
+import '../styles/conversation.css'
 
 const NO_ENTRIES: ConversationTimelineEntry[] = []
 

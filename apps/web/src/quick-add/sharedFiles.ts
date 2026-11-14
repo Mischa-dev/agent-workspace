@@ -1,4 +1,5 @@
 import { uploadFile, type FileAttachment, type UploadTarget } from '../files/api'
+import '../styles/pages.css'
 
 const SHARE_CACHE = 'aw-share-v1'
 

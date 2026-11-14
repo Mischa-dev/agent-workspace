@@ -51,6 +51,9 @@ import { DiscussionMarks, discussionKey, selectionAnchor, type MarkedThread, typ
 import { FROM_SERVER, PageSync, saveLabel, type SaveFailure, type SaveState } from './pageSync'
 import { pageExtensions } from './schema'
 import './live.css'
+import '../../styles/conversation.css'
+import '../../styles/markdown.css'
+import '../../styles/pages.css'
 
 const CollectionEmbedPicker = lazy(() => import('../../collections/CollectionEmbedPicker'))
 const EmbedPicker = lazy(() => import('../embeds/EmbedPicker'))

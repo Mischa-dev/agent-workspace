@@ -12,6 +12,7 @@ import { TITLE_WIDTH, referenceKind, tableItems, viewColumns, type TableItem } f
 import { AddFieldHeader, FieldHeader, TitleHeader, type ColumnActions } from './ColumnMenus'
 import { NewRecordInput, TitleCell, ValueCell } from './RecordCells'
 import type { RecordEdits } from './useRecordEdits'
+import '../styles/work.css'
 
 type Editing = { record: CollectionRecord; field: FieldDefinition; anchor: HTMLElement }
 

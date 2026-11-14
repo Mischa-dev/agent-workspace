@@ -40,6 +40,7 @@ import { TaskStart, type StartFix } from './TaskStart'
 import type { WorkItem, WorkItemPriority, WorkItemWorkflow } from './types'
 import { BlockerPriorityNotice } from './BlockerPriorityNotice'
 import { useTaskSave } from './useTaskSave'
+import '../styles/work.css'
 
 export type TaskLayout = 'panel' | 'page'
 
