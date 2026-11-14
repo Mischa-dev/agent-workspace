@@ -1714,7 +1714,10 @@ async fn the_gate_covers_pages_and_boards_named_by_id() {
             .0,
         StatusCode::OK
     );
-    assert_eq!(listed_boards(&bea_browser).await, [board.clone()]);
+    assert_eq!(
+        listed_boards(&bea_browser).await,
+        std::slice::from_ref(&board)
+    );
 
     // Off in the workspace.
     let (status, body) = switch(

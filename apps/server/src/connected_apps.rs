@@ -167,7 +167,7 @@ async fn owned_grant(
         Some((_, None)) => false,
         // An app acting as an agent: whoever may manage the agent (P0.6).
         Some((_, Some(connection_id))) => {
-            crate::external_agents::may_manage(&mut **transaction, actor_id, connection_id)
+            crate::external_agents::may_manage(transaction, actor_id, connection_id)
                 .await?
                 .is_some()
         }

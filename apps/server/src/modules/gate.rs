@@ -59,8 +59,8 @@ static PROJECTS: LazyLock<Mutex<HashMap<Uuid, (Uuid, &'static str)>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 /// A workspace's modules on, whether any role there turns modules off, and
 /// when they were read.
-static SWITCHES: LazyLock<Mutex<HashMap<Uuid, (ModuleSet, bool, Instant)>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+type Switches = HashMap<Uuid, (ModuleSet, bool, Instant)>;
+static SWITCHES: LazyLock<Mutex<Switches>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Drops a workspace's kept switches; called whenever one is written.
 pub fn forget(organization_id: Uuid) {

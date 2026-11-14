@@ -6203,38 +6203,37 @@ mod tests {
                 .is_some_and(|target| fits(root, target, value));
         }
         for union in ["oneOf", "anyOf"] {
-            if let Some(variants) = schema.get(union).and_then(serde_json::Value::as_array) {
-                if !variants.iter().any(|variant| fits(root, variant, value)) {
-                    return false;
-                }
-            }
-        }
-        if let Some(parts) = schema.get("allOf").and_then(serde_json::Value::as_array) {
-            if !parts.iter().all(|part| fits(root, part, value)) {
+            if let Some(variants) = schema.get(union).and_then(serde_json::Value::as_array)
+                && !variants.iter().any(|variant| fits(root, variant, value))
+            {
                 return false;
             }
         }
-        if let Some(constant) = schema.get("const") {
-            if constant != value {
-                return false;
-            }
+        if let Some(parts) = schema.get("allOf").and_then(serde_json::Value::as_array)
+            && !parts.iter().all(|part| fits(root, part, value))
+        {
+            return false;
         }
-        if let Some(allowed) = schema.get("enum").and_then(serde_json::Value::as_array) {
-            if !allowed.contains(value) {
-                return false;
-            }
+        if let Some(constant) = schema.get("const")
+            && constant != value
+        {
+            return false;
+        }
+        if let Some(allowed) = schema.get("enum").and_then(serde_json::Value::as_array)
+            && !allowed.contains(value)
+        {
+            return false;
         }
         let Some(object) = value.as_object() else {
             return true;
         };
-        if let Some(required) = schema.get("required").and_then(serde_json::Value::as_array) {
-            if !required
+        if let Some(required) = schema.get("required").and_then(serde_json::Value::as_array)
+            && !required
                 .iter()
                 .filter_map(serde_json::Value::as_str)
                 .all(|key| object.contains_key(key))
-            {
-                return false;
-            }
+        {
+            return false;
         }
         let properties = schema
             .get("properties")
