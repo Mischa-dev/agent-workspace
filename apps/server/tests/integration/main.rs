@@ -28,6 +28,8 @@ mod awd96_workspace_pages;
 mod backbone;
 mod bug_report_links;
 mod bug_sweep;
+mod cluster;
+mod cluster_support;
 mod compat_clients;
 mod direct_conversations;
 mod event_log;

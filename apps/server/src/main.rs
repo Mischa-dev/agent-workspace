@@ -3,13 +3,12 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use agent_workspace_server::{
-    AppState, bootstrap, config::AppConfig, github, mcp, migration_preflight,
-    provider::SupervisorRegistry, rate_limit::RateLimiters, realtime::RealtimeHub, recovery,
-    retention, router, seed, shutdown_signal, telemetry::init_tracing, work_items,
+    bootstrap, config::AppConfig, mcp, migration_preflight, retention, seed, server::Server,
+    shutdown_signal, telemetry::init_tracing, work_items,
 };
 use anyhow::{Context, bail};
 use sqlx::postgres::PgPoolOptions;
-use tokio::{net::TcpListener, sync::watch};
+use tokio::net::TcpListener;
 use uuid::Uuid;
 
 #[tokio::main]
@@ -320,65 +319,7 @@ async fn main() -> anyhow::Result<()> {
         None => {}
     }
 
-    let realtime = RealtimeHub::new(256);
-    let supervisors = SupervisorRegistry::new(&config).context("configure Codex supervisors")?;
-    let state = AppState {
-        config: Arc::clone(&config),
-        pool: pool.clone(),
-        rate_limits: RateLimiters::default(),
-        realtime: realtime.clone(),
-        supervisors: supervisors.clone(),
-    };
-
-    state.supervisors.set_host(Arc::new(
-        agent_workspace_server::harness_host::ServerHost::new(pool.clone(), Arc::clone(&config)),
-    ));
-    // Registered harnesses load before runs of their kinds are recovered.
-    if let Err(error) = agent_workspace_server::harnesses::reload(&state).await {
-        tracing::warn!(
-            error_category = error.log_category(),
-            "registered harnesses not loaded"
-        );
-    }
-    let recovered = recovery::reconcile_non_terminal_runs(&state)
-        .await
-        .context("reconcile non-terminal Agent Runs")?;
-    if recovered > 0 {
-        tracing::warn!(recovered, "reconciled non-terminal Agent Runs");
-    }
-    let inspected_worktrees = recovery::reconcile_registered_worktrees(&state)
-        .await
-        .context("reconcile registered Git worktrees")?;
-    let canceled_approvals = recovery::cancel_terminal_run_approvals(&state)
-        .await
-        .context("cancel approvals owned by terminal Agent Runs")?;
-    tracing::info!(
-        inspected_worktrees,
-        canceled_approvals,
-        "startup reconciliation completed"
-    );
-
-    let moved_secrets =
-        agent_workspace_server::secrets::migrate_plaintext_webhook_secrets(&pool, &config)
-            .await
-            .context("encrypt plaintext agent webhook secrets")?;
-    if moved_secrets > 0 {
-        tracing::info!(
-            moved_secrets,
-            "moved agent webhook secrets into the secrets store"
-        );
-    }
-
-    // Modules (and their operations) that don't fit together stop the
-    // server here, before it takes a request.
-    let modules = agent_workspace_server::modules::registry::Registry::global();
-    let operations = agent_workspace_server::ops::registry();
-    tracing::info!(
-        modules = modules.descriptions().len(),
-        operations = operations.entries().count(),
-        "modules registered"
-    );
-
+    let server = Server::build(Arc::clone(&config), pool).await?;
     let listener = TcpListener::bind(config.server_addr)
         .await
         .with_context(|| format!("bind application server to {}", config.server_addr))?;
@@ -397,146 +338,19 @@ async fn main() -> anyhow::Result<()> {
         "GitHub webhook server listening"
     );
 
-    let (shutdown_sender, shutdown_receiver) = watch::channel(false);
-    agent_workspace_server::harnesses::spawn_reloader(state.clone());
-    let mut run_scheduler = tokio::spawn(agent_workspace_server::scheduler::run(
-        state.clone(),
-        shutdown_receiver.clone(),
-    ));
-    let mut github_job_worker =
-        tokio::spawn(github::run_jobs(state.clone(), shutdown_receiver.clone()));
-    let mut outbox_publisher =
-        tokio::spawn(agent_workspace_server::realtime::run_outbox_publisher(
-            pool,
-            realtime,
-            agent_workspace_server::realtime::outbox_worker_id(),
-            shutdown_receiver.clone(),
-        ));
-    // Not supervised like the workers above: a failure here delays wakeups
-    // and lease expiry but never loses data, so it must not stop the server.
-    tokio::spawn(agent_workspace_server::replies::run(
-        state.clone(),
-        shutdown_receiver.clone(),
-    ));
-    // Background jobs (F9). A job lost to a crash is retried once its lease
-    // runs out, so like the reply worker this doesn't stop the server.
-    let job_workers = tokio::spawn(agent_workspace_server::jobs::run_workers(
-        state.clone(),
-        Arc::new(agent_workspace_server::jobs::default_registry()),
-        agent_workspace_server::jobs::WorkerOptions {
-            concurrency: config.job_concurrency,
-            ..agent_workspace_server::jobs::WorkerOptions::default()
-        },
-        shutdown_receiver.clone(),
-    ));
-    let signal_shutdown_sender = shutdown_sender.clone();
-    let signal_supervisors = supervisors.clone();
-    let signal_task = tokio::spawn(async move {
-        shutdown_signal().await;
-        signal_supervisors.request_shutdown();
-        let _ = signal_shutdown_sender.send(true);
-    });
-    let application_shutdown = shutdown_receiver.clone();
-    let webhook_shutdown = shutdown_receiver;
-    let server = async move {
-        let application = axum::serve(listener, router(state.clone()).into_make_service())
-            .with_graceful_shutdown(wait_for_shutdown(application_shutdown));
-        let webhooks = axum::serve(
-            webhook_listener,
-            github::webhook_router(state).into_make_service(),
-        )
-        .with_graceful_shutdown(wait_for_shutdown(webhook_shutdown));
-        tokio::try_join!(application, webhooks).map(|_| ())
-    };
-    tokio::pin!(server);
-
-    let result = tokio::select! {
-        server_result = &mut server => {
-            let _ = shutdown_sender.send(true);
-            let worker_result = outbox_publisher
-                .await
-                .context("join outbox publisher")?;
-            let scheduler_result = run_scheduler
-                .await
-                .context("join Agent Run scheduler")?;
-            let github_result = github_job_worker
-                .await
-                .context("join GitHub job worker")?;
-            server_result.context("serve HTTP application")?;
-            worker_result.context("run outbox publisher")?;
-            scheduler_result.context("run Agent Run scheduler")?;
-            github_result.context("run GitHub job worker")
+    let running = server.spawn(listener, webhook_listener);
+    let shutdown = running.shutdown();
+    let supervisors = running.state().supervisors.clone();
+    let wait = running.wait();
+    tokio::pin!(wait);
+    tokio::select! {
+        result = &mut wait => result,
+        () = shutdown_signal() => {
+            supervisors.request_shutdown();
+            let _ = shutdown.send(true);
+            wait.await
         }
-        worker_result = &mut outbox_publisher => {
-            let already_shutting_down = *shutdown_sender.borrow();
-            let _ = shutdown_sender.send(true);
-            server.await.context("serve HTTP application")?;
-            let scheduler_result = run_scheduler
-                .await
-                .context("join Agent Run scheduler")?;
-            let github_result = github_job_worker
-                .await
-                .context("join GitHub job worker")?;
-            worker_result
-                .context("join outbox publisher")?
-                .context("run outbox publisher")?;
-            scheduler_result.context("run Agent Run scheduler")?;
-            github_result.context("run GitHub job worker")?;
-            if already_shutting_down {
-                Ok(())
-            } else {
-                bail!("outbox publisher stopped unexpectedly")
-            }
-        }
-        scheduler_result = &mut run_scheduler => {
-            let already_shutting_down = *shutdown_sender.borrow();
-            let _ = shutdown_sender.send(true);
-            server.await.context("serve HTTP application")?;
-            let worker_result = outbox_publisher
-                .await
-                .context("join outbox publisher")?;
-            let github_result = github_job_worker
-                .await
-                .context("join GitHub job worker")?;
-            scheduler_result
-                .context("join Agent Run scheduler")?
-                .context("run Agent Run scheduler")?;
-            worker_result.context("run outbox publisher")?;
-            github_result.context("run GitHub job worker")?;
-            if already_shutting_down {
-                Ok(())
-            } else {
-                bail!("Agent Run scheduler stopped unexpectedly")
-            }
-        }
-        github_result = &mut github_job_worker => {
-            let already_shutting_down = *shutdown_sender.borrow();
-            let _ = shutdown_sender.send(true);
-            server.await.context("serve HTTP application")?;
-            let worker_result = outbox_publisher
-                .await
-                .context("join outbox publisher")?;
-            let scheduler_result = run_scheduler
-                .await
-                .context("join Agent Run scheduler")?;
-            github_result
-                .context("join GitHub job worker")?
-                .context("run GitHub job worker")?;
-            worker_result.context("run outbox publisher")?;
-            scheduler_result.context("run Agent Run scheduler")?;
-            if already_shutting_down {
-                Ok(())
-            } else {
-                bail!("GitHub job worker stopped unexpectedly")
-            }
-        }
-    };
-    signal_task.abort();
-    if let Err(error) = job_workers.await {
-        tracing::warn!(%error, "background job workers stopped abnormally");
     }
-    supervisors.shutdown_all().await;
-    result
 }
 
 fn parse_options(
@@ -636,17 +450,6 @@ fn parse_scopes(value: &str) -> anyhow::Result<Vec<String>> {
         bail!("--scopes must be a comma-separated list");
     }
     Ok(scopes)
-}
-
-async fn wait_for_shutdown(mut shutdown: watch::Receiver<bool>) {
-    if *shutdown.borrow() {
-        return;
-    }
-    while shutdown.changed().await.is_ok() {
-        if *shutdown.borrow() {
-            return;
-        }
-    }
 }
 
 /// Write a secret to a new owner-only file; refuses to overwrite.

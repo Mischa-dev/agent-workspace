@@ -135,14 +135,14 @@
   "background_spawns": {
     "github.rs": 1,
     "harnesses.rs": 1,
-    "main.rs": 6,
     "provider.rs": 1,
     "provider/claude_cloud.rs": 1,
     "provider/codex_cloud.rs": 1,
     "provider/line_process.rs": 2,
     "repositories.rs": 1,
     "retention.rs": 1,
-    "scheduler.rs": 1
+    "scheduler.rs": 1,
+    "server.rs": 6
   },
   "conversation_inserts": {
     "conversations.rs": 2,
@@ -265,7 +265,6 @@
     "agent_setup_links.rs": 2,
     "environments.rs": 2,
     "error.rs": 1,
-    "main.rs": 1,
     "mcp.rs": 1,
     "mcp/description_words.rs": 1,
     "mcp/oauth.rs": 1,

@@ -91,6 +91,7 @@ pub mod scheduler;
 pub mod search;
 pub mod secrets;
 pub mod seed;
+pub mod server;
 pub mod server_status;
 pub mod settings;
 pub mod sheets;
