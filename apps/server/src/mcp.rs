@@ -4259,7 +4259,9 @@ pub fn oauth_router() -> Router<AppState> {
 
 /// Every tool's name, description, schemas and hints, for the public API's
 /// OpenAPI document (X3). Generated from the same Rust types the tools take.
-pub(crate) fn tool_catalog() -> Vec<rmcp::model::Tool> {
+/// Public for the connected-client contract tests (compat_clients).
+#[doc(hidden)]
+pub fn tool_catalog() -> Vec<rmcp::model::Tool> {
     McpServer::tools().list_all()
 }
 

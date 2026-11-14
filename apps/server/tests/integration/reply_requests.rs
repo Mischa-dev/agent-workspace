@@ -1029,7 +1029,9 @@ async fn stop_cancels_the_claim_and_refuses_the_next_call() {
 }
 
 /// Typed wakeups say what happened and where, signed, without message text;
-/// webhooks from before typed wakeups keep getting `inbox.available`.
+/// webhooks from before typed wakeups keep getting `inbox.available`. That
+/// format is a connected-client contract (the always-on runtime): see
+/// docs/compatibility/connected-clients.md before changing it.
 #[tokio::test]
 async fn webhooks_say_what_happened_without_message_text() {
     let Some(Fixture {
