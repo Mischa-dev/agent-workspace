@@ -5470,6 +5470,8 @@ async fn validate_issue_command(
     let wants_write = command.scopes.iter().any(|scope| scope == "write");
     // Write scope for anyone whose role may write anything here (any
     // permission beyond seeing): each tool still checks its own action.
+    // Reporting one's own runs and raising one's own requests (A1.3) come
+    // with every role, a Viewer's too, so they don't count as writing.
     if !role.is_some_and(|(role, role_permissions)| {
         mcp_policy_allows(
             command.actor_id,
@@ -5488,6 +5490,8 @@ async fn validate_issue_command(
                             | Permission::CodeView
                             | Permission::MembersView
                             | Permission::DirectoryView
+                            | Permission::RunsReport
+                            | Permission::RequestsRaise
                     )
                 })
             }))
