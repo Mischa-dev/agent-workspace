@@ -36,7 +36,6 @@ mod m0_database;
 mod m1_api_policy_database;
 mod m1_bootstrap_database;
 mod m1_http_projects;
-mod m1_identity_projects_database;
 mod m1_realtime_websocket;
 mod m1_recovery_provider_sessions;
 mod m2_actor_realtime_convergence;
