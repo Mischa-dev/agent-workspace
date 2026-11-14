@@ -11,6 +11,8 @@ paths below are under `apps/server/src/` unless they start with `apps/`, `migrat
 (meaning `apps/server/migrations/`) or `docs/`. Line numbers were re-read in the code, not
 copied from the health check. Where a statement is inferred rather than read, it says so.
 
+> **Amended by the architecture review (2026-11-14).** R59 adds per-call account selection for an integration bound to several agents, and per-call delegation context, to the delegation slices. See `LEAD-RULINGS.md`.
+
 ## 1. Goal
 
 When K1 is done, every person, agent and app is one kind of thing, an account, and what any
