@@ -163,9 +163,9 @@ async fn every_served_revision_lists_reads_writes_and_resumes() {
             // The Tasks extension (long operations, K2.21) is something
             // rmcp can serve; this server doesn't advertise it yet.
             assert!(
-                result.pointer("/capabilities/extensions").is_none_or(|extensions| {
-                    !extensions.to_string().contains("tasks")
-                }),
+                result
+                    .pointer("/capabilities/extensions")
+                    .is_none_or(|extensions| { !extensions.to_string().contains("tasks") }),
                 "{discovered}"
             );
             None
