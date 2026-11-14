@@ -85,6 +85,10 @@ pub struct AppConfig {
     /// OAuth metadata and MCP resource URLs are built from it. Defaults to the
     /// loopback server address.
     pub public_origin: Option<String>,
+    /// Where browsers open the live connection, when it isn't the API's own
+    /// origin (`AGENT_WORKSPACE_LIVE_ORIGIN`, H1.41): a live service in
+    /// front of this one. The web app reads it from `/client-config`.
+    pub live_origin: Option<String>,
     pub database_url: SecretString,
     pub database_max_connections: u32,
     pub data_root: PathBuf,
@@ -402,6 +406,7 @@ impl AppConfig {
         let log_filter = optional(values, "LOG_FILTER", "agent_workspace=info,tower_http=info");
         let webhook_trusted_origins = webhook_trusted_origins(values)?;
         let public_origin = public_origin(values)?;
+        let live_origin = origin_setting(values, "LIVE_ORIGIN")?;
         let allowed_origins = allowed_origins(values, environment, public_origin.as_deref())?;
 
         validate_loopback("SERVER_ADDR", server_addr, environment)?;
@@ -563,6 +568,7 @@ impl AppConfig {
             allowed_origins,
             webhook_trusted_origins,
             public_origin,
+            live_origin,
             database_url: SecretString::new(database_url),
             database_max_connections,
             data_root,
@@ -911,15 +917,24 @@ fn validate_secret_file(
 }
 
 fn public_origin(values: &BTreeMap<String, String>) -> Result<Option<String>, ConfigError> {
+    origin_setting(values, "PUBLIC_ORIGIN")
+}
+
+/// An origin setting such as `PUBLIC_ORIGIN` or `LIVE_ORIGIN`: https, or
+/// http on localhost or a loopback address, with nothing after the host.
+fn origin_setting(
+    values: &BTreeMap<String, String>,
+    name: &str,
+) -> Result<Option<String>, ConfigError> {
     let Some(value) = values
-        .get(&format!("{PREFIX}PUBLIC_ORIGIN"))
+        .get(&format!("{PREFIX}{name}"))
         .map(|value| value.trim().trim_end_matches('/'))
         .filter(|value| !value.is_empty())
     else {
         return Ok(None);
     };
     let parsed = url::Url::parse(value).map_err(|error| ConfigError::Invalid {
-        key: format!("{PREFIX}PUBLIC_ORIGIN"),
+        key: format!("{PREFIX}{name}"),
         reason: error.to_string(),
     })?;
     // Browsers treat localhost as a secure origin, so `__Host-` cookies work
@@ -940,7 +955,7 @@ fn public_origin(values: &BTreeMap<String, String>) -> Result<Option<String>, Co
         || parsed.path() != "/"
     {
         return Err(ConfigError::Invalid {
-            key: format!("{PREFIX}PUBLIC_ORIGIN"),
+            key: format!("{PREFIX}{name}"),
             reason: "must be an HTTPS origin without credentials, query, or fragment (or http on localhost or a loopback address)".into(),
         });
     }

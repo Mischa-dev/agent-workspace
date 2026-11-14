@@ -41,6 +41,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .merge(workos::router())
         .route("/api/v1/auth/session", get(read_session))
+        .route("/api/v1/auth/csrf", get(read_csrf))
         .route("/api/v1/auth/login", post(login))
         .route("/api/v1/auth/logout", post(logout))
 }
@@ -166,6 +167,33 @@ async fn read_session(
 ) -> Result<Json<SessionResponse>, AppError> {
     let principal = load_authenticated_actor(&state, &headers).await?;
     Ok(Json(session_response(&state, principal.as_ref()).await?))
+}
+
+/// `GET /api/v1/auth/csrf`: the request token for a web app served from
+/// another origin of the same site (H1.41), which can't read the API's
+/// cookie itself. It is the request's own cookie handed back, only to an
+/// allowed origin; CORS keeps any other page from reading the answer, and
+/// the cookie is never sent cross-site.
+async fn read_csrf(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    require_allowed_origin(&state.config, &headers)?;
+    if headers
+        .get("sec-fetch-site")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("cross-site"))
+    {
+        return Err(AppError::OriginRejected);
+    }
+    let token = cookie_value(&headers, csrf_cookie_name(&state.config))
+        .filter(|value| !value.is_empty() && value.len() <= MAX_COOKIE_VALUE_BYTES);
+    let mut response = Json(serde_json::json!({ "csrfToken": token })).into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
 }
 
 async fn login(

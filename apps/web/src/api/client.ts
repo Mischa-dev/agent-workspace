@@ -36,6 +36,48 @@ export function readCsrfToken(): string | null {
   return null
 }
 
+// Where the API and the live connection answer (H1.41). Null: the origin the
+// app was loaded from. Set once at start from `/client-config` when the app
+// is served from a static host on another origin of the same site.
+let apiOrigin: string | null = null
+let liveOrigin: string | null = null
+// The API's request token, which a page on another origin can't read from
+// the API's cookie: fetched from `/api/v1/auth/csrf` when first needed.
+let crossOriginCsrf: Promise<string | null> | null = null
+
+export function setApiOrigins(origins: { api: string | null; live: string | null }) {
+  apiOrigin = origins.api
+  liveOrigin = origins.live
+  crossOriginCsrf = null
+}
+
+/** An API path as the browser should ask for it. */
+export function apiUrl(path: string): string {
+  return apiOrigin && path.startsWith('/') ? `${apiOrigin}${path}` : path
+}
+
+/** The live connection's URL for `path`: wss on an https origin. */
+export function liveUrl(path: string): string {
+  const origin = liveOrigin ?? apiOrigin ?? window.location.origin
+  return `${origin.replace(/^http/, 'ws')}${path}`
+}
+
+/** The origin agents and apps reach this server at, for showing to people. */
+export function apiOriginForDisplay(): string {
+  return apiOrigin ?? window.location.origin
+}
+
+function crossOriginCsrfToken(): Promise<string | null> {
+  crossOriginCsrf ??= fetch(apiUrl('/api/v1/auth/csrf'), {
+    credentials: 'include',
+    headers: { accept: 'application/json' },
+  })
+    .then((response) => (response.ok ? response.json() : null))
+    .then((body: { csrfToken?: string | null } | null) => body?.csrfToken ?? null)
+    .catch(() => null)
+  return crossOriginCsrf
+}
+
 function dispatchAuthenticationRequired() {
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event('agent-workspace:authentication-required'))
@@ -46,6 +88,20 @@ export async function requestJson<T>(
   path: string,
   options: ApiRequestOptions = {},
 ): Promise<T> {
+  try {
+    return await sendJson<T>(path, options)
+  } catch (error) {
+    // Signing in or out gives the API a new request token; a page on
+    // another origin fetches it again and tries once more.
+    if (apiOrigin && error instanceof ApiError && error.code === 'csrf_token_invalid') {
+      crossOriginCsrf = null
+      return sendJson<T>(path, options)
+    }
+    throw error
+  }
+}
+
+async function sendJson<T>(path: string, options: ApiRequestOptions): Promise<T> {
   const { idempotencyKey, json, ...requestOptions } = options
   const method = (requestOptions.method ?? 'GET').toUpperCase()
   const headers = new Headers(requestOptions.headers)
@@ -58,16 +114,16 @@ export async function requestJson<T>(
   }
 
   if (unsafeMethods.has(method)) {
-    const csrfToken = readCsrfToken()
+    const csrfToken = apiOrigin ? await crossOriginCsrfToken() : readCsrfToken()
     if (csrfToken) headers.set('x-csrf-token', csrfToken)
   }
   if (idempotencyKey) headers.set('idempotency-key', idempotencyKey)
 
-  const response = await fetch(path, {
+  const response = await fetch(apiUrl(path), {
     ...requestOptions,
     method,
     body,
-    credentials: 'same-origin',
+    credentials: apiOrigin ? 'include' : 'same-origin',
     headers,
   })
   const requestId = response.headers.get('x-request-id')

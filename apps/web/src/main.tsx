@@ -5,6 +5,7 @@ import '@fontsource-variable/figtree/wght.css'
 import '@fontsource/jetbrains-mono/latin-400.css'
 import '@fontsource/jetbrains-mono/latin-500.css'
 import { App } from './app/App'
+import { loadClientConfig } from './app/clientConfig'
 import { registerServiceWorker } from './app/serviceWorker'
 import { installErrorReporting } from './telemetry/reportErrors'
 import './styles/tokens.css'
@@ -25,10 +26,14 @@ if (!root) {
   throw new Error('Missing root element')
 }
 
-createRoot(root).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-)
+// Where the API answers comes first (H1.41); it never fails, and with no
+// answer the app keeps to its own origin.
+void loadClientConfig().then(() => {
+  createRoot(root).render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  )
+})
 
 registerServiceWorker()

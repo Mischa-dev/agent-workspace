@@ -3,6 +3,8 @@
 // query strings and hashes are stripped, and reports are capped per page
 // load so a loop can't flood the server.
 
+import { apiUrl } from '../api/client'
+
 const MAX_REPORTS = 10
 const ENDPOINT = '/api/v1/client-errors'
 
@@ -27,7 +29,7 @@ export function reportError(message: string, source?: string): void {
     release: import.meta.env.MODE,
   })
   try {
-    void fetch(ENDPOINT, {
+    void fetch(apiUrl(ENDPOINT), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body,
