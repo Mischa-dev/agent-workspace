@@ -303,10 +303,9 @@ pub(crate) fn access_bypasses(source: &str) -> usize {
         let calls = normal
             .match_indices("authorize(")
             .filter(|(index, _)| {
-                !normal[..*index]
-                    .bytes()
-                    .last()
-                    .is_some_and(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'.')
+                !normal[..*index].bytes().last().is_some_and(|byte| {
+                    byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'.'
+                })
             })
             .count();
         calls
@@ -328,7 +327,9 @@ pub(crate) fn account_kind_strings(source: &str) -> usize {
         let mut found = 0;
         for kind in ["human", "external_agent", "execution_worker", "integration"] {
             for operator in ["==", "!="] {
-                found += normal.matches(&format!("kind {operator} \"{kind}\"")).count();
+                found += normal
+                    .matches(&format!("kind {operator} \"{kind}\""))
+                    .count();
             }
         }
         found
@@ -678,7 +679,10 @@ pub(crate) fn names_its_slice(note: &str) -> bool {
     plan.len() == 2
         && plan.starts_with('K')
         && plan[1..].bytes().all(|byte| byte.is_ascii_digit())
-        && number.trim_end_matches(|c: char| c.is_ascii_lowercase()).parse::<u32>().is_ok()
+        && number
+            .trim_end_matches(|c: char| c.is_ascii_lowercase())
+            .parse::<u32>()
+            .is_ok()
         && !reason.trim().is_empty()
 }
 
@@ -799,7 +803,11 @@ mod tests {
                 "ACCESS_RULES names {rule}, which is no rule"
             );
             let notes = removals.get(*rule).cloned().unwrap_or_default();
-            for file in allowances.get(*rule).into_iter().flat_map(|files| files.keys()) {
+            for file in allowances
+                .get(*rule)
+                .into_iter()
+                .flat_map(|files| files.keys())
+            {
                 match notes.get(file) {
                     Some(note) if names_its_slice(note) => {}
                     Some(note) => failures.push(format!(
@@ -817,7 +825,9 @@ mod tests {
                     .get(*rule)
                     .is_some_and(|files| files.contains_key(file))
                 {
-                    eprintln!("hint: {rule}: {file} has no allowance now; drop its note from removals.json");
+                    eprintln!(
+                        "hint: {rule}: {file} has no allowance now; drop its note from removals.json"
+                    );
                 }
             }
         }
@@ -986,10 +996,7 @@ mod tests {
             0
         );
         assert_eq!(rust_role_checks("if role == \"owner\" {"), 1);
-        assert_eq!(
-            rust_role_checks("matches!(role, \"owner\" | \"admin\")"),
-            1
-        );
+        assert_eq!(rust_role_checks("matches!(role, \"owner\" | \"admin\")"), 1);
         assert_eq!(
             rust_role_checks("MembershipRole::Owner | MembershipRole::Admin => true,"),
             1
@@ -1009,13 +1016,19 @@ mod tests {
         );
         assert_eq!(access_bypasses("pub fn authorize(subject: &Subject) {"), 0);
         assert_eq!(access_bypasses("require_authorize(&x);"), 0);
-        assert_eq!(access_bypasses("use crate::policy::{authorize, Subject};"), 0);
+        assert_eq!(
+            access_bypasses("use crate::policy::{authorize, Subject};"),
+            0
+        );
         assert_eq!(account_kind_strings("if kind == \"human\" {"), 1);
         assert_eq!(
             account_kind_strings("let q = \"WHERE actor.kind IN ('human', 'external_agent')\";"),
             1
         );
-        assert_eq!(account_kind_strings("if account.kind == AccountKind::Agent {"), 1);
+        assert_eq!(
+            account_kind_strings("if account.kind == AccountKind::Agent {"),
+            1
+        );
         assert_eq!(
             account_kind_strings("if kind == \"human\" { // kind-check: mechanical (sign-in)"),
             0

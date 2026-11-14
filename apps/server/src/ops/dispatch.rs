@@ -19,6 +19,7 @@ use super::{
 };
 use crate::{
     AppState,
+    access::compare::Mode as AccessMode,
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
 };
 
@@ -244,17 +245,47 @@ async fn pipeline<O: Operation>(
         request.workspace,
     )
     .await?;
-    module_gate::<O>(&mut connection, &request.caller, &target, &located).await?;
-    let _grant = access_shim::check(
-        &mut connection,
-        &request.caller,
-        &target,
-        &located,
-        O::PERMISSION,
-        writes,
-        O::TITLE,
-    )
-    .await?;
+    let mode = state.config.access_mode("ops");
+    let old = if mode == AccessMode::New {
+        None
+    } else {
+        Some(old_check::<O>(&mut connection, &request.caller, &target, &located, writes).await)
+    };
+    if mode != AccessMode::Old {
+        let need = crate::access::Need::maybe(O::PERMISSION)
+            .writing(writes)
+            .in_module(O::MODULE);
+        let access_target = access_target(&target, &located);
+        let new = crate::access::check(&mut connection, &request.caller, need, access_target)
+            .await
+            .map_err(|error| OpError::logged(O::NAME, &error))?;
+        match &old {
+            Some(old) => {
+                crate::access::compare::compare(
+                    &state.pool,
+                    crate::access::compare::Compared {
+                        area: "ops",
+                        operation: O::NAME,
+                        caller: &request.caller,
+                        need: &need,
+                        target: &access_target,
+                        workspace_id: Some(located.workspace_id),
+                        space_id: located.space_id,
+                        old_allowed: old.is_ok(),
+                    },
+                    &new,
+                )
+                .await;
+            }
+            None => {
+                let _grant =
+                    new.map_err(|denied| denied_error::<O>(denied, &request.caller, &located))?;
+            }
+        }
+    }
+    if let Some(old) = old {
+        old?;
+    }
     drop(connection);
 
     let key = request_id_for::<O>(&request, &canonical)?;
@@ -371,6 +402,95 @@ async fn name_the_workspace(connection: &mut sqlx::PgConnection, reach: &[Uuid])
             slugs.join(", ")
         )
         .into(),
+    }
+}
+
+/// Today's checks, which decide while the `ops` area is in compare mode:
+/// the module gate, then the access shim.
+async fn old_check<O: Operation>(
+    connection: &mut sqlx::PgConnection,
+    caller: &Caller,
+    target: &Target,
+    located: &target::Located,
+    writes: bool,
+) -> Result<(), OpError> {
+    module_gate::<O>(connection, caller, target, located).await?;
+    access_shim::check(
+        connection,
+        caller,
+        target,
+        located,
+        O::PERMISSION,
+        writes,
+        O::TITLE,
+    )
+    .await
+    .map(|_| ())
+}
+
+/// What `access` is asked about for a located target.
+fn access_target(target: &Target, located: &target::Located) -> crate::access::Target {
+    match (target, located.space_id) {
+        (Target::Account, _) => crate::access::Target::Account,
+        (_, Some(space)) => crate::access::Target::Space(space),
+        (_, None) => crate::access::Target::Workspace(located.workspace_id),
+    }
+}
+
+/// `access`'s refusal in the words the operation layer uses.
+fn denied_error<O: Operation>(
+    denied: crate::access::Denied,
+    caller: &Caller,
+    located: &target::Located,
+) -> OpError {
+    use crate::access::{Denied, DenyReason as Because};
+    match denied {
+        Denied::NotFound => match located.space_id {
+            Some(_) => OpError::not_found("That space"),
+            None => OpError::not_found("That workspace"),
+        },
+        Denied::ModuleOff { module } => OpError::Denied {
+            reason: DenyReason::ModuleOff {
+                module: module.to_owned(),
+            },
+            message: format!(
+                "{} is turned off here.",
+                crate::modules::manifest::get(module).map_or(module, |manifest| manifest.name.as_str())
+            )
+            .into(),
+        },
+        Denied::Permission {
+            because: Because::ReadOnlyCredential,
+            ..
+        } => OpError::Denied {
+            reason: DenyReason::ReadOnlyCredential,
+            message: "This connection is read-only. Reconnect it with full access to make changes."
+                .into(),
+        },
+        Denied::Permission {
+            because: Because::CredentialCannotRead,
+            ..
+        } => OpError::Denied {
+            reason: DenyReason::ReadOnlyCredential,
+            message: "This connection can't read.".into(),
+        },
+        Denied::Permission { permission, .. } => match permission {
+            Some(permission) => OpError::Denied {
+                reason: DenyReason::Role { permission },
+                message: format!(
+                    "{} needs \"{}\" here, which your role doesn't give you{}. Ask a workspace owner or admin.",
+                    O::TITLE,
+                    permission.info().label,
+                    if caller.limits.is_some() {
+                        " through this app"
+                    } else {
+                        ""
+                    },
+                )
+                .into(),
+            },
+            None => OpError::not_found("That workspace"),
+        },
     }
 }
 

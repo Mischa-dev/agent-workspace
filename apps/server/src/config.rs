@@ -142,6 +142,20 @@ pub struct AppConfig {
     /// Cloudflare). Unset, nothing is read from the request for the
     /// caller's address and there are no per-address limits.
     pub client_address_header: Option<String>,
+    /// How each access area decides while it moves onto `access` (K1 §4.3):
+    /// `AGENT_WORKSPACE_ACCESS_<AREA>=old|compare|new`, each area's default
+    /// from `access::compare::AREAS`.
+    pub access_modes: BTreeMap<&'static str, crate::access::compare::Mode>,
+}
+
+impl AppConfig {
+    /// How `area` decides (its default when the area is unknown here).
+    pub fn access_mode(&self, area: &str) -> crate::access::compare::Mode {
+        self.access_modes
+            .get(area)
+            .copied()
+            .unwrap_or(crate::access::compare::Mode::Old)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -422,6 +436,7 @@ impl AppConfig {
         let allow_private_addresses = parse(values, "ALLOW_PRIVATE_ADDRESSES", "false")?;
         let operator_logins = operator_logins(values)?;
         let client_address_header = client_address_header(values)?;
+        let access_modes = access_modes(values)?;
         Ok(Self {
             environment,
             server_addr,
@@ -458,8 +473,29 @@ impl AppConfig {
             allow_private_addresses,
             operator_logins,
             client_address_header,
+            access_modes,
         })
     }
+}
+
+fn access_modes(
+    values: &BTreeMap<String, String>,
+) -> Result<BTreeMap<&'static str, crate::access::compare::Mode>, ConfigError> {
+    let mut modes = BTreeMap::new();
+    for (area, default) in crate::access::compare::AREAS {
+        let key = format!("{PREFIX}ACCESS_{}", area.to_ascii_uppercase());
+        let mode = match values.get(&key) {
+            None => *default,
+            Some(value) => {
+                crate::access::compare::Mode::parse(value).ok_or_else(|| ConfigError::Invalid {
+                    key: key.clone(),
+                    reason: "must be old, compare or new".into(),
+                })?
+            }
+        };
+        modes.insert(*area, mode);
+    }
+    Ok(modes)
 }
 
 fn github_config(

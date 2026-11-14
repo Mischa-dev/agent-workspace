@@ -23,6 +23,7 @@ commands below still work for a dry run or a one-off cleanup.
 | OAuth refresh tokens | used, expired, or revoked, at least 30 days old | unlink retained rotation references, then delete |
 | Published outbox rows | published at least 30 days ago | delete |
 | Completed temporary GitHub jobs | completed or exhausted at least 30 days ago | delete |
+| Access disagreements (K1's compare mode) | last seen at least 30 days ago | delete |
 
 These windows never make durable product history eligible. Actor attribution,
 audit history, Messages, Work Items, approvals, Agent Runs, provider sessions,

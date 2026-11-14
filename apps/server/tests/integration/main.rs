@@ -1,6 +1,7 @@
 //! Every server integration test, built as one binary so the server is
 //! compiled and linked for tests once rather than once per file.
 
+mod access_compare;
 mod agent_interface;
 mod awd102_task_move;
 mod awd110_collection_forms;

@@ -56,6 +56,16 @@ pub struct AuthenticatedActor {
     csrf_token_hash: Vec<u8>,
 }
 
+impl AuthenticatedActor {
+    /// The caller `access` decides for: this account in the browser, with
+    /// everything its roles give it.
+    pub fn caller(&self) -> Result<crate::access::Caller, AppError> {
+        let kind = crate::ops::context::actor_kind_of(&self.actor_kind)
+            .ok_or(AppError::AuthenticationRequired)?;
+        Ok(crate::access::Caller::person(self.actor_id, kind))
+    }
+}
+
 pub(crate) struct SessionIdentity {
     pub user_id: Uuid,
     pub actor_id: Uuid,

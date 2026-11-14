@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod access;
 pub mod account;
 pub mod account_security;
 pub mod agent_docs;
@@ -174,6 +175,7 @@ pub fn router(state: AppState) -> Router {
         .merge(roles::router())
         .merge(workspace_templates::router())
         .merge(server_status::router())
+        .merge(access::http::router())
         .merge(onboarding::router())
         .merge(audit_log::router())
         .merge(search::router())

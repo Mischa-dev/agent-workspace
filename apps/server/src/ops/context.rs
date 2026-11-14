@@ -4,73 +4,11 @@ use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
 use super::{OpError, Target};
-use crate::{
-    AppState,
-    policy::{ActorKind, AgentLimits},
-};
+use crate::{AppState, policy::ActorKind};
 
-/// The account making a call, as the edge resolved it. This is the stopgap
-/// for K1's `access::Caller` (same fields and names); K1.2 replaces the
-/// struct with a re-export.
-#[derive(Clone, Debug)]
-pub struct Caller {
-    pub account_id: Uuid,
-    /// For mechanics only (how it signs in, how it is told). Never a
-    /// permission: the conventions guard refuses kind checks in `ops.rs`.
-    pub kind: ActorKind,
-    /// The connected app a person acts through, recorded on what they write.
-    pub via_grant_id: Option<Uuid>,
-    /// What the credential allows: reads, writes.
-    pub can_read: bool,
-    pub can_write: bool,
-    /// An agent's connection, whose rules decide the spaces it reaches.
-    pub connection_id: Option<Uuid>,
-    /// An older space-scoped credential that stays in one space.
-    pub confined_space: Option<Uuid>,
-    /// What an app acting for a person may do (their agent limit).
-    pub limits: Option<AgentLimits>,
-    /// The account a call is made for (a run's requester), when not the
-    /// caller's own.
-    pub requested_by: Option<Uuid>,
-    pub run_id: Option<Uuid>,
-}
-
-impl Caller {
-    /// A person in the web app: full access as themselves.
-    pub fn person(account_id: Uuid, kind: ActorKind) -> Self {
-        Self {
-            account_id,
-            kind,
-            via_grant_id: None,
-            can_read: true,
-            can_write: true,
-            connection_id: None,
-            confined_space: None,
-            limits: None,
-            requested_by: None,
-            run_id: None,
-        }
-    }
-
-    /// The caller behind an MCP or public API credential.
-    pub fn of_principal(principal: &crate::mcp::McpPrincipal, limits: Option<AgentLimits>) -> Self {
-        Self {
-            account_id: principal.actor_id,
-            kind: principal.actor_kind,
-            via_grant_id: principal.via_grant_id(),
-            can_read: principal.can_read(),
-            can_write: principal.can_write(),
-            connection_id: principal.external_agent_connection_id,
-            // kind-check: mechanical (an older person's credential is tied
-            // to the one project it was made in; agents reach by connection)
-            confined_space: (principal.actor_kind == ActorKind::Human && !principal.account_wide)
-                .then_some(principal.project_id),
-            limits,
-            requested_by: None,
-            run_id: None,
-        }
-    }
-}
+/// The account making a call: K1's `access::Caller` (K1.2 replaced the
+/// stopgap struct with this re-export).
+pub use crate::access::Caller;
 
 /// The edge a call arrived through: recorded on the audit row.
 #[derive(Clone, Debug)]
