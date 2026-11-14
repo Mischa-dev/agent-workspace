@@ -217,6 +217,10 @@ pub struct FieldDecl {
     /// rest read muted (AWD-98).
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub tones: std::collections::BTreeMap<String, ChipTone>,
+    /// For long text written in Markdown, such as why a decision was made:
+    /// drawn in full rather than as a two-line summary (AWD-116).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub markdown: bool,
 }
 
 /// The tones a chip comes in, as the app draws them.

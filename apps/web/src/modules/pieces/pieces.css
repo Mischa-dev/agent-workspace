@@ -94,6 +94,15 @@
   line-clamp: 2;
 }
 
+/* Markdown (why a decision was made) reads in full. */
+.aw-piece__summary--full {
+  display: block;
+  overflow: visible;
+  color: var(--content-fg);
+  -webkit-line-clamp: unset;
+  line-clamp: none;
+}
+
 .aw-piece__group + .aw-piece__group {
   margin-top: var(--space-4);
 }
@@ -128,6 +137,8 @@
   gap: var(--space-1);
   padding: var(--space-2-5) var(--space-4);
   min-width: 0;
+  /* A row a link points at stays clear of the header when scrolled to. */
+  scroll-margin-top: var(--space-10);
 }
 
 .aw-piece__row + .aw-piece__row {

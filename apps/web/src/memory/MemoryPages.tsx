@@ -161,6 +161,8 @@ export function PagesPage() {
 /** A page as the pieces see it: its tags, when and by whom it was last edited, and how it starts. */
 const PAGE_THING = pagesManifest.things.find((thing) => thing.kind === 'page') as ThingDecl
 const PAGE_LIST: Piece = { type: 'list', thing: 'page', fields: ['tags', 'updatedAt', 'owner', 'excerpt'] }
+const DECISION_THING = pagesManifest.things.find((thing) => thing.kind === 'decision') as ThingDecl
+const DECISION_LIST: Piece = { type: 'list', thing: 'decision', fields: ['status', 'decidedAt', 'decidedBy', 'source', 'detail'] }
 
 function pageThing(page: PageSummary, base: string): Thing {
   const tags = [page.isGuide && 'Guide', page.skillDescription && 'Skill', page.stale && 'Not updated in months'].filter(
@@ -727,6 +729,26 @@ function sourceLink(decision: Decision) {
   return name ? { label: name, to: null } : null
 }
 
+/** A decision as the list piece draws it; its row is `#decision-<id>`, which a link to it scrolls to. */
+function decisionThing(decision: Decision): Thing {
+  const source = sourceLink(decision)
+  return {
+    id: decision.id,
+    kind: 'decision',
+    module: 'pages',
+    title: decision.title,
+    status: decision.status === 'superseded' ? 'Replaced' : undefined,
+    projectId: decision.projectId,
+    href: `/projects/${encodeURIComponent(decision.projectId)}/decisions#${encodeURIComponent(decision.id)}`,
+    fields: {
+      decidedAt: decision.createdAt,
+      decidedBy: decision.via ? `${decision.decidedBy} via ${decision.via}` : decision.decidedBy,
+      source: source ? { label: source.label, href: source.to } : null,
+      detail: decision.detail,
+    },
+  }
+}
+
 function DecisionsList({ projectId }: { projectId: string }) {
   const location = useLocation()
   const [showSuperseded, setShowSuperseded] = useState(false)
@@ -740,15 +762,14 @@ function DecisionsList({ projectId }: { projectId: string }) {
   // A link to one decision (from a pin) scrolls to it and marks it for a moment.
   useEffect(() => {
     if (!target || !decisions.data) return
-    const element = document.getElementById(`decision-${target}`)
-    if (!element) return
-    const row = element.closest('li')
-    element.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    row?.classList.add('aw-memory__found')
-    const timer = window.setTimeout(() => row?.classList.remove('aw-memory__found'), 2400)
+    const row = document.getElementById(`decision-${target}`)
+    if (!row) return
+    row.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    row.classList.add('aw-memory__found')
+    const timer = window.setTimeout(() => row.classList.remove('aw-memory__found'), 2400)
     return () => {
       window.clearTimeout(timer)
-      row?.classList.remove('aw-memory__found')
+      row.classList.remove('aw-memory__found')
     }
   }, [decisions.data, target])
 
@@ -788,38 +809,7 @@ function DecisionsList({ projectId }: { projectId: string }) {
         </EmptyState>
       ) : null}
       {decisions.data && decisions.data.decisions.length > 0 ? (
-        <RowList label="Decisions">
-          {decisions.data.decisions.map((decision) => {
-            const source = sourceLink(decision)
-            return (
-              <Row
-                key={decision.id}
-                meta={
-                  <>
-                    {decision.status === 'superseded' ? <StatusChip>Replaced</StatusChip> : null}
-                    <span>
-                      {decision.decidedBy}
-                      {decision.via ? ` via ${decision.via}` : ''} · <When at={decision.createdAt} />
-                      {source ? (
-                        <>
-                          {' · in '}
-                          {source.to ? <Link to={source.to}>{source.label}</Link> : source.label}
-                        </>
-                      ) : null}
-                    </span>
-                  </>
-                }
-                title={
-                  <span className="aw-memory__anchor" id={`decision-${decision.id}`}>
-                    {decision.title}
-                  </span>
-                }
-              >
-                {decision.detail ? <Markdown className="aw-row__text" source={decision.detail} /> : null}
-              </Row>
-            )
-          })}
-        </RowList>
+        <PieceView decl={DECISION_THING} label="Decisions" piece={DECISION_LIST} things={decisions.data.decisions.map(decisionThing)} />
       ) : null}
       {recording ? <RecordDecisionDialog onClose={() => setRecording(false)} projectId={projectId} /> : null}
     </>

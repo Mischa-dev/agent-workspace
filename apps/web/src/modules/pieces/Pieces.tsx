@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom'
 
 import { Button, Checkbox, DetailList, Menu, SelectField, StatusChip, TextField, formatFullDate } from '../../ui'
 import type { FieldDecl, FieldValue, Piece, Thing, ThingDecl } from '../contract'
-import { fieldOf, fieldText, isMoment, rawValue, words } from './fields'
+import { fieldOf, fieldText, isLink, isMoment, rawValue, words } from './fields'
+import { Markdown } from '../../ui/markdown'
 import './pieces.css'
 
 // Pieces the app draws (AWD-75, principle 5 of the build-out plan). A module
@@ -66,6 +67,19 @@ function FieldValueView({ decl, id, thing }: { decl: ThingDecl; id: string; thin
       </span>
     )
   }
+  // A link goes where it points; one the reader can't open is just its name.
+  if (isLink(value)) {
+    if (!value.href) return <span className="aw-piece__value">{text}</span>
+    return value.href.startsWith('/') ? (
+      <Link className="aw-piece__value" to={value.href}>
+        {text}
+      </Link>
+    ) : (
+      <a className="aw-piece__value" href={value.href} rel="noreferrer" target="_blank">
+        {text}
+      </a>
+    )
+  }
   if (field.type === 'date' && isMoment(value)) {
     return (
       <time className="aw-piece__value" dateTime={String(value)} title={formatFullDate(String(value))}>
@@ -101,16 +115,16 @@ function Meta({ decl, piece, thing, summaries = true }: { decl: ThingDecl; piece
         .filter((id) => summaries || !isSummary(decl, id))
         .map((id, index, ids) => {
           const field = fieldOf(decl, id)
-          // A date says what it is ("Edited 5 min ago"); other values speak for themselves.
-          const dated = field.type === 'date'
+          // A date or a link says what it is ("Edited 5 min ago", "In #design"); other values speak for themselves.
+          const named = field.type === 'date' || field.type === 'link'
           // Who, right after when, reads "Edited 5 min ago by Ana".
           const by = field.type === 'person' && index > 0 && fieldOf(decl, ids[index - 1]).type === 'date'
           const value = rawValue(thing, id)
-          // Labels with none to show leave no "None" behind, nor does a missing "by".
-          if (fieldText(field, value) === null && (field.type === 'labels' || by)) return null
+          // Labels, a status or a link with none to show leave no "None" behind, nor does a missing "by".
+          if (fieldText(field, value) === null && (field.type === 'labels' || field.type === 'status' || field.type === 'link' || by)) return null
           return (
             <div className={by ? 'aw-piece__meta-item aw-piece__meta-item--by' : 'aw-piece__meta-item'} key={id}>
-              <dt className={dated ? 'aw-piece__label' : 'visually-hidden'}>{field.label}</dt>
+              <dt className={named ? 'aw-piece__label' : 'visually-hidden'}>{field.label}</dt>
               <dd>
                 {by ? <span aria-hidden="true">by </span> : null}
                 <FieldValueView decl={decl} id={id} thing={thing} />
@@ -126,12 +140,17 @@ function Summaries({ decl, piece, thing }: { decl: ThingDecl; piece: Piece; thin
   return shownFields(piece)
     .filter((id) => isSummary(decl, id))
     .map((id) => {
-      const text = fieldText(fieldOf(decl, id), rawValue(thing, id))
-      return text ? (
+      const field = fieldOf(decl, id)
+      const text = fieldText(field, rawValue(thing, id))
+      if (!text) return null
+      // Markdown reads in full, formatted; other long text is a two-line summary.
+      return field.markdown ? (
+        <Markdown className="aw-piece__summary aw-piece__summary--full" key={id} source={text} />
+      ) : (
         <p className="aw-piece__summary" key={id}>
           {text}
         </p>
-      ) : null
+      )
     })
 }
 
@@ -163,7 +182,8 @@ function ListPiece({ decl, label, piece, things }: PieceProps) {
           {group.title ? <h3 className="aw-piece__group-title">{group.title}</h3> : null}
           <ul className="aw-piece__rows">
             {group.things.map((thing) => (
-              <li className="aw-piece__row" key={thing.id}>
+              // Each row can be linked to, as #<kind>-<id>.
+              <li className="aw-piece__row" id={`${thing.kind}-${thing.id}`} key={thing.id}>
                 <ThingTitle thing={thing} />
                 <Meta decl={decl} piece={piece} summaries={false} thing={thing} />
                 <Summaries decl={decl} piece={piece} thing={thing} />
@@ -312,7 +332,7 @@ function FormField({ field, onChange, value }: { field: FieldDecl; onChange: (va
       label={field.label}
       onChange={(event) => onChange(event.target.value === '' ? null : type === 'number' ? Number(event.target.value) : event.target.value)}
       type={type}
-      value={value === null || Array.isArray(value) || typeof value === 'boolean' ? '' : String(value)}
+      value={value === null || Array.isArray(value) || typeof value === 'boolean' ? '' : isLink(value) ? value.label : String(value)}
     />
   )
 }
