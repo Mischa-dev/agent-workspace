@@ -256,6 +256,11 @@ const HTTP_EXCLUSIONS: &[(&str, &str)] = &[
          people; covered in awd110_collection_forms",
     ),
     (
+        "/api/v1/auth/csrf",
+        "hands the caller's own request-token cookie back to an allowed web origin (H1.41); \
+         reads no row of any workspace; covered in client_config's unit tests",
+    ),
+    (
         "/api/v1/integrations/github/callback",
         "GitHub's redirect back after sign-in: returns a redirect, never data, and \
          only for a state bound to the caller's browser; covered in settings_accounts",

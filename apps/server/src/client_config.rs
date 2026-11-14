@@ -358,6 +358,7 @@ mod tests {
             supervisors,
         });
         let response = application
+            .clone()
             .oneshot(
                 HttpRequest::builder()
                     .uri("/client-config")
@@ -391,6 +392,32 @@ mod tests {
             let secret = secret.trim();
             assert!(!body.contains(secret), "client-config holds {secret}");
         }
+
+        // The request token goes back only to an allowed web origin.
+        let csrf = |origin: &'static str| {
+            HttpRequest::builder()
+                .uri("/api/v1/auth/csrf")
+                .header(ORIGIN, origin)
+                .header("cookie", "agent_workspace_csrf=csrf-marker")
+                .body(Body::empty())
+                .expect("request")
+        };
+        let response = application
+            .clone()
+            .oneshot(csrf("https://app.example.com"))
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
+        let body = axum::body::to_bytes(response.into_body(), 1 << 16)
+            .await
+            .expect("body");
+        assert_eq!(&body[..], br#"{"csrfToken":"csrf-marker"}"#);
+        let refused = application
+            .oneshot(csrf("https://evil.example"))
+            .await
+            .expect("response");
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
     }
 
     async fn through_cors(origin: Option<&str>, method: Method) -> Response {
