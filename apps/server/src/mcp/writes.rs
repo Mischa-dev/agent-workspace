@@ -1620,6 +1620,34 @@ pub(super) async fn change_pull_request_link(
     if !changed {
         return Ok(PullRequestLinkChange::Unchanged);
     }
+    // An unlinked pull request isn't suggested on the task again when it
+    // next syncs, even if it still names the task's key (AWD-59); linking it
+    // again lifts that.
+    if link {
+        sqlx::query(
+            "DELETE FROM github_pull_request_dismissed_links WHERE project_id = $1 AND github_pull_request_id = $2 AND work_item_id = $3",
+        )
+        .bind(project_id)
+        .bind(pull_request_id)
+        .bind(work_item_id)
+        .execute(&mut **transaction)
+        .await?;
+    } else {
+        sqlx::query(
+            r#"
+            INSERT INTO github_pull_request_dismissed_links (
+                project_id, github_pull_request_id, work_item_id, dismissed_by_actor_id
+            ) VALUES ($1, $2, $3, $4)
+            ON CONFLICT (github_pull_request_id, work_item_id) DO NOTHING
+            "#,
+        )
+        .bind(project_id)
+        .bind(pull_request_id)
+        .bind(work_item_id)
+        .bind(actor_id)
+        .execute(&mut **transaction)
+        .await?;
+    }
     let version = advance_version(transaction, project_id, work_item_id, current_version).await?;
     let activity_id = insert_work_item_activity(
         transaction,
