@@ -70,3 +70,4 @@ are gated or exempt with a reason (P0.7).
 | `personal_hosts` (no tailnet address or home path outside docs/history) | `tools/ci/test_personal_hosts.py` | P0.33 |
 | runner SDK tests run in CI | `tools/ci/checks.sh` steps "runner SDK tests" | P0.34 |
 | `notification_detail_text` | `apps/server/src/structure_guards.rs` | P0.36 |
+| account routes walked or excused (`ACCOUNT_ROUTES_EXCUSED` only shrinks) | `privacy_inside_workspace.rs` `every_account_route_is_walked_or_excused` | P0.38 |
