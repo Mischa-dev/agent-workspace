@@ -32,11 +32,12 @@ use crate::{
         CreateWorkItemCommand, CreateWorkItemOutcome, CriteriaCommand, CriteriaOperation,
         CriteriaOutcome, CriteriaPlanError, CriterionTarget, LinkWording,
         MAX_BLOCKED_REASON_CHARACTERS, NewTaskFields, PlacementProblem, ProjectMembership,
-        RepositoryLinkOutcome, TaskFieldChanges, ThreadLinkOutcome, UpdateWorkItemCommand,
-        UpdateWorkItemOutcome, authorize_mutation, change_criteria, change_repository_link,
-        change_thread_link, conflict_kind, create_work_item as execute_create_work_item,
-        finalize_change, finalize_comment, insert_activity, lock_membership, lock_work_item,
-        place_in_column, set_archived, update_work_item_by_id, valid_estimate,
+        PullRequestLinkChange, RepositoryLinkOutcome, TaskFieldChanges, ThreadLinkOutcome,
+        UpdateWorkItemCommand, UpdateWorkItemOutcome, authorize_mutation, change_criteria,
+        change_pull_request_link, change_repository_link, change_thread_link, conflict_kind,
+        create_work_item as execute_create_work_item, finalize_change, finalize_comment,
+        insert_activity, lock_membership, lock_work_item, place_in_column, set_archived,
+        update_work_item_by_id, valid_estimate,
     },
     work_item_labels::LabelDelta,
 };
@@ -293,6 +294,11 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}/primary",
             axum::routing::post(set_primary_work_item_repository),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/pull-requests/{pull_request_id}",
+            axum::routing::post(link_work_item_pull_request)
+                .delete(unlink_work_item_pull_request),
         )
 }
 
@@ -1987,6 +1993,166 @@ async fn change_work_item_repository_link(
             return Err(AppError::Internal("repository link checked its version"));
         }
         RepositoryLinkOutcome::Unchanged | RepositoryLinkOutcome::Changed { .. } => {}
+    }
+    let item = current_work_item_view(
+        &mut transaction,
+        project_id,
+        work_item_id,
+        principal.actor_id,
+        caps,
+    )
+    .await?;
+    complete(&mut transaction, &reservation, StatusCode::OK, &item).await?;
+    transaction.commit().await?;
+    work_item_response(StatusCode::OK, item)
+}
+
+/// Links a pull request to a task (confirming one suggested because it names
+/// the task's key), the same as task_link with pullRequestId (AWD-59).
+async fn link_work_item_pull_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath((project_id, work_item_id, pull_request_id)): ApiPath<(Uuid, Uuid, Uuid)>,
+    ApiJson(request): ApiJson<WorkItemVersionRequest>,
+) -> Result<Response, AppError> {
+    change_work_item_pull_request_link(
+        &state,
+        &headers,
+        &principal,
+        (project_id, work_item_id, pull_request_id),
+        request.expected_version,
+        true,
+    )
+    .await
+}
+
+/// Unlinks a pull request from a task, or dismisses a suggested one so it
+/// isn't suggested there again.
+async fn unlink_work_item_pull_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath((project_id, work_item_id, pull_request_id)): ApiPath<(Uuid, Uuid, Uuid)>,
+    ApiJson(request): ApiJson<WorkItemVersionRequest>,
+) -> Result<Response, AppError> {
+    change_work_item_pull_request_link(
+        &state,
+        &headers,
+        &principal,
+        (project_id, work_item_id, pull_request_id),
+        request.expected_version,
+        false,
+    )
+    .await
+}
+
+async fn change_work_item_pull_request_link(
+    state: &AppState,
+    headers: &HeaderMap,
+    principal: &AuthenticatedActor,
+    (project_id, work_item_id, pull_request_id): (Uuid, Uuid, Uuid),
+    expected_version: i64,
+    linked: bool,
+) -> Result<Response, AppError> {
+    require_authenticated_write(state, headers, principal)?;
+    let key = IdempotencyKey::from_headers(headers)?;
+    let scope = resource_bound_scope(
+        "work_items",
+        work_item_id,
+        if linked {
+            "pull_request_link"
+        } else {
+            "pull_request_unlink"
+        },
+    )?;
+    let request_hash = RequestHash::for_value(&(pull_request_id, expected_version))?;
+    let mut transaction = state.pool.begin().await?;
+    let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
+        .await?
+        .ok_or(AppError::NotFound("work_item"))?;
+    authorize_work_item(
+        principal,
+        &membership,
+        Action::WorkItemEdit,
+        Some(work_item_id),
+    )?;
+    if membership.project_archived_at.is_some() {
+        return Err(AppError::ProjectArchived);
+    }
+    let reservation = match reserve(
+        &mut transaction,
+        principal.actor_id,
+        &scope,
+        &key,
+        request_hash,
+    )
+    .await?
+    {
+        IdempotencyOutcome::Replay(replay) => {
+            let item: WorkItemView = replay.decode()?;
+            transaction.commit().await?;
+            return work_item_response(replay.status(), item);
+        }
+        IdempotencyOutcome::Reserved(reservation) => reservation,
+    };
+    let current = lock_work_item(&mut transaction, project_id, work_item_id)
+        .await?
+        .ok_or(AppError::NotFound("work_item"))?;
+    let caps = capabilities(&membership)?;
+    if current.archived && linked {
+        return Err(AppError::Conflict("work_item", "archived"));
+    }
+    match change_pull_request_link(
+        &mut transaction,
+        project_id,
+        work_item_id,
+        current.version,
+        Some(expected_version),
+        pull_request_id,
+        principal.actor_id,
+        linked,
+        if linked {
+            "Pull request linked"
+        } else {
+            "Pull request unlinked"
+        },
+    )
+    .await?
+    {
+        PullRequestLinkChange::NotInProject => {
+            return Err(AppError::NotFound("github_pull_request"));
+        }
+        PullRequestLinkChange::VersionConflict => {
+            let row = fetch_work_item_in_transaction(
+                &mut transaction,
+                project_id,
+                work_item_id,
+                principal.actor_id,
+            )
+            .await?
+            .ok_or(AppError::NotFound("work_item"))?;
+            return work_item_version_conflict_response(work_item_view(row, caps)?);
+        }
+        PullRequestLinkChange::Unchanged => {}
+        PullRequestLinkChange::Changed { version, .. } => {
+            crate::work_item_commands::record_audit(
+                &mut transaction,
+                &browser_actor(headers, principal, project_id)?,
+                if linked {
+                    "work_item.pull_request_linked"
+                } else {
+                    "work_item.pull_request_unlinked"
+                },
+                work_item_id,
+                serde_json::json!({
+                    "pullRequestId": pull_request_id,
+                    "linked": linked,
+                    "version": version,
+                }),
+            )
+            .await?;
+        }
     }
     let item = current_work_item_view(
         &mut transaction,

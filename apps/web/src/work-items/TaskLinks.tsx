@@ -6,7 +6,7 @@ import { useProjectConversationSidebar } from '../conversations/hooks'
 import { humanize } from '../projects/format'
 import { listRepositories } from '../repositories/api'
 import { Banner, Button, Icon, IconButton, Row, RowList, SelectField, describeError } from '../ui'
-import { useSetWorkItemPrimaryRepository, useSetWorkItemRepositoryLink, useSetWorkItemThreadLink } from './hooks'
+import { useSetWorkItemPrimaryRepository, useSetWorkItemPullRequestLink, useSetWorkItemRepositoryLink, useSetWorkItemThreadLink } from './hooks'
 import { TaskSection } from './TaskSection'
 import type { WorkItem } from './types'
 
@@ -22,7 +22,7 @@ function pullRequestSummary(pullRequest: WorkItem['linkedPullRequests'][number])
     CHECKS[pullRequest.checksState],
     REVIEW[pullRequest.reviewState],
     open ? MERGE[pullRequest.mergeabilityState] : undefined,
-    pullRequest.confirmed ? undefined : 'not confirmed yet',
+    pullRequest.confirmed ? undefined : 'suggested because it names this task',
     pullRequest.syncState === 'failed' ? 'couldn’t refresh' : undefined,
   ]
   return parts.filter(Boolean).join(' · ')
@@ -31,7 +31,8 @@ function pullRequestSummary(pullRequest: WorkItem['linkedPullRequests'][number])
 /**
  * The threads, repositories and pull requests linked to a task. Only kinds
  * with something linked show; adding reveals the fields to link a thread or
- * a repository. Pull requests are linked by the runs that open them. A
+ * a repository. Pull requests are linked by the runs that open them, or
+ * suggested when they name the task's key (confirm or dismiss those). A
  * layout can hide the threads (no chat) or the code (no pull requests).
  */
 export function TaskLinks({
@@ -58,6 +59,7 @@ export function TaskLinks({
   const threadMutation = useSetWorkItemThreadLink()
   const repositoryMutation = useSetWorkItemRepositoryLink()
   const primaryMutation = useSetWorkItemPrimaryRepository()
+  const pullRequestMutation = useSetWorkItemPullRequestLink()
   const [threadId, setThreadId] = useState('')
   const [repositoryId, setRepositoryId] = useState('')
   const [repositoryRole, setRepositoryRole] = useState<'primary' | 'related'>('related')
@@ -69,8 +71,8 @@ export function TaskLinks({
   const availableRepositories = (repositories.data?.repositories ?? []).filter(
     (repository) => !repository.archivedAt && !item.linkedRepositories.some((link) => link.id === repository.id),
   )
-  const busy = threadMutation.isPending || repositoryMutation.isPending || primaryMutation.isPending
-  const failure = threadMutation.error ?? repositoryMutation.error ?? primaryMutation.error
+  const busy = threadMutation.isPending || repositoryMutation.isPending || primaryMutation.isPending || pullRequestMutation.isPending
+  const failure = threadMutation.error ?? repositoryMutation.error ?? primaryMutation.error ?? pullRequestMutation.error
   const ids = { projectId: item.projectId, workItemId: item.id }
   const open = adding && !disabled
   const linkedThreads = threads ? item.linkedThreads : []
@@ -182,6 +184,43 @@ export function TaskLinks({
           <RowList label="Linked pull requests">
             {linkedPullRequests.map((pullRequest) => (
               <Row
+                actions={
+                  !disabled && !pullRequest.confirmed ? (
+                    <>
+                      <Button
+                        disabled={busy}
+                        onClick={() =>
+                          pullRequestMutation.mutate({
+                            ...ids,
+                            pullRequestId: pullRequest.id,
+                            linked: true,
+                            expectedVersion: item.version,
+                            idempotencyKey: crypto.randomUUID(),
+                          })
+                        }
+                        size="sm"
+                        variant="ghost"
+                      >
+                        Link
+                      </Button>
+                      <IconButton
+                        disabled={busy}
+                        icon="x"
+                        label={`Dismiss #${pullRequest.number}`}
+                        onClick={() =>
+                          pullRequestMutation.mutate({
+                            ...ids,
+                            pullRequestId: pullRequest.id,
+                            linked: false,
+                            expectedVersion: item.version,
+                            idempotencyKey: crypto.randomUUID(),
+                          })
+                        }
+                        size="sm"
+                      />
+                    </>
+                  ) : null
+                }
                 key={pullRequest.id}
                 leading={
                   <span className="aw-row__tile">

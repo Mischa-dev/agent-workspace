@@ -344,3 +344,132 @@ async fn a_pull_request_naming_a_task_key_is_suggested_on_that_task_only() {
         .unwrap_or_else(|| panic!("the suggested pull request: {read}"));
     assert_eq!(suggested["confirmed"], false, "{read}");
 }
+
+#[tokio::test]
+async fn a_suggested_pull_request_is_confirmed_or_dismissed_on_the_task() {
+    let Some((setup, seed, _temporary)) = seeded("github_task_key_confirm").await else {
+        return;
+    };
+    let app = &setup.app;
+    let pool = &setup.pool;
+    let aw = seed.project_id.to_string();
+    let owner = connect_app(app, &setup.browser, "Owner's app", "full").await;
+    let session = initialize(app, &owner).await.expect("owner's app");
+    let created = tool(
+        app,
+        &owner,
+        &session,
+        "task_create",
+        json!({"projectId": aw, "title": "Fix the board"}),
+    )
+    .await;
+    let task: Uuid = created["workItemId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("task: {created}"))
+        .parse()
+        .expect("task id");
+    let key = key_of(pool, task).await;
+    let (pull_request, _) = seed_pull_request(&setup, &aw, seed.repository_id, 59).await;
+    let integration = sqlx::query_scalar::<_, Uuid>(
+        "SELECT installation.integration_actor_id FROM github_pull_requests pr JOIN github_installations installation ON installation.id = pr.github_installation_id WHERE pr.id = $1",
+    )
+    .bind(pull_request)
+    .fetch_one(pool)
+    .await
+    .expect("integration actor");
+    assert_eq!(
+        suggest(
+            pool,
+            seed.project_id,
+            pull_request,
+            &[&key],
+            &[],
+            integration
+        )
+        .await,
+        1
+    );
+
+    // An agent reading the task sees the suggestion, marked as one.
+    let opened = tool(app, &owner, &session, "task_open", json!({"taskId": key})).await;
+    let listed = opened.to_string();
+    assert!(listed.contains("\"suggested\":true"), "{opened}");
+
+    let version = |pool: PgPool| async move {
+        sqlx::query_scalar::<_, i64>("SELECT version FROM work_items WHERE id = $1")
+            .bind(task)
+            .fetch_one(&pool)
+            .await
+            .expect("version")
+    };
+    let path = format!("/api/v1/projects/{aw}/work-items/{task}/pull-requests/{pull_request}");
+    // A stale version is refused.
+    let (status, _) = send(
+        app,
+        setup.browser.request(
+            "DELETE",
+            &path,
+            Some("dismiss-stale"),
+            json!({"expectedVersion": 0}),
+        ),
+    )
+    .await;
+    assert_eq!(status, 409);
+
+    // Dismissing it from the task page keeps it off on the next sync.
+    let (status, read) = send(
+        app,
+        setup.browser.request(
+            "DELETE",
+            &path,
+            Some("dismiss"),
+            json!({"expectedVersion": version(pool.clone()).await}),
+        ),
+    )
+    .await;
+    assert_eq!(status, 200, "{read}");
+    assert!(links(pool, pull_request).await.is_empty());
+    assert_eq!(
+        suggest(
+            pool,
+            seed.project_id,
+            pull_request,
+            &[&key],
+            &[],
+            integration
+        )
+        .await,
+        0
+    );
+
+    // Linking it from the task page confirms it, so automation can move the
+    // task when it merges.
+    let (status, read) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &path,
+            Some("confirm"),
+            json!({"expectedVersion": version(pool.clone()).await}),
+        ),
+    )
+    .await;
+    assert_eq!(status, 200, "{read}");
+    assert_eq!(
+        links(pool, pull_request).await,
+        vec![(task, "explicit".to_owned(), true)]
+    );
+    let confirmed = read["linkedPullRequests"]
+        .as_array()
+        .and_then(|lines| lines.iter().find(|line| line["number"] == 59))
+        .unwrap_or_else(|| panic!("the pull request: {read}"));
+    assert_eq!(confirmed["confirmed"], true, "{read}");
+    let audited = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM audit_events WHERE target_id = $1 AND action IN ('work_item.pull_request_linked', 'work_item.pull_request_unlinked')",
+    )
+    .bind(task)
+    .fetch_one(pool)
+    .await
+    .expect("audit");
+    assert_eq!(audited, 2);
+}

@@ -1492,6 +1492,18 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     policy_route!(
         "work_items",
         Post,
+        "/api/v1/projects/{project_id}/work-items/{work_item_id}/pull-requests/{pull_request_id}",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "work_items",
+        Delete,
+        "/api/v1/projects/{project_id}/work-items/{work_item_id}/pull-requests/{pull_request_id}",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "work_items",
+        Post,
         "/api/v1/projects/{project_id}/work-items/bulk",
         WorkItemEdit
     ),

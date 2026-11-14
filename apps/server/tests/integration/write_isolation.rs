@@ -288,6 +288,8 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/files",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/move",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/project-move",
+    "DELETE /api/v1/projects/{project_id}/work-items/{work_item_id}/pull-requests/{pull_request_id}",
+    "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/pull-requests/{pull_request_id}",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/relations",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/release-claim",
     "DELETE /api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}",
@@ -5225,6 +5227,16 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             "a move needs its own fresh preview; a made-up snapshot stops there, past every access check",
         )
         .last(),
+        path_case(
+            "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/pull-requests/{pull_request_id}",
+            &[project(), task(), id(a.pull_request, b.pull_request)],
+            versioned("work_items", 1, json!({})),
+        ),
+        path_case(
+            "DELETE /api/v1/projects/{project_id}/work-items/{work_item_id}/pull-requests/{pull_request_id}",
+            &[project(), task(), id(a.pull_request, b.pull_request)],
+            versioned("work_items", 1, json!({})),
+        ),
         path_case(
             "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/relations",
             &[project(), task()],

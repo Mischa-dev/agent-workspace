@@ -16,6 +16,7 @@ import {
   searchAssignableActors,
   setWorkItemPrimaryRepository,
   setWorkItemArchived,
+  setWorkItemPullRequestLink,
   setWorkItemRepositoryLink,
   setWorkItemThreadLink,
   updateWorkItem,
@@ -197,6 +198,10 @@ export function useSetWorkItemThreadLink() {
 
 export function useSetWorkItemRepositoryLink() {
   return useWorkItemChildMutation(setWorkItemRepositoryLink)
+}
+
+export function useSetWorkItemPullRequestLink() {
+  return useWorkItemChildMutation(setWorkItemPullRequestLink)
 }
 
 export function useSetWorkItemPrimaryRepository() {

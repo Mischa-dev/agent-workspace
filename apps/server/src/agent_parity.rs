@@ -1158,6 +1158,16 @@ mod tests {
         ),
         (
             Post,
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/pull-requests/{pull_request_id}",
+            Tool("task_link"),
+        ),
+        (
+            Delete,
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/pull-requests/{pull_request_id}",
+            Tool("task_link"),
+        ),
+        (
+            Post,
             "/api/v1/projects/{project_id}/work-items/bulk",
             Tool("task_update_many"),
         ),

@@ -243,7 +243,7 @@ export function normalizeCard(value: unknown): WorkItemCard {
 function workItemLinkPath(
   projectId: string,
   workItemId: string,
-  collection: 'threads' | 'repositories',
+  collection: 'threads' | 'repositories' | 'pull-requests',
   targetId: string,
 ) {
   return `/api/v1/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(workItemId)}/${collection}/${encodeURIComponent(targetId)}`
@@ -276,6 +276,21 @@ export async function setWorkItemRepositoryLink(input: {
     idempotencyKey: input.idempotencyKey,
     json: input.role ? { expectedVersion: input.expectedVersion, role: input.role } : { expectedVersion: input.expectedVersion },
   }))
+}
+
+/** Links a pull request to a task (confirming a suggested one), or unlinks it (dismissing a suggestion). */
+export async function setWorkItemPullRequestLink(input: {
+  projectId: string
+  workItemId: string
+  pullRequestId: string
+  linked: boolean
+  expectedVersion: number
+  idempotencyKey: string
+}) {
+  return normalizeWorkItem(await requestJson<unknown>(
+    workItemLinkPath(input.projectId, input.workItemId, 'pull-requests', input.pullRequestId),
+    { method: input.linked ? 'POST' : 'DELETE', idempotencyKey: input.idempotencyKey, json: { expectedVersion: input.expectedVersion } },
+  ))
 }
 
 export async function setWorkItemPrimaryRepository(input: {
