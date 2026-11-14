@@ -3988,29 +3988,42 @@ fn tool_listed(name: &str, reach: PermissionSet) -> bool {
 /// "permission denied" (almost all of them), so clients that check results
 /// against the output schema accept it; otherwise a plain error.
 fn refusal(tool: &str, message: String) -> rmcp::model::CallToolResponse {
-    static SAYS_DENIED: OnceLock<std::collections::HashSet<String>> = OnceLock::new();
-    let says_denied = SAYS_DENIED.get_or_init(|| {
+    rmcp::model::CallToolResponse::Complete(match refusal_body(tool, message.clone()) {
+        Some(body) => rmcp::model::CallToolResult::structured(body),
+        None => rmcp::model::CallToolResult::error(vec![rmcp::model::ContentBlock::text(message)]),
+    })
+}
+
+/// The structured refusal for `tool`, or `None` when its results can't say
+/// "permission denied". The retry key is spelled as the tool's own output
+/// schema spells it: `retry_category` for the few tools whose results use
+/// snake case there, `retryCategory` for the rest.
+fn refusal_body(tool: &str, message: String) -> Option<serde_json::Value> {
+    static SHAPES: OnceLock<std::collections::HashMap<String, &'static str>> = OnceLock::new();
+    let shapes = SHAPES.get_or_init(|| {
         McpServer::tools()
             .list_all()
             .into_iter()
-            .filter(|tool| {
-                tool.output_schema.as_ref().is_some_and(|schema| {
-                    serde_json::to_string(schema)
-                        .is_ok_and(|text| text.contains("permission_denied"))
-                })
+            .filter_map(|tool| {
+                let text = serde_json::to_string(tool.output_schema.as_ref()?).ok()?;
+                if !text.contains("permission_denied") {
+                    return None;
+                }
+                let key = if text.contains("\"retry_category\"") {
+                    "retry_category"
+                } else {
+                    "retryCategory"
+                };
+                Some((tool.name.to_string(), key))
             })
-            .map(|tool| tool.name.to_string())
             .collect()
     });
-    rmcp::model::CallToolResponse::Complete(if says_denied.contains(tool) {
-        rmcp::model::CallToolResult::structured(serde_json::json!({
-            "outcome": "permission_denied",
-            "retryCategory": "role",
-            "message": message,
-        }))
-    } else {
-        rmcp::model::CallToolResult::error(vec![rmcp::model::ContentBlock::text(message)])
-    })
+    let key = shapes.get(tool)?;
+    let mut body = serde_json::Map::new();
+    body.insert("outcome".to_owned(), "permission_denied".into());
+    body.insert((*key).to_owned(), "role".into());
+    body.insert("message".to_owned(), message.into());
+    Some(serde_json::Value::Object(body))
 }
 
 /// Runs one tool call. A tool none of the caller's roles allows is refused
@@ -6054,6 +6067,92 @@ mod tests {
         MAX_LOGGED_ERROR_CHARACTERS, ResumeAnySession, SERVER_INSTRUCTIONS, SLOW_HANDSHAKE_MS,
         StatusCode, common, exact_bearer_token, generate_token,
     };
+
+    /// Whether `value` fits `schema`'s shape: required keys present, no key
+    /// outside closed properties, and constants and enums matched, through
+    /// `$ref`, `oneOf`, `anyOf` and `allOf`. Enough to catch a refusal its
+    /// tool's clients would reject.
+    fn fits(
+        root: &serde_json::Value,
+        schema: &serde_json::Value,
+        value: &serde_json::Value,
+    ) -> bool {
+        if let Some(reference) = schema.get("$ref").and_then(serde_json::Value::as_str) {
+            let pointer = reference.trim_start_matches('#');
+            return root
+                .pointer(pointer)
+                .is_some_and(|target| fits(root, target, value));
+        }
+        for union in ["oneOf", "anyOf"] {
+            if let Some(variants) = schema.get(union).and_then(serde_json::Value::as_array) {
+                if !variants.iter().any(|variant| fits(root, variant, value)) {
+                    return false;
+                }
+            }
+        }
+        if let Some(parts) = schema.get("allOf").and_then(serde_json::Value::as_array) {
+            if !parts.iter().all(|part| fits(root, part, value)) {
+                return false;
+            }
+        }
+        if let Some(constant) = schema.get("const") {
+            if constant != value {
+                return false;
+            }
+        }
+        if let Some(allowed) = schema.get("enum").and_then(serde_json::Value::as_array) {
+            if !allowed.contains(value) {
+                return false;
+            }
+        }
+        let Some(object) = value.as_object() else {
+            return true;
+        };
+        if let Some(required) = schema.get("required").and_then(serde_json::Value::as_array) {
+            if !required
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .all(|key| object.contains_key(key))
+            {
+                return false;
+            }
+        }
+        let properties = schema
+            .get("properties")
+            .and_then(serde_json::Value::as_object);
+        let closed = schema.get("additionalProperties") == Some(&serde_json::Value::Bool(false));
+        object.iter().all(|(key, field)| {
+            match properties.and_then(|properties| properties.get(key)) {
+                Some(property) => fits(root, property, field),
+                None => !closed,
+            }
+        })
+    }
+
+    /// P0.9: the generic refusal fits every tool's own output schema, or
+    /// the tool gets a plain error instead.
+    #[test]
+    fn refusals_fit_each_tools_output_schema() {
+        let mut misfits = Vec::new();
+        for tool in super::tool_catalog() {
+            let Some(body) = super::refusal_body(&tool.name, "no".to_owned()) else {
+                continue;
+            };
+            let schema = serde_json::Value::Object(
+                tool.output_schema
+                    .as_deref()
+                    .cloned()
+                    .expect("output schema"),
+            );
+            if !fits(&schema, &schema, &body) {
+                misfits.push(tool.name.to_string());
+            }
+        }
+        assert!(
+            misfits.is_empty(),
+            "refusals that don't fit the tool's schema: {misfits:?}"
+        );
+    }
 
     #[tokio::test]
     async fn deleted_sessions_stay_deleted_within_a_bounded_memory() {

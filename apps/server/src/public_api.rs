@@ -114,16 +114,30 @@ fn bounded(message: &str) -> String {
     message.chars().take(1_000).collect()
 }
 
-/// The HTTP status for a tool result, from its `outcome`.
+/// The HTTP status for a tool result, from its `outcome`. A result with no
+/// outcome is a plain read; an outcome nobody mapped is a server fault, not
+/// a success.
 pub(crate) fn status_for(result: &Value) -> StatusCode {
     match result.get("outcome").and_then(Value::as_str) {
-        Some("not_found") => StatusCode::NOT_FOUND,
-        Some("permission_denied") => StatusCode::FORBIDDEN,
-        Some("invalid_request" | "invalid_transition") => StatusCode::UNPROCESSABLE_ENTITY,
-        Some("conflict") => StatusCode::CONFLICT,
-        Some("temporarily_unavailable") => StatusCode::SERVICE_UNAVAILABLE,
-        _ => StatusCode::OK,
+        None => StatusCode::OK,
+        Some(outcome) => outcome_status(outcome).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
     }
+}
+
+/// The status for each outcome a tool can answer with; a test keeps this
+/// in step with the tools' output schemas.
+fn outcome_status(outcome: &str) -> Option<StatusCode> {
+    Some(match outcome {
+        "ok" | "applied" | "found" | "events" | "requested" => StatusCode::OK,
+        "not_found" => StatusCode::NOT_FOUND,
+        "permission_denied" => StatusCode::FORBIDDEN,
+        "invalid_request" | "invalid_transition" | "rejected" => StatusCode::UNPROCESSABLE_ENTITY,
+        "conflict" => StatusCode::CONFLICT,
+        "cursor_expired" => StatusCode::GONE,
+        "busy" => StatusCode::TOO_MANY_REQUESTS,
+        "temporarily_unavailable" => StatusCode::SERVICE_UNAVAILABLE,
+        _ => return None,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -481,6 +495,71 @@ mod tests {
         }
     }
 
+    /// Every `outcome` value any tool's output schema names.
+    fn schema_outcomes() -> std::collections::BTreeSet<String> {
+        fn walk(root: &Value, node: &Value, found: &mut std::collections::BTreeSet<String>) {
+            match node {
+                Value::Object(map) => {
+                    if let Some(outcome) = map
+                        .get("properties")
+                        .and_then(|properties| properties.get("outcome"))
+                    {
+                        let outcome = match outcome.get("$ref").and_then(Value::as_str) {
+                            Some(reference) => root
+                                .pointer(reference.trim_start_matches('#'))
+                                .unwrap_or(outcome),
+                            None => outcome,
+                        };
+                        let values = outcome
+                            .get("const")
+                            .into_iter()
+                            .chain(
+                                outcome
+                                    .get("enum")
+                                    .and_then(Value::as_array)
+                                    .into_iter()
+                                    .flatten(),
+                            )
+                            .chain(
+                                ["oneOf", "anyOf"]
+                                    .iter()
+                                    .filter_map(|key| outcome.get(*key).and_then(Value::as_array))
+                                    .flatten()
+                                    .filter_map(|variant| variant.get("const")),
+                            );
+                        found.extend(values.filter_map(Value::as_str).map(str::to_owned));
+                    }
+                    map.values().for_each(|child| walk(root, child, found));
+                }
+                Value::Array(items) => items.iter().for_each(|child| walk(root, child, found)),
+                _ => {}
+            }
+        }
+        let mut found = std::collections::BTreeSet::new();
+        for tool in crate::mcp::tool_catalog() {
+            if let Some(schema) = tool.output_schema.as_deref() {
+                let schema = Value::Object(schema.clone());
+                walk(&schema, &schema, &mut found);
+            }
+        }
+        found
+    }
+
+    /// P0.9: a new outcome in any tool's schema needs a status here.
+    #[test]
+    fn every_outcome_in_a_schema_has_a_status() {
+        let outcomes = schema_outcomes();
+        assert!(outcomes.contains("permission_denied"), "{outcomes:?}");
+        let unmapped = outcomes
+            .iter()
+            .filter(|outcome| super::outcome_status(outcome).is_none())
+            .collect::<Vec<_>>();
+        assert!(
+            unmapped.is_empty(),
+            "outcomes without an HTTP status in public_api::outcome_status: {unmapped:?}"
+        );
+    }
+
     #[test]
     fn outcomes_set_the_status() {
         assert_eq!(status_for(&json!({"outcome": "ok"})).as_u16(), 200);
@@ -495,6 +574,15 @@ mod tests {
             status_for(&json!({"outcome": "invalid_transition"})).as_u16(),
             422
         );
+        assert_eq!(status_for(&json!({"outcome": "rejected"})).as_u16(), 422);
+        assert_eq!(status_for(&json!({"outcome": "busy"})).as_u16(), 429);
+        assert_eq!(
+            status_for(&json!({"outcome": "cursor_expired"})).as_u16(),
+            410
+        );
+        assert_eq!(status_for(&json!({"outcome": "found"})).as_u16(), 200);
+        assert_eq!(status_for(&json!({"items": []})).as_u16(), 200);
+        assert_eq!(status_for(&json!({"outcome": "unheard_of"})).as_u16(), 500);
         assert_eq!(pascal("task_create_many"), "TaskCreateMany");
     }
 }
