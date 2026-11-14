@@ -141,9 +141,9 @@ pub(crate) const RULES: &[Rule] = &[
 // merged before these rules reached main). Lower one when its allowances go
 // down; never raise one.
 const RAW_ROLE_CHECKS_CEILING: usize = 40;
-const CUSTOM_ROLE_ALLOWS_CEILING: usize = 25;
+const CUSTOM_ROLE_ALLOWS_CEILING: usize = 23;
 const WORKSPACE_ROLE_ENUM_CEILING: usize = 32;
-const ACCOUNT_KIND_CHECKS_CEILING: usize = 266;
+const ACCOUNT_KIND_CHECKS_CEILING: usize = 264;
 // K1.1: role names compared in Rust, the old access core called by hand,
 // and account kinds compared as stored strings. Set from today's counts.
 const RUST_ROLE_CHECKS_CEILING: usize = 36;

@@ -118,6 +118,36 @@ async fn access_agrees_with_the_old_checks_and_records_a_difference() {
     }
     assert!(differences.is_empty(), "{}", differences.join("\n"));
 
+    // The list rule (`access::sql_filter`) answers as `check` does for a
+    // space, for every key.
+    for caller in callers.iter().filter(|caller| caller.can_read) {
+        for info in PERMISSIONS {
+            let filter = access::sql_filter(caller, info.permission, "$4::uuid", 1);
+            let listed = sqlx::query_scalar::<_, bool>(&format!("SELECT {}", filter.sql))
+                .bind(filter.account_id)
+                .bind(filter.connection_id)
+                .bind(filter.permission)
+                .bind(space)
+                .fetch_one(&mut *connection)
+                .await
+                .expect("filter");
+            let checked = access::check(
+                &mut connection,
+                caller,
+                Need::permission(info.permission),
+                access::Target::Space(space),
+            )
+            .await
+            .expect("access check")
+            .is_ok();
+            assert_eq!(
+                listed, checked,
+                "{} {}: list {listed}, check {checked}",
+                caller.account_id, info.key
+            );
+        }
+    }
+
     // A forced difference: the old check said yes where access says no
     // (a viewer editing tasks).
     let stranger = Caller::person(reader, ActorKind::Human);

@@ -381,47 +381,22 @@ pub(crate) async fn issuer_still_grants(
 
 /// SQL that is true when `actor`'s role in `project` (both SQL expressions,
 /// written by us, never user input) keeps `permission`, a catalogue key such
-/// as `tasks.view`: an enabled membership whose base role holds it
-/// (`PermissionSet::built_in`) and whose custom role, if it has one, keeps
-/// it. An app's agent limit is applied separately, in Rust
+/// as `tasks.view`: an enabled membership whose role holds it, as the SQL
+/// `role_allows` (K1.3) answers from `permission_catalogue`: the base role
+/// holds it and its custom role, if it has one, keeps it. An app's agent limit is applied separately, in Rust
 /// (`policy::agent_limit_hides`) or as a bound project list
 /// (`policy::agent_limit_projects_allowing`).
 pub(crate) fn role_allows_sql(actor: &str, project: &str, permission: &str) -> String {
-    let base_roles = base_roles_holding(permission);
+    assert!(
+        PERMISSIONS.iter().any(|info| info.key == permission),
+        "unknown permission {permission}"
+    );
     format!(
         "EXISTS (SELECT 1 FROM project_memberships role_check \
          WHERE role_check.project_id = {project} AND role_check.actor_id = {actor} \
-         AND role_check.enabled AND role_check.role IN ({base_roles}) \
-         AND custom_role_allows(role_check.role_id, '{permission}'))"
+         AND role_check.enabled \
+         AND role_allows(role_check.role, role_check.role_id, '{permission}'))"
     )
-}
-
-/// The built-in roles whose own set holds `permission`, as SQL string
-/// literals for an `IN (…)` list (`NULL` when none does, so the list
-/// matches nothing). The keys are ours, never input.
-pub(crate) fn base_roles_holding(permission: &str) -> String {
-    let info = PERMISSIONS
-        .iter()
-        .find(|info| info.key == permission)
-        .unwrap_or_else(|| panic!("unknown permission {permission}"));
-    let roles = base_roles_with(info.permission)
-        .into_iter()
-        .map(|role| format!("'{role}'"))
-        .collect::<Vec<_>>();
-    if roles.is_empty() {
-        "NULL".to_owned()
-    } else {
-        roles.join(", ")
-    }
-}
-
-/// The keys of the built-in roles whose own set holds `permission`.
-pub(crate) fn base_roles_with(permission: Permission) -> Vec<&'static str> {
-    MembershipRole::ALL
-        .into_iter()
-        .filter(|role| PermissionSet::built_in(*role).contains(permission))
-        .map(MembershipRole::key)
-        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -2285,22 +2260,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn role_allows_sql_holds_to_the_base_role() {
+    fn role_allows_sql_asks_the_catalogue() {
         let edit = role_allows_sql("$1", "item.project_id", "tasks.edit");
         assert!(
-            edit.contains("role_check.role IN ('owner', 'admin', 'member')"),
+            edit.contains("role_allows(role_check.role, role_check.role_id, 'tasks.edit')"),
             "{edit}"
         );
-        for role in ["viewer", "worker"] {
-            assert!(!edit.contains(&format!("'{role}'")), "{edit}");
-        }
-        let view = role_allows_sql("$1", "item.project_id", "tasks.view");
-        assert!(
-            view.contains("role_check.role IN ('owner', 'admin', 'member', 'viewer')"),
-            "{view}"
-        );
-        assert!(!view.contains("'worker'"), "{view}");
-        assert!(view.contains("custom_role_allows(role_check.role_id, 'tasks.view')"));
+        assert!(!edit.contains("custom_role_allows"), "{edit}");
     }
 
     fn caller(role: MembershipRole) -> Standing {

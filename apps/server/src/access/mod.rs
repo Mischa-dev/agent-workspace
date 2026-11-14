@@ -297,3 +297,54 @@ async fn check_with(
     );
     Ok(decided)
 }
+/// A list filter: SQL true for rows whose space (`space_column`) the
+/// caller may `need` in, with its binds starting at `$first`.
+pub struct SqlFilter {
+    pub sql: String,
+    pub account_id: Uuid,
+    pub connection_id: Option<Uuid>,
+    pub permission: &'static str,
+    /// The spaces a delegation limit leaves `need` in; `None` when no
+    /// limit applies.
+    pub limited_to: Option<Vec<Uuid>>,
+}
+
+/// The rule for lists, from the same data as `check`: the caller reaches
+/// the space (`actor_can_access_project`), their role there holds the
+/// permission (`role_allows`), and a delegation limit, if any, allows it.
+/// Bind, in order: `account_id`, `connection_id`, `permission`, then
+/// `limited_to` when it is `Some`.
+pub fn sql_filter(
+    caller: &Caller,
+    need: Permission,
+    space_column: &str,
+    first: usize,
+) -> SqlFilter {
+    let (account, connection, permission) = (first, first + 1, first + 2);
+    let limited_to = caller.limits.as_ref().map(|limits| {
+        limits
+            .projects
+            .iter()
+            .filter(|(_, allowed)| allowed.contains(need))
+            .map(|(space, _)| *space)
+            .collect::<Vec<_>>()
+    });
+    let mut sql = format!(
+        "(actor_can_access_project(${account}, ${connection}, {space_column}) \
+         AND EXISTS (SELECT 1 FROM project_memberships access_membership \
+             WHERE access_membership.project_id = {space_column} \
+               AND access_membership.actor_id = ${account} AND access_membership.enabled \
+               AND role_allows(access_membership.role, access_membership.role_id, ${permission}))"
+    );
+    if limited_to.is_some() {
+        sql.push_str(&format!(" AND {space_column} = ANY(${})", first + 3));
+    }
+    sql.push(')');
+    SqlFilter {
+        sql,
+        account_id: caller.account_id,
+        connection_id: caller.connection_id,
+        permission: need.key(),
+        limited_to,
+    }
+}
