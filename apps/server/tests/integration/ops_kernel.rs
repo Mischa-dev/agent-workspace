@@ -332,7 +332,11 @@ async fn the_kernel_replays_refuses_and_hides_what_it_should() {
     );
     assert_eq!(unkeyed.body["replaySafe"], false, "{:?}", unkeyed.body);
     assert_eq!(again_unkeyed.body["replayed"], false);
-    assert!(unkeyed.body.get("requestId").is_none(), "{:?}", unkeyed.body);
+    assert!(
+        unkeyed.body.get("requestId").is_none(),
+        "{:?}",
+        unkeyed.body
+    );
     assert_eq!(first.body["replaySafe"], true, "{:?}", first.body);
     matches_schema(&unkeyed.body);
     assert_eq!(rows(&setup).await, 4);
