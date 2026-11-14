@@ -11,6 +11,7 @@ import {
   getWorkItemWorkflow,
   listWorkItems,
   getWorkItemTimeline,
+  mergeWorkItemPullRequest,
   namedAssignableActors,
   removeAcceptanceCriterion,
   searchAssignableActors,
@@ -202,6 +203,10 @@ export function useSetWorkItemRepositoryLink() {
 
 export function useSetWorkItemPullRequestLink() {
   return useWorkItemChildMutation(setWorkItemPullRequestLink)
+}
+
+export function useMergeWorkItemPullRequest() {
+  return useWorkItemChildMutation(mergeWorkItemPullRequest)
 }
 
 export function useSetWorkItemPrimaryRepository() {

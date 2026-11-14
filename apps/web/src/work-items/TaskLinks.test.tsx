@@ -7,6 +7,7 @@ import { TaskLinks } from './TaskLinks'
 import type { LinkedPullRequest, WorkItem } from './types'
 
 const mutate = vi.fn()
+const merge = vi.fn()
 vi.mock('../conversations/hooks', () => ({ useProjectConversationSidebar: () => ({ data: undefined }) }))
 vi.mock('./hooks', () => {
   const idle = () => ({ mutate: vi.fn(), isPending: false, error: null })
@@ -15,6 +16,7 @@ vi.mock('./hooks', () => {
     useSetWorkItemRepositoryLink: idle,
     useSetWorkItemThreadLink: idle,
     useSetWorkItemPullRequestLink: () => ({ mutate, isPending: false, error: null }),
+    useMergeWorkItemPullRequest: () => ({ mutate: merge, reset: vi.fn(), isPending: false, error: null }),
   }
 })
 
@@ -36,6 +38,7 @@ function pullRequest(extra: Partial<LinkedPullRequest>): LinkedPullRequest {
     automationState: 'not_evaluated',
     automationReason: null,
     headRef: 'awd-59-card',
+    headSha: 'a'.repeat(40),
     baseRef: 'main',
     authorLogin: 'mischa',
     requestedReviewers: [],
@@ -47,8 +50,16 @@ function pullRequest(extra: Partial<LinkedPullRequest>): LinkedPullRequest {
   }
 }
 
-function draw(linked: LinkedPullRequest) {
-  const item = { id: 'task-1', projectId: 'p1', version: 4, linkedThreads: [], linkedRepositories: [], linkedPullRequests: [linked] } as unknown as WorkItem
+function draw(linked: LinkedPullRequest, mergePullRequests = false) {
+  const item = {
+    id: 'task-1',
+    projectId: 'p1',
+    version: 4,
+    capabilities: { view: true, edit: true, archive: true, mergePullRequests },
+    linkedThreads: [],
+    linkedRepositories: [],
+    linkedPullRequests: [linked],
+  } as unknown as WorkItem
   render(
     <QueryClientProvider client={new QueryClient()}>
       <MemoryRouter>
@@ -61,6 +72,7 @@ function draw(linked: LinkedPullRequest) {
 afterEach(() => {
   cleanup()
   mutate.mockReset()
+  merge.mockReset()
 })
 
 describe('a task’s pull requests', () => {
@@ -83,5 +95,21 @@ describe('a task’s pull requests', () => {
     expect(screen.getByText('awd-59-card → main · by mischa')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Show 2 more checks' }))
     expect(checks.querySelectorAll('li')).toHaveLength(7)
+  })
+
+  it('merges a linked pull request after one confirmation, for those who manage code', () => {
+    draw(pullRequest({ confirmed: true }))
+    expect(screen.queryByRole('button', { name: 'Merge' })).toBeNull()
+    cleanup()
+    draw(pullRequest({ confirmed: true, draft: true }), true)
+    expect(screen.queryByRole('button', { name: 'Merge' })).toBeNull()
+    cleanup()
+    draw(pullRequest({ confirmed: true }), true)
+    fireEvent.click(screen.getByRole('button', { name: 'Merge' }))
+    expect(merge).not.toHaveBeenCalled()
+    expect(screen.getByText('Merge #59?')).toBeTruthy()
+    const buttons = screen.getAllByRole('button', { name: 'Merge' })
+    fireEvent.click(buttons[buttons.length - 1])
+    expect(merge.mock.calls[0][0]).toMatchObject({ pullRequestId: 'pr-1', expectedHeadSha: 'a'.repeat(40) })
   })
 })

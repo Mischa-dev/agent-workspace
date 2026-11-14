@@ -5,8 +5,14 @@ import { useQuery } from '@tanstack/react-query'
 import { useProjectConversationSidebar } from '../conversations/hooks'
 import { humanize } from '../projects/format'
 import { listRepositories } from '../repositories/api'
-import { Banner, Button, Icon, IconButton, Row, RowList, SelectField, describeError } from '../ui'
-import { useSetWorkItemPrimaryRepository, useSetWorkItemPullRequestLink, useSetWorkItemRepositoryLink, useSetWorkItemThreadLink } from './hooks'
+import { Banner, Button, ConfirmDialog, Icon, IconButton, Row, RowList, SelectField, describeError } from '../ui'
+import {
+  useMergeWorkItemPullRequest,
+  useSetWorkItemPrimaryRepository,
+  useSetWorkItemPullRequestLink,
+  useSetWorkItemRepositoryLink,
+  useSetWorkItemThreadLink,
+} from './hooks'
 import { TaskSection } from './TaskSection'
 import type { PullRequestCheck, WorkItem } from './types'
 
@@ -115,6 +121,11 @@ export function TaskLinks({
   const repositoryMutation = useSetWorkItemRepositoryLink()
   const primaryMutation = useSetWorkItemPrimaryRepository()
   const pullRequestMutation = useSetWorkItemPullRequestLink()
+  const mergeMutation = useMergeWorkItemPullRequest()
+  // The pull request asked to merge, while its confirmation is open.
+  const [merging, setMerging] = useState<WorkItem['linkedPullRequests'][number] | null>(null)
+  // Merged here and waiting for the sync to say so.
+  const [merged, setMerged] = useState<string[]>([])
   const [threadId, setThreadId] = useState('')
   const [repositoryId, setRepositoryId] = useState('')
   const [repositoryRole, setRepositoryRole] = useState<'primary' | 'related'>('related')
@@ -240,7 +251,28 @@ export function TaskLinks({
             {linkedPullRequests.map((pullRequest) => (
               <Row
                 actions={
-                  !disabled && !pullRequest.confirmed ? (
+                  item.capabilities.mergePullRequests &&
+                  pullRequest.confirmed &&
+                  pullRequest.state === 'open' &&
+                  !pullRequest.draft ? (
+                    merged.includes(pullRequest.id) ? (
+                      <Button disabled size="sm" variant="ghost">
+                        Merged
+                      </Button>
+                    ) : (
+                      <Button
+                        disabled={mergeMutation.isPending}
+                        onClick={() => {
+                          mergeMutation.reset()
+                          setMerging(pullRequest)
+                        }}
+                        size="sm"
+                        variant="ghost"
+                      >
+                        Merge
+                      </Button>
+                    )
+                  ) : !disabled && !pullRequest.confirmed ? (
                     <>
                       <Button
                         disabled={busy}
@@ -294,6 +326,33 @@ export function TaskLinks({
             ))}
           </RowList>
         ) : null}
+
+        <ConfirmDialog
+          busy={mergeMutation.isPending}
+          confirmLabel="Merge"
+          error={mergeMutation.error ? describeError(mergeMutation.error).message : null}
+          onClose={() => setMerging(null)}
+          onConfirm={() => {
+            if (!merging) return
+            const pullRequest = merging
+            mergeMutation.mutate(
+              { ...ids, pullRequestId: pullRequest.id, expectedHeadSha: pullRequest.headSha },
+              {
+                onSuccess: () => {
+                  setMerged((current) => [...current, pullRequest.id])
+                  setMerging(null)
+                },
+              },
+            )
+          }}
+          open={merging !== null}
+          title={merging ? `Merge #${merging.number}?` : 'Merge'}
+          tone="primary"
+        >
+          {merging
+            ? `It merges ${merging.headRef || 'its branch'} into ${merging.baseRef || 'its base'} on GitHub at the commit shown here. Linked tasks move once GitHub confirms it.`
+            : null}
+        </ConfirmDialog>
 
         {open ? (
           <div className="aw-links__add">

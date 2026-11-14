@@ -596,6 +596,8 @@ struct LinkedPullRequestView {
     #[serde(default)]
     head_ref: String,
     #[serde(default)]
+    head_sha: String,
+    #[serde(default)]
     base_ref: String,
     #[serde(default)]
     author_login: String,
@@ -882,6 +884,10 @@ struct WorkItemCapabilities {
     view: bool,
     edit: bool,
     archive: bool,
+    /// "Manage repositories" with "See code": the task's pull request cards
+    /// offer Merge (AWD-59).
+    #[serde(default)]
+    merge_pull_requests: bool,
     /// "See code": linked repositories and pull requests are shown only
     /// with it. Not sent; the view leaves those sections empty without it.
     #[serde(skip)]
@@ -3891,6 +3897,8 @@ fn capabilities(membership: &ProjectMembershipRow) -> Result<WorkItemCapabilitie
         view: membership.membership_enabled,
         edit: membership.may(Permission::TasksEdit)?,
         archive: membership.may(Permission::TasksDelete)?,
+        merge_pull_requests: membership.may(Permission::CodeManage)?
+            && membership.may(Permission::CodeView)?,
         code: membership.may(Permission::CodeView)?,
         tasks: membership.may(Permission::TasksView)?,
     })
@@ -4221,6 +4229,7 @@ const WORK_ITEM_SELECT: &str = concat!(
                     'source', link.source,
                     'confirmed', link.confirmed,
                     'headRef', pull_request.head_ref,
+                    'headSha', pull_request.head_sha,
                     'baseRef', pull_request.base_ref,
                     'authorLogin', pull_request.author_login,
                     'requestedReviewers', pull_request.requested_reviewers,

@@ -518,3 +518,114 @@ async fn a_suggested_pull_request_is_confirmed_or_dismissed_on_the_task() {
     .expect("audit");
     assert_eq!(audited, 2);
 }
+
+#[tokio::test]
+async fn merging_checks_the_pull_request_before_it_asks_github() {
+    let Some((setup, seed, _temporary)) = seeded("github_task_key_merge").await else {
+        return;
+    };
+    let app = &setup.app;
+    let pool = &setup.pool;
+    let aw = seed.project_id.to_string();
+    let (pull_request, _) = seed_pull_request(&setup, &aw, seed.repository_id, 61).await;
+    let path = format!("/api/v1/projects/{aw}/pull-requests/{pull_request}/merge");
+    let merge = |body: serde_json::Value| {
+        let request = setup.browser.request("POST", &path, Some("merge"), body);
+        send(app, request)
+    };
+    let set = |sql: &'static str| async move {
+        sqlx::query(sql)
+            .bind(pull_request)
+            .execute(pool)
+            .await
+            .expect("change the pull request");
+    };
+
+    let (status, read) = merge(json!({"method": "octopus"})).await;
+    assert_eq!(status, 400, "{read}");
+    let (status, read) = merge(json!({"expectedHeadSha": "abc"})).await;
+    assert_eq!(status, 400, "{read}");
+
+    // The installation doesn't reach the repository yet.
+    let (status, read) = merge(json!({})).await;
+    assert_eq!(status, 400, "{read}");
+    assert!(
+        read.to_string().contains("doesn't reach that repository"),
+        "{read}"
+    );
+    sqlx::query(
+        "INSERT INTO github_installation_repositories (project_id, github_installation_id, repository_id, github_repository_id, access_state, last_verified_at) SELECT project_id, github_installation_id, repository_id, github_repository_id, 'selected', now() FROM github_pull_requests WHERE id = $1",
+    )
+    .bind(pull_request)
+    .execute(pool)
+    .await
+    .expect("installation reaches the repository");
+
+    // A head that moved since the caller looked is never merged.
+    let (status, read) = merge(json!({"expectedHeadSha": "b".repeat(40)})).await;
+    assert_eq!(status, 400, "{read}");
+    assert!(read.to_string().contains("head moved"), "{read}");
+
+    set("UPDATE github_pull_requests SET draft = true WHERE id = $1").await;
+    let (status, read) = merge(json!({})).await;
+    assert_eq!(status, 400, "{read}");
+    assert!(read.to_string().contains("is a draft"), "{read}");
+    set("UPDATE github_pull_requests SET draft = false, state = 'closed' WHERE id = $1").await;
+    let (status, read) = merge(json!({})).await;
+    assert_eq!(status, 400, "{read}");
+    assert!(read.to_string().contains("isn't open"), "{read}");
+
+    // Everything checks out, so the next step is GitHub, which this server
+    // doesn't reach.
+    set("UPDATE github_pull_requests SET state = 'open' WHERE id = $1").await;
+    let (status, read) =
+        merge(json!({"expectedHeadSha": "a".repeat(40), "method": "squash"})).await;
+    assert_eq!(status, 400, "{read}");
+    assert!(read.to_string().contains("isn't set up"), "{read}");
+
+    // The task page offers Merge to those who manage the project's code.
+    let owner = connect_app(app, &setup.browser, "Owner's app", "full").await;
+    let session = initialize(app, &owner).await.expect("owner's app");
+    let created = tool(
+        app,
+        &owner,
+        &session,
+        "task_create",
+        json!({"projectId": aw, "title": "Ship offline mode"}),
+    )
+    .await;
+    let task = created["workItemId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("task: {created}"))
+        .to_owned();
+    // The agent tool checks the same things the button does.
+    let merged = tool(
+        app,
+        &owner,
+        &session,
+        "pull_request_merge",
+        json!({"pullRequestId": pull_request, "expectedHeadSha": "c".repeat(40)}),
+    )
+    .await;
+    assert!(merged.to_string().contains("moved"), "{merged}");
+    let (status, read) = send(
+        app,
+        setup.browser.request(
+            "GET",
+            &format!("/api/v1/projects/{aw}/work-items/{task}"),
+            None,
+            json!(null),
+        ),
+    )
+    .await;
+    assert_eq!(status, 200, "{read}");
+    assert_eq!(read["capabilities"]["mergePullRequests"], true, "{read}");
+    // No merge reached GitHub, so nothing was recorded as merged.
+    let audited = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM audit_events WHERE action = 'github.pull_request_merged'",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("audit");
+    assert_eq!(audited, 0);
+}

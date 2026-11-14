@@ -80,6 +80,9 @@ pub enum Action {
     GithubIntegrationManage,
     PullRequestCreate,
     PullRequestRefresh,
+    /// Merge a pull request on GitHub (AWD-59): for those who manage the
+    /// project's code.
+    PullRequestMerge,
     /// Change settings and keys for a workspace or project (owners and
     /// admins; people only).
     SettingsManage,
@@ -88,7 +91,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Self; 43] = [
+    pub const ALL: [Self; 44] = [
         Self::OrganizationProjectCreate,
         Self::ProjectView,
         Self::ProjectManage,
@@ -130,6 +133,7 @@ impl Action {
         Self::GithubIntegrationManage,
         Self::PullRequestCreate,
         Self::PullRequestRefresh,
+        Self::PullRequestMerge,
         Self::SettingsManage,
         Self::RoleManage,
     ];
@@ -170,7 +174,9 @@ impl Action {
             Self::CollectionBuild => Permission::CollectionsBuild,
             Self::SheetEdit => Permission::SheetsEdit,
             Self::RepositoryView => Permission::CodeView,
-            Self::RepositoryManage | Self::GithubIntegrationManage => Permission::CodeManage,
+            Self::RepositoryManage | Self::GithubIntegrationManage | Self::PullRequestMerge => {
+                Permission::CodeManage
+            }
             Self::RepositoryPublish | Self::PullRequestCreate | Self::PullRequestRefresh => {
                 Permission::CodePublish
             }
@@ -505,7 +511,7 @@ pub const PERMISSIONS: [PermissionInfo; 30] = [
         "code.manage",
         "code",
         "Manage repositories",
-        "Connect GitHub, and add or archive repositories.",
+        "Connect GitHub, add or archive repositories, and merge pull requests.",
         PermissionScope::Project,
         MANAGERS,
     ),
@@ -1177,6 +1183,7 @@ pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decis
             | Action::GithubIntegrationManage
             | Action::PullRequestCreate
             | Action::PullRequestRefresh
+            | Action::PullRequestMerge
             | Action::SettingsManage,
             Resource::Project(scope),
         ) => MembershipScope::Project(scope.project_id),

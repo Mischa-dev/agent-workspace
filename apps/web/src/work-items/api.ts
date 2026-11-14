@@ -166,6 +166,7 @@ export function normalizeWorkItem(value: unknown): WorkItem {
         automationState: string(pullRequest.automationState),
         automationReason: nullableString(pullRequest.automationReason),
         headRef: string(pullRequest.headRef),
+        headSha: string(pullRequest.headSha),
         baseRef: string(pullRequest.baseRef),
         authorLogin: string(pullRequest.authorLogin),
         requestedReviewers: (Array.isArray(pullRequest.requestedReviewers) ? pullRequest.requestedReviewers : []).map((login) => string(login)),
@@ -184,6 +185,7 @@ export function normalizeWorkItem(value: unknown): WorkItem {
       view: boolean(capabilities.view),
       edit: boolean(capabilities.edit),
       archive: boolean(capabilities.archive),
+      mergePullRequests: boolean(capabilities.mergePullRequests),
     },
     parent: taskRef(item.parent),
     milestone: milestoneRef(item.milestone),
@@ -303,6 +305,19 @@ export async function setWorkItemPullRequestLink(input: {
   return normalizeWorkItem(await requestJson<unknown>(
     workItemLinkPath(input.projectId, input.workItemId, 'pull-requests', input.pullRequestId),
     { method: input.linked ? 'POST' : 'DELETE', idempotencyKey: input.idempotencyKey, json: { expectedVersion: input.expectedVersion } },
+  ))
+}
+
+/** Merges a task's pull request on GitHub if its head is still the one shown. */
+export async function mergeWorkItemPullRequest(input: {
+  projectId: string
+  workItemId: string
+  pullRequestId: string
+  expectedHeadSha: string
+}) {
+  return record(await requestJson<unknown>(
+    projectPath(input.projectId, `pull-requests/${encodeURIComponent(input.pullRequestId)}/merge`),
+    { method: 'POST', idempotencyKey: crypto.randomUUID(), json: { expectedHeadSha: input.expectedHeadSha } },
   ))
 }
 

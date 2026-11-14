@@ -46,6 +46,7 @@ use crate::{
         Action, ActorKind, Membership, Permission, ProjectScope, Resource, RoleGrant, Subject,
         authorize,
     },
+    work_item_commands::{AuditAttribution, CommandActor, record_audit_for},
     work_items,
 };
 
@@ -103,6 +104,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/projects/{project_id}/pull-requests/{pull_request_id}/refresh",
             post(refresh_pull_request),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/pull-requests/{pull_request_id}/merge",
+            post(merge_pull_request),
         )
 }
 
@@ -482,6 +487,8 @@ enum InstallationTokenScope {
     ContentsRead,
     ContentsWrite,
     PullRequestsWrite,
+    /// Merging a pull request writes its base branch.
+    PullRequestsMerge,
     ChecksRead,
     IssuesRead,
 }
@@ -506,6 +513,11 @@ impl InstallationTokenScope {
             Self::PullRequestsWrite => json!({
                 "metadata": "read",
                 "contents": "read",
+                "pull_requests": "write"
+            }),
+            Self::PullRequestsMerge => json!({
+                "metadata": "read",
+                "contents": "write",
                 "pull_requests": "write"
             }),
             Self::IssuesRead => json!({
@@ -1037,6 +1049,51 @@ impl GitHubClient {
             .await
             .map_err(|_| GitHubError::Http)?;
         decode_response(response).await
+    }
+
+    /// Merges a pull request if its head is still `head_sha`.
+    async fn merge_pull_request(
+        &self,
+        token: &InstallationToken,
+        owner: &str,
+        repository: &str,
+        number: u64,
+        head_sha: &str,
+        method: &str,
+    ) -> Result<MergeCall, GitHubError> {
+        let mut url =
+            reqwest::Url::parse(&self.config.api_base_url).map_err(|_| GitHubError::Response)?;
+        url.path_segments_mut()
+            .map_err(|_| GitHubError::Response)?
+            .extend([
+                "repos",
+                owner,
+                repository,
+                "pulls",
+                &number.to_string(),
+                "merge",
+            ]);
+        let response = self
+            .http
+            .put(url)
+            .headers(github_headers(token.expose())?)
+            .json(&json!({ "sha": head_sha, "merge_method": method }))
+            .send()
+            .await
+            .map_err(|_| GitHubError::Http)?;
+        match response.status() {
+            StatusCode::METHOD_NOT_ALLOWED => Ok(MergeCall::NotMergeable),
+            StatusCode::CONFLICT => Ok(MergeCall::HeadMoved),
+            status if status.is_success() => {
+                let merged: GitHubMergeResponse = decode_response(response).await?;
+                Ok(if merged.merged && is_commit_sha(&merged.sha) {
+                    MergeCall::Merged(merged.sha)
+                } else {
+                    MergeCall::NotMergeable
+                })
+            }
+            _ => Err(GitHubError::Response),
+        }
     }
 
     async fn check_runs(
@@ -5791,6 +5848,314 @@ fn task_keys_in(text: &str) -> Vec<String> {
     keys
 }
 
+/// What GitHub said to a merge.
+enum MergeCall {
+    Merged(String),
+    /// Checks, reviews, conflicts or the repository's merge settings stop it.
+    NotMergeable,
+    /// Its head isn't the commit the caller saw.
+    HeadMoved,
+}
+
+#[derive(Deserialize)]
+struct GitHubMergeResponse {
+    #[serde(default)]
+    sha: String,
+    #[serde(default)]
+    merged: bool,
+}
+
+fn is_commit_sha(value: &str) -> bool {
+    value.len() == 40
+        && value
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// What the caller asks a merge for. Both are optional: the head defaults to
+/// the one Agent Workspace last read, the method to a squash.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct MergePullRequestRequest {
+    /// Merge only if the pull request's head is still this commit.
+    #[serde(default)]
+    pub expected_head_sha: Option<String>,
+    /// `squash` (the default), `merge` or `rebase`.
+    #[serde(default)]
+    pub method: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PullRequestMergeView {
+    pub pull_request_id: Uuid,
+    pub number: i64,
+    pub method: String,
+    pub merge_commit_sha: String,
+    /// true when it was merged already, by this call's earlier try or
+    /// someone on GitHub.
+    pub already_merged: bool,
+    /// The sync that records the merge; it moves the pull request's tasks.
+    pub refresh: PullRequestRefreshView,
+}
+
+#[derive(FromRow)]
+struct MergeTarget {
+    pull_request_number: i64,
+    head_sha: String,
+    state: String,
+    draft: bool,
+    installation_id: i64,
+    github_repository_id: i64,
+    owner: String,
+    repository_name: String,
+    scope_available: bool,
+}
+
+/// Merges an open pull request through the project's GitHub App, for a
+/// caller who manages the project's code and can see the pull request
+/// (AWD-59). Nothing is held open while GitHub answers. A merge writes an
+/// audit row and queues a sync, which records it and moves linked tasks.
+/// Asking again after it merged answers with that merge.
+pub(crate) async fn merge_pull_request_as(
+    state: &AppState,
+    actor: &CommandActor,
+    pull_request_id: Uuid,
+    request: &MergePullRequestRequest,
+) -> Result<PullRequestMergeView, AppError> {
+    let method = request.method.as_deref().unwrap_or("squash");
+    if !matches!(method, "squash" | "merge" | "rebase") {
+        return Err(AppError::Invalid("merge method"));
+    }
+    if request
+        .expected_head_sha
+        .as_deref()
+        .is_some_and(|value| !is_commit_sha(value))
+    {
+        return Err(AppError::Invalid("expected head sha"));
+    }
+    let project_id = actor.project_id;
+    let mut transaction = state.pool.begin().await?;
+    require_project_access_as(
+        &mut transaction,
+        actor.actor_id,
+        actor.actor_kind,
+        project_id,
+        Action::PullRequestMerge,
+    )
+    .await?;
+    let target = sqlx::query_as::<_, MergeTarget>(
+        r#"
+        SELECT pull_request.pull_request_number, pull_request.head_sha,
+               pull_request.state, pull_request.draft,
+               installation.installation_id,
+               repository.github_repository_id,
+               repository.owner, repository.name AS repository_name,
+               COALESCE(
+                   installation.enabled
+                   AND installation.state = 'available'
+                   AND access.access_state = 'selected'
+                   AND access.github_repository_id = repository.github_repository_id
+                   AND repository.enabled
+                   AND repository.archived_at IS NULL,
+                   false
+               ) AS scope_available
+        FROM github_pull_requests pull_request
+        JOIN github_installations installation
+          ON installation.project_id = pull_request.project_id
+         AND installation.id = pull_request.github_installation_id
+        JOIN repositories repository
+          ON repository.project_id = pull_request.project_id
+         AND repository.id = pull_request.repository_id
+        LEFT JOIN github_installation_repositories access
+          ON access.project_id = pull_request.project_id
+         AND access.github_installation_id = installation.id
+         AND access.repository_id = repository.id
+        WHERE pull_request.project_id = $1 AND pull_request.id = $2
+          AND pull_request_visible_to(pull_request.id, $3)
+        "#,
+    )
+    .bind(project_id)
+    .bind(pull_request_id)
+    .bind(actor.actor_id)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(AppError::NotFound("github_pull_request"))?;
+    transaction.commit().await?;
+
+    if target.state != "open" {
+        return Err(AppError::Conflict("github_pull_request", "not_open"));
+    }
+    if target.draft {
+        return Err(AppError::Conflict("github_pull_request", "draft"));
+    }
+    if !target.scope_available {
+        return Err(AppError::Conflict(
+            "github_installation",
+            "repository_unavailable",
+        ));
+    }
+    let head_sha = request
+        .expected_head_sha
+        .clone()
+        .unwrap_or_else(|| target.head_sha.clone());
+    if head_sha != target.head_sha {
+        return Err(AppError::Conflict("github_pull_request", "head_moved"));
+    }
+    let Some(config) = state.config.github.as_ref() else {
+        return Err(AppError::Conflict("github_integration", "not_configured"));
+    };
+    let (Ok(installation_id), Ok(github_repository_id), Ok(number)) = (
+        u64::try_from(target.installation_id),
+        u64::try_from(target.github_repository_id),
+        u64::try_from(target.pull_request_number),
+    ) else {
+        return Err(AppError::Internal("GitHub identity invalid"));
+    };
+    let client = GitHubClient::new(config).map_err(map_github_error)?;
+    let token = client
+        .installation_token(
+            installation_id,
+            &[github_repository_id],
+            InstallationTokenScope::PullRequestsMerge,
+        )
+        .await
+        .map_err(map_github_error)?;
+    let called = client
+        .merge_pull_request(
+            &token,
+            &target.owner,
+            &target.repository_name,
+            number,
+            &head_sha,
+            method,
+        )
+        .await;
+    let (merge_commit_sha, already_merged) = match called {
+        Ok(MergeCall::Merged(sha)) => (sha, false),
+        Ok(MergeCall::HeadMoved) => {
+            return Err(AppError::Conflict("github_pull_request", "head_moved"));
+        }
+        // GitHub refuses a pull request that is merged already; one merged
+        // by an earlier try of this call counts as done.
+        Ok(MergeCall::NotMergeable) | Err(_) => {
+            let current = client
+                .pull_request(&token, &target.owner, &target.repository_name, number)
+                .await;
+            match current {
+                Ok(current)
+                    if current.merged_at.is_some()
+                        && current.head.sha == head_sha
+                        && current
+                            .merge_commit_sha
+                            .as_deref()
+                            .is_some_and(is_commit_sha) =>
+                {
+                    (current.merge_commit_sha.unwrap_or_default(), true)
+                }
+                _ if matches!(called, Ok(MergeCall::NotMergeable)) => {
+                    return Err(AppError::Conflict("github_pull_request", "not_mergeable"));
+                }
+                _ => return Err(AppError::Internal("GitHub integration unavailable")),
+            }
+        }
+    };
+    drop(token);
+
+    let mut transaction = state.pool.begin().await?;
+    record_audit_for(
+        &mut transaction,
+        actor,
+        "github_pull_request",
+        "github.pull_request_merged",
+        pull_request_id,
+        json!({
+            "number": target.pull_request_number,
+            "method": method,
+            "head_sha": head_sha,
+            "merge_commit_sha": merge_commit_sha,
+            "already_merged": already_merged,
+        }),
+    )
+    .await?;
+    let Queued { view: refresh, new } = queue_refresh_in(
+        &mut transaction,
+        actor.actor_id,
+        project_id,
+        pull_request_id,
+    )
+    .await?;
+    transaction.commit().await?;
+    if new {
+        kick_jobs(state.clone());
+    }
+    Ok(PullRequestMergeView {
+        pull_request_id,
+        number: target.pull_request_number,
+        method: method.to_owned(),
+        merge_commit_sha,
+        already_merged,
+        refresh,
+    })
+}
+
+async fn merge_pull_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath((project_id, pull_request_id)): ApiPath<(Uuid, Uuid)>,
+    ApiJson(request): ApiJson<MergePullRequestRequest>,
+) -> Result<Response, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    let actor = CommandActor {
+        actor_id: principal.actor_id,
+        actor_kind: actor_kind(&principal.actor_kind)?,
+        project_id,
+        audit: AuditAttribution::Browser {
+            session_id: principal.session_id,
+            request_id: headers
+                .get(crate::REQUEST_ID_HEADER)
+                .and_then(|value| value.to_str().ok())
+                .filter(|value| value.len() <= 128)
+                .map(str::to_owned),
+        },
+    };
+    let view = merge_pull_request_as(&state, &actor, pull_request_id, &request)
+        .await
+        .map_err(|error| match error {
+            AppError::Conflict(what, why) => match merge_refusal(what, why) {
+                Some(message) => AppError::Refused {
+                    field: "pullRequest",
+                    message,
+                },
+                None => AppError::Conflict(what, why),
+            },
+            error => error,
+        })?;
+    Ok((StatusCode::OK, Json(view)).into_response())
+}
+
+/// Why a merge didn't go ahead, for the person or agent who asked.
+pub(crate) fn merge_refusal(what: &str, why: &str) -> Option<&'static str> {
+    Some(match (what, why) {
+        ("github_integration", "not_configured") => "GitHub isn't set up on this server yet.",
+        ("github_pull_request", "not_open") => "That pull request isn't open.",
+        ("github_pull_request", "draft") => {
+            "That pull request is a draft. Mark it ready on GitHub first."
+        }
+        ("github_pull_request", "head_moved") => {
+            "Its head moved since you looked. Check the new commit, then merge again."
+        }
+        ("github_pull_request", "not_mergeable") => {
+            "GitHub won't merge it yet: checks, reviews or conflicts block it, or the repository doesn't allow that merge method."
+        }
+        ("github_installation", "repository_unavailable") => {
+            "The project's GitHub App doesn't reach that repository. Check the project's GitHub settings."
+        }
+        _ => return None,
+    })
+}
+
 fn map_github_error(error: GitHubError) -> AppError {
     match error {
         GitHubError::Scope => AppError::Conflict("github_installation", "incompatible_scope"),
@@ -6123,6 +6488,15 @@ mod tests {
 
     #[test]
     fn pull_request_scope_and_external_identity_are_exact() {
+        // Merging writes the base branch, and nothing else.
+        assert_eq!(
+            InstallationTokenScope::PullRequestsMerge.permissions(),
+            json!({
+                "metadata": "read",
+                "contents": "write",
+                "pull_requests": "write"
+            })
+        );
         assert_eq!(
             InstallationTokenScope::PullRequestsWrite.permissions(),
             json!({

@@ -4,6 +4,8 @@ export type WorkItemCapabilities = {
   view: boolean
   edit: boolean
   archive: boolean
+  /** Manages the project's code, so pull request cards offer Merge. */
+  mergePullRequests?: boolean
 }
 
 export type WorkItemType = { id: string; name: string }
@@ -150,6 +152,8 @@ export type LinkedPullRequest = {
   automationState: string
   automationReason: string | null
   headRef: string
+  /** The head commit last read from GitHub; Merge merges only this one. */
+  headSha: string
   baseRef: string
   authorLogin: string
   requestedReviewers: string[]

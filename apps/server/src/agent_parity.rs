@@ -911,6 +911,11 @@ mod tests {
         ),
         (
             Post,
+            "/api/v1/projects/{project_id}/pull-requests/{pull_request_id}/merge",
+            Tool("pull_request_merge"),
+        ),
+        (
+            Post,
             "/api/v1/integrations/github/webhook",
             Plumbing("GitHub's own deliveries"),
         ),
