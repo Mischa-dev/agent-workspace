@@ -11,6 +11,8 @@ Planner's draft, 2026-11-14, against `main` at fe95a74. Every `path:line` is rel
 `apps/server/src/` unless they start with `apps/` or `docs/`; migrations are under
 `apps/server/migrations/`. Nothing was built or run.
 
+> **Amended by the architecture review (2026-11-14).** R54 amends the `subject_kind` CHECK: it uses the shared ThingKind domain. See `LEAD-RULINGS.md`.
+
 ## 1. Goal
 
 When this is done there is one way to talk about anything. The comments on a task, the
