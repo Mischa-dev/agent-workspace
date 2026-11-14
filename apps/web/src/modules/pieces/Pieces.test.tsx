@@ -86,4 +86,56 @@ describe('pieces the app draws', () => {
     expect(second.querySelector('.aw-piece__summary')).toBeNull()
     expect(await run(container)).toEqual([])
   })
+
+  it('a list links where a decision was made, reads its why in full, and shows a status only when it has one', async () => {
+    const decision = DECLARED_THINGS.find((entry) => entry.decl.kind === 'decision')!.decl
+    const { container } = render(
+      <MemoryRouter>
+        <PieceView
+          decl={decision}
+          label="Decisions"
+          piece={{ type: 'list', thing: 'decision', fields: ['status', 'decidedAt', 'decidedBy', 'source', 'detail'] }}
+          things={[
+            {
+              id: 'd1',
+              kind: 'decision',
+              module: 'pages',
+              title: 'Ship on Fridays',
+              status: 'Replaced',
+              href: '/projects/x/decisions#d1',
+              fields: {
+                decidedAt: new Date().toISOString(),
+                decidedBy: 'Ana via Rook',
+                source: { label: '#design', href: '/projects/x/channels/c1' },
+                detail: 'Because **releases** settle over the weekend.',
+              },
+            },
+            {
+              id: 'd2',
+              kind: 'decision',
+              module: 'pages',
+              title: 'Keep the name',
+              href: '/projects/x/decisions#d2',
+              fields: { decidedAt: new Date().toISOString(), decidedBy: 'Ana', source: { label: 'a direct message', href: null }, detail: '' },
+            },
+          ]}
+        />
+      </MemoryRouter>,
+    )
+    const [first, second] = container.querySelectorAll('.aw-piece__row')
+    // Each row can be linked to by its id.
+    expect(first.id).toBe('decision-d1')
+    expect(first.querySelector('.aw-chip')?.textContent).toBe('Replaced')
+    expect(first.textContent).toContain('Decided')
+    expect(first.textContent).toContain('by Ana via Rook')
+    expect(first.querySelector('a[href="/projects/x/channels/c1"]')?.textContent).toBe('#design')
+    expect(first.textContent).toContain('In#design')
+    expect(first.querySelector('.aw-piece__summary--full strong')?.textContent).toBe('releases')
+    // No status, no why, and a place the reader can't open: no chip, no "None", and a name with no link.
+    expect(second.querySelector('.aw-chip')).toBeNull()
+    expect(second.textContent).not.toContain('None')
+    expect(second.textContent).toContain('a direct message')
+    expect(second.querySelector('a[href^="/projects/x/channels"]')).toBeNull()
+    expect(await run(container)).toEqual([])
+  })
 })

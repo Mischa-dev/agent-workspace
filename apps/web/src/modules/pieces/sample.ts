@@ -33,6 +33,9 @@ function sampleValue(field: FieldDecl, index: number): FieldValue {
       return index % 3 === 0 ? [] : PEOPLE.slice(0, 1 + (index % 3))
     case 'person':
       return PEOPLE[index % PEOPLE.length]
+    case 'link':
+      // Somewhere in the app, now and then one the reader can't open.
+      return index % 4 === 2 ? null : { label: `#a-channel-with-a-long-name-${index + 1}`, href: index % 3 === 1 ? null : '/design-system/pieces' }
     case 'url':
       return 'https://example.com/a/rather/long/address/that/must/wrap/somewhere/rather-than-overflow'
     default:

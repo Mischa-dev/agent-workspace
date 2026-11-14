@@ -1,5 +1,5 @@
 import { formatRelative } from '../../ui'
-import { SHARED_FIELDS, type FieldDecl, type FieldValue, type Thing, type ThingDecl } from '../contract'
+import { SHARED_FIELDS, type FieldDecl, type FieldValue, type LinkValue, type Thing, type ThingDecl } from '../contract'
 
 // Reading a thing's fields for the pieces: the shared ones (title, status,
 // owner) and the ones its kind declares, in words.
@@ -22,6 +22,7 @@ export const words = (value: string) => value.replace(/_/g, ' ').replace(/^\w/, 
 /** A field's value in words; null when it has none. */
 export function fieldText(field: FieldDecl, value: FieldValue | undefined): string | null {
   if (value === null || value === undefined || value === '') return null
+  if (isLink(value)) return value.label || null
   if (Array.isArray(value)) {
     const items = field.type === 'multiple_choice' ? value.map(words) : value
     return items.length ? items.join(', ') : null
@@ -44,3 +45,6 @@ export function fieldText(field: FieldDecl, value: FieldValue | undefined): stri
 
 /** A date that carries a time of day, so it reads as "5 min ago". */
 export const isMoment = (value: FieldValue | undefined) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(value)
+
+/** A link field's value, with what it reads as and where it goes. */
+export const isLink = (value: FieldValue | undefined): value is LinkValue => typeof value === 'object' && value !== null && !Array.isArray(value)

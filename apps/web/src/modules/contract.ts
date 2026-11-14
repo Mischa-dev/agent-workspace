@@ -50,6 +50,8 @@ export type FieldDecl = {
   options?: string[]
   /** How a label or choice reads as a chip, by value; the rest read muted. */
   tones?: Record<string, ChipTone>
+  /** Long text written in Markdown: drawn in full, not as a two-line summary. */
+  markdown?: boolean
 }
 
 export type ThingDecl = { kind: string; one: string; many: string; href: string; fields: FieldDecl[] }
@@ -70,7 +72,10 @@ export type Thing = {
   fields?: Record<string, FieldValue>
 }
 
-export type FieldValue = string | number | boolean | string[] | null
+export type FieldValue = string | number | boolean | string[] | LinkValue | null
+
+/** A link field's value: what it reads as, and where it goes (none when the reader can't open it). */
+export type LinkValue = { label: string; href: string | null }
 
 export type ThingLink = {
   kind: LinkKind

@@ -45,7 +45,8 @@
 }
 
 /* The decision a link pointed at, marked for a moment. */
-.aw-row.aw-memory__found {
+.aw-row.aw-memory__found,
+.aw-piece__row.aw-memory__found {
   background: var(--accent-soft);
   box-shadow: inset 3px 0 0 var(--accent);
   transition: background-color var(--duration-fade) var(--ease-out);

@@ -200,13 +200,19 @@ piece a manifest declares, plus each kind of piece once, with made-up things
 Values read the same in every piece: labels are chips, in the tone a field's
 `tones` gives each value (muted otherwise); a moment reads "5 min ago" and a
 date names itself ("Edited 5 min ago"), with the person after it reading "by
-Ana"; long text sits under the title as a summary, two lines at most.
+Ana"; long text sits under the title as a summary, two lines at most, unless
+the field is `markdown`, which reads in full. A link field's value is
+`{ label, href }`: it names itself ("In #design") and opens where it points, or
+is just its name when the reader can't open it. A status, labels or a link with
+nothing to show leave nothing behind. Each list row is `#<kind>-<id>`, so a link
+can jump to it.
 
 Core pages move onto the pieces over time. The first is a project's Pages
-list (AWD-98), drawn as a list of `page` things.
+list (AWD-98), drawn as a list of `page` things, then its Decisions list
+(AWD-116), a list of `decision` things.
 
 ## Next
 
 - **Built and connected modules** (AWD-90, M5) fill in the same manifest from
   data; packages (AWD-76) set modules, roles and layouts at once.
-- **More core pages on the pieces**: the decisions list, Home's cards.
+- **More core pages on the pieces**: Home's cards.
