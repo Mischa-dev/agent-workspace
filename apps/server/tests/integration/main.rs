@@ -35,6 +35,7 @@ mod bug_sweep;
 mod direct_conversations;
 mod github_task_keys;
 mod harness_support;
+mod journey;
 mod layouts;
 mod m0_database;
 mod m1_api_policy_database;
