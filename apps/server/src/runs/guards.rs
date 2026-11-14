@@ -17,7 +17,6 @@ use std::{collections::BTreeMap, path::Path};
 const LEGACY_RUN_SQL: &[(&str, &str)] = &[
     ("account.rs", "A1.6"),
     ("agent_profiles.rs", "A1.6"),
-    ("agent_sessions.rs", "A1.4"),
     ("api.rs", "A1.14"),
     ("automations.rs", "A1.6"),
     ("conversations.rs", "A1.6"),
@@ -207,7 +206,12 @@ fn g5_the_run_service_never_asks_what_kind_of_account_reports() {
         {
             continue;
         }
-        for forbidden in ["ActorKind::", "actor.kind =", "kind = 'human'", "kind = 'external_agent'"] {
+        for forbidden in [
+            "ActorKind::",
+            "actor.kind =",
+            "kind = 'human'",
+            "kind = 'external_agent'",
+        ] {
             assert!(
                 !source.contains(forbidden),
                 "{name} checks an account's kind ({forbidden}); the run service treats every account alike"

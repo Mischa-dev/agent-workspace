@@ -2461,6 +2461,7 @@ async fn run_action(
                 mcp: acting.actor_kind == ActorKind::ExternalAgent,
                 session_id: None,
                 request_id: Some(format!("automation:{run_id}")),
+                mcp_credential: None,
             };
             let idempotency = IdempotencyKey::parse(&format!("automation-{run_id}-{index}"));
             let checks_prompt = context.pull_request.as_ref().map(|pr| {

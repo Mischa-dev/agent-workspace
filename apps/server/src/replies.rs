@@ -1214,6 +1214,9 @@ pub(crate) async fn stop_request_in(
     }
     // The agent's session in that conversation stops too (A5 with A3).
     crate::agent_sessions::cancel_for_request(transaction, request_id).await?;
+    // A1.4: a launched run behind any of them is asked to stop.
+    let stopped_ids = stopped.iter().map(|(id, _, _)| *id).collect::<Vec<_>>();
+    crate::runs::launch_paths::stopped(transaction, actor_id, agent_actor_id, &stopped_ids).await?;
     let mut conversations = BTreeSet::new();
     for (id, request_conversation_id, thread_id) in &stopped {
         wake(

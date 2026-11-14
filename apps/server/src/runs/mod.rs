@@ -31,6 +31,7 @@ use crate::{
 pub mod activities;
 #[cfg(test)]
 mod guards;
+pub mod launch_paths;
 pub mod liveness;
 pub mod ops;
 pub mod state;

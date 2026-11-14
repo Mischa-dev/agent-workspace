@@ -291,6 +291,7 @@ if has rust; then
   step "self-hosted guide" ./tools/verify-self-hosted-guide.sh
   step "hermes fixtures" python3 tools/hermes-connector/verify-fixtures.py
   step "agentos-nyx tests" python3 -m unittest discover -s integrations/agentos-nyx -p 'test_*.py'
+  step "runner SDK tests (Python)" python3 -m unittest discover -s sdks/runner-python -p 'test_*.py'
 fi
 if has web; then
   step "Node toolchain" fetch_pinned_node
@@ -308,6 +309,7 @@ if has web; then
     }
     console.log(`Node ${process.version}`);
   '
+  step "runner SDK tests (TypeScript)" node --test 'sdks/runner-typescript/test/*.test.ts'
   step "pnpm install" pnpm install --frozen-lockfile --reporter=silent
   step "web lint" pnpm lint
   step "web typecheck" pnpm typecheck

@@ -3,7 +3,7 @@
 // session, report progress, post interim and final replies, and stop when a
 // person presses Stop. No dependencies; Node 22 or later.
 
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http'
 
 // ---------------------------------------------------------------------------
@@ -290,7 +290,21 @@ export type Claim = {
   recentMessages: ContextMessage[]
   instructions: string
   session: { externalRef: string; harness: string; url: string | null; state: string } | null
+  /** The run a launch opened for this request; the reply calls move it. */
+  run?: { runId: string; state: string }
 }
+
+export type RunActivity = {
+  /** Your own id for it: sending it again is a duplicate, never an error. */
+  id: string
+  kind: string
+  summary?: string
+  stepRef?: string
+  parentRef?: string
+  payload?: Record<string, unknown>
+}
+
+export type RunResult = { kind: string; url?: string; title?: string; branch?: string; number?: number }
 
 function unwrap<T>(payload: unknown): T {
   const result = payload as { outcome?: string; value?: T; message?: string; field?: string; retryCategory?: string }
@@ -317,7 +331,8 @@ export class ReplyTools {
   async sessionBind(options: {
     conversationId: string
     externalRef: string
-    harness: string
+    /** Optional: your launched run there shows it as its backend. */
+    harness?: string
     url?: string
     state?: 'active' | 'idle'
   }) {
@@ -350,6 +365,21 @@ export class ReplyTools {
     return unwrap<{ requestId: string; status: string }>(
       await this.mcp.callTool('reply_release', { requestId, reason, ...(generation !== undefined && { generation }) }),
     )
+  }
+
+  /** Steps, tool calls, messages or a plan on a run (`claim.run`). */
+  async runActivity(runId: string, activities: RunActivity[]) {
+    return unwrap<Record<string, unknown>>(await this.mcp.callTool('run_activity', { runId, activities }))
+  }
+
+  /** Change a run's status line, title, link (`externalUrl`) or state. */
+  async runUpdate(runId: string, change: Record<string, unknown>) {
+    return unwrap<Record<string, unknown>>(await this.mcp.callTool('run_update', { runId, ...change }))
+  }
+
+  /** What a run produced: a pull request, branch, file or link. */
+  async runResult(runId: string, results: RunResult[]) {
+    return unwrap<Record<string, unknown>>(await this.mcp.callTool('run_result', { runId, results }))
   }
 }
 
@@ -405,6 +435,12 @@ export type RequestContext = {
   pass(reason?: string): Promise<void>
   release(reason: string): Promise<void>
   bindSession(externalRef: string, options?: { url?: string; state?: 'active' | 'idle' }): Promise<void>
+  /** The run a launch opened for this request, or null. */
+  runId: string | null
+  /** One step of the work on the run (nothing without one). */
+  step(title: string, stepId?: string): Promise<void>
+  /** Something the run produced, such as a pull request (nothing without a run). */
+  result(kind: string, url: string, title?: string): Promise<void>
   /** Follow-ups people send in the thread while this request runs. */
   onFollowup(listener: (followup: RequestContext) => void): void
 }
@@ -489,6 +525,7 @@ export class Runner {
     const { prompt, settings } = parseSettings(stripLeadingMentions(asked))
     const tools = this.tools
     const harness = this.options.harness
+    const runId = claim.run?.runId ?? null
     const active: Active = {
       controller,
       listeners: [],
@@ -517,6 +554,16 @@ export class Runner {
         },
         async bindSession(externalRef, options = {}) {
           await tools.sessionBind({ conversationId: request.replyConversationId, externalRef, harness, ...options })
+        },
+        runId,
+        async step(title, stepId) {
+          if (!runId) return
+          const id = stepId ?? `step:${createHash('sha256').update(title).digest('hex').slice(0, 16)}`
+          await tools.runActivity(runId, [{ id, kind: 'step_started', summary: title.slice(0, 200), payload: { title: title.slice(0, 200) } }])
+        },
+        async result(kind, url, title) {
+          if (!runId) return
+          await tools.runResult(runId, [{ kind, url, ...(title && { title }) }])
         },
         onFollowup(listener) {
           active.listeners.push(listener)

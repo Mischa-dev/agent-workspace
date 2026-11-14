@@ -70,17 +70,28 @@ fn named(state: &AppState, mut session: SessionView) -> SessionView {
     session
 }
 
-/// A name people know a harness by, for ones the server runs and the usual
-/// runner kinds.
+/// A name people know a harness by: its manifest's, for ones the server
+/// knows, otherwise the runner's own word with each part capitalised
+/// (`claude_code` reads "Claude Code"). No names are kept here (A1.4).
 pub(crate) fn harness_name(state: &AppState, harness: &str) -> String {
     if let Some(manifest) = state.supervisors.manifest(harness) {
         return manifest.display_name.clone();
     }
-    match harness {
-        "claude_code" => "Claude Code".to_owned(),
-        "codex" => "Codex".to_owned(),
-        other => other.replace('_', " "),
-    }
+    readable(harness)
+}
+
+fn readable(harness: &str) -> String {
+    harness
+        .split(['_', '-'])
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut characters = part.chars();
+            characters.next().map_or_else(String::new, |first| {
+                first.to_uppercase().chain(characters).collect()
+            })
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The sessions in a conversation the caller can see, newest first.
@@ -249,21 +260,12 @@ pub(crate) async fn record_run_turn(
     turn_id: &str,
     url: Option<&str>,
 ) -> Result<(), AppError> {
-    let Some((project_id, conversation_id, worker_actor_id, harness)) =
-        sqlx::query_as::<_, (Uuid, Uuid, Uuid, String)>(
-            r#"
-            SELECT run.project_id, run.conversation_id, worker.actor_id,
-                   COALESCE(run.config ->> 'harness', account.adapter_kind)
-            FROM agent_runs run
-            JOIN execution_workers worker ON worker.id = run.execution_worker_id
-            JOIN execution_profiles profile ON profile.id = run.execution_profile_id
-            JOIN provider_accounts account ON account.id = profile.provider_account_id
-            WHERE run.id = $1
-            "#,
-        )
-        .bind(run_id)
-        .fetch_optional(&state.pool)
-        .await?
+    let Some(crate::runs::store::BuiltinTurnPlace {
+        project_id,
+        conversation_id,
+        worker_actor_id,
+        harness,
+    }) = crate::runs::store::builtin_turn_place(&state.pool, run_id).await?
     else {
         return Ok(());
     };
@@ -335,4 +337,17 @@ pub(crate) async fn cancel_for_request(
     .execute(&mut **transaction)
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::readable;
+
+    #[test]
+    fn harness_words_read_as_names() {
+        assert_eq!(readable("claude_code"), "Claude Code");
+        assert_eq!(readable("codex"), "Codex");
+        assert_eq!(readable("my-runner_2"), "My Runner 2");
+        assert_eq!(readable(""), "");
+    }
 }

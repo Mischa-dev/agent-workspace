@@ -247,3 +247,33 @@ pub async fn space_of_own(
     .await?
     .flatten())
 }
+
+/// Where a built-in run's turn happens, for its session row (A1.4 moved this
+/// from `agent_sessions`).
+#[derive(Clone, Debug, sqlx::FromRow)]
+pub struct BuiltinTurnPlace {
+    pub project_id: Uuid,
+    pub conversation_id: Uuid,
+    pub worker_actor_id: Uuid,
+    pub harness: String,
+}
+
+pub async fn builtin_turn_place(
+    executor: impl sqlx::PgExecutor<'_>,
+    run_id: Uuid,
+) -> Result<Option<BuiltinTurnPlace>, AppError> {
+    Ok(sqlx::query_as::<_, BuiltinTurnPlace>(
+        r#"
+        SELECT run.project_id, run.conversation_id, worker.actor_id AS worker_actor_id,
+               COALESCE(run.config ->> 'harness', account.adapter_kind) AS harness
+        FROM agent_runs run
+        JOIN execution_workers worker ON worker.id = run.execution_worker_id
+        JOIN execution_profiles profile ON profile.id = run.execution_profile_id
+        JOIN provider_accounts account ON account.id = profile.provider_account_id
+        WHERE run.id = $1
+        "#,
+    )
+    .bind(run_id)
+    .fetch_optional(executor)
+    .await?)
+}
