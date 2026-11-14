@@ -1,157 +1,30 @@
-//! A1.11: the hosts routes. People's routes (`/api/v1/hosts…`) sign in as
-//! usual and match the `host_*` MCP tools; a host's own routes
-//! (`/api/v1/hosts/enrol`, `/api/v1/host/…`) carry its bearer token.
+//! A1.11: a host's own routes (`/api/v1/hosts/enrol`, `/api/v1/host/…`),
+//! which carry its bearer token. Managing hosts (list, enrolment codes,
+//! binding agents, unlinking) is the `host_*` operations in `hosts::ops`.
 
 use axum::{
     Json, Router,
     extract::State,
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::post,
 };
-use serde::Deserialize;
 use serde_json::json;
-use uuid::Uuid;
 
 use super::{
-    EnrolmentCode, HostRow, HostView, Owner,
+    HostRow,
     protocol::{self, HostError},
 };
-use crate::{
-    AppState,
-    auth::{AuthenticatedActor, require_authenticated_write},
-    error::{ApiJson, ApiPath, ApiQuery, AppError},
-    policy::ActorKind,
-};
+use crate::{AppState, error::ApiJson};
 
 pub const PROTOCOL_HEADER: &str = "aw-host-protocol";
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/api/v1/hosts", get(list_route))
-        .route("/api/v1/hosts/enrolments", post(enrolment_route))
-        .route("/api/v1/hosts/{host_id}/agents", post(bind_route))
-        .route(
-            "/api/v1/hosts/{host_id}/agents/{account_id}",
-            delete(unbind_route),
-        )
-        .route("/api/v1/hosts/{host_id}/unlink", post(unlink_route))
         .route("/api/v1/hosts/enrol", post(enrol_route))
         .route("/api/v1/host/describe", post(describe_route))
         .route("/api/v1/host/heartbeat", post(heartbeat_route))
         .route("/api/v1/host/notices", post(notice_route))
-}
-
-fn kind_of(principal: &AuthenticatedActor) -> ActorKind {
-    let person = principal.actor_kind == "human"; // kind-check: mechanical (maps the principal onto the policy kind)
-    if person {
-        ActorKind::Human
-    } else {
-        ActorKind::ExternalAgent
-    }
-}
-
-// ---------------------------------------------------------------- people
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ListQuery {
-    workspace_id: Option<Uuid>,
-}
-
-async fn list_route(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    ApiQuery(query): ApiQuery<ListQuery>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let mut connection = state.pool.acquire().await?;
-    let hosts = super::list(&mut connection, principal.actor_id, query.workspace_id).await?;
-    Ok(Json(json!({ "hosts": hosts })))
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct EnrolmentRequest {
-    /// The workspace that will own the host; left out, the caller does.
-    workspace_id: Option<Uuid>,
-    label: Option<String>,
-}
-
-async fn enrolment_route(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiJson(request): ApiJson<EnrolmentRequest>,
-) -> Result<(StatusCode, Json<EnrolmentCode>), AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
-    let owner = request
-        .workspace_id
-        .map_or(Owner::Account(principal.actor_id), Owner::Workspace);
-    let mut transaction = state.pool.begin().await?;
-    let code = super::create_enrolment(
-        &mut transaction,
-        principal.actor_id,
-        kind_of(&principal),
-        owner,
-        request.label.as_deref(),
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok((StatusCode::CREATED, Json(code)))
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct BindRequest {
-    account_id: Uuid,
-    host_agent_ref: String,
-}
-
-async fn bind_route(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(host_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<BindRequest>,
-) -> Result<Json<HostView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
-    let mut transaction = state.pool.begin().await?;
-    let host = super::bind(
-        &mut transaction,
-        principal.actor_id,
-        host_id,
-        request.account_id,
-        &request.host_agent_ref,
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(Json(host))
-}
-
-async fn unbind_route(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((host_id, account_id)): ApiPath<(Uuid, Uuid)>,
-) -> Result<Json<HostView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
-    let mut transaction = state.pool.begin().await?;
-    let host = super::unbind(&mut transaction, principal.actor_id, host_id, account_id).await?;
-    transaction.commit().await?;
-    Ok(Json(host))
-}
-
-async fn unlink_route(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(host_id): ApiPath<Uuid>,
-) -> Result<Json<HostView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
-    let mut transaction = state.pool.begin().await?;
-    let host = super::unlink(&mut transaction, principal.actor_id, host_id).await?;
-    transaction.commit().await?;
-    Ok(Json(host))
 }
 
 // ---------------------------------------------------------------- hosts

@@ -110,10 +110,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/direct/dms",
     "POST /api/v1/direct/groups",
     "DELETE /api/v1/files/{id}",
-    "POST /api/v1/hosts/enrolments",
-    "POST /api/v1/hosts/{host_id}/agents",
-    "DELETE /api/v1/hosts/{host_id}/agents/{account_id}",
-    "POST /api/v1/hosts/{host_id}/unlink",
     "POST /api/v1/inbox/update",
     "POST /api/v1/later",
     "DELETE /api/v1/later/{id}",
@@ -5597,31 +5593,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             empty(),
         )
         .last(),
-        // Hosts (A1.11)
-        body_case(
-            "POST /api/v1/hosts/enrolments",
-            &[],
-            json!({"workspaceId": a.organization, "label": "Net host"}),
-            vec![json!({"workspaceId": b.organization, "label": "Net host"})],
-        ),
-        path_case(
-            "POST /api/v1/hosts/{host_id}/agents",
-            &[id(ax.hosts[0], bx.hosts[0])],
-            json_body(json!({"accountId": ax.agent, "hostAgentRef": "net-agent"})),
-        )
-        .rejecting(vec![json!({"accountId": bx.agent, "hostAgentRef": "net-agent"})]),
-        path_case(
-            "DELETE /api/v1/hosts/{host_id}/agents/{account_id}",
-            &[id(ax.hosts[0], bx.hosts[0]), removed(ax.agent, bx.agent)],
-            empty(),
-        )
-        .last(),
-        path_case(
-            "POST /api/v1/hosts/{host_id}/unlink",
-            &[id(ax.hosts[2], bx.hosts[2])],
-            empty(),
-        )
-        .last(),
         // Webhooks
         body_case(
             "POST /api/v1/webhooks",
@@ -6893,8 +6864,8 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         // Hosts (A1.11)
         mcp_case(
             "host_enrolment_create",
-            json!({"owner": "workspace", "workspaceId": a.organization, "label": "Net mcp host"}),
-            vec![json!({"owner": "workspace", "workspaceId": b.organization, "label": "Net mcp host"})],
+            json!({"owner": "workspace", "workspace": a.organization, "label": "Net mcp host"}),
+            vec![json!({"owner": "workspace", "workspace": b.organization, "label": "Net mcp host"})],
         ),
         mcp_case(
             "host_agent_bind",

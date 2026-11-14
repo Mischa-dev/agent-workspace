@@ -50,9 +50,12 @@ const STATUS: Record<Host['status'], { label: string; tone: ChipTone }> = {
  */
 export function HostsView({ mode, workspace }: { mode: 'workspace' | 'account'; workspace: OrganizationSummary | null }) {
   const queryClient = useQueryClient()
-  const workspaceId = mode === 'workspace' ? (workspace?.id ?? null) : null
-  const key = hostKeys.list(workspaceId)
-  const hosts = useQuery({ queryKey: key, queryFn: () => listHosts(workspaceId) })
+  // Every call acts in the current workspace; the account page lists only
+  // the hosts you own.
+  const workspaceId = workspace?.id ?? null
+  const mineOnly = mode === 'account'
+  const key = hostKeys.list(workspaceId, mineOnly)
+  const hosts = useQuery({ queryKey: key, queryFn: () => listHosts(workspaceId, mineOnly) })
   const members = useQuery({
     queryKey: workspace ? workspaceKeys.members(workspace.id) : ['organization', 'none', 'members'],
     queryFn: () => listWorkspaceMembers(workspace?.id ?? ''),
@@ -65,8 +68,8 @@ export function HostsView({ mode, workspace }: { mode: 'workspace' | 'account'; 
   const refresh = () => queryClient.invalidateQueries({ queryKey: key })
   const enrol = useMutation({
     mutationFn: () =>
-      createEnrolment({
-        ...(mode === 'workspace' && workspace ? { workspaceId: workspace.id } : {}),
+      createEnrolment(workspaceId, {
+        owner: mode === 'workspace' ? 'workspace' : 'person',
         ...(label.trim() ? { label: label.trim() } : {}),
       }),
     onSuccess: (made) => {
@@ -75,7 +78,7 @@ export function HostsView({ mode, workspace }: { mode: 'workspace' | 'account'; 
     },
   })
   const unlink = useMutation({
-    mutationFn: (host: Host) => unlinkHost(host.id),
+    mutationFn: (host: Host) => unlinkHost(workspaceId, host.id),
     onSuccess: (host) => {
       setUnlinking(null)
       showToast({ tone: 'success', title: `${host.name} unlinked`, description: 'Its credential stopped working.' })
@@ -145,6 +148,7 @@ export function HostsView({ mode, workspace }: { mode: 'workspace' | 'account'; 
                 key={host.id}
                 onChanged={() => void refresh()}
                 onUnlink={() => setUnlinking(host)}
+                workspaceId={workspaceId}
               />
             ))}
           </RowList>
@@ -178,18 +182,20 @@ function HostRow({
   host,
   onChanged,
   onUnlink,
+  workspaceId,
 }: {
   agents: { id: string; name: string }[]
   host: Host
   onChanged: () => void
   onUnlink: () => void
+  workspaceId: string | null
 }) {
   const bound = new Set(host.agents.map((agent) => agent.hostAgentRef))
   const unbound = host.describedAgents.filter((agent) => !bound.has(agent.hostAgentRef))
   const [reference, setReference] = useState('')
   const [accountId, setAccountId] = useState('')
   const bind = useMutation({
-    mutationFn: () => bindHostAgent(host.id, accountId, reference),
+    mutationFn: () => bindHostAgent(workspaceId, host.id, accountId, reference),
     onSuccess: () => {
       setReference('')
       setAccountId('')
@@ -197,7 +203,7 @@ function HostRow({
     },
   })
   const unbind = useMutation({
-    mutationFn: (account: string) => unbindHostAgent(host.id, account),
+    mutationFn: (account: string) => unbindHostAgent(workspaceId, host.id, account),
     onSuccess: onChanged,
   })
   return (

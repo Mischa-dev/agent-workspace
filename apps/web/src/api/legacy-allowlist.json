@@ -45,7 +45,6 @@
   "settings/account/ProfilePage.tsx": 3,
   "settings/account/usageApi.ts": 19,
   "settings/api.ts": 4,
-  "settings/hosts/api.ts": 5,
   "settings/project/bugReports.ts": 3,
   "settings/project/GeneralPage.tsx": 1,
   "settings/workspace/api.ts": 15,

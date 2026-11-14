@@ -1313,25 +1313,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/agents/token",
         AgentCredentialExchange
     ),
-    policy_route!("hosts/routes", Post, "/api/v1/hosts/enrolments", HostManage),
-    policy_route!(
-        "hosts/routes",
-        Post,
-        "/api/v1/hosts/{host_id}/agents",
-        HostManage
-    ),
-    policy_route!(
-        "hosts/routes",
-        Delete,
-        "/api/v1/hosts/{host_id}/agents/{account_id}",
-        HostManage
-    ),
-    policy_route!(
-        "hosts/routes",
-        Post,
-        "/api/v1/hosts/{host_id}/unlink",
-        HostManage
-    ),
     boundary_route!("hosts/routes", Post, "/api/v1/hosts/enrol", HostCredential),
     boundary_route!(
         "hosts/routes",

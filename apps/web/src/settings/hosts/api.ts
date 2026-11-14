@@ -1,4 +1,4 @@
-import { requestJson } from '../../api/client'
+import { callOp } from '../../api/ops'
 
 /** A1.11: hosts, the machines and services that run agents. */
 export type HostOwner = { kind: 'person' | 'workspace'; id: string; name: string }
@@ -35,27 +35,28 @@ export type Host = {
 export type EnrolmentCode = { enrolmentId: string; code: string; expiresAt: string; owner: HostOwner }
 
 export const hostKeys = {
-  list: (workspaceId: string | null) => ['hosts', workspaceId ?? 'mine'] as const,
+  list: (workspaceId: string | null, mineOnly: boolean) => ['hosts', workspaceId ?? 'only', mineOnly ? 'mine' : 'all'] as const,
 }
 
-export const listHosts = (workspaceId: string | null) =>
-  requestJson<{ hosts: Host[] }>(
-    workspaceId ? `/api/v1/hosts?workspaceId=${encodeURIComponent(workspaceId)}` : '/api/v1/hosts',
+// The host operations (hosts/ops.rs). `workspaceId` names where the call
+// acts; left out, the caller's only workspace.
+const where = (workspaceId: string | null) => (workspaceId ? { workspaceId } : {})
+
+export const listHosts = (workspaceId: string | null, mineOnly: boolean) =>
+  callOp('host_list', mineOnly ? { mineOnly } : {}, where(workspaceId)).then((value) => ({
+    hosts: value.hosts as unknown as Host[],
+  }))
+
+export const createEnrolment = (workspaceId: string | null, input: { owner: 'person' | 'workspace'; label?: string }) =>
+  callOp('host_enrolment_create', input, where(workspaceId)).then((value) => value as unknown as EnrolmentCode)
+
+export const bindHostAgent = (workspaceId: string | null, hostId: string, accountId: string, hostAgentRef: string) =>
+  callOp('host_agent_bind', { hostId, accountId, hostAgentRef }, where(workspaceId)).then(
+    (value) => value as unknown as Host,
   )
 
-export const createEnrolment = (input: { workspaceId?: string; label?: string }) =>
-  requestJson<EnrolmentCode>('/api/v1/hosts/enrolments', { method: 'POST', json: input })
+export const unbindHostAgent = (workspaceId: string | null, hostId: string, accountId: string) =>
+  callOp('host_agent_unbind', { hostId, accountId }, where(workspaceId)).then((value) => value as unknown as Host)
 
-export const bindHostAgent = (hostId: string, accountId: string, hostAgentRef: string) =>
-  requestJson<Host>(`/api/v1/hosts/${encodeURIComponent(hostId)}/agents`, {
-    method: 'POST',
-    json: { accountId, hostAgentRef },
-  })
-
-export const unbindHostAgent = (hostId: string, accountId: string) =>
-  requestJson<Host>(`/api/v1/hosts/${encodeURIComponent(hostId)}/agents/${encodeURIComponent(accountId)}`, {
-    method: 'DELETE',
-  })
-
-export const unlinkHost = (hostId: string) =>
-  requestJson<Host>(`/api/v1/hosts/${encodeURIComponent(hostId)}/unlink`, { method: 'POST', json: {} })
+export const unlinkHost = (workspaceId: string | null, hostId: string) =>
+  callOp('host_unlink', { hostId }, where(workspaceId)).then((value) => value as unknown as Host)

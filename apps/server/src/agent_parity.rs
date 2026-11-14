@@ -1011,22 +1011,6 @@ mod tests {
         ),
         (
             Post,
-            "/api/v1/hosts/enrolments",
-            Tool("host_enrolment_create"),
-        ),
-        (
-            Post,
-            "/api/v1/hosts/{host_id}/agents",
-            Tool("host_agent_bind"),
-        ),
-        (
-            Delete,
-            "/api/v1/hosts/{host_id}/agents/{account_id}",
-            Tool("host_agent_unbind"),
-        ),
-        (Post, "/api/v1/hosts/{host_id}/unlink", Tool("host_unlink")),
-        (
-            Post,
             "/api/v1/hosts/enrol",
             Plumbing("a host enrolling with the code a person made"),
         ),

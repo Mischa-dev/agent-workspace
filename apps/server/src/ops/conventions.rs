@@ -41,6 +41,8 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "release",
             "link",
             "unlink",
+            "bind",
+            "unbind",
             "react",
             "pin",
             "mark_read",

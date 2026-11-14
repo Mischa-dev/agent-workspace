@@ -29,6 +29,7 @@ use crate::{
     roles,
 };
 
+pub mod ops;
 pub mod protocol;
 pub mod routes;
 

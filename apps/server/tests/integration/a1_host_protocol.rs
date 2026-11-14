@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::{
-    agent_interface::{create_agent, send},
+    agent_interface::{Browser, create_agent, send},
     mcp_admin::{create_project, setup},
     message_edits::add_person,
 };
@@ -31,6 +31,33 @@ fn host_call(method: &str, uri: &str, token: Option<&str>, body: Value) -> Reque
     builder
         .body(Body::from(body.to_string()))
         .expect("host request")
+}
+
+/// A host operation from the web app, in `workspace`: the value on
+/// success, the refusal otherwise.
+async fn host_op(
+    app: &axum::Router,
+    browser: &Browser,
+    workspace: Uuid,
+    name: &str,
+    input: Value,
+) -> (StatusCode, Value) {
+    let key = Uuid::now_v7().to_string();
+    let (status, body) = send(
+        app,
+        browser.request(
+            "POST",
+            &format!("/api/v2/w/{workspace}/ops/{name}"),
+            Some(&key),
+            input,
+        ),
+    )
+    .await;
+    if body["outcome"] == "ok" {
+        (status, body["value"].clone())
+    } else {
+        (status, body)
+    }
 }
 
 async fn enrol(app: &axum::Router, code: &str, name: &str) -> (StatusCode, Value) {
@@ -66,57 +93,49 @@ async fn hosts_enrol_once_act_only_for_their_agents_and_stop_when_unlinked() {
     .fetch_one(&setup.pool)
     .await
     .expect("built-in host");
-    let (status, refused) = send(
+    let (status, refused) = host_op(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/hosts/{builtin}/unlink"),
-            None,
-            json!({}),
-        ),
+        &setup.browser,
+        setup.organization_id,
+        "host_unlink",
+        json!({"hostId": builtin}),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
 
     // A member without hosts.manage can't link one for the workspace, but
     // may link one of their own.
-    let (status, refused) = send(
+    let (status, refused) = host_op(
         app,
-        mara_browser.request(
-            "POST",
-            "/api/v1/hosts/enrolments",
-            None,
-            json!({"workspaceId": setup.organization_id}),
-        ),
+        &mara_browser,
+        setup.organization_id,
+        "host_enrolment_create",
+        json!({"owner": "workspace"}),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
-    let (status, personal) = send(
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    let (status, personal) = host_op(
         app,
-        mara_browser.request(
-            "POST",
-            "/api/v1/hosts/enrolments",
-            None,
-            json!({"label": "Mara's laptop"}),
-        ),
+        &mara_browser,
+        setup.organization_id,
+        "host_enrolment_create",
+        json!({"owner": "person", "label": "Mara's laptop"}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{personal}");
+    assert_eq!(status, StatusCode::OK, "{personal}");
     assert_eq!(personal["owner"]["kind"], "person");
     let personal_code = personal["code"].as_str().expect("code").to_owned();
     assert!(personal_code.starts_with("AWH-"), "{personal_code}");
 
-    let (status, made) = send(
+    let (status, made) = host_op(
         app,
-        setup.browser.request(
-            "POST",
-            "/api/v1/hosts/enrolments",
-            None,
-            json!({"workspaceId": setup.organization_id, "label": "Team host"}),
-        ),
+        &setup.browser,
+        setup.organization_id,
+        "host_enrolment_create",
+        json!({"owner": "workspace", "label": "Team host"}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{made}");
+    assert_eq!(status, StatusCode::OK, "{made}");
     assert_eq!(made["owner"]["kind"], "workspace");
     let team_code = made["code"].as_str().expect("code").to_owned();
     let stored = sqlx::query_scalar::<_, i64>(
@@ -127,6 +146,14 @@ async fn hosts_enrol_once_act_only_for_their_agents_and_stop_when_unlinked() {
     .await
     .expect("code row");
     assert_eq!(stored, 1, "only the code's digest is kept");
+    let replayable = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM idempotency_keys WHERE response_body::text LIKE '%' || $1 || '%'",
+    )
+    .bind(&team_code)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("replays");
+    assert_eq!(replayable, 0, "no stored answer holds the code");
 
     // A code works once, typed however.
     let typed = team_code.to_lowercase().replace('-', " ");
@@ -164,12 +191,15 @@ async fn hosts_enrol_once_act_only_for_their_agents_and_stop_when_unlinked() {
         .expect("expire");
     let (status, expired) = enrol(app, &personal_code, "Mara's laptop").await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{expired}");
-    let (status, personal) = send(
+    let (status, personal) = host_op(
         app,
-        mara_browser.request("POST", "/api/v1/hosts/enrolments", None, json!({})),
+        &mara_browser,
+        setup.organization_id,
+        "host_enrolment_create",
+        json!({"owner": "person"}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{personal}");
+    assert_eq!(status, StatusCode::OK, "{personal}");
     let (status, mara_host) = enrol(
         app,
         personal["code"].as_str().expect("code"),
@@ -235,52 +265,44 @@ async fn hosts_enrol_once_act_only_for_their_agents_and_stop_when_unlinked() {
     );
 
     // Binding: the owner manages the team host and the agents.
-    let (status, bound) = send(
+    let (status, bound) = host_op(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/hosts/{team_host}/agents"),
-            None,
-            json!({"accountId": fixer, "hostAgentRef": "fixer"}),
-        ),
+        &setup.browser,
+        setup.organization_id,
+        "host_agent_bind",
+        json!({"hostId": team_host, "accountId": fixer, "hostAgentRef": "fixer"}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{bound}");
     assert_eq!(bound["agents"][0]["hostAgentRef"], "fixer");
     assert_eq!(bound["agents"][0]["actions"][0]["id"], "pause");
     // Mara sees the team host but can't manage it.
-    let (status, refused) = send(
+    let (status, refused) = host_op(
         app,
-        mara_browser.request(
-            "POST",
-            &format!("/api/v1/hosts/{team_host}/agents"),
-            None,
-            json!({"accountId": scout, "hostAgentRef": "scout"}),
-        ),
+        &mara_browser,
+        setup.organization_id,
+        "host_agent_bind",
+        json!({"hostId": team_host, "accountId": scout, "hostAgentRef": "scout"}),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
     // Mara owns her host, but agents.manage is what lets her hand it an agent.
-    let (status, refused) = send(
+    let (status, refused) = host_op(
         app,
-        mara_browser.request(
-            "POST",
-            &format!("/api/v1/hosts/{mara_host_id}/agents"),
-            None,
-            json!({"accountId": scout, "hostAgentRef": "scout"}),
-        ),
+        &mara_browser,
+        setup.organization_id,
+        "host_agent_bind",
+        json!({"hostId": mara_host_id, "accountId": scout, "hostAgentRef": "scout"}),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
     // The owner can't reach Mara's own host at all.
-    let (status, hidden) = send(
+    let (status, hidden) = host_op(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/hosts/{mara_host_id}/agents"),
-            None,
-            json!({"accountId": scout, "hostAgentRef": "scout"}),
-        ),
+        &setup.browser,
+        setup.organization_id,
+        "host_agent_bind",
+        json!({"hostId": mara_host_id, "accountId": scout, "hostAgentRef": "scout"}),
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{hidden}");
@@ -474,14 +496,12 @@ async fn hosts_enrol_once_act_only_for_their_agents_and_stop_when_unlinked() {
 
     // Unlinking: the next call is 401 host_revoked, and what it asked for
     // is cancelled.
-    let (status, unlinked) = send(
+    let (status, unlinked) = host_op(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/hosts/{team_host}/unlink"),
-            None,
-            json!({}),
-        ),
+        &setup.browser,
+        setup.organization_id,
+        "host_unlink",
+        json!({"hostId": team_host}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{unlinked}");
@@ -518,14 +538,12 @@ async fn hosts_enrol_once_act_only_for_their_agents_and_stop_when_unlinked() {
     assert_eq!(nobody["error"], "unauthorized");
 
     // Listing: Mara sees her own host and the workspace's, not the unlinked one.
-    let (status, listed) = send(
+    let (status, listed) = host_op(
         app,
-        mara_browser.request(
-            "GET",
-            &format!("/api/v1/hosts?workspaceId={}", setup.organization_id),
-            None,
-            Value::Null,
-        ),
+        &mara_browser,
+        setup.organization_id,
+        "host_list",
+        json!({}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{listed}");

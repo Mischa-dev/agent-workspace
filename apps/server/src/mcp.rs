@@ -84,7 +84,6 @@ mod file_tools;
 mod github_tools;
 mod groups;
 mod history;
-mod host_tools;
 mod invitation_tools;
 mod labels;
 mod later_tools;
@@ -1452,101 +1451,6 @@ impl McpServer {
     ) -> Json<common::ToolResult<launch_tools::SessionBindValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(launch_tools::session_bind(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "List hosts (machines and services that run agents) you can see: your own and your workspace's, with what each described (capabilities, offers, actions, its agents) and which agent accounts it may act for.",
-        annotations(
-            title = "List hosts",
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn host_list(
-        &self,
-        Parameters(arguments): Parameters<host_tools::HostListArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<host_tools::HostListValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(host_tools::host_list(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Make a one-time code (15 minutes) that links a host: owner person for a host of your own, workspace for one the workspace owns (needs hosts.manage). The host's administrator runs the host's own enrol step with the code; nothing is linked until they do.",
-        annotations(
-            title = "Make host code",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn host_enrolment_create(
-        &self,
-        Parameters(arguments): Parameters<host_tools::HostEnrolmentArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<crate::hosts::EnrolmentCode>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(host_tools::host_enrolment_create(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Let a host act for an agent account, under the host's own name for it (hostAgentRef, from the agents the host described). Needs managing the host and agents.manage where the agent is a member. Binding again moves it to a new name.",
-        annotations(
-            title = "Bind agent to host",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn host_agent_bind(
-        &self,
-        Parameters(arguments): Parameters<host_tools::HostAgentBindArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<host_tools::HostValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(host_tools::host_agent_bind(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Stop a host acting for an agent account. Its active runs on that host are interrupted.",
-        annotations(
-            title = "Unbind agent from host",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn host_agent_unbind(
-        &self,
-        Parameters(arguments): Parameters<host_tools::HostAgentUnbindArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<host_tools::HostValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(host_tools::host_agent_unbind(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Unlink a host you manage: its credential stops working at once, its active runs are interrupted and the open requests raised through it are cancelled. Linking it again takes a new code.",
-        annotations(
-            title = "Unlink host",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn host_unlink(
-        &self,
-        Parameters(arguments): Parameters<host_tools::HostUnlinkArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<host_tools::HostValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(host_tools::host_unlink(&self.state, principal, arguments).await)
     }
 
     #[tool(

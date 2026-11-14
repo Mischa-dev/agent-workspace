@@ -30,6 +30,84 @@
     "title": "Record decision"
   },
   {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "host.agent_bound"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "host_agent_bind",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Bind an agent to a host"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "host.agent_unbound"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "host_agent_unbind",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Unbind an agent from a host"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "host.enrolment_created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "agents",
+    "name": "host_enrolment_create",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Make a host enrolment code"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "agents",
+    "name": "host_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List hosts"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "host.unlinked"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "host_unlink",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Unlink a host"
+  },
+  {
     "automation": false,
     "destructive": false,
     "emits": [],
