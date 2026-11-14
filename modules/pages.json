@@ -57,7 +57,12 @@
       "one": "Decision",
       "many": "Decisions",
       "href": "/projects/{projectId}/decisions",
-      "fields": [{ "id": "decidedAt", "label": "Decided", "type": "date" }]
+      "fields": [
+        { "id": "decidedAt", "label": "Decided", "type": "date" },
+        { "id": "decidedBy", "label": "Decided by", "type": "person" },
+        { "id": "source", "label": "In", "type": "link" },
+        { "id": "detail", "label": "Why", "type": "long_text", "markdown": true }
+      ]
     }
   ],
   "links": [],
