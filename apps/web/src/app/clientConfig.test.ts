@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { apiUrl, origins, requestJson } from '../api/client'
+import { uploadFile } from '../files/api'
 import { load as loadClientConfig } from './clientConfig'
 
 const json = (body: unknown, status = 200) =>
@@ -69,5 +70,40 @@ describe('client config (H1.41)', () => {
     await requestJson('/api/v1/projects', { method: 'POST', json: {} })
     expect(new Headers(fetchMock.mock.calls[3][1].headers).get('x-csrf-token')).toBe('first')
     expect(new Headers(fetchMock.mock.calls[5][1].headers).get('x-csrf-token')).toBe('after-sign-in')
+  })
+
+  it('sends uploads to the API origin with its request token', async () => {
+    const sent: { url?: string; headers: Record<string, string>; credentials?: boolean } = { headers: {} }
+    class FakeRequest {
+      status = 201
+      responseText = JSON.stringify({ id: '0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b', name: 'a.txt' })
+      withCredentials = false
+      upload = {}
+      onload?: () => void
+      open(_method: string, url: string) {
+        sent.url = url
+      }
+      setRequestHeader(name: string, value: string) {
+        sent.headers[name] = value
+      }
+      getResponseHeader() {
+        return null
+      }
+      send() {
+        sent.credentials = this.withCredentials
+        this.onload?.()
+      }
+    }
+    vi.stubGlobal('XMLHttpRequest', FakeRequest)
+    Object.assign(origins, { api: 'https://api.example.com', csrf: async () => 'upload-token' })
+
+    await uploadFile({ kind: 'conversation', conversationId: 'c1' })(
+      new File(['x'], 'a.txt', { type: 'text/plain' }),
+      () => {},
+      new AbortController().signal,
+    )
+    expect(sent.url).toBe('https://api.example.com/api/v1/conversations/c1/files?name=a.txt')
+    expect(sent.headers['x-csrf-token']).toBe('upload-token')
+    expect(sent.credentials).toBe(true)
   })
 })

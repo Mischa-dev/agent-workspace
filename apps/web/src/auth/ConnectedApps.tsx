@@ -87,7 +87,7 @@ export function ConnectedAppsSection() {
     },
   })
   const mcpUrl = apps.data?.mcpUrl ?? new URL(apiUrl('/api/v1/mcp'), window.location.href).href
-  const guideUrl = apps.data?.guideUrl ?? `${window.location.origin}/connect.md`
+  const guideUrl = apps.data?.guideUrl ?? new URL(apiUrl('/connect.md'), window.location.href).href
   return (
     <>
       <Section

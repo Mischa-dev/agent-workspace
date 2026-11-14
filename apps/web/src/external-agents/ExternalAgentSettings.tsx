@@ -791,7 +791,7 @@ function OneTimeToken({
   const [settingsCopied, copySettings] = useCopy()
   const settings = setup
     ? runnerSettings({
-        origin: window.location.origin,
+        origin: new URL(apiUrl('/'), window.location.href).origin,
         token: credential.token,
         webhookSecret: setup.webhookSecret,
         handle: setup.handle,
