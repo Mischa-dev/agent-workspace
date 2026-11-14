@@ -1686,6 +1686,19 @@
    "seq": 12
   },
   {
+   "id": "K3.26",
+   "name": "Incoming webhooks as an automation trigger",
+   "size": "M",
+   "plan": "K3",
+   "build": "3E",
+   "needs": [
+    "K3.4",
+    "K2.18"
+   ],
+   "soft": [],
+   "seq": 9
+  },
+  {
    "id": "K4.1",
    "name": "Space words in the database (views, columns, kinds)",
    "size": "M",
@@ -2875,6 +2888,31 @@
    "seq": 13
   },
   {
+   "id": "T1.42",
+   "name": "Milestone order and roll-up",
+   "size": "S",
+   "plan": "T1",
+   "build": "4T",
+   "needs": [
+    "K2.14"
+   ],
+   "soft": [],
+   "seq": 14
+  },
+  {
+   "id": "T1.43",
+   "name": "Project status and update posts",
+   "size": "M",
+   "plan": "T1",
+   "build": "4T",
+   "needs": [
+    "T1.26",
+    "C1.2"
+   ],
+   "soft": [],
+   "seq": 14
+  },
+  {
    "id": "A1.1",
    "name": "Run record tables and mirror",
    "size": "M",
@@ -3103,7 +3141,8 @@
    "build": "3G",
    "needs": [
     "A1.16",
-    "H1.13"
+    "H1.13",
+    "A1.24"
    ],
    "soft": [
     "M1.14"
@@ -3188,6 +3227,33 @@
    "soft": [
     "A2.19"
    ],
+   "seq": 11
+  },
+  {
+   "id": "A1.24",
+   "name": "Plan windows over the host protocol",
+   "size": "M",
+   "plan": "A1",
+   "build": "3G",
+   "needs": [
+    "A1.12",
+    "A1.15"
+   ],
+   "soft": [],
+   "seq": 8
+  },
+  {
+   "id": "A1.25",
+   "name": "Built-in host: a default assistant on the workspace's model key",
+   "size": "M",
+   "plan": "A1",
+   "build": "4G",
+   "needs": [
+    "A1.17",
+    "A2.17",
+    "K1.24"
+   ],
+   "soft": [],
    "seq": 11
   },
   {
@@ -4292,6 +4358,19 @@
    "seq": 13
   },
   {
+   "id": "C1.38",
+   "name": "Pages inside pages",
+   "size": "M",
+   "plan": "C1",
+   "build": "4D",
+   "needs": [
+    "K3.10",
+    "C1.37"
+   ],
+   "soft": [],
+   "seq": 14
+  },
+  {
    "id": "C2.1",
    "name": "Close the listing gaps (beyond P0.0, P0.28)",
    "size": "S",
@@ -4806,6 +4885,20 @@
     "K4.25"
    ],
    "seq": 7
+  },
+  {
+   "id": "C2.41",
+   "name": "Search by meaning",
+   "size": "M",
+   "plan": "C2",
+   "build": "4C",
+   "needs": [
+    "K3.17",
+    "K3.18",
+    "C2.25"
+   ],
+   "soft": [],
+   "seq": 13
   },
   {
    "id": "W1.1",
@@ -5419,6 +5512,44 @@
     "C2.40"
    ],
    "seq": 7
+  },
+  {
+   "id": "W1.40",
+   "name": "UI hill climb, round 1: visual directions the owner picks",
+   "size": "M",
+   "plan": "W1",
+   "build": "2W",
+   "needs": [
+    "W1.17"
+   ],
+   "soft": [],
+   "seq": 6
+  },
+  {
+   "id": "W1.41",
+   "name": "UI hill climb, later rounds on the shared pieces",
+   "size": "M",
+   "plan": "W1",
+   "build": "4W",
+   "needs": [
+    "W1.28"
+   ],
+   "soft": [],
+   "seq": 14
+  },
+  {
+   "id": "W1.42",
+   "name": "Automation builder on the pieces",
+   "size": "M",
+   "plan": "W1",
+   "build": "4W",
+   "needs": [
+    "W1.22",
+    "A2.13",
+    "K2.18"
+   ],
+   "soft": [],
+   "seq": 14
   },
   {
    "id": "H1.1",

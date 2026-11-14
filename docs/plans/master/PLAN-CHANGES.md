@@ -17,3 +17,14 @@ and why (R50). Newest last.
   on the gate rehearsal (R57); coordination scenarios and prerequisite checks at gates
   (R58); several agents through one connector and an assistant that is both member and
   delegate, from existing contracts (R59).
+- **2026-11-14.** The roadmap coverage check (is every item of the earlier roadmap and the
+  Linear, Notion and Slack build-out plan in this plan?) found 12 gaps and some partial
+  coverage; the lead folded them in. New slices: A1.24 plan windows over the host protocol
+  (3G, before A1.17, which now needs it), A1.25 a default assistant in the built-in host
+  (4G), W1.40 UI hill climb round 1 (2W), W1.41 later hill-climb rounds (4W), W1.42
+  automation builder (4W), C1.38 pages inside pages (4D), C2.41 search by meaning (4C),
+  K3.26 incoming webhooks as a trigger (3E), T1.42 milestone order and roll-up (4T), T1.43
+  project status and update posts (4T). Acceptance added to A1.5, A1.17, K2.14, K4.7,
+  W1.24, C1.29 and C1.35. T1 notes that #262, #265 and #268 already did tasks-into-records
+  steps 2, 3, 5 and 6. Admin retention rules and moving AI suggestions onto requests are
+  open questions in `decisions.md` (Lead Q1, Q2). No slice removed.

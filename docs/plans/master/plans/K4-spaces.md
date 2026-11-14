@@ -1039,6 +1039,8 @@ parallel with this one.
     through the same calls.
   - Creating a workspace or personal space through `space_create` is refused.
   - Isolation and write-isolation cases are added.
+  - `space_update` sets an icon (an emoji or an uploaded image), and the sidebar, the
+    switcher and the command palette show it (AWD-78; added 2026-11-14).
 - **Beside**: K4.8 (after the operations file exists), K4.11.
 
 ### K4.8 Space membership operations and events (M)
