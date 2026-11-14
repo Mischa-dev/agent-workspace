@@ -328,3 +328,54 @@ async fn a_task_has_one_revision_whichever_side_writes_it() {
     assert_eq!(status, StatusCode::OK, "{listed}");
     assert_eq!(listed["records"][0]["version"], 4, "{listed}");
 }
+
+/// A task's words are its record's and its description's, searched as one
+/// document: words split between the title and the description still find
+/// it, in `search` and in `task_list`.
+#[tokio::test]
+async fn a_search_finds_words_split_between_title_and_description() {
+    let Some(setup) = setup("t1_task_search_split").await else {
+        return;
+    };
+    let app = &setup.app;
+    create_project(&setup, "WORK", "Work").await;
+    let token = connect_app(app, &setup.browser, "Tool", "full").await;
+    let session = initialize(app, &token).await.expect("MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let token = token.clone();
+        let session = session.clone();
+        async move { tool(app, &token, &session, name, arguments).await }
+    };
+    let made = call(
+        "task_create",
+        json!({
+            "projectId": "WORK", "title": "Bridge", "description": "Repair",
+            "clientRequestId": "split",
+        }),
+    )
+    .await;
+    assert_eq!(made["outcome"], "applied", "{made}");
+
+    let found = call("search", json!({"query": "bridge repair"})).await;
+    let kinds = found["value"]["results"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|result| result["kind"] == "task")
+        .count();
+    assert_eq!(kinds, 1, "{found}");
+
+    let listed = call(
+        "task_list",
+        json!({"projectId": "WORK", "query": "bridge repair"}),
+    )
+    .await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    let titles = listed["value"]["tasks"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|task| task["title"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(titles, vec![json!("Bridge")], "{listed}");
+}
