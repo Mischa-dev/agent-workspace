@@ -1,7 +1,8 @@
 import { lazy } from 'react'
 
-// Every page, loaded when first shown. The route table (`routes.tsx`) says
-// where each one lives.
+// The workspace's own pages, loaded when first shown. The route table
+// (`routes.tsx`) says where each one lives; each module's pages come from
+// its registration (`<folder>/module.ts`).
 
 export const SettingsArea = lazy(() => import('../settings/SettingsArea'))
 export const SignInPage = lazy(() => import('../auth/SignInPage').then((module) => ({ default: module.SignInPage })))
@@ -9,42 +10,9 @@ export const ForgotPasswordPage = lazy(() => import('../auth/PasswordResetPages'
 export const ResetPasswordPage = lazy(() => import('../auth/PasswordResetPages').then((module) => ({ default: module.ResetPasswordPage })))
 export const VerifyEmailPage = lazy(() => import('../auth/PasswordResetPages').then((module) => ({ default: module.VerifyEmailPage })))
 export const JoinPage = lazy(() => import('../invitations/JoinPage').then((module) => ({ default: module.JoinPage })))
-export const FormPage = lazy(() => import('../forms/Form'))
-export const CreateProjectPage = lazy(() => import('../projects/CreateProjectPage').then((module) => ({ default: module.CreateProjectPage })))
-export const ProjectsPage = lazy(() => import('../projects/ProjectsPage').then((module) => ({ default: module.ProjectsPage })))
-export const ChannelPage = lazy(() => import('../conversations/ChannelPage').then((module) => ({ default: module.ChannelPage })))
-export const ConversationArchivePage = lazy(() => import('../conversations/ConversationArchivePage').then((module) => ({ default: module.ConversationArchivePage })))
-export const MessagesPage = lazy(() => import('../direct/MessagesPage').then((module) => ({ default: module.MessagesPage })))
-export const AgentsPage = lazy(() => import('../direct/MessagesPage').then((module) => ({ default: module.AgentsPage })))
-export const DirectConversationPage = lazy(() => import('../direct/DirectConversationPage').then((module) => ({ default: module.DirectConversationPage })))
 export const HomePage = lazy(() => import('../projects/HomePage').then((module) => ({ default: module.HomePage })))
 export const OnboardingPage = lazy(() => import('../onboarding/OnboardingPage').then((module) => ({ default: module.OnboardingPage })))
-export const ProjectOverviewPage = lazy(() => import('../projects/ProjectOverviewPage').then((module) => ({ default: module.ProjectOverviewPage })))
-export const ThreadPage = lazy(() => import('../threads/ThreadPage').then((module) => ({ default: module.ThreadPage })))
-export const WorkItemDetailPage = lazy(() => import('../work-items/WorkItemDetailPage').then((module) => ({ default: module.WorkItemDetailPage })))
-export const WorkItemsPage = lazy(() => import('../work-items/WorkItemsPage').then((module) => ({ default: module.WorkItemsPage })))
-export const TimelinePage = lazy(() => import('../views/TimelinePage').then((module) => ({ default: module.TimelinePage })))
-export const MilestonesPage = lazy(() => import('../work-items/MilestonesPage').then((module) => ({ default: module.MilestonesPage })))
-export const NextPage = lazy(() => import('../ai/PlanningPages').then((module) => ({ default: module.NextPage })))
-export const SuggestionsPage = lazy(() => import('../ai/PlanningPages').then((module) => ({ default: module.SuggestionsPage })))
-export const GraphPage = lazy(() => import('../ai/GraphPage').then((module) => ({ default: module.GraphPage })))
-export const PlanImportPage = lazy(() => import('../ai/PlanImportPage').then((module) => ({ default: module.PlanImportPage })))
-export const ProjectRunsPage = lazy(() => import('../runs/RunsPage').then((module) => ({ default: module.ProjectRunsPage })))
-export const PagesPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.PagesPage })))
 export const NotFoundPage = lazy(() => import('./NotFoundPage').then((module) => ({ default: module.NotFoundPage })))
-export const PageDetailPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.PageDetailPage })))
-export const DecisionsPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.DecisionsPage })))
-export const CollectionsArea = lazy(() => import('../collections/CollectionsArea'))
-export const SheetsArea = lazy(() => import('../sheets/SheetsArea'))
-export const MyWorkPage = lazy(() => import('../views/MyWorkPage').then((module) => ({ default: module.MyWorkPage })))
-export const RunsPage = lazy(() => import('../runs/RunsPage').then((module) => ({ default: module.RunsPage })))
-export const RunPage = lazy(() => import('../runs/RunPage').then((module) => ({ default: module.RunPage })))
-export const WhiteboardsPage = lazy(() => import('../whiteboards/WhiteboardsPage').then((module) => ({ default: module.WhiteboardsPage })))
-export const WhiteboardPage = lazy(() => import('../whiteboards/WhiteboardPage').then((module) => ({ default: module.WhiteboardPage })))
-export const InboxPage = lazy(() => import('../inbox/InboxPage').then((module) => ({ default: module.InboxPage })))
-export const LaterPage = lazy(() => import('../later/LaterPage').then((module) => ({ default: module.LaterPage })))
-export const QuickAddPage = lazy(() => import('../quick-add/QuickAddPage').then((module) => ({ default: module.QuickAddPage })))
-export const TaskKeyRedirect = lazy(() => import('./TaskKeyRedirect').then((module) => ({ default: module.TaskKeyRedirect })))
 export const DesignSystemPage = lazy(() => import('../design/DesignSystemPage').then((module) => ({ default: module.DesignSystemPage })))
 export const PieceGallery = lazy(() => import('../pieces/PieceGallery').then((module) => ({ default: module.PieceGallery })))
 export const SearchPage = lazy(() => import('../memory/SearchPage').then((module) => ({ default: module.SearchPage })))
