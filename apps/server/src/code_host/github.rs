@@ -70,19 +70,16 @@ impl CodeHost for GitHub {
             Some(_) => false,
         };
         let number = number.parse::<i64>().ok().filter(|number| *number > 0)?;
-        (pull == "pull"
-            && tail_ok
-            && valid_component(owner, false)
-            && valid_component(name, true))
-        .then(|| {
-            (
-                RepoRef {
-                    code_host: "github",
-                    full_name: format!("{owner}/{name}"),
-                },
-                number,
-            )
-        })
+        (pull == "pull" && tail_ok && valid_component(owner, false) && valid_component(name, true))
+            .then(|| {
+                (
+                    RepoRef {
+                        code_host: "github",
+                        full_name: format!("{owner}/{name}"),
+                    },
+                    number,
+                )
+            })
     }
 }
 
@@ -114,14 +111,20 @@ mod tests {
             "",
         ] {
             assert_eq!(GITHUB.is_safe_remote(url), old_push_check(url), "{url:?}");
-            assert_eq!(crate::code_host::is_safe_remote(url), old_push_check(url), "{url:?}");
+            assert_eq!(
+                crate::code_host::is_safe_remote(url),
+                old_push_check(url),
+                "{url:?}"
+            );
         }
     }
 
     #[test]
     fn repositories_and_pull_requests_are_read_from_their_addresses() {
         assert_eq!(
-            GITHUB.parse_url("https://github.com/acme/app.git").map(|repo| repo.full_name),
+            GITHUB
+                .parse_url("https://github.com/acme/app.git")
+                .map(|repo| repo.full_name),
             Some("acme/app".to_owned())
         );
         assert!(GITHUB.parse_url("https://github.com/acme").is_none());
@@ -130,9 +133,25 @@ mod tests {
             .pull_request_by_url("https://github.com/acme/app/pull/12")
             .expect("pull request");
         assert_eq!((repo.full_name.as_str(), number), ("acme/app", 12));
-        assert!(GITHUB.pull_request_by_url("https://github.com/acme/app/pull/12/files").is_some());
-        assert!(GITHUB.pull_request_by_url("https://github.com/acme/app/issues/12").is_none());
-        assert!(GITHUB.pull_request_by_url("https://github.com/acme/app/pull/0").is_none());
-        assert!(GITHUB.pull_request_by_url("https://code.example/acme/app/pull/12").is_none());
+        assert!(
+            GITHUB
+                .pull_request_by_url("https://github.com/acme/app/pull/12/files")
+                .is_some()
+        );
+        assert!(
+            GITHUB
+                .pull_request_by_url("https://github.com/acme/app/issues/12")
+                .is_none()
+        );
+        assert!(
+            GITHUB
+                .pull_request_by_url("https://github.com/acme/app/pull/0")
+                .is_none()
+        );
+        assert!(
+            GITHUB
+                .pull_request_by_url("https://code.example/acme/app/pull/12")
+                .is_none()
+        );
     }
 }
