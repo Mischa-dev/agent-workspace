@@ -1,24 +1,99 @@
-//! What the run, approval and GitHub job cores share between the browser and
-//! MCP (docs/plans/mcp-tools.md, Phase 4): who is calling, the run states
-//! that count as active, and the per-person cap on agent runs started
-//! through MCP.
+//! The run service (A1). It owns the run record every agent gets, whoever
+//! runs it: `runs`, `run_activities`, `run_usage` and `usage_reports`
+//! (`state` for where a run is, `store` for its rows). The built-in host
+//! still keeps its detail in `agent_runs`, mirrored into `runs` by triggers
+//! until A1.22.
+//!
+//! It also holds what the run, approval and GitHub job cores share between
+//! the browser and MCP (docs/plans/mcp-tools.md, Phase 4): who is calling,
+//! the built-in run states that count as active, and the per-person cap on
+//! agent runs started through MCP.
 //!
 //! Whoever calls, the cores bind the execution profile to the caller (or the
 //! sponsor of an approved run request); no tool ever takes a profile,
 //! sponsor or worker argument.
 
+use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::{
     auth::AuthenticatedActor,
     error::AppError,
+    jobs::{JobContext, JobError, JobRegistry, NewJob},
     mcp::McpPrincipal,
     policy::ActorKind,
     work_item_commands::{AuditAttribution, CommandActor},
 };
 
-/// Run states that hold (or wait for) harness time. One list for starting a
+pub mod state;
+pub mod store;
+
+pub use state::{Liveness, RunState};
+
+/// Copies `agent_run_events` into `run_activities`, a batch at a time (A1.1).
+pub const BACKFILL_ACTIVITIES_KIND: &str = "runs.backfill_activities";
+const BACKFILL_BATCH: i32 = 5000;
+
+pub fn register_jobs(registry: &mut JobRegistry) {
+    registry.register_with_timeout(
+        BACKFILL_ACTIVITIES_KIND,
+        Duration::from_secs(300),
+        |context: JobContext| async move {
+            let payload: BackfillPayload = context.job.payload_as()?;
+            backfill_activities(&context.state.pool, payload.after)
+                .await
+                .map_err(|error| JobError::retry(error.log_category()))?;
+            Ok(())
+        },
+    );
+}
+
+/// Where the activities backfill got to.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BackfillPayload {
+    #[serde(default)]
+    after: Option<Uuid>,
+}
+
+/// Copy one batch of old run events after `after` and queue the next batch
+/// when this one was full. Safe to run twice: copied events are skipped.
+pub async fn backfill_activities(
+    pool: &sqlx::PgPool,
+    after: Option<Uuid>,
+) -> Result<Option<Uuid>, AppError> {
+    let mut transaction = pool.begin().await?;
+    let last = sqlx::query_scalar::<_, Option<Uuid>>("SELECT runs_backfill_activities($1, $2)")
+        .bind(after)
+        .bind(BACKFILL_BATCH)
+        .fetch_one(&mut *transaction)
+        .await?;
+    if let Some(last) = last {
+        let more = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM agent_run_events WHERE id > $1)",
+        )
+        .bind(last)
+        .fetch_one(&mut *transaction)
+        .await?;
+        if more {
+            crate::jobs::enqueue(
+                &mut *transaction,
+                NewJob::new(BACKFILL_ACTIVITIES_KIND)
+                    .payload(BackfillPayload { after: Some(last) })
+                    .unique(format!("{BACKFILL_ACTIVITIES_KIND}:{last}"))
+                    .max_attempts(50),
+            )
+            .await?;
+        }
+    }
+    transaction.commit().await?;
+    Ok(last)
+}
+
+/// Built-in run states (`agent_runs.state`) that hold (or wait for) harness time. One list for starting a
 /// run, the cap, archiving a project, repository counts and run_list's
 /// "active" filter. It matches `RunState::is_terminal` being false.
 pub const ACTIVE_RUN_STATES: [&str; 6] = [
