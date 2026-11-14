@@ -2597,6 +2597,16 @@ async fn reply_request(
 /// Every row, in any table, whose JSON form mentions one of B's IDs, by
 /// table. A new row that points at B shows up as well as a change.
 async fn digest(pool: &PgPool, pattern: &str) -> BTreeMap<String, BTreeSet<String>> {
+    digest_ignoring(pool, pattern, &[]).await
+}
+
+/// [`digest`], leaving out the `ignored` columns of every row (ones a read
+/// may legitimately touch, such as a credential's `last_used_at`).
+pub(super) async fn digest_ignoring(
+    pool: &PgPool,
+    pattern: &str,
+    ignored: &[&str],
+) -> BTreeMap<String, BTreeSet<String>> {
     let tables = sqlx::query_scalar::<_, String>(
         r#"
         SELECT table_name::text FROM information_schema.tables
@@ -2610,9 +2620,10 @@ async fn digest(pool: &PgPool, pattern: &str) -> BTreeMap<String, BTreeSet<Strin
     let mut rows = BTreeMap::new();
     for table in tables {
         let found = sqlx::query_scalar::<_, String>(&format!(
-            r#"SELECT listed.row_text FROM (SELECT row_to_json(row_value)::text AS row_text FROM "{table}" row_value) listed WHERE listed.row_text ~ $1"#
+            r#"SELECT listed.row_text FROM (SELECT (to_jsonb(row_value) - $2::text[])::text AS row_text FROM "{table}" row_value) listed WHERE listed.row_text ~ $1"#
         ))
         .bind(pattern)
+        .bind(ignored)
         .fetch_all(pool)
         .await
         .unwrap_or_else(|error| panic!("digest {table}: {error}"));
@@ -2624,7 +2635,7 @@ async fn digest(pool: &PgPool, pattern: &str) -> BTreeMap<String, BTreeSet<Strin
 }
 
 /// What changed between two digests, one line per row.
-fn digest_changes(
+pub(super) fn digest_changes(
     before: &BTreeMap<String, BTreeSet<String>>,
     after: &BTreeMap<String, BTreeSet<String>>,
 ) -> Vec<String> {

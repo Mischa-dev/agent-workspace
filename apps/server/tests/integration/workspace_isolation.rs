@@ -61,6 +61,7 @@ use super::{
     agent_interface::{Browser, initialize},
     mcp_admin::Setup,
     message_edits::{say, text},
+    write_isolation::{digest_changes, digest_ignoring},
 };
 
 pub(super) use super::support::two_workspaces::{
@@ -255,6 +256,14 @@ const HTTP_EXCLUSIONS: &[(&str, &str)] = &[
 /// Read-only MCP tools this suite deliberately doesn't call, and why.
 /// (Every read-only tool currently has a case.)
 const MCP_EXCLUSIONS: &[(&str, &str)] = &[];
+
+/// Columns a read may legitimately change: when a credential or grant was
+/// last used, and when a connection last shook hands.
+const READ_TOUCHES: &[&str] = &["last_used_at", "last_seen_at", "last_handshake_at"];
+
+/// Tools marked read-only that change rows anyway, each with why. The list
+/// only shrinks: fix the tool (or its hint) and take it off.
+const READ_TOOLS_THAT_WRITE: &[(&str, &str)] = &[];
 
 // ---------------------------------------------------------------------------
 // Coverage guard (no database needed)
@@ -466,7 +475,7 @@ async fn one_workspace_never_sees_another() {
 
     let mut report = Report::default();
     check_http(app, a, b, &b_ids, &mut report).await;
-    check_mcp(app, a, b, &b_ids, &mut report).await;
+    check_mcp(app, pool, a, b, &b_ids, &mut report).await;
     check_realtime(app, pool, realtime, a, b, &b_ids, &mut report).await;
 
     for note in &report.notes {
@@ -2625,6 +2634,7 @@ fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
 /// only leaks count.
 async fn check_mcp(
     app: &axum::Router,
+    pool: &PgPool,
     a: &World,
     b: &World,
     b_ids: &HashSet<String>,
@@ -2660,11 +2670,20 @@ async fn check_mcp(
         ));
     }
 
+    // P0.23: a read-only tool changes nothing. A's rows are digested before
+    // and after each tool's calls; only the columns reads may touch differ.
+    let a_ids = sweep_ids(pool, a.organization).await;
+    let a_pattern = a_ids.iter().cloned().collect::<Vec<_>>().join("|");
+    let mut a_rows = digest_ignoring(pool, &a_pattern, READ_TOUCHES).await;
     for (who, token, session, is_agent) in [
         ("A's app", &a.app_token, &app_session, false),
         ("A's agent", &a.agent_token, &agent_session, true),
     ] {
         for case in &cases {
+            let read_only_check = !READ_TOOLS_THAT_WRITE
+                .iter()
+                .any(|(tool, _)| *tool == case.tool);
+            let before = std::mem::take(&mut a_rows);
             for arguments in &case.own {
                 report.mcp_calls += 1;
                 let (status, body) =
@@ -2711,6 +2730,15 @@ async fn check_mcp(
                     &body,
                     b_ids,
                 );
+            }
+            a_rows = digest_ignoring(pool, &a_pattern, READ_TOUCHES).await;
+            let changes = digest_changes(&before, &a_rows);
+            if read_only_check && !changes.is_empty() {
+                report.failures.push(format!(
+                    "READ-ONLY {who} {} changed A's rows:\n    {}",
+                    case.tool,
+                    changes.join("\n    ")
+                ));
             }
         }
     }
