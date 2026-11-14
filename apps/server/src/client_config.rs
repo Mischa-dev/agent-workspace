@@ -135,32 +135,33 @@ pub struct WebOrigins(pub Arc<[String]>);
 /// CORS headers, so the browser keeps its response from the page.
 pub async fn cors(State(origins): State<WebOrigins>, request: Request, next: Next) -> Response {
     let allowed = allowed_origin(&origins, request.headers());
-    if request.method() == Method::OPTIONS
-        && request
-            .headers()
-            .contains_key(ACCESS_CONTROL_REQUEST_METHOD)
-    {
+    // A preflight from an origin that isn't ours goes on to the route, so a
+    // route that is open to every origin (bug reports) still answers it.
+    if let Some(origin) = allowed.clone().filter(|_| {
+        request.method() == Method::OPTIONS
+            && request
+                .headers()
+                .contains_key(ACCESS_CONTROL_REQUEST_METHOD)
+    }) {
         let mut response = StatusCode::NO_CONTENT.into_response();
-        if let Some(origin) = allowed {
-            let headers = response.headers_mut();
-            allow(headers, origin);
-            headers.insert(
-                ACCESS_CONTROL_ALLOW_METHODS,
-                HeaderValue::from_static("GET, POST, PUT, PATCH, DELETE"),
-            );
-            headers.insert(
-                ACCESS_CONTROL_ALLOW_HEADERS,
-                HeaderValue::from_static("accept, content-type, idempotency-key, x-csrf-token"),
-            );
-            headers.insert(ACCESS_CONTROL_MAX_AGE, HeaderValue::from_static("600"));
-        }
-        response
-            .headers_mut()
-            .append(VARY, HeaderValue::from_static("origin"));
+        let headers = response.headers_mut();
+        allow(headers, origin);
+        headers.insert(
+            ACCESS_CONTROL_ALLOW_METHODS,
+            HeaderValue::from_static("GET, POST, PUT, PATCH, DELETE"),
+        );
+        headers.insert(
+            ACCESS_CONTROL_ALLOW_HEADERS,
+            HeaderValue::from_static("accept, content-type, idempotency-key, x-csrf-token"),
+        );
+        headers.insert(ACCESS_CONTROL_MAX_AGE, HeaderValue::from_static("600"));
+        headers.append(VARY, HeaderValue::from_static("origin"));
         return response;
     }
     let mut response = next.run(request).await;
-    if let Some(origin) = allowed {
+    // A route that set its own (open) policy keeps it.
+    let own_policy = response.headers().contains_key(ACCESS_CONTROL_ALLOW_ORIGIN);
+    if let Some(origin) = allowed.filter(|_| !own_policy) {
         allow(response.headers_mut(), origin);
         response.headers_mut().insert(
             ACCESS_CONTROL_EXPOSE_HEADERS,
@@ -466,6 +467,39 @@ mod tests {
                         .contains_key(ACCESS_CONTROL_ALLOW_CREDENTIALS)
                 );
             }
+        }
+
+        // A route open to every origin (bug reports) keeps its own policy:
+        // it answers other origins' preflights, and ours get no credentials.
+        let origins = WebOrigins(Arc::from(vec!["https://app.example.com".to_owned()]));
+        let open = || async {
+            ([(ACCESS_CONTROL_ALLOW_ORIGIN, "*")], StatusCode::NO_CONTENT).into_response()
+        };
+        let app = Router::new()
+            .route("/open", get(open).options(open))
+            .layer(axum::middleware::from_fn_with_state(origins, cors));
+        for (origin, method) in [
+            ("https://game.example.com", Method::OPTIONS),
+            ("https://app.example.com", Method::GET),
+        ] {
+            let mut request = HttpRequest::builder()
+                .method(method.clone())
+                .uri("/open")
+                .header(ORIGIN, origin);
+            if method == Method::OPTIONS {
+                request = request.header(ACCESS_CONTROL_REQUEST_METHOD, "POST");
+            }
+            let response = app
+                .clone()
+                .oneshot(request.body(Body::empty()).expect("request"))
+                .await
+                .expect("response");
+            assert_eq!(response.headers()[ACCESS_CONTROL_ALLOW_ORIGIN], "*");
+            assert!(
+                !response
+                    .headers()
+                    .contains_key(ACCESS_CONTROL_ALLOW_CREDENTIALS)
+            );
         }
     }
 }
