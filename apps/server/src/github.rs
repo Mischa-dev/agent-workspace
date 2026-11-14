@@ -3809,11 +3809,13 @@ async fn process_pull_request_adoption_job(
 
     let mut transaction = state.pool.begin().await?;
     // Back to the queue, where the usual sync finds the pull request now
-    // tracked and reads its checks and reviews.
+    // tracked and reads its checks and reviews. The sync gets a fresh attempt
+    // budget: pickup happens once per pull request, so this can't loop, and a
+    // pickup that took its last attempt still leaves the sync one to run.
     let updated = sqlx::query(
         r#"
         UPDATE github_jobs
-        SET state = 'queued', lease_owner = NULL, lease_expires_at = NULL,
+        SET state = 'queued', attempts = 0, lease_owner = NULL, lease_expires_at = NULL,
             failure_category = NULL, next_attempt_at = now(), updated_at = now()
         WHERE id = $1 AND state = 'running' AND lease_owner = $2
         "#,
