@@ -77,6 +77,61 @@ pub async fn dispatch(
     call(state, request, input).await
 }
 
+/// A space's key (such as "AWD") in the input's `spaceId` or `projectId`,
+/// replaced by its id, on every edge (MCP's own key resolution does the
+/// same for its tools). A key resolves only among spaces the caller is an
+/// enabled member of and can reach, in the named workspace when there is
+/// one; an unknown or ambiguous key is left for the input to refuse.
+async fn space_keys_to_ids(
+    state: &AppState,
+    request: &DispatchRequest,
+    mut input: Value,
+) -> Result<Value, OpError> {
+    for field in ["spaceId", "projectId"] {
+        let Some(key) = input
+            .get(field)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|key| {
+                (2..=12).contains(&key.len())
+                    && key.starts_with(|c: char| c.is_ascii_alphabetic())
+                    && key.chars().all(|c| c.is_ascii_alphanumeric())
+            })
+            .map(str::to_owned)
+        else {
+            continue;
+        };
+        let found = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            SELECT project.id
+            FROM projects project
+            JOIN project_memberships membership
+              ON membership.project_id = project.id
+             AND membership.actor_id = $1
+             AND membership.enabled
+            WHERE upper(project.project_key) = upper($3)
+              AND project.archived_at IS NULL
+              AND actor_can_access_project($1, $2, project.id)
+              AND ($4::uuid IS NULL OR project.id = $4)
+              AND ($5::uuid IS NULL OR project.organization_id = $5)
+            LIMIT 2
+            "#,
+        )
+        .bind(request.caller.account_id)
+        .bind(request.caller.connection_id)
+        .bind(&key)
+        .bind(request.caller.confined_space)
+        .bind(request.workspace)
+        .fetch_all(&state.pool)
+        .await
+        .map_err(|error| OpError::logged("space key", &error.into()))?;
+        if let [id] = found.as_slice() {
+            input[field] = Value::String(id.to_string());
+        }
+    }
+    Ok(input)
+}
+
 /// The pipeline for one operation; `registry::entry` erases it.
 pub(super) async fn run<O: Operation>(
     state: &AppState,
@@ -159,6 +214,7 @@ async fn pipeline<O: Operation>(
             message: format!("{} has no preview.", O::NAME).into(),
         });
     }
+    let input = space_keys_to_ids(state, &request, input).await?;
     let decoded =
         serde_json::from_value::<O::Input>(input).map_err(|error| decode_error(&error))?;
     // The input as the operation reads it: what the request id is held to.

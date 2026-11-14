@@ -83,6 +83,22 @@ async fn decisions_are_recorded_once_and_stay_private() {
     let (status, listed) = send(app, setup.browser.request("GET", &route, None, Value::Null)).await;
     assert_eq!(status, StatusCode::OK, "{listed}");
     assert_eq!(listed["canRecord"], true, "{listed}");
+    // The v2 route takes the space's key, as MCP does.
+    let (status, by_key) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            "/api/v2/ops/decision_list",
+            None,
+            json!({"spaceId": "WORK"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{by_key}");
+    assert_eq!(
+        by_key["value"]["decisions"][0]["id"], first["id"],
+        "{by_key}"
+    );
     assert_eq!(listed["decisions"][0]["id"], first["id"], "{listed}");
 
     // MCP: an agent's retry with the same clientRequestId is answered once.
