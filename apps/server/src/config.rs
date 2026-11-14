@@ -1485,18 +1485,18 @@ mod tests {
         let mut values = base_values();
         values.insert(
             "AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS".to_owned(),
-            " http://100.119.56.3:8732 , https://hooks.internal:443/ ".to_owned(),
+            " http://100.64.0.10:8732 , https://hooks.internal:443/ ".to_owned(),
         );
         let config = AppConfig::from_values(&values).expect("config");
         assert_eq!(
             config.webhook_trusted_origins,
-            ["http://100.119.56.3:8732", "https://hooks.internal"]
+            ["http://100.64.0.10:8732", "https://hooks.internal"]
         );
         for invalid in [
-            "ftp://100.119.56.3",
-            "http://user:secret@100.119.56.3:8732",
-            "http://100.119.56.3:8732/wake",
-            "100.119.56.3:8732",
+            "ftp://100.64.0.10",
+            "http://user:secret@100.64.0.10:8732",
+            "http://100.64.0.10:8732/wake",
+            "100.64.0.10:8732",
         ] {
             values.insert(
                 "AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS".to_owned(),

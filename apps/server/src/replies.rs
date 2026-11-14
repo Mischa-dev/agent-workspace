@@ -1861,19 +1861,19 @@ mod tests {
 
     #[test]
     fn only_operator_trusted_origins_may_use_http_and_tailnet_addresses() {
-        let trusted = ["http://100.119.56.3:8732".to_owned()];
-        assert!(validate_webhook_url("http://100.119.56.3:8732/wake", &trusted).is_ok());
+        let trusted = ["http://100.64.0.10:8732".to_owned()];
+        assert!(validate_webhook_url("http://100.64.0.10:8732/wake", &trusted).is_ok());
         // Without the operator's say-so the same listener is refused.
-        assert!(validate_webhook_url("http://100.119.56.3:8732/wake", &[]).is_err());
+        assert!(validate_webhook_url("http://100.64.0.10:8732/wake", &[]).is_err());
         for value in [
             // Another port, scheme or host on the same network is not trusted.
-            "http://100.119.56.3:8733/wake",
-            "https://100.119.56.3:8732/wake",
-            "http://100.119.56.4:8732/wake",
+            "http://100.64.0.10:8733/wake",
+            "https://100.64.0.10:8732/wake",
+            "http://100.64.0.11:8732/wake",
             "http://169.254.169.254/latest/meta-data",
             // Credentials and fragments stay refused even for trusted origins.
-            "http://user:secret@100.119.56.3:8732/wake",
-            "http://100.119.56.3:8732/wake#secret",
+            "http://user:secret@100.64.0.10:8732/wake",
+            "http://100.64.0.10:8732/wake#secret",
         ] {
             assert!(
                 validate_webhook_url(value, &trusted).is_err(),

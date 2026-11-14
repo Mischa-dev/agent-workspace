@@ -339,7 +339,14 @@ async fn pull_requests_follow_their_thread_and_reach_the_right_person() {
     let listed = call(OWNER, "repository_list", json!({"projectId": "AW"})).await;
     assert_eq!(listed["outcome"], "ok", "{listed}");
     let repository = &listed["value"]["repositories"][0];
-    assert_eq!(repository["name"], "Mischa-dev/agent-workspace-m0-spike");
+    assert_eq!(
+        repository["name"],
+        format!(
+            "{}/{}",
+            agent_workspace_server::seed::DEMO_REPOSITORY_OWNER,
+            agent_workspace_server::seed::DEMO_REPOSITORY_NAME
+        )
+    );
     assert_eq!(repository["readyForRuns"], false, "{listed}");
     assert!(
         repository["notReadyBecause"]
@@ -556,7 +563,11 @@ async fn pull_requests_follow_their_thread_and_reach_the_right_person() {
     let by_name = call(
         OWNER,
         "pull_request_list",
-        json!({"repositoryId": "mischa-dev/agent-workspace-m0-spike"}),
+        json!({"repositoryId": format!(
+            "{}/{}",
+            agent_workspace_server::seed::DEMO_REPOSITORY_OWNER,
+            agent_workspace_server::seed::DEMO_REPOSITORY_NAME
+        )}),
     )
     .await;
     assert_eq!(by_name["value"]["total"], 4, "{by_name}");

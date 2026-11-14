@@ -9,7 +9,7 @@ configuration, system Node, Tailscale, or any public listener.
 Keep this process running on the Mac:
 
 ```bash
-ssh -N -L 3100:127.0.0.1:3100 bot@redhat
+ssh -N -L 3100:127.0.0.1:3100 <user>@<server>
 ```
 
 In another terminal, verify both application and OAuth discovery through the
@@ -95,7 +95,7 @@ token is not printed or typed into shell history:
 
 ```bash
 umask 077
-ssh bot@redhat "sudo -n /opt/agent-workspace/current/bin/agent-workspace-service-command mcp-credential-create --project-id <project-uuid> --actor-id <actor-uuid> --client-name codex-m6-local --scopes read,write --expires-days 1" > "$CODEX_HOME/mcp-credential.json"
+ssh <user>@<server> "sudo -n /opt/agent-workspace/current/bin/agent-workspace-service-command mcp-credential-create --project-id <project-uuid> --actor-id <actor-uuid> --client-name codex-m6-local --scopes read,write --expires-days 1" > "$CODEX_HOME/mcp-credential.json"
 export AGENT_WORKSPACE_MCP_TOKEN="$(jq -er .token < "$CODEX_HOME/mcp-credential.json")"
 ```
 
@@ -117,13 +117,13 @@ approval. Do not change it to `approve` for acceptance evidence.
 List only safe metadata if one-time creation output is uncertain:
 
 ```bash
-ssh bot@redhat "sudo -n /opt/agent-workspace/current/bin/agent-workspace-service-command mcp-credential-list --project-id <project-uuid>"
+ssh <user>@<server> "sudo -n /opt/agent-workspace/current/bin/agent-workspace-service-command mcp-credential-list --project-id <project-uuid>"
 ```
 
 Revoke without putting the token on the command line:
 
 ```bash
-ssh bot@redhat "sudo -n /opt/agent-workspace/current/bin/agent-workspace-service-command mcp-credential-revoke --credential-id <credential-uuid> --expected-version <version>"
+ssh <user>@<server> "sudo -n /opt/agent-workspace/current/bin/agent-workspace-service-command mcp-credential-revoke --credential-id <credential-uuid> --expected-version <version>"
 unset AGENT_WORKSPACE_MCP_TOKEN
 ```
 

@@ -318,7 +318,11 @@ async fn github_status_and_webhook_receipt_are_scoped_signed_and_idempotent() {
         "installation": { "id": INSTALLATION_ID },
         "repository": {
             "id": github_repository_id,
-            "full_name": "Mischa-dev/agent-workspace-m0-spike"
+            "full_name": format!(
+                "{}/{}",
+                agent_workspace_server::seed::DEMO_REPOSITORY_OWNER,
+                agent_workspace_server::seed::DEMO_REPOSITORY_NAME
+            )
         },
         "after": "0123456789012345678901234567890123456789",
         "before": "1111111111111111111111111111111111111111",
@@ -384,7 +388,11 @@ async fn github_status_and_webhook_receipt_are_scoped_signed_and_idempotent() {
         "installation": { "id": INSTALLATION_ID },
         "repository": {
             "id": github_repository_id,
-            "full_name": "Mischa-dev/agent-workspace-m0-spike"
+            "full_name": format!(
+                "{}/{}",
+                agent_workspace_server::seed::DEMO_REPOSITORY_OWNER,
+                agent_workspace_server::seed::DEMO_REPOSITORY_NAME
+            )
         },
         "after": "2222222222222222222222222222222222222222"
     }))

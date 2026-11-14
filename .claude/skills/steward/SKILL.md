@@ -9,7 +9,7 @@ description: Use when driving an Agent Workspace pull request to green, such as 
 
 Run the same checks GitHub runs, on the working tree as it is:
 
-- On Mischa's machines: `tools/ci/run.sh` (add `--areas rust` or
+- On the CI machines: `tools/ci/run.sh` (add `--areas rust` or
   `--areas web` for one side). It picks the idle laptop or the Red Hat host.
 - In a cloud session, where those hosts aren't reachable, run the checks
   script directly after `tools/cloud/setup.sh`:
