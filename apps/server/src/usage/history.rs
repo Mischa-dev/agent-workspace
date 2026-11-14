@@ -126,15 +126,21 @@ pub(crate) async fn record(
 
 /// Drop history past its keep-by date.
 pub(crate) async fn prune(pool: &PgPool) -> Result<(), AppError> {
-    sqlx::query(&format!(
-        "DELETE FROM usage_window_samples WHERE sampled_at < now() - interval '{SAMPLE_RETENTION_DAYS} days'"
-    ))
-    .execute(pool)
+    crate::db::scoped_one(pool, async |connection| {
+        sqlx::query(&format!(
+            "DELETE FROM usage_window_samples WHERE sampled_at < now() - interval '{SAMPLE_RETENTION_DAYS} days'"
+        ))
+        .execute(connection)
+        .await
+    })
     .await?;
-    sqlx::query(&format!(
-        "DELETE FROM usage_window_cycles WHERE resets_at < now() - interval '{CYCLE_RETENTION_DAYS} days'"
-    ))
-    .execute(pool)
+    crate::db::scoped_one(pool, async |connection| {
+        sqlx::query(&format!(
+            "DELETE FROM usage_window_cycles WHERE resets_at < now() - interval '{CYCLE_RETENTION_DAYS} days'"
+        ))
+        .execute(connection)
+        .await
+    })
     .await?;
     Ok(())
 }
@@ -237,17 +243,20 @@ pub(crate) async fn percent_per_run(
     account_id: Uuid,
     window_key: &str,
 ) -> Result<Option<f64>, AppError> {
-    let rows = sqlx::query_as::<_, (DateTime<Utc>, i32, i16)>(&format!(
-        r#"
+    let rows = crate::db::scoped_one(pool, async |connection| {
+        sqlx::query_as::<_, (DateTime<Utc>, i32, i16)>(&format!(
+            r#"
         SELECT resets_at, duration_minutes, peak_used_percent FROM usage_window_cycles
         WHERE account_id = $1 AND window_key = $2 AND resets_at <= now()
           AND duration_minutes IS NOT NULL AND peak_used_percent > 0
         ORDER BY resets_at DESC LIMIT {CYCLES_SHOWN}
         "#
-    ))
-    .bind(account_id)
-    .bind(window_key)
-    .fetch_all(pool)
+        ))
+        .bind(account_id)
+        .bind(window_key)
+        .fetch_all(connection)
+        .await
+    })
     .await?;
     let (mut used, mut runs) = (0_f64, 0_i64);
     for (resets_at, minutes, peak) in rows {
@@ -296,16 +305,19 @@ pub(crate) async fn account_history(
     now: DateTime<Utc>,
 ) -> Result<AccountHistory, AppError> {
     let since = now - Duration::days(CHART_DAYS);
-    let samples = sqlx::query_as::<_, (String, DateTime<Utc>, i16)>(
-        r#"
+    let samples = crate::db::scoped_one(pool, async |connection| {
+        sqlx::query_as::<_, (String, DateTime<Utc>, i16)>(
+            r#"
         SELECT window_key, sampled_at, used_percent FROM usage_window_samples
         WHERE account_id = $1 AND sampled_at >= $2
         ORDER BY window_key, sampled_at
         "#,
-    )
-    .bind(account_id)
-    .bind(since)
-    .fetch_all(pool)
+        )
+        .bind(account_id)
+        .bind(since)
+        .fetch_all(connection)
+        .await
+    })
     .await?;
     let mut points: BTreeMap<String, Vec<Point>> = BTreeMap::new();
     for (key, at, used) in samples {
@@ -314,8 +326,9 @@ pub(crate) async fn account_history(
             used_percent: u16::try_from(used.clamp(0, 100)).unwrap_or(0),
         });
     }
-    let cycle_rows = sqlx::query_as::<_, CycleRow>(&format!(
-        r#"
+    let cycle_rows = crate::db::scoped_one(pool, async |connection| {
+        sqlx::query_as::<_, CycleRow>(&format!(
+            r#"
         SELECT window_key, duration_minutes, resets_at, peak_used_percent FROM (
             SELECT cycle.*, row_number() OVER (
                        PARTITION BY window_key ORDER BY resets_at DESC) AS position
@@ -324,9 +337,11 @@ pub(crate) async fn account_history(
         WHERE position <= {CYCLES_SHOWN}
         ORDER BY window_key, resets_at DESC
         "#
-    ))
-    .bind(account_id)
-    .fetch_all(pool)
+        ))
+        .bind(account_id)
+        .fetch_all(connection)
+        .await
+    })
     .await?;
     let mut cycles: BTreeMap<String, Vec<CycleRow>> = BTreeMap::new();
     for row in cycle_rows {
@@ -411,17 +426,18 @@ pub(crate) async fn account_history(
 
     // Cost comes from W12's per-run usage records (U2), in each record's
     // currency; mixed currencies are rare enough to report as USD.
-    let projects = sqlx::query_as::<
-        _,
-        (
-            Option<Uuid>,
-            Option<String>,
-            i64,
-            Option<f64>,
-            Option<String>,
-        ),
-    >(&format!(
-        r#"
+    let projects = crate::db::scoped_one(pool, async |connection| {
+        sqlx::query_as::<
+            _,
+            (
+                Option<Uuid>,
+                Option<String>,
+                i64,
+                Option<f64>,
+                Option<String>,
+            ),
+        >(&format!(
+            r#"
         SELECT CASE WHEN actor_can_access_project($2, NULL, project.id) THEN project.id END,
                CASE WHEN actor_can_access_project($2, NULL, project.id) THEN project.name END,
                count(*),
@@ -443,10 +459,12 @@ pub(crate) async fn account_history(
         ORDER BY 3 DESC
         LIMIT 50
         "#
-    ))
-    .bind(account_id)
-    .bind(viewer)
-    .fetch_all(pool)
+        ))
+        .bind(account_id)
+        .bind(viewer)
+        .fetch_all(connection)
+        .await
+    })
     .await?;
     let mut uses = Vec::new();
     let mut hidden = 0;
@@ -462,11 +480,14 @@ pub(crate) async fn account_history(
             _ => hidden += runs,
         }
     }
-    let cost_tracked = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (SELECT 1 FROM agent_run_usage WHERE provider_account_id = $1)",
-    )
-    .bind(account_id)
-    .fetch_one(pool)
+    let cost_tracked = crate::db::scoped_one(pool, async |connection| {
+        sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM agent_run_usage WHERE provider_account_id = $1)",
+        )
+        .bind(account_id)
+        .fetch_one(connection)
+        .await
+    })
     .await?;
     if hidden > 0 {
         uses.push(ProjectUse {

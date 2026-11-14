@@ -167,22 +167,25 @@ pub(crate) async fn set_rule(
     {
         return Err(AppError::Validation("alert rule threshold"));
     }
-    sqlx::query(
-        r#"
+    crate::db::scoped_one(pool, async |connection| {
+        sqlx::query(
+            r#"
         INSERT INTO capacity_alert_rules (account_id, organization_id, rule, enabled, hours, percent)
         VALUES ($1, $2, $3, $4, $5, $6)
         ON CONFLICT (account_id, rule) DO UPDATE SET
             enabled = EXCLUDED.enabled, hours = EXCLUDED.hours,
             percent = EXCLUDED.percent, updated_at = now()
         "#,
-    )
-    .bind(account.id)
-    .bind(account.organization_id)
-    .bind(rule.as_str())
-    .bind(change.enabled)
-    .bind(change.hours)
-    .bind(change.percent)
-    .execute(pool)
+        )
+        .bind(account.id)
+        .bind(account.organization_id)
+        .bind(rule.as_str())
+        .bind(change.enabled)
+        .bind(change.hours)
+        .bind(change.percent)
+        .execute(connection)
+        .await
+    })
     .await?;
     Ok(())
 }
@@ -340,11 +343,14 @@ pub async fn evaluate(
     };
     let rules = rules(&state.pool, account.id).await?;
     let windows = windows_at(&state.pool, account.id, now).await?;
-    let credits = sqlx::query_scalar::<_, serde_json::Value>(
-        "SELECT reset_credits FROM usage_accounts WHERE account_id = $1 AND reset_credits_available > 0",
-    )
-    .bind(account.id)
-    .fetch_optional(&state.pool)
+    let credits = crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT reset_credits FROM usage_accounts WHERE account_id = $1 AND reset_credits_available > 0",
+        )
+        .bind(account.id)
+        .fetch_optional(connection)
+        .await
+    })
     .await?
     .map(|value| super::stored_credits(&value))
     .unwrap_or_default();
@@ -352,7 +358,7 @@ pub async fn evaluate(
     if found.is_empty() {
         return Ok(0);
     }
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     // One evaluation per account at a time, so a cycle fires once.
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(format!("capacity-alerts:{}", account.id))
