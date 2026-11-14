@@ -7820,7 +7820,6 @@
                           "required": [
                             "accepted",
                             "duplicates",
-                            "overLimit",
                             "lastSeq",
                             "state",
                             "version"
@@ -8214,7 +8213,6 @@
                           "required": [
                             "accepted",
                             "duplicates",
-                            "overLimit",
                             "lastSeq",
                             "state",
                             "version"

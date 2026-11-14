@@ -591,7 +591,7 @@ pub struct RunActivityOutput {
     pub duplicates: usize,
     /// Activities refused because the run reached its limit of 20,000; one
     /// gap activity records them.
-    #[serde(skip_serializing_if = "is_zero")]
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub over_limit: usize,
     /// The sequence number of the run's last activity.
     pub last_seq: i64,

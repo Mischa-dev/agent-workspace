@@ -469,6 +469,54 @@ async fn a_launch_to_a_runner_gives_it_a_run_its_reply_calls_move() {
         .expect("settle");
     assert_eq!(run_row(pool, halted_run).await.0, "cancelled");
 
+    // A lease that ran out, retried and claimed before it settles: a new
+    // attempt, and the old worker can't finish it.
+    let expired = launch(task("Tag the photos", "t8").await, "l8").await;
+    let expired_run = uuid_at(&expired, "/runId");
+    let expired_request = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT request.id FROM reply_requests request
+        JOIN launches launch ON launch.handoff_message_id = request.message_id
+        WHERE launch.id = $1 AND request.agent_actor_id = $2
+        "#,
+    )
+    .bind(uuid_at(&expired, "/id"))
+    .bind(runner)
+    .fetch_one(pool)
+    .await
+    .expect("request");
+    let claimed = runner_call("reply_claim", json!({"requestId": expired_request})).await;
+    assert_eq!(claimed["value"]["run"]["state"], "working", "{claimed}");
+    sqlx::query(
+        "UPDATE reply_requests SET status = 'expired', lease_expires_at = NULL, reason = 'The agent stopped checking in before replying.' WHERE id = $1",
+    )
+    .bind(expired_request)
+    .execute(pool)
+    .await
+    .expect("lapse the lease");
+    let retried = owner_call("reply_retry", json!({"requestId": expired_request})).await;
+    assert_eq!(retried["outcome"], "ok", "{retried}");
+    let again = runner_call("reply_claim", json!({"requestId": expired_request})).await;
+    assert_eq!(again["outcome"], "ok", "{again}");
+    let renewed = again["value"]["run"]["runId"]
+        .as_str()
+        .expect("a new attempt")
+        .parse::<Uuid>()
+        .expect("run UUID");
+    assert_ne!(renewed, expired_run, "{again}");
+    assert_eq!(run_row(pool, expired_run).await.0, "failed");
+    let late = runner_call(
+        "run_activity_report",
+        json!({"runId": expired_run, "activities": [
+            {"id": "late-finish", "kind": "run_finished", "payload": {"outcome": "done"}}]}),
+    )
+    .await;
+    assert_eq!(run_row(pool, expired_run).await.0, "failed", "{late}");
+    agent_workspace_server::runs::liveness::settle(pool)
+        .await
+        .expect("settle");
+    assert_eq!(run_row(pool, renewed).await.0, "working");
+
     // A lease that ran out fails the run, with the reason.
     let lapsed = launch(task("Check the links", "t5").await, "l5").await;
     let lapsed_run = uuid_at(&lapsed, "/runId");

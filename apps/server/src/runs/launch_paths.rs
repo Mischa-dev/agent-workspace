@@ -164,13 +164,30 @@ pub async fn follow_reply(
     // is a retried request (Retry after a release, a stop or a lost lease):
     // a new attempt, not the old run. A stop still settling ends now, so
     // it never later ends the attempt that holds the new claim.
+    // A claim under a new generation of a run claimed before is a retry
+    // too (a lease ran out and the request was retried before settling):
+    // the old attempt ends, so its worker can't finish the new work.
     let current = run.run_state()?;
+    let reclaimed = match step {
+        ReplyStep::Claimed { generation } if current.is_active() => {
+            claimed_under_another_generation(transaction, run.id, request_id, generation).await?
+        }
+        _ => false,
+    };
     let run = match step {
         ReplyStep::Claimed { generation }
-            if current.is_terminal() || current == RunState::CancelRequested =>
+            if current.is_terminal() || current == RunState::CancelRequested || reclaimed =>
         {
             if current == RunState::CancelRequested {
                 ops::end_by_service(transaction, run.id, RunState::Cancelled, "Stopped.").await?;
+            } else if reclaimed {
+                ops::end_by_service(
+                    transaction,
+                    run.id,
+                    RunState::Failed,
+                    "The agent stopped checking in before replying.",
+                )
+                .await?;
             }
             match next_attempt(transaction, &run, request_id, generation).await? {
                 Some(next) => next,
@@ -258,6 +275,31 @@ pub async fn follow_reply(
         Err(RunOpError::App(error)) => Err(error),
         Err(_) => Ok(Some(run)),
     }
+}
+
+/// Whether the run took a claim of this request under a generation other
+/// than `generation` (its claim activity records which).
+async fn claimed_under_another_generation(
+    transaction: &mut Transaction<'_, Postgres>,
+    run_id: Uuid,
+    request_id: Uuid,
+    generation: i32,
+) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM run_activities activity
+            WHERE activity.run_id = $1
+              AND activity.client_id LIKE $2
+              AND activity.client_id <> $3
+        )
+        "#,
+    )
+    .bind(run_id)
+    .bind(format!("reply-claim:{request_id}:%"))
+    .bind(format!("reply-claim:{request_id}:{generation}"))
+    .fetch_one(&mut **transaction)
+    .await?)
 }
 
 /// Open the next attempt of a launched run whose request was retried: the

@@ -84,7 +84,7 @@ export type PackageExportOutput = { digest: string; package: Package }
 
 export type RunActivityReportInput = { activities: RunActivityInput[]; runId: string }
 
-export type RunActivityReportOutput = { accepted: number; duplicates: number; lastSeq: number; overLimit: number; requests?: RaisedRequestOutput[]; state: string; version: number }
+export type RunActivityReportOutput = { accepted: number; duplicates: number; lastSeq: number; overLimit?: number; requests?: RaisedRequestOutput[]; state: string; version: number }
 
 export type RunCancelInput = { reason?: string | null; runId: string }
 
