@@ -179,7 +179,7 @@ async fn members_never_read_what_they_are_not_in() {
         json!({"workItemId": "WORK-1", "update": format!("The {TASK} estimate"), "clientRequestId": "quokka-comment-1"}),
     )
     .await;
-    sqlx::query("UPDATE work_items SET title = title || $2 WHERE id = $1")
+    sqlx::query("UPDATE collection_records SET title = title || $2 WHERE id = $1")
         .bind(a.task)
         .bind(format!(" ({TASK})"))
         .execute(pool)

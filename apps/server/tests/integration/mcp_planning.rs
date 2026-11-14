@@ -337,9 +337,9 @@ async fn dependencies_cross_projects_but_never_workspaces_or_private_projects() 
 
     // An archived task takes no link changes until it's restored.
     sqlx::query(
-        "UPDATE work_items item SET archived_at = now(), archived_by_actor_id = item.created_by_actor_id \
-         FROM projects project \
-         WHERE project.id = item.project_id AND project.project_key = 'WORK' AND item.number = 3",
+        "UPDATE collection_records record SET archived_at = now(), archived_by_actor_id = item.created_by_actor_id \
+         FROM work_items item JOIN projects project ON project.id = item.project_id \
+         WHERE record.id = item.id AND project.project_key = 'WORK' AND item.number = 3",
     )
     .execute(&setup.pool)
     .await

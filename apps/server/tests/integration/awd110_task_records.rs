@@ -1,7 +1,8 @@
 //! AWD-110, step 2 of moving tasks into collection records: every task has
 //! a record in its project's Tasks collection, with the same ID, kept in step
-//! by triggers. The silent, costly failures: a task without its record (or
-//! with a stale one), a record changed behind its task's back, a project's
+//! by triggers (since T1.3 the record owns the shared columns and the task
+//! keeps a copy). The silent, costly failures: a task without its record (or
+//! with a stale one), a record deleted behind its task's back, a project's
 //! own "Tasks" collection taken over, and tasks found twice by search.
 
 use serde_json::{Value, json};
@@ -99,10 +100,9 @@ async fn every_task_has_its_record_in_the_tasks_collection() {
     .expect("views");
     assert_eq!(views, vec!["All tasks".to_owned()]);
 
-    // A task's changes reach its record: the title through the task tool,
-    // field values and archiving however they're written. A title the
-    // record can't hold as is (control characters, spaces at the ends) is
-    // cleaned on the record only.
+    // A task's changes reach its record: the title through the task tool.
+    // Since T1.3 the record owns the title, field values and archive state,
+    // and the task keeps a copy, which can't be written directly.
     let opened = call("task_open", json!({"taskId": task.to_string()})).await;
     let version = opened["value"]["task"]["version"]
         .as_i64()
@@ -119,7 +119,7 @@ async fn every_task_has_its_record_in_the_tasks_collection() {
     );
     let field = Uuid::now_v7().to_string();
     sqlx::query(
-        "UPDATE work_items SET title = E'Fix\\tthe bridge ', field_values = jsonb_build_object($2::text, 'steel'), \
+        "UPDATE collection_records SET title = 'Fix the bridge', field_values = jsonb_build_object($2::text, 'steel'), \
            archived_at = now(), archived_by_actor_id = created_by_actor_id \
          WHERE id = $1",
     )
@@ -127,18 +127,34 @@ async fn every_task_has_its_record_in_the_tasks_collection() {
     .bind(&field)
     .execute(pool)
     .await
-    .expect("task write");
+    .expect("record write");
     let record = mirror(pool, task).await.expect("record");
     assert_eq!(record.title, "Fix the bridge");
     assert_eq!(record.field_values, json!({ field.as_str(): "steel" }));
     assert!(record.archived);
-
-    // A Tasks record changes only through its task.
-    let sneaky = sqlx::query("UPDATE collection_records SET title = 'Sneaky' WHERE id = $1")
+    let cached = sqlx::query_as::<_, (String, Value, bool)>(
+        "SELECT title, field_values, archived_at IS NOT NULL FROM work_items WHERE id = $1",
+    )
+    .bind(task)
+    .fetch_one(pool)
+    .await
+    .expect("cache");
+    assert_eq!(
+        cached,
+        ("Fix the bridge".to_owned(), json!({ field.as_str(): "steel" }), true)
+    );
+    let direct = sqlx::query("UPDATE work_items SET title = 'Sneaky' WHERE id = $1")
         .bind(task)
         .execute(pool)
         .await;
-    assert!(sneaky.is_err(), "a direct write to a Tasks record");
+    assert!(direct.is_err(), "a direct write to a task's cached title");
+
+    // A Tasks record is deleted, moved or added only through its task.
+    let deleted = sqlx::query("DELETE FROM collection_records WHERE id = $1")
+        .bind(task)
+        .execute(pool)
+        .await;
+    assert!(deleted.is_err(), "a Tasks record deleted directly");
     let built_in = sqlx::query_scalar::<_, Uuid>(
         "SELECT id FROM collections WHERE project_id = $1::uuid AND builtin = 'tasks'",
     )
@@ -172,7 +188,7 @@ async fn every_task_has_its_record_in_the_tasks_collection() {
 
     // Search finds a task once, as the task.
     sqlx::query(
-        "UPDATE work_items SET title = 'Paint the zeppelin', archived_at = NULL, \
+        "UPDATE collection_records SET title = 'Paint the zeppelin', archived_at = NULL, \
            archived_by_actor_id = NULL WHERE id = $1",
     )
     .bind(task)

@@ -97,6 +97,7 @@ pub mod sheets;
 pub mod storage_admission;
 #[cfg(test)]
 mod structure_guards;
+pub mod task_records;
 pub mod telemetry;
 pub mod test_support;
 pub mod usage;

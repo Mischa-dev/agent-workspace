@@ -273,11 +273,13 @@ async fn a_collection_that_acts_like_a_task_holds_tasks() {
     )
     .await;
     assert_eq!(direct["outcome"], "conflict", "{direct}");
-    let sneaky = sqlx::query("UPDATE collection_records SET title = 'Sneaky' WHERE id = $1")
+    // In the database the record owns its title (T1.3), but it can't leave
+    // its task: no move to another collection, no delete.
+    let sneaky = sqlx::query("DELETE FROM collection_records WHERE id = $1")
         .bind(crash)
         .execute(pool)
         .await;
-    assert!(sneaky.is_err(), "a direct write to a Bugs record");
+    assert!(sneaky.is_err(), "a Bugs record deleted directly");
 
     // The switch stays on while it has records.
     let off = call(

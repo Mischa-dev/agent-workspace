@@ -2612,18 +2612,32 @@ async fn archive(
     task: &SourceTask,
     new_key: &str,
 ) -> Result<(), AppError> {
+    // Archive state is the record's (crate::task_records); the version is
+    // the task's.
+    if !crate::task_records::write_shared(
+        transaction,
+        actor.project_id,
+        task.id,
+        actor.actor_id,
+        crate::task_records::SharedChange {
+            archived: Some(true),
+            ..Default::default()
+        },
+    )
+    .await?
+    {
+        return Err(AppError::Internal("a moved task was already archived"));
+    }
     let version = sqlx::query_scalar::<_, i64>(
         r#"
         UPDATE work_items
-        SET archived_at = now(), archived_by_actor_id = $3,
-            version = version + 1, updated_at = now()
-        WHERE project_id = $1 AND id = $2 AND archived_at IS NULL
+        SET version = version + 1, updated_at = now()
+        WHERE project_id = $1 AND id = $2
         RETURNING version
         "#,
     )
     .bind(actor.project_id)
     .bind(task.id)
-    .bind(actor.actor_id)
     .fetch_one(&mut **transaction)
     .await?;
     let summary = format!("Work Item moved to {new_key}");

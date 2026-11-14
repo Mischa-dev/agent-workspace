@@ -580,20 +580,40 @@ pub async fn create_work_item_with_id(
     .bind(actor.project_id)
     .fetch_one(&mut **transaction)
     .await?;
+    // The record first: it owns the title and field values, and inserting
+    // the task fills its cached copies from it (crate::task_records).
+    let field_values = command
+        .field_values
+        .map_or_else(|| serde_json::json!({}), FieldValueChanges::initial);
+    if !crate::work_item_fields::values_fit(&field_values) {
+        return Err(crate::work_item_fields::too_large());
+    }
+    crate::task_records::create(
+        transaction,
+        crate::task_records::NewTaskRecord {
+            project_id: actor.project_id,
+            task_id: work_item_id,
+            collection_id: command.collection_id,
+            number,
+            title: command.title,
+            field_values: &field_values,
+            actor_id: actor.actor_id,
+        },
+    )
+    .await?;
     sqlx::query(
         r#"
         INSERT INTO work_items (
-            id, project_id, number, title, description, type_id, status_id,
+            id, project_id, number, description, type_id, status_id,
             priority, assignee_actor_id, created_by_actor_id, board_rank,
             parent_work_item_id, milestone_id, start_date, due_date, estimate,
-            field_values, collection_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+            collection_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
         "#,
     )
     .bind(work_item_id)
     .bind(actor.project_id)
     .bind(number)
-    .bind(command.title)
     .bind(command.description)
     .bind(type_id)
     .bind(status_id)
@@ -606,15 +626,6 @@ pub async fn create_work_item_with_id(
     .bind(command.fields.start_date)
     .bind(command.fields.due_date)
     .bind(command.fields.estimate)
-    .bind({
-        let values = command
-            .field_values
-            .map_or_else(|| serde_json::json!({}), FieldValueChanges::initial);
-        if !crate::work_item_fields::values_fit(&values) {
-            return Err(crate::work_item_fields::too_large());
-        }
-        values
-    })
     .bind(command.collection_id)
     .execute(&mut **transaction)
     .await?;
@@ -974,27 +985,41 @@ pub async fn update_locked_work_item(
         )
         .await?;
     }
+    // The title and field values are the record's (crate::task_records);
+    // the rest is the task's own.
+    crate::task_records::write_shared(
+        transaction,
+        actor.project_id,
+        current.id,
+        actor.actor_id,
+        crate::task_records::SharedChange {
+            title: (title != current.title).then_some(title),
+            field_values: (field_values != current.field_values).then_some(&field_values),
+            archived: None,
+        },
+    )
+    .await?;
     let updated = sqlx::query(
         r#"
         UPDATE work_items
-        SET title = $3, description = $4, type_id = $5, status_id = $6,
+        SET description = $4, type_id = $5, status_id = $6,
             priority = $7, assignee_actor_id = $8, parent_work_item_id = $10,
             board_rank = $11, milestone_id = $12, start_date = $13, due_date = $14,
-            estimate = $15, field_values = $18,
+            estimate = $15,
             blocked_reason = $16,
             blocked_at = CASE WHEN $16::text IS NULL THEN NULL
                               WHEN blocked_reason IS NOT DISTINCT FROM $16 THEN blocked_at
                               ELSE now() END,
             blocked_by_actor_id = CASE WHEN $16::text IS NULL THEN NULL
                                        WHEN blocked_reason IS NOT DISTINCT FROM $16 THEN blocked_by_actor_id
-                                       ELSE $17::uuid END,
+                                       ELSE $3::uuid END,
             version = version + 1, updated_at = now()
         WHERE project_id = $1 AND id = $2 AND version = $9
         "#,
     )
     .bind(actor.project_id)
     .bind(current.id)
-    .bind(title)
+    .bind(actor.actor_id)
     .bind(description)
     .bind(type_id)
     .bind(status_id)
@@ -1008,8 +1033,6 @@ pub async fn update_locked_work_item(
     .bind(due_date)
     .bind(estimate)
     .bind(blocked_reason.as_deref())
-    .bind(actor.actor_id)
-    .bind(&field_values)
     .execute(&mut **transaction)
     .await?;
     if updated.rows_affected() != 1 {
@@ -1252,19 +1275,31 @@ pub async fn set_archived(
     {
         return Ok(ArchiveOutcome::MovedAway { moved_to });
     }
+    // Archive state is the record's (crate::task_records); the version is
+    // the task's.
+    if !crate::task_records::write_shared(
+        transaction,
+        actor.project_id,
+        work_item_id,
+        actor.actor_id,
+        crate::task_records::SharedChange {
+            archived: Some(command.archived),
+            ..Default::default()
+        },
+    )
+    .await?
+    {
+        return Err(AppError::Internal("locked Work Item archive lost its record"));
+    }
     let updated = sqlx::query(
         r#"
         UPDATE work_items
-        SET archived_at = CASE WHEN $3 THEN now() END,
-            archived_by_actor_id = CASE WHEN $3 THEN $4::uuid END,
-            version = version + 1, updated_at = now()
-        WHERE project_id = $1 AND id = $2 AND version = $5
+        SET version = version + 1, updated_at = now()
+        WHERE project_id = $1 AND id = $2 AND version = $3
         "#,
     )
     .bind(actor.project_id)
     .bind(work_item_id)
-    .bind(command.archived)
-    .bind(actor.actor_id)
     .bind(command.expected_version)
     .execute(&mut **transaction)
     .await?;

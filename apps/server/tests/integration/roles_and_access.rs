@@ -4596,7 +4596,7 @@ async fn a_repeated_move_shows_the_title_only_where_tasks_are_seen() {
         .expect("destination")
         .parse::<Uuid>()
         .expect("destination id");
-    sqlx::query("UPDATE work_items SET title = 'Renamed where it went' WHERE id = $1")
+    sqlx::query("UPDATE collection_records SET title = 'Renamed where it went' WHERE id = $1")
         .bind(destination)
         .execute(&setup.pool)
         .await

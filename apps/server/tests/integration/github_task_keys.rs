@@ -97,14 +97,20 @@ async fn a_pull_request_naming_a_task_key_is_suggested_on_that_task_only() {
         key_of(pool, guide).await,
         key_of(pool, old).await,
     );
+    // A task's archive state is its record's (T1.3).
     sqlx::query(
-        "UPDATE work_items SET archived_at = now(), archived_by_actor_id = $2, version = version + 1 WHERE id = $1",
+        "UPDATE collection_records SET archived_at = now(), archived_by_actor_id = $2, version = version + 1 WHERE id = $1",
     )
     .bind(old)
     .bind(seed.human_actor_id)
         .execute(pool)
         .await
         .expect("archive the old idea");
+    sqlx::query("UPDATE work_items SET version = version + 1 WHERE id = $1")
+        .bind(old)
+        .execute(pool)
+        .await
+        .expect("bump the old idea");
     // Another project's task with the same number must never match.
     let beta = create_project(&setup, "BETA", "Beta").await;
     let beta_task = tool(
