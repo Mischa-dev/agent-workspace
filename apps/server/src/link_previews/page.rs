@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use url::Url;
 
-use super::guard::Policy;
+use crate::outbound::PagePolicy as Policy;
 
 /// Redirects followed, each checked like the first request.
 const MAX_REDIRECTS: usize = 3;

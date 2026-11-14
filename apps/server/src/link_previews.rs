@@ -3,9 +3,10 @@
 //! else `<title>`) once per URL per workspace, and the message shows them.
 //!
 //! The fetch is the server reaching out on someone's say-so, so it is
-//! guarded (`guard`): http and https on the standard ports only, every
-//! address the name resolves to must be public (no loopback, private,
-//! link-local or other special ranges), the checked address is pinned so a
+//! guarded (`outbound::PagePolicy`): http and https on the standard ports
+//! only, every address the name resolves to must be public (no loopback,
+//! private, link-local or other special ranges), the checked addresses are
+//! pinned so a
 //! second DNS answer can't change it, each redirect is checked again, and
 //! there are limits on time, redirects and bytes. The page's picture is
 //! fetched the same way and stored, so viewers' browsers only ever load
@@ -14,7 +15,6 @@
 //! The author (or a moderator) can hide a preview from their message; the
 //! workspace setting `messages.link_previews` turns new previews off.
 
-mod guard;
 mod page;
 
 use std::{collections::BTreeMap, time::Duration};
@@ -288,7 +288,8 @@ async fn fetch_job(context: JobContext) -> Result<(), JobError> {
     if status != "pending" {
         return Ok(());
     }
-    let policy = guard::Policy::public();
+    let policy = crate::outbound::PagePolicy::public();
+    let permit = crate::outbound::permit(organization_id).await;
     let outcome = match page::fetch(&policy, &url).await {
         Ok(found) => {
             let picture = match &found.image_url {
@@ -299,6 +300,7 @@ async fn fetch_job(context: JobContext) -> Result<(), JobError> {
         }
         Err(reason) => Err(reason),
     };
+    drop(permit);
     let store = FileStore::from_config(&state.config);
     let result = match outcome {
         Ok((found, picture)) => {
@@ -383,7 +385,7 @@ async fn fetch_job(context: JobContext) -> Result<(), JobError> {
 /// The page's picture, shrunk for the preview: (bytes, content type,
 /// width, height).
 async fn preview_image(
-    policy: &guard::Policy,
+    policy: &crate::outbound::PagePolicy,
     url: &str,
 ) -> Option<(Vec<u8>, &'static str, u32, u32)> {
     let bytes = page::fetch_image(policy, url).await.ok()?;

@@ -46,7 +46,6 @@ use crate::{
 pub(crate) const TURN_ALLOWANCE: i32 = 6;
 pub(crate) const LEASE_MINUTES: i32 = 15;
 const WORKER_INTERVAL: Duration = Duration::from_secs(3);
-const WEBHOOK_TIMEOUT: Duration = Duration::from_secs(8);
 const WEBHOOK_MAX_ATTEMPTS: i32 = 8;
 
 pub fn router() -> Router<AppState> {
@@ -1243,7 +1242,7 @@ pub(crate) async fn stop_request_in(
 /// Background loop: expire lapsed claims and deliver webhook wakeups.
 pub async fn run(state: AppState, mut shutdown: watch::Receiver<bool>) {
     // Each delivery builds its own client, pinned to the address it checked
-    // (see `webhook_client`), so there is no shared one here.
+    // (see `outbound::webhook_client`), so there is no shared one here.
     loop {
         if let Err(error) = expire_leases(&state.pool).await {
             tracing::warn!(category = error.log_category(), "reply lease sweep failed");
@@ -1293,6 +1292,9 @@ struct DueDelivery {
     attempts: i32,
     agent_actor_id: Uuid,
     project_id: Uuid,
+    /// The project's workspace, whose share of outbound requests the wakeup
+    /// takes.
+    organization_id: Uuid,
     conversation_id: Uuid,
     thread_id: Option<Uuid>,
     message_id: Uuid,
@@ -1320,7 +1322,8 @@ async fn deliver_webhooks(state: &AppState) -> Result<(), AppError> {
         r#"
         SELECT delivery.id, delivery.connection_id, delivery.reply_request_id,
                delivery.event, delivery.attempts, request.agent_actor_id,
-               request.project_id, request.conversation_id, request.thread_id,
+               request.project_id, project.organization_id,
+               request.conversation_id, request.thread_id,
                request.message_id, request.generation, request.follows_request_id,
                (
                    CASE delivery.event
@@ -1335,6 +1338,7 @@ async fn deliver_webhooks(state: &AppState) -> Result<(), AppError> {
                connection.webhook_url, connection.webhook_secret, connection.webhook_secret_id
         FROM agent_webhook_deliveries delivery
         JOIN reply_requests request ON request.id = delivery.reply_request_id
+        JOIN projects project ON project.id = request.project_id
         JOIN external_agent_connections connection ON connection.id = delivery.connection_id
         LEFT JOIN agent_sessions session
           ON session.agent_actor_id = request.agent_actor_id
@@ -1473,7 +1477,8 @@ async fn post_wakeup(
     delivery: &DueDelivery,
     trusted_origins: &[String],
 ) -> Result<(), &'static str> {
-    let (url, client) = webhook_client(url, trusted_origins).await?;
+    let (url, client) = crate::outbound::webhook_client(url, trusted_origins).await?;
+    let _permit = crate::outbound::permit(delivery.organization_id).await;
     let body = wakeup_body(delivery);
     let event = body["event"].as_str().unwrap_or_default().to_owned();
     let body = body.to_string();
@@ -1524,7 +1529,7 @@ pub(crate) async fn send_test_wakeup(
     let delivery_id = Uuid::now_v7();
     let started = std::time::Instant::now();
     let outcome = async {
-        let (url, client) = webhook_client(url, trusted_origins)
+        let (url, client) = crate::outbound::webhook_client(url, trusted_origins)
             .await
             .map_err(|error| (None, error.to_owned()))?;
         let body = serde_json::json!({
@@ -1598,137 +1603,6 @@ pub(crate) async fn send_test_wakeup(
 /// https only, unless the URL's origin is one the operator trusts
 /// (`AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS`), which may also be http on a
 /// private or tailnet address. Credentials and fragments are never allowed.
-pub(crate) fn validate_webhook_url(
-    value: &str,
-    trusted_origins: &[String],
-) -> Result<reqwest::Url, AppError> {
-    let url = reqwest::Url::parse(value).map_err(|_| AppError::Validation("webhook URL"))?;
-    let host = url.host().ok_or(AppError::Validation("webhook URL"))?;
-    if value.len() > 500
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.fragment().is_some()
-    {
-        return Err(AppError::Validation("webhook URL"));
-    }
-    if is_trusted_origin(&url, trusted_origins) {
-        return Ok(url);
-    }
-    let loopback = match host {
-        url::Host::Ipv4(address) => address.is_loopback(),
-        url::Host::Ipv6(address) => address.is_loopback(),
-        url::Host::Domain(_) => false,
-    };
-    if url.scheme() != "https"
-        || matches!(host, url::Host::Domain(name) if name.eq_ignore_ascii_case("localhost") || name.ends_with(".localhost"))
-        || matches!(host, url::Host::Ipv4(address) if !loopback && !public_ipv4(address))
-        || matches!(host, url::Host::Ipv6(address) if !loopback && !public_ipv6(address))
-        || loopback
-    {
-        return Err(AppError::Validation("webhook URL"));
-    }
-    Ok(url)
-}
-
-fn is_trusted_origin(url: &reqwest::Url, trusted_origins: &[String]) -> bool {
-    matches!(url.scheme(), "http" | "https")
-        && trusted_origins.contains(&url.origin().ascii_serialization())
-}
-
-pub(crate) async fn webhook_client(
-    value: &str,
-    trusted_origins: &[String],
-) -> Result<(reqwest::Url, reqwest::Client), &'static str> {
-    let url =
-        validate_webhook_url(value, trusted_origins).map_err(|_| "the webhook URL is unsafe")?;
-    let trusted = is_trusted_origin(&url, trusted_origins);
-    let host = url
-        .host_str()
-        .ok_or("the webhook URL is unsafe")?
-        .to_owned();
-    let port = url
-        .port_or_known_default()
-        .ok_or("the webhook URL is unsafe")?;
-    let addresses = tokio::time::timeout(
-        WEBHOOK_TIMEOUT,
-        tokio::net::lookup_host((host.as_str(), port)),
-    )
-    .await
-    .map_err(|_| "the webhook host could not be resolved")?
-    .map_err(|_| "the webhook host could not be resolved")?
-    .collect::<Vec<_>>();
-    if addresses.is_empty()
-        || !trusted
-            && addresses.iter().any(|address| match address.ip() {
-                std::net::IpAddr::V4(ip) => !public_ipv4(ip),
-                std::net::IpAddr::V6(ip) => !public_ipv6(ip),
-            })
-    {
-        return Err("the webhook host resolved to an unsafe address");
-    }
-    // Pin the already-checked address so a second DNS lookup cannot be used
-    // for rebinding. Disabling ambient proxies also prevents them from
-    // changing the destination selected by this security check.
-    let client = reqwest::Client::builder()
-        .timeout(WEBHOOK_TIMEOUT)
-        .redirect(reqwest::redirect::Policy::none())
-        .no_proxy()
-        .resolve(&host, addresses[0])
-        .build()
-        .map_err(|_| "the webhook client could not be built")?;
-    Ok((url, client))
-}
-
-pub(crate) fn public_ipv4(ip: std::net::Ipv4Addr) -> bool {
-    let [a, b, c, _] = ip.octets();
-    !(a == 0
-        || a == 10
-        || a == 127
-        || (a == 100 && (64..=127).contains(&b))
-        || (a == 169 && b == 254)
-        || (a == 172 && (16..=31).contains(&b))
-        || (a == 192 && b == 0 && c == 0)
-        || (a == 192 && b == 0 && c == 2)
-        || (a == 192 && b == 168)
-        || (a == 198 && (b == 18 || b == 19))
-        || (a == 198 && b == 51 && c == 100)
-        || (a == 203 && b == 0 && c == 113)
-        || a >= 224)
-}
-
-pub(crate) fn public_ipv6(ip: std::net::Ipv6Addr) -> bool {
-    let segments = ip.segments();
-    !ip.is_unspecified()
-        && !ip.is_loopback()
-        && (segments[0] & 0xfe00) != 0xfc00
-        && (segments[0] & 0xffc0) != 0xfe80
-        && (segments[0] & 0xff00) != 0xff00
-        && !(segments[0] == 0x2001 && segments[1] == 0x0db8)
-        && ip.to_ipv4_mapped().is_none_or(public_ipv4)
-        && embedded_ipv4(ip).is_none_or(public_ipv4)
-}
-
-/// The IPv4 address inside a NAT64 (64:ff9b::/96), 6to4 (2002::/16) or
-/// IPv4-compatible (::a.b.c.d) address, which can reach it on hosts that
-/// translate them.
-fn embedded_ipv4(ip: std::net::Ipv6Addr) -> Option<std::net::Ipv4Addr> {
-    let s = ip.segments();
-    let from = |high: u16, low: u16| {
-        let [a, b] = high.to_be_bytes();
-        let [c, d] = low.to_be_bytes();
-        std::net::Ipv4Addr::new(a, b, c, d)
-    };
-    if s[0] == 0x0064 && s[1] == 0xff9b && s[2..6] == [0, 0, 0, 0] {
-        Some(from(s[6], s[7]))
-    } else if s[0] == 0x2002 {
-        Some(from(s[1], s[2]))
-    } else if s[..6] == [0, 0, 0, 0, 0, 0] && !ip.is_loopback() && !ip.is_unspecified() {
-        Some(from(s[6], s[7]))
-    } else {
-        None
-    }
-}
-
 /// HMAC-SHA256 over "{timestamp}.{body}", hex encoded.
 pub fn sign(secret: &str, timestamp: &str, body: &str) -> Option<String> {
     let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).ok()?;
@@ -1764,69 +1638,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ipv6_addresses_carrying_a_private_ipv4_are_not_public() {
-        for private in [
-            "64:ff9b::10.0.0.1",
-            "2002:a00:1::",
-            "::192.168.1.1",
-            "::ffff:127.0.0.1",
-        ] {
-            let ip = private.parse::<std::net::Ipv6Addr>().expect("address");
-            assert!(!public_ipv6(ip), "{private}");
-        }
-        for public in ["64:ff9b::8.8.8.8", "2002:808:808::", "2606:4700::1111"] {
-            let ip = public.parse::<std::net::Ipv6Addr>().expect("address");
-            assert!(public_ipv6(ip), "{public}");
-        }
-    }
-
-    #[test]
     fn signatures_cover_timestamp_and_body() {
         let signature = sign("secret", "1700000000", "{}").expect("sign");
         assert_eq!(signature.len(), 64);
         assert_ne!(Some(signature.clone()), sign("secret", "1700000001", "{}"));
         assert_ne!(Some(signature), sign("other", "1700000000", "{}"));
-    }
-
-    #[test]
-    fn browser_webhooks_reject_ssrf_and_credential_vectors() {
-        for value in [
-            "http://example.com/hook",
-            "https://localhost/hook",
-            "https://127.0.0.1/hook",
-            "https://169.254.169.254/latest/meta-data",
-            "https://10.0.0.1/hook",
-            "https://user:password@example.com/hook",
-            "https://example.com/hook#secret",
-        ] {
-            assert!(
-                validate_webhook_url(value, &[]).is_err(),
-                "accepted {value}"
-            );
-        }
-        assert!(validate_webhook_url("https://example.com/hook", &[]).is_ok());
-    }
-
-    #[test]
-    fn only_operator_trusted_origins_may_use_http_and_tailnet_addresses() {
-        let trusted = ["http://100.119.56.3:8732".to_owned()];
-        assert!(validate_webhook_url("http://100.119.56.3:8732/wake", &trusted).is_ok());
-        // Without the operator's say-so the same listener is refused.
-        assert!(validate_webhook_url("http://100.119.56.3:8732/wake", &[]).is_err());
-        for value in [
-            // Another port, scheme or host on the same network is not trusted.
-            "http://100.119.56.3:8733/wake",
-            "https://100.119.56.3:8732/wake",
-            "http://100.119.56.4:8732/wake",
-            "http://169.254.169.254/latest/meta-data",
-            // Credentials and fragments stay refused even for trusted origins.
-            "http://user:secret@100.119.56.3:8732/wake",
-            "http://100.119.56.3:8732/wake#secret",
-        ] {
-            assert!(
-                validate_webhook_url(value, &trusted).is_err(),
-                "accepted {value}"
-            );
-        }
     }
 }

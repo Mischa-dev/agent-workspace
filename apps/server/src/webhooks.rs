@@ -15,7 +15,7 @@
 //! sha256=<HMAC-SHA256 of "{timestamp}.{body}">` with the subscription's
 //! secret, which is stored encrypted (S1) and shown once. Every attempt of
 //! one delivery carries the same `X-Workspace-Delivery` id. Targets pass
-//! PR #128's address checks (`replies::validate_webhook_url`), and the
+//! PR #128's address checks (`outbound::validate_webhook_url`), and the
 //! client pins the checked address. Failed deliveries retry with the job
 //! queue's backoff; twenty failed deliveries in a row turn it off.
 
@@ -297,7 +297,7 @@ fn normalize_events(values: &[String]) -> Result<Vec<String>, AppError> {
 
 fn check_url(state: &AppState, value: &str) -> Result<String, AppError> {
     let value = value.trim();
-    crate::replies::validate_webhook_url(value, &state.config.webhook_trusted_origins)?;
+    crate::outbound::validate_webhook_url(value, &state.config.webhook_trusted_origins)?;
     Ok(value.to_owned())
 }
 
@@ -1308,9 +1308,10 @@ async fn send_post(
     body: &Value,
     trusted_origins: &[String],
 ) -> Result<u16, (Option<u16>, &'static str)> {
-    let (url, client) = crate::replies::webhook_client(url, trusted_origins)
+    let (url, client) = crate::outbound::webhook_client(url, trusted_origins)
         .await
         .map_err(|error| (None, error))?;
+    let _permit = crate::outbound::permit(due.organization_id).await;
     let body = body.to_string();
     let timestamp = Utc::now().timestamp().to_string();
     let signature = crate::replies::sign(secret, &timestamp, &body)
