@@ -543,6 +543,7 @@ pub async fn load_authenticated_actor(
     .bind(row.session_id)
     .execute(&state.pool)
     .await?;
+    crate::tenancy::signed_in(row.actor_id);
     Ok(Some(AuthenticatedActor {
         session_id: row.session_id,
         user_id: row.user_id,

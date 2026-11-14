@@ -615,7 +615,25 @@ async fn execute(state: &AppState, registry: &JobRegistry, job: Job, lease: Dura
         tracing::warn!(job_id = %job.id, kind, "a claimed job's lease was gone before it started");
         return;
     };
-    let handler = (registration.handler)(context);
+    // A job runs in its workspace's tenancy scope (H1.20); one queued for no
+    // workspace is the server's own work.
+    let tenancy = match job.organization_id {
+        Some(workspace) => crate::tenancy::Tenancy::Workspace {
+            account: None,
+            workspace,
+        },
+        None => crate::tenancy::Tenancy::System("jobs.server"),
+    };
+    let span = tracing::info_span!(
+        "job",
+        kind = %job.kind,
+        tenancy = tenancy.kind(),
+        workspace_id = job.organization_id.map(tracing::field::display),
+    );
+    let handler = tracing::Instrument::instrument(
+        crate::tenancy::scoped(tenancy, (registration.handler)(context)),
+        span,
+    );
     let renewals = renew_lease(
         state.pool.clone(),
         job.id,

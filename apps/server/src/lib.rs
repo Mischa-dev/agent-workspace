@@ -19,6 +19,7 @@ pub mod collections;
 pub mod config;
 pub mod connected_apps;
 pub mod conversations;
+pub mod db;
 pub mod direct;
 pub mod domain;
 pub mod environments;
@@ -229,6 +230,8 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
         .layer(DefaultBodyLimit::max(MAX_APPLICATION_BODY_BYTES))
         .layer(axum::middleware::from_fn(metrics::track_requests))
+        // Each request's tenancy scope (H1.20), inside its span.
+        .layer(axum::middleware::from_fn(tenancy::scope_requests))
         .layer(
             TraceLayer::new_for_http().make_span_with(|request: &Request<_>| {
                 let request_id = request
@@ -242,6 +245,8 @@ pub fn router(state: AppState) -> Router {
                     method = %request.method(),
                     path = %logged_path(request),
                     request_id = request_id,
+                    tenancy = tracing::field::Empty,
+                    account_id = tracing::field::Empty,
                 )
             }),
         )
