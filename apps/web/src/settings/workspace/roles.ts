@@ -26,6 +26,8 @@ export const PERMISSION_KEYS = [
   'runs.approve',
   'runs.interrupt',
   'runs.accounts',
+  'runs.report',
+  'requests.raise',
   'code.view',
   'code.publish',
   'code.manage',

@@ -7,11 +7,18 @@
   "switchable": true,
   "needs": ["tasks", "channels", "code"],
   "worksWith": ["agents", "automations"],
-  "permissions": ["runs.launch", "runs.approve", "runs.interrupt", "runs.accounts"],
+  "permissions": ["runs.launch", "runs.approve", "runs.interrupt", "runs.accounts", "runs.report", "requests.raise"],
   "tools": {
     "run_start": "create",
     "task_launch": "create",
     "run_get": "describe",
+    "run_open": "create",
+    "run_update": "change",
+    "run_activity": "change",
+    "run_usage_report": "change",
+    "run_result": "change",
+    "run_cancel": "change",
+    "run_mark_not_started": "change",
     "run_stop": "change",
     "run_retry": "create",
     "run_dismiss_failure": "change",
@@ -51,7 +58,7 @@
     "/api/v1/organizations/{organization_id}/harnesses*",
     "/api/v1/organizations/{organization_id}/model-catalog*"
   ],
-  "events": { "emits": ["run.updated", "run.finished"], "listens": ["task.created", "task.updated"] },
+  "events": { "emits": ["run.updated", "run.finished", "run.changed"], "listens": ["task.created", "task.updated"] },
   "notifications": [
     "approval_requested",
     "run_waiting",

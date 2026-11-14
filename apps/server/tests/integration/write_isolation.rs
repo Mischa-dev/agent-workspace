@@ -489,12 +489,19 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "repository_write",
     "role_assign",
     "role_write",
+    "run_activity",
+    "run_cancel",
     "run_dismiss_failure",
+    "run_mark_not_started",
+    "run_open",
     "run_publish",
     "run_request",
+    "run_result",
     "run_retry",
     "run_start",
     "run_stop",
+    "run_update",
+    "run_usage_report",
     "scheduled_message_update",
     "session_bind",
     "settings_set",
@@ -1251,6 +1258,9 @@ struct Targets {
     /// Questions the agent asked the owner (AWD-62): one to answer over
     /// HTTP, one through MCP.
     questions: [Uuid; 2],
+    /// Runs the owner reports on themselves (A1.3): one to report on, one
+    /// to stop, and one whose start is uncertain.
+    reported_runs: [Uuid; 3],
 }
 
 async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targets {
@@ -1589,7 +1599,7 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
                 ARRAY['projects.view', 'tasks.view', 'tasks.create', 'tasks.edit', 'tasks.delete',
                       'channels.post', 'channels.create', 'pages.edit', 'whiteboards.edit',
                       'collections.edit', 'collections.build', 'runs.launch', 'runs.approve', 'runs.interrupt', 'runs.accounts',
-                      'code.view', 'code.publish'])
+                      'runs.report', 'requests.raise', 'code.view', 'code.publish'])
         RETURNING id
         "#,
     )
@@ -1611,10 +1621,30 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
     .fetch_one(pool)
     .await
     .expect("workspace template");
+    let mut reported_runs = [Uuid::nil(); 3];
+    for (index, state) in ["working", "working", "start_uncertain"].into_iter().enumerate() {
+        reported_runs[index] = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            INSERT INTO runs (id, workspace_id, space_id, account_id, title, cause_kind, state,
+                              last_report_at, started_at)
+            VALUES (gen_random_uuid(), $1, $2, $3, $4, 'manual', $5, now(), now())
+            RETURNING id
+            "#,
+        )
+        .bind(organization)
+        .bind(project)
+        .bind(owner)
+        .bind(format!("Net reported run {tag} {index}"))
+        .bind(state)
+        .fetch_one(pool)
+        .await
+        .expect("reported run");
+    }
     let in_project = |sql: &'static str| scalar(pool, sql, project);
     let in_organization = |sql: &'static str| scalar(pool, sql, organization);
     Targets {
         questions,
+        reported_runs,
         custom_role,
         workspace_template,
         sessions,
@@ -6914,6 +6944,50 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "run_stop",
             json!({"runId": sp.run_stop, "clientRequestId": "net-stop-own"}),
             vec![json!({"runId": b.run, "clientRequestId": "net-stop-b"})],
+        ),
+        mcp_case(
+            "run_open",
+            json!({"projectId": a.project, "title": "Net run", "cause": {"kind": "manual"}, "clientRunId": "net-open-own"}),
+            vec![json!({"projectId": b.project, "title": "Net run", "cause": {"kind": "manual"}, "clientRunId": "net-open-b"})],
+        )
+        .rejecting(vec![
+            json!({"projectId": a.project, "title": "Net run", "cause": {"kind": "thread", "conversationId": b.channel}, "clientRunId": "net-open-m1"}),
+            json!({"projectId": a.project, "title": "Net run", "cause": {"kind": "task", "taskId": b.task}, "clientRunId": "net-open-m2"}),
+            json!({"projectId": a.project, "title": "Net run", "cause": {"kind": "manual"}, "parentRunId": bx.reported_runs[0], "clientRunId": "net-open-m3"}),
+        ]),
+        mcp_case(
+            "run_update",
+            json!({"runId": ax.reported_runs[0], "statusLine": "Net", "clientRequestId": "net-run-update-own"}),
+            vec![json!({"runId": bx.reported_runs[0], "statusLine": "Net", "clientRequestId": "net-run-update-b"})],
+        ),
+        mcp_case(
+            "run_activity",
+            json!({"runId": ax.reported_runs[0], "activities": [{"id": "net-own", "kind": "text_message", "payload": {"text": "Net"}}]}),
+            vec![json!({"runId": bx.reported_runs[0], "activities": [{"id": "net-b", "kind": "text_message", "payload": {"text": "Net"}}]})],
+        ),
+        mcp_case(
+            "run_usage_report",
+            json!({"runId": ax.reported_runs[0], "reportKey": "net-usage-own", "model": "model-a", "inputTokens": 10}),
+            vec![
+                json!({"runId": bx.reported_runs[0], "reportKey": "net-usage-b", "model": "model-a", "inputTokens": 10}),
+                json!({"projectId": b.project, "reportKey": "net-usage-window-b", "model": "model-a", "inputTokens": 10,
+                       "windowStart": "2026-11-14T09:00:00Z", "windowEnd": "2026-11-14T09:15:00Z"}),
+            ],
+        ),
+        mcp_case(
+            "run_result",
+            json!({"runId": ax.reported_runs[0], "results": [{"kind": "link", "url": "https://example.com/net-own"}]}),
+            vec![json!({"runId": bx.reported_runs[0], "results": [{"kind": "link", "url": "https://example.com/net-b"}]})],
+        ),
+        mcp_case(
+            "run_cancel",
+            json!({"runId": ax.reported_runs[1], "reason": "Net", "clientRequestId": "net-run-cancel-own"}),
+            vec![json!({"runId": bx.reported_runs[1], "reason": "Net", "clientRequestId": "net-run-cancel-b"})],
+        ),
+        mcp_case(
+            "run_mark_not_started",
+            json!({"runId": ax.reported_runs[2]}),
+            vec![json!({"runId": bx.reported_runs[2]})],
         ),
         mcp_case(
             "run_retry",

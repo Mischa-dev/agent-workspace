@@ -48,6 +48,11 @@ pub enum Action {
     WorkerInvoke,
     RunInterrupt,
     ApprovalRespond,
+    /// Open runs for yourself and report on them (A1): any account, for its
+    /// own work.
+    RunReport,
+    /// Ask someone for an approval or an answer (A1).
+    RequestRaise,
     ChannelCreate,
     MessageSend,
     /// Remove anyone's message (owners and admins; people only, checked by
@@ -91,7 +96,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Self; 44] = [
+    pub const ALL: [Self; 46] = [
         Self::OrganizationProjectCreate,
         Self::ProjectView,
         Self::ProjectManage,
@@ -110,6 +115,8 @@ impl Action {
         Self::WorkerInvoke,
         Self::RunInterrupt,
         Self::ApprovalRespond,
+        Self::RunReport,
+        Self::RequestRaise,
         Self::ChannelCreate,
         Self::MessageSend,
         Self::MessageModerate,
@@ -159,6 +166,8 @@ impl Action {
             Self::WorkerInvoke => Permission::RunsLaunch,
             Self::RunInterrupt => Permission::RunsInterrupt,
             Self::ApprovalRespond => Permission::RunsApprove,
+            Self::RunReport => Permission::RunsReport,
+            Self::RequestRaise => Permission::RequestsRaise,
             Self::ChannelCreate | Self::ConversationArchive => Permission::ChannelsCreate,
             Self::MessageSend | Self::ThreadCreate | Self::MentionSearch => {
                 Permission::ChannelsPost
@@ -215,6 +224,8 @@ pub enum Permission {
     RunsApprove,
     RunsInterrupt,
     RunsAccounts,
+    RunsReport,
+    RequestsRaise,
     CodeView,
     CodePublish,
     CodeManage,
@@ -307,7 +318,7 @@ const WORKERS: [bool; 4] = [true, true, true, false];
 const MANAGERS: [bool; 4] = [true, true, false, false];
 
 /// Every permission, in the order the Roles page shows them.
-pub const PERMISSIONS: [PermissionInfo; 30] = [
+pub const PERMISSIONS: [PermissionInfo; 32] = [
     required(permission(
         Permission::ProjectsView,
         "projects.view",
@@ -487,6 +498,25 @@ pub const PERMISSIONS: [PermissionInfo; 30] = [
         "Set up and use their own accounts and environments for runs.",
         PermissionScope::Project,
         WORKERS,
+    ),
+    // A1: every account reports its own work the same way, person or agent.
+    permission(
+        Permission::RunsReport,
+        "runs.report",
+        "runs",
+        "Report their own runs",
+        "Open runs for their own work and report its steps, usage and results.",
+        PermissionScope::Project,
+        ALL_ROLES,
+    ),
+    permission(
+        Permission::RequestsRaise,
+        "requests.raise",
+        "runs",
+        "Raise requests",
+        "Ask someone for an approval or an answer from a run.",
+        PermissionScope::Project,
+        ALL_ROLES,
     ),
     permission(
         Permission::CodeView,
@@ -1160,6 +1190,8 @@ pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decis
             | Action::NavigationWrite
             | Action::WorkerInvoke
             | Action::RunInterrupt
+            | Action::RunReport
+            | Action::RequestRaise
             | Action::ChannelCreate
             | Action::MessageSend
             | Action::MessageModerate
@@ -1414,6 +1446,9 @@ mod tests {
                             | Action::CollectionBuild
                             // AWD-54: members edit sheets.
                             | Action::SheetEdit
+                            // A1: every role reports its own runs.
+                            | Action::RunReport
+                            | Action::RequestRaise
                     ),
                     MembershipRole::Viewer => {
                         matches!(
@@ -1426,6 +1461,8 @@ mod tests {
                                 | Action::ReadStateUpdate
                                 | Action::WorkItemView
                                 | Action::RepositoryView
+                                | Action::RunReport
+                                | Action::RequestRaise
                         )
                     }
                     MembershipRole::Worker => matches!(

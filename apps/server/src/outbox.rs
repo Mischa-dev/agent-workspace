@@ -165,6 +165,21 @@ pub struct AgentRunUpdatedPayload {
     pub state: Option<RunState>,
 }
 
+/// A1: a run changed, whoever runs it (the stopgap until K3's log carries
+/// `run.*` events). IDs and the state only; `change` names what happened
+/// (`opened`, `updated`, `activity`, `finished`, `liveness_changed`,
+/// `result_added`, `usage_updated`, `cancel`).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RunChangedPayload {
+    pub run_id: Uuid,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<Uuid>,
+    pub change: String,
+    pub state: String,
+    pub version: i64,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkItemUpdatedPayload {
@@ -278,6 +293,7 @@ pub enum OutboxEventPayload {
     ReadStateUpdated(ReadStateUpdatedPayload),
     ConversationMemberRemoved(ConversationMemberRemovedPayload),
     AgentRunUpdated(AgentRunUpdatedPayload),
+    RunChanged(RunChangedPayload),
     WorkItemUpdated(WorkItemUpdatedPayload),
     ProjectMembershipUpdated(ProjectMembershipUpdatedPayload),
     NotificationsUpdated(NotificationsUpdatedPayload),
@@ -301,6 +317,7 @@ impl OutboxEventPayload {
             Self::ReadStateUpdated(_) => "conversation.read_state.updated",
             Self::ConversationMemberRemoved(_) => "conversation.member.removed",
             Self::AgentRunUpdated(_) => "conversation.agent_run.updated",
+            Self::RunChanged(_) => "run.changed",
             Self::WorkItemUpdated(_) => "work_item.updated",
             Self::ProjectMembershipUpdated(_) => "project.membership.updated",
             Self::NotificationsUpdated(_) => "notifications.updated",
@@ -323,6 +340,7 @@ impl OutboxEventPayload {
             Self::MessageReactionsUpdated(payload) => Some(payload.conversation_id),
             Self::ReadStateUpdated(payload) => Some(payload.conversation_id),
             Self::AgentRunUpdated(payload) => Some(payload.conversation_id),
+            Self::RunChanged(payload) => payload.conversation_id,
             // The removed actor can no longer see the group, so delivery must
             // not depend on that visibility: the event has no conversation
             // scope and goes only to them (see recipient_actor_id).
@@ -361,7 +379,7 @@ impl OutboxEventPayload {
             | Self::MessageUpdated(_)
             | Self::MessageReactionsUpdated(_) => OutboxResourceKind::Message,
             Self::ReadStateUpdated(_) => OutboxResourceKind::ReadState,
-            Self::AgentRunUpdated(_) => OutboxResourceKind::AgentRun,
+            Self::AgentRunUpdated(_) | Self::RunChanged(_) => OutboxResourceKind::AgentRun,
             Self::WorkItemUpdated(_) => OutboxResourceKind::WorkItem,
             Self::ProjectMembershipUpdated(_) => OutboxResourceKind::Project,
             Self::NotificationsUpdated(_) => OutboxResourceKind::Notification,
@@ -387,6 +405,7 @@ impl OutboxEventPayload {
             Self::ReadStateUpdated(payload) => payload.actor_id,
             Self::ConversationMemberRemoved(payload) => payload.conversation_id,
             Self::AgentRunUpdated(payload) => payload.agent_run_id,
+            Self::RunChanged(payload) => payload.run_id,
             Self::WorkItemUpdated(payload) => payload.work_item_id,
             Self::ProjectMembershipUpdated(payload) => payload.project_id,
             // Keyed by recipient, like read state.
@@ -434,6 +453,13 @@ impl OutboxEventPayload {
             Self::AgentRunUpdated(payload) if payload.agent_run_id.is_nil() => {
                 Err(OutboxEventError::MalformedPayload)
             }
+            Self::RunChanged(payload)
+                if payload.version < 1
+                    || !(1..=40).contains(&payload.change.len())
+                    || !(1..=40).contains(&payload.state.len()) =>
+            {
+                Err(OutboxEventError::MalformedPayload)
+            }
             Self::WorkItemUpdated(payload)
                 if payload.work_item_id.is_nil() || payload.version < 1 =>
             {
@@ -476,6 +502,7 @@ impl OutboxEventPayload {
             Self::ReadStateUpdated(payload) => serde_json::to_value(payload),
             Self::ConversationMemberRemoved(payload) => serde_json::to_value(payload),
             Self::AgentRunUpdated(payload) => serde_json::to_value(payload),
+            Self::RunChanged(payload) => serde_json::to_value(payload),
             Self::WorkItemUpdated(payload) => serde_json::to_value(payload),
             Self::ProjectMembershipUpdated(payload) => serde_json::to_value(payload),
             Self::NotificationsUpdated(payload) => serde_json::to_value(payload),
@@ -521,6 +548,9 @@ impl OutboxEventPayload {
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "conversation.agent_run.updated" => Self::AgentRunUpdated(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "run.changed" => Self::RunChanged(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "work_item.updated" => Self::WorkItemUpdated(

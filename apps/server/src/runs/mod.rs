@@ -28,8 +28,12 @@ use crate::{
     work_item_commands::{AuditAttribution, CommandActor},
 };
 
+pub mod activities;
+pub mod liveness;
+pub mod ops;
 pub mod state;
 pub mod store;
+pub mod usage;
 
 pub use state::{Liveness, RunState};
 
@@ -38,6 +42,7 @@ pub const BACKFILL_ACTIVITIES_KIND: &str = "runs.backfill_activities";
 const BACKFILL_BATCH: i32 = 5000;
 
 pub fn register_jobs(registry: &mut JobRegistry) {
+    liveness::register_jobs(registry);
     registry.register_with_timeout(
         BACKFILL_ACTIVITIES_KIND,
         Duration::from_secs(300),

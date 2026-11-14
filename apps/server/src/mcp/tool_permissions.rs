@@ -17,7 +17,7 @@
 use crate::policy::Permission::{
     self, ChannelsCreate, ChannelsPost, CodeManage, CodePublish, CodeView, CollectionsBuild,
     CollectionsEdit, MembersInvite, MembersManage, MembersView, PagesEdit, ProjectsCreate,
-    ProjectsManage, RolesManage, RunsApprove, RunsInterrupt, RunsLaunch, SettingsManage,
+    ProjectsManage, RolesManage, RunsApprove, RunsInterrupt, RunsLaunch, RunsReport, SettingsManage,
     SheetsEdit, TasksCreate, TasksDelete, TasksEdit, TasksView, TasksWorkflow, WhiteboardsEdit,
 };
 
@@ -193,6 +193,13 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("run_start", Some(RunsLaunch)),
     ("task_launch", Some(RunsLaunch)),
     ("run_get", None),
+    ("run_open", Some(RunsReport)),
+    ("run_update", Some(RunsReport)),
+    ("run_activity", Some(RunsReport)),
+    ("run_usage_report", Some(RunsReport)),
+    ("run_result", Some(RunsReport)),
+    ("run_cancel", Some(RunsInterrupt)),
+    ("run_mark_not_started", Some(RunsInterrupt)),
     ("run_stop", Some(RunsInterrupt)),
     ("run_retry", Some(RunsLaunch)),
     ("run_dismiss_failure", None),
