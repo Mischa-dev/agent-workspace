@@ -1,10 +1,17 @@
 # Agent Workspace
 
-Agent Workspace is a desktop-first project environment that connects durable
-conversation, structured work, hosted execution workers, and GitHub delivery.
+Agent Workspace is one app where a team talks (channels, DMs, groups and
+threads), plans (pages, whiteboards, sheets and collections of its own record
+types) and ships (tasks, agent runs, code and pull requests). People and
+agents work in it as equals: agents connect over MCP or the public API, answer
+when they're asked, claim tasks and launch runs, and every call is checked
+against the caller's memberships and what each conversation lets them see.
 
-The canonical product and engineering plan is
-[PROJECT_SOURCE_OF_TRUTH.md](./PROJECT_SOURCE_OF_TRUTH.md).
+Today it runs as one Rust server with PostgreSQL and a React web app, on one
+host or self-hosted. Where it is going, and the order it is built in, is the
+master plan in [`docs/plans/master/`](docs/plans/master/README.md). The rules
+for changing it, for people and agents alike, are in [`AGENTS.md`](AGENTS.md).
+First-build documents are kept in [`docs/history/`](docs/history/).
 
 ## Development
 
@@ -28,7 +35,7 @@ cargo test --workspace
 ```
 
 Copy `.env.example` to `.env` for local development. Never commit `.env`,
-Codex credentials, GitHub App keys, webhook secrets, or bearer tokens.
+provider credentials, GitHub App keys, webhook secrets, or bearer tokens.
 
 Start PostgreSQL, then apply migrations and create the idempotent M0 seed:
 
@@ -50,10 +57,10 @@ argument or environment variable:
 
 ```bash
 cargo run -p agent-workspace-server -- bootstrap-admin \
-  --login-name mischa \
-  --display-name "Mischa Nelson" \
-  --organization-name "Personal" \
-  --organization-slug personal
+  --login-name <login> \
+  --display-name "<your name>" \
+  --organization-name "<workspace name>" \
+  --organization-slug <workspace-slug>
 ```
 
 On an upgraded M0 database, the command adopts the single unambiguous active

@@ -35,6 +35,7 @@ class AreaValidationTests(unittest.TestCase):
         self.stub(self.root / "tools" / "verify-self-hosted-guide.sh")
         self.stub(self.root / "tools" / "ci" / "test_admission.sh")
         self.stub(self.root / "tools" / "ci" / "test_pinned_node.sh")
+        self.stub(self.root / "tools" / "db" / "schema-snapshot.sh")
         self.stub(self.root / "target" / "debug" / "agent-workspace-server")
         # Keep combined checks sequential for deterministic call logs.
         self.stub(self.bin / "nproc", output="4")
@@ -93,6 +94,7 @@ class AreaValidationTests(unittest.TestCase):
                 self.assertEqual(any(c.split() == ["test_admission.sh"] for c in calls), rust)
                 self.assertEqual(any(c.split() == ["test_pinned_node.sh"] for c in calls), rust)
                 self.assertEqual("cargo nextest run --workspace --profile ci" in calls, rust)
+                self.assertEqual(any(c.split() == ["schema-snapshot.sh"] for c in calls), rust)
                 self.assertEqual("pnpm lint" in calls, web)
                 self.assertEqual("pnpm build" in calls, web)
                 # The browser smoke tests drive the server too, so they run

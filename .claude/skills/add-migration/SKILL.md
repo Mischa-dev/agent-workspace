@@ -9,14 +9,23 @@ description: Use when a change needs a database change in Agent Workspace (a new
 
 New migrations are named by a UTC timestamp: `apps/server/migrations/
 YYYYMMDDhhmmss_what_it_does.sql`. The numbered ones stop at 0054, and
-`apps/server/tests/integration/m0_database.rs` refuses new numbered ones and
-duplicate timestamps. Several branches add migrations at once, so:
+`apps/server/tests/integration/migrations_guard.rs` refuses new numbered ones
+and duplicate timestamps. Several branches add migrations at once, so:
 
 - Use the range your workstream was given (the brief or the roadmap says), or
   the current UTC time if none was.
 - Never edit a migration that's on `main`; add another one.
 - A migration must apply on top of any other branch's migration, in either
   order. Don't depend on something a branch that hasn't merged adds.
+
+## Read today's schema first
+
+`tools/db/schema-snapshot.sh` applies every migration to a scratch database
+and writes the result, as `pg_dump --schema-only` prints it, to
+`target/schema.sql` (it needs `AGENT_WORKSPACE_DATABASE_URL` or
+`CI_DATABASE_BASE`; each CI run keeps one with its reports). Read a table,
+function or trigger there instead of hunting through the migrations for its
+last `CREATE OR REPLACE`. It isn't checked in, so run it again after a merge.
 
 ## Write it like the others
 
@@ -36,8 +45,9 @@ duplicate timestamps. Several branches add migrations at once, so:
 
 ## Check it
 
-- `cargo test -p agent-workspace-server --test integration -- m0_database`
-  applies every migration to a fresh schema.
+- `cargo test -p agent-workspace-server --test integration -- migrations_guard
+  m0_database` checks the name and applies every migration to a fresh
+  schema.
 - Any integration test applies them too (`sqlx::migrate!` in the test setup).
 - The server's `preflight` command checks a release's migrations against a
   live database before a deploy; nothing to do here, but list the new

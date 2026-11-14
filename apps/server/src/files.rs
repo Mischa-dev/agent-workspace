@@ -352,8 +352,27 @@ pub(crate) async fn store_upload(
     destination: Destination,
     upload: Upload,
 ) -> Result<FileRow, AppError> {
-    let project_id = destination.project_id();
-    let organization_id = organization_of(&state.pool, project_id).await?;
+    let prepared = prepare_upload(upload).await?;
+    let mut transaction = state.pool.begin().await?;
+    let row = store_prepared(state, &mut transaction, uploader, destination, prepared).await?;
+    if let Err(error) = transaction.commit().await {
+        discard_stored(state, &row).await;
+        return Err(error.into());
+    }
+    Ok(row)
+}
+
+/// An upload ready to store: a picture re-encoded without where it was
+/// taken, its type and size worked out. Made before any transaction opens.
+pub(crate) struct PreparedUpload {
+    name: String,
+    bytes: Vec<u8>,
+    content_type: String,
+    dimensions: Option<(u32, u32)>,
+    thumbnail: Option<Vec<u8>>,
+}
+
+pub(crate) async fn prepare_upload(upload: Upload) -> Result<PreparedUpload, AppError> {
     let name = clean_name(&upload.name);
     let declared = upload.declared_type;
     let processed = if image::sniff(&upload.bytes).is_some() {
@@ -370,31 +389,58 @@ pub(crate) async fn store_upload(
     } else {
         Err(upload.bytes)
     };
-    let (bytes, content_type, dimensions, thumbnail) = match processed {
-        Ok(image) => (
-            image.bytes,
-            image.format.content_type().to_owned(),
-            Some((image.width, image.height)),
-            image.thumbnail,
-        ),
+    Ok(match processed {
+        Ok(image) => PreparedUpload {
+            name,
+            bytes: image.bytes,
+            content_type: image.format.content_type().to_owned(),
+            dimensions: Some((image.width, image.height)),
+            thumbnail: image.thumbnail.map(|thumbnail| thumbnail.bytes),
+        },
         Err(bytes) => {
             let content_type = file_content_type(&name, declared.as_deref(), &bytes);
-            (bytes, content_type, None, None)
+            PreparedUpload {
+                name,
+                bytes,
+                content_type,
+                dimensions: None,
+                thumbnail: None,
+            }
         }
-    };
+    })
+}
+
+/// Stores a prepared upload in `transaction`, which the caller commits
+/// (with anything else that belongs with it, such as a retry key). If that
+/// commit fails, [`discard_stored`] takes the stored bytes away again.
+pub(crate) async fn store_prepared(
+    state: &AppState,
+    transaction: &mut Transaction<'_, Postgres>,
+    uploader: Uuid,
+    destination: Destination,
+    prepared: PreparedUpload,
+) -> Result<FileRow, AppError> {
+    let project_id = destination.project_id();
+    let organization_id = organization_of(&mut **transaction, project_id).await?;
+    let PreparedUpload {
+        name,
+        bytes,
+        content_type,
+        dimensions,
+        thumbnail,
+    } = prepared;
     let incoming = u64::try_from(bytes.len())
         .unwrap_or(u64::MAX)
         .saturating_add(thumbnail.as_ref().map_or(0, |thumbnail| {
-            u64::try_from(thumbnail.bytes.len()).unwrap_or(u64::MAX)
+            u64::try_from(thumbnail.len()).unwrap_or(u64::MAX)
         }));
     // One upload at a time per workspace from the room check to the insert,
     // so uploads side by side can't each see room and together overfill it.
-    let mut transaction = state.pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(format!("files-quota:{organization_id}"))
-        .execute(&mut *transaction)
+        .execute(&mut **transaction)
         .await?;
-    require_room(state, organization_id, incoming).await?;
+    require_room(state, transaction, organization_id, incoming).await?;
 
     let id = Uuid::now_v7();
     let storage_key = format!("{}/{}", organization_id.simple(), id.simple());
@@ -402,7 +448,7 @@ pub(crate) async fn store_upload(
     let store = FileStore::from_config(&state.config);
     store.put(&storage_key, &bytes).await?;
     if let (Some(key), Some(thumbnail)) = (&thumbnail_key, &thumbnail)
-        && let Err(error) = store.put(key, &thumbnail.bytes).await
+        && let Err(error) = store.put(key, thumbnail).await
     {
         let _ = store.delete(&storage_key).await;
         return Err(error);
@@ -448,15 +494,11 @@ pub(crate) async fn store_upload(
     .bind(
         thumbnail
             .as_ref()
-            .map(|thumbnail| i64::try_from(thumbnail.bytes.len()).unwrap_or(i64::MAX)),
+            .map(|thumbnail| i64::try_from(thumbnail.len()).unwrap_or(i64::MAX)),
     )
     .bind(attached)
-    .fetch_one(&mut *transaction)
+    .fetch_one(&mut **transaction)
     .await;
-    let inserted = match inserted {
-        Ok(row) => transaction.commit().await.map(|()| row),
-        Err(error) => Err(error),
-    };
     match inserted {
         Ok(row) => Ok(row),
         Err(error) => {
@@ -469,18 +511,28 @@ pub(crate) async fn store_upload(
     }
 }
 
+/// Takes away the bytes [`store_prepared`] stored, when the transaction
+/// that held its row didn't commit.
+pub(crate) async fn discard_stored(state: &AppState, row: &FileRow) {
+    let store = FileStore::from_config(&state.config);
+    let _ = store.delete(&row.storage_key).await;
+    if let Some(key) = &row.thumbnail_key {
+        let _ = store.delete(key).await;
+    }
+}
+
 /// Refuses an upload that would take the workspace over its file quota, or
 /// the server over its storage watermark. The walk of the data root leaves
 /// the file store out (`storage_admission`), so the files the database knows
 /// about are added here.
 pub(crate) async fn require_room(
     state: &AppState,
+    connection: &mut sqlx::PgConnection,
     organization_id: Uuid,
     incoming: u64,
 ) -> Result<(), AppError> {
-    let mut connection = state.pool.acquire().await?;
     let effective = settings::resolve(
-        &mut connection,
+        &mut *connection,
         SettingsContext {
             organization_id,
             project_id: None,
@@ -512,7 +564,6 @@ pub(crate) async fn require_room(
     .bind(organization_id)
     .fetch_one(&mut *connection)
     .await?;
-    drop(connection);
     let incoming_i64 = i64::try_from(incoming).unwrap_or(i64::MAX);
     if quota_mb > 0
         && workspace_bytes.saturating_add(incoming_i64) > quota_mb.saturating_mul(1024 * 1024)

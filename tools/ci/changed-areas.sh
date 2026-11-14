@@ -17,9 +17,15 @@ fi
 
 while IFS= read -r file; do
   case "${file}" in
-    # Generated from the server's operations: a hand edit must fail the
-    # server's drift check, and a regenerated file must pass the web's.
-    apps/web/src/api/generated/*)
+    # Web files the Rust tests read (include_str! and parity fixtures): a
+    # change to one can break a Rust test, so it runs both sides. And the
+    # files generated from the server's operations: a hand edit must fail
+    # the server's drift check, and a regenerated file must pass the web's.
+    apps/web/src/experience/registry.json | \
+      apps/web/src/ui/markdown/*.json | \
+      apps/web/src/memory/live/*.json | \
+      apps/web/src/settings/workspace/roles.ts | \
+      apps/web/src/api/generated/*)
       rust=true
       web=true
       ;;

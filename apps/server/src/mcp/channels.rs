@@ -93,7 +93,7 @@ fn conversation_error(error: AppError, operation: &'static str) -> ToolResult<Co
         ),
         AppError::Conflict("conversation", "non-terminal Agent Run prevents archive") => {
             ToolResult::conflict(
-                "Codex is still running in it. Wait for the run to finish, or interrupt it, then archive.",
+                "A run is still going in it. Wait for the run to finish, or interrupt it, then archive.",
             )
         }
         AppError::Conflict("conversation", message) => ToolResult::conflict(message),

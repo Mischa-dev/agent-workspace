@@ -142,10 +142,18 @@ struct RegistrationResponse {
     response_types: Vec<&'static str>,
 }
 
+/// Registrations that no one has authorized yet, across the server.
+const MAX_UNCLAIMED_CLIENTS: i64 = 1_024;
+
 async fn register_client(
     State(state): State<AppState>,
+    headers: HeaderMap,
     ApiJson(mut request): ApiJson<RegistrationRequest>,
 ) -> Result<(StatusCode, Json<RegistrationResponse>), OAuthError> {
+    state
+        .rate_limits
+        .check_oauth_registration_sender(crate::rate_limit::client_address(&state.config, &headers))
+        .map_err(OAuthError::from)?;
     state
         .rate_limits
         .check_oauth_ceremony(&request.client_name)
@@ -194,11 +202,19 @@ async fn register_client(
     .execute(&mut *transaction)
     .await
     .map_err(AppError::from)?;
-    let client_count = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM mcp_oauth_clients")
-        .fetch_one(&mut *transaction)
-        .await
-        .map_err(AppError::from)?;
-    if client_count >= 1_024 {
+    // Only registrations nobody has used yet count: they're all an
+    // anonymous caller can grow. Clients someone authorized are bounded by
+    // the people who authorized them, and their (even revoked) grants stay
+    // for history.
+    let unclaimed = sqlx::query_scalar::<_, i64>(
+        r#"SELECT count(*) FROM mcp_oauth_clients client
+           WHERE NOT EXISTS (SELECT 1 FROM mcp_oauth_authorization_codes code WHERE code.client_id = client.id)
+             AND NOT EXISTS (SELECT 1 FROM mcp_oauth_grants grant_row WHERE grant_row.client_id = client.id)"#,
+    )
+    .fetch_one(&mut *transaction)
+    .await
+    .map_err(AppError::from)?;
+    if unclaimed >= MAX_UNCLAIMED_CLIENTS {
         return Err(OAuthError::invalid_client_metadata(
             "the local client registration limit has been reached",
         ));
@@ -599,7 +615,7 @@ async fn token(
     Form(request): Form<TokenRequest>,
 ) -> Result<Response, OAuthError> {
     let refreshing = request.grant_type == "refresh_token";
-    let address = crate::rate_limit::client_address(&headers);
+    let address = crate::rate_limit::client_address(&state.config, &headers);
     // A refresh is charged to its app only once its token checks out (in
     // `refresh`), and a refused one to its sender, so junk refreshes can't
     // spend the budget real apps need.
@@ -1269,9 +1285,11 @@ struct AgentChoice {
     display_name: String,
 }
 
-/// Active agent connections in Projects this person can manage agents in.
+/// Active agent connections this person may manage, and so act as: the
+/// candidates are the agents in projects the person is an enabled member of,
+/// and `external_agents::may_manage` decides each one (P0.6).
 async fn agent_choices(state: &AppState, actor_id: Uuid) -> Result<Vec<AgentChoice>, OAuthError> {
-    sqlx::query_as::<_, AgentChoice>(
+    let candidates = sqlx::query_as::<_, AgentChoice>(
         r#"
         SELECT connection.id AS connection_id, agent_membership.display_name
         FROM external_agent_connections connection
@@ -1284,8 +1302,6 @@ async fn agent_choices(state: &AppState, actor_id: Uuid) -> Result<Vec<AgentChoi
           ON manager.project_id = connection.project_id
          AND manager.actor_id = $1
          AND manager.enabled
-         AND manager.role IN ('owner', 'admin')
-         AND custom_role_allows(manager.role_id, 'agents.manage')
         WHERE connection.status = 'active' AND project.archived_at IS NULL
         ORDER BY lower(agent_membership.display_name), connection.id
         LIMIT 100
@@ -1294,8 +1310,18 @@ async fn agent_choices(state: &AppState, actor_id: Uuid) -> Result<Vec<AgentChoi
     .bind(actor_id)
     .fetch_all(&state.pool)
     .await
-    .map_err(AppError::from)
-    .map_err(Into::into)
+    .map_err(AppError::from)?;
+    let mut connection = state.pool.acquire().await.map_err(AppError::from)?;
+    let mut choices = Vec::new();
+    for candidate in candidates {
+        if crate::external_agents::may_manage(&mut connection, actor_id, candidate.connection_id)
+            .await?
+            .is_some()
+        {
+            choices.push(candidate);
+        }
+    }
+    Ok(choices)
 }
 
 /// The agent's Project and Actor, if this person may connect clients as it.
@@ -1304,45 +1330,34 @@ async fn managed_agent(
     manager_actor_id: Uuid,
     connection_id: Uuid,
 ) -> Result<Option<(Uuid, Uuid)>, OAuthError> {
-    let found = sqlx::query_as::<_, (Uuid, Uuid, Uuid, String, Option<Vec<String>>)>(
-        r#"
-        SELECT connection.project_id, connection.actor_id, project.organization_id,
-               agent_membership.role,
-               workspace_role_permissions(agent_membership.role_id)
-        FROM external_agent_connections connection
-        JOIN projects project ON project.id = connection.project_id
-        JOIN actors agent ON agent.id = connection.actor_id AND agent.status = 'active'
-        JOIN project_memberships agent_membership
-          ON agent_membership.project_id = connection.project_id
-         AND agent_membership.actor_id = connection.actor_id
-         AND agent_membership.enabled
-        JOIN project_memberships manager
-          ON manager.project_id = connection.project_id
-         AND manager.actor_id = $2
-         AND manager.enabled
-         AND manager.role IN ('owner', 'admin')
-         AND custom_role_allows(manager.role_id, 'agents.manage')
-        JOIN organization_memberships organization_membership
-          ON organization_membership.organization_id = project.organization_id
-         AND organization_membership.actor_id = $2
-         AND organization_membership.enabled
-        WHERE connection.id = $1 AND connection.status = 'active'
-          AND project.archived_at IS NULL
-        "#,
-    )
-    .bind(connection_id)
-    .bind(manager_actor_id)
-    .fetch_optional(&state.pool)
-    .await
-    .map_err(AppError::from)?;
-    let Some((project_id, agent_actor_id, organization_id, role, role_permissions)) = found else {
+    let mut connection = state.pool.acquire().await.map_err(AppError::from)?;
+    let Some(managed) =
+        crate::external_agents::may_manage(&mut connection, manager_actor_id, connection_id)
+            .await?
+    else {
         return Ok(None);
     };
+    let (project_id, agent_actor_id, organization_id) = (
+        managed.project_id,
+        managed.agent_actor_id,
+        managed.organization_id,
+    );
+    let (role, role_permissions) = sqlx::query_as::<_, (String, Option<Vec<String>>)>(
+        r#"
+        SELECT role, workspace_role_permissions(role_id)
+        FROM project_memberships
+        WHERE project_id = $1 AND actor_id = $2
+        "#,
+    )
+    .bind(project_id)
+    .bind(agent_actor_id)
+    .fetch_one(&mut *connection)
+    .await
+    .map_err(AppError::from)?;
     // Connecting as the agent hands its role to the app: only within what the
     // manager holds, as creating or re-enabling the agent requires.
     let grant = crate::policy::RoleGrant::stored(&role, role_permissions.as_deref())
         .map_err(AppError::from)?;
-    let mut connection = state.pool.acquire().await.map_err(AppError::from)?;
     let manager =
         crate::roles::standing(&mut connection, organization_id, manager_actor_id).await?;
     if !grant.permissions().is_subset_of(manager.permissions) {

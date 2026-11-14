@@ -241,7 +241,7 @@ Agent wakeup webhooks must be public `https` addresses. An agent host that
 listens on plain `http` on a private or tailnet address (such as the crew's
 wakeup listener on its Tailscale IP) works only once its exact origin is listed
 in `AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS`, comma separated, such as
-`http://100.119.56.3:8732`. Set it before upgrading to a release with these
+`http://100.64.0.10:8732`. Set it before upgrading to a release with these
 checks, or those wakeups start failing and agents fall back to their timers.
 
 Two more optional settings. `AGENT_WORKSPACE_OPERATOR_LOGINS` lists, comma
@@ -250,6 +250,14 @@ Settings › Workspace › Server; a workspace owner who doesn't run the server
 doesn't. `AGENT_WORKSPACE_ALLOW_PRIVATE_ADDRESSES=true` lets a workspace point
 its model provider or SMTP server at this machine or a private network (such
 as a local model or mail relay); without it both must be public addresses.
+
+`AGENT_WORKSPACE_CLIENT_ADDRESS_HEADER` names the request header that carries
+the caller's address, as the proxy in front of the server sets it:
+`cf-connecting-ip` behind Cloudflare. Sign-in, password reset and app
+sign-in limits per sender address use it. Unset, the server reads no address
+from requests and has no per-address limits, only per-name, per-token and
+shared ones; set it only when every request reaches the server through that
+proxy, or callers could name any address they like.
 
 GitHub App settings are optional and must be installed as separate owner-only
 files before adding their paths to this environment. Never print those files.

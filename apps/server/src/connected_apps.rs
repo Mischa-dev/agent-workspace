@@ -61,6 +61,9 @@ struct ConnectedApp {
     show_via: bool,
     created_at: String,
     last_used_at: Option<String>,
+    /// The agent connection the app acts as, for the management check.
+    #[serde(skip)]
+    agent_connection_id: Option<Uuid>,
 }
 
 #[derive(Debug, Serialize)]
@@ -80,6 +83,7 @@ const APP_SELECT: &str = r#"
                 ELSE COALESCE(agent.display_name, 'an agent') END AS acting_as,
            grant_row.account_wide, grant_row.show_via,
            grant_row.created_at::text AS created_at,
+           grant_row.external_agent_connection_id AS agent_connection_id,
            (SELECT max(access.last_used_at) FROM mcp_oauth_access_tokens access
             WHERE access.grant_id = grant_row.id)::text AS last_used_at
     FROM mcp_oauth_grants grant_row
@@ -103,15 +107,8 @@ async fn list(
                OR (grant_row.external_agent_connection_id IS NOT NULL
                    AND EXISTS (
                        SELECT 1 FROM project_memberships manager
-                       JOIN projects project ON project.id = manager.project_id
-                       JOIN organization_memberships organization_membership
-                         ON organization_membership.organization_id = project.organization_id
-                        AND organization_membership.actor_id = manager.actor_id
-                        AND organization_membership.enabled
                        WHERE manager.project_id = connection.project_id
-                         AND manager.actor_id = $1 AND manager.enabled
-                         AND manager.role IN ('owner', 'admin')
-                         AND custom_role_allows(manager.role_id, 'agents.manage'))))
+                         AND manager.actor_id = $1 AND manager.enabled)))
         ORDER BY grant_row.created_at DESC
         LIMIT 100
         "#
@@ -119,6 +116,26 @@ async fn list(
     .bind(principal.actor_id)
     .fetch_all(&state.pool)
     .await?;
+    // Apps connected as an agent show only to those who may manage it
+    // (external_agents::may_manage, the one rule; P0.6).
+    let mut connection = state.pool.acquire().await?;
+    let mut managed = Vec::with_capacity(apps.len());
+    for app in apps {
+        let mine = match app.agent_connection_id {
+            None => true,
+            Some(connection_id) => crate::external_agents::may_manage(
+                &mut connection,
+                principal.actor_id,
+                connection_id,
+            )
+            .await?
+            .is_some(),
+        };
+        if mine {
+            managed.push(app);
+        }
+    }
+    let apps = managed;
     let origin = public_origin(&state);
     Ok(Json(ConnectedAppsResponse {
         mcp_url: format!("{origin}{MCP_PATH}"),
@@ -133,34 +150,28 @@ async fn owned_grant(
     actor_id: Uuid,
     grant_id: Uuid,
 ) -> Result<(), AppError> {
-    let allowed = sqlx::query_scalar::<_, bool>(
+    let grant = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(
         r#"
-        SELECT EXISTS (
-            SELECT 1
-            FROM mcp_oauth_grants grant_row
-            LEFT JOIN external_agent_connections connection
-              ON connection.id = grant_row.external_agent_connection_id
-            WHERE grant_row.id = $1 AND grant_row.revoked_at IS NULL
-              AND (grant_row.actor_id = $2
-                   OR EXISTS (
-                       SELECT 1 FROM project_memberships manager
-                       JOIN projects project ON project.id = manager.project_id
-                       JOIN organization_memberships organization_membership
-                         ON organization_membership.organization_id = project.organization_id
-                        AND organization_membership.actor_id = manager.actor_id
-                        AND organization_membership.enabled
-                       WHERE manager.project_id = connection.project_id
-                         AND manager.actor_id = $2 AND manager.enabled
-                         AND manager.role IN ('owner', 'admin')
-                         AND custom_role_allows(manager.role_id, 'agents.manage')))
-            FOR UPDATE OF grant_row
-        )
+        SELECT actor_id, external_agent_connection_id
+        FROM mcp_oauth_grants
+        WHERE id = $1 AND revoked_at IS NULL
+        FOR UPDATE
         "#,
     )
     .bind(grant_id)
-    .bind(actor_id)
-    .fetch_one(&mut **transaction)
+    .fetch_optional(&mut **transaction)
     .await?;
+    let allowed = match grant {
+        None => false,
+        Some((grant_actor, _)) if grant_actor == actor_id => true,
+        Some((_, None)) => false,
+        // An app acting as an agent: whoever may manage the agent (P0.6).
+        Some((_, Some(connection_id))) => {
+            crate::external_agents::may_manage(transaction, actor_id, connection_id)
+                .await?
+                .is_some()
+        }
+    };
     if allowed {
         Ok(())
     } else {

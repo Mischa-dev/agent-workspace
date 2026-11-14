@@ -12,8 +12,7 @@ use crate::replies::{public_ipv4, public_ipv6};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(6);
-const USER_AGENT: &str =
-    "AgentWorkspace-LinkPreview/1.0 (+https://github.com/Mischa-dev/agent-workspace)";
+const USER_AGENT: &str = concat!("agent-workspace-link-preview/", env!("CARGO_PKG_VERSION"));
 
 /// What the guard lets through. Outside tests, only public addresses on the
 /// standard web ports.

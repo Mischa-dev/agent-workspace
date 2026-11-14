@@ -9,7 +9,7 @@ description: Use when driving an Agent Workspace pull request to green, such as 
 
 Run the same checks GitHub runs, on the working tree as it is:
 
-- On Mischa's machines: `tools/ci/run.sh` (add `--areas rust` or
+- On the CI machines: `tools/ci/run.sh` (add `--areas rust` or
   `--areas web` for one side). It picks the idle laptop or the Red Hat host.
 - In a cloud session, where those hosts aren't reachable, run the checks
   script directly after `tools/cloud/setup.sh`:
@@ -27,6 +27,10 @@ all Rust tests against a throwaway database (`cargo nextest`), doc tests,
 `cargo deny`, then web tests, the web build, the asset budgets and the
 browser smoke tests. Fix what fails before pushing; one validated push beats
 several guesses.
+
+New integration tests build on `apps/server/tests/integration/support/`
+(the app, test databases, callers and worlds) rather than a file's private
+helpers.
 
 ## Conflicts and a moving main
 
@@ -64,9 +68,11 @@ a proposal. Every change still passes the checks above before it's pushed.
 
 ## The pull request
 
-- Title `W<n>: <name>` for a workstream; one branch and one PR each.
+- Title `<slice id>: <name>` (`K1.3: …`), or `Build <n>: <name>` for a
+  whole build; one branch and one PR each.
 - The description lists deploy requirements: new migrations, environment
   variables, permissions, anything to install or set after deploying. The
   deploy checklist in `docs/operations/alpha-deploy.md` collects them.
-- If the workstream has an entry in `docs/plans/roadmap.md`, tick its
-  checklist and put the PR number after its heading, in the same PR.
+- Say in the description which slices of the workstream plan's slice table
+  (`docs/plans/master/plans/`, and `SLICES.md`) the PR builds, and record any
+  interface it changes in `docs/plans/master/interfaces.md`, in the same PR.

@@ -1,3 +1,5 @@
+> **Superseded where [`docs/plans/master/`](master/README.md) says otherwise.** This plan explains how the existing pieces were built; the master plan decides what changes.
+
 # Plan: an MCP surface that can do everything the app can
 
 September 30, 2026. A draft for Mischa; nothing here is approved yet. It

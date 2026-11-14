@@ -2,6 +2,8 @@
 
 use sqlx::PgPool;
 
+pub mod source;
+
 /// Drops a test's PostgreSQL schema and everything in it.
 ///
 /// `DROP SCHEMA ... CASCADE` takes a lock on every table, index, constraint

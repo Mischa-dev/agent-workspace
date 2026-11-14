@@ -1,3 +1,5 @@
+> **Superseded where [`docs/plans/master/`](master/README.md) says otherwise.** This plan explains how the existing pieces were built; the master plan decides what changes.
+
 # Whiteboards
 
 Workstream W16, task AWD-15. Shared Excalidraw boards that people draw on in

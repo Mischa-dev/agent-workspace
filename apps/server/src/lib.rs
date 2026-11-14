@@ -76,6 +76,7 @@ pub mod push;
 pub mod questions;
 pub mod rate_limit;
 pub mod reactions;
+pub mod read_state;
 pub mod realtime;
 pub mod recovery;
 pub mod replies;
@@ -94,6 +95,8 @@ pub mod server_status;
 pub mod settings;
 pub mod sheets;
 pub mod storage_admission;
+#[cfg(test)]
+mod structure_guards;
 pub mod telemetry;
 pub mod test_support;
 pub mod usage;
