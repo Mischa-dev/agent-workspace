@@ -35,7 +35,10 @@ own origin.
   such as `https://app.example.com,https://api.example.com`. Only these get
   CORS headers, and writes from any other origin are refused.
 - `AGENT_WORKSPACE_LIVE_ORIGIN`, only when a separate live service answers
-  the live connection.
+  the live connection. It must be on the API's host (another port is fine,
+  such as `https://api.example.com:8443`): the session cookies belong to that
+  host alone, so a live service on another host wouldn't see who is signed
+  in, and the server refuses such a setting when it starts.
 
 The app reads the request token it sends with every write from
 `/api/v1/auth/csrf`, since a page on another origin can't read the API's

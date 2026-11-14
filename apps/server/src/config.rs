@@ -87,7 +87,8 @@ pub struct AppConfig {
     pub public_origin: Option<String>,
     /// Where browsers open the live connection, when it isn't the API's own
     /// origin (`AGENT_WORKSPACE_LIVE_ORIGIN`, H1.41): a live service in
-    /// front of this one. The web app reads it from `/client-config`.
+    /// front of this one, on the public origin's host. The web app reads it
+    /// from `/client-config`.
     pub live_origin: Option<String>,
     pub database_url: SecretString,
     pub database_max_connections: u32,
@@ -411,7 +412,7 @@ impl AppConfig {
         let log_filter = optional(values, "LOG_FILTER", "agent_workspace=info,tower_http=info");
         let webhook_trusted_origins = webhook_trusted_origins(values)?;
         let public_origin = public_origin(values)?;
-        let live_origin = origin_setting(values, "LIVE_ORIGIN")?;
+        let live_origin = live_origin(values, public_origin.as_deref())?;
         let allowed_origins = allowed_origins(values, environment, public_origin.as_deref())?;
 
         validate_loopback("SERVER_ADDR", server_addr, environment)?;
@@ -925,6 +926,32 @@ fn validate_secret_file(
 
 fn public_origin(values: &BTreeMap<String, String>) -> Result<Option<String>, ConfigError> {
     origin_setting(values, "PUBLIC_ORIGIN")
+}
+
+/// `LIVE_ORIGIN`: an origin on the public origin's host (another port or
+/// scheme is fine). Sign-in cookies are host-only, so a live connection to
+/// another host would arrive unsigned; until a ticket hands the session
+/// across hosts, such a setting is refused here rather than failing in the
+/// browser.
+fn live_origin(
+    values: &BTreeMap<String, String>,
+    public_origin: Option<&str>,
+) -> Result<Option<String>, ConfigError> {
+    let Some(live) = origin_setting(values, "LIVE_ORIGIN")? else {
+        return Ok(None);
+    };
+    let host = |origin: &str| url::Url::parse(origin).ok()?.host_str().map(str::to_owned);
+    if public_origin.and_then(host).is_none() || public_origin.and_then(host) != host(&live) {
+        return Err(ConfigError::Invalid {
+            key: format!("{PREFIX}LIVE_ORIGIN"),
+            reason: format!(
+                "must be on the same host as {PREFIX}PUBLIC_ORIGIN (another port is fine): \
+                 sign-in cookies belong to one host, so a live connection to another host \
+                 would not be signed in. Leave it unset to use the public origin"
+            ),
+        });
+    }
+    Ok(Some(live))
 }
 
 /// An origin setting such as `PUBLIC_ORIGIN` or `LIVE_ORIGIN`: https, or
@@ -1561,7 +1588,7 @@ mod tests {
             ("AGENT_WORKSPACE_ALLOW_PRIVATE_ADDRESSES", "true"),
             (
                 "AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS",
-                "http://100.64.0.1:8732",
+                "http://wake.internal:8732",
             ),
             ("AGENT_WORKSPACE_DEMO_EXECUTOR", "true"),
         ] {

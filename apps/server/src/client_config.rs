@@ -269,7 +269,7 @@ mod tests {
         let split_config = config(&[
             ("DATABASE_URL", "postgres://aw:pw@127.0.0.1/aw"),
             ("PUBLIC_ORIGIN", "https://api.example.com"),
-            ("LIVE_ORIGIN", "https://live.example.com/"),
+            ("LIVE_ORIGIN", "https://api.example.com:8443/"),
         ]);
         // A page this server served keeps to its own origin.
         assert_eq!(
@@ -280,13 +280,15 @@ mod tests {
         assert_eq!(split.api_origin.as_deref(), Some("https://api.example.com"));
         assert_eq!(
             split.live_origin.as_deref(),
-            Some("https://live.example.com")
+            Some("https://api.example.com:8443")
         );
         // The server's own pages may open the live connection there.
         let policy = content_security_policy(&split_config);
         let policy = policy.to_str().expect("ascii");
         assert!(
-            policy.contains("connect-src 'self' https://live.example.com wss://live.example.com;"),
+            policy.contains(
+                "connect-src 'self' https://api.example.com:8443 wss://api.example.com:8443;"
+            ),
             "{policy}"
         );
         let plain_policy = content_security_policy(&config(&[(
@@ -313,6 +315,28 @@ mod tests {
             .is_err(),
             "the live origin is https, like the public one"
         );
+        // Sign-in cookies are host-only: a live origin on another host, or
+        // with no public origin to compare, would arrive unsigned.
+        for values in [
+            &[
+                ("DATABASE_URL", "postgres://aw:pw@127.0.0.1/aw"),
+                ("PUBLIC_ORIGIN", "https://api.example.com"),
+                ("LIVE_ORIGIN", "https://live.example.com"),
+            ][..],
+            &[
+                ("DATABASE_URL", "postgres://aw:pw@127.0.0.1/aw"),
+                ("LIVE_ORIGIN", "https://live.example.com"),
+            ][..],
+        ] {
+            let error = AppConfig::from_values(
+                &values
+                    .iter()
+                    .map(|(key, value)| (format!("AGENT_WORKSPACE_{key}"), (*value).to_owned()))
+                    .collect::<BTreeMap<_, _>>(),
+            )
+            .expect_err("a live origin on another host");
+            assert!(error.to_string().contains("same host"), "{error}");
+        }
     }
 
     /// The route's answer holds no configured secret: every value of a
