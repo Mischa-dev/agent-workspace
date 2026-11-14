@@ -11,6 +11,8 @@ at fe95a74, `/home/user/agentos` and `/home/user/mischa-dev/harness`. Paths with
 are under `apps/server/src/` of Agent Workspace; `migrations/` means
 `apps/server/migrations/`. "Inferred" marks anything not read directly.
 
+> **Amended by the architecture review (2026-11-14).** R55 (opaque cursor with per-scope progress; pause defers one scope) amends sections 3.2 and 3.8. R56 covers operations held for review. R59 adds per-call account selection and delegation context to adding agents. See `LEAD-RULINGS.md`.
+
 ## 1. Goal
 
 When A2 is done, any agent, whoever runs it, is told everything that concerns it through one
