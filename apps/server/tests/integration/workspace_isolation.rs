@@ -214,6 +214,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/search",
     "/api/v1/settings/effective",
     "/api/v1/settings/registry",
+    "/api/v1/things/{id}",
     "/api/v1/things/{kind}/{id}",
     "/api/v1/usage",
     "/api/v1/usage/accounts/{account_id}",
@@ -1356,6 +1357,22 @@ pub(super) fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
                 "/api/v1/organizations/{}/workspace-templates",
                 b.organization
             )],
+            vec![],
+        ),
+        case(
+            "/api/v1/things/{id}",
+            vec![
+                format!("/api/v1/things/{}", a.task),
+                format!("/api/v1/things/{}", a.page),
+                format!("/api/v1/things/{}", a.project_whiteboard),
+            ],
+            vec![
+                format!("/api/v1/things/{}", b.task),
+                format!("/api/v1/things/{}", b.page),
+                format!("/api/v1/things/{}", b.thread),
+                format!("/api/v1/things/{}", b.dm),
+                format!("/api/v1/things/{}", b.whiteboard),
+            ],
             vec![],
         ),
         case(
