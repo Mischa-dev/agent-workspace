@@ -374,7 +374,7 @@ write category, conflict/replay behavior, audit attribution, secret
 redaction, Streamable HTTP initialization, and zero Conversation creation.
 
 Exact Red Hat and real local Codex acceptance is recorded in
-`docs/acceptance/m6.md`. The live `0.146.0` compatibility findings are:
+`docs/history/acceptance/m6.md`. The live `0.146.0` compatibility findings are:
 
 - Codex sends the same protected resource in the authorization request and in
   the token request. Agent Workspace accepts only an identical duplicate and

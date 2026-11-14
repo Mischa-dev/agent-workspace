@@ -488,7 +488,7 @@ async fn invitation_acceptance_creates_or_extends_one_human_identity_atomically(
         .expect("resolve invitation response");
     assert_eq!(resolved_response.status(), StatusCode::OK);
     let resolved = response_json(resolved_response).await;
-    assert_eq!(resolved["organizationName"], "Mischa Personal");
+    assert_eq!(resolved["organizationName"], "Demo Workspace");
     assert_eq!(resolved["projectName"], "Agent Workspace");
     assert_eq!(resolved["role"], "viewer");
     assert!(resolved.get("id").is_none());

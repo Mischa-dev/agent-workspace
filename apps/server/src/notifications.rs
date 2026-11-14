@@ -700,10 +700,10 @@ pub(crate) async fn forget_comment(
     retract(transaction, project_id, comment_id, affected).await
 }
 
-/// A page comment that was edited or deleted (AWD-53) stops showing its old
-/// words in anyone's inbox: a deletion takes its occurrence away (and the
-/// notification, when that was all it stood for), and either way the
-/// notifications it reached lose their copied preview.
+/// A page comment that was edited or deleted (AWD-53): a deletion takes its
+/// occurrence away (and the notification, when that was all it stood for),
+/// and either way the recipients hear the inbox changed. The words are read
+/// live when listing (P0.36), so there is no copy to strip.
 pub(crate) async fn forget_page_comment(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
@@ -714,7 +714,7 @@ pub(crate) async fn forget_page_comment(
     let reached = sqlx::query_as::<_, (Uuid, Uuid)>(
         r#"
         UPDATE notifications n
-        SET detail = n.detail - 'preview', updated_at = now()
+        SET updated_at = now()
         FROM notification_occurrences o
         WHERE o.notification_id = n.id AND o.dedupe_key = $1
         RETURNING n.id, n.recipient_actor_id
@@ -1339,6 +1339,11 @@ const VISIBLE: &str = r#"
         SELECT 1 FROM provider_accounts account
         WHERE account.id = n.subject_id AND account.owner_actor_id = $1
     ))
+    -- A page's notification only while the page is still in the project.
+    AND (n.subject_kind <> 'page' OR EXISTS (
+        SELECT 1 FROM project_pages subject_page
+        WHERE subject_page.id = n.subject_id AND subject_page.project_id = n.project_id
+    ))
 "#;
 
 #[derive(Clone, Debug, Default)]
@@ -1476,6 +1481,9 @@ struct NotificationRow {
     message_id: Option<Uuid>,
     message_preview: Option<String>,
     comment_preview: Option<String>,
+    page_title: Option<String>,
+    page_archived: Option<bool>,
+    page_comment_preview: Option<String>,
     work_item_id: Option<Uuid>,
     work_item_key: Option<String>,
     work_item_title: Option<String>,
@@ -1526,6 +1534,8 @@ fn list_sql(view_condition: &str, extra: &str) -> String {
                CASE WHEN message.removed_at IS NULL
                     THEN left(message.plain_text, {PREVIEW_CHARACTERS}) END AS message_preview,
                left(comment.plain_text, {PREVIEW_CHARACTERS}) AS comment_preview,
+               page.title AS page_title, page.archived_at IS NOT NULL AS page_archived,
+               left(page_comment.body, {PREVIEW_CHARACTERS}) AS page_comment_preview,
                n.work_item_id,
                project.project_key || '-' || item.number::text AS work_item_key,
                item.title AS work_item_title,
@@ -1550,6 +1560,11 @@ fn list_sql(view_condition: &str, extra: &str) -> String {
         LEFT JOIN conversations conversation ON conversation.id = n.conversation_id
         LEFT JOIN messages message ON message.id = n.message_id
         LEFT JOIN work_item_comments comment ON comment.id = n.comment_id
+        LEFT JOIN project_pages page ON n.subject_kind = 'page' AND page.id = n.subject_id
+        LEFT JOIN project_page_comments page_comment
+          ON n.kind = 'page_comment'
+         AND page_comment.id = (n.detail->>'pageCommentId')::uuid
+         AND page_comment.deleted_at IS NULL
         LEFT JOIN work_items item ON item.id = n.work_item_id
         LEFT JOIN agent_runs run ON run.id = n.agent_run_id
         LEFT JOIN execution_workers run_worker ON run_worker.id = run.execution_worker_id
@@ -1877,6 +1892,25 @@ fn view(row: NotificationRow) -> NotificationView {
             format!("Your review was requested on {pull_request}"),
             row.pull_request_title.clone(),
         ),
+        // The page's title and the comment's words, read live (P0.36): a
+        // removed comment shows nothing, an archived page says so and
+        // shows nothing.
+        kind::PAGE_COMMENT | kind::PAGE_SUGGESTION => {
+            let archived = row.page_archived == Some(true);
+            let page = match (&row.page_title, archived) {
+                (Some(title), false) => title.clone(),
+                (Some(title), true) => format!("{title} (archived)"),
+                (None, _) => "a page".to_owned(),
+            };
+            if row.kind == kind::PAGE_COMMENT {
+                (
+                    format!("New comment on {page}"),
+                    row.page_comment_preview.clone().filter(|_| !archived),
+                )
+            } else {
+                (format!("Suggested edits to {page}"), None)
+            }
+        }
         other => (
             row.detail
                 .get("title")

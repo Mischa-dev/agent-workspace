@@ -1,3 +1,5 @@
+> **Superseded where [`docs/plans/master/`](master/README.md) says otherwise.** This plan explains how the existing pieces were built; the master plan decides what changes.
+
 # Collections
 
 Task AWD-90 (milestone M4 of the AWD-81 plan). Record types a project makes

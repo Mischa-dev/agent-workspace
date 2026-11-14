@@ -174,8 +174,8 @@ pub(super) struct EnvironmentListValue {
 pub(super) struct SessionBindArguments {
     /// The thread or conversation you were asked to reply in.
     pub conversation_id: String,
-    /// Your runner's own reference for the session, such as a Claude Code
-    /// session ID or a Codex thread ID; wakeups name it as sessionRef.
+    /// Your runner's own reference for the session, such as its session or
+    /// thread ID; wakeups name it as sessionRef.
     pub external_ref: String,
     /// What runs it, such as claude_code or codex.
     pub harness: String,

@@ -76,6 +76,7 @@ pub mod push;
 pub mod questions;
 pub mod rate_limit;
 pub mod reactions;
+pub mod read_state;
 pub mod realtime;
 pub mod recovery;
 pub mod replies;
@@ -94,14 +95,14 @@ pub mod server_status;
 pub mod settings;
 pub mod sheets;
 pub mod storage_admission;
+#[cfg(test)]
+mod structure_guards;
 pub mod telemetry;
 pub mod test_support;
 pub mod usage;
 pub mod views;
-// Test-only, but not "#[cfg(test)] mod" on its own lines: tests that read
-// this file's routes stop at the first such line.
 #[cfg(test)]
-pub(crate) mod views_guard;
+mod views_guard;
 pub mod webhooks;
 pub mod whiteboards;
 pub mod work_item_commands;

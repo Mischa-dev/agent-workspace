@@ -1,0 +1,44 @@
+{
+  "web_role_name_gates": {
+    "conversations/MessageMemory.tsx": 1,
+    "external-agents/ExternalAgentSettings.tsx": 2,
+    "invitations/JoinPage.tsx": 2,
+    "invitations/api.ts": 3,
+    "modules/TurnedOffPage.tsx": 2,
+    "projects/ProjectOverviewPage.tsx": 2,
+    "settings/account/NotificationsPage.tsx": 1,
+    "settings/account/ProfilePage.tsx": 1,
+    "settings/account/ProviderAccountsPage.tsx": 1,
+    "settings/project/GeneralPage.tsx": 1,
+    "settings/registry.ts": 5,
+    "settings/workspace/GeneralPage.tsx": 3,
+    "settings/workspace/MembersPage.tsx": 15,
+    "settings/workspace/RolesPage.tsx": 7,
+    "settings/workspace/RunsPage.tsx": 2,
+    "settings/workspace/TemplatesPage.tsx": 2,
+    "team/TeamSettings.tsx": 10,
+    "work-items/TaskActivity.tsx": 2,
+    "workspace-templates/SetupSteps.tsx": 1
+  },
+  "web_account_kind_gates": {
+    "conversations/StructuredComposer.tsx": 1,
+    "direct/DirectConversationPage.tsx": 1,
+    "settings/workspace/AuditLogPage.tsx": 2,
+    "settings/workspace/GeneralPage.tsx": 1,
+    "settings/workspace/MembersPage.tsx": 4,
+    "ui/identityModel.ts": 1
+  },
+  "web_vendor_names": {
+    "conversations/types.ts": 1,
+    "external-agents/ExternalAgentSettings.tsx": 2,
+    "external-agents/runnerPresets.ts": 6,
+    "launch/SessionLinks.tsx": 1,
+    "memory/MemoryPages.tsx": 1,
+    "settings/project/CodexRunsPage.tsx": 1,
+    "settings/registry.ts": 1,
+    "threads/runAgent.ts": 1,
+    "ui/identity.tsx": 1,
+    "work-items/TaskDetail.tsx": 2,
+    "work-items/codexDeepLink.ts": 3
+  }
+}

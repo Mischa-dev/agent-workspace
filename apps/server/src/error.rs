@@ -250,7 +250,7 @@ impl IntoResponse for AppError {
                 action: "start_new_thread",
             }),
             Self::ExecutionProfileRequired => Some(ErrorDetails::Action {
-                action: "connect_personal_codex_account",
+                action: "connect_provider_account",
             }),
             Self::ModuleOff { module } => Some(ErrorDetails::Module { module }),
             _ => None,

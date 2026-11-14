@@ -322,7 +322,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
     );
     assert_eq!(
         browser_timeline["entries"][0]["message"]["plainText"],
-        "<script>alert('inert')</script> hello @mischa"
+        "<script>alert('inert')</script> hello @owner"
     );
 
     let human_mention = application

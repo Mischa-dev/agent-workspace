@@ -172,7 +172,7 @@ async fn team_runs_use_only_invoker_owned_profiles_and_missing_setup_has_no_effe
     );
     assert_eq!(
         missing_profile.1["error"]["details"]["action"],
-        "connect_personal_codex_account"
+        "connect_provider_account"
     );
     assert_eq!(effect_counts(&pool).await, effects_before_setup);
 

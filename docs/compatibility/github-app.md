@@ -115,7 +115,7 @@ a conflict, and an unmerged pull request never consumes the fallback. This
 keeps refresh and stale-lease recovery convergent after the remote head branch
 has been deleted without making an unsigned refresh a new source of identity.
 The redacted provider contract fixture is
-`tools/github-spike/fixtures/merged-close-rest-null-sha.json`.
+`apps/server/tests/fixtures/merged-close-rest-null-sha.json`.
 
 ## Work Item automation boundary
 

@@ -7,7 +7,7 @@ use axum::http::StatusCode;
 use serde_json::{Value, json};
 
 use super::{
-    agent_interface::{Browser, create_agent, initialize, send, tool},
+    agent_interface::{Browser, create_agent, creates_once, initialize, send, tool},
     mcp_admin::{Setup, create_project, setup},
     mcp_tasks::{add_member, space},
     message_edits::{add_person, set_role},
@@ -928,6 +928,88 @@ async fn agents_draw_read_render_and_restore_boards_through_mcp_alone() {
     assert!(!listed.to_string().contains("Secret plans"), "{listed}");
     let unchanged = scene(&setup, &setup.browser, &hidden, None).await;
     assert_eq!(unchanged["elements"], json!([]));
+}
+
+#[tokio::test]
+async fn creating_or_copying_a_board_again_makes_one() {
+    let Some(setup) = setup("w16_retry").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let space = space(&setup).await;
+    let (rook, token) = create_agent(app, &setup.browser, &space, "Rook", "rook").await;
+    add_member(&setup, &work, rook, "member").await;
+    let session = initialize(app, &token).await.expect("agent MCP");
+    let boards = "SELECT count(*) FROM whiteboards";
+    let created = creates_once(
+        app,
+        &setup.pool,
+        &token,
+        &session,
+        "whiteboard_create",
+        json!({
+            "title": "Launch flow",
+            "projectId": work,
+            "operations": [{"op": "add", "type": "rectangle", "id": "plan", "text": "Plan"}],
+            "clientRequestId": "board-retry-1",
+        }),
+        json!({"title": "Other flow", "projectId": work, "clientRequestId": "board-retry-1"}),
+        boards,
+    )
+    .await;
+    let board = created["value"]["whiteboard"]["id"]
+        .as_str()
+        .expect("board");
+    let copied = creates_once(
+        app,
+        &setup.pool,
+        &token,
+        &session,
+        "whiteboard_duplicate",
+        json!({"whiteboardId": board, "clientRequestId": "copy-retry-1"}),
+        json!({"whiteboardId": board, "title": "Mine", "clientRequestId": "copy-retry-1"}),
+        boards,
+    )
+    .await;
+    let copy = copied["value"]["whiteboard"]["id"].as_str().expect("copy");
+
+    // Both boards move to a project Rook isn't in, renamed: a retry now
+    // finds nothing and names neither board, project nor editors.
+    let secret = create_project(&setup, "SEC", "Secret project").await;
+    for id in [board, copy] {
+        sqlx::query(
+            "UPDATE whiteboards SET project_id = $2::uuid, title = 'Hidden plans' WHERE id = $1::uuid",
+        )
+        .bind(id)
+        .bind(&secret)
+        .execute(&setup.pool)
+        .await
+        .expect("move the board");
+    }
+    for (name, arguments) in [
+        (
+            "whiteboard_create",
+            json!({
+                "title": "Launch flow",
+                "projectId": work,
+                "operations": [{"op": "add", "type": "rectangle", "id": "plan", "text": "Plan"}],
+                "clientRequestId": "board-retry-1",
+            }),
+        ),
+        (
+            "whiteboard_duplicate",
+            json!({"whiteboardId": board, "clientRequestId": "copy-retry-1"}),
+        ),
+    ] {
+        let replay = tool(app, &token, &session, name, arguments).await;
+        assert_eq!(replay["outcome"], "not_found", "{name}: {replay}");
+        let text = replay.to_string();
+        assert!(
+            !text.contains("Hidden plans") && !text.contains("Secret project"),
+            "{name} replay leaks the moved board: {replay}"
+        );
+    }
 }
 
 #[tokio::test]

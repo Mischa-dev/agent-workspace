@@ -1,3 +1,5 @@
+> **Superseded where [`docs/plans/master/`](master/README.md) says otherwise.** This plan explains how the existing pieces were built; the master plan decides what changes.
+
 # Plan: tag an agent to hand it work
 
 October 8, 2026. A draft for Mischa. It covers the Agent Workspace half of a

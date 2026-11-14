@@ -1832,11 +1832,25 @@ async fn accept_existing_user(
         &handle,
     )
     .await?;
-    sqlx::query("UPDATE users SET default_organization_id = $2, updated_at = now() WHERE id = $1")
-        .bind(principal.user_id)
-        .bind(invitation.organization_id)
-        .execute(&mut *transaction)
-        .await?;
+    // Joining is not choosing (P0.37): the person's default workspace moves
+    // here only when they had none and belong nowhere else, so an
+    // invitation can't make itself the workspace that carries their
+    // account mail or their Home.
+    sqlx::query(
+        r#"
+        UPDATE users SET default_organization_id = $2, updated_at = now()
+        WHERE id = $1 AND default_organization_id IS NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM organization_memberships other
+              WHERE other.actor_id = users.actor_id AND other.enabled
+                AND other.organization_id <> $2
+          )
+        "#,
+    )
+    .bind(principal.user_id)
+    .bind(invitation.organization_id)
+    .execute(&mut *transaction)
+    .await?;
     let established = establish_session_in_transaction(
         &state.config,
         &headers,

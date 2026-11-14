@@ -13,7 +13,8 @@ export default defineConfig({
   workers: 1,
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
-  retries: process.env.CI ? 1 : 0,
+  // A flaky pass is a failure (P0.3): no retries, here or in CI.
+  retries: 0,
   timeout: 60_000,
   expect: { timeout: 10_000 },
   reporter: [['list'], ['html', { outputFolder: `${outputRoot}/report`, open: 'never' }], ['./e2e/support/owners-reporter.ts']],

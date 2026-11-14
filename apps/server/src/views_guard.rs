@@ -13,7 +13,9 @@
 //! as today. The list only shrinks: when T1.39 deletes the second task
 //! engine it is empty.
 
-use std::{collections::BTreeMap, path::Path};
+use std::collections::BTreeMap;
+
+use crate::test_support::source::{rust_files, server_src, strip_tests};
 
 /// What an engine is made of, as its definition is written.
 const FROZEN: &[&str] = &[
@@ -45,27 +47,10 @@ const HOW: &str = "Build view, filter, sort, grouping and board features in the 
      engine (apps/server/src/views/, docs/plans/collections.md and T1 in \
      docs/plans/master/plans/T1-fields-views-tasks.md); tasks get them through the Tasks source.";
 
-fn rust_files(folder: &Path, found: &mut Vec<std::path::PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(folder) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            rust_files(&path, found);
-        } else if path.extension().is_some_and(|extension| extension == "rs") {
-            found.push(path);
-        }
-    }
-}
-
-/// The file before its `#[cfg(test)]` tail: tests may define what they like.
-fn code_of(text: &str) -> &str {
-    text.find("\n#[cfg(test)]").map_or(text, |end| &text[..end])
-}
-
+/// Definitions in the file before its test tail: tests may define what
+/// they like.
 pub(crate) fn definitions(text: &str) -> usize {
-    code_of(text)
+    strip_tests(text)
         .lines()
         .filter(|line| {
             let line = line.trim_start();
@@ -78,23 +63,14 @@ pub(crate) fn definitions(text: &str) -> usize {
 }
 
 fn counts() -> BTreeMap<String, usize> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let mut files = Vec::new();
-    rust_files(&root.join("src"), &mut files);
     let mut found = BTreeMap::new();
-    for file in files {
-        let relative = file
-            .strip_prefix(root)
-            .map(|path| path.to_string_lossy().replace('\\', "/"))
-            .unwrap_or_default();
+    for (path, text) in rust_files(&server_src()) {
+        let relative = format!("src/{path}");
         if relative == "src/views_guard.rs"
             || ENGINE.iter().any(|prefix| relative.starts_with(prefix))
         {
             continue;
         }
-        let Ok(text) = std::fs::read_to_string(&file) else {
-            continue;
-        };
         let count = definitions(&text);
         if count > 0 {
             found.insert(relative, count);
@@ -148,7 +124,7 @@ fn a_new_engine_piece_is_caught() {
     );
     assert_eq!(definitions("enum SortBy {}\n// fn push_after\n"), 0);
     assert_eq!(
-        definitions("fn a() {}\n#[cfg(test)]\nmod tests { fn push_after() {} }"),
+        definitions("fn a() {}\n#[cfg(test)]\nmod tests {\n    fn push_after() {}\n}\n"),
         0
     );
 }

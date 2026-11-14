@@ -8,7 +8,7 @@ use agent_workspace_server::{
     retention, router, seed, shutdown_signal, telemetry::init_tracing, work_items,
 };
 use anyhow::{Context, bail};
-use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use sqlx::postgres::PgPoolOptions;
 use tokio::{net::TcpListener, sync::watch};
 use uuid::Uuid;
 
@@ -22,18 +22,9 @@ async fn main() -> anyhow::Result<()> {
     let config = Arc::new(AppConfig::load().context("load application configuration")?);
     init_tracing(&config.log_filter)?;
 
-    // No JIT: lists over expressions (a task's view sorted by whether it's
-    // blocked) are estimated dear enough to be compiled, which takes
-    // seconds for a query that runs in milliseconds (T1.7).
-    let connect = config
-        .database_url
-        .expose()
-        .parse::<PgConnectOptions>()
-        .context("read the PostgreSQL URL")?
-        .options([("jit", "off")]);
     let pool = PgPoolOptions::new()
         .max_connections(config.database_max_connections)
-        .connect_with(connect)
+        .connect(config.database_url.expose())
         .await
         .context("connect to PostgreSQL")?;
 

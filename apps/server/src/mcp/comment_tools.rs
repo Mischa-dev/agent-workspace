@@ -147,7 +147,9 @@ pub(super) async fn task_comment_edit(
         let Some(text) = normalize_comment(arguments.text.clone()) else {
             return Ok(ToolResult::invalid("text", TEXT_MESSAGE));
         };
-        let Ok(validated) = MessageContent::from_plain_text(text) else {
+        let content =
+            super::common::comment_content_from_text(state, principal.project_id, &text).await?;
+        let Ok(validated) = MessageContent::from_json(content) else {
             return Ok(ToolResult::invalid("text", TEXT_MESSAGE));
         };
         let Some(task_id) = task_in_scope(state, principal, &arguments.task_id).await? else {
@@ -166,7 +168,7 @@ pub(super) async fn task_comment_edit(
         let resolved = match resolve_comment_content(
             &mut transaction,
             principal.project_id,
-            validated.content().clone(),
+            validated,
         )
         .await
         {

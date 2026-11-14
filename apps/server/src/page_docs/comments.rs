@@ -448,10 +448,11 @@ pub async fn create(
             format!("page-comment:{id}"),
         );
         notification.actor_id = Some(writer.actor_id);
-        let preview: String = body.chars().take(140).collect();
+        // Ids only (P0.36): the inbox reads the page's title and the
+        // comment's words live, so a removal or an archive reaches it.
         notification.detail = serde_json::json!({
-            "title": format!("New comment on {}", page.title),
-            "preview": preview,
+            "pageCommentId": id,
+            "threadId": thread_id,
             "href": format!("/projects/{}/pages/{page_id}#comment-{thread_id}", page.project_id),
         });
         notify(transaction, &notification).await?;
