@@ -593,6 +593,26 @@ struct LinkedPullRequestView {
     sync_failure_category: Option<String>,
     automation_state: String,
     automation_reason: Option<String>,
+    #[serde(default)]
+    head_ref: String,
+    #[serde(default)]
+    base_ref: String,
+    #[serde(default)]
+    author_login: String,
+    #[serde(default)]
+    requested_reviewers: Vec<String>,
+    /// The checks on its head commit, failing ones first (AWD-59).
+    #[serde(default)]
+    checks: Vec<LinkedPullRequestCheck>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LinkedPullRequestCheck {
+    name: String,
+    status: String,
+    conclusion: Option<String>,
+    url: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -4199,7 +4219,35 @@ const WORK_ITEM_SELECT: &str = concat!(
                     'automationState', pull_request.automation_state,
                     'automationReason', pull_request.automation_reason,
                     'source', link.source,
-                    'confirmed', link.confirmed
+                    'confirmed', link.confirmed,
+                    'headRef', pull_request.head_ref,
+                    'baseRef', pull_request.base_ref,
+                    'authorLogin', pull_request.author_login,
+                    'requestedReviewers', pull_request.requested_reviewers,
+                    -- Each check on the head commit, failing ones first, for
+                    -- the task's pull request card (AWD-59).
+                    'checks', COALESCE((
+                        SELECT jsonb_agg(
+                            jsonb_build_object(
+                                'name', check_run.name,
+                                'status', check_run.status,
+                                'conclusion', check_run.conclusion,
+                                'url', check_run.details_url
+                            ) ORDER BY check_run.rank, check_run.name, check_run.id
+                        )
+                        FROM (
+                            SELECT run.*,
+                                   CASE
+                                       WHEN run.conclusion IN ('failure', 'timed_out', 'startup_failure', 'action_required', 'cancelled') THEN 0
+                                       WHEN run.status <> 'completed' THEN 1
+                                       ELSE 2
+                                   END AS rank
+                            FROM github_pull_request_check_runs run
+                            WHERE run.github_pull_request_id = pull_request.id
+                            ORDER BY rank, run.name, run.id
+                            LIMIT 30
+                        ) check_run
+                    ), '[]'::jsonb)
                 ) ORDER BY pull_request.pull_request_number, pull_request.id
             )
             FROM github_pull_request_work_item_links link

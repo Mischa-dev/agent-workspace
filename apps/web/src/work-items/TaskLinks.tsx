@@ -8,7 +8,7 @@ import { listRepositories } from '../repositories/api'
 import { Banner, Button, Icon, IconButton, Row, RowList, SelectField, describeError } from '../ui'
 import { useSetWorkItemPrimaryRepository, useSetWorkItemPullRequestLink, useSetWorkItemRepositoryLink, useSetWorkItemThreadLink } from './hooks'
 import { TaskSection } from './TaskSection'
-import type { WorkItem } from './types'
+import type { PullRequestCheck, WorkItem } from './types'
 
 const CHECKS: Record<string, string> = { success: 'checks passed', failure: 'checks failing', pending: 'checks running' }
 const REVIEW: Record<string, string> = { approved: 'approved', changes_requested: 'changes requested', pending: 'waiting for review' }
@@ -26,6 +26,61 @@ function pullRequestSummary(pullRequest: WorkItem['linkedPullRequests'][number])
     pullRequest.syncState === 'failed' ? 'couldn’t refresh' : undefined,
   ]
   return parts.filter(Boolean).join(' · ')
+}
+
+const FAILED = new Set(['failure', 'timed_out', 'startup_failure', 'action_required', 'cancelled'])
+
+/** How one check stands, in words and as an icon. */
+function checkStanding(check: PullRequestCheck): { icon: 'check' | 'x' | 'loader' | 'clock'; label: string; tone: string } {
+  if (check.status !== 'completed') return check.status === 'in_progress' ? { icon: 'loader', label: 'running', tone: 'agent' } : { icon: 'clock', label: 'queued', tone: 'muted' }
+  if (check.conclusion && FAILED.has(check.conclusion)) return { icon: 'x', label: humanize(check.conclusion).toLocaleLowerCase(), tone: 'danger' }
+  if (check.conclusion === 'success') return { icon: 'check', label: 'passed', tone: 'success' }
+  return { icon: 'check', label: humanize(check.conclusion ?? 'done').toLocaleLowerCase(), tone: 'muted' }
+}
+
+const SHOWN_CHECKS = 5
+
+/** A pull request's branch and checks, under its line on the task (AWD-59). */
+function PullRequestDetails({ pullRequest }: { pullRequest: WorkItem['linkedPullRequests'][number] }) {
+  const [all, setAll] = useState(false)
+  const checks = all ? pullRequest.checks : pullRequest.checks.slice(0, SHOWN_CHECKS)
+  const hidden = pullRequest.checks.length - checks.length
+  const from = [
+    pullRequest.headRef && pullRequest.baseRef ? `${pullRequest.headRef} → ${pullRequest.baseRef}` : undefined,
+    pullRequest.authorLogin ? `by ${pullRequest.authorLogin}` : undefined,
+    pullRequest.requestedReviewers.length ? `review asked of ${pullRequest.requestedReviewers.join(', ')}` : undefined,
+  ].filter(Boolean)
+  if (!from.length && !checks.length) return null
+  return (
+    <div className="aw-pr">
+      {from.length ? <p className="aw-pr__from">{from.join(' · ')}</p> : null}
+      {checks.length ? (
+        <ul aria-label={`Checks on #${pullRequest.number}`} className="aw-pr__checks">
+          {checks.map((check, index) => {
+            const standing = checkStanding(check)
+            return (
+              <li className={`aw-pr__check aw-pr__check--${standing.tone}`} key={`${check.name}-${index}`}>
+                <Icon name={standing.icon} size={14} />
+                {check.url ? (
+                  <a href={check.url} rel="noreferrer" target="_blank">
+                    {check.name}
+                  </a>
+                ) : (
+                  <span>{check.name}</span>
+                )}
+                <span>{standing.label}</span>
+              </li>
+            )
+          })}
+        </ul>
+      ) : null}
+      {hidden > 0 ? (
+        <Button onClick={() => setAll(true)} size="sm" variant="ghost">
+          Show {hidden} more {hidden === 1 ? 'check' : 'checks'}
+        </Button>
+      ) : null}
+    </div>
+  )
 }
 
 /**
@@ -233,7 +288,9 @@ export function TaskLinks({
                     #{pullRequest.number} {pullRequest.title}
                   </a>
                 }
-              />
+              >
+                <PullRequestDetails pullRequest={pullRequest} />
+              </Row>
             ))}
           </RowList>
         ) : null}

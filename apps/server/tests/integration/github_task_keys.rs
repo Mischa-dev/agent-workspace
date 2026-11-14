@@ -464,6 +464,51 @@ async fn a_suggested_pull_request_is_confirmed_or_dismissed_on_the_task() {
         .and_then(|lines| lines.iter().find(|line| line["number"] == 59))
         .unwrap_or_else(|| panic!("the pull request: {read}"));
     assert_eq!(confirmed["confirmed"], true, "{read}");
+    // Its card lists each check, failing ones first.
+    for (id, name, conclusion) in [(1_i64, "build", "success"), (2, "lint", "failure")] {
+        sqlx::query(
+            "INSERT INTO github_pull_request_check_runs (id, project_id, github_pull_request_id, github_check_run_id, name, status, conclusion, details_url) VALUES ($1, $2, $3, $4, $5, 'completed', $6, 'https://github.com/checks')",
+        )
+        .bind(Uuid::now_v7())
+        .bind(seed.project_id)
+        .bind(pull_request)
+        .bind(id)
+        .bind(name)
+        .bind(conclusion)
+        .execute(pool)
+        .await
+        .expect("check run");
+    }
+    let (status, read) = send(
+        app,
+        setup.browser.request(
+            "GET",
+            &format!("/api/v1/projects/{aw}/work-items/{task}"),
+            None,
+            serde_json::Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, 200, "{read}");
+    let card = read["linkedPullRequests"]
+        .as_array()
+        .and_then(|lines| lines.iter().find(|line| line["number"] == 59))
+        .unwrap_or_else(|| panic!("the pull request: {read}"));
+    let names = card["checks"]
+        .as_array()
+        .unwrap_or_else(|| panic!("checks: {card}"))
+        .iter()
+        .map(|check| (check["name"].clone(), check["conclusion"].clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        vec![
+            (json!("lint"), json!("failure")),
+            (json!("build"), json!("success"))
+        ]
+    );
+    assert_eq!(card["headRef"], "feature", "{card}");
+
     let audited = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM audit_events WHERE target_id = $1 AND action IN ('work_item.pull_request_linked', 'work_item.pull_request_unlinked')",
     )

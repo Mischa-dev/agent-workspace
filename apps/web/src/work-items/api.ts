@@ -165,6 +165,19 @@ export function normalizeWorkItem(value: unknown): WorkItem {
         syncFailureCategory: nullableString(pullRequest.syncFailureCategory),
         automationState: string(pullRequest.automationState),
         automationReason: nullableString(pullRequest.automationReason),
+        headRef: string(pullRequest.headRef),
+        baseRef: string(pullRequest.baseRef),
+        authorLogin: string(pullRequest.authorLogin),
+        requestedReviewers: (Array.isArray(pullRequest.requestedReviewers) ? pullRequest.requestedReviewers : []).map((login) => string(login)),
+        checks: (Array.isArray(pullRequest.checks) ? pullRequest.checks : []).map((value) => {
+          const check = record(value)
+          return {
+            name: string(check.name),
+            status: string(check.status),
+            conclusion: nullableString(check.conclusion),
+            url: nullableString(check.url),
+          }
+        }),
       }
     }),
     capabilities: {

@@ -149,6 +149,21 @@ export type LinkedPullRequest = {
   syncFailureCategory: string | null
   automationState: string
   automationReason: string | null
+  headRef: string
+  baseRef: string
+  authorLogin: string
+  requestedReviewers: string[]
+  /** The checks on its head commit, failing ones first (at most 30). */
+  checks: PullRequestCheck[]
+}
+
+export type PullRequestCheck = {
+  name: string
+  /** queued, in_progress or completed. */
+  status: string
+  /** success, failure, neutral, skipped, cancelled, timed_out… once completed. */
+  conclusion: string | null
+  url: string | null
 }
 
 export type AcceptanceCriterion = {
