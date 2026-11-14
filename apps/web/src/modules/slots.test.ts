@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import appSource from '../app/App.tsx?raw'
 import paletteSource from '../shell/CommandPalette.tsx?raw'
 import homeSource from '../projects/HomePage.tsx?raw'
 import homeSidebarSource from '../shell/HomeSidebar.tsx?raw'
 import railSource from '../shell/ProjectRail.tsx?raw'
+import { routePaths } from '../app/routes'
 import { SLASH_COMMANDS } from '../later/slashCommands'
 import { SETTINGS_PAGES } from '../settings/registry'
 import { SHORTCUTS } from '../shell/shortcutSheet'
@@ -42,9 +42,9 @@ describe('every entry point names its module', () => {
   })
 
   it('routes', () => {
-    const paths = [...appSource.matchAll(/\bpath="([^"]+)"/g)].map((match) => match[1])
+    const paths = routePaths()
     expect(paths.length).toBeGreaterThan(30)
-    // Pages name routes exactly as App.tsx writes them.
+    // Pages name routes exactly as the route table (app/routes.tsx) writes them.
     const pages = claims('pages')
     expect(paths.filter((path) => !pages.has(path)), 'routes without a module').toEqual([])
     expectNamed('pages', paths)

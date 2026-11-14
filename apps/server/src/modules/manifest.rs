@@ -40,7 +40,7 @@ pub struct AutomationDecl {
 #[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Slots {
-    /// Web app routes, as `apps/web/src/app/App.tsx` writes their paths.
+    /// Web app routes, as `apps/web/src/app/routes.tsx` writes their paths.
     #[serde(default)]
     pub pages: Vec<String>,
     /// Layout parts (`apps/web/src/experience/registry.json`): sidebar rows,
