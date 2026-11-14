@@ -614,3 +614,122 @@ whole plan reaches it in one deploy after build 5X.
   owner once, in the thread, because it runs on the owner's server; the deploy itself
   still waits for the owner's "go" in words.
 
+
+## Rulings on the architecture review of 2026-11-14 (AWD-150)
+
+Mischa asked for a review of the plan's abstractions (AWD page "Review: master-plan
+abstractions and proposed adjustments", AWD-150) and for the lead to weigh it, not obey it.
+The review keeps the architecture and names six contracts that were wrong or missing, plus
+two examples (several agents through one shared connector; one assistant that is both a
+member and a delegate). The lead checked the cited code and plan lines; each point below
+was confirmed. Where a ruling and plan text disagree, the ruling wins, and the owning
+slice brings its text in line when it is built.
+
+**R52. A retry key states intent; it is never guessed.** Confirmed: `ops/dispatch.rs`
+derives a missing request id from the caller, operation, input and a ten-minute bucket, so
+two meant-to-be-separate identical creates collapse and a retry across a bucket edge runs
+twice. From now on:
+- The web app and the public v2 API send a request id with every write (the web app
+  already must; v2 refuses a write without `Idempotency-Key` with a clear validation error).
+- An automation's request id is derived from its run and step, which is a real intent.
+- An MCP or v1 call without one runs once and is not retry-safe; the tool description and
+  the answer say so (`replaySafe: false`). Outside agents are never broken for omitting it.
+- No identity is ever inferred from equal input or the clock.
+- Same id and same input replays; same id and other input conflicts; different ids both
+  run; a replay works across any clock edge, from the browser and from MCP alike.
+Owner: the K2 dispatcher, done with 1O's leftovers (AWD-148) before more operations land.
+
+**R53. A task has one public revision.** A task has one canonical thing identity and one
+optimistic-concurrency revision: `work_items.version`. Every successful change to what a
+task shows advances it once, through the shared task mutation path, whichever side made it
+(task tools, `record_write` on its record, forms, automations). Record-side counters may
+stay internal; nothing outside treats them as the task's version. A task-like record
+normalises to the same identity in the registry (K3.10) and the web cache (W1.5).
+Acceptance: interleaved record-side title or field edits and task-side status changes
+conflict correctly and show one advanced revision in events, the registry and every open
+view. Owners: T1.3 and T1.11 (build 1T, told), K3.10 (1E, told), W1.5.
+
+**R54. One grammar for kind names.** Confirmed: K3's `thing_kinds` CHECK refuses dots,
+M1's example connected kind is `acme.build`, and C1's `subject_kind` CHECK refuses digits
+with another length. ThingKind is `^[a-z][a-z0-9_]{1,39}(\.[a-z][a-z0-9_]{1,39})?$`,
+validated by one Rust function and one SQL domain used by the registry, manifests, comment
+subjects, links, event declarations, access and export. Unqualified names are core's;
+`<install>.<kind>` belongs to the connected install that registered it, which alone may
+register or change it, in its own workspace. Event and operation names keep their own
+grammars. Acceptance: install `acme.build_v2`, create one, link it, comment on it, search
+it, export and import it; another install can't impersonate the kind. Owners: K3.10 (1E,
+told), C1.3 (1C), M1.12 and M1.13.
+
+**R55. Pause defers one scope; the cursor is opaque.** A2's one scalar cursor per
+connection (section 3.2) and holding a paused workspace's events (section 3.8) can't both
+hold with globally ordered delivery. The connection's resume token is opaque and carries
+progress per scope (workspace or subscription) behind it. Order is kept within a scope, not
+across scopes. Pausing a scope defers it while others continue; resume rechecks access,
+delivers what is still allowed and drops what was revoked. The log position says where an
+event is stored, not when it arrives after a pause. Pause and resume notices travel on a
+control path that can't be stuck behind what they release. Acceptance in the stage 2
+journey: pause A while B continues, reconnect, rotate the credential, resume A, get A's
+accessible work, lose revoked work. Owners: A2.1, A2.2, A2.9 (build 2G).
+
+**R56. Remote and held operations don't hold a transaction.** Local operations stay one
+atomic transaction. A remote action (M1's RemoteOperation, connected modules) is admitted
+durably in a short transaction, executed with no transaction held, and completed in
+another; retries reuse the request id; the receiver's deduplication is a declared
+capability; when the outcome can't be known, the record says "unknown", never "rolled
+back". An operation held for review stores a prepared intent and resumes after access and
+version are checked again, holding no lock. Installing a package or built module that
+creates several local parts runs in one transaction by design, not as several dispatch
+calls. The compiled operation registry and installed operation definitions are different
+things: installed ones are looked up per workspace and install, updated across processes,
+and never shown in another workspace's tool list. This reuses jobs, requests and A1's
+unknown-start state; no workflow engine. Acceptance: lose the response after a remote
+success, restart the worker, retry, no duplicate and no false rollback; a queued revocation;
+a slow receiver with a small pool; a failed multi-part install leaves nothing. Owners: K2,
+M1.9, M1.12, M1.13, the A2 review guard; before build 3O.
+
+**R57. Observation gates under R51 run on a rehearsal, not on live traffic.** K5's week of
+real-traffic shadowing before K5.5 and H1's week of observe-mode traffic before strict row
+rules can't happen while the live server stays on today's commit. Each becomes a defined
+preproduction workload run against the stage gate's restored snapshot: named flows, load,
+duration, metrics and pass conditions, written in the gate's notes. Anything that truly
+needs real hosted traffic is marked unverified, with a check and a rollback step after the
+deploy. Elapsed time is not evidence on its own; a source-count ratchet doesn't prove every
+dynamic query path ran. Owners: the stage gates, K5.4, K5.5, H1.63.
+
+**R58. The journey proves coordination, and gates check prerequisites, not build
+status.** Added to the journey and the test for done, each at the earliest stage its
+operations exist: two agents race to claim one ready task, one wins, stops or expires with
+a handoff, another resumes it with its branch and evidence; a record-side and a task-side
+edit stay consistent everywhere (R53); one outside agent handles a lost launch response, a
+pause in one of two workspaces (R55), a reconnect and a revocation; and, once page
+operations land (K2.10), an agent folds agreed facts from a conversation into an existing
+page with a source link without overwriting a concurrent edit. Claims stop two agents
+owning one task; they don't find two tasks describing the same work, and nothing claims
+they do. A new shared contract is fixed only after two different real callers use it (R48);
+`Support::Not(reason)` stays allowed. Each stage gate also measures the small self-hosted
+shape together: message send and delivery, a 10,000-record task list and edit, event
+backlog recovery, query counts and memory. A gate checks that the slices a later build
+needs have shipped, not that their build's task is Done (AWD-148 is the example).
+
+**R59. Several agents through one connector, and one assistant in two roles, use what
+exists.** Two of Mischa's real cases, mapped to existing contracts with the smallest gaps:
+- *Several agents through one shared integration* (Mischa's Grok Bots): the connected app
+  is bound to a set of agent accounts, as A1 already lets a host act for its bound agents.
+  Each call names which bound account it acts as; access is that account's roles narrowed
+  by the integration's scope, checked on every call. Audit records both the authenticated
+  integration and the selected account, and marks the selection as claimed by the
+  integration, not independently proven. An unbound account can't be selected; retiring a
+  binding stops calls under it at once; a role change applies on the next call. Nothing
+  claims isolation between agents that share one connection.
+- *One assistant that is a member and a delegate* (Mischa's Muse): its own agent account
+  and membership answer @mentions; a person's narrowed delegation (K1) to its app is a
+  separate grant. Each call carries its context explicitly (as itself, or for a named
+  person under a named delegation); there is no connector-wide mode switch and grants are
+  never merged into one permission set. A normal @mention can't reach the person's DMs
+  because a delegation exists; a delegated read is recorded as delegated; revoking the
+  delegation stops delegated calls and leaves the membership working; reading a DM under
+  delegation never by itself publishes it anywhere.
+- Gaps to build, nothing more: per-call account selection among an integration's
+  bindings, per-call context for delegation, and audit of credential plus account plus
+  mode. Owners: K1's delegation slices and A2's adding-agents slices (build 2A), with these
+  checks in their acceptance. No new identity framework and no provider-specific code.

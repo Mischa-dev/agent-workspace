@@ -12,6 +12,8 @@ its workstreams M1 to M5), `docs/plans/modules.md` (AWD-75), `docs/plans/collect
 (AWD-90 and AWD-110) and the health check (`F-content-modules.md` F1, F3, F5, F8; `I-web-app.md`
 F3, F6, F11).
 
+> **Amended by the architecture review (2026-11-14).** R54 makes `acme.build`-style kinds valid and install-owned. R56 sets how RemoteOperation, held operations and multi-part installs run, and separates installed operation definitions from the compiled registry. See `LEAD-RULINGS.md`.
+
 ## 1. Goal
 
 Today a module is a JSON file that says what a feature owns, plus a switch. When this

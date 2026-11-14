@@ -39,6 +39,8 @@ regardless of when hosting starts.
 
 ---
 
+> **Amended by the architecture review (2026-11-14).** R57 replaces the week of live observe-mode traffic before strict row rules with a defined workload run on the stage gate rehearsal; real-traffic claims are checked after the deploy. See `LEAD-RULINGS.md`.
+
 ## 1. Goal
 
 When this workstream is done, anyone can run Agent Workspace with one command and a browser,

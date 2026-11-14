@@ -10,6 +10,8 @@ Planner for K2, 2026-11-14. Read-only review of `/home/user/agent-workspace` at 
 Nothing was built or run. Line numbers are from that tree. "Inferred" marks anything not read
 directly in code.
 
+> **Amended by the architecture review (2026-11-14).** R52 (request ids state intent; no input-and-clock hash) and R56 (remote and held operations; compiled vs installed registries) amend section 3.3 and the transaction rules. See `LEAD-RULINGS.md`.
+
 ## 1. Goal
 
 Every thing the app can do is written once, as an **operation**: a name, an input type, the

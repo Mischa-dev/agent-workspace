@@ -10,6 +10,8 @@ Plan for workstream K5 of the Agent Workspace master plan. Written 2026-11-14 ag
 `fe95a74`. Read-only research: nothing was built or run. Paths are relative to
 `/home/user/agent-workspace` unless they start with `/home/user/`.
 
+> **Amended by the architecture review (2026-11-14).** R57 replaces the week of real-traffic shadowing before K5.5 with a defined workload run on the stage gate rehearsal. R58 adds a combined small-shape measurement at each gate. See `LEAD-RULINGS.md`.
+
 ## 1. Goal
 
 Today the server is correct only as one process: live updates reach only the browsers on the
