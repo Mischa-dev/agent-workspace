@@ -30,6 +30,7 @@ mod backup_restore;
 mod bug_report_links;
 mod bug_sweep;
 mod direct_conversations;
+mod export_declarations;
 mod github_task_keys;
 mod harness_support;
 mod layouts;
