@@ -31,6 +31,8 @@ use subtle::ConstantTimeEq;
 use uuid::Uuid;
 use zeroize::{Zeroize, Zeroizing};
 
+pub mod slug;
+
 use crate::{
     AppState,
     auth::{
@@ -381,7 +383,11 @@ async fn read_workspace(
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RenameRequest {
-    name: String,
+    #[serde(default)]
+    name: Option<String>,
+    /// A new address (K4.5); the old one keeps working for members.
+    #[serde(default)]
+    slug: Option<String>,
     expected_version: i64,
 }
 
@@ -406,7 +412,10 @@ async fn rename_workspace(
         &mut transaction,
         principal.actor_id,
         organization_id,
-        &request.name,
+        WorkspaceChange {
+            name: request.name.as_deref(),
+            slug: request.slug.as_deref(),
+        },
         request.expected_version,
     )
     .await?;
@@ -428,17 +437,29 @@ async fn rename_workspace(
     Ok(Json(view))
 }
 
-/// Rename a workspace, for an owner or admin who may manage its settings.
-/// Returns the caller's role, and the audit metadata when the name changed
-/// (the caller records the row).
+/// What a workspace update changes: its name, its slug, or both.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct WorkspaceChange<'a> {
+    pub name: Option<&'a str>,
+    pub slug: Option<&'a str>,
+}
+
+/// Rename a workspace or change its slug, for an owner or admin who may
+/// manage its settings. Returns the caller's role, and the audit metadata
+/// when something changed (the caller records the row). A changed slug
+/// keeps the old one as a retired slug (K4.5).
 pub(crate) async fn rename_workspace_in(
     transaction: &mut Transaction<'_, Postgres>,
     actor_id: Uuid,
     organization_id: Uuid,
-    name: &str,
+    change: WorkspaceChange<'_>,
     expected_version: i64,
 ) -> Result<(WorkspaceRole, Option<serde_json::Value>), AppError> {
-    let name = normalize_workspace_name(name)?;
+    let name = change.name.map(normalize_workspace_name).transpose()?;
+    let slug = change.slug.map(slug::check_new).transpose()?;
+    if name.is_none() && slug.is_none() {
+        return Err(AppError::Validation("workspace name"));
+    }
     let role = role_of(transaction, actor_id, organization_id, true).await?;
     if !role.manages()
         || !crate::roles::standing(transaction, organization_id, actor_id)
@@ -448,32 +469,41 @@ pub(crate) async fn rename_workspace_in(
     {
         return Err(AppError::Forbidden);
     }
-    let previous = sqlx::query_as::<_, (String, i64)>(
-        "SELECT name, version FROM organizations WHERE id = $1 FOR UPDATE",
+    let previous = sqlx::query_as::<_, (String, String, i64)>(
+        "SELECT name, slug, version FROM organizations WHERE id = $1 FOR UPDATE",
     )
     .bind(organization_id)
     .fetch_one(&mut **transaction)
     .await?;
-    if previous.1 != expected_version {
+    if previous.2 != expected_version {
         return Err(AppError::VersionConflict {
             resource: "workspace",
-            current_version: previous.1,
+            current_version: previous.2,
         });
     }
-    if previous.0 == name {
+    let mut metadata = serde_json::Map::new();
+    if let Some(name) = name.filter(|name| *name != previous.0) {
+        sqlx::query("UPDATE organizations SET name = $2, updated_at = now() WHERE id = $1")
+            .bind(organization_id)
+            .bind(&name)
+            .execute(&mut **transaction)
+            .await?;
+        metadata.insert("previousName".into(), previous.0.clone().into());
+        metadata.insert("name".into(), name.into());
+    }
+    if let Some(slug) = slug.filter(|slug| *slug != previous.1) {
+        slug::rename(transaction, organization_id, &slug).await?;
+        metadata.insert("previousSlug".into(), previous.1.clone().into());
+        metadata.insert("slug".into(), slug.into());
+    }
+    if metadata.is_empty() {
         return Ok((role, None));
     }
-    sqlx::query(
-        "UPDATE organizations SET name = $2, version = version + 1, updated_at = now() WHERE id = $1",
-    )
-    .bind(organization_id)
-    .bind(&name)
-    .execute(&mut **transaction)
-    .await?;
-    Ok((
-        role,
-        Some(serde_json::json!({ "previousName": previous.0, "name": name })),
-    ))
+    sqlx::query("UPDATE organizations SET version = version + 1 WHERE id = $1")
+        .bind(organization_id)
+        .execute(&mut **transaction)
+        .await?;
+    Ok((role, Some(serde_json::Value::Object(metadata))))
 }
 
 // ---------------------------------------------------------------------------

@@ -321,13 +321,15 @@ pub async fn bootstrap_admin(
                     .ok_or(BootstrapError::Usage(
                         "--organization-name is required when no eligible M0 owner exists",
                     ))?;
-            let organization_slug =
-                command
-                    .organization_slug
-                    .as_ref()
-                    .ok_or(BootstrapError::Usage(
-                        "--organization-slug is required when no eligible M0 owner exists",
-                    ))?;
+            // Without `--organization-slug`, a readable one from the name
+            // with a numeric suffix (K4.5).
+            let organization_slug = match command.organization_slug.clone() {
+                Some(slug) => slug,
+                None => {
+                    crate::workspace::slug::readable_for_new(&mut *transaction, organization_name)
+                        .await?
+                }
+            };
             let actor_id = Uuid::now_v7();
             let organization_id = Uuid::now_v7();
             sqlx::query("INSERT INTO actors (id, kind) VALUES ($1, 'human')")
@@ -624,20 +626,11 @@ fn normalize_organization_name(value: String) -> Result<String, BootstrapError> 
     Ok(normalized.to_owned())
 }
 
+/// A slug given on the command line follows the rules for a new slug
+/// (`workspace::slug`, K4.5).
 fn normalize_organization_slug(value: String) -> Result<String, BootstrapError> {
-    let normalized = value.trim().to_ascii_lowercase();
-    let valid = !normalized.is_empty()
-        && normalized.len() <= 64
-        && normalized.split('-').all(|part| {
-            !part.is_empty()
-                && part
-                    .chars()
-                    .all(|character| character.is_ascii_alphanumeric())
-        });
-    if !valid {
-        return Err(BootstrapError::Usage("Organization slug is invalid"));
-    }
-    Ok(normalized)
+    crate::workspace::slug::check_new(&value)
+        .map_err(|_| BootstrapError::Usage("Organization slug is invalid or reserved"))
 }
 
 #[cfg(test)]

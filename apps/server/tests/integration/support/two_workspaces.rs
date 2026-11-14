@@ -46,6 +46,8 @@ pub(crate) struct World {
     pub(crate) marker: &'static str,
     pub(crate) browser: Browser,
     pub(crate) organization: Uuid,
+    /// The workspace's current slug (K4.5).
+    pub(crate) slug: String,
     pub(crate) rook: Uuid,
     pub(crate) agent_token: String,
     pub(crate) agent_connection: Uuid,
@@ -1587,11 +1589,17 @@ async fn build_workspace(
     .execute(pool)
     .await
     .expect("ready preview");
+    let slug = sqlx::query_scalar::<_, String>("SELECT slug FROM organizations WHERE id = $1")
+        .bind(organization)
+        .fetch_one(pool)
+        .await
+        .expect("workspace slug");
 
     World {
         marker,
         browser,
         organization,
+        slug,
         rook,
         agent_token,
         agent_connection,

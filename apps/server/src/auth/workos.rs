@@ -509,9 +509,11 @@ async fn resolve_identity(
             .bind(name)
             .execute(&mut **tx)
             .await?;
+        // A readable slug from the name, with a numeric suffix (K4.5).
+        let slug = crate::workspace::slug::readable_for_new(&mut **tx, "My workspace").await?;
         sqlx::query("INSERT INTO organizations(id,name,slug) VALUES ($1,'My workspace',$2)")
             .bind(org)
-            .bind(format!("workspace-{}", org.simple()))
+            .bind(slug)
             .execute(&mut **tx)
             .await?;
         sqlx::query("INSERT INTO organization_memberships(organization_id,actor_id,role) VALUES ($1,$2,'owner')").bind(org).bind(actor).execute(&mut **tx).await?;

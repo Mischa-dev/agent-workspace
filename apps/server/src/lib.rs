@@ -173,6 +173,7 @@ pub fn router(state: AppState) -> Router {
         .merge(notification_settings::router())
         .merge(mail::http::router())
         .merge(workspace::router())
+        .merge(workspace::slug::router())
         .merge(roles::router())
         .merge(workspace_templates::router())
         .merge(server_status::router())

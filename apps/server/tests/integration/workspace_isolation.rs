@@ -229,6 +229,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/whiteboards/{id}/files/{file_id}",
     "/api/v1/whiteboards/{id}/preview.svg",
     "/api/v1/whiteboards/{id}/scene",
+    "/api/v1/workspaces/by-slug/{slug}",
 ];
 
 /// GET routes under `/api/v1` this suite deliberately doesn't call as plain
@@ -937,6 +938,12 @@ pub(super) fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
                 "/api/v1/organizations/{}/server/access-disagreements",
                 b.organization
             )],
+            vec![],
+        ),
+        case(
+            "/api/v1/workspaces/by-slug/{slug}",
+            vec![format!("/api/v1/workspaces/by-slug/{}", a.slug)],
+            vec![format!("/api/v1/workspaces/by-slug/{}", b.slug)],
             vec![],
         ),
         case(
