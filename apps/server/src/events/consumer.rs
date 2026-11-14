@@ -4,10 +4,13 @@
 //! and exactly once for database effects). Outside effects (a webhook POST,
 //! a push) never happen in `handle`: it enqueues a job keyed by the event.
 //!
-//! One runner per consumer at a time, in any process: until K5.2's
-//! `consumer:<name>` leases, each batch locks the consumer's own
-//! `event_consumers` row with `FOR UPDATE SKIP LOCKED` (pooler-safe, never
-//! a session advisory lock). A failing batch rolls back and is retried;
+//! One runner per consumer at a time, in any process: `run_consumer` runs
+//! only while this instance holds the `consumer:<name>` lease (K5.2), and
+//! each batch fences on it in its own transaction, so a runner that lost
+//! the lease can't advance the cursor. Each batch also locks the consumer's
+//! own `event_consumers` row with `FOR UPDATE SKIP LOCKED` (pooler-safe,
+//! never a session advisory lock), so a round run outside a lease, as
+//! tests do, is still alone. A failing batch rolls back and is retried;
 //! after three failures the runner goes event by event, and an event that
 //! fails five times is parked in `event_consumer_failures` and passed, so
 //! one bad event never stops a consumer for long and is never forgotten. A
@@ -20,7 +23,10 @@ use sqlx::{PgPool, Postgres, Transaction};
 use tokio::sync::watch;
 
 use super::{LOGGED_EVENT_COLUMNS, LoggedEvent};
-use crate::error::AppError;
+use crate::{
+    cluster::{Cluster, Lease, LeaseName, while_held},
+    error::AppError,
+};
 
 /// The most events one batch reads.
 pub const BATCH: i64 = 500;
@@ -133,8 +139,21 @@ impl<C: Consumer> Runner<C> {
 
     /// One batch (or, after repeated failures, one event).
     pub async fn round(&mut self, pool: &PgPool) -> Result<Round, AppError> {
+        self.round_under(pool, None).await
+    }
+
+    /// One round under a lease: it fences on `lease` in the batch's
+    /// transaction, so it fails with `LeaseLost` once the lease is gone.
+    pub async fn round_under(
+        &mut self,
+        pool: &PgPool,
+        lease: Option<(&Cluster, &Lease)>,
+    ) -> Result<Round, AppError> {
         let one_by_one = self.one_by_one_until.is_some();
         let mut transaction = pool.begin().await?;
+        if let Some((cluster, lease)) = lease {
+            cluster.fence(&mut transaction, lease).await?;
+        }
         let Some(cursor) = lock_cursor(&mut transaction, &self.consumer).await? else {
             return Ok(Round {
                 busy: true,
@@ -326,25 +345,49 @@ async fn park<C: Consumer>(
     Ok(())
 }
 
-/// Run a consumer until shutdown: a round whenever there may be work, a
-/// sweep every minute, a pause when idle or failing. Errors are logged and
+/// Run a consumer until shutdown, whenever this instance holds its
+/// `consumer:<name>` lease: a round whenever there may be work, a sweep
+/// every minute, a pause when idle or failing. Errors are logged and
 /// retried; they never stop the server.
-pub async fn run_consumer<C: Consumer>(
-    pool: PgPool,
+pub async fn run_consumer<C: Consumer + 'static>(
+    cluster: Cluster,
     consumer: C,
-    mut shutdown: watch::Receiver<bool>,
+    shutdown: watch::Receiver<bool>,
 ) {
-    let mut runner = Runner::new(consumer);
+    let name = LeaseName::Consumer(consumer.name());
+    let runner = std::sync::Arc::new(tokio::sync::Mutex::new(Runner::new(consumer)));
+    let pool = cluster.pool().clone();
+    let work_cluster = cluster.clone();
+    while_held(cluster, name, shutdown, move |lease| {
+        let runner = std::sync::Arc::clone(&runner);
+        let pool = pool.clone();
+        let cluster = work_cluster.clone();
+        async move {
+            let mut runner = runner.lock().await;
+            run_rounds(&mut runner, &pool, &cluster, &lease).await
+        }
+    })
+    .await;
+}
+
+/// Rounds until `lease` is lost or released.
+async fn run_rounds<C: Consumer>(
+    runner: &mut Runner<C>,
+    pool: &PgPool,
+    cluster: &Cluster,
+    lease: &Lease,
+) -> Result<(), AppError> {
     let mut last_sweep = tokio::time::Instant::now();
     loop {
-        if *shutdown.borrow() {
-            return;
+        if lease.lost.is_cancelled() {
+            return Ok(());
         }
-        let pause = match runner.round(&pool).await {
+        let pause = match runner.round_under(pool, Some((cluster, lease))).await {
             Ok(round) if round.handled > 0 || round.parked > 0 => Duration::ZERO,
             Ok(round) if round.busy => Duration::from_secs(2),
             Ok(_) if runner.batch_failures > 0 => backoff(runner.batch_failures),
             Ok(_) => super::sequencer::POLL,
+            Err(AppError::LeaseLost) => return Ok(()),
             Err(error) => {
                 tracing::warn!(
                     consumer = runner.consumer.name(),
@@ -356,7 +399,7 @@ pub async fn run_consumer<C: Consumer>(
         };
         if last_sweep.elapsed() > Duration::from_secs(60) {
             last_sweep = tokio::time::Instant::now();
-            if let Err(error) = runner.sweep(&pool).await {
+            if let Err(error) = runner.sweep(pool).await {
                 tracing::warn!(
                     consumer = runner.consumer.name(),
                     error_category = error.log_category(),
@@ -369,7 +412,7 @@ pub async fn run_consumer<C: Consumer>(
         }
         tokio::select! {
             () = tokio::time::sleep(pause) => {}
-            _ = shutdown.changed() => {}
+            () = lease.lost.cancelled() => {}
         }
     }
 }

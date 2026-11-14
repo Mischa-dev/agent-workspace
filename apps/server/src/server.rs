@@ -10,13 +10,15 @@ use sqlx::PgPool;
 use tokio::{net::TcpListener, sync::watch, task::JoinHandle};
 
 use crate::{
-    AppState, config::AppConfig, error::AppError, github, jobs, provider::SupervisorRegistry,
-    rate_limit::RateLimiters, realtime::RealtimeHub, recovery, router,
+    AppState, cluster::Cluster, config::AppConfig, error::AppError, github, jobs,
+    provider::SupervisorRegistry, rate_limit::RateLimiters, realtime::RealtimeHub, recovery,
+    router,
 };
 
 /// A server, assembled and ready to listen.
 pub struct Server {
     state: AppState,
+    cluster: Cluster,
     jobs: Arc<jobs::JobRegistry>,
 }
 
@@ -74,6 +76,17 @@ impl Server {
             );
         }
 
+        // This process as an instance among any number (K5.2); its
+        // heartbeat starts with the loops.
+        let cluster = Cluster::register(
+            pool.clone(),
+            crate::cluster::Roles::ALL,
+            config.instance_label.clone(),
+            config.lease_ttl,
+        )
+        .await
+        .context("register this server instance")?;
+
         // Modules (and their operations) that don't fit together stop the
         // server here, before it takes a request.
         let modules = crate::modules::registry::Registry::global();
@@ -85,6 +98,7 @@ impl Server {
         );
         Ok(Self {
             state,
+            cluster,
             jobs: Arc::new(jobs::default_registry()),
         })
     }
@@ -93,10 +107,18 @@ impl Server {
         &self.state
     }
 
+    pub fn cluster(&self) -> &Cluster {
+        &self.cluster
+    }
+
     /// Serve the app on `listener` and GitHub webhooks on `webhooks`, and
     /// start the loops.
     pub fn spawn(self, listener: TcpListener, webhooks: TcpListener) -> RunningServer {
-        let Self { state, jobs } = self;
+        let Self {
+            state,
+            cluster,
+            jobs,
+        } = self;
         let address = listener.local_addr().ok();
         let (shutdown, receiver) = watch::channel(false);
         // Wakes the sequencer; K5.4's listener notifies it.
@@ -113,8 +135,10 @@ impl Server {
         // Not supervised like the loops above: a failure here delays
         // wakeups and lease expiry but never loses data, so it must not
         // stop the server.
-        // The log's sequencer runs beside it on the same task, for the same
-        // reason: a failed step is retried on the next round.
+        // The log's sequencer and the instance's heartbeat run beside it on
+        // the same task, for the same reason: a failed step is retried on
+        // the next round (a heartbeat that stays late fences this instance,
+        // it never stops it).
         let replies = tokio::spawn({
             let replies = crate::replies::run(state.clone(), receiver.clone());
             let sequencer = crate::events::sequencer::run(
@@ -122,8 +146,11 @@ impl Server {
                 Arc::clone(&wake),
                 receiver.clone(),
             );
+            let heartbeat_cluster = cluster.clone();
+            let heartbeat_shutdown = receiver.clone();
             async move {
-                tokio::join!(replies, sequencer);
+                let heartbeat = heartbeat_cluster.run_heartbeat(heartbeat_shutdown);
+                tokio::join!(replies, sequencer, heartbeat);
             }
         });
         // Background jobs (F9). A job lost to a crash is retried once its
@@ -153,6 +180,7 @@ impl Server {
         });
         RunningServer {
             state,
+            cluster,
             address,
             shutdown,
             http,
@@ -168,6 +196,7 @@ impl Server {
 /// A server that is listening and running its loops.
 pub struct RunningServer {
     state: AppState,
+    cluster: Cluster,
     address: Option<SocketAddr>,
     shutdown: watch::Sender<bool>,
     http: JoinHandle<std::io::Result<()>>,
@@ -181,6 +210,11 @@ pub struct RunningServer {
 impl RunningServer {
     pub fn state(&self) -> &AppState {
         &self.state
+    }
+
+    /// This instance among the others.
+    pub fn cluster(&self) -> &Cluster {
+        &self.cluster
     }
 
     /// Where the app listens.

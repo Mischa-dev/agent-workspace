@@ -142,6 +142,12 @@ pub struct AppConfig {
     /// Cloudflare). Unset, nothing is read from the request for the
     /// caller's address and there are no per-address limits.
     pub client_address_header: Option<String>,
+    /// The operator's name for this instance (K5.2), shown with the
+    /// server's instances; never taken from the machine.
+    pub instance_label: Option<String>,
+    /// How long a lease lives unless renewed (K5.2): renewed every third,
+    /// given up by its holder after two thirds.
+    pub lease_ttl: Duration,
 }
 
 #[derive(Clone, Debug)]
@@ -422,6 +428,24 @@ impl AppConfig {
         let allow_private_addresses = parse(values, "ALLOW_PRIVATE_ADDRESSES", "false")?;
         let operator_logins = operator_logins(values)?;
         let client_address_header = client_address_header(values)?;
+        let instance_label = Some(optional(values, "INSTANCE_LABEL", "").trim().to_owned())
+            .filter(|label| !label.is_empty());
+        if instance_label
+            .as_deref()
+            .is_some_and(|label| label.chars().count() > 80 || label.chars().any(char::is_control))
+        {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}INSTANCE_LABEL"),
+                reason: "use at most 80 characters".into(),
+            });
+        }
+        let lease_seconds = parse::<u64>(values, "LEASE_SECONDS", "15")?;
+        if !(2..=300).contains(&lease_seconds) {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}LEASE_SECONDS"),
+                reason: "must be between 2 and 300".into(),
+            });
+        }
         Ok(Self {
             environment,
             server_addr,
@@ -458,6 +482,8 @@ impl AppConfig {
             allow_private_addresses,
             operator_logins,
             client_address_header,
+            instance_label,
+            lease_ttl: Duration::from_secs(lease_seconds),
         })
     }
 }

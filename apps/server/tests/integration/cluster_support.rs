@@ -40,6 +40,11 @@ impl Instance {
         self.running.as_ref().expect("running").state()
     }
 
+    /// This instance's leases and heartbeat.
+    pub(crate) fn cluster(&self) -> &agent_workspace_server::cluster::Cluster {
+        self.running.as_ref().expect("running").cluster()
+    }
+
     /// Send a request built for the in-process app to this instance's
     /// listener.
     pub(crate) async fn send(&self, request: Request<Body>) -> (StatusCode, Value) {
