@@ -27,7 +27,7 @@ use crate::{
     AppState,
     config::{AppConfig, Environment},
     error::{ApiJson, AppError},
-    policy::{Action, ActorKind, Membership, Resource, RoleGrant, Subject, authorize},
+    policy::{Action, Membership, Resource, RoleGrant, Subject, authorize},
 };
 
 const SESSION_COOKIE_DEV: &str = "agent_workspace_session";
@@ -54,6 +54,16 @@ pub struct AuthenticatedActor {
     pub login_name: String,
     pub display_name: String,
     csrf_token_hash: Vec<u8>,
+}
+
+impl AuthenticatedActor {
+    /// The caller `access` decides for: this account in the browser, with
+    /// everything its roles give it.
+    pub fn caller(&self) -> Result<crate::access::Caller, AppError> {
+        let kind = crate::ops::context::actor_kind_of(&self.actor_kind)
+            .ok_or(AppError::AuthenticationRequired)?;
+        Ok(crate::access::Caller::person(self.actor_id, kind))
+    }
 }
 
 pub(crate) struct SessionIdentity {
@@ -590,7 +600,7 @@ async fn session_response(
     .bind(principal.actor_id)
     .fetch_all(&state.pool)
     .await?;
-    let actor_kind = policy_actor_kind(&principal.actor_kind)?;
+    let actor_kind = crate::accounts::actor_kind(&principal.actor_kind)?;
     let mut create_project = false;
     for organization in &organizations {
         let role = RoleGrant::stored(&organization.role, organization.role_permissions.as_deref())?;
@@ -634,17 +644,6 @@ async fn session_response(
         }),
         organizations,
     })
-}
-
-fn policy_actor_kind(value: &str) -> Result<ActorKind, AppError> {
-    match value {
-        "human" => Ok(ActorKind::Human),
-        "external_agent" => Ok(ActorKind::ExternalAgent),
-        "execution_worker" => Ok(ActorKind::ExecutionWorker),
-        "integration" => Ok(ActorKind::Integration),
-        "system" => Ok(ActorKind::System),
-        _ => Err(AppError::Internal("stored Actor kind")),
-    }
 }
 
 pub(crate) fn normalize_login_name(value: &str) -> Result<String, AppError> {

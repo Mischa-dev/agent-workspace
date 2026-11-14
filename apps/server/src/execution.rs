@@ -14,8 +14,7 @@ use crate::{
     error::{ApiJson, ApiPath, AppError},
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     policy::{
-        Action, ActorKind, Membership, Permission, ProjectScope, Resource, RoleGrant, Subject,
-        authorize,
+        Action, Membership, Permission, ProjectScope, Resource, RoleGrant, Subject, authorize,
     },
     provider::{
         CODEX_KIND, ProfileHealth, SupervisorRegistry,
@@ -1177,7 +1176,7 @@ async fn require_project_action(
 
     let subject = Subject::new(
         principal.actor_id,
-        actor_kind(&principal.actor_kind)?,
+        crate::accounts::actor_kind(&principal.actor_kind)?,
         true,
         Some(Membership::project(project_id, access.grant()?, true)),
         None,
@@ -1475,17 +1474,6 @@ fn parse_actor_status(value: &str) -> Result<ActorStatus, AppError> {
         "active" => Ok(ActorStatus::Active),
         "disabled" => Ok(ActorStatus::Disabled),
         _ => Err(AppError::Internal("stored execution Actor status")),
-    }
-}
-
-fn actor_kind(value: &str) -> Result<ActorKind, AppError> {
-    match value {
-        "human" => Ok(ActorKind::Human),
-        "external_agent" => Ok(ActorKind::ExternalAgent),
-        "execution_worker" => Ok(ActorKind::ExecutionWorker),
-        "integration" => Ok(ActorKind::Integration),
-        "system" => Ok(ActorKind::System),
-        _ => Err(AppError::Internal("stored Actor kind")),
     }
 }
 

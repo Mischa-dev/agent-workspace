@@ -234,6 +234,7 @@ pub enum Permission {
     CodePublish,
     CodeManage,
     AgentsManage,
+    AgentsManageAny,
     HostsManage,
     MembersView,
     DirectoryView,
@@ -321,9 +322,10 @@ const fn required(info: PermissionInfo) -> PermissionInfo {
 const ALL_ROLES: [bool; 4] = [true, true, true, true];
 const WORKERS: [bool; 4] = [true, true, true, false];
 const MANAGERS: [bool; 4] = [true, true, false, false];
+const OWNERS: [bool; 4] = [true, false, false, false];
 
 /// Every permission, in the order the Roles page shows them.
-pub const PERMISSIONS: [PermissionInfo; 33] = [
+pub const PERMISSIONS: [PermissionInfo; 34] = [
     required(permission(
         Permission::ProjectsView,
         "projects.view",
@@ -558,6 +560,17 @@ pub const PERMISSIONS: [PermissionInfo; 33] = [
         "Connect agents to a project and change or remove them.",
         PermissionScope::Project,
         MANAGERS,
+    )),
+    // K1.4: the owner starting role only, so a workspace never loses control
+    // of an agent whose named managers left.
+    people_only(permission(
+        Permission::AgentsManageAny,
+        "agents.manage_any",
+        "agents",
+        "Manage every agent the workspace owns",
+        "Manage any agent or app the workspace owns, without being named as its manager.",
+        PermissionScope::Workspace,
+        OWNERS,
     )),
     people_only(permission(
         Permission::HostsManage,
@@ -2298,10 +2311,15 @@ mod tests {
     #[test]
     fn people_only_permissions_refuse_agents_whatever_their_role() {
         for info in PERMISSIONS.iter().filter(|info| info.people_only) {
-            let action = Action::ALL
+            // `agents.manage_any` (K1.4) has no action in this older engine:
+            // `access::may_manage_account` reads it.
+            let Some(action) = Action::ALL
                 .into_iter()
                 .find(|action| action.permission() == info.permission)
-                .expect("valid in the test");
+            else {
+                assert_eq!(info.permission, Permission::AgentsManageAny);
+                continue;
+            };
             let resource = project_resource(action, MembershipRole::Owner);
             let agent = subject(
                 ActorKind::ExternalAgent,
