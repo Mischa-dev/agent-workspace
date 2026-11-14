@@ -9,6 +9,9 @@ import { DatePicker } from '../ui/pickers'
 import type { WorkItem } from './types'
 import type { TaskSave } from './useTaskSave'
 
+/** The fields every task has, under fixed IDs, as a collection that acts like a task lists them first. */
+const BUILT_IN = new Set(['1', '2', '3', '4', '5', '6'].map((n) => `0192f5c0-0000-7000-8000-00000000000${n}`))
+
 /**
  * A task's custom fields (AWD-89), each edited in place and saved on its
  * own, as the built-in fields are: rows in the page's side rail, pills under
@@ -33,9 +36,18 @@ export function TaskCustomFields({
   /** Whether an empty field waits behind More (pills only). */
   tucked: boolean
 }) {
-  const fields = useFields({ projectId: item.projectId })
+  // A record of a collection that acts like a task has that collection's
+  // fields, after the built-in ones this page already shows.
+  const fields = useFields(
+    item.collectionId
+      ? {
+          projectId: item.projectId,
+          path: `/api/v1/projects/${encodeURIComponent(item.projectId)}/collections/${encodeURIComponent(item.collectionId)}`,
+        }
+      : { projectId: item.projectId },
+  )
   const [editing, setEditing] = useState<{ field: FieldDefinition; anchor: HTMLElement } | null>(null)
-  const definitions = fields.data?.fields ?? []
+  const definitions = (fields.data?.fields ?? []).filter((field) => !field.archived && !BUILT_IN.has(field.id))
   if (!definitions.length) return null
   const set = (field: FieldDefinition, value: FieldValue | null) => {
     // Against what the person sees now, their own change on its way

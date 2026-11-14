@@ -265,11 +265,11 @@ pub(crate) async fn checked_form(
             "The collection is archived. Restore it to take answers.".to_owned(),
         ));
     }
-    if collection.is_tasks() {
-        return Ok(Err(
-            "Tasks is the built-in collection of this project's tasks, so a form can't add to it. A bug report link without a collection makes tasks."
-                .to_owned(),
-        ));
+    if collection.acts_like_task {
+        return Ok(Err(format!(
+            "{}'s records are tasks, so a form can't add to it yet. A bug report link without a collection makes tasks.",
+            collection.name
+        )));
     }
     let definitions = crate::collections::field_definitions(
         &mut *pool.acquire().await?,

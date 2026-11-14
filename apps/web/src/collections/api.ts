@@ -24,6 +24,8 @@ export type CollectionSummary = {
   updatedAt: string
   /** "tasks" for the project's built-in Tasks collection: its records are tasks, changed on task screens. */
   builtin?: 'tasks' | null
+  /** Its records are tasks (AWD-110): a status, assignee and the rest, a key like AWD-12, and a task page. */
+  actsLikeTask?: boolean
 }
 
 export type SortRule = { field: string; direction: 'asc' | 'desc' }
@@ -110,6 +112,7 @@ export function normalizeCollection(value: unknown): CollectionSummary {
     version: asNumber(raw.version, 1),
     updatedAt: asString(raw.updatedAt),
     builtin: raw.builtin === 'tasks' ? 'tasks' : null,
+    actsLikeTask: raw.actsLikeTask === true || raw.builtin === 'tasks',
   }
 }
 
@@ -256,7 +259,7 @@ export async function getCollection(projectId: string, collectionId: string) {
 export async function updateCollection(
   projectId: string,
   collectionId: string,
-  input: { expectedVersion: number; name?: string; description?: string; titleName?: string; archived?: boolean },
+  input: { expectedVersion: number; name?: string; description?: string; titleName?: string; archived?: boolean; actsLikeTask?: boolean },
 ) {
   return normalizeBody(await requestJson<unknown>(collectionPath(projectId, collectionId), { method: 'PATCH', idempotencyKey: crypto.randomUUID(), json: input }))
 }

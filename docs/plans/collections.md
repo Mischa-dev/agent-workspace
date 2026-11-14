@@ -320,3 +320,39 @@ two copies stay instead, kept in step in the same transaction:
 - In the app, Tasks cells, board moves and calendar moves are editable;
   a record still opens its task. Forms don't target Tasks (a plain bug
   report link already makes tasks).
+
+### Collections that act like tasks (steps 5 and 6)
+
+Any collection can switch on "acts like a task" (`collections.acts_like_task`,
+migration `20261114070000_task_like_collections.sql`; always on for the
+built-in Tasks collection). Its records are then tasks, the way Tasks'
+records are:
+
+- Each record has a task with the same ID; `work_items.collection_id` names
+  the collection (NULL for Tasks) and never changes. Switching on
+  (`collection_make_task_like`) makes those tasks with the project's default
+  type and status and keys from the project's task numbers, which the
+  records take as their numbers too. The step 2 triggers then keep each
+  record in step with its task, and `task_record_guard` refuses other writes.
+- So the records show on the board and in My work, and can be claimed,
+  run, commented on and linked, like any task. Search finds them once, as
+  tasks.
+- Their fields are the collection's own, after the built-in task fields
+  (`tasks::fields` with the collection's kind). Task code that reads or
+  writes one task's values asks `work_item_fields::definitions_for_task`
+  (or `kind_of`); the task page shows the collection's fields.
+- Writes from the collection's views go through `task_writes` as Tasks'
+  do. `record_write` and forms refuse them, pointing at the task tools.
+- Switching off (`collections::task_like`) is only allowed while the
+  collection has no records, so a task never loses its record; a collection
+  whose records are tasks is archived once they are. A collection with its
+  own field named like a built-in one (Status, Priority, …) renames it
+  first.
+- Agents: `collection_write` takes `actsLikeTask`; `task_create` and
+  `task_list` take `collection` (by name or ID); `fields` on the task tools
+  follow the task's collection; `task_open` says which collection a task is
+  in; `project_open` lists the task fields and the collections that act like
+  tasks. No new tools.
+- Later: workflows of their own (they share the project's statuses now),
+  turning the switch off with records, forms that make task-like records,
+  and carrying the switch in workspace templates.

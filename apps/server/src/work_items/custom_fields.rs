@@ -359,7 +359,13 @@ pub(super) async fn web_field_values(
             .bind(project_id)
             .fetch_one(&mut *connection)
             .await?;
-    let definitions = work_item_fields::definitions(&mut *connection, project_id, true).await?;
+    // A task of a collection that acts like a task follows its fields.
+    let definitions = match task {
+        Some(task) => {
+            work_item_fields::definitions_for_task(&mut *connection, project_id, task, true).await?
+        }
+        None => work_item_fields::definitions(&mut *connection, project_id, true).await?,
+    };
     let written = written
         .iter()
         .map(|(field, value)| (field.clone(), value.clone()))
