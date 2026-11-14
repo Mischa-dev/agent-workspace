@@ -26,3 +26,5 @@ slices move.
 | 2026-11-14 | P0.26 | `apps/server/src/structure_guards/allowances.json` | one rule → fourteen rules with per-file allowances and ceilings | every workstream (lower a number when you remove an offender) |
 | 2026-11-14 | P0.28 | SQL `conversation_readable_by(conversation_id, actor_id)` | new: one call to `conversation_visible_to` (ruling R32) | C2.1, K1, K4.4 |
 | 2026-11-14 | P0.35 | `tools/db/schema-snapshot.sh` → `target/schema.sql` | new: today's schema as `pg_dump --schema-only` prints it; CI keeps it in the `ci-reports` artifact | every workstream that adds a migration |
+| 2026-11-14 | P0.36 | `page_comment`, `page_suggestion` notification `detail` | `title` and `preview` copied in → ids only (`pageCommentId`, `threadId`, `pageSuggestionId`, `href`); the inbox reads the page title and the comment live, an archived page shows "(archived)" and no preview, a page moved out of the project hides its notifications | C1, K3 |
+| 2026-11-14 | P0.28, P0.36 | migration names | P0.28's migration is `20261114070500_conversation_readable_by.sql` (main took `20261114070000`); the scrub is `20261114071000_notifications_page_text.sql` | none |

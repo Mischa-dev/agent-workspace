@@ -69,3 +69,4 @@ are gated or exempt with a reason (P0.7).
 | tool titles, descriptions and schemas name no vendor | `mcp.rs` test `tool_descriptions_name_no_vendor` | P0.32 |
 | `personal_hosts` (no tailnet address or home path outside docs/history) | `tools/ci/test_personal_hosts.py` | P0.33 |
 | runner SDK tests run in CI | `tools/ci/checks.sh` steps "runner SDK tests" | P0.34 |
+| `notification_detail_text` | `apps/server/src/structure_guards.rs` | P0.36 |

@@ -214,6 +214,11 @@
     "external_execution.rs": 1,
     "provider.rs": 1
   },
+  "notification_detail_text": {
+    "automations.rs": 2,
+    "scheduled_messages.rs": 1,
+    "usage/alerts.rs": 1
+  },
   "process_state": {
     "metrics.rs": 2,
     "modules/gate.rs": 2,

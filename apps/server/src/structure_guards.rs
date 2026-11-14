@@ -105,6 +105,12 @@ pub(crate) const RULES: &[Rule] = &[
         count: conversation_listings,
     },
     Rule {
+        id: "notification_detail_text",
+        agents_rule: "rule 10, \"Content stays in its record\"",
+        ceiling: NOTIFICATION_DETAIL_TEXT_CEILING,
+        count: notification_detail_text,
+    },
+    Rule {
         id: "vendor_names_core",
         agents_rule: "rule 8, \"Nobody's stack is hard-coded\"",
         ceiling: VENDOR_NAMES_CORE_CEILING,
@@ -127,6 +133,11 @@ const DIRECT_TOOL_CALLS_CEILING: usize = 4;
 const PROCESS_STATE_CEILING: usize = 14;
 const BACKGROUND_SPAWNS_CEILING: usize = 16;
 const CONVERSATION_LISTINGS_CEILING: usize = 77;
+// P0.36. The four left are system text, not anyone's words: why a scheduled
+// message wasn't sent (scheduled_messages.rs), why an automation was turned
+// off and which automation posted (automations.rs), and a usage alert's
+// suggested batch (usage/alerts.rs).
+const NOTIFICATION_DETAIL_TEXT_CEILING: usize = 4;
 const VENDOR_NAMES_CORE_CEILING: usize = 9;
 
 /// The heading in `AGENTS.md` the rules sit under.
@@ -339,6 +350,51 @@ pub(crate) fn conversation_listings(source: &str) -> usize {
         })
         .count()
 }
+
+/// A notification `detail` (`detail: json!({…})`, `detail = json!({…})`)
+/// with a `preview`, `body`, `text` or `quote` key whose value isn't a
+/// string literal or an id. A notification row holds ids; the words are read
+/// live when listing, so a removal, an edit or an archive reaches the inbox.
+pub(crate) fn notification_detail_text(source: &str) -> usize {
+    let mut found = 0;
+    let mut depth: Option<i32> = None;
+    for (_, line) in code_lines(source) {
+        if depth.is_none() {
+            let Some(at) = line.find("json!(") else {
+                continue;
+            };
+            let before = line[..at]
+                .trim_end()
+                .trim_end_matches("serde_json::")
+                .trim_end();
+            if !(before.ends_with("detail =") || before.ends_with("detail:")) {
+                continue;
+            }
+            depth = Some(0);
+        }
+        if let Some(value) = DETAIL_TEXT_KEYS
+            .iter()
+            .find_map(|key| line.trim_start().strip_prefix(key))
+        {
+            let value = value.trim().trim_end_matches(',').trim();
+            let constant = value.starts_with('"');
+            let id = value
+                .trim_end_matches(".to_string()")
+                .rsplit(['.', '_'])
+                .next()
+                .is_some_and(|last| last == "id");
+            if !constant && !id {
+                found += 1;
+            }
+        }
+        let open = depth.unwrap_or(0) + line.matches(['(', '{']).count() as i32
+            - line.matches([')', '}']).count() as i32;
+        depth = (open > 0).then_some(open);
+    }
+    found
+}
+
+const DETAIL_TEXT_KEYS: [&str; 4] = ["\"preview\":", "\"body\":", "\"text\":", "\"quote\":"];
 
 /// Files a rule never reads, since they are where the thing belongs.
 fn exempt(rule: &str, path: &str) -> bool {
@@ -732,6 +788,24 @@ mod tests {
         );
         assert_eq!(vendor_names_core("let label = \"Ask Claude\";"), 1);
         assert_eq!(vendor_names_core("let label = \"Ask the agent\";"), 0);
+        assert_eq!(
+            notification_detail_text(
+                "notification.detail = serde_json::json!({\n    \"title\": \"New comment\",\n    \"preview\": preview,\n    \"href\": href,\n});"
+            ),
+            1
+        );
+        assert_eq!(
+            notification_detail_text(
+                "detail: json!({\n    \"body\": format!(\"{} said\", who),\n    \"quote\": \"fixed\",\n    \"text\": comment.id,\n}),\nlet other = json!({ \"preview\": preview });"
+            ),
+            1
+        );
+        assert_eq!(
+            notification_detail_text(
+                "let detail = json!({\n    \"pageCommentId\": id,\n    \"href\": href,\n});\n\"preview\": text,"
+            ),
+            0
+        );
         assert!(exempt("vendor_names_core", "provider/codex_cloud.rs"));
         assert!(!exempt("vendor_names_core", "mcp.rs"));
     }
