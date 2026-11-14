@@ -1156,6 +1156,7 @@ pub(crate) async fn create(
     .execute(&mut **transaction)
     .await
     .map_err(name_taken)?;
+    crate::modules::gate::forget(organization_id);
     let view = read(transaction, caller, organization_id, id).await?;
     auditor
         .record(
@@ -1329,6 +1330,7 @@ pub(crate) async fn change(
     .execute(&mut **transaction)
     .await
     .map_err(name_taken)?;
+    crate::modules::gate::forget(organization_id);
     let after = read(transaction, caller, organization_id, role_id).await?;
     auditor
         .record(
@@ -1390,6 +1392,7 @@ pub(crate) async fn remove(
         .bind(role_id)
         .execute(&mut **transaction)
         .await?;
+    crate::modules::gate::forget(organization_id);
     auditor
         .record(
             transaction,

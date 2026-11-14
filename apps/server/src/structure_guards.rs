@@ -48,9 +48,14 @@ pub(crate) fn conversation_listings(source: &str) -> usize {
         .into_iter()
         .map(|literal| normalise(&literal.text))
         .filter(|sql| {
-            ["FROM conversations", "JOIN conversations", "FROM messages", "JOIN messages"]
-                .iter()
-                .any(|word| contains_word(sql, word))
+            [
+                "FROM conversations",
+                "JOIN conversations",
+                "FROM messages",
+                "JOIN messages",
+            ]
+            .iter()
+            .any(|word| contains_word(sql, word))
         })
         .filter(|sql| {
             !sql.contains("conversation_visible_to(")

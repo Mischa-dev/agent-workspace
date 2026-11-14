@@ -411,6 +411,46 @@ mod tests {
         });
     }
 
+    /// P0.7: every route a switchable module owns that names its content by
+    /// id is looked up by the gate (`ID_FAMILIES`) or exempt with a reason
+    /// (`ID_EXEMPT`), so a new family can't step around the gate.
+    #[test]
+    fn every_id_routed_family_is_gated_or_exempt() {
+        use super::gate::{ID_EXEMPT, ID_FAMILIES};
+        let mut missing = BTreeSet::new();
+        for path in route_paths() {
+            let Some(module) = manifest::of_route(&path) else {
+                continue;
+            };
+            if !module.switchable {
+                continue;
+            }
+            let mut parts = path.trim_start_matches('/').split('/');
+            let (Some("api"), Some("v1"), Some(family), Some(id)) =
+                (parts.next(), parts.next(), parts.next(), parts.next())
+            else {
+                continue;
+            };
+            if !id.starts_with('{') || family == "projects" || family == "organizations" {
+                continue;
+            }
+            let prefix = format!("/api/v1/{family}/");
+            let known = ID_FAMILIES.iter().any(|(gated, _, _)| *gated == prefix)
+                || ID_EXEMPT.iter().any(|(exempt, _)| *exempt == prefix);
+            if !known {
+                missing.insert(format!("{prefix} ({path}, module {})", module.id));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "id-routed families of switchable modules the module gate neither looks up \
+             (modules/gate.rs ID_FAMILIES) nor exempts with a reason (ID_EXEMPT): {missing:#?}"
+        );
+        for (prefix, reason) in ID_EXEMPT {
+            assert!(!reason.is_empty(), "{prefix} needs a reason");
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Reading the routes from the source, as `policy_inventory` does.
 
@@ -430,12 +470,9 @@ mod tests {
                 if path.extension().is_none_or(|extension| extension != "rs") {
                     continue;
                 }
-                let mut source = std::fs::read_to_string(&path).expect("read source file");
+                let source = std::fs::read_to_string(&path).expect("read source file");
                 // Test modules build throwaway routers.
-                if let Some(tests) = source.find("\n#[cfg(test)]\nmod ") {
-                    source.truncate(tests);
-                }
-                let mut remaining = source.as_str();
+                let mut remaining = crate::test_support::source::strip_tests(&source);
                 while let Some(start) = remaining.find(ROUTE_CALL) {
                     remaining = &remaining[start + ROUTE_CALL.len()..];
                     let Some(open) = remaining.find('"') else {

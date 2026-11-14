@@ -39,7 +39,9 @@ pub fn server_src() -> std::path::PathBuf {
 }
 
 /// The source before its test tail: everything up to the first
-/// `#[cfg(test)]` line that starts a module (`mod tests`, `mod guard`, …).
+/// `#[cfg(test)]` line that starts an inline module (`mod tests {`,
+/// `mod guard {`, …). A test-only module kept in its own file
+/// (`mod structure_guards;`) is only declared here, so scanning goes on.
 /// One rule for every guard, so a test-only router or fixture never counts.
 pub fn strip_tests(source: &str) -> &str {
     let mut offset = 0;
@@ -48,7 +50,12 @@ pub fn strip_tests(source: &str) -> &str {
         let line_start = source[..at].rfind('\n').map_or(0, |index| index + 1);
         let after = source[at + "#[cfg(test)]".len()..].trim_start();
         let starts_line = source[line_start..at].trim().is_empty();
-        if starts_line && (after.starts_with("mod ") || after.starts_with("pub(crate) mod ")) {
+        let module = after.starts_with("mod ") || after.starts_with("pub(crate) mod ");
+        let inline = after
+            .split('\n')
+            .next()
+            .is_some_and(|line| line.trim_end().ends_with('{'));
+        if starts_line && module && inline {
             return &source[..line_start];
         }
         offset = at + "#[cfg(test)]".len();
@@ -56,7 +63,7 @@ pub fn strip_tests(source: &str) -> &str {
     source
 }
 
-/// One `.route("<path>", <handlers>)` call.
+/// One `.route(path, handlers)` call.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Route {
     /// The path template, as written.
@@ -360,14 +367,22 @@ mod tests {
             "fn a() {}\n#[cfg(test)]\nfn helper() {}\n"
         );
         assert_eq!(strip_tests("fn a() {}"), "fn a() {}");
+        let declared = "#[cfg(test)]\nmod guards;\nfn b() {}\n#[cfg(test)]\nmod tests {\n}\n";
+        assert_eq!(
+            strip_tests(declared),
+            "#[cfg(test)]\nmod guards;\nfn b() {}\n"
+        );
     }
 
     #[test]
     fn routes_carry_their_methods() {
         let source = concat!(
-            ".route", "(\"/a/{id}\", get(read).post(write))\n",
-            ".route", "(PATH, get(other))\n",
-            ".route", "(\"/b\", axum::routing::patch(change))"
+            ".route",
+            "(\"/a/{id}\", get(read).post(write))\n",
+            ".route",
+            "(PATH, get(other))\n",
+            ".route",
+            "(\"/b\", axum::routing::patch(change))"
         );
         assert_eq!(
             routes(source),

@@ -69,19 +69,7 @@ fn refused<T>(error: AppError, operation: &'static str) -> ToolResult<T> {
 async fn whiteboards_on(state: &AppState, principal: &McpPrincipal) -> Result<OnIn, AppError> {
     let projects = super::common::accessible_project_ids(state, principal).await?;
     let mut connection = state.pool.acquire().await?;
-    let in_projects =
-        crate::modules::state::ProjectModules::load(&mut connection, principal.actor_id, &projects)
-            .await?;
-    let workspaces = crate::modules::state::by_workspace(&mut connection, principal.actor_id)
-        .await?
-        .into_iter()
-        .filter(|(_, set)| set.contains("whiteboards"))
-        .map(|(workspace, _)| workspace)
-        .collect();
-    Ok(OnIn {
-        projects: in_projects.with(&projects, "whiteboards"),
-        workspaces,
-    })
+    crate::whiteboards::on_for(&mut connection, principal.actor_id, &projects).await
 }
 
 /// AWD-75: whether Whiteboards is off for the caller where whiteboard `id`

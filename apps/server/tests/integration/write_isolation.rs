@@ -659,9 +659,7 @@ fn every_write_route_and_write_tool_has_an_isolation_case() {
 /// The source before a trailing `#[cfg(test)] mod`, so test-only routers
 /// (a provider's fake server) don't count as the app's routes.
 fn without_tests(source: &str) -> &str {
-    source
-        .find("\n#[cfg(test)]\nmod ")
-        .map_or(source, |end| &source[..end])
+    agent_workspace_server::test_support::source::strip_tests(source)
 }
 
 /// `"METHOD /path"` for each `.route("...", ...)` call that registers a
