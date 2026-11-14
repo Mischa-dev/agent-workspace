@@ -10,6 +10,8 @@ Planner's draft, 2026-11-14, against `main` at fe95a74 (pull request #251, tasks
 four, is not in this checkout). Paths are relative to `/home/user/agent-workspace` unless they
 start with `/`. "Inferred" marks a claim not read directly in code.
 
+> **Amended by the architecture review (2026-11-14).** R54 (one kind-name grammar, qualified install-owned kinds) amends the `thing_kinds` CHECK. R53 sets the thing version of a task. See `LEAD-RULINGS.md`.
+
 ## 1. Goal
 
 When K3 is done, every kind of thing (a message, task, page, sheet, whiteboard, record, file,
