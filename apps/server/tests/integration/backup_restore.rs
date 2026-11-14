@@ -81,6 +81,11 @@ async fn a_set_restores_into_an_empty_target_and_refuses_a_full_one() {
         / 10_000;
     let usable = |program| client_major(program).is_some_and(|major| major >= server_major);
     if !usable("pg_dump") || !usable("pg_restore") || client_major("tar").is_none() {
+        // GitHub's CI installs matching clients (ci.yml), so there it runs.
+        assert!(
+            std::env::var_os("GITHUB_ACTIONS").is_none(),
+            "CI must install pg_dump and pg_restore for PostgreSQL {server_major}"
+        );
         eprintln!(
             "skipping backup test: no pg_dump/pg_restore for PostgreSQL {server_major}, or no tar"
         );
