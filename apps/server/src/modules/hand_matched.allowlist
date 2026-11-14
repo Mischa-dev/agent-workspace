@@ -1,0 +1,33 @@
+# Files that match a core module id by hand, with how many times (M1 guard 1).
+# Counts only fall: register a ModuleFilter or use the operation's module instead.
+
+src/ai/plans.rs: 1
+src/automations.rs: 1
+src/conversations.rs: 1
+src/events.rs: 2
+# mcp.rs: a JSON-RPC error's "code" field, not the Code module.
+src/mcp.rs: 1
+src/mcp/admin.rs: 2
+src/mcp/agents.rs: 1
+src/mcp/automation_tools.rs: 7
+src/mcp/briefing.rs: 2
+src/mcp/bug_report_tools.rs: 1
+src/mcp/code.rs: 1
+src/mcp/collection_tools.rs: 6
+src/mcp/later_tools.rs: 5
+src/mcp/sheet_tools.rs: 4
+src/mcp/task_batch.rs: 1
+src/mcp/task_move.rs: 1
+src/mcp/tasks.rs: 4
+src/mcp/views_data.rs: 1
+src/mcp/whiteboard_tools.rs: 11
+src/modules/gate.rs: 2
+src/onboarding.rs: 1
+src/page_docs/docx.rs: 1
+src/provider/codex_cloud.rs: 1
+src/replies.rs: 2
+src/search.rs: 3
+src/usage/batch.rs: 1
+src/usage/ready.rs: 1
+src/work_item_move.rs: 4
+src/workspace_templates.rs: 1

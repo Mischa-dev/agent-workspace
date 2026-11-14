@@ -26,7 +26,7 @@ import {
   showToast,
   type MenuEntry,
 } from '../ui'
-import { usePhoneWidth } from '../work-items/useCoarsePointer'
+import { usePhoneWidth } from '../ui/useCoarsePointer'
 import { changeSheet, sheetExportHref, sheetKeys, updateSheet, useSheet, type SheetBody, type SheetChange, type SheetTab } from './api'
 import { SheetDetailsDialog, TabNameDialog } from './SheetDialogs'
 import { SheetGrid, type GridEdit } from './SheetGrid'

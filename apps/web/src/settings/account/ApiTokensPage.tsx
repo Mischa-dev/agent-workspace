@@ -35,6 +35,7 @@ import {
   type ApiToken,
   type ApiTokenProject,
 } from './api'
+import '../../styles/pages.css'
 
 const EXPIRY_PRESETS = [7, 30, 90, 365]
 const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._ -]*$/

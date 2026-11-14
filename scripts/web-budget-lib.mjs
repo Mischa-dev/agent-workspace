@@ -5,89 +5,41 @@ import { join, relative } from 'node:path'
 // The budget holds the code every page load downloads (what index.html loads
 // before the app can paint) and each lazily loaded chunk on its own, never a
 // grand total, so a branch that adds a lazy route doesn't edit this file.
-// Raise a limit only when that part really grows, and say why next to it.
+//
+// Policy (W1.15): each limit is the size measured when it was last set plus
+// 10%, and CI prints every limit's measured size (and, when the base
+// commit's report is at hand, the change against it) on every run, so growth
+// shows long before a limit is crossed. A run fails only when one is. Raise a
+// limit by measuring again and adding 10%, and say why in the commit message:
+// the history of each number is in the git log, not here.
+//
+// Measured November 2026 (W1.15: the data router in the shell; feature
+// stylesheets moved from the first paint into the routes that use them).
 export const WEB_ASSET_LIMITS = Object.freeze({
-  // index.html's scripts and module preloads: the entry chunk, the shared UI
-  // chunk and theme-boot.js. Measured 388,329 raw / 120,899 gzip bytes when
-  // the budget moved to per-chunk limits (October 2026). The app shell (command
-  // menu, shortcuts, toasts with Undo, tab titles and badges, live task
-  // patches) brings it to 423,687 / 130,474; Markdown loads with its routes.
-  // Tasks at scale and the inbox's rail tile and route bring it to about
-  // 430,500 raw; the inbox page itself loads with its route. The settings
-  // area (Settings in the rail and command menu, the account's saved theme)
-  // brings it to 431,830 / 135,187; its pages and two-factor sign-in load lazily.
-  // The polish pass added plain error sentences, shortcut labels for each
-  // keyboard, confirm dialogs and steadier sidebars, and moved 9 KB of
-  // conversation calls the shell doesn't need out of it: from 418,331 /
-  // 136,131 to 419,086 / 137,030 (October 2026). Layouts bring it to
-  // 422,207 / 136,850. The rail's own order and dragging, sidebar and panel
-  // widths set before the first paint, offline sends from any page and more
-  // remembered places bring it to 428,622 / 138,911; the resize edges and
-  // the dialogs for comments, labels and decisions load when first used.
-  // Modules (AWD-75) put module gating in the shell: the page gate, the
-  // shortcut check, settings navigation and the rail, each reading only its
-  // own kind of manifest claims (vite.config.ts moduleProjections), with the
-  // turned-off page and the palette's claims loading lazily. That measured
-  // 433,897 / 140,611 (November 2026), so the gzip limit went from 136 to
-  // 138 KB by decision; the raw limit is unchanged.
-  // Moving tasks between projects (AWD-102) must forget an unsent or
-  // unanswered move at once on every sign-in and sign-out, so that small
-  // store (moveStore.ts) is in the shell; sending and checking moves load
-  // with the Move dialog. Measured from the built assets (not a browser's
-  // network transfer): 433,999 / 140,955 before it; 435,731 / 141,719 with
-  // the move code in the shell; 434,232 / 141,081 once split, 1,499 raw /
-  // 638 gzip bytes less, still 56 raw bytes over 424 KB. The raw limit went
-  // up 256 bytes by decision (November 2026); gzip is unchanged.
-  // The entry names about 270 lazy chunks, each with eight random letters
-  // of content hash, so the same shell gzipped up to a few dozen bytes
-  // larger or smaller whenever any lazy chunk changed: a fix in the page
-  // editor alone measured 141,323 against main's 141,306. Gzip sizes are now
-  // taken with every hash replaced by the same placeholder (withoutHashes),
-  // which measured 139,036 for both, 2,270 less; the gzip limit came down
-  // by that much, so it is exactly as full as before (November 2026).
-  // Home's cards drawn with the pieces (Working now, Your tasks) add no code
-  // to the shell, only the names of the chunks Home now preloads (the pieces,
-  // their stylesheet, the markdown renderer and the module manifests): 434,409
-  // raw bytes before, 434,463 after, 31 over. Loading the markdown renderer
-  // lazily inside the pieces instead reshuffled the shared chunks and pushed
-  // the task panel 16 KB over its own limit. The raw limit went up another
-  // 256 bytes by decision (November 2026); gzip is unchanged.
-  initialJavascriptRawBytes: 424 * 1024 + 512,
-  initialJavascriptGzipBytes: 138 * 1024 - 2270,
-  // index.html's stylesheets: the design system's five theme presets,
-  // components and page layouts. Measured 101,925 raw bytes; the UI kit
-  // (toasts, command menu, shortcut sheet, skeletons) and Markdown styles
-  // bring it to 112,083. The design system pass moved every hand-typed size,
-  // weight and gap onto tokens (var(--space-1-5) is longer than 6px) and added
-  // the scales themselves: 114,898 (October 2026).
-  initialCssRawBytes: 116 * 1024,
+  // index.html's scripts and module preloads: 486,736 raw / 154,185 gzip.
+  initialJavascriptRawBytes: 535_410,
+  initialJavascriptGzipBytes: 169_604,
+  // index.html's stylesheets (tokens, base, components, shell, kit): 61,731.
+  initialCssRawBytes: 67_905,
   // Any other script (each lazy route or shared lazy chunk, sw.js). The
-  // largest, project settings, measured 35,379 raw / 9,320 gzip bytes.
-  // Tasks at scale (W3) made the task list page (list, board, filters, bulk
-  // edits) and the task panel the largest lazy routes: 54,755 raw / 17,390
-  // gzip and 54,619 / 15,346 bytes.
-  chunkJavascriptRawBytes: 56 * 1024,
-  chunkJavascriptGzipBytes: 18 * 1024,
-  // Any stylesheet a lazy chunk loads.
-  chunkCssRawBytes: 32 * 1024,
+  // largest measured 56,135 raw (collections) and 16,415 gzip (task panel).
+  chunkJavascriptRawBytes: 61_749,
+  chunkJavascriptGzipBytes: 18_057,
+  // Any stylesheet a lazy chunk loads: the largest, the task pages', 32,641.
+  chunkCssRawBytes: 35_906,
   // Whiteboards draw with Excalidraw, which apps/web/vite.config.ts puts under
   // assets/whiteboard/ with everything only it pulls in. Nothing else loads
-  // them. Opening a board fetches its canvas (550,932 raw / 162,306 gzip) and
-  // one shared chunk (532,641 / 175,934); the rest load only when a board
-  // uses them. The largest, the font subsetter for exports, is 1,821,039 raw /
-  // 735,032 gzip; its stylesheet is 142,020. Excalidraw 0.18.1, October 2026.
-  // The same file gzips to 740,312 on the NixOS CI host (another zlib), so
-  // the gzip limit leaves room for that.
-  whiteboardChunkJavascriptRawBytes: 1792 * 1024,
-  whiteboardChunkJavascriptGzipBytes: 752 * 1024,
-  whiteboardChunkCssRawBytes: 140 * 1024,
-  // The live page editor (AWD-53): Tiptap on ProseMirror, Yjs and the page's
-  // own schema and sync, which apps/web/vite.config.ts puts under
-  // assets/editor/. Only a page opened to write in loads it, as one chunk of
-  // 524,864 raw / 158,581 gzip bytes (Tiptap 3.33, Yjs 13.6, November 2026).
-  // Its stylesheet is small and held to chunkCssRawBytes.
-  editorChunkJavascriptRawBytes: 544 * 1024,
-  editorChunkJavascriptGzipBytes: 168 * 1024,
+  // them. The largest, the font subsetter for exports, is 1,821,039 raw /
+  // 735,014 gzip (740,312 with the CI host's zlib, which the gzip limit
+  // starts from); its stylesheet is 142,020.
+  whiteboardChunkJavascriptRawBytes: 2_003_143,
+  whiteboardChunkJavascriptGzipBytes: 814_344,
+  whiteboardChunkCssRawBytes: 156_222,
+  // The live page editor (Tiptap, Yjs and the page's own schema and sync),
+  // under assets/editor/: one chunk of 532,920 raw / 161,086 gzip. Its
+  // stylesheet is held to chunkCssRawBytes.
+  editorChunkJavascriptRawBytes: 586_212,
+  editorChunkJavascriptGzipBytes: 177_195,
 })
 
 // Chunks held to their own limits, by where vite.config.ts puts them.
@@ -225,3 +177,55 @@ function walkRegularFiles(root) {
 function sum(records, key) {
   return records.reduce((total, record) => total + record[key], 0)
 }
+
+/** Every limit's measured value in one report: the largest file for a per-chunk limit. */
+export function limitValues(report) {
+  const values = {}
+  for (const name of ['initialJavascriptRawBytes', 'initialJavascriptGzipBytes', 'initialCssRawBytes']) {
+    values[name] = report.totals[name]
+  }
+  const initial = new Set(report.initial)
+  const chunkChecks = [
+    ['.js', 'bytes', 'chunkJavascriptRawBytes'],
+    ['.js', 'gzipBytes', 'chunkJavascriptGzipBytes'],
+    ['.css', 'bytes', 'chunkCssRawBytes'],
+  ]
+  for (const [extension, key, chunkName] of chunkChecks) {
+    for (const record of report.files) {
+      if (initial.has(record.file) || !record.file.endsWith(extension)) continue
+      const name = limitName(record.file, chunkName, report.limits)
+      values[name] = Math.max(values[name] ?? 0, record[key])
+    }
+  }
+  return values
+}
+
+/**
+ * A Markdown table of every limit: the base commit's value (when its report
+ * is given), this one's, the change, the limit and the room left.
+ */
+export function budgetTable(head, base = null) {
+  const headValues = limitValues(head)
+  const baseValues = base ? limitValues(base) : {}
+  const names = Object.keys(head.limits).filter((name) => headValues[name] !== undefined)
+  const format = (value) => (value === undefined ? '' : value.toLocaleString('en-US'))
+  const signed = (value) => (value > 0 ? `+${format(value)}` : value === 0 ? '0' : `-${format(-value)}`)
+  const rows = [
+    base ? '| Limit | Base | Head | Change | Limit | Room |' : '| Limit | Head | Limit | Room |',
+    base ? '| --- | ---: | ---: | ---: | ---: | ---: |' : '| --- | ---: | ---: | ---: |',
+  ]
+  for (const name of names) {
+    const value = headValues[name]
+    const limit = head.limits[name]
+    const room = `${(((limit - value) / limit) * 100).toFixed(1)}%`
+    if (base) {
+      const before = baseValues[name]
+      const change = before === undefined ? '' : signed(value - before)
+      rows.push(`| ${name} | ${format(before)} | ${format(value)} | ${change} | ${format(limit)} | ${room} |`)
+    } else {
+      rows.push(`| ${name} | ${format(value)} | ${format(limit)} | ${room} |`)
+    }
+  }
+  return rows.join('\n')
+}
+

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
-import { measureWebAssets } from './web-budget-lib.mjs'
+import { budgetTable, limitValues, measureWebAssets } from './web-budget-lib.mjs'
 
 function withDist(build) {
   const root = mkdtempSync(join(tmpdir(), 'agent-workspace-web-budget-'))
@@ -139,5 +139,24 @@ test('holds the page editor to its own limit, and its stylesheet to the general 
       report.violations.map(({ name, file }) => [name, file]),
       [['chunkCssRawBytes', 'assets/editor/LivePage.css']],
     )
+  })
+})
+
+test('prints every limit with the change from the base commit', () => {
+  withDist((root) => {
+    writeFileSync(join(root, 'assets', 'lazy.js'), 'x'.repeat(100))
+    const limits = { ...roomy, chunkJavascriptRawBytes: 400 }
+    const base = measureWebAssets(root, limits)
+    writeFileSync(join(root, 'assets', 'lazy.js'), 'x'.repeat(300))
+    const head = measureWebAssets(root, limits)
+    assert.equal(limitValues(head).chunkJavascriptRawBytes, 300)
+    const table = budgetTable(head, base).split('\n')
+    assert.equal(table[0], '| Limit | Base | Head | Change | Limit | Room |')
+    assert.ok(table.includes('| chunkJavascriptRawBytes | 100 | 300 | +200 | 400 | 25.0% |'), table.join('\n'))
+    // An unchanged limit says so; one without a base value leaves the cells empty.
+    assert.ok(table.some((row) => row.startsWith('| initialCssRawBytes |') && row.includes('| 0 |')))
+    const alone = budgetTable(head).split('\n')
+    assert.equal(alone[0], '| Limit | Head | Limit | Room |')
+    assert.ok(alone.includes('| chunkJavascriptRawBytes | 300 | 400 | 25.0% |'))
   })
 })

@@ -1,4 +1,4 @@
-import type { FieldDecl, FieldValue, Thing, ThingDecl } from '../contract'
+import type { FieldDecl, FieldValue, Thing, ThingDecl } from '../modules/contract'
 
 // Made-up things of any declared kind, for the pieces gallery and its guard
 // test: long titles and long values on purpose, so a piece that can't fit

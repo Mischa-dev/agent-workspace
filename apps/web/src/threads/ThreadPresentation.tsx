@@ -7,6 +7,7 @@ import { Avatar, Button, Icon, IconButton, StatusChip, TextArea, formatFullDate,
 import { RUN_STATUS } from '../runs/runModel'
 import { runAgent } from './runAgent'
 import type { Approval, Run } from './threadTypes'
+import '../styles/conversation.css'
 
 function ordinal(position: number) {
   const suffix = position % 10 === 1 && position % 100 !== 11 ? 'st' : position % 10 === 2 && position % 100 !== 12 ? 'nd' : position % 10 === 3 && position % 100 !== 13 ? 'rd' : 'th'

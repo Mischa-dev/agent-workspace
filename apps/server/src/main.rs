@@ -369,6 +369,16 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
+    // Modules (and their operations) that don't fit together stop the
+    // server here, before it takes a request.
+    let modules = agent_workspace_server::modules::registry::Registry::global();
+    let operations = agent_workspace_server::ops::registry();
+    tracing::info!(
+        modules = modules.descriptions().len(),
+        operations = operations.entries().count(),
+        "modules registered"
+    );
+
     let listener = TcpListener::bind(config.server_addr)
         .await
         .with_context(|| format!("bind application server to {}", config.server_addr))?;

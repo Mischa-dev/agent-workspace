@@ -1,0 +1,46 @@
+[
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "pages",
+    "name": "decision_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List decisions"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "decision.recorded"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "pages",
+    "name": "decision_record",
+    "permission": "pages.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Record decision"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "package_export",
+    "permission": "settings.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Export package"
+  }
+]

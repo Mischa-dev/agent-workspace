@@ -8,6 +8,8 @@
 //!   devices, a secret, or a provider sign-in.
 //! - `Plumbing`: not an action in a project at all, such as sign-in, OAuth,
 //!   an invitation link or a webhook from GitHub.
+//! - `Op`: the generated operation route, where every operation is also the
+//!   MCP tool of the same name.
 //!
 //! AWD-111 closed the last gaps: there's no "not yet" any more.
 //!
@@ -22,7 +24,7 @@ mod tests {
     use crate::policy_inventory::{MUTATING_ENTRY_POINTS, MutationMethod};
 
     use MutationMethod::{Delete, Patch, Post, Put};
-    use Parity::{Person, Plumbing, Tool};
+    use Parity::{Op, Person, Plumbing, Tool};
 
     enum Parity {
         /// The MCP tools that do it, separated by ", ".
@@ -31,6 +33,9 @@ mod tests {
         Person(&'static str),
         /// Why it isn't an action in a project.
         Plumbing(&'static str),
+        /// The generated operation route (K2): each operation it runs is
+        /// also the MCP tool of the same name, by construction.
+        Op,
     }
 
     /// Every web write, in `MUTATING_ENTRY_POINTS` order.
@@ -1014,6 +1019,8 @@ mod tests {
             "/api/public/v1/{tool}",
             Plumbing("the MCP tools themselves, over HTTP"),
         ),
+        (Post, "/api/v2/w/{workspace}/ops/{name}", Op),
+        (Post, "/api/v2/ops/{name}", Op),
         (Post, "/api/v1/projects", Tool("project_create")),
         (Patch, "/api/v1/projects/{id}", Tool("project_update")),
         (
@@ -1486,6 +1493,15 @@ mod tests {
                 }
                 Person(why) | Plumbing(why) => {
                     assert!(!why.trim().is_empty(), "{method:?} {path} needs a reason");
+                }
+                Op => {
+                    for entry in crate::ops::registry().entries() {
+                        assert!(
+                            tools.contains(entry.meta.name),
+                            "operation {} isn't an MCP tool",
+                            entry.meta.name
+                        );
+                    }
                 }
             }
         }

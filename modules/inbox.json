@@ -3,6 +3,7 @@
   "name": "Inbox",
   "description": "One place for what needs you, plus Later: things saved to come back to, and reminders.",
   "version": 1,
+  "order": 130,
   "kind": "core",
   "switchable": true,
   "needs": [],
@@ -24,6 +25,7 @@
   "things": [],
   "links": [],
   "embeds": [],
+  "web": { "folder": "inbox" },
   "slots": {
     "pages": ["/inbox", "/later"],
     "parts": ["workspace.later", "workspace.inbox_triage"],

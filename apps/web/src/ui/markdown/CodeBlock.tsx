@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 
 import type { Token } from './highlight'
+import '../../styles/conversation.css'
+import '../../styles/markdown.css'
 
 type Highlighter = typeof import('./highlight')
 

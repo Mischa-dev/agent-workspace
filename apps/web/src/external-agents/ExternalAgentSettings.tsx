@@ -49,6 +49,7 @@ import {
   setupMessage,
 } from './api'
 import { RUNNER_PRESETS, runnerSettings, type RunnerPresetId } from './runnerPresets'
+import '../styles/pages.css'
 
 const memberScopes: ExternalAgentScope[] = ['read', 'write', 'events', 'approval_respond', 'worker_request']
 const viewerScopes: ExternalAgentScope[] = ['read', 'events']

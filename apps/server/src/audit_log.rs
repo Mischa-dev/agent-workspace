@@ -48,6 +48,8 @@ fn parse_app(value: &str) -> Result<AppFilter, AppError> {
     match value {
         "browser" => Ok(AppFilter::Channel("browser")),
         "mcp" => Ok(AppFilter::Channel("mcp")),
+        "api" => Ok(AppFilter::Channel("api")),
+        "automation" => Ok(AppFilter::Channel("automation")),
         "host_cli" => Ok(AppFilter::Channel("host_cli")),
         "system" => Ok(AppFilter::Channel("system")),
         _ => {
@@ -389,6 +391,8 @@ fn channel_label(channel: &str) -> &'static str {
     match channel {
         "browser" => "Browser",
         "mcp" => "Connected apps",
+        "api" => "Public API",
+        "automation" => "Automations",
         "host_cli" => "Server command line",
         "system" => "System",
         _ => "Other",

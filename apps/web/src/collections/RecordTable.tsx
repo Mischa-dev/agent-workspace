@@ -4,14 +4,15 @@ import { FieldEditor } from '../fields/FieldEditor'
 import type { FieldDefinition, FieldValue } from '../fields/fieldModel'
 import { Button, EmptyState, Icon, ListSkeleton, countLabel } from '../ui'
 import { Table, type TableColumn, type TableRow } from '../ui/pickers'
-import { useCoarsePointer } from '../work-items/useCoarsePointer'
-import { useWindowedRows } from '../work-items/useWindowedRows'
+import { useCoarsePointer } from '../ui/useCoarsePointer'
+import { useWindowedRows } from '../ui/useWindowedRows'
 import type { CollectionBody, CollectionRecord, RecordPage, ViewConfig } from './api'
 import { useRecords } from './api'
 import { TITLE_WIDTH, referenceKind, tableItems, viewColumns, type TableItem } from './collectionModel'
 import { AddFieldHeader, FieldHeader, TitleHeader, type ColumnActions } from './ColumnMenus'
 import { NewRecordInput, TitleCell, ValueCell } from './RecordCells'
 import type { RecordEdits } from './useRecordEdits'
+import '../styles/work.css'
 
 type Editing = { record: CollectionRecord; field: FieldDefinition; anchor: HTMLElement }
 

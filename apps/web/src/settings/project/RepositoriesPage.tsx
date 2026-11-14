@@ -10,6 +10,7 @@ import { RepositorySettings } from '../../repositories/RepositorySettings'
 import { ErrorState, PageHeader, Section } from '../../ui'
 import { GitHubReturnBanner } from '../GitHubReturnBanner'
 import type { SettingsPageProps } from '../types'
+import '../../styles/pages.css'
 
 /**
  * Project › Repositories: connect GitHub, pick a repository, done. GitHub sends

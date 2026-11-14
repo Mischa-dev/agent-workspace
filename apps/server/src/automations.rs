@@ -205,7 +205,13 @@ pub const TRIGGER_KINDS: &[&str] = &[
 ];
 
 /// Every action kind, as [`Action::kind`] names them.
-pub const ACTION_KINDS: &[&str] = &["launch", "set_field", "notify", "post_message"];
+pub const ACTION_KINDS: &[&str] = &[
+    "launch",
+    "set_field",
+    "notify",
+    "post_message",
+    "run_operation",
+];
 
 impl Trigger {
     pub fn kind(&self) -> &'static str {
@@ -366,6 +372,9 @@ pub enum Action {
         conversation_id: Uuid,
         text: String,
     },
+    /// Run any operation the rule's maker could run, as the maker, with
+    /// {{variables}} filled into its input's text.
+    RunOperation { operation: String, input: Value },
 }
 
 impl Action {
@@ -375,6 +384,7 @@ impl Action {
             Self::SetField { .. } => "set_field",
             Self::Notify { .. } => "notify",
             Self::PostMessage { .. } => "post_message",
+            Self::RunOperation { .. } => "run_operation",
         }
     }
 }
@@ -388,6 +398,8 @@ const SET_FIELDS: &[&str] = &[
 ];
 /// How a set_field action names a custom field (AWD-89): "field:Risk".
 const CUSTOM_FIELD: &str = "field:";
+/// The largest input a run_operation action stores.
+const MAX_OPERATION_INPUT_BYTES: usize = 16 * 1024;
 const RUN_OUTCOMES: &[&str] = &["completed", "failed", "canceled", "interrupted"];
 
 fn clean_text(value: &str, field: &'static str) -> Result<String, AppError> {
@@ -516,6 +528,17 @@ fn check_shape(
             }
             Action::Notify { message, .. } => *message = clean_text(message, "actions.message")?,
             Action::PostMessage { text, .. } => *text = clean_text(text, "actions.text")?,
+            Action::RunOperation { operation, input } => {
+                let offered = crate::ops::registry()
+                    .get(operation)
+                    .is_some_and(|entry| entry.meta.automation);
+                if !offered {
+                    return Err(AppError::Validation("actions.operation"));
+                }
+                if !input.is_object() || input.to_string().len() > MAX_OPERATION_INPUT_BYTES {
+                    return Err(AppError::Validation("actions.input"));
+                }
+            }
         }
         let needs_tasks = matches!(action, Action::Launch { .. } | Action::SetField { .. });
         if needs_tasks && trigger.picks_tasks() && conditions.is_empty() {
@@ -640,16 +663,17 @@ async fn module_off(
 }
 
 /// AWD-75: the module a trigger or action of `module` needs where its rule
-/// lives: conversations follow Channels in a project and Messages in the
-/// direct space, as they do everywhere else.
+/// lives: in a project, conversations follow the module that governs them
+/// there (`ModuleFilter::Conversations`), as they do everywhere else.
 pub(crate) fn in_project_kind(
     module: Option<&'static crate::modules::Manifest>,
     direct: bool,
 ) -> Option<&'static crate::modules::Manifest> {
+    let registry = crate::modules::registry::Registry::global();
     match module {
-        Some(module) if module.id == "messages" && !direct => {
-            crate::modules::manifest::get("channels")
-        }
+        Some(module) if !direct && registry.governs_conversations(&module.id) => registry
+            .conversation_module(false)
+            .and_then(crate::modules::manifest::get),
         other => other,
     }
 }
@@ -2407,9 +2431,19 @@ async fn call_tool(
     state: &AppState,
     rule: &RuleRow,
     acting: &Acting,
+    run_id: Uuid,
     tool: &str,
-    arguments: Value,
+    mut arguments: Value,
 ) -> Result<Value, String> {
+    // A tool that is an operation runs through the dispatcher, with this
+    // rule and run on its audit row.
+    if crate::ops::mcp::is_operation(tool) {
+        let request_id = arguments
+            .as_object_mut()
+            .and_then(|object| object.remove("clientRequestId"))
+            .and_then(|value| value.as_str().map(str::to_owned));
+        return run_operation(state, rule, acting, run_id, tool, arguments, request_id).await;
+    }
     let result = mcp::call_tool_direct(state, principal_for(rule, acting), tool, arguments)
         .await
         .map_err(|error| match error {
@@ -2427,6 +2461,65 @@ async fn call_tool(
             .chars()
             .take(300)
             .collect()),
+    }
+}
+
+/// Run an operation as the rule's maker, confined to the rule's project as
+/// the maker's tool calls are.
+async fn run_operation(
+    state: &AppState,
+    rule: &RuleRow,
+    acting: &Acting,
+    run_id: Uuid,
+    operation: &str,
+    input: Value,
+    request_id: Option<String>,
+) -> Result<Value, String> {
+    let principal = principal_for(rule, acting);
+    let caller = crate::ops::mcp::caller_of(state, &principal)
+        .await
+        .map_err(|error| error.message().into_owned())?;
+    let request = crate::ops::DispatchRequest {
+        caller,
+        edge: crate::ops::Edge::Automation {
+            rule_id: rule.id,
+            run_id,
+        },
+        trace_id: None,
+        workspace: None,
+        request_id,
+        preview: false,
+        renamed_from: None,
+    };
+    let answer = crate::ops::dispatch(state, request, operation, input).await;
+    if answer.is_ok() {
+        return Ok(answer.body["value"].clone());
+    }
+    Err(answer.body["message"]
+        .as_str()
+        .unwrap_or("the change was refused")
+        .chars()
+        .take(300)
+        .collect())
+}
+
+/// Fill {{variables}} into every text in an operation's input.
+fn render_input(context: &Context, input: &Value) -> Value {
+    match input {
+        Value::String(text) => Value::String(context.render(text)),
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| render_input(context, item))
+                .collect(),
+        ),
+        Value::Object(fields) => Value::Object(
+            fields
+                .iter()
+                .map(|(key, value)| (key.clone(), render_input(context, value)))
+                .collect(),
+        ),
+        other => other.clone(),
     }
 }
 
@@ -2592,7 +2685,7 @@ async fn run_action(
                         json!(value)
                     };
                 }
-                match call_tool(state, rule, acting, "task_update", arguments).await {
+                match call_tool(state, rule, acting, run_id, "task_update", arguments).await {
                     Ok(_) => changed += 1,
                     Err(error) => last_error = Some(error),
                 }
@@ -2623,6 +2716,7 @@ async fn run_action(
                 state,
                 rule,
                 acting,
+                run_id,
                 "message_send",
                 json!({
                     "conversationId": conversation_id.to_string(),
@@ -2632,6 +2726,19 @@ async fn run_action(
             )
             .await?;
             Ok("Posted the message.".to_owned())
+        }
+        Action::RunOperation { operation, input } => {
+            run_operation(
+                state,
+                rule,
+                acting,
+                run_id,
+                operation,
+                render_input(context, input),
+                Some(format!("automation-{run_id}-{index}")),
+            )
+            .await?;
+            Ok(format!("Ran {operation}."))
         }
     }
 }

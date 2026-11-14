@@ -173,6 +173,26 @@ fn builtins() -> &'static [BuiltinFile] {
     })
 }
 
+/// The built-in templates' ids, names, descriptions and definitions, for
+/// reading them as packages (`packages::format::from_template`).
+pub fn builtin_definitions() -> impl Iterator<
+    Item = (
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static TemplateDefinition,
+    ),
+> {
+    builtins().iter().map(|file| {
+        (
+            file.id.as_str(),
+            file.name.as_str(),
+            file.description.as_str(),
+            &file.definition,
+        )
+    })
+}
+
 /// A template, built in or saved, as people and agents read it.
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]

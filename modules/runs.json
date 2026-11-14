@@ -3,6 +3,7 @@
   "name": "Runs",
   "description": "Handing tasks to agents on harnesses (Codex, Claude Code and others), following their runs, approvals and usage.",
   "version": 1,
+  "order": 110,
   "kind": "core",
   "switchable": true,
   "needs": ["tasks", "channels", "code"],
@@ -109,6 +110,7 @@
       "piece": { "type": "list", "thing": "run", "fields": ["status", "harness", "owner"] }
     }
   ],
+  "web": { "folder": "runs" },
   "slots": {
     "pages": ["/runs", "/runs/:runId", "/projects/:projectId/launches"],
     "parts": ["area.runs", "task.runs", "tech.run_usage", "home.working_now", "home.capacity", "workspace.runs"],
