@@ -2331,6 +2331,7 @@ pub(super) async fn thread_update(
     };
     let result = async {
         let mut transaction = state.pool.begin().await?;
+        mark_via(&mut transaction, principal).await?;
         let view = match update_thread(
             &mut transaction,
             principal.actor_id,

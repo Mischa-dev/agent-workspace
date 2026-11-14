@@ -67,7 +67,7 @@
     "/api/v1/things/*",
     "/api/v1/workspace-invitations/*"
   ],
-  "events": { "emits": [], "listens": [] },
+  "events": { "emits": ["file.attached", "file.removed"], "listens": [] },
   "notifications": [],
   "search": ["files"],
   "automations": { "triggers": [], "actions": [] },

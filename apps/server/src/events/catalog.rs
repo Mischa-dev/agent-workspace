@@ -168,6 +168,21 @@ pub static MESSAGE_REACTIONS_CHANGED: EventType = signal(
 )
 .legacy(&["conversation.message.reactions.updated"]);
 
+pub static CONVERSATION_PINS_CHANGED: EventType = fact(
+    "conversation.pins_changed",
+    "messages",
+    Some("conversation"),
+    "Something was pinned to or unpinned from a conversation",
+);
+
+// --- channels ----------------------------------------------------------
+pub static THREAD_STATUS_CHANGED: EventType = fact(
+    "thread.status_changed",
+    "channels",
+    Some("thread"),
+    "A thread's status or outcome changed",
+);
+
 // --- runs ------------------------------------------------------------------
 pub static RUN_UPDATED: EventType = fact("run.updated", "runs", Some("run"), "A run changed state")
     .legacy(&["conversation.agent_run.updated"])
@@ -192,6 +207,48 @@ pub static TASK_PLACEMENT_CHANGED: EventType = signal(
     "A task changed or moved on its board",
 )
 .legacy(&["work_item.updated"]);
+pub static TASK_COMMENTED: EventType = fact(
+    "task.commented",
+    "tasks",
+    Some("task"),
+    "Someone commented on a task",
+);
+pub static TASK_COMMENT_CHANGED: EventType = fact(
+    "task.comment_changed",
+    "tasks",
+    Some("task"),
+    "A comment on a task was edited or removed",
+);
+pub static MILESTONE_CREATED: EventType = fact(
+    "milestone.created",
+    "tasks",
+    Some("milestone"),
+    "A milestone was added",
+);
+pub static MILESTONE_UPDATED: EventType = fact(
+    "milestone.updated",
+    "tasks",
+    Some("milestone"),
+    "A milestone changed or was archived",
+);
+pub static LABEL_CHANGED: EventType = fact(
+    "label.changed",
+    "tasks",
+    Some("label"),
+    "A label was added, changed or archived",
+);
+pub static VIEW_CHANGED: EventType = fact(
+    "view.changed",
+    "tasks",
+    Some("view"),
+    "A saved view was added, changed or removed",
+);
+pub static FIELD_CHANGED: EventType = fact(
+    "field.changed",
+    "tasks",
+    Some("field"),
+    "A task field was added, changed or archived",
+);
 
 // --- pages -----------------------------------------------------------------
 pub static PAGE_CONTENT_SAVED: EventType = signal(
@@ -208,6 +265,30 @@ pub static PAGE_DISCUSSION_CHANGED: EventType = signal(
     "A page's comments or suggestions changed",
 )
 .legacy(&["page.discussion.updated"]);
+pub static PAGE_COMMENTED: EventType = fact(
+    "page.commented",
+    "pages",
+    Some("page"),
+    "Someone commented on a page",
+);
+pub static PAGE_COMMENT_CHANGED: EventType = fact(
+    "page.comment_changed",
+    "pages",
+    Some("page"),
+    "A comment on a page was edited, resolved or deleted",
+);
+pub static DECISION_RECORDED: EventType = fact(
+    "decision.recorded",
+    "pages",
+    Some("decision"),
+    "A decision was recorded",
+);
+pub static DECISION_UPDATED: EventType = fact(
+    "decision.updated",
+    "pages",
+    Some("decision"),
+    "A decision changed or was superseded",
+);
 
 // --- sheets ----------------------------------------------------------------
 pub static SHEET_UPDATED: EventType = fact(
@@ -289,6 +370,20 @@ pub static SPACE_MEMBER_CHANGED: EventType = fact(
 )
 .legacy(&["project.membership.updated"]);
 
+// --- workspace -------------------------------------------------------------
+pub static FILE_ATTACHED: EventType = fact(
+    "file.attached",
+    "workspace",
+    Some("file"),
+    "A file was attached to a message or task",
+);
+pub static FILE_REMOVED: EventType = fact(
+    "file.removed",
+    "workspace",
+    Some("file"),
+    "A file was removed",
+);
+
 // --- inbox -----------------------------------------------------------------
 pub static NOTIFICATION_CHANGED: EventType = signal(
     "notification.changed",
@@ -297,6 +392,18 @@ pub static NOTIFICATION_CHANGED: EventType = signal(
     "Someone's notifications changed",
 )
 .legacy(&["notifications.updated"]);
+pub static QUESTION_ASKED: EventType = fact(
+    "question.asked",
+    "inbox",
+    Some("question"),
+    "Someone was asked a question",
+);
+pub static QUESTION_ANSWERED: EventType = fact(
+    "question.answered",
+    "inbox",
+    Some("question"),
+    "A question was answered",
+);
 
 /// Every event type, in module order.
 pub fn catalog() -> &'static [&'static EventType] {
@@ -311,13 +418,26 @@ pub fn catalog() -> &'static [&'static EventType] {
         &MESSAGE_EDITED,
         &MESSAGE_REMOVED,
         &MESSAGE_REACTIONS_CHANGED,
+        &CONVERSATION_PINS_CHANGED,
+        &THREAD_STATUS_CHANGED,
         &RUN_UPDATED,
         &RUN_FINISHED,
         &TASK_CREATED,
         &TASK_UPDATED,
         &TASK_PLACEMENT_CHANGED,
+        &TASK_COMMENTED,
+        &TASK_COMMENT_CHANGED,
+        &MILESTONE_CREATED,
+        &MILESTONE_UPDATED,
+        &LABEL_CHANGED,
+        &VIEW_CHANGED,
+        &FIELD_CHANGED,
         &PAGE_CONTENT_SAVED,
         &PAGE_DISCUSSION_CHANGED,
+        &PAGE_COMMENTED,
+        &PAGE_COMMENT_CHANGED,
+        &DECISION_RECORDED,
+        &DECISION_UPDATED,
         &SHEET_UPDATED,
         &WHITEBOARD_SCENE_CHANGED,
         &COLLECTION_UPDATED,
@@ -328,7 +448,11 @@ pub fn catalog() -> &'static [&'static EventType] {
         &PULL_REQUEST_MERGED,
         &PULL_REQUEST_CLOSED,
         &SPACE_MEMBER_CHANGED,
+        &FILE_ATTACHED,
+        &FILE_REMOVED,
         &NOTIFICATION_CHANGED,
+        &QUESTION_ASKED,
+        &QUESTION_ANSWERED,
     ];
     CATALOG
 }
@@ -383,6 +507,27 @@ mod tests {
                 "the outbox type {legacy} has no catalogue entry"
             );
         }
+    }
+
+    /// The triggers of K3.8 stage events by name in SQL; each is here.
+    #[test]
+    fn every_type_a_trigger_stages_is_in_the_catalogue() {
+        let sql = include_str!("../../migrations/20261114194000_events_for_quiet_writes.sql");
+        let mut found = 0;
+        for piece in sql.split('\'') {
+            let dotted = piece.split('.').count() >= 2
+                && piece
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c == '.' || c == '_');
+            if dotted && !piece.starts_with("aw.") {
+                assert!(
+                    get(piece).is_some(),
+                    "{piece} is staged but not in the catalogue"
+                );
+                found += 1;
+            }
+        }
+        assert!(found >= 17, "{found}");
     }
 
     #[test]

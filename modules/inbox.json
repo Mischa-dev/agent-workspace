@@ -18,7 +18,7 @@
     "question_answer": "change"
   },
   "routes": ["/api/v1/inbox*", "/api/v1/later*", "/api/v1/questions/*"],
-  "events": { "emits": ["notification.changed"], "listens": [] },
+  "events": { "emits": ["notification.changed", "question.asked", "question.answered"], "listens": [] },
   "notifications": ["reminder", "question_asked"],
   "search": [],
   "automations": { "triggers": [], "actions": [] },

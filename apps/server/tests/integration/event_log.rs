@@ -461,3 +461,117 @@ async fn a_failing_event_is_parked_and_swept_not_lost() {
     assert_eq!(handled.load(Ordering::SeqCst), 3);
     db.finish().await;
 }
+
+/// K3.8: writes that had no event now emit one, through whichever path
+/// made them, with who acted and the app they came through, and no text.
+#[tokio::test]
+async fn quiet_writes_emit_their_events() {
+    let Some(world) = WorldBuilder::default()
+        .project("LOG")
+        .connected_app("helper")
+        .build("k3_8_quiet_writes")
+        .await
+    else {
+        return;
+    };
+    let helper = &world.apps["helper"];
+    let app = &world.app;
+    let call = |name: &'static str, arguments: serde_json::Value| async move {
+        let result = tool(app, &helper.token, &helper.session, name, arguments).await;
+        assert!(
+            matches!(result["outcome"].as_str(), Some("ok" | "applied")),
+            "{name}: {result}"
+        );
+        result
+    };
+    let project = world.project("LOG").to_owned();
+    let task = call(
+        "task_create",
+        json!({"projectId": project, "title": "Paint"}),
+    )
+    .await;
+    let task = task["workItemId"].as_str().expect("task").to_owned();
+    call(
+        "task_comment",
+        json!({"taskId": task, "text": "secret plan", "clientRequestId": "k3-8-comment"}),
+    )
+    .await;
+    call(
+        "decision_record",
+        json!({"projectId": project, "title": "Paint it blue", "clientRequestId": "k3-8-decision"}),
+    )
+    .await;
+    call(
+        "milestone_write",
+        json!({"projectId": project, "name": "Spring"}),
+    )
+    .await;
+    call(
+        "label_write",
+        json!({"projectId": project, "name": "Paintwork"}),
+    )
+    .await;
+    let channel = call(
+        "channel_create",
+        json!({"projectId": project, "name": "paint"}),
+    )
+    .await;
+    let channel = channel["value"]["id"].as_str().expect("channel").to_owned();
+    let said = call(
+        "message_send",
+        json!({"conversationId": channel, "text": "colours?"}),
+    )
+    .await;
+    let message = said["value"]["messageId"]
+        .as_str()
+        .expect("message")
+        .to_owned();
+    call(
+        "pin_set",
+        json!({"conversationId": channel, "messageId": message}),
+    )
+    .await;
+    let thread = call(
+        "thread_start",
+        json!({"conversationId": channel, "fromMessageId": message}),
+    )
+    .await;
+    let thread = thread["value"]["id"].as_str().expect("thread").to_owned();
+    call(
+        "thread_update",
+        json!({"threadId": thread, "status": "decided"}),
+    )
+    .await;
+
+    let owner = world.owner.actor;
+    for ty in [
+        "task.commented",
+        "decision.recorded",
+        "milestone.created",
+        "label.changed",
+        "conversation.pins_changed",
+        "thread.status_changed",
+    ] {
+        let rows = sqlx::query_as::<_, (Option<Uuid>, Option<Uuid>, String, serde_json::Value)>(
+            "SELECT actor_account_id, via_credential_id, audience, payload \
+             FROM event_staging WHERE type = $1",
+        )
+        .bind(ty)
+        .fetch_all(world.pool())
+        .await
+        .expect("staged");
+        assert_eq!(rows.len(), 1, "{ty}: {rows:?}");
+        let (actor, via, _, payload) = &rows[0];
+        assert_eq!(*actor, Some(owner), "{ty}: the person the app acts for");
+        assert!(via.is_some(), "{ty}: the app it came through");
+        assert!(!payload.to_string().contains("secret"), "{ty}: no text");
+    }
+    let audience = sqlx::query_scalar::<_, String>(
+        "SELECT audience FROM event_staging WHERE type = 'thread.status_changed'",
+    )
+    .fetch_one(world.pool())
+    .await
+    .expect("audience");
+    assert_eq!(audience, "conversation");
+    world.finish().await;
+}
