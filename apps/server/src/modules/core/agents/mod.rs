@@ -12,5 +12,10 @@ impl CoreModule for Module {
         include_str!("../../../../../../modules/agents.json")
     }
 
-    fn register(&self, _module: &mut Registrar<'_>) {}
+    fn register(&self, module: &mut Registrar<'_>) {
+        module.routes(crate::external_agents::router);
+        module.routes(crate::agent_profiles::router);
+        module.routes(crate::agent_sessions::router);
+        module.routes(crate::agent_setup_links::router);
+    }
 }

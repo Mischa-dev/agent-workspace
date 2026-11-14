@@ -1,7 +1,7 @@
 //! The Automations module's registration. Its feature code lives where it
 //! always has; this folder is how the server finds the module.
 
-use crate::modules::registry::{CoreModule, Registrar};
+use crate::modules::registry::{CoreModule, ExportPart, Registrar};
 
 pub struct Module;
 
@@ -12,5 +12,12 @@ impl CoreModule for Module {
         include_str!("../../../../../../modules/automations.json")
     }
 
-    fn register(&self, _module: &mut Registrar<'_>) {}
+    fn register(&self, module: &mut Registrar<'_>) {
+        module.routes(crate::webhooks::router);
+        module.routes(crate::automations::router);
+        module.export(ExportPart {
+            name: "automations",
+            describe: "Automation rules and webhooks (no secrets).",
+        });
+    }
 }

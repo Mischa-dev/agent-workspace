@@ -12,7 +12,10 @@ use std::collections::BTreeMap;
 use sqlx::{FromRow, PgConnection};
 use uuid::Uuid;
 
-use super::manifest::{self, Manifest};
+use super::{
+    manifest::{self, Manifest},
+    registry::Registry,
+};
 use crate::error::AppError;
 
 /// The setting that switches a module.
@@ -169,12 +172,12 @@ impl ModuleSet {
 
     /// Whether an agent tool may be listed and called.
     pub fn allows_tool(self, tool: &str) -> bool {
-        // AWD-75: threads belong to Channels but also work in DMs and
-        // groups, which follow Messages, as the call itself does.
-        if matches!(tool, "thread_start" | "thread_update") && self.contains("messages") {
-            return true;
-        }
+        // AWD-75: a tool another module also serves (threads work in DMs and
+        // groups too) is on wherever either module is, as the call is.
         manifest::of_tool(tool).is_none_or(|module| self.contains(&module.id))
+            || Registry::global()
+                .also_serving(tool)
+                .any(|module| self.contains(module))
     }
 
     pub fn allows_part(self, part: &str) -> bool {
@@ -189,15 +192,14 @@ impl ModuleSet {
         manifest::of_notification(kind).is_none_or(|module| self.contains(&module.id))
     }
 
-    /// Whether conversations of a project of this kind show: DMs and groups
-    /// (in the hidden direct project) need Messages; a project's channels
-    /// and threads need Channels.
+    /// Whether conversations of a project of this kind show: the module
+    /// that governs conversations there (`ModuleFilter::Conversations`) is
+    /// on. DMs and groups (in the hidden direct project) follow one module,
+    /// a project's channels and threads the other.
     pub fn allows_conversations_in(self, project_kind: &str) -> bool {
-        if project_kind == "direct" {
-            self.contains("messages")
-        } else {
-            self.contains("channels")
-        }
+        Registry::global()
+            .conversation_module(project_kind == "direct")
+            .is_none_or(|module| self.contains(module))
     }
 
     /// The modules on in a project of this kind (AWD-96). A project needs
@@ -558,10 +560,11 @@ impl ProjectModules {
 
     /// Of `projects`, the ones whose workspace has `module` on. For a
     /// project-level module (tasks, pages, ...) the direct project never
-    /// counts; for Messages only it does.
+    /// counts; for the one that lives in the direct space only it does.
     pub fn with(&self, projects: &[Uuid], module: &str) -> Vec<Uuid> {
+        let in_direct = Registry::global().lives_in_direct_space(module);
         self.keep(projects, |set, direct| {
-            set.contains(module) && (direct == (module == "messages"))
+            set.contains(module) && direct == in_direct
         })
     }
 
@@ -593,7 +596,7 @@ impl ProjectModules {
             return true;
         };
         match manifest::of_notification(kind) {
-            Some(module) if module.id == "messages" => {
+            Some(module) if Registry::global().governs_conversations(&module.id) => {
                 set.allows_conversations_in(if *direct { "direct" } else { "standard" })
             }
             Some(module) => set.contains(&module.id),
@@ -648,11 +651,18 @@ pub fn notification_switches_sql() -> &'static str {
         for module in manifest::core() {
             for kind in &module.notifications {
                 let kind = kind.replace('\'', "");
-                let keys = if module.id == "messages" {
+                let registry = Registry::global();
+                let keys = if registry.governs_conversations(&module.id) {
+                    let switches = |direct| {
+                        registry
+                            .conversation_module(direct)
+                            .map(required_switches)
+                            .unwrap_or_default()
+                    };
                     format!(
                         "CASE WHEN module_project.kind = 'direct' THEN {} ELSE {} END",
-                        sql_array(&required_switches("messages")),
-                        sql_array(&required_switches("channels")),
+                        sql_array(&switches(true)),
+                        sql_array(&switches(false)),
                     )
                 } else if module.id == "pages" {
                     // AWD-96: a project's pages need Projects; the

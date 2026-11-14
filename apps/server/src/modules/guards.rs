@@ -62,6 +62,29 @@ pub(super) fn hand_matches(line: &str) -> usize {
     found
 }
 
+/// A file without its inline test module: tests may name modules, since
+/// they check what a module does. Only an inline `mod … {` marked
+/// `#[cfg(test)]` ends the code; a `#[cfg(test)] mod x;` near the top
+/// (an outlined test file) doesn't hide the rest of the file.
+pub(super) fn code_of(text: &str) -> &str {
+    let mut offset = 0;
+    let mut lines = text.split_inclusive('\n').peekable();
+    while let Some(line) = lines.next() {
+        if line.trim() == "#[cfg(test)]"
+            && lines.peek().is_some_and(|next| {
+                let next = next.trim();
+                (next.starts_with("mod ") || next.starts_with("pub mod ")
+                    || next.starts_with("pub(crate) mod "))
+                    && next.ends_with('{')
+            })
+        {
+            return &text[..offset];
+        }
+        offset += line.len();
+    }
+    text
+}
+
 fn counts() -> BTreeMap<String, usize> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let source = root.join("src");
@@ -84,9 +107,7 @@ fn counts() -> BTreeMap<String, usize> {
         let Ok(text) = std::fs::read_to_string(&file) else {
             continue;
         };
-        // Tests may name modules: they check what a module does.
-        let code = text.split("#[cfg(test)]").next().unwrap_or(&text);
-        let found = code.lines().map(hand_matches).sum::<usize>();
+        let found = code_of(&text).lines().map(hand_matches).sum::<usize>();
         if found > 0 {
             counts.insert(relative, found);
         }
@@ -144,4 +165,11 @@ fn the_guard_sees_a_hand_match() {
     assert_eq!(hand_matches(r#"let on = module == "pages";"#), 1);
     assert_eq!(hand_matches(r#"// modules.contains("tasks")"#), 0);
     assert_eq!(hand_matches(r#"let name = "tasks";"#), 0);
+}
+
+#[test]
+fn only_an_inline_test_module_ends_the_code() {
+    let outlined = "#[cfg(test)]\nmod words;\nfn a() {}\n#[cfg(test)]\nmod tests {\n}\n";
+    assert_eq!(code_of(outlined), "#[cfg(test)]\nmod words;\nfn a() {}\n");
+    assert_eq!(code_of("fn a() {}\n"), "fn a() {}\n");
 }

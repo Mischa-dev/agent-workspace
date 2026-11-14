@@ -3951,29 +3951,25 @@ async fn module_off_here(
         // Only for a project the call names (or a conversation, message or
         // request it names): a connection's own project isn't where an
         // unscoped list acts, and those lists leave out what's off themselves.
-        if principal.project_explicit && matches!(module.id.as_str(), "messages" | "channels") {
+        let registry = crate::modules::registry::Registry::global();
+        if principal.project_explicit && registry.governs_conversations(&module.id) {
             let direct =
                 sqlx::query_scalar::<_, bool>("SELECT kind = 'direct' FROM projects WHERE id = $1")
                     .bind(principal.project_id)
                     .fetch_one(&mut *connection)
                     .await?;
-            let on = modules.allows_conversations_in(if direct { "direct" } else { "standard" });
-            let name = if direct { "Messages" } else { "Channels" };
-            return Ok((!on).then(|| name.to_owned()));
+            let governing = registry
+                .conversation_module(direct)
+                .and_then(|id| registry.describe(id));
+            return Ok(governing
+                .filter(|governing| !modules.contains(&governing.id))
+                .map(|governing| governing.name.clone()));
         }
         return Ok((!modules.contains(&module.id)).then(|| module.name.clone()));
     }
     let modules = crate::modules::state::anywhere(&mut connection, principal.actor_id).await?;
     Ok((!modules.contains(&module.id)).then(|| module.name.clone()))
 }
-
-/// Tools a second module also serves: forms (Collections) are bug report
-/// links too, so these work where Collections is on and Tasks is off, and
-/// then leave task links alone.
-const ALSO_SERVED_BY: &[(&str, &str)] = &[
-    ("bug_report_link_list", "collections"),
-    ("bug_report_link_write", "collections"),
-];
 
 /// A call to a tool of a module that's off, in the shape `refusal` uses.
 fn module_refusal(tool: &str, module: &str) -> rmcp::model::CallToolResponse {
@@ -4115,14 +4111,15 @@ async fn run_tool(
         match module_off_here(&server.state, &principal, &request.name, module).await {
             Ok(None) => {}
             Ok(Some(name)) => {
-                // A tool another module also serves is on wherever that
-                // module is; its handler keeps to that module's part.
+                // A tool another module also serves (`ModuleFilter::AlsoServes`)
+                // is on wherever that module is; its handler keeps to that
+                // module's part.
                 let mut also_on = false;
-                for also in ALSO_SERVED_BY
-                    .iter()
-                    .filter(|(tool, _)| *tool == request.name.as_ref())
-                    .filter_map(|(_, module)| crate::modules::manifest::get(module))
-                {
+                let also_serving = crate::modules::registry::Registry::global()
+                    .also_serving(&request.name)
+                    .filter_map(crate::modules::manifest::get)
+                    .collect::<Vec<_>>();
+                for also in also_serving {
                     if matches!(
                         module_off_here(&server.state, &principal, &request.name, also).await,
                         Ok(None)
@@ -4304,6 +4301,7 @@ pub(crate) fn tool_catalog() -> Vec<rmcp::model::Tool> {
 }
 
 /// Whether a hand-written tool has this name (an operation must not).
+#[cfg(test)]
 pub(crate) fn has_legacy_tool(name: &str) -> bool {
     McpServer::tools().has_route(name)
 }

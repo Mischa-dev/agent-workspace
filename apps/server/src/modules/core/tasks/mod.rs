@@ -1,7 +1,7 @@
 //! The Tasks module's registration. Its feature code lives where it
 //! always has; this folder is how the server finds the module.
 
-use crate::modules::registry::{CoreModule, Registrar};
+use crate::modules::registry::{CoreModule, ExportPart, Registrar};
 
 pub struct Module;
 
@@ -12,5 +12,13 @@ impl CoreModule for Module {
         include_str!("../../../../../../modules/tasks.json")
     }
 
-    fn register(&self, _module: &mut Registrar<'_>) {}
+    fn register(&self, module: &mut Registrar<'_>) {
+        module.routes(crate::work_items::router);
+        module.routes(crate::work_items::comments::router);
+        module.routes(crate::bug_reports::router);
+        module.export(ExportPart {
+            name: "tasks",
+            describe: "Tasks, their comments and history.",
+        });
+    }
 }

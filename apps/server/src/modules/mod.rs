@@ -311,7 +311,7 @@ mod tests {
 
     #[test]
     fn every_setting_names_its_module() {
-        let keys = crate::settings::REGISTRY
+        let keys = crate::settings::all()
             .iter()
             .map(|definition| definition.key.to_owned())
             .collect::<BTreeSet<_>>();

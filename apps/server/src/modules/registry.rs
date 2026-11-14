@@ -29,12 +29,45 @@ pub trait CoreModule: Send + Sync + 'static {
     fn register(&self, module: &mut Registrar<'_>);
 }
 
+/// A module's HTTP routes: the router function its feature code already
+/// has.
+pub type RouterFn = fn() -> axum::Router<crate::AppState>;
+
 /// What one module adds, as `register` fills it in. Every contribution is
 /// recorded beside the module's id, so nothing is unowned.
 #[derive(Default)]
 pub struct Contributions {
     /// Adds the module's operations (K2): its `ops::register_ops`.
     pub operations: Vec<fn(&mut crate::ops::Registry)>,
+    /// Its routes, merged into the app by `Registry::router`.
+    pub routes: Vec<RouterFn>,
+    /// How it narrows which module governs something (see `ModuleFilter`).
+    pub filters: Vec<ModuleFilter>,
+    /// Its parts of a workspace export (H1 fills them in).
+    pub exports: Vec<ExportPart>,
+}
+
+/// A rule a module registers instead of other code naming it by hand
+/// (guard 1).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ModuleFilter {
+    /// The module governs conversations, and their notifications, triggers
+    /// and actions, in the direct space (`direct: true`: DMs and groups) or
+    /// in every other space (`direct: false`: channels and threads).
+    Conversations { direct: bool },
+    /// The module also serves these tools of another module: they work
+    /// where either is on, and keep to this module's part.
+    AlsoServes(&'static [&'static str]),
+}
+
+/// A slot in a workspace export the module fills (H1.8, H1.9): declared
+/// here so the export can list every module's part; H1 adds the writer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExportPart {
+    /// The folder in the export, such as `pages`.
+    pub name: &'static str,
+    /// What it holds, for the export's index.
+    pub describe: &'static str,
 }
 
 /// One module's view of the registry while it registers.
@@ -50,8 +83,25 @@ impl Registrar<'_> {
     }
 
     /// The module's operations: `module.operations(crate::<module>::ops::register_ops)`.
-    pub fn operations(&mut self, add: fn(&mut crate::ops::Registry)) {
+    pub fn operations(&mut self, add: fn(&mut crate::ops::Registry)) -> &mut Self {
         self.into.operations.push(add);
+        self
+    }
+
+    /// The module's routes: `module.routes(crate::<module>::router)`.
+    pub fn routes(&mut self, router: RouterFn) -> &mut Self {
+        self.into.routes.push(router);
+        self
+    }
+
+    pub fn filter(&mut self, filter: ModuleFilter) -> &mut Self {
+        self.into.filters.push(filter);
+        self
+    }
+
+    pub fn export(&mut self, part: ExportPart) -> &mut Self {
+        self.into.exports.push(part);
+        self
     }
 }
 
@@ -275,6 +325,65 @@ impl Registry {
         })
     }
 
+    /// Every module's routes, merged in module order. The app adds the
+    /// routes no module owns (sign-in, the API's plumbing) beside them.
+    pub fn router(&self) -> axum::Router<crate::AppState> {
+        self.modules
+            .iter()
+            .flat_map(|module| module.contributions.routes.iter())
+            .fold(axum::Router::new(), |router, routes| router.merge(routes()))
+    }
+
+    fn filters(&self) -> impl Iterator<Item = (&str, ModuleFilter)> {
+        self.modules.iter().flat_map(|module| {
+            module
+                .contributions
+                .filters
+                .iter()
+                .map(move |filter| (module.id.as_str(), *filter))
+        })
+    }
+
+    /// The module that governs conversations in the direct space
+    /// (`direct`) or in the others.
+    pub fn conversation_module(&self, direct: bool) -> Option<&str> {
+        self.filters().find_map(|(module, filter)| {
+            (filter == ModuleFilter::Conversations { direct }).then_some(module)
+        })
+    }
+
+    /// Whether `module` governs conversations somewhere: what it covers
+    /// then depends on the space's kind.
+    pub fn governs_conversations(&self, module: &str) -> bool {
+        self.filters().any(|(owner, filter)| {
+            owner == module && matches!(filter, ModuleFilter::Conversations { .. })
+        })
+    }
+
+    /// Whether `module` lives in the direct space rather than in projects.
+    pub fn lives_in_direct_space(&self, module: &str) -> bool {
+        self.conversation_module(true) == Some(module)
+    }
+
+    /// The modules that also serve `tool`, besides the one that owns it.
+    pub fn also_serving(&self, tool: &str) -> impl Iterator<Item = &str> {
+        self.filters().filter_map(move |(module, filter)| match filter {
+            ModuleFilter::AlsoServes(tools) if tools.contains(&tool) => Some(module),
+            _ => None,
+        })
+    }
+
+    /// Every module's export parts, with the module's id.
+    pub fn export_parts(&self) -> impl Iterator<Item = (&str, ExportPart)> {
+        self.modules.iter().flat_map(|module| {
+            module
+                .contributions
+                .exports
+                .iter()
+                .map(move |part| (module.id.as_str(), *part))
+        })
+    }
+
     /// Module id to the ids it needs, for docs and tests.
     pub fn needs(&self) -> BTreeMap<&str, Vec<&str>> {
         self.descriptions
@@ -317,6 +426,116 @@ mod tests {
         })
         .to_string();
         Box::leak(Box::new(Synthetic(Box::leak(source.into_boxed_str()))))
+    }
+
+    struct Routed(&'static str, RouterFn);
+
+    impl CoreModule for Routed {
+        fn manifest_source(&self) -> &'static str {
+            self.0
+        }
+
+        fn register(&self, module: &mut Registrar<'_>) {
+            module.routes(self.1);
+        }
+    }
+
+    fn alpha_routes() -> axum::Router<crate::AppState> {
+        axum::Router::new().route("/alpha", axum::routing::get(|| async { "alpha" }))
+    }
+
+    fn beta_routes() -> axum::Router<crate::AppState> {
+        axum::Router::new().route("/beta", axum::routing::get(|| async { "beta" }))
+    }
+
+    fn routed(id: &str, routes: RouterFn) -> &'static dyn CoreModule {
+        let source = synthetic(id, &[], &[]).manifest_source();
+        Box::leak(Box::new(Routed(source, routes)))
+    }
+
+    fn test_state() -> crate::AppState {
+        let web_root = std::env::temp_dir();
+        let config = crate::config::AppConfig::from_values(&BTreeMap::from([
+            (
+                "AGENT_WORKSPACE_DATABASE_URL".to_owned(),
+                "postgres://example.invalid/database".to_owned(),
+            ),
+            (
+                "AGENT_WORKSPACE_WEB_ROOT".to_owned(),
+                web_root.to_string_lossy().into_owned(),
+            ),
+        ]))
+        .expect("test config");
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy(config.database_url.expose())
+            .expect("lazy PostgreSQL pool");
+        let supervisors =
+            crate::provider::SupervisorRegistry::new(&config).expect("test supervisor registry");
+        crate::AppState {
+            config: std::sync::Arc::new(config),
+            pool,
+            rate_limits: crate::rate_limit::RateLimiters::default(),
+            realtime: crate::realtime::RealtimeHub::new(8),
+            supervisors,
+        }
+    }
+
+    async fn status(registry: &Registry, path: &str) -> axum::http::StatusCode {
+        use tower::ServiceExt;
+        registry
+            .router()
+            .with_state(test_state())
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(path)
+                    .body(axum::body::Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response")
+            .status()
+    }
+
+    #[tokio::test]
+    async fn a_module_brings_its_routes_and_takes_them_away() {
+        let both = Registry::build(
+            &[routed("alpha", alpha_routes), routed("beta", beta_routes)],
+            &[],
+        )
+        .expect("two modules");
+        assert_eq!(status(&both, "/alpha").await, axum::http::StatusCode::OK);
+        assert_eq!(status(&both, "/beta").await, axum::http::StatusCode::OK);
+
+        let alpha = Registry::build(&[routed("alpha", alpha_routes)], &[]).expect("one module");
+        assert_eq!(status(&alpha, "/alpha").await, axum::http::StatusCode::OK);
+        assert_eq!(
+            status(&alpha, "/beta").await,
+            axum::http::StatusCode::NOT_FOUND
+        );
+    }
+
+    #[test]
+    fn the_conversation_filters_are_registered_once() {
+        let registry = Registry::global();
+        let direct = registry.conversation_module(true).expect("direct space");
+        let spaces = registry.conversation_module(false).expect("other spaces");
+        assert_ne!(direct, spaces);
+        assert!(registry.governs_conversations(direct));
+        assert!(registry.governs_conversations(spaces));
+        assert!(registry.lives_in_direct_space(direct));
+        assert!(!registry.lives_in_direct_space(spaces));
+        // A tool another module also serves names a module that isn't its owner.
+        for module in registry.modules() {
+            for filter in &module.contributions.filters {
+                if let ModuleFilter::AlsoServes(tools) = filter {
+                    for tool in *tools {
+                        let owner = registry.module_of_tool(tool).map(|owner| owner.id.as_str());
+                        assert!(owner.is_some(), "{tool} has no module");
+                        assert_ne!(owner, Some(module.id.as_str()), "{tool}");
+                    }
+                }
+            }
+        }
     }
 
     #[test]

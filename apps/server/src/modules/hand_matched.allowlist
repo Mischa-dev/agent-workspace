@@ -2,9 +2,11 @@
 # Counts only fall: register a ModuleFilter or use the operation's module instead.
 
 src/ai/plans.rs: 1
-src/automations.rs: 3
+src/automations.rs: 1
 src/conversations.rs: 1
 src/events.rs: 2
+# mcp.rs: a JSON-RPC error's "code" field, not the Code module.
+src/mcp.rs: 1
 src/mcp/admin.rs: 2
 src/mcp/agents.rs: 1
 src/mcp/automation_tools.rs: 7

@@ -12,5 +12,12 @@ impl CoreModule for Module {
         include_str!("../../../../../../modules/runs.json")
     }
 
-    fn register(&self, _module: &mut Registrar<'_>) {}
+    fn register(&self, module: &mut Registrar<'_>) {
+        module.routes(crate::account::router);
+        module.routes(crate::usage::router);
+        module.routes(crate::environments::router);
+        module.routes(crate::harnesses::router);
+        module.routes(crate::launch::router);
+        module.routes(crate::run_views::router);
+    }
 }

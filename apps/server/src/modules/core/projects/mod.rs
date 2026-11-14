@@ -12,5 +12,8 @@ impl CoreModule for Module {
         include_str!("../../../../../../modules/projects.json")
     }
 
-    fn register(&self, _module: &mut Registrar<'_>) {}
+    fn register(&self, module: &mut Registrar<'_>) {
+        module.routes(crate::invitations::router);
+        module.routes(crate::memberships::router);
+    }
 }

@@ -663,16 +663,17 @@ async fn module_off(
 }
 
 /// AWD-75: the module a trigger or action of `module` needs where its rule
-/// lives: conversations follow Channels in a project and Messages in the
-/// direct space, as they do everywhere else.
+/// lives: in a project, conversations follow the module that governs them
+/// there (`ModuleFilter::Conversations`), as they do everywhere else.
 pub(crate) fn in_project_kind(
     module: Option<&'static crate::modules::Manifest>,
     direct: bool,
 ) -> Option<&'static crate::modules::Manifest> {
+    let registry = crate::modules::registry::Registry::global();
     match module {
-        Some(module) if module.id == "messages" && !direct => {
-            crate::modules::manifest::get("channels")
-        }
+        Some(module) if !direct && registry.governs_conversations(&module.id) => registry
+            .conversation_module(false)
+            .and_then(crate::modules::manifest::get),
         other => other,
     }
 }
