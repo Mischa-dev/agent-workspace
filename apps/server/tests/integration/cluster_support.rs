@@ -40,6 +40,13 @@ impl Instance {
         self.running.as_ref().expect("running").state()
     }
 
+    /// Every event this instance's tail hands on, from now.
+    pub(crate) fn tail(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<agent_workspace_server::realtime::tail::Tailed> {
+        self.running.as_ref().expect("running").subscribe_tail()
+    }
+
     /// This instance's leases and heartbeat.
     pub(crate) fn cluster(&self) -> &agent_workspace_server::cluster::Cluster {
         self.running.as_ref().expect("running").cluster()

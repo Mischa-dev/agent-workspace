@@ -86,6 +86,11 @@ pub struct AppConfig {
     /// loopback server address.
     pub public_origin: Option<String>,
     pub database_url: SecretString,
+    /// The session connection the wake listener uses (K5.4): the main URL
+    /// unless `AGENT_WORKSPACE_DATABASE_LISTEN_URL` names another (straight
+    /// at PostgreSQL when the main URL goes through a transaction pooler).
+    /// None when it is `off`: the instance runs on its polls alone.
+    pub database_listen_url: Option<SecretString>,
     pub database_max_connections: u32,
     pub data_root: PathBuf,
     pub data_quota_bytes: u64,
@@ -453,6 +458,13 @@ impl AppConfig {
             allowed_origins,
             webhook_trusted_origins,
             public_origin,
+            database_listen_url: crate::realtime::wake::listen_url(
+                values
+                    .get(&format!("{PREFIX}DATABASE_LISTEN_URL"))
+                    .map(String::as_str),
+                &database_url,
+            )
+            .map(SecretString::new),
             database_url: SecretString::new(database_url),
             database_max_connections,
             data_root,

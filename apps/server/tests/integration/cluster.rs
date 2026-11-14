@@ -1,16 +1,25 @@
 //! K5: any number of servers. Two instances on one database act as one: a
 //! sign-in on one works on the other, a write on one reads on the other,
-//! and a lease is held by one of them at a time.
+//! a lease is held by one of them at a time, and every instance's tail
+//! sees every event, in order.
 
 use std::{
     collections::HashSet,
     time::{Duration, Instant},
 };
 
-use agent_workspace_server::{cluster::LeaseName, error::AppError};
+use agent_workspace_server::{
+    cluster::LeaseName,
+    error::AppError,
+    events::{self, NewEvent, catalog},
+    realtime::tail::Tailed,
+};
 use axum::http::StatusCode;
 use futures_util::future::join_all;
 use serde_json::{Value, json};
+use sqlx::{Postgres, Transaction};
+use tokio::sync::broadcast;
+use uuid::Uuid;
 
 use crate::cluster_support::{cluster, cluster_with};
 
@@ -275,5 +284,211 @@ async fn self_fencing_cancels_work_when_renewal_stops() {
     assert!(lost < taken, "A stopped its work before B took over");
     assert!(!a.holds(&name));
     blocker.rollback().await.expect("rollback");
+    cluster.finish().await;
+}
+
+// K5.4: positions, the wake and the tail.
+
+/// A project to hang events on, made through A's HTTP.
+async fn log_project(cluster: &crate::cluster_support::Cluster) -> Uuid {
+    let a = cluster.instance(0);
+    let browser = a.login("owner").await;
+    let (status, project) = a
+        .send(browser.request(
+            "POST",
+            "/api/v1/projects",
+            Some("cluster-log"),
+            json!({"organizationId": cluster.organization_id, "key": "LOG", "name": "Log"}),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{project}");
+    project["id"]
+        .as_str()
+        .expect("project")
+        .parse()
+        .expect("id")
+}
+
+async fn stage(transaction: &mut Transaction<'_, Postgres>, project: Uuid) -> Uuid {
+    events::emit(
+        transaction,
+        NewEvent::thing(&catalog::TASK_UPDATED, project, "task", Uuid::now_v7()),
+    )
+    .await
+    .expect("emit")
+}
+
+/// What a tail hands on until it has seen every one of `ids`: (position,
+/// id) in the order it came.
+async fn tail_until(
+    receiver: &mut broadcast::Receiver<Tailed>,
+    ids: &HashSet<Uuid>,
+    within: Duration,
+) -> Vec<(i64, Uuid)> {
+    let mut seen = Vec::new();
+    let deadline = Instant::now() + within;
+    while !ids.iter().all(|id| seen.iter().any(|(_, seen)| seen == id)) {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match tokio::time::timeout(left, receiver.recv()).await {
+            Ok(Ok(Tailed::Event(event))) => seen.push((event.position, event.id)),
+            Ok(Ok(Tailed::Resync)) => panic!("the tail jumped"),
+            Ok(Err(error)) => panic!("tail: {error}"),
+            Err(_) => panic!(
+                "the tail saw {} of {} events within {within:?}",
+                seen.len(),
+                ids.len()
+            ),
+        }
+    }
+    seen
+}
+
+fn assert_dense(seen: &[(i64, Uuid)]) {
+    for pair in seen.windows(2) {
+        assert_eq!(pair[1].0, pair[0].0 + 1, "positions are dense and in order");
+    }
+}
+
+#[tokio::test]
+async fn positions_follow_commit_order() {
+    let Some(cluster) = cluster("k5_4_commit_order", 2).await else {
+        return;
+    };
+    let project = log_project(&cluster).await;
+    let mut tails = [cluster.instance(0).tail(), cluster.instance(1).tail()];
+    let mut first = cluster.pool.begin().await.expect("first");
+    let early = stage(&mut first, project).await;
+    let mut second = cluster.pool.begin().await.expect("second");
+    let late = stage(&mut second, project).await;
+    second.commit().await.expect("second commits first");
+    // The reader sees the second as soon as it commits; the first, still
+    // open, isn't there yet, and comes after it once it commits.
+    let mut seen_by_a = tail_until(
+        &mut tails[0],
+        &HashSet::from([late]),
+        Duration::from_secs(5),
+    )
+    .await;
+    first.commit().await.expect("first commits last");
+    seen_by_a.extend(
+        tail_until(
+            &mut tails[0],
+            &HashSet::from([early]),
+            Duration::from_secs(5),
+        )
+        .await,
+    );
+    let ids = HashSet::from([early, late]);
+    let seen_by_b = tail_until(&mut tails[1], &ids, Duration::from_secs(5)).await;
+    for seen in [seen_by_a, seen_by_b] {
+        let position = |id: Uuid| seen.iter().find(|(_, seen)| *seen == id).expect("seen").0;
+        assert!(position(late) < position(early), "{seen:?}");
+        assert_dense(&seen);
+    }
+    cluster.finish().await;
+}
+
+#[tokio::test]
+async fn concurrent_writers_leave_no_gaps() {
+    let Some(cluster) = cluster("k5_4_no_gaps", 2).await else {
+        return;
+    };
+    let project = log_project(&cluster).await;
+    let mut tails = [cluster.instance(0).tail(), cluster.instance(1).tail()];
+    let writers = (0..8).map(|writer| {
+        // Half write through A's pool, half through B's.
+        let pool = cluster.instance(writer % 2).state().pool.clone();
+        async move {
+            let mut ids = Vec::new();
+            for _ in 0..100 {
+                let mut transaction = pool.begin().await.expect("begin");
+                ids.push(stage(&mut transaction, project).await);
+                transaction.commit().await.expect("commit");
+            }
+            ids
+        }
+    });
+    let written = join_all(writers)
+        .await
+        .into_iter()
+        .flatten()
+        .collect::<HashSet<_>>();
+    assert_eq!(written.len(), 800);
+    for tail in &mut tails {
+        let seen = tail_until(tail, &written, Duration::from_secs(30)).await;
+        assert_eq!(seen.len(), written.len(), "each event once");
+        assert_dense(&seen);
+    }
+    cluster.finish().await;
+}
+
+#[tokio::test]
+async fn tail_survives_losing_the_listener() {
+    let Some(cluster) = cluster("k5_4_listener_lost", 1).await else {
+        return;
+    };
+    let project = log_project(&cluster).await;
+    let a = cluster.instance(0);
+    let name = format!("aw-listen-{}", a.cluster().instance_id().0.simple());
+    let listening = |pool: sqlx::PgPool, name: String| async move {
+        sqlx::query_scalar::<_, i32>("SELECT pid FROM pg_stat_activity WHERE application_name = $1")
+            .bind(name)
+            .fetch_optional(&pool)
+            .await
+            .expect("activity")
+    };
+    let started = Instant::now();
+    let old = loop {
+        if let Some(pid) = listening(cluster.pool.clone(), name.clone()).await {
+            break pid;
+        }
+        assert!(started.elapsed() < Duration::from_secs(10), "no listener");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    sqlx::query("SELECT pg_terminate_backend($1)")
+        .bind(old)
+        .execute(&cluster.pool)
+        .await
+        .expect("terminate the listener");
+    let mut tail = a.tail();
+    let mut transaction = cluster.pool.begin().await.expect("begin");
+    let id = stage(&mut transaction, project).await;
+    transaction.commit().await.expect("commit");
+    tail_until(&mut tail, &HashSet::from([id]), Duration::from_secs(1)).await;
+    let started = Instant::now();
+    loop {
+        match listening(cluster.pool.clone(), name.clone()).await {
+            Some(pid) if pid != old => break,
+            _ => {}
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the listener never came back"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    cluster.finish().await;
+}
+
+#[tokio::test]
+async fn events_arrive_with_listen_off() {
+    let Some(cluster) = cluster_with(
+        "k5_4_listen_off",
+        2,
+        &[("AGENT_WORKSPACE_DATABASE_LISTEN_URL", "off")],
+    )
+    .await
+    else {
+        return;
+    };
+    let project = log_project(&cluster).await;
+    let mut tails = [cluster.instance(0).tail(), cluster.instance(1).tail()];
+    let mut transaction = cluster.pool.begin().await.expect("begin");
+    let id = stage(&mut transaction, project).await;
+    transaction.commit().await.expect("commit");
+    for tail in &mut tails {
+        // A sequencer poll and a tail poll, with room for a slow machine.
+        tail_until(tail, &HashSet::from([id]), Duration::from_secs(2)).await;
+    }
     cluster.finish().await;
 }

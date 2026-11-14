@@ -19,6 +19,8 @@ use crate::{
 pub struct Server {
     state: AppState,
     cluster: Cluster,
+    /// The log's head when this instance started: its tail starts there.
+    tail_start: i64,
     jobs: Arc<jobs::JobRegistry>,
 }
 
@@ -96,9 +98,16 @@ impl Server {
             operations = operations.entries().count(),
             "modules registered"
         );
+        let tail_start = {
+            let mut connection = pool.acquire().await.context("read the log's head")?;
+            crate::events::head(&mut connection)
+                .await
+                .context("read the log's head")?
+        };
         Ok(Self {
             state,
             cluster,
+            tail_start,
             jobs: Arc::new(jobs::default_registry()),
         })
     }
@@ -117,12 +126,18 @@ impl Server {
         let Self {
             state,
             cluster,
+            tail_start,
             jobs,
         } = self;
         let address = listener.local_addr().ok();
         let (shutdown, receiver) = watch::channel(false);
-        // Wakes the sequencer; K5.4's listener notifies it.
-        let wake = Arc::new(tokio::sync::Notify::new());
+        // The wake listener (K5.4) runs the sequencer, the tail and lease
+        // standbys; each also polls, so it is only ever an optimisation.
+        let wakes = crate::realtime::wake::Wakes {
+            control: cluster.release_wake(),
+            ..crate::realtime::wake::Wakes::default()
+        };
+        let tail = crate::realtime::tail::channel();
         crate::harnesses::spawn_reloader(state.clone());
         let scheduler = tokio::spawn(crate::scheduler::run(state.clone(), receiver.clone()));
         let github = tokio::spawn(github::run_jobs(state.clone(), receiver.clone()));
@@ -135,22 +150,39 @@ impl Server {
         // Not supervised like the loops above: a failure here delays
         // wakeups and lease expiry but never loses data, so it must not
         // stop the server.
-        // The log's sequencer and the instance's heartbeat run beside it on
-        // the same task, for the same reason: a failed step is retried on
-        // the next round (a heartbeat that stays late fences this instance,
-        // it never stops it).
+        // The log's sequencer, the instance's heartbeat, the wake listener
+        // and the tail run beside it on the same task, for the same reason:
+        // a failed step is retried on the next round (a heartbeat that
+        // stays late fences this instance, it never stops it).
         let replies = tokio::spawn({
             let replies = crate::replies::run(state.clone(), receiver.clone());
             let sequencer = crate::events::sequencer::run(
                 state.pool.clone(),
-                Arc::clone(&wake),
+                Arc::clone(&wakes.log),
+                receiver.clone(),
+            );
+            let tail = crate::realtime::tail::run(
+                state.pool.clone(),
+                tail_start,
+                Arc::clone(&wakes.events),
+                tail.clone(),
+                receiver.clone(),
+            );
+            let listener = crate::realtime::wake::run(
+                state
+                    .config
+                    .database_listen_url
+                    .as_ref()
+                    .map(|url| url.expose().to_owned()),
+                format!("aw-listen-{}", cluster.instance_id().0.simple()),
+                wakes,
                 receiver.clone(),
             );
             let heartbeat_cluster = cluster.clone();
             let heartbeat_shutdown = receiver.clone();
             async move {
                 let heartbeat = heartbeat_cluster.run_heartbeat(heartbeat_shutdown);
-                tokio::join!(replies, sequencer, heartbeat);
+                tokio::join!(replies, sequencer, tail, listener, heartbeat);
             }
         });
         // Background jobs (F9). A job lost to a crash is retried once its
@@ -181,6 +213,7 @@ impl Server {
         RunningServer {
             state,
             cluster,
+            tail,
             address,
             shutdown,
             http,
@@ -197,6 +230,7 @@ impl Server {
 pub struct RunningServer {
     state: AppState,
     cluster: Cluster,
+    tail: crate::realtime::tail::TailSender,
     address: Option<SocketAddr>,
     shutdown: watch::Sender<bool>,
     http: JoinHandle<std::io::Result<()>>,
@@ -215,6 +249,13 @@ impl RunningServer {
     /// This instance among the others.
     pub fn cluster(&self) -> &Cluster {
         &self.cluster
+    }
+
+    /// Every event this instance's tail hands on, from now.
+    pub fn subscribe_tail(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<crate::realtime::tail::Tailed> {
+        self.tail.subscribe()
     }
 
     /// Where the app listens.
