@@ -97,6 +97,8 @@ pub mod storage_admission;
 pub mod telemetry;
 pub mod test_support;
 pub mod usage;
+#[cfg(test)]
+mod views_guard;
 pub mod webhooks;
 pub mod whiteboards;
 pub mod work_item_commands;

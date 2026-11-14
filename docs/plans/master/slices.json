@@ -2467,7 +2467,7 @@
   },
   {
    "id": "T1.12",
-   "name": "Step 5: `fields` and `collection` on task tools",
+   "name": "Step 5: `fields` and `collection` on task tools (done early by #268)",
    "size": "M",
    "plan": "T1",
    "build": "4T",
@@ -2653,7 +2653,7 @@
   },
   {
    "id": "T1.25",
-   "name": "Step 6: acts like a task",
+   "name": "Step 6: acts like a task (done early by #268; left: forms for task-like collections, switching off once it has records, per-collection workflows, the switch in workspace templates)",
    "size": "L",
    "plan": "T1",
    "build": "4T",

@@ -10,3 +10,8 @@ and why (R50). Newest last.
   longer waits for a release; contract steps may follow their replacement at once. A
   deploy rehearsal on a copy of the live database is added at every stage gate. Aliases
   for outside clients count from the one deploy.
+- **2026-11-14.** T1.12 (task tools take `fields` and `collection`) and T1.25 (acts like a
+  task) were done early by #268 (AWD-110 steps 5 and 6), before build 1T. Both stay in build
+  4T in `slices.json`, marked done early; T1.25's leftovers (forms for task-like collections,
+  switching off once it has records, per-collection workflows, the switch in workspace
+  templates) are named on it for build 4T to finish.
