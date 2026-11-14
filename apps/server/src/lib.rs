@@ -93,6 +93,7 @@ pub mod settings;
 pub mod sheets;
 pub mod storage_admission;
 pub mod telemetry;
+pub mod tenancy;
 pub mod test_support;
 pub mod usage;
 pub mod webhooks;
