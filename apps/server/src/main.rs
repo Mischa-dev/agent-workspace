@@ -21,6 +21,7 @@ async fn main() -> anyhow::Result<()> {
     }
     let config = Arc::new(AppConfig::load().context("load application configuration")?);
     init_tracing(&config.log_filter)?;
+    agent_workspace_server::link_previews::set_server_switch(config.link_previews);
 
     let pool = PgPoolOptions::new()
         .max_connections(config.database_max_connections)
@@ -318,6 +319,17 @@ async fn main() -> anyhow::Result<()> {
         }
         Some(_) => bail!("unknown command"),
         None => {}
+    }
+
+    // A keyring path that names no file yet gets a new keyring on first
+    // start, so a container needs no separate setup step.
+    if let Some(created) = agent_workspace_server::secrets::ensure_keyring(&config)
+        .context("create the secrets keyring")?
+    {
+        tracing::warn!(
+            path = %created.display(),
+            "created a new secrets keyring; back this file up apart from database dumps"
+        );
     }
 
     let realtime = RealtimeHub::new(256);

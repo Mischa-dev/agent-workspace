@@ -150,9 +150,19 @@ fn normalize(link: &str) -> Option<String> {
 // ---------------------------------------------------------------------------
 // Attaching previews to new messages
 
+/// The server's own switch (`AGENT_WORKSPACE_LINK_PREVIEWS`, off in the
+/// `small` profile), set once at start. On by default.
+static SERVER_SWITCH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Turns previews off (or on) for every workspace on this server.
+pub fn set_server_switch(enabled: bool) {
+    SERVER_SWITCH.store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Shows previews for the links in a new message, fetching the ones this
 /// workspace hasn't seen (or that failed a while ago) in the background.
-/// Does nothing when the workspace or project turned previews off.
+/// Does nothing when the server, the workspace or the project turned
+/// previews off.
 pub(crate) async fn add_for_message(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
@@ -178,7 +188,8 @@ pub(crate) async fn add_for_message(
         &BTreeMap::new(),
     )
     .await?;
-    if !effective.bool("messages.link_previews").unwrap_or(true) {
+    if !SERVER_SWITCH.load(std::sync::atomic::Ordering::Relaxed)
+        || !effective.bool("messages.link_previews").unwrap_or(true) {
         return Ok(());
     }
     for (position, url) in links.iter().enumerate() {

@@ -442,6 +442,27 @@ pub fn keyring(config: &AppConfig) -> Result<Arc<dyn KeyEncryption>, SecretError
     load_cached(&path)
 }
 
+/// Creates the configured keyring when the path names a file that doesn't
+/// exist yet (checked as a safe place when the configuration loaded), as
+/// `secret-key-init` would. Returns the path when it made one, so the server
+/// can log where it is (never the key). Losing a race to another process
+/// starting at once is fine: whichever file won is kept.
+pub fn ensure_keyring(config: &AppConfig) -> Result<Option<PathBuf>, SecretError> {
+    let Some(path) = config.secrets_key_path.as_ref() else {
+        return Ok(None);
+    };
+    if path.exists() {
+        return Ok(None);
+    }
+    crate::config::validate_new_secret_location(path, config)
+        .map_err(|_| SecretError::KeyringUnreadable)?;
+    match write_new_keyring(path, &FileKeyring::generate()) {
+        Ok(()) => Ok(Some(path.clone())),
+        Err(_) if path.exists() => Ok(None),
+        Err(_) => Err(SecretError::KeyringUnreadable),
+    }
+}
+
 fn development_keyring_path() -> Result<PathBuf, SecretError> {
     let directory = std::env::current_dir()
         .map_err(|_| SecretError::KeyringUnreadable)?
