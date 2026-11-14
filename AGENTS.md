@@ -116,7 +116,10 @@ raising a number.
    through `work_item_commands::lock_membership` and `authorize_mutation`,
    `roles::standing` or `roles::project_holding`, and on the web the
    permissions the server returns. (K1 replaces these with one `access`
-   module; use it once it lands.)
+   module; use it once it lands.) No role name compared in Rust
+   (`== "owner"`), no hand-built `Subject` or direct `authorize(` call, no
+   agent limit applied by hand. Every allowance for these rules names the K1
+   slice that removes it in `structure_guards/removals.json`.
 2. **No permission depends on the kind of account.** People, agents and apps
    differ only in how they sign in and how they're told about things. Don't
    refuse or allow anything because `actor_kind` is or isn't `Human`. If

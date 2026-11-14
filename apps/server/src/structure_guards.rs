@@ -51,6 +51,24 @@ pub(crate) const RULES: &[Rule] = &[
         count: account_kind_checks,
     },
     Rule {
+        id: "rust_role_checks",
+        agents_rule: "rule 1, \"Access is decided in one place\"",
+        ceiling: RUST_ROLE_CHECKS_CEILING,
+        count: rust_role_checks,
+    },
+    Rule {
+        id: "access_bypasses",
+        agents_rule: "rule 1, \"Access is decided in one place\"",
+        ceiling: ACCESS_BYPASSES_CEILING,
+        count: access_bypasses,
+    },
+    Rule {
+        id: "account_kind_strings",
+        agents_rule: "rule 2, \"No permission depends on the kind of account\"",
+        ceiling: ACCOUNT_KIND_STRINGS_CEILING,
+        count: account_kind_strings,
+    },
+    Rule {
         id: "agent_runs_sql",
         agents_rule: "rule 3, \"Runs are read and written through runs.rs\"",
         ceiling: AGENT_RUNS_SQL_CEILING,
@@ -126,6 +144,11 @@ const RAW_ROLE_CHECKS_CEILING: usize = 40;
 const CUSTOM_ROLE_ALLOWS_CEILING: usize = 25;
 const WORKSPACE_ROLE_ENUM_CEILING: usize = 32;
 const ACCOUNT_KIND_CHECKS_CEILING: usize = 266;
+// K1.1: role names compared in Rust, the old access core called by hand,
+// and account kinds compared as stored strings. Set from today's counts.
+const RUST_ROLE_CHECKS_CEILING: usize = 36;
+const ACCESS_BYPASSES_CEILING: usize = 81;
+const ACCOUNT_KIND_STRINGS_CEILING: usize = 58;
 const AGENT_RUNS_SQL_CEILING: usize = 178;
 const ACTIVE_RUN_STATES_LITERAL_CEILING: usize = 19;
 const CONVERSATION_INSERTS_CEILING: usize = 11;
@@ -141,6 +164,19 @@ const CONVERSATION_LISTINGS_CEILING: usize = 77;
 // suggested batch (usage/alerts.rs).
 const NOTIFICATION_DETAIL_TEXT_CEILING: usize = 4;
 const VENDOR_NAMES_CORE_CEILING: usize = 10;
+
+/// The rules of `AGENTS.md` rules 1 and 2 (access and account kinds). Every
+/// allowance of theirs names the K1 slice that removes it and why it is
+/// there today, in `structure_guards/removals.json` (K1.1).
+pub(crate) const ACCESS_RULES: &[&str] = &[
+    "raw_role_checks",
+    "custom_role_allows",
+    "workspace_role_enum",
+    "rust_role_checks",
+    "access_bypasses",
+    "account_kind_checks",
+    "account_kind_strings",
+];
 
 /// The heading in `AGENTS.md` the rules sit under.
 const AGENTS_HEADING: &str = "Rules while the foundations are rebuilt";
@@ -228,6 +264,78 @@ pub(crate) fn account_kind_checks(source: &str) -> usize {
             }
         }
         found
+    })
+}
+
+/// A role compared by name in Rust: `== "owner"`, `"owner" | "admin"`,
+/// `MembershipRole::Owner | MembershipRole::Admin` (K1.1).
+pub(crate) fn rust_role_checks(source: &str) -> usize {
+    in_code(source, |line| {
+        let normal = normalise(line);
+        let mut found = 0;
+        for role in ["owner", "admin", "viewer"] {
+            for operator in ["==", "!="] {
+                found += normal.matches(&format!("{operator} \"{role}\"")).count();
+            }
+        }
+        found
+            + normal.matches("\"owner\" | \"admin\"").count()
+            + normal
+                .matches("MembershipRole::Owner | MembershipRole::Admin")
+                .count()
+    })
+}
+
+/// The old access core used by hand instead of asking `access` (K1.1):
+/// a hand-built `Subject`, a direct call of `authorize`, or an agent limit
+/// applied by hand. `access/` and `policy.rs` (the core itself) are left
+/// out by [`exempt`].
+pub(crate) fn access_bypasses(source: &str) -> usize {
+    in_code(source, |line| {
+        let normal = normalise(line);
+        if normal.starts_with("pub fn ")
+            || normal.starts_with("pub(crate) fn ")
+            || normal.starts_with("fn ")
+            || normal.starts_with("use ")
+        {
+            return 0;
+        }
+        let calls = normal
+            .match_indices("authorize(")
+            .filter(|(index, _)| {
+                !normal[..*index]
+                    .bytes()
+                    .last()
+                    .is_some_and(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'.')
+            })
+            .count();
+        calls
+            + normal.matches("Subject::new(").count()
+            + normal.matches("agent_limit_hides(").count()
+            + normal.matches("agent_limit_projects_allowing(").count()
+    })
+}
+
+/// An account kind compared as its stored string (K1.1): `kind == "human"`,
+/// `kind IN ('human'`, or a new `AccountKind` compared, unless the line says
+/// it is mechanical.
+pub(crate) fn account_kind_strings(source: &str) -> usize {
+    in_code(source, |line| {
+        if line.contains("// kind-check: mechanical") {
+            return 0;
+        }
+        let normal = normalise(line);
+        let mut found = 0;
+        for kind in ["human", "external_agent", "execution_worker", "integration"] {
+            for operator in ["==", "!="] {
+                found += normal.matches(&format!("kind {operator} \"{kind}\"")).count();
+            }
+        }
+        found
+            + normal.matches("kind IN ('human'").count()
+            + normal.matches("kind NOT IN ('human'").count()
+            + normal.matches("== AccountKind::").count()
+            + normal.matches("!= AccountKind::").count()
     })
 }
 
@@ -400,7 +508,13 @@ const DETAIL_TEXT_KEYS: [&str; 4] = ["\"preview\":", "\"body\":", "\"text\":", "
 
 /// Files a rule never reads, since they are where the thing belongs.
 fn exempt(rule: &str, path: &str) -> bool {
+    // The access module and the account mechanics are where these belong
+    // (K1 guard 1).
+    if ACCESS_RULES.contains(&rule) && (path.starts_with("access/") || path == "accounts.rs") {
+        return true;
+    }
     match rule {
+        "access_bypasses" => path == "policy.rs",
         "vendor_names_core" => {
             path.starts_with("provider/")
                 || path == "provider.rs"
@@ -546,6 +660,28 @@ pub(crate) fn readable_by_problem(sql: &str) -> Option<String> {
     (body != expected).then(|| format!("its body is `{body}`, not `{expected}`"))
 }
 
+/// Why each access allowance is there and the K1 slice that removes it
+/// (K1.1): `rule -> file -> "K1.n: reason"`.
+fn removals() -> BTreeMap<String, BTreeMap<String, String>> {
+    serde_json::from_str(include_str!("structure_guards/removals.json"))
+        .expect("structure_guards/removals.json is a map of rule to file to note")
+}
+
+/// Whether a removal note starts with the slice that removes the entry.
+pub(crate) fn names_its_slice(note: &str) -> bool {
+    let Some((slice, reason)) = note.split_once(": ") else {
+        return false;
+    };
+    let mut parts = slice.splitn(2, '.');
+    let plan = parts.next().unwrap_or_default();
+    let number = parts.next().unwrap_or_default();
+    plan.len() == 2
+        && plan.starts_with('K')
+        && plan[1..].bytes().all(|byte| byte.is_ascii_digit())
+        && number.trim_end_matches(|c: char| c.is_ascii_lowercase()).parse::<u32>().is_ok()
+        && !reason.trim().is_empty()
+}
+
 fn allowances() -> BTreeMap<String, BTreeMap<String, usize>> {
     serde_json::from_str(include_str!("structure_guards/allowances.json"))
         .expect("structure_guards/allowances.json is a map of rule to file to count")
@@ -648,6 +784,47 @@ mod tests {
             "{}",
             serde_json::to_string_pretty(&counts()).expect("serialise counts")
         );
+    }
+
+    /// Every allowance of an access rule says which K1 slice removes it and
+    /// why it is there (K1.1). A note for a file no longer allowed is a hint.
+    #[test]
+    fn access_allowances_name_the_slice_that_removes_them() {
+        let allowances = allowances();
+        let removals = removals();
+        let mut failures = Vec::new();
+        for rule in ACCESS_RULES {
+            assert!(
+                RULES.iter().any(|known| known.id == *rule),
+                "ACCESS_RULES names {rule}, which is no rule"
+            );
+            let notes = removals.get(*rule).cloned().unwrap_or_default();
+            for file in allowances.get(*rule).into_iter().flat_map(|files| files.keys()) {
+                match notes.get(file) {
+                    Some(note) if names_its_slice(note) => {}
+                    Some(note) => failures.push(format!(
+                        "{rule}: {file}'s note \"{note}\" must start with the slice that removes it, \
+                         like \"K1.16: why it is there\""
+                    )),
+                    None => failures.push(format!(
+                        "{rule}: {file} has an allowance but no note in removals.json saying which \
+                         K1 slice removes it"
+                    )),
+                }
+            }
+            for file in notes.keys() {
+                if !allowances
+                    .get(*rule)
+                    .is_some_and(|files| files.contains_key(file))
+                {
+                    eprintln!("hint: {rule}: {file} has no allowance now; drop its note from removals.json");
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+        assert!(names_its_slice("K1.14a: role caps"));
+        assert!(!names_its_slice("someday: role caps"));
+        assert!(!names_its_slice("K1.16:"));
     }
 
     #[test]
@@ -808,6 +985,44 @@ mod tests {
             ),
             0
         );
+        assert_eq!(rust_role_checks("if role == \"owner\" {"), 1);
+        assert_eq!(
+            rust_role_checks("matches!(role, \"owner\" | \"admin\")"),
+            1
+        );
+        assert_eq!(
+            rust_role_checks("MembershipRole::Owner | MembershipRole::Admin => true,"),
+            1
+        );
+        assert_eq!(rust_role_checks("let role = \"owner\";"), 0);
+        assert_eq!(
+            access_bypasses("let decision = authorize(&subject, action, resource);"),
+            1
+        );
+        assert_eq!(
+            access_bypasses("let subject = Subject::new(actor, kind, true, None, None);"),
+            1
+        );
+        assert_eq!(
+            access_bypasses("if policy::agent_limit_hides(actor, project, permission) {"),
+            1
+        );
+        assert_eq!(access_bypasses("pub fn authorize(subject: &Subject) {"), 0);
+        assert_eq!(access_bypasses("require_authorize(&x);"), 0);
+        assert_eq!(access_bypasses("use crate::policy::{authorize, Subject};"), 0);
+        assert_eq!(account_kind_strings("if kind == \"human\" {"), 1);
+        assert_eq!(
+            account_kind_strings("let q = \"WHERE actor.kind IN ('human', 'external_agent')\";"),
+            1
+        );
+        assert_eq!(account_kind_strings("if account.kind == AccountKind::Agent {"), 1);
+        assert_eq!(
+            account_kind_strings("if kind == \"human\" { // kind-check: mechanical (sign-in)"),
+            0
+        );
+        assert!(exempt("access_bypasses", "policy.rs"));
+        assert!(exempt("raw_role_checks", "access/holding.rs"));
+        assert!(!exempt("raw_role_checks", "roles.rs"));
         assert!(exempt("vendor_names_core", "provider/codex_cloud.rs"));
         assert!(!exempt("vendor_names_core", "mcp.rs"));
     }
