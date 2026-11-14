@@ -2518,42 +2518,6 @@ impl McpServer {
         Json(whiteboard_tools::whiteboard_link(&self.state, principal, arguments).await)
     }
 
-    #[tool(
-        description = "Record a decision: what was chosen and why, linked to the message or conversation where it happened. Pass supersedes to replace an older decision. A decision from a private conversation stays as private as it.",
-        annotations(
-            title = "Record decision",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn decision_record(
-        &self,
-        Parameters(arguments): Parameters<memory_tools::DecisionRecordArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<memory_tools::DecisionValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(memory_tools::decision_record(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "List a project's decisions, newest first: what was chosen, why, and where. Superseded ones are left out unless includeSuperseded.",
-        annotations(
-            title = "List decisions",
-            read_only_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn decision_list(
-        &self,
-        Parameters(arguments): Parameters<memory_tools::DecisionListArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<memory_tools::DecisionListValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(memory_tools::decision_list(&self.state, principal, arguments).await)
-    }
-
     // -- Code, runs and approvals --------------------------------------------
 
     #[tool(
@@ -5531,7 +5495,7 @@ async fn keys_to_ids(
         arguments["projectId"] = serde_json::Value::String(project_id.to_string());
         changed = true;
     }
-    for field in ["projectId", "toProjectId"] {
+    for field in ["projectId", "toProjectId", "spaceId"] {
         if let Some(key) = unresolved(arguments, field)
             && is_project_key(&key)
             && let Some(project_id) = project_by_key(state, principal, &key).await?

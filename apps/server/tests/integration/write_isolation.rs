@@ -3404,26 +3404,29 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             last: false,
         },
         // The generated operation route (K2): the workspace in the path must
-        // be where the target is, and a target in B is not found. No real
-        // operation is registered until K2.5's decision_record, so A's own
-        // call waits for it; `ops_edges` runs the test operations.
+        // be where the target is, and a target in B is not found. Run with
+        // K2.5's decision_record; `ops_edges` runs the test operations.
         HttpCase {
             route: "POST /api/v2/w/{workspace}/ops/{name}",
-            own: Own::Skip("no operation is registered in the server before K2.5"),
+            own: Own::Run(Call::new(
+                "POST",
+                format!("/api/v2/w/{}/ops/decision_record", a.organization),
+                Payload::Json(json!({"spaceId": a.project, "title": "Net op"})),
+            )),
             foreign: vec![
                 (
                     Call::new(
                         "POST",
-                        format!("/api/v2/w/{}/ops/echo_create", b.organization),
-                        Payload::Json(json!({"space": a.project, "text": "Net op"})),
+                        format!("/api/v2/w/{}/ops/decision_record", b.organization),
+                        Payload::Json(json!({"spaceId": a.project, "title": "Net op"})),
                     ),
                     Expect::Refused,
                 ),
                 (
                     Call::new(
                         "POST",
-                        format!("/api/v2/w/{}/ops/echo_create", a.organization),
-                        Payload::Json(json!({"space": b.project, "text": "Net op"})),
+                        format!("/api/v2/w/{}/ops/decision_record", a.organization),
+                        Payload::Json(json!({"spaceId": b.project, "title": "Net op"})),
                     ),
                     Expect::Refused,
                 ),
@@ -3432,12 +3435,16 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         },
         HttpCase {
             route: "POST /api/v2/ops/{name}",
-            own: Own::Skip("no operation is registered in the server before K2.5"),
+            own: Own::Run(Call::new(
+                "POST",
+                "/api/v2/ops/decision_record".to_owned(),
+                Payload::Json(json!({"spaceId": a.project, "title": "Net op"})),
+            )),
             foreign: vec![(
                 Call::new(
                     "POST",
-                    "/api/v2/ops/echo_create".to_owned(),
-                    Payload::Json(json!({"space": b.project, "text": "Net op"})),
+                    "/api/v2/ops/decision_record".to_owned(),
+                    Payload::Json(json!({"spaceId": b.project, "title": "Net op"})),
                 ),
                 Expect::Refused,
             )],

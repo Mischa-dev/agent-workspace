@@ -1,4 +1,5 @@
 import { requestJson } from '../api/client'
+import { callOp } from '../api/generated/client'
 
 export type PageSummary = {
   id: string
@@ -144,11 +145,13 @@ export function listDecisions(projectId: string, includeSuperseded = false) {
   return requestJson<{ decisions: Decision[]; canRecord: boolean }>(`${project(projectId)}/decisions${query}`)
 }
 
+/** Records a decision through its operation (K2.5); a retry of the same call is answered once. */
 export function recordDecision(
   projectId: string,
   input: { title: string; detail?: string; sourceMessageId?: string; sourceConversationId?: string; supersedes?: string },
+  requestId: string = crypto.randomUUID(),
 ) {
-  return requestJson<Decision>(`${project(projectId)}/decisions`, { method: 'POST', json: input })
+  return callOp('decision_record', { spaceId: projectId, ...input }, { requestId }).then((decision) => decision as Decision)
 }
 
 export function listPins(conversationId: string) {

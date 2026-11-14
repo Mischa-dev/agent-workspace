@@ -73,7 +73,8 @@ pub(super) fn code_of(text: &str) -> &str {
         if line.trim() == "#[cfg(test)]"
             && lines.peek().is_some_and(|next| {
                 let next = next.trim();
-                (next.starts_with("mod ") || next.starts_with("pub mod ")
+                (next.starts_with("mod ")
+                    || next.starts_with("pub mod ")
                     || next.starts_with("pub(crate) mod "))
                     && next.ends_with('{')
             })

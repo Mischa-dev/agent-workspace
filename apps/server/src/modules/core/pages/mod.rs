@@ -14,6 +14,7 @@ impl CoreModule for Module {
 
     fn register(&self, module: &mut Registrar<'_>) {
         module.routes(crate::memory::router);
+        module.operations(crate::memory::ops::register_ops);
         module.export(ExportPart {
             name: "pages",
             describe: "Pages with every version, and decisions.",

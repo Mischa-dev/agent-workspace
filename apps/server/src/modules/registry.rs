@@ -367,10 +367,11 @@ impl Registry {
 
     /// The modules that also serve `tool`, besides the one that owns it.
     pub fn also_serving(&self, tool: &str) -> impl Iterator<Item = &str> {
-        self.filters().filter_map(move |(module, filter)| match filter {
-            ModuleFilter::AlsoServes(tools) if tools.contains(&tool) => Some(module),
-            _ => None,
-        })
+        self.filters()
+            .filter_map(move |(module, filter)| match filter {
+                ModuleFilter::AlsoServes(tools) if tools.contains(&tool) => Some(module),
+                _ => None,
+            })
     }
 
     /// Every module's export parts, with the module's id.

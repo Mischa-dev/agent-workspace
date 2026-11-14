@@ -9,6 +9,11 @@ The app's MCP server is how agents and connected apps do everything a person
 can. A tool is three pieces: argument and result types, a function that does
 the work, and a method in the tool router. The tests check the rest.
 
+Anything new is an operation, not a hand-written tool: follow
+`add-operation` (`.claude/skills/add-operation/SKILL.md`), which gives the
+MCP tool, the web route and the v2 API at once. This guide is for changing
+the hand-written tools that are still here.
+
 ## 1. Types and the function
 
 Put them in the module for the area, in `apps/server/src/mcp/` (tasks in

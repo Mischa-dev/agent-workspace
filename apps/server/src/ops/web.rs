@@ -80,6 +80,51 @@ async fn operation(
     call(&state, None, &name, &uri, &headers, body).await
 }
 
+/// A v1 route kept as a wrapper over its operation (K2.5): the signed-in
+/// person through the web edge, the `Idempotency-Key` header as the request
+/// id. The operation's value on success; its envelope, with the status its
+/// outcome maps to, on a refusal. The route checks CSRF itself, as before
+/// (a read over `GET` has none to check).
+pub(crate) async fn run_for_session(
+    state: &AppState,
+    headers: &HeaderMap,
+    principal: &auth::AuthenticatedActor,
+    name: &str,
+    input: serde_json::Value,
+) -> Result<serde_json::Value, Response> {
+    let kind = super::context::actor_kind_of(&principal.actor_kind)
+        .ok_or_else(|| AppError::AuthenticationRequired.into_response())?;
+    let text = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    };
+    let request = DispatchRequest {
+        caller: Caller::person(principal.actor_id, kind),
+        edge: Edge::Web {
+            session_id: principal.session_id,
+        },
+        trace_id: text(crate::REQUEST_ID_HEADER.as_str()),
+        workspace: None,
+        // v1 never asked for a request id: a write without one gets its own.
+        request_id: text("idempotency-key").or_else(|| {
+            registry()
+                .get(name)
+                .is_some_and(|entry| entry.meta.kind.writes())
+                .then(|| uuid::Uuid::now_v7().to_string())
+        }),
+        preview: false,
+    };
+    let mut outcome = dispatch(state, request, name, input).await;
+    if outcome.status == StatusCode::OK && outcome.body["outcome"] == "ok" {
+        return Ok(outcome.body["value"].take());
+    }
+    Err(answer(outcome))
+}
+
 fn answer(answer: Answer) -> Response {
     let retry_after = answer.body["details"]["retryAfterSeconds"]
         .as_u64()
