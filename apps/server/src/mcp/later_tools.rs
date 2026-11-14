@@ -16,7 +16,7 @@ use super::{
     },
     talk::{message_actor, message_content},
     tasks::resolve_task,
-    writes::{HeldCreate, REQUEST_ID_MESSAGE, parse_request_id},
+    writes::{CreateRetry, REQUEST_ID_MESSAGE, complete_create, parse_request_id, reserve_create},
 };
 use crate::{
     AppState,
@@ -524,34 +524,11 @@ pub(super) async fn message_schedule(
         },
         None => None,
     };
-    let retry = match HeldCreate::begin(
-        state,
-        principal,
-        "scheduled_messages",
-        retry_key.as_ref(),
-        &arguments,
-    )
-    .await
-    {
-        Ok(HeldCreate::Replay(id)) => {
-            return match scheduled_messages::get_scheduled(&state.pool, principal.actor_id, id)
-                .await
-            {
-                Ok(message) => ToolResult::ok(ScheduledValue {
-                    scheduled: scheduled_line(state, message),
-                    idempotent_replay: true,
-                }),
-                Err(error) => schedule_refusal(error, "message_schedule"),
-            };
-        }
-        Ok(retry) => retry,
-        Err(error) => return schedule_refusal(error, "message_schedule"),
-    };
     let content = match message_content(
         state,
         principal,
         arguments.text.as_deref(),
-        arguments.content,
+        arguments.content.clone(),
         "message_schedule",
     )
     .await
@@ -559,23 +536,54 @@ pub(super) async fn message_schedule(
         Ok(content) => content,
         Err(refused) => return refused,
     };
-    match scheduled_messages::schedule(
-        state,
-        &actor,
-        conversation_id,
-        content,
-        &arguments.send_at,
-        principal.actor_kind == ActorKind::Human,
-    )
-    .await
-    {
-        Ok(message) => match retry.finish(message.id).await {
-            Ok(()) => ToolResult::ok(ScheduledValue {
-                scheduled: scheduled_line(state, message),
-                idempotent_replay: false,
-            }),
-            Err(error) => schedule_refusal(error, "message_schedule"),
-        },
+    // The retry key and the scheduled message in one transaction on one
+    // connection: a retry waits for this one and answers with its message,
+    // and a crash leaves neither.
+    let scheduled = async {
+        let mut transaction = state.pool.begin().await?;
+        let reservation = match reserve_create(
+            &mut transaction,
+            principal,
+            "scheduled_messages",
+            retry_key.as_ref(),
+            &arguments,
+        )
+        .await?
+        {
+            CreateRetry::Fresh(reservation) => reservation,
+            CreateRetry::Replay(id, _) => {
+                transaction.commit().await?;
+                return Ok((id, true));
+            }
+        };
+        let id = scheduled_messages::schedule_in(
+            &mut transaction,
+            &actor,
+            conversation_id,
+            content,
+            &arguments.send_at,
+            principal.actor_kind == ActorKind::Human,
+        )
+        .await?;
+        complete_create(&mut transaction, reservation.as_ref(), id).await?;
+        transaction.commit().await?;
+        Ok::<_, AppError>((id, false))
+    }
+    .await;
+    // Read back as the author: only while they still see the conversation.
+    let read = match scheduled {
+        Ok((id, replayed)) => {
+            scheduled_messages::get_scheduled(&state.pool, principal.actor_id, id)
+                .await
+                .map(|message| (message, replayed))
+        }
+        Err(error) => Err(error),
+    };
+    match read {
+        Ok((message, idempotent_replay)) => ToolResult::ok(ScheduledValue {
+            scheduled: scheduled_line(state, message),
+            idempotent_replay,
+        }),
         Err(error) => schedule_refusal(error, "message_schedule"),
     }
 }

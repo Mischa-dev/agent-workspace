@@ -1372,8 +1372,20 @@ pub(super) async fn task_from_template(
         .await?
         {
             CreateRetry::Fresh(reservation) => reservation,
-            CreateRetry::Replay(_, kept) => {
+            CreateRetry::Replay(task_id, kept) => {
+                // Only while the task is still here, where the caller was
+                // just checked: it may have moved or gone since.
+                let here = sqlx::query_scalar::<_, bool>(
+                    "SELECT EXISTS (SELECT 1 FROM work_items WHERE id = $1 AND project_id = $2)",
+                )
+                .bind(task_id)
+                .bind(project_id)
+                .fetch_one(&mut *transaction)
+                .await?;
                 transaction.commit().await?;
+                if !here {
+                    return Ok(ToolResult::not_found("The task that request made"));
+                }
                 let value = serde_json::from_value::<TaskFromTemplateValue>(kept)
                     .map_err(|_| AppError::Internal("a stored task from a template"))?;
                 return Ok(ToolResult::ok(TaskFromTemplateValue {

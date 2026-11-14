@@ -15,7 +15,8 @@ use super::{
     McpPrincipal,
     briefing::LayoutLine,
     common::{
-        StoredRole, ToolResult, insert_audit, parse_id, project_role, public_url, role_allows,
+        StoredRole, ToolResult, accessible_project_ids, insert_audit, parse_id, project_role,
+        public_url, role_allows,
     },
     tasks::command_actor,
     workflow::Workflow,
@@ -782,6 +783,13 @@ pub(super) async fn project_create(
             CreateRetry::Fresh(reservation) => reservation,
             CreateRetry::Replay(project_id, _) => {
                 transaction.commit().await?;
+                // Only while the caller still belongs to it.
+                if !accessible_project_ids(state, principal)
+                    .await?
+                    .contains(&project_id)
+                {
+                    return Ok(ToolResult::not_found("The project that request made"));
+                }
                 return Ok(ToolResult::ok(ProjectValue {
                     idempotent_replay: true,
                     ..project_value(state, project_id).await?

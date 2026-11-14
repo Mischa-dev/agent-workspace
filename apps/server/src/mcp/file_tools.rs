@@ -23,7 +23,10 @@ use super::{
     common::{ToolResult, accessible_project_ids, confined_project, parse_id, parse_message_id},
     talk::{can_write_in, message_actor},
     tasks::resolve_task,
-    writes::{HeldCreate, REQUEST_ID_MESSAGE, WriteAccess, check_access_for, parse_request_id},
+    writes::{
+        CreateRetry, REQUEST_ID_MESSAGE, WriteAccess, check_access_for, complete_create,
+        parse_request_id, reserve_create,
+    },
 };
 use crate::{
     AppState,
@@ -439,23 +442,11 @@ pub(super) async fn file_upload(
         },
         None => None,
     };
-    let retry =
-        match HeldCreate::begin(state, principal, "files", retry_key.as_ref(), &arguments).await {
-            Ok(HeldCreate::Replay(file_id)) => {
-                return match files::readable_file(&state.pool, reader(principal), file_id).await {
-                    Ok(row) => ToolResult::ok(FileSummary {
-                        idempotent_replay: true,
-                        ..FileSummary::from(&row)
-                    }),
-                    Err(AppError::NotFound(_)) => {
-                        ToolResult::not_found("The file that request stored (it was removed since)")
-                    }
-                    Err(error) => ToolResult::from_error(error, "file_upload"),
-                };
-            }
-            Ok(retry) => retry,
-            Err(error) => return ToolResult::from_error(error, "file_upload"),
-        };
+    // What the retry key is checked against, before the arguments are used.
+    let retried = match serde_json::to_value(&arguments) {
+        Ok(retried) => retried,
+        Err(_) => return ToolResult::from_error(AppError::Internal("arguments"), "file_upload"),
+    };
     let bytes = match (arguments.text, arguments.data_base64) {
         (Some(text), None) => text.into_bytes(),
         (None, Some(data)) => match STANDARD.decode(data.trim()) {
@@ -472,7 +463,7 @@ pub(super) async fn file_upload(
         declared_type: arguments.content_type,
         bytes,
     };
-    let outcome = match (
+    let target = match (
         arguments.conversation_id.as_deref(),
         arguments.task_id.as_deref(),
     ) {
@@ -480,22 +471,88 @@ pub(super) async fn file_upload(
             let Some(conversation_id) = parse_id(conversation) else {
                 return ToolResult::invalid("conversationId", "Pass a conversation ID or link.");
             };
-            upload_to_conversation(state, principal, conversation_id, upload).await
+            conversation_destination(state, principal, conversation_id).await
         }
         (None, Some(task)) => {
             let for_comment = arguments.for_comment.unwrap_or(false);
-            upload_to_task(state, principal, task, for_comment, upload).await
+            task_destination(state, principal, task, for_comment).await
         }
         _ => {
             return ToolResult::invalid("conversationId", "Pass either conversationId or taskId.");
         }
     };
+    let outcome = async {
+        let (destination, limit) = target?;
+        if upload.bytes.len() > limit.min(MCP_FILE_BYTES) {
+            return Err(AppError::PayloadTooLarge);
+        }
+        let prepared = files::prepare_upload(upload).await?;
+        // The retry key, the file and its row in one transaction on one
+        // connection: a retry waits for this one and answers with its file,
+        // and a crash leaves neither.
+        let mut transaction = state.pool.begin().await?;
+        let reservation = match reserve_create(
+            &mut transaction,
+            principal,
+            "files",
+            retry_key.as_ref(),
+            &retried,
+        )
+        .await?
+        {
+            CreateRetry::Fresh(reservation) => reservation,
+            CreateRetry::Replay(file_id, _) => {
+                transaction.commit().await?;
+                return Ok((file_id, true, destination));
+            }
+        };
+        let row = files::store_prepared(
+            state,
+            &mut transaction,
+            principal.actor_id,
+            destination,
+            prepared,
+        )
+        .await?;
+        let kept = complete_create(&mut transaction, reservation.as_ref(), row.id).await;
+        let committed = match kept {
+            Ok(()) => transaction.commit().await.map_err(AppError::from),
+            Err(error) => Err(error),
+        };
+        if let Err(error) = committed {
+            files::discard_stored(state, &row).await;
+            return Err(error);
+        }
+        Ok((row.id, false, destination))
+    }
+    .await;
     let outcome = match outcome {
-        Ok(row) => retry.finish(row.id).await.map(|()| row),
+        Ok((file_id, replayed, destination)) => {
+            if let Destination::Task {
+                project_id,
+                work_item_id,
+                for_comment: false,
+            } = destination
+                && !replayed
+                && let Err(error) =
+                    crate::work_items::notify_files_changed(&state.pool, project_id, work_item_id)
+                        .await
+            {
+                return ToolResult::from_error(error, "file_upload");
+            }
+            // Read back as the caller, so a retry shows the file only while
+            // they may still see it.
+            files::readable_file(&state.pool, reader(principal), file_id)
+                .await
+                .map(|row| (row, replayed))
+        }
         Err(error) => Err(error),
     };
     match outcome {
-        Ok(row) => ToolResult::ok(FileSummary::from(&row)),
+        Ok((row, idempotent_replay)) => ToolResult::ok(FileSummary {
+            idempotent_replay,
+            ..FileSummary::from(&row)
+        }),
         Err(AppError::NotFound(_)) => {
             ToolResult::not_found("That conversation or task (or you can't post there)")
         }
@@ -572,12 +629,13 @@ pub(super) async fn file_delete(
     result.unwrap_or_else(|error| ToolResult::from_error(error, "file_delete"))
 }
 
-async fn upload_to_conversation(
+/// Where an upload to a conversation goes, and the most it may be, once
+/// the caller may post there.
+async fn conversation_destination(
     state: &AppState,
     principal: &McpPrincipal,
     conversation_id: Uuid,
-    upload: Upload,
-) -> Result<FileRow, AppError> {
+) -> Result<(Destination, usize), AppError> {
     let actor = message_actor(principal).map_err(|_| AppError::Forbidden)?;
     let mut transaction = state.pool.begin().await?;
     let conversation = lock_message_conversation(
@@ -588,36 +646,31 @@ async fn upload_to_conversation(
     )
     .await?;
     require_active_conversation(&conversation)?;
+    let limit = files::upload_limit(&mut transaction, conversation.project_id).await?;
+    transaction.commit().await?;
     if !accessible_project_ids(state, principal)
         .await?
         .contains(&conversation.project_id)
     {
         return Err(AppError::NotFound("conversation"));
     }
-    let limit = files::upload_limit(&mut transaction, conversation.project_id).await?;
-    transaction.commit().await?;
-    if upload.bytes.len() > limit.min(MCP_FILE_BYTES) {
-        return Err(AppError::PayloadTooLarge);
-    }
-    files::store_upload(
-        state,
-        principal.actor_id,
+    Ok((
         Destination::Conversation {
             project_id: conversation.project_id,
             conversation_id: conversation.id,
         },
-        upload,
-    )
-    .await
+        limit,
+    ))
 }
 
-async fn upload_to_task(
+/// Where an upload to a task goes, and the most it may be, once the caller
+/// may edit the task and it's open.
+async fn task_destination(
     state: &AppState,
     principal: &McpPrincipal,
     task: &str,
     for_comment: bool,
-    upload: Upload,
-) -> Result<FileRow, AppError> {
+) -> Result<(Destination, usize), AppError> {
     let Some((work_item_id, project_id)) = resolve_task(state, principal, task).await? else {
         return Err(AppError::NotFound("work_item"));
     };
@@ -642,23 +695,12 @@ async fn upload_to_task(
     }
     let mut connection = state.pool.acquire().await?;
     let limit = files::upload_limit(&mut connection, project_id).await?;
-    drop(connection);
-    if upload.bytes.len() > limit.min(MCP_FILE_BYTES) {
-        return Err(AppError::PayloadTooLarge);
-    }
-    let row = files::store_upload(
-        state,
-        principal.actor_id,
+    Ok((
         Destination::Task {
             project_id,
             work_item_id,
             for_comment,
         },
-        upload,
-    )
-    .await?;
-    if !for_comment {
-        crate::work_items::notify_files_changed(&state.pool, project_id, work_item_id).await?;
-    }
-    Ok(row)
+        limit,
+    ))
 }

@@ -1371,13 +1371,19 @@ async fn a_slow_runner_doesnt_hold_a_database_connection() {
         .expect("the wakeup is posted")
         .expect("runner");
 
-    // While the runner sleeps: no connection is out of the pool, and the
-    // delivery row is free to lock.
-    assert_eq!(
-        pool.size() as usize - pool.num_idle(),
-        0,
-        "connections in use while a wakeup is posted"
-    );
+    // While the runner sleeps (five seconds): no connection is out of the
+    // pool, and the delivery row is free to lock. A dropped connection goes
+    // back to the pool in the background, so give it a moment to settle; a
+    // delivery that held one through the post would hold it all along.
+    let mut in_use = usize::MAX;
+    for _ in 0..40 {
+        in_use = pool.size() as usize - pool.num_idle();
+        if in_use == 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(in_use, 0, "connections in use while a wakeup is posted");
     let mut transaction = pool.begin().await.expect("begin");
     let locked = sqlx::query_scalar::<_, uuid::Uuid>(
         "SELECT id FROM agent_webhook_deliveries WHERE delivered_at IS NULL FOR UPDATE NOWAIT",

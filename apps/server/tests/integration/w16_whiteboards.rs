@@ -961,7 +961,7 @@ async fn creating_or_copying_a_board_again_makes_one() {
     let board = created["value"]["whiteboard"]["id"]
         .as_str()
         .expect("board");
-    creates_once(
+    let copied = creates_once(
         app,
         &setup.pool,
         &token,
@@ -972,6 +972,44 @@ async fn creating_or_copying_a_board_again_makes_one() {
         boards,
     )
     .await;
+    let copy = copied["value"]["whiteboard"]["id"].as_str().expect("copy");
+
+    // Both boards move to a project Rook isn't in, renamed: a retry now
+    // finds nothing and names neither board, project nor editors.
+    let secret = create_project(&setup, "SEC", "Secret project").await;
+    for id in [board, copy] {
+        sqlx::query(
+            "UPDATE whiteboards SET project_id = $2::uuid, title = 'Hidden plans' WHERE id = $1::uuid",
+        )
+        .bind(id)
+        .bind(&secret)
+        .execute(&setup.pool)
+        .await
+        .expect("move the board");
+    }
+    for (name, arguments) in [
+        (
+            "whiteboard_create",
+            json!({
+                "title": "Launch flow",
+                "projectId": work,
+                "operations": [{"op": "add", "type": "rectangle", "id": "plan", "text": "Plan"}],
+                "clientRequestId": "board-retry-1",
+            }),
+        ),
+        (
+            "whiteboard_duplicate",
+            json!({"whiteboardId": board, "clientRequestId": "copy-retry-1"}),
+        ),
+    ] {
+        let replay = tool(app, &token, &session, name, arguments).await;
+        assert_eq!(replay["outcome"], "not_found", "{name}: {replay}");
+        let text = replay.to_string();
+        assert!(
+            !text.contains("Hidden plans") && !text.contains("Secret project"),
+            "{name} replay leaks the moved board: {replay}"
+        );
+    }
 }
 
 #[tokio::test]

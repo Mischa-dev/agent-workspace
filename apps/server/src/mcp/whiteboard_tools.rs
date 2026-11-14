@@ -669,6 +669,9 @@ pub(super) async fn whiteboard_create(
         {
             CreateRetry::Fresh(reservation) => reservation,
             CreateRetry::Replay(id, kept) => {
+                // Only while the caller may still see the board: it may have
+                // moved somewhere they can't since.
+                whiteboards::access(&mut transaction, &caller, id, false).await?;
                 transaction.commit().await?;
                 let edit = serde_json::from_value(kept["edit"].clone()).unwrap_or(None);
                 return Ok((id, edit, true));
@@ -1075,7 +1078,11 @@ pub(super) async fn whiteboard_duplicate(
         )
         .await?
         {
-            CreateRetry::Replay(copy, _) => (copy, true),
+            CreateRetry::Replay(copy, _) => {
+                // Only while the caller may still see the copy.
+                whiteboards::access(&mut transaction, &caller, copy, false).await?;
+                (copy, true)
+            }
             CreateRetry::Fresh(reservation) => {
                 let copy = whiteboards::duplicate(
                     &mut transaction,
