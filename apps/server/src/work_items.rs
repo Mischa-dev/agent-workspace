@@ -3852,6 +3852,19 @@ macro_rules! field_values_columns {
                 JOIN project_pages page
                   ON page.project_id = item.project_id AND page.id::text = stored.target
                  AND page.archived_at IS NULL
+                UNION ALL
+                SELECT jsonb_build_object('id', linked.id, 'kind', 'record',
+                         'label', CASE WHEN linked.title = '' THEN 'Untitled #' || linked.number::text
+                                       ELSE linked.title END,
+                         'key', '#' || linked.number)
+                FROM jsonb_each_text(item.field_values) AS stored(field_id, target)
+                JOIN field_definitions definition
+                  ON definition.project_id = item.project_id
+                 AND definition.id::text = stored.field_id AND definition.field_type = 'link'
+                 AND definition.config ->> 'target' = 'record'
+                JOIN collection_records linked
+                  ON linked.project_id = item.project_id AND linked.id::text = stored.target
+                 AND linked.archived_at IS NULL
             ) reference
         ), '[]'::jsonb) AS field_references
         "#

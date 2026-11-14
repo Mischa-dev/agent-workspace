@@ -30,7 +30,29 @@ async fn a_collection_that_acts_like_a_task_holds_tasks() {
         async move { tool(app, &codex, &session, name, arguments).await }
     };
 
-    // A plain task first, so the project's task numbers are ahead of the
+    // In a project with no tasks yet (so no built-in Tasks collection), a
+    // collection made to act like a task reads its tasks.
+    let made = call(
+        "collection_write",
+        json!({"projectId": "WORK", "name": "Chores", "actsLikeTask": true}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let chore = call(
+        "task_create",
+        json!({"projectId": "WORK", "collection": "Chores", "title": "Water the plants", "clientRequestId": "chore"}),
+    )
+    .await;
+    assert_eq!(chore["outcome"], "applied", "{chore}");
+    let chores = call(
+        "record_query",
+        json!({"projectId": "WORK", "collection": "Chores"}),
+    )
+    .await;
+    assert_eq!(chores["value"]["total"], 1, "{chores}");
+    assert_eq!(chores["value"]["records"][0]["title"], "Water the plants");
+
+    // A plain task next, so the project's task numbers are ahead of the
     // records' own.
     let plain = call(
         "task_create",
@@ -112,10 +134,10 @@ async fn a_collection_that_acts_like_a_task_holds_tasks() {
     assert_eq!(rows.len(), 2, "every record has its task");
     assert_eq!(rows[0].1, "Crash on save");
     assert_eq!(
-        rows[0].2, 2,
-        "after the plain task, in the project's sequence"
+        rows[0].2, 3,
+        "after the chore and the plain task, in the project's sequence"
     );
-    assert_eq!(rows[1].2, 3);
+    assert_eq!(rows[1].2, 4);
     for row in &rows {
         assert_eq!(row.2, row.3, "the record takes its task's number");
         assert_eq!(row.5, Some(bugs));
@@ -223,7 +245,7 @@ async fn a_collection_that_acts_like_a_task_holds_tasks() {
     let project = call("project_open", json!({"projectId": "WORK"})).await;
     assert_eq!(
         project["value"]["taskCollections"],
-        json!(["Bugs"]),
+        json!(["Chores", "Bugs"]),
         "{project}"
     );
 

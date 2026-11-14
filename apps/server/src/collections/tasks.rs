@@ -243,7 +243,7 @@ pub fn source() -> String {
            task.created_by_actor_id, task.created_by_actor_id AS updated_by_actor_id, \
            task.archived_at, task.version, task.created_at, task.updated_at \
          FROM work_items task \
-         JOIN collections tasks ON tasks.project_id = task.project_id AND tasks.builtin = '{BUILTIN}')",
+         LEFT JOIN collections tasks ON tasks.project_id = task.project_id AND tasks.builtin = '{BUILTIN}')",
         priority = priority_value(),
     )
 }
