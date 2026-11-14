@@ -359,6 +359,57 @@ async fn a_launch_to_a_runner_gives_it_a_run_its_reply_calls_move() {
         .expect("settle");
     assert_eq!(run_row(pool, silent_run).await.0, "cancelled");
 
+    // Stopping a claimed launched run from the run itself goes through its
+    // request: the claim is revoked and the runner hears reply.cancelled,
+    // which today's SDKs stop on.
+    let halted = launch(task("Rebuild the index", "t6").await, "l6").await;
+    let halted_run = uuid_at(&halted, "/runId");
+    let halted_request = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT request.id FROM reply_requests request
+        JOIN launches launch ON launch.handoff_message_id = request.message_id
+        WHERE launch.id = $1 AND request.agent_actor_id = $2
+        "#,
+    )
+    .bind(uuid_at(&halted, "/id"))
+    .bind(runner)
+    .fetch_one(pool)
+    .await
+    .expect("request");
+    let claimed = runner_call("reply_claim", json!({"requestId": halted_request})).await;
+    assert_eq!(claimed["value"]["run"]["state"], "working", "{claimed}");
+    let halt = owner_call(
+        "run_cancel",
+        json!({"runId": halted_run, "reason": "Wrong index", "clientRequestId": "stop-6"}),
+    )
+    .await;
+    assert_eq!(halt["outcome"], "ok", "{halt}");
+    assert_eq!(halt["value"]["run"]["state"], "cancel_requested", "{halt}");
+    let (request_status, heard) = sqlx::query_as::<_, (String, i64)>(
+        r#"
+        SELECT (SELECT status FROM reply_requests WHERE id = $1),
+               (SELECT count(*) FROM external_agent_events
+                WHERE kind = 'reply.cancelled' AND resource_id = $1)
+        "#,
+    )
+    .bind(halted_request)
+    .fetch_one(pool)
+    .await
+    .expect("request");
+    assert_eq!(request_status, "cancelled");
+    assert!(heard >= 1, "the runner hears reply.cancelled");
+    let late = runner_call(
+        "reply_send",
+        json!({"requestId": halted_request, "generation": claimed["value"]["request"]["generation"],
+               "text": "Done anyway."}),
+    )
+    .await;
+    assert_ne!(late["outcome"], "ok", "the claim is gone: {late}");
+    agent_workspace_server::runs::liveness::settle(pool)
+        .await
+        .expect("settle");
+    assert_eq!(run_row(pool, halted_run).await.0, "cancelled");
+
     // A lease that ran out fails the run, with the reason.
     let lapsed = launch(task("Check the links", "t5").await, "l5").await;
     let lapsed_run = uuid_at(&lapsed, "/runId");

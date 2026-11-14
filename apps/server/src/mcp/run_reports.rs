@@ -907,6 +907,19 @@ pub(super) async fn run_cancel(
             Keyed::Refused(refused) => return Ok(refused),
             Keyed::Reserved(reservation) => reservation,
         };
+        // A launched run stops through its reply request, so a runner that
+        // only knows the reply tools hears it and loses its claim (A1.4).
+        if let Some(request_id) =
+            crate::runs::launch_paths::open_request_of(&mut transaction, run_id).await?
+        {
+            crate::replies::stop_for_run(
+                &mut transaction,
+                principal.actor_id,
+                request_id,
+                arguments.reason.clone(),
+            )
+            .await?;
+        }
         let run = match ops::request_cancel(
             &mut transaction,
             principal.actor_id,

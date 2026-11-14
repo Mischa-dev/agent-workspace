@@ -316,18 +316,44 @@ pub async fn stopped(
     by: Uuid,
     agent_account_id: Uuid,
     request_ids: &[Uuid],
+    reason: Option<String>,
 ) -> Result<(), AppError> {
     for request_id in request_ids {
         let Some(run) = for_reply_request(transaction, agent_account_id, *request_id).await? else {
             continue;
         };
-        match ops::request_cancel(transaction, by, run.id, None).await {
+        match ops::request_cancel(transaction, by, run.id, reason.clone()).await {
             Ok(_) | Err(RunOpError::NotFound | RunOpError::Conflict(_)) => {}
             Err(RunOpError::App(error)) => return Err(error),
             Err(_) => {}
         }
     }
     Ok(())
+}
+
+/// The reply request a launched run still answers, if it is open: a stop
+/// on the run goes through it so the runner hears it (A1.4).
+pub async fn open_request_of(
+    transaction: &mut Transaction<'_, Postgres>,
+    run_id: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT request.id
+        FROM runs run
+        JOIN reply_requests request
+          ON request.message_id = run.cause_message_id
+         AND request.agent_actor_id = run.account_id
+        WHERE run.id = $1 AND run.launch_id IS NOT NULL
+          AND request.status IN ('pending', 'claimed')
+          AND NOT EXISTS (SELECT 1 FROM agent_runs builtin WHERE builtin.id = run.id)
+        ORDER BY request.updated_at DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(run_id)
+    .fetch_optional(&mut **transaction)
+    .await?)
 }
 
 /// The runner bound a session in a conversation (`session_bind`): its
