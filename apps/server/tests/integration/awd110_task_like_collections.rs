@@ -241,6 +241,23 @@ async fn a_collection_that_acts_like_a_task_holds_tasks() {
     .await;
     assert_eq!(updated["outcome"], "applied", "{updated}");
 
+    // Many at once: each task takes its own collection's fields, and a
+    // field another collection has is refused.
+    let many = call(
+        "task_update_many",
+        json!({"projectId": "WORK", "taskIds": [crash.to_string(), loops.to_string()],
+               "fields": {"Severity": "High"}, "clientRequestId": "many"}),
+    )
+    .await;
+    assert_eq!(many["outcome"], "ok", "{many}");
+    let mixed = call(
+        "task_update_many",
+        json!({"projectId": "WORK", "taskIds": [crash.to_string(), "WORK-2"],
+               "fields": {"Severity": "Low"}, "clientRequestId": "mixed"}),
+    )
+    .await;
+    assert_eq!(mixed["outcome"], "rejected", "{mixed}");
+
     // project_open lists the collection.
     let project = call("project_open", json!({"projectId": "WORK"})).await;
     assert_eq!(

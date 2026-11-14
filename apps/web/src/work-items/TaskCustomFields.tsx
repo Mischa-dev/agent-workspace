@@ -47,7 +47,7 @@ export function TaskCustomFields({
       : { projectId: item.projectId },
   )
   const [editing, setEditing] = useState<{ field: FieldDefinition; anchor: HTMLElement } | null>(null)
-  const definitions = (fields.data?.fields ?? []).filter((field) => !BUILT_IN.has(field.id))
+  const definitions = (fields.data?.fields ?? []).filter((field) => !field.archived && !BUILT_IN.has(field.id))
   if (!definitions.length) return null
   const set = (field: FieldDefinition, value: FieldValue | null) => {
     // Against what the person sees now, their own change on its way

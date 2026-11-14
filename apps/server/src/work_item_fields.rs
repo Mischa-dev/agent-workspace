@@ -82,6 +82,29 @@ pub async fn task_collection(
     .flatten())
 }
 
+/// The fields one task's values follow, with `plain` (the project's task
+/// fields, already read) for a plain task, so a bulk change reads each
+/// collection's only for its own tasks.
+pub async fn definitions_for_task_or(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    task_id: Uuid,
+    plain: &[FieldDefinition],
+) -> Result<Vec<FieldDefinition>, AppError> {
+    match task_collection(&mut *connection, project_id, task_id).await? {
+        Some(collection) => {
+            fields::list(
+                &mut *connection,
+                project_id,
+                RecordKind::Collection(collection),
+                true,
+            )
+            .await
+        }
+        None => Ok(plain.to_vec()),
+    }
+}
+
 /// The fields one task's values follow (see `kind_of`).
 pub async fn definitions_for_task(
     connection: &mut PgConnection,

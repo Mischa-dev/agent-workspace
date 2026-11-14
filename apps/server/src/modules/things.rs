@@ -217,7 +217,7 @@ const RECORDS_SQL: &str = r#"
     WHERE record.id = ANY($1) AND record.project_id = ANY($2)
       AND record.archived_at IS NULL AND collection.archived_at IS NULL
       -- A task's record (the built-in Tasks collection) is the task.
-      AND NOT collection.acts_like_task
+      AND collection.builtin IS NULL
 "#;
 
 fn resolver(kind: &str) -> Option<&'static str> {
