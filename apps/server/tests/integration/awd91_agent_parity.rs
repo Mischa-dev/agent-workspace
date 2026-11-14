@@ -1,4 +1,4 @@
-//! AWD-91: the agent parity scenario. Mischa's bar is that an agent can do
+//! AWD-91: the agent parity scenario. The owner's bar is that an agent can do
 //! everything a person can in a project, so this walks one agent from a goal
 //! in an empty project to a finished run, through MCP alone: it writes the
 //! plan page, builds a collection, draws a whiteboard, creates tasks with

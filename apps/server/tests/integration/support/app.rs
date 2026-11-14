@@ -313,7 +313,13 @@ pub(crate) async fn creates_once(
     assert!(first["value"].get("idempotentReplay").is_none(), "{first}");
     let again = tool(app, token, session, name, arguments).await;
     let mut expected = first.clone();
-    expected["value"]["idempotentReplay"] = json!(true);
+    if first.get("replayed").is_some() {
+        // An operation (build 1O): the dispatcher marks the replay on the
+        // envelope, not in the value.
+        expected["replayed"] = json!(true);
+    } else {
+        expected["value"]["idempotentReplay"] = json!(true);
+    }
     assert_eq!(again, expected, "a retry answers the first call");
     assert_eq!(counted().await, before + 1, "{name} made one thing");
     let refused = tool(app, token, session, name, different).await;

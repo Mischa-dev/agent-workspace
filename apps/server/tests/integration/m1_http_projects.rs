@@ -45,8 +45,8 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
     let bootstrapped = bootstrap_admin(
         &pool,
         BootstrapCommand {
-            login_name: "mischa".to_owned(),
-            display_name: "Mischa Nelson".to_owned(),
+            login_name: "ada".to_owned(),
+            display_name: "Ada Owner".to_owned(),
             organization_name: Some("Personal".to_owned()),
             organization_slug: Some(format!("personal-{}", Uuid::now_v7().simple())),
             adopt_actor_id: None,
@@ -63,7 +63,7 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
         "/api/v1/auth/login",
         &[("origin", "http://127.0.0.1:3100")],
         json!({
-            "loginName": "mischa",
+            "loginName": "ada",
             "password": "correct horse battery staple"
         }),
     );
@@ -97,7 +97,7 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
                 ("cookie", cookie_header.as_str()),
             ],
             json!({
-                "loginName": "mischa",
+                "loginName": "ada",
                 "password": "correct horse battery staple"
             }),
         ))
@@ -827,7 +827,7 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
             "/api/v1/auth/login",
             &[("origin", "http://127.0.0.1:3100")],
             json!({
-                "loginName": "mischa",
+                "loginName": "ada",
                 "password": "correct horse battery staple"
             }),
         ))
