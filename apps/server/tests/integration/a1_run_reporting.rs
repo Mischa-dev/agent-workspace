@@ -9,6 +9,7 @@ use uuid::Uuid;
 use super::{
     agent_interface::{connect_app, create_agent, initialize, tool},
     mcp_admin::{create_project, setup},
+    mcp_tasks::add_member,
 };
 
 #[tokio::test]
@@ -235,10 +236,23 @@ async fn a_person_stops_an_agents_run_and_the_agent_hears_it() {
 
     // A person who may stop runs there asks; a retry with the same
     // clientRequestId asks once.
-    let cancel = json!({"runId": run_id, "reason": "Wrong branch", "clientRequestId": "stop-1"});
+    // The longest reason (200 characters) still fits the status line.
+    let reason = format!("Wrong branch. {}", "x".repeat(186));
+    let cancel = json!({"runId": run_id, "reason": reason, "clientRequestId": "stop-1"});
     let asked = tool(app, &person, &desk, "run_cancel", cancel.clone()).await;
     assert_eq!(asked["outcome"], "ok", "{asked}");
     assert_eq!(asked["value"]["run"]["state"], "cancel_requested");
+    let status_line =
+        sqlx::query_scalar::<_, Option<String>>("SELECT status_line FROM runs WHERE id = $1")
+            .bind(run_id.parse::<Uuid>().expect("run UUID"))
+            .fetch_one(&setup.pool)
+            .await
+            .expect("status line")
+            .expect("a status line");
+    assert!(
+        status_line.starts_with("Stop asked: Wrong branch.") && status_line.chars().count() == 200,
+        "{status_line}"
+    );
     let again = tool(app, &person, &desk, "run_cancel", cancel).await;
     assert_eq!(again["value"]["idempotentReplay"], true, "{again}");
     let heard = sqlx::query_scalar::<_, i64>(
@@ -272,4 +286,84 @@ async fn a_person_stops_an_agents_run_and_the_agent_hears_it() {
     )
     .await;
     assert_eq!(refused["outcome"], "conflict", "{refused}");
+}
+
+#[tokio::test]
+async fn a_retried_open_never_answers_with_a_run_from_elsewhere() {
+    use agent_workspace_server::runs::{
+        ops::{self, Cause, Reporter, RunOpError, RunOpen},
+        state::RunState,
+    };
+
+    let Some(setup) = setup("a1_run_replay").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let home = create_project(&setup, "HOME", "Home").await;
+    let (fixer_id, fixer_token) = create_agent(app, &setup.browser, &work, "Fixer", "fixer").await;
+    add_member(&setup, &home, fixer_id, "member").await;
+    let fixer = initialize(app, &fixer_token).await.expect("Fixer MCP");
+    let open = |project: &'static str| {
+        json!({"projectId": project, "clientRunId": "nightly",
+               "title": "Quiet merger talks", "cause": {"kind": "manual"}})
+    };
+    let opened = tool(app, &fixer_token, &fixer, "run_open", open("WORK")).await;
+    assert_eq!(opened["outcome"], "ok", "{opened}");
+    let run_id = opened["value"]["run"]["runId"]
+        .as_str()
+        .expect("run")
+        .to_owned();
+
+    // The same clientRunId from the other project: refused, and nothing
+    // about the first run comes back.
+    let elsewhere = tool(app, &fixer_token, &fixer, "run_open", open("HOME")).await;
+    assert_ne!(elsewhere["outcome"], "ok", "{elsewhere}");
+    let said = elsewhere.to_string();
+    assert!(
+        !said.contains(&run_id) && !said.contains("Quiet merger"),
+        "{said}"
+    );
+
+    // Gone from the first project, a replay there finds nothing either,
+    // even below the tool's own check.
+    sqlx::query(
+        "UPDATE project_memberships SET enabled = false WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(work.parse::<Uuid>().expect("project"))
+    .bind(fixer_id)
+    .execute(&setup.pool)
+    .await
+    .expect("leave the project");
+    let mut transaction = setup.pool.begin().await.expect("transaction");
+    let replay = ops::open(
+        &mut transaction,
+        Reporter::Account {
+            account_id: fixer_id,
+        },
+        RunOpen {
+            space_id: work.parse().expect("project"),
+            client_run_id: Some("nightly".to_owned()),
+            title: "Anything".to_owned(),
+            cause: Cause {
+                kind: "manual".to_owned(),
+                conversation_id: None,
+                work_item_id: None,
+                message_id: None,
+                reference: None,
+            },
+            parent_run_id: None,
+            report_interval_seconds: None,
+            settings: None,
+            initial: RunState::Working,
+            requested_by: None,
+            via_app_id: None,
+            launch_id: None,
+        },
+    )
+    .await;
+    assert!(
+        matches!(replay, Err(RunOpError::NotFound)),
+        "a replay where the account no longer belongs finds nothing"
+    );
 }

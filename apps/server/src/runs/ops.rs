@@ -298,10 +298,7 @@ pub async fn open(
     if let Some(client_run_id) = &client_run_id
         && let Some(run) = existing_by_client_id(transaction, account_id, client_run_id).await?
     {
-        return Ok(Opened {
-            run,
-            created: false,
-        });
+        return replayed(transaction, account_id, input.space_id, run).await;
     }
     let title = line(
         &input.title,
@@ -463,10 +460,7 @@ pub async fn open(
     if let Some(client_run_id) = &client_run_id
         && let Some(run) = existing_by_client_id(transaction, account_id, client_run_id).await?
     {
-        return Ok(Opened {
-            run,
-            created: false,
-        });
+        return replayed(transaction, account_id, input.space_id, run).await;
     }
     let open_runs = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM runs WHERE account_id = $1 AND state = ANY($2)",
@@ -543,6 +537,45 @@ pub async fn open(
     }
     emit(transaction, &run, "opened").await?;
     Ok(Opened { run, created: true })
+}
+
+/// A retried `run_open` answers with the run it opened, but only where the
+/// caller could open it now: in the same project, which it still belongs
+/// to, and in a conversation it still sees. A `clientRunId` already used in
+/// another project is refused without saying anything about that run.
+async fn replayed(
+    transaction: &mut Transaction<'_, Postgres>,
+    account_id: Uuid,
+    space_id: Uuid,
+    run: RunRow,
+) -> Result<Opened, RunOpError> {
+    if run.space_id != Some(space_id) {
+        return Err(RunOpError::Conflict(
+            "That clientRunId already names another of your runs. Use a new one.".to_owned(),
+        ));
+    }
+    let reachable = sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+                   SELECT 1 FROM project_memberships membership
+                   JOIN projects project ON project.id = membership.project_id
+                   WHERE membership.project_id = $2 AND membership.actor_id = $1
+                     AND membership.enabled AND project.archived_at IS NULL)
+           AND ($3::uuid IS NULL OR conversation_visible_to($3, $1))
+        "#,
+    )
+    .bind(account_id)
+    .bind(space_id)
+    .bind(run.conversation_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if !reachable {
+        return Err(RunOpError::NotFound);
+    }
+    Ok(Opened {
+        run,
+        created: false,
+    })
 }
 
 async fn existing_by_client_id(
@@ -1218,7 +1251,13 @@ pub async fn request_cancel(
     ))
     .bind(saved.id)
     .bind(by)
-    .bind(reason.map(|reason| format!("Stop asked: {reason}")))
+    // The status line holds 200 characters; the prefix comes out of them.
+    .bind(reason.map(|reason| {
+        format!("Stop asked: {reason}")
+            .chars()
+            .take(MAX_LINE_CHARS)
+            .collect::<String>()
+    }))
     .fetch_one(&mut **transaction)
     .await?;
     emit(
