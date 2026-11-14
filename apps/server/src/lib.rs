@@ -61,6 +61,7 @@ pub mod onboarding;
 pub mod ops;
 pub mod outbound;
 pub mod outbox;
+pub mod packages;
 pub mod page_blocks;
 pub mod page_docs;
 pub mod password_reset;

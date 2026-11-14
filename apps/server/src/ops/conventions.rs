@@ -9,7 +9,7 @@ use super::{Idempotency, OpKind, OpMeta};
 /// The verbs each kind may use: `<thing>_<verb>`.
 pub const VERBS: &[(OpKind, &[&str])] = &[
     (OpKind::Describe, &["get", "open"]),
-    (OpKind::Query, &["list", "search", "history"]),
+    (OpKind::Query, &["list", "search", "history", "export"]),
     (
         OpKind::Create,
         &[
@@ -238,10 +238,9 @@ mod tests {
                     folders.push(path);
                 } else if path.file_name().is_some_and(|name| name == "ops.rs")
                     && let Ok(text) = std::fs::read_to_string(&path)
+                    && (text.contains("ActorKind::") || text.contains("actor_kind =="))
                 {
-                    if text.contains("ActorKind::") || text.contains("actor_kind ==") {
-                        found.push(path.display().to_string());
-                    }
+                    found.push(path.display().to_string());
                 }
             }
         }

@@ -83,6 +83,7 @@ mod oauth_agent;
 mod ops_decisions;
 mod ops_edges;
 mod ops_kernel;
+mod packages;
 mod phase3_takedown;
 mod phase4_groundwork;
 mod polish_leftovers;

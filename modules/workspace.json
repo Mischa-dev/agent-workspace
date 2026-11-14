@@ -30,6 +30,7 @@
     "workspace_template_list": "query",
     "workspace_template_apply": "change",
     "workspace_template_save": "create",
+    "package_export": "query",
     "role_assign": "change",
     "thing_open": "describe"
   },

@@ -12,5 +12,7 @@ impl CoreModule for Module {
         include_str!("../../../../../../modules/workspace.json")
     }
 
-    fn register(&self, _module: &mut Registrar<'_>) {}
+    fn register(&self, module: &mut Registrar<'_>) {
+        module.operations(crate::packages::ops::register_ops);
+    }
 }
