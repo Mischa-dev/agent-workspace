@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 
-import { liveUrl } from '../api/client'
+import { origins } from '../api/client'
 import { queryKeys } from '../api/queryKeys'
 import { currentQueryScopeGeneration } from '../api/queryScope'
 import { coalesceDeltaBatch } from '../app/streaming'
@@ -40,7 +40,8 @@ const MAX_RECONNECT_DELAY_MS = 10_000
 const RESUME_RECONNECT_AFTER_MS = 30_000
 
 function websocketUrl() {
-  return liveUrl('/api/v1/realtime')
+  // The live origin from client-config (H1.41), as ws or wss.
+  return `${(origins.live ?? window.location.origin).replace(/^http/, 'ws')}/api/v1/realtime`
 }
 
 /**

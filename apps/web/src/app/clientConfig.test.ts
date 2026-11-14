@@ -1,14 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { apiUrl, liveUrl, requestJson, setApiOrigins } from '../api/client'
-import { loadClientConfig } from './clientConfig'
+import { apiUrl, origins, requestJson } from '../api/client'
+import { load as loadClientConfig } from './clientConfig'
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 
 afterEach(() => {
   vi.unstubAllGlobals()
-  setApiOrigins({ api: null, live: null })
+  Object.assign(origins, { api: undefined, live: undefined, csrf: undefined })
 })
 
 describe('client config (H1.41)', () => {
@@ -21,7 +21,7 @@ describe('client config (H1.41)', () => {
     expect(config.apiOrigin).toBeNull()
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(apiUrl('/api/v1/projects')).toBe('/api/v1/projects')
-    expect(liveUrl('/api/v1/realtime')).toBe(`${window.location.origin.replace(/^http/, 'ws')}/api/v1/realtime`)
+    expect(origins.live).toBeUndefined()
   })
 
   it('keeps to its own origin with no answer at all', async () => {
@@ -43,7 +43,7 @@ describe('client config (H1.41)', () => {
     const config = await loadClientConfig()
     expect(config.apiOrigin).toBe('https://api.example.com')
     expect(fetchMock.mock.calls[1][0]).toBe('https://api.example.com/client-config')
-    expect(liveUrl('/api/v1/realtime')).toBe('wss://live.example.com/api/v1/realtime')
+    expect(origins.live).toBe('https://live.example.com')
 
     await requestJson('/api/v1/projects', { method: 'POST', json: { name: 'P' } })
     expect(fetchMock.mock.calls[2][0]).toBe('https://api.example.com/api/v1/auth/csrf')
@@ -53,17 +53,21 @@ describe('client config (H1.41)', () => {
     expect(new Headers(init.headers).get('x-csrf-token')).toBe('token-1')
   })
 
-  it('fetches a new request token once when the old one is refused', async () => {
-    setApiOrigins({ api: 'https://api.example.com', live: null })
+  it('reads the current request token before each write', async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(json({ csrfToken: 'stale' }))
-      .mockResolvedValueOnce(json({ error: { code: 'csrf_token_invalid', message: 'no' } }, 403))
-      .mockResolvedValueOnce(json({ csrfToken: 'fresh' }))
+      .mockResolvedValueOnce(json({ apiOrigin: 'https://api.example.com' }))
+      .mockResolvedValueOnce(json({ apiOrigin: 'https://api.example.com' }))
+      .mockResolvedValueOnce(json({ csrfToken: 'first' }))
+      .mockResolvedValueOnce(json({ ok: true }))
+      .mockResolvedValueOnce(json({ csrfToken: 'after-sign-in' }))
       .mockResolvedValueOnce(json({ ok: true }))
     vi.stubGlobal('fetch', fetchMock)
+    await loadClientConfig()
 
-    await expect(requestJson('/api/v1/projects', { method: 'POST', json: {} })).resolves.toEqual({ ok: true })
-    expect(new Headers(fetchMock.mock.calls[3][1].headers).get('x-csrf-token')).toBe('fresh')
+    await requestJson('/api/v1/projects', { method: 'POST', json: {} })
+    await requestJson('/api/v1/projects', { method: 'POST', json: {} })
+    expect(new Headers(fetchMock.mock.calls[3][1].headers).get('x-csrf-token')).toBe('first')
+    expect(new Headers(fetchMock.mock.calls[5][1].headers).get('x-csrf-token')).toBe('after-sign-in')
   })
 })

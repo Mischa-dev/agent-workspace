@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { WorkOsAgentSettings } from './WorkOsAgentSettings'
 import { toastError } from '../app/mutations'
-import { apiOriginForDisplay } from '../api/client'
+import { apiUrl } from '../api/client'
 import { queryKeys } from '../api/queryKeys'
 import { OneTimeValue } from '../settings/OneTimeValue'
 import {
@@ -826,7 +826,7 @@ function OneTimeToken({
         </>
       ) : null}
       <p className="aw-token__help" hidden={runner}>
-        Point the agent’s MCP client at <code>{`${apiOriginForDisplay()}/api/v1/mcp`}</code> with this token, or send it the{' '}
+        Point the agent’s MCP client at <code>{new URL(apiUrl('/api/v1/mcp'), window.location.href).href}</code> with this token, or send it the{' '}
         <a href="/connect.md" rel="noreferrer" target="_blank">
           setup guide
         </a>{' '}
