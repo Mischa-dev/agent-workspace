@@ -32,8 +32,6 @@ const ENGINE: &[&str] = &["src/views/", "src/fields/", "src/fields.rs"];
 /// Today's other definitions, file by file. Lower a number when a
 /// definition goes; never raise one or add a file.
 const ALLOWED: &[(&str, usize)] = &[
-    // The collections' engine, until T1.5 moves it into src/views/.
-    ("src/collections/query.rs", 3),
     // Cursors over other lists (runs, external events), not views.
     ("src/external_events.rs", 1),
     ("src/run_views.rs", 1),

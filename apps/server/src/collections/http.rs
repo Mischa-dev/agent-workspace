@@ -39,8 +39,8 @@ use crate::{
     conversations::parse_actor_kind,
     error::{ApiJson, ApiPath, ApiQuery, AppError},
     fields::{
-        self, ChangeFieldOutcome, CreateFieldOutcome, FieldChange, FieldClause, FieldDefinition,
-        FieldType, FieldView, NewField, OptionInput,
+        self, ChangeFieldOutcome, CreateFieldOutcome, FieldChange, FieldDefinition, FieldType,
+        FieldView, NewField, OptionInput,
     },
     idempotency::{
         IdempotencyKey, IdempotencyOutcome, IdempotencyReservation, RequestHash, complete, reserve,
@@ -48,6 +48,7 @@ use crate::{
     },
     outbox,
     policy::Action,
+    views::filter::Filter,
     work_item_commands::{
         AuditAttribution, CommandActor, ProjectMembership, authorize_mutation, lock_membership,
         read_membership, record_audit_for,
@@ -1437,12 +1438,12 @@ async fn list_records(
         None => ViewConfig::default(),
     };
     if let Some(filters) = query.filters.as_deref() {
-        match serde_json::from_str::<Vec<FieldClause>>(filters) {
-            Ok(clauses) => config.filters = clauses,
+        match serde_json::from_str::<Filter>(filters) {
+            Ok(filter) => config.filters = filter,
             Err(_) => {
                 return Ok(invalid(
                     "filters",
-                    "Filters are a JSON list of {field, op, values}.",
+                    "Filters are a JSON list of {field, op, values}, or {\"and\": [...]} or {\"or\": [...]} of them.",
                 ));
             }
         }
@@ -1487,7 +1488,7 @@ async fn list_records(
     let mut spec =
         Spec::from_config(&config, &definitions, principal.actor_id).searching(words, &definitions);
     spec.archived = archived;
-    spec.tasks = collection.acts_like_task;
+    let source = super::source(&collection);
     if let Some(group) = query.group {
         if spec.group.is_none() {
             return Ok(invalid("group", "A group is read within a grouping."));
@@ -1504,7 +1505,7 @@ async fn list_records(
         (None, None, None) => {}
         (Some(field), Some(from), Some(to)) => {
             match query::date_range(&definitions, field, from, to) {
-                Ok(clauses) => spec.clauses.extend(clauses),
+                Ok(clauses) => spec.narrow(clauses),
                 Err(message) => return Ok(invalid("dateField", message)),
             }
         }
@@ -1518,8 +1519,7 @@ async fn list_records(
     let limit = query.limit.unwrap_or(query::DEFAULT_LIMIT);
     let Ok(page) = query::page(
         &mut *connection,
-        project_id,
-        collection_id,
+        source.as_ref(),
         &spec,
         query.cursor.as_deref(),
         limit,
@@ -1528,15 +1528,15 @@ async fn list_records(
     else {
         return Ok(invalid("cursor", query::CURSOR_MESSAGE));
     };
-    let total = query::total(&mut *connection, project_id, collection_id, &spec).await?;
-    let groups = query::group_counts(&mut *connection, project_id, collection_id, &spec).await?;
+    let total = query::total(&mut *connection, source.as_ref(), &spec).await?;
+    let groups = query::group_counts(&mut *connection, source.as_ref(), &spec).await?;
     let ids = page.rows.iter().map(|(id, _)| *id).collect::<Vec<_>>();
     let found = records::by_ids(
         &mut *connection,
         project_id,
         collection_id,
         &ids,
-        spec.tasks,
+        collection.acts_like_task,
     )
     .await?;
     let references = records::references(&mut connection, project_id, &definitions, &found).await?;

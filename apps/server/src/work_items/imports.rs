@@ -2453,6 +2453,7 @@ mod tests {
             position: 0,
             archived: false,
             version: 1,
+            accessor: crate::fields::Accessor::Stored,
         };
         // A custom field named like a built-in column keeps its own column,
         // and so does one whose name starts with the prefix itself.
@@ -2530,6 +2531,7 @@ mod tests {
             position: 0,
             archived: false,
             version: 1,
+            accessor: crate::fields::Accessor::Stored,
         }
     }
 
@@ -2689,6 +2691,7 @@ mod tests {
             position: 0,
             archived: false,
             version: 1,
+            accessor: crate::fields::Accessor::Stored,
         };
         // "=Plan" and "'=Plan" are different options; "''x" starts with two
         // apostrophes of its own.
@@ -2789,6 +2792,7 @@ mod tests {
             position: 0,
             archived: false,
             version: 1,
+            accessor: crate::fields::Accessor::Stored,
         };
         let mut task = areas_task(0, &[]);
         task.fields = serde_json::Map::from_iter([(name.clone(), json!("a;b"))]);

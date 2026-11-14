@@ -174,10 +174,11 @@ impl FieldType {
         use FieldOp::*;
         match self {
             Self::Text | Self::LongText | Self::Url => &[Contains, Is, IsNot, Empty, NotEmpty],
-            Self::Number | Self::Date => &[Is, IsNot, Gt, Gte, Lt, Lte, Empty, NotEmpty],
+            Self::Number => &[Is, IsNot, Gt, Gte, Lt, Lte, Empty, NotEmpty],
+            Self::Date => &[Is, IsNot, Gt, Gte, Lt, Lte, Within, Empty, NotEmpty],
+            Self::Status => &[Is, IsNot, CategoryIs, CategoryIsNot, Empty, NotEmpty],
             Self::SingleChoice
             | Self::MultipleChoice
-            | Self::Status
             | Self::Labels
             | Self::Person
             | Self::People
@@ -254,6 +255,10 @@ pub struct ChoiceOption {
     /// Hidden from pickers; records that have it keep it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub archived: bool,
+    /// Status options: what kind of status it is ("started", "completed"...),
+    /// which `categoryIs` filters by.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
 }
 
 /// A field's settings, as `field_definitions.config` stores them.
@@ -271,6 +276,28 @@ pub struct FieldConfig {
     pub collection: Option<Uuid>,
 }
 
+/// Where a field's value comes from in SQL (T1.5), so stored values, a
+/// record's own columns and a task's columns filter, sort and group through
+/// one code path (`push_condition`, `sort_keys`, `group_sql`).
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub enum Accessor {
+    /// A stored value: `<values column> -> '<field id>'`.
+    #[default]
+    Stored,
+    /// A column or SQL expression of the record (aliased `record`) or its
+    /// task (aliased `core`); NULL is no value. `sql_type` is its type, so
+    /// filters compare in it and its indexes apply; `category`, for status
+    /// fields, the SQL for the status's category.
+    Column {
+        expr: String,
+        sql_type: &'static str,
+        category: Option<String>,
+    },
+    /// A set of values: a query giving each as text (one column), such as
+    /// a task's labels.
+    Elements { sql: String },
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct FieldDefinition {
     pub id: Uuid,
@@ -282,9 +309,40 @@ pub struct FieldDefinition {
     pub position: i32,
     pub archived: bool,
     pub version: i64,
+    /// Where its value comes from: `Accessor::Stored` for every field in
+    /// `field_definitions`; built-in fields read columns.
+    pub accessor: Accessor,
 }
 
+/// What kind of status a status is, in workflow order.
+pub const STATUS_CATEGORIES: [&str; 7] = [
+    "backlog",
+    "unstarted",
+    "started",
+    "review",
+    "verification",
+    "completed",
+    "canceled",
+];
+
 impl FieldDefinition {
+    /// The filter operations the field takes: its type's, and
+    /// `categoryIs`/`categoryIsNot` wherever a status's category is known.
+    pub fn ops(&self) -> Vec<FieldOp> {
+        let mut ops = self.field_type.ops().to_vec();
+        if matches!(
+            &self.accessor,
+            Accessor::Column {
+                category: Some(_),
+                ..
+            }
+        ) && !ops.contains(&FieldOp::CategoryIs)
+        {
+            ops.extend([FieldOp::CategoryIs, FieldOp::CategoryIsNot]);
+        }
+        ops
+    }
+
     /// The option with this ID, archived or not.
     pub fn option(&self, id: &str) -> Option<&ChoiceOption> {
         self.config
@@ -370,6 +428,7 @@ impl TryFrom<DefinitionRow> for FieldDefinition {
             position: row.position,
             archived: row.archived,
             version: row.version,
+            accessor: Accessor::Stored,
         })
     }
 }
@@ -633,6 +692,7 @@ pub fn normalize_config(
                 name,
                 color,
                 archived: false,
+                category: None,
             });
         }
         // Options left out are archived, after the active ones.
@@ -977,6 +1037,13 @@ pub enum FieldOp {
     Gte,
     Lt,
     Lte,
+    // A date in a range relative to today, such as "this_week" or
+    // "overdue" (`WITHIN_VALUES`), read when the list is.
+    Within,
+    // A status whose category is any of the values (such as "started").
+    CategoryIs,
+    // A status whose category is none of the values.
+    CategoryIsNot,
 }
 
 impl FieldOp {
@@ -987,7 +1054,7 @@ impl FieldOp {
     fn takes_one_value(self) -> bool {
         matches!(
             self,
-            Self::Contains | Self::Gt | Self::Gte | Self::Lt | Self::Lte
+            Self::Contains | Self::Gt | Self::Gte | Self::Lt | Self::Lte | Self::Within
         )
     }
 
@@ -1002,6 +1069,9 @@ impl FieldOp {
             Self::Gte => "gte",
             Self::Lt => "lt",
             Self::Lte => "lte",
+            Self::Within => "within",
+            Self::CategoryIs => "categoryIs",
+            Self::CategoryIsNot => "categoryIsNot",
         }
     }
 }
@@ -1057,6 +1127,15 @@ pub fn clauses_param(clauses: &[FieldClause]) -> String {
 /// "me" in a person field's clause as `reader`. Other fields keep "me" as
 /// written: in a text or URL field it's the word.
 pub fn resolve_me(clauses: &mut [FieldClause], definitions: &[FieldDefinition], reader: Uuid) {
+    resolve_me_in(clauses.iter_mut().collect(), definitions, reader);
+}
+
+/// `resolve_me` for clauses wherever they are, such as in a filter's groups.
+pub fn resolve_me_in(
+    clauses: Vec<&mut FieldClause>,
+    definitions: &[FieldDefinition],
+    reader: Uuid,
+) {
     for clause in clauses {
         let person = definitions
             .iter()
@@ -1076,15 +1155,42 @@ pub fn resolve_me(clauses: &mut [FieldClause], definitions: &[FieldDefinition], 
 /// the values are what the type stores. The message says what would work.
 pub fn check_clause(field: &FieldDefinition, clause: &FieldClause) -> Result<(), String> {
     let name = &field.name;
-    if !field.field_type.ops().contains(&clause.op) {
-        let ops = field
-            .field_type
-            .ops()
+    let ops = field.ops();
+    if !ops.contains(&clause.op) {
+        let ops = ops
             .iter()
             .map(|op| op.as_str())
             .collect::<Vec<_>>()
             .join(", ");
         return Err(format!("\"{name}\" filters with {ops}."));
+    }
+    match clause.op {
+        FieldOp::Within => {
+            return if clause
+                .values
+                .iter()
+                .all(|value| within_range(value, today()).is_some())
+            {
+                Ok(())
+            } else {
+                Err(format!("\"{name}\" within takes one of {WITHIN_VALUES}."))
+            };
+        }
+        FieldOp::CategoryIs | FieldOp::CategoryIsNot => {
+            return if clause
+                .values
+                .iter()
+                .all(|value| STATUS_CATEGORIES.contains(&value.trim()))
+            {
+                Ok(())
+            } else {
+                Err(format!(
+                    "\"{name}\" filters by category with {}.",
+                    STATUS_CATEGORIES.join(", ")
+                ))
+            };
+        }
+        _ => {}
     }
     for value in &clause.values {
         let ok = match (field.field_type, clause.op) {
@@ -1128,6 +1234,14 @@ pub fn clause_from_written(
     let mut op = op;
     let mut stored = Vec::with_capacity(values.len());
     for value in values {
+        if matches!(
+            op,
+            FieldOp::Within | FieldOp::CategoryIs | FieldOp::CategoryIsNot
+        ) {
+            // A range's or a category's name, as written.
+            stored.push(value.trim().to_ascii_lowercase().replace([' ', '-'], "_"));
+            continue;
+        }
         match field.field_type {
             FieldType::SingleChoice | FieldType::MultipleChoice => {
                 let option = field
@@ -1204,32 +1318,129 @@ fn elements(column: &str, field: Uuid) -> String {
 
 /// Appends ` AND ...` for one clause over the JSONB `column` of values.
 pub fn push_clause(builder: &mut QueryBuilder<'_, Postgres>, column: &str, clause: &FieldClause) {
+    builder.push(" AND ");
+    push_stored_condition(builder, column, clause, today());
+}
+
+/// Today's date, as `within` reads it when the caller doesn't say.
+pub fn today() -> NaiveDate {
+    chrono::Utc::now().date_naive()
+}
+
+/// Writes one clause as a condition (no leading AND) over where `field`'s
+/// value comes from (`FieldDefinition::accessor`): its key in the JSONB
+/// `column` of stored values, a column, or a set of elements. `within`
+/// reads dates relative to `today`; `categoryIs` reads a status's
+/// category. `field` None reads the stored value.
+pub fn push_condition(
+    builder: &mut QueryBuilder<'_, Postgres>,
+    column: &str,
+    field: Option<&FieldDefinition>,
+    clause: &FieldClause,
+    today: NaiveDate,
+) {
+    let Some(field) = field else {
+        push_stored_condition(builder, column, clause, today);
+        return;
+    };
+    match &field.accessor {
+        Accessor::Stored => {
+            if matches!(clause.op, FieldOp::CategoryIs | FieldOp::CategoryIsNot) {
+                // A stored status holds an option ID; its options carry
+                // their categories.
+                let ids = field
+                    .config
+                    .options
+                    .iter()
+                    .filter(|option| {
+                        option.category.as_deref().is_some_and(|category| {
+                            clause.values.iter().any(|value| value == category)
+                        })
+                    })
+                    .map(|option| option.id.to_string())
+                    .collect::<Vec<_>>();
+                let op = if clause.op == FieldOp::CategoryIs {
+                    FieldOp::Is
+                } else {
+                    FieldOp::IsNot
+                };
+                if ids.is_empty() {
+                    builder.push(if op == FieldOp::Is { "false" } else { "true" });
+                    return;
+                }
+                let by_option = FieldClause {
+                    field: clause.field,
+                    op,
+                    values: ids,
+                };
+                push_stored_condition(builder, column, &by_option, today);
+            } else {
+                push_stored_condition(builder, column, clause, today);
+            }
+        }
+        Accessor::Column {
+            expr,
+            sql_type,
+            category,
+        } => push_column_condition(builder, expr, sql_type, category.as_deref(), clause, today),
+        Accessor::Elements { sql } => push_elements_condition(builder, sql, clause),
+    }
+}
+
+/// The values a clause compares with, trimmed.
+fn written_values(clause: &FieldClause) -> Vec<String> {
+    clause
+        .values
+        .iter()
+        .map(|value| value.trim().to_owned())
+        .collect()
+}
+
+fn like_pattern(clause: &FieldClause) -> String {
+    let needle = clause.values.first().cloned().unwrap_or_default();
+    let escaped = needle
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    format!("%{escaped}%")
+}
+
+fn comparison(op: FieldOp) -> &'static str {
+    match op {
+        FieldOp::Gt => ">",
+        FieldOp::Gte => ">=",
+        FieldOp::Lt => "<",
+        _ => "<=",
+    }
+}
+
+fn push_stored_condition(
+    builder: &mut QueryBuilder<'_, Postgres>,
+    column: &str,
+    clause: &FieldClause,
+    today: NaiveDate,
+) {
     let field = clause.field;
     let value = value_at(column, field);
     let text = text_at(column, field);
     match clause.op {
         FieldOp::Empty => {
-            builder.push(format!(" AND {value} IS NULL"));
+            builder.push(format!("{value} IS NULL"));
         }
         FieldOp::NotEmpty => {
-            builder.push(format!(" AND {value} IS NOT NULL"));
+            builder.push(format!("{value} IS NOT NULL"));
         }
         FieldOp::Is | FieldOp::IsNot => {
-            let written = clause
-                .values
-                .iter()
-                .map(|value| value.trim().to_owned())
-                .collect::<Vec<_>>();
             builder.push(if clause.op == FieldOp::Is {
-                " AND EXISTS (SELECT 1 FROM "
+                "EXISTS (SELECT 1 FROM "
             } else {
-                " AND NOT EXISTS (SELECT 1 FROM "
+                "NOT EXISTS (SELECT 1 FROM "
             });
             builder.push(format!(
                 "{} AS element(value) WHERE element.value = ANY(",
                 elements(column, field)
             ));
-            builder.push_bind(written);
+            builder.push_bind(written_values(clause));
             // A stored number (a number field) compares as a number, so
             // "3.0", "0012" and "1e-7" match 3, 12 and 0.0000001, however
             // PostgreSQL writes them; a text field's "0012" stays the text
@@ -1241,23 +1452,14 @@ pub fn push_clause(builder: &mut QueryBuilder<'_, Postgres>, column: &str, claus
             builder.push("::numeric[]) ELSE false END)");
         }
         FieldOp::Contains => {
-            let needle = clause.values.first().cloned().unwrap_or_default();
-            let escaped = needle
-                .replace('\\', "\\\\")
-                .replace('%', "\\%")
-                .replace('_', "\\_");
             builder.push(format!(
-                " AND jsonb_typeof({value}) = 'string' AND {text} ILIKE "
+                "(jsonb_typeof({value}) = 'string' AND {text} ILIKE "
             ));
-            builder.push_bind(format!("%{escaped}%"));
+            builder.push_bind(like_pattern(clause));
+            builder.push(")");
         }
         FieldOp::Gt | FieldOp::Gte | FieldOp::Lt | FieldOp::Lte => {
-            let operator = match clause.op {
-                FieldOp::Gt => ">",
-                FieldOp::Gte => ">=",
-                FieldOp::Lt => "<",
-                _ => "<=",
-            };
+            let operator = comparison(clause.op);
             let bound = clause
                 .values
                 .first()
@@ -1266,7 +1468,7 @@ pub fn push_clause(builder: &mut QueryBuilder<'_, Postgres>, column: &str, claus
             if let Ok(date) = NaiveDate::parse_from_str(bound, "%Y-%m-%d") {
                 // ISO dates compare as text.
                 builder.push(format!(
-                    " AND (CASE WHEN jsonb_typeof({value}) = 'string' THEN {text} END) {operator} "
+                    "(CASE WHEN jsonb_typeof({value}) = 'string' THEN {text} END) {operator} "
                 ));
                 builder.push_bind(date.to_string());
             } else {
@@ -1275,13 +1477,209 @@ pub fn push_clause(builder: &mut QueryBuilder<'_, Postgres>, column: &str, claus
                     .ok()
                     .filter(|number| number.is_finite());
                 builder.push(format!(
-                    " AND (CASE WHEN jsonb_typeof({value}) = 'number' THEN ({text})::double precision END) {operator} "
+                    "(CASE WHEN jsonb_typeof({value}) = 'number' THEN ({text})::double precision END) {operator} "
                 ));
                 builder.push_bind(number);
             }
         }
+        FieldOp::Within => {
+            let date = format!("(CASE WHEN jsonb_typeof({value}) = 'string' THEN {text} END)");
+            push_within(builder, &date, "text", clause, today);
+        }
+        // Only status fields have categories, and they're read through
+        // their options (`push_condition`).
+        FieldOp::CategoryIs | FieldOp::CategoryIsNot => {
+            builder.push("false");
+        }
     }
 }
+
+/// `date` (an expression of `sql_type`: a date, a time, or ISO text) is in
+/// the range a `within` clause names, from `today`.
+fn push_within(
+    builder: &mut QueryBuilder<'_, Postgres>,
+    date: &str,
+    sql_type: &str,
+    clause: &FieldClause,
+    today: NaiveDate,
+) {
+    let Some((from, to)) = clause
+        .values
+        .first()
+        .and_then(|value| within_range(value, today))
+    else {
+        builder.push("false");
+        return;
+    };
+    // Times compare by their day.
+    let date = match sql_type {
+        "timestamptz" | "timestamp" => format!("(({date}) AT TIME ZONE 'UTC')::date"),
+        _ => format!("({date})"),
+    };
+    let cast = if sql_type == "text" { "text" } else { "date" };
+    builder.push(format!("({date} IS NOT NULL"));
+    if let Some(from) = from {
+        builder.push(format!(" AND {date} >= CAST("));
+        builder.push_bind(from.to_string());
+        builder.push(format!(" AS {cast})"));
+    }
+    if let Some(to) = to {
+        builder.push(format!(" AND {date} < CAST("));
+        builder.push_bind(to.to_string());
+        builder.push(format!(" AS {cast})"));
+    }
+    builder.push(")");
+}
+
+fn push_column_condition(
+    builder: &mut QueryBuilder<'_, Postgres>,
+    expr: &str,
+    sql_type: &str,
+    category: Option<&str>,
+    clause: &FieldClause,
+    today: NaiveDate,
+) {
+    match clause.op {
+        FieldOp::Empty => {
+            builder.push(format!("({expr}) IS NULL"));
+        }
+        FieldOp::NotEmpty => {
+            builder.push(format!("({expr}) IS NOT NULL"));
+        }
+        FieldOp::Is => {
+            // Compared in the column's own type, so its indexes apply.
+            builder.push(format!("({expr}) = ANY(CAST("));
+            builder.push_bind(written_values(clause));
+            builder.push(format!(" AS {sql_type}[]))"));
+        }
+        FieldOp::IsNot => {
+            builder.push(format!("(({expr}) IS NULL OR NOT ({expr}) = ANY(CAST("));
+            builder.push_bind(written_values(clause));
+            builder.push(format!(" AS {sql_type}[])))"));
+        }
+        FieldOp::Contains => {
+            builder.push(format!("({expr})::text ILIKE "));
+            builder.push_bind(like_pattern(clause));
+        }
+        FieldOp::Gt | FieldOp::Gte | FieldOp::Lt | FieldOp::Lte => {
+            let bound = clause
+                .values
+                .first()
+                .map(|value| value.trim().to_owned())
+                .unwrap_or_default();
+            builder.push(format!("({expr}) {} CAST(", comparison(clause.op)));
+            builder.push_bind(bound);
+            builder.push(format!(" AS {sql_type})"));
+        }
+        FieldOp::Within => push_within(builder, expr, sql_type, clause, today),
+        FieldOp::CategoryIs | FieldOp::CategoryIsNot => {
+            let Some(category) = category else {
+                builder.push("false");
+                return;
+            };
+            if clause.op == FieldOp::CategoryIs {
+                builder.push(format!("({category}) = ANY("));
+            } else {
+                builder.push(format!("(({category}) IS NULL OR NOT ({category}) = ANY("));
+            }
+            builder.push_bind(written_values(clause));
+            builder.push(if clause.op == FieldOp::CategoryIs {
+                "::text[])"
+            } else {
+                "::text[]))"
+            });
+        }
+    }
+}
+
+fn push_elements_condition(
+    builder: &mut QueryBuilder<'_, Postgres>,
+    sql: &str,
+    clause: &FieldClause,
+) {
+    match clause.op {
+        FieldOp::Empty => {
+            builder.push(format!("NOT EXISTS ({sql})"));
+        }
+        FieldOp::NotEmpty => {
+            builder.push(format!("EXISTS ({sql})"));
+        }
+        FieldOp::Is | FieldOp::IsNot => {
+            builder.push(if clause.op == FieldOp::Is {
+                "EXISTS (SELECT 1 FROM ("
+            } else {
+                "NOT EXISTS (SELECT 1 FROM ("
+            });
+            builder.push(format!(
+                "{sql}) AS element(value) WHERE element.value = ANY("
+            ));
+            builder.push_bind(written_values(clause));
+            builder.push("))");
+        }
+        _ => {
+            builder.push("false");
+        }
+    }
+}
+
+/// The days a `within` value covers from `today`: from (inclusive) and to
+/// (exclusive), either open. None for a value that isn't one.
+pub fn within_range(
+    value: &str,
+    today: NaiveDate,
+) -> Option<(Option<NaiveDate>, Option<NaiveDate>)> {
+    use chrono::{Datelike, Days, Months};
+    let day = |offset: i64| {
+        if offset >= 0 {
+            today.checked_add_days(Days::new(offset as u64))
+        } else {
+            today.checked_sub_days(Days::new(offset.unsigned_abs()))
+        }
+    };
+    // Weeks start on Monday.
+    let monday = day(-i64::from(today.weekday().num_days_from_monday()))?;
+    let week = |weeks: i64| {
+        let start = if weeks >= 0 {
+            monday.checked_add_days(Days::new(7 * weeks as u64))?
+        } else {
+            monday.checked_sub_days(Days::new(7 * weeks.unsigned_abs()))?
+        };
+        Some((Some(start), Some(start.checked_add_days(Days::new(7))?)))
+    };
+    let first = today.with_day(1)?;
+    let month = |months: i32| {
+        let start = if months >= 0 {
+            first.checked_add_months(Months::new(months as u32))?
+        } else {
+            first.checked_sub_months(Months::new(months.unsigned_abs()))?
+        };
+        Some((Some(start), Some(start.checked_add_months(Months::new(1))?)))
+    };
+    let key = value.trim().to_ascii_lowercase().replace([' ', '-'], "_");
+    Some(match key.as_str() {
+        "today" => (Some(today), day(1)),
+        "yesterday" => (day(-1), Some(today)),
+        "tomorrow" => (day(1), day(2)),
+        "this_week" => week(0)?,
+        "last_week" => week(-1)?,
+        "next_week" => week(1)?,
+        "this_month" => month(0)?,
+        "last_month" => month(-1)?,
+        "next_month" => month(1)?,
+        "last_7_days" => (day(-6), day(1)),
+        "last_30_days" => (day(-29), day(1)),
+        "next_7_days" => (Some(today), day(7)),
+        "next_30_days" => (Some(today), day(30)),
+        "overdue" | "past" => (None, Some(today)),
+        "future" => (day(1), None),
+        _ => return None,
+    })
+}
+
+/// What `within` takes, for messages.
+pub const WITHIN_VALUES: &str = "today, yesterday, tomorrow, this_week, last_week, next_week, \
+     this_month, last_month, next_month, last_7_days, last_30_days, next_7_days, next_30_days, \
+     overdue, past or future";
 
 /// The filter values that are numbers, written out in full as decimals
 /// (Rust never writes an f64 with an exponent), so PostgreSQL reads each as
@@ -1341,10 +1739,16 @@ fn uuid_array(ids: impl Iterator<Item = Uuid>) -> String {
 /// `SORT_PREFIX_CHARACTERS`). `column` is the JSONB column of values and
 /// `project` the record's project ID column.
 pub fn sort_keys(field: &FieldDefinition, column: &str, project: &str) -> Vec<SortKey> {
-    let value = value_at(column, field.id);
-    let text = text_at(column, field.id);
+    let reading = Reading::of(field, column);
+    let Reading {
+        is_null,
+        text,
+        number,
+        checked,
+        elements,
+    } = &reading;
     let empty_last = SortKey {
-        expr: format!("({value} IS NULL)::integer"),
+        expr: format!("({is_null})::integer"),
         ty: "integer",
         follows_direction: false,
     };
@@ -1358,15 +1762,20 @@ pub fn sort_keys(field: &FieldDefinition, column: &str, project: &str) -> Vec<So
             format!("left(lower(COALESCE({text}, '')), {SORT_PREFIX_CHARACTERS})"),
             "text",
         ),
-        FieldType::Date => key(format!("COALESCE({text}, '')"), "text"),
-        FieldType::Number => key(
-            format!(
-                "COALESCE(CASE WHEN jsonb_typeof({value}) = 'number' THEN ({text})::double precision END, 0)"
+        FieldType::Date => match &field.accessor {
+            // A day or a time in its own type, so its index can order it.
+            Accessor::Column { expr, sql_type, .. } if *sql_type == "date" => {
+                key(format!("COALESCE({expr}, '-infinity'::date)"), "date")
+            }
+            Accessor::Column { expr, sql_type, .. } if *sql_type == "timestamptz" => key(
+                format!("COALESCE({expr}, '-infinity'::timestamptz)"),
+                "timestamptz",
             ),
-            "double precision",
-        ),
+            _ => key(format!("COALESCE({text}, '')"), "text"),
+        },
+        FieldType::Number => key(format!("COALESCE({number}, 0)"), "double precision"),
         FieldType::Checkbox => {
-            return vec![key(format!("({value} IS NULL)::integer"), "integer")];
+            return vec![key(format!("(NOT ({checked}))::integer"), "integer")];
         }
         FieldType::SingleChoice => key(
             format!(
@@ -1377,9 +1786,8 @@ pub fn sort_keys(field: &FieldDefinition, column: &str, project: &str) -> Vec<So
         ),
         FieldType::MultipleChoice => key(
             format!(
-                "COALESCE((SELECT min(array_position({}, element.value)) FROM {} AS element(value)), 0)",
+                "COALESCE((SELECT min(array_position({}, element.value)) FROM {elements}), 0)",
                 uuid_array(field.config.options.iter().map(|option| option.id)),
-                elements(column, field.id)
             ),
             "integer",
         ),
@@ -1420,6 +1828,64 @@ pub fn sort_keys(field: &FieldDefinition, column: &str, project: &str) -> Vec<So
     vec![empty_last, by_value]
 }
 
+/// A field's value as SQL, wherever it comes from (`Accessor`): whether it
+/// has none, its first value as text, as a number, whether it's checked,
+/// and its values as rows `element(value)` of text.
+struct Reading {
+    is_null: String,
+    text: String,
+    number: String,
+    checked: String,
+    elements: String,
+}
+
+impl Reading {
+    fn of(field: &FieldDefinition, column: &str) -> Self {
+        match &field.accessor {
+            Accessor::Stored => {
+                let value = value_at(column, field.id);
+                let text = text_at(column, field.id);
+                Self {
+                    is_null: format!("{value} IS NULL"),
+                    number: format!(
+                        "CASE WHEN jsonb_typeof({value}) = 'number' THEN ({text})::double precision END"
+                    ),
+                    checked: format!("{value} IS NOT DISTINCT FROM 'true'::jsonb"),
+                    elements: format!("{} AS element(value)", elements(column, field.id)),
+                    text,
+                }
+            }
+            Accessor::Column { expr, sql_type, .. } => Self {
+                is_null: format!("({expr}) IS NULL"),
+                text: format!("(({expr})::text)"),
+                number: if matches!(
+                    *sql_type,
+                    "bigint" | "integer" | "double precision" | "numeric"
+                ) {
+                    format!("(({expr})::double precision)")
+                } else {
+                    "NULL::double precision".to_owned()
+                },
+                checked: if *sql_type == "boolean" {
+                    format!("(({expr}) IS TRUE)")
+                } else {
+                    format!("(({expr}) IS NOT NULL)")
+                },
+                elements: format!(
+                    "(SELECT ({expr})::text AS value WHERE ({expr}) IS NOT NULL) AS element"
+                ),
+            },
+            Accessor::Elements { sql } => Self {
+                is_null: format!("NOT EXISTS ({sql})"),
+                text: format!("(SELECT min(first.value) FROM ({sql}) AS first(value))"),
+                number: "NULL::double precision".to_owned(),
+                checked: format!("EXISTS ({sql})"),
+                elements: format!("({sql}) AS element(value)"),
+            },
+        }
+    }
+}
+
 /// A list grouped by a field: the join it needs, the group's key ("none"
 /// for no value), label and color, and the keys that order the groups.
 #[derive(Clone, Debug)]
@@ -1433,15 +1899,13 @@ pub struct GroupSql {
 
 /// SQL for grouping by a field whose type `can_group`. The join is aliased
 /// `group_field`.
-pub fn group_sql(
-    field: Uuid,
-    field_type: FieldType,
-    column: &str,
-    project: &str,
-) -> Option<GroupSql> {
-    let value = value_at(column, field);
-    let text = text_at(column, field);
-    Some(match field_type {
+pub fn group_sql(definition: &FieldDefinition, column: &str, project: &str) -> Option<GroupSql> {
+    let field = definition.id;
+    let Reading { text, checked, .. } = Reading::of(definition, column);
+    Some(match definition.field_type {
+        // Options of fields that aren't stored are their source's to name
+        // (`views::source::RecordSource::group_sql`).
+        FieldType::SingleChoice if definition.accessor != Accessor::Stored => return None,
         FieldType::SingleChoice => GroupSql {
             join: format!(
                 " LEFT JOIN LATERAL (SELECT choice.option ->> 'name' AS name, \
@@ -1487,18 +1951,34 @@ pub fn group_sql(
         },
         FieldType::Checkbox => GroupSql {
             join: String::new(),
-            key: format!("CASE WHEN {value} = 'true'::jsonb THEN 'true' ELSE 'none' END"),
-            label: format!(
-                "CASE WHEN {value} = 'true'::jsonb THEN 'Checked' ELSE 'Not checked' END"
-            ),
+            key: format!("CASE WHEN {checked} THEN 'true' ELSE 'none' END"),
+            label: format!("CASE WHEN {checked} THEN 'Checked' ELSE 'Not checked' END"),
             color: "NULL::text".to_owned(),
-            order: vec![key(
-                format!("({value} IS DISTINCT FROM 'true'::jsonb)::integer"),
-                "integer",
-            )],
+            order: vec![key(format!("(NOT ({checked}))::integer"), "integer")],
         },
         _ => return None,
     })
+}
+
+/// `group_sql` for a stored field known only by its ID and type.
+pub fn stored_group_sql(
+    field: Uuid,
+    field_type: FieldType,
+    column: &str,
+    project: &str,
+) -> Option<GroupSql> {
+    let definition = FieldDefinition {
+        id: field,
+        name: String::new(),
+        description: String::new(),
+        field_type,
+        config: FieldConfig::default(),
+        position: 0,
+        archived: false,
+        version: 0,
+        accessor: Accessor::Stored,
+    };
+    group_sql(&definition, column, project)
 }
 
 /// The clause that narrows a list to one group of a field.
@@ -1936,6 +2416,7 @@ mod tests {
             position: 0,
             archived: false,
             version: 1,
+            accessor: crate::fields::Accessor::Stored,
         }
     }
 
@@ -2293,15 +2774,100 @@ mod tests {
         for key in sort_keys(&single, "item.field_values", "item.project_id") {
             assert!(!key.expr.contains("DROP"));
         }
-        let group = group_sql(
-            single.id,
-            FieldType::SingleChoice,
-            "item.field_values",
-            "item.project_id",
-        )
-        .expect("test value");
+        let group = group_sql(&single, "item.field_values", "item.project_id").expect("test value");
         assert!(!group.join.contains("DROP"));
-        assert!(group_sql(single.id, FieldType::Text, "c", "p").is_none());
+        assert!(stored_group_sql(single.id, FieldType::Text, "c", "p").is_none());
+    }
+
+    /// `within` reads from a given day, so a list in any time zone asks
+    /// with its own today; weeks start on Monday.
+    #[test]
+    fn within_names_ranges_from_today() {
+        let day = |text: &str| NaiveDate::parse_from_str(text, "%Y-%m-%d").expect("date");
+        // A Saturday.
+        let today = day("2026-11-14");
+        assert_eq!(
+            within_range("today", today),
+            Some((Some(today), Some(day("2026-11-15"))))
+        );
+        assert_eq!(
+            within_range("this week", today),
+            Some((Some(day("2026-11-09")), Some(day("2026-11-16"))))
+        );
+        assert_eq!(
+            within_range("last_7_days", today),
+            Some((Some(day("2026-11-08")), Some(day("2026-11-15"))))
+        );
+        assert_eq!(
+            within_range("next-30-days", today),
+            Some((Some(today), Some(day("2026-12-14"))))
+        );
+        assert_eq!(
+            within_range("last_month", today),
+            Some((Some(day("2026-10-01")), Some(day("2026-11-01"))))
+        );
+        assert_eq!(within_range("overdue", today), Some((None, Some(today))));
+        assert_eq!(within_range("someday", today), None);
+        let date = field(FieldType::Date);
+        let clause = |values: &[&str]| FieldClause {
+            field: date.id,
+            op: FieldOp::Within,
+            values: values.iter().map(|value| (*value).to_owned()).collect(),
+        };
+        assert!(check_clause(&date, &clause(&["this_week"])).is_ok());
+        assert!(check_clause(&date, &clause(&["fortnight"])).is_err());
+        assert!(!clause(&["today", "tomorrow"]).shape_is_valid());
+        assert!(check_clause(&field(FieldType::Text), &clause(&["today"])).is_err());
+    }
+
+    /// A field read from a column compiles in the column's own type, and
+    /// knows a status's category only where its source says it.
+    #[test]
+    fn column_fields_filter_in_their_own_type() {
+        let mut status = field(FieldType::SingleChoice);
+        status.accessor = Accessor::Column {
+            expr: "core.status_id".to_owned(),
+            sql_type: "uuid",
+            category: Some("status.semantic_category".to_owned()),
+        };
+        assert!(status.ops().contains(&FieldOp::CategoryIs));
+        assert!(
+            !field(FieldType::SingleChoice)
+                .ops()
+                .contains(&FieldOp::CategoryIs)
+        );
+        let sql = |field: &FieldDefinition, clause: &FieldClause| {
+            let mut builder = QueryBuilder::<Postgres>::new("");
+            push_condition(
+                &mut builder,
+                "record.field_values",
+                Some(field),
+                clause,
+                today(),
+            );
+            builder.sql().to_owned()
+        };
+        let is = FieldClause {
+            field: status.id,
+            op: FieldOp::Is,
+            values: vec![Uuid::now_v7().to_string()],
+        };
+        assert_eq!(
+            sql(&status, &is),
+            "(core.status_id) = ANY(CAST($1 AS uuid[]))"
+        );
+        let started = FieldClause {
+            field: status.id,
+            op: FieldOp::CategoryIs,
+            values: vec!["started".to_owned()],
+        };
+        assert!(check_clause(&status, &started).is_ok());
+        assert_eq!(
+            sql(&status, &started),
+            "(status.semantic_category) = ANY($1::text[])"
+        );
+        let keys = sort_keys(&status, "record.field_values", "record.project_id");
+        assert_eq!(keys[0].expr, "((core.status_id) IS NULL)::integer");
     }
 
     #[test]

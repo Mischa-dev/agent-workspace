@@ -3,6 +3,23 @@
 //!
 //! * [`ViewKind`]: the seven kinds of view, the one list the module
 //!   contract, collections and the web app name kinds from (T1.2).
+//! * [`definition`]: a view as stored (filters, sort, grouping, columns),
+//!   checked against its source's fields on every write.
+//! * [`filter`]: a view's filter, a tree of clauses joined by "and" and
+//!   "or" (a plain list of clauses is the "and" of them).
+//! * [`source`]: where a view's records come from (`RecordSource`), and
+//!   one collection's records (`CollectionSource`).
+//! * [`query`]: the one query compiler: a page of records in order with a
+//!   keyset cursor, the total, and counts by group, for any source.
+//!
+//! Collections reach `definition` and `query` at their old paths
+//! (`collections::views`, `collections::query`); tasks get the engine
+//! through `collections::tasks::TasksSource`.
+
+pub mod definition;
+pub mod filter;
+pub mod query;
+pub mod source;
 
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};

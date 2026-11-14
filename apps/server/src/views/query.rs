@@ -17,7 +17,11 @@ use sha2::{Digest, Sha256};
 use sqlx::{FromRow, Postgres, QueryBuilder};
 use uuid::Uuid;
 
-use super::views::{Direction, SortBy, ViewConfig};
+use super::{
+    definition::{Direction, SortBy, ViewConfig},
+    filter::Filter,
+    source::RecordSource,
+};
 use crate::{
     error::AppError,
     fields::{self, FieldClause, FieldDefinition, FieldOp, FieldType, GroupSql},
@@ -73,10 +77,10 @@ pub struct Sort {
 }
 
 /// What to find, already checked against the collection's fields.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Spec {
     /// Field filters with stored values ("me" already the reader).
-    pub clauses: Vec<FieldClause>,
+    pub filter: Filter,
     /// Words that must each appear in the title, a text or web address
     /// value or a chosen option's name, or be the record's number.
     pub words: Vec<String>,
@@ -89,10 +93,34 @@ pub struct Spec {
     /// Only records in this group of `group` (a key `group_counts` gives,
     /// such as an option's ID or "none"): one column of a board.
     pub in_group: Option<String>,
-    /// Read the project's tasks: the built-in Tasks collection (`tasks`).
-    pub tasks: bool,
+    /// Who reads: "me" in filters is them, and the source's access filter
+    /// is theirs.
+    pub reader: Uuid,
+    /// The day `within` filters read from.
+    pub today: NaiveDate,
+    /// The fields filters, sorts and groups name, for where each value is
+    /// read (`FieldDefinition::accessor`).
+    definitions: Vec<FieldDefinition>,
     /// The collection's text, web address and choice fields, for `words`.
     search_fields: SearchFields,
+}
+
+impl Default for Spec {
+    fn default() -> Self {
+        Self {
+            filter: Filter::default(),
+            words: Vec::new(),
+            sorts: Vec::new(),
+            group: None,
+            archived: Archived::default(),
+            only: None,
+            in_group: None,
+            reader: Uuid::nil(),
+            today: fields::today(),
+            definitions: Vec::new(),
+            search_fields: SearchFields::default(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -109,8 +137,8 @@ impl Spec {
     /// `reader`; a field archived since is left out.
     pub fn from_config(config: &ViewConfig, definitions: &[FieldDefinition], reader: Uuid) -> Self {
         let config = config.active(definitions);
-        let mut clauses = config.filters.clone();
-        fields::resolve_me(&mut clauses, definitions, reader);
+        let mut filter = config.filters.clone();
+        fields::resolve_me_in(filter.clauses_mut(), definitions, reader);
         let sorts = config
             .sort
             .iter()
@@ -134,12 +162,23 @@ impl Spec {
                 .cloned()
         });
         Self {
-            clauses,
+            filter,
             sorts,
             group,
+            reader,
+            definitions: definitions.to_vec(),
             ..Self::default()
         }
         .searching(Vec::new(), definitions)
+    }
+
+    /// Narrows what it finds by more clauses, such as a calendar's range.
+    pub fn narrow(&mut self, clauses: Vec<FieldClause>) {
+        self.filter = std::mem::take(&mut self.filter).and(clauses);
+    }
+
+    fn definition(&self, id: Uuid) -> Option<&FieldDefinition> {
+        self.definitions.iter().find(|field| field.id == id)
     }
 
     /// Sets the words to search for, read against `definitions`.
@@ -162,14 +201,22 @@ impl Spec {
         }
         self.words = words;
         self.search_fields = search;
+        if self.definitions.is_empty() {
+            self.definitions = definitions.to_vec();
+        }
         self
     }
 
-    fn keys(&self) -> Vec<Key> {
+    fn group_sql(&self, source: &dyn RecordSource) -> Option<GroupSql> {
+        let field = self.group.as_ref()?;
+        source
+            .group_sql(field)
+            .or_else(|| fields::group_sql(field, "record.field_values", "record.project_id"))
+    }
+
+    fn keys(&self, source: &dyn RecordSource) -> Vec<Key> {
         let mut keys = self
-            .group
-            .as_ref()
-            .and_then(group_sql)
+            .group_sql(source)
             .map(|group| {
                 group
                     .order
@@ -224,11 +271,19 @@ impl Spec {
     }
 
     /// Changes whenever anything that decides the rows or their order does.
-    fn fingerprint(&self, project_id: Uuid, collection_id: Uuid) -> String {
+    fn fingerprint(&self, source: &dyn RecordSource) -> String {
         let mut hasher = Sha256::new();
-        hasher.update(project_id.as_bytes());
-        hasher.update(collection_id.as_bytes());
-        hasher.update(fields::clauses_param(&self.clauses));
+        hasher.update(source.identity());
+        hasher.update(serde_json::to_string(&self.filter).unwrap_or_default());
+        if self
+            .filter
+            .clauses()
+            .iter()
+            .any(|clause| clause.op == FieldOp::Within)
+        {
+            // "this week" is another set of records next week.
+            hasher.update(self.today.to_string());
+        }
         hasher.update(format!("{:?}", self.words));
         for sort in &self.sorts {
             hasher.update(format!("{}:{}", sort.by.key(), sort.desc));
@@ -253,26 +308,18 @@ impl Spec {
         hex::encode(&hasher.finalize()[..12])
     }
 
-    /// The table (or the tasks' subquery) records are read from, aliased
-    /// `record`.
-    fn source_sql(&self) -> String {
-        if self.tasks {
-            format!("{} record", super::tasks::source())
-        } else {
-            "collection_records record".to_owned()
+    /// The FROM clause: the source's records, and the group's join when
+    /// grouped (each record joins at most one row of it).
+    fn from_sql(&self, source: &dyn RecordSource) -> String {
+        match self.group_sql(source) {
+            Some(group) => format!("{} {}", source.from_sql(), group.join),
+            None => source.from_sql(),
         }
     }
 
-    fn push_where(
-        &self,
-        builder: &mut QueryBuilder<'_, Postgres>,
-        project_id: Uuid,
-        collection_id: Uuid,
-    ) {
-        builder.push(" WHERE record.project_id = ");
-        builder.push_bind(project_id);
-        builder.push(" AND record.collection_id = ");
-        builder.push_bind(collection_id);
+    fn push_where(&self, builder: &mut QueryBuilder<'_, Postgres>, source: &dyn RecordSource) {
+        source.scope(builder);
+        source.access(builder, self.reader);
         builder.push(match self.archived {
             Archived::Exclude => " AND record.archived_at IS NULL",
             Archived::Include => "",
@@ -283,16 +330,18 @@ impl Spec {
             builder.push_bind(only.clone());
             builder.push(")");
         }
-        fields::push_clauses(builder, "record.field_values", &self.clauses);
-        if let (Some(key), Some(group)) = (&self.in_group, self.group.as_ref().and_then(group_sql))
-        {
-            // The group's key worked out for this record alone, so the page,
-            // the total and the group counts read it the same way.
-            builder.push(format!(
-                " AND (SELECT {key} FROM (SELECT record.field_values, record.project_id) record {join}) = ",
-                key = group.key,
-                join = group.join,
-            ));
+        let today = self.today;
+        self.filter.push_sql(builder, &mut |builder, clause| {
+            fields::push_condition(
+                builder,
+                "record.field_values",
+                self.definition(clause.field),
+                clause,
+                today,
+            );
+        });
+        if let (Some(key), Some(group)) = (&self.in_group, self.group_sql(source)) {
+            builder.push(format!(" AND ({}) = ", group.key));
             builder.push_bind(key.clone());
         }
         for word in &self.words {
@@ -410,21 +459,6 @@ pub fn date_range(
     ])
 }
 
-fn group_sql(field: &FieldDefinition) -> Option<GroupSql> {
-    if super::tasks::is_builtin_field(field.id)
-        && let Some(group) =
-            super::tasks::group_sql(field, "record.field_values", "record.project_id")
-    {
-        return Some(group);
-    }
-    fields::group_sql(
-        field.id,
-        field.field_type,
-        "record.field_values",
-        "record.project_id",
-    )
-}
-
 /// One sort key: a non-null SQL expression, the type its cursor value is
 /// cast back to, and the direction.
 #[derive(Clone, Debug)]
@@ -528,15 +562,14 @@ pub const CURSOR_MESSAGE: &str = "That cursor was made for another query. Start 
 /// made for this query.
 pub async fn page(
     executor: impl sqlx::PgExecutor<'_>,
-    project_id: Uuid,
-    collection_id: Uuid,
+    source: &dyn RecordSource,
     spec: &Spec,
     cursor: Option<&str>,
     limit: i64,
 ) -> Result<Result<Page, ()>, AppError> {
     let limit = limit.clamp(1, MAX_LIMIT);
-    let keys = spec.keys();
-    let fingerprint = spec.fingerprint(project_id, collection_id);
+    let keys = spec.keys(source);
+    let fingerprint = spec.fingerprint(source);
     let after = match cursor {
         Some(value) => match decode_cursor(value, &fingerprint, keys.len()) {
             Some(after) => Some(after),
@@ -544,14 +577,10 @@ pub async fn page(
         },
         None => None,
     };
-    let group = spec.group.as_ref().and_then(group_sql);
-    let (join, group_key, group_label) = match &group {
-        Some(group) => (group.join.clone(), group.key.clone(), group.label.clone()),
-        None => (
-            String::new(),
-            "NULL::text".to_owned(),
-            "NULL::text".to_owned(),
-        ),
+    let group = spec.group_sql(source);
+    let (group_key, group_label) = match &group {
+        Some(group) => (group.key.clone(), group.label.clone()),
+        None => ("NULL::text".to_owned(), "NULL::text".to_owned()),
     };
     let key_array = keys
         .iter()
@@ -560,10 +589,10 @@ pub async fn page(
         .join(", ");
     let mut builder = QueryBuilder::<Postgres>::new(format!(
         "SELECT record.id, {group_key} AS group_key, {group_label} AS group_label, \
-         ARRAY[{key_array}] AS keys FROM {from} {join}",
-        from = spec.source_sql(),
+         ARRAY[{key_array}] AS keys FROM {from}",
+        from = spec.from_sql(source),
     ));
-    spec.push_where(&mut builder, project_id, collection_id);
+    spec.push_where(&mut builder, source);
     if let Some(after) = after {
         push_after(&mut builder, &keys, after);
     }
@@ -608,13 +637,12 @@ pub async fn page(
 /// How many records `spec` finds, across every page.
 pub async fn total(
     executor: impl sqlx::PgExecutor<'_>,
-    project_id: Uuid,
-    collection_id: Uuid,
+    source: &dyn RecordSource,
     spec: &Spec,
 ) -> Result<i64, AppError> {
     let mut builder =
-        QueryBuilder::<Postgres>::new(format!("SELECT count(*) FROM {}", spec.source_sql()));
-    spec.push_where(&mut builder, project_id, collection_id);
+        QueryBuilder::<Postgres>::new(format!("SELECT count(*) FROM {}", spec.from_sql(source)));
+    spec.push_where(&mut builder, source);
     Ok(builder
         .build_query_scalar::<i64>()
         .fetch_one(executor)
@@ -636,11 +664,10 @@ pub struct GroupCount {
 /// Empty when it doesn't group.
 pub async fn group_counts(
     executor: impl sqlx::PgExecutor<'_>,
-    project_id: Uuid,
-    collection_id: Uuid,
+    source: &dyn RecordSource,
     spec: &Spec,
 ) -> Result<Vec<GroupCount>, AppError> {
-    let Some(group) = spec.group.as_ref().and_then(group_sql) else {
+    let Some(group) = spec.group_sql(source) else {
         return Ok(Vec::new());
     };
     let order = group
@@ -651,14 +678,13 @@ pub async fn group_counts(
         .join(", ");
     let mut builder = QueryBuilder::<Postgres>::new(format!(
         "SELECT {key} AS key, min({label}) AS label, count(*) AS count, min({color}) AS color \
-         FROM {from} {join}",
-        from = spec.source_sql(),
+         FROM {from}",
+        from = spec.from_sql(source),
         key = group.key,
         label = group.label,
         color = group.color,
-        join = group.join,
     ));
-    spec.push_where(&mut builder, project_id, collection_id);
+    spec.push_where(&mut builder, source);
     builder.push(format!(
         " GROUP BY {} ORDER BY {order}, {}",
         group.key, group.key
@@ -675,8 +701,16 @@ mod tests {
 
     use super::{Archived, MAX_CURSOR_LENGTH, Spec, decode_cursor, encode_cursor, search_words};
     use crate::{
-        collections::views::{Direction, SortRule, ViewConfig},
         fields::{FieldConfig, FieldDefinition, FieldType, SORT_PREFIX_CHARACTERS},
+        views::{
+            definition::{Direction, SortRule, ViewConfig},
+            source::CollectionSource,
+        },
+    };
+
+    const SOURCE: CollectionSource = CollectionSource {
+        project_id: Uuid::nil(),
+        collection_id: Uuid::from_u128(1),
     };
 
     fn field(name: &str, field_type: FieldType) -> FieldDefinition {
@@ -689,6 +723,7 @@ mod tests {
             position: 0,
             archived: false,
             version: 1,
+            accessor: crate::fields::Accessor::Stored,
         }
     }
 
@@ -714,7 +749,7 @@ mod tests {
             ..ViewConfig::default()
         };
         let spec = Spec::from_config(&config, &definitions, Uuid::now_v7());
-        let keys = spec.keys();
+        let keys = spec.keys(&SOURCE);
         // The person group's three, two for each text sort, then the ID.
         assert_eq!(keys.len(), 10);
         let longest = keys
@@ -727,7 +762,7 @@ mod tests {
                 }
             })
             .collect::<Vec<_>>();
-        let fingerprint = spec.fingerprint(Uuid::now_v7(), Uuid::now_v7());
+        let fingerprint = spec.fingerprint(&SOURCE);
         let cursor = encode_cursor(fingerprint.clone(), longest.clone()).expect("cursor");
         assert!(
             cursor.len() <= MAX_CURSOR_LENGTH,
@@ -751,11 +786,11 @@ mod tests {
             Uuid::now_v7(),
         );
         assert!(
-            by_title.keys()[0]
+            by_title.keys(&SOURCE)[0]
                 .expr
                 .contains(&format!(", {SORT_PREFIX_CHARACTERS})")),
             "{:?}",
-            by_title.keys()
+            by_title.keys(&SOURCE)
         );
     }
 
@@ -791,6 +826,7 @@ mod tests {
             position: 0,
             archived: false,
             version: 1,
+            accessor: crate::fields::Accessor::Stored,
         };
         let definitions = vec![field.clone()];
         let config = ViewConfig {
@@ -802,9 +838,8 @@ mod tests {
         };
         let spec = Spec::from_config(&config, &definitions, Uuid::now_v7());
         // A field sort: records without a value last, the value, then ID.
-        assert_eq!(spec.keys().len(), 3);
-        let (project, collection) = (Uuid::now_v7(), Uuid::now_v7());
-        let fingerprint = spec.fingerprint(project, collection);
+        assert_eq!(spec.keys(&SOURCE).len(), 3);
+        let fingerprint = spec.fingerprint(&SOURCE);
         let cursor = encode_cursor(
             fingerprint.clone(),
             vec!["0".into(), "3".into(), "x".into()],
@@ -815,8 +850,12 @@ mod tests {
             archived: Archived::Include,
             ..spec.clone()
         };
-        assert_ne!(archived.fingerprint(project, collection), fingerprint);
-        assert_ne!(spec.fingerprint(project, Uuid::now_v7()), fingerprint);
+        assert_ne!(archived.fingerprint(&SOURCE), fingerprint);
+        let other = CollectionSource {
+            project_id: SOURCE.project_id,
+            collection_id: Uuid::now_v7(),
+        };
+        assert_ne!(spec.fingerprint(&other), fingerprint);
         assert!(decode_cursor(&cursor, &fingerprint, 2).is_none());
         assert!(decode_cursor("not a cursor", &fingerprint, 3).is_none());
     }

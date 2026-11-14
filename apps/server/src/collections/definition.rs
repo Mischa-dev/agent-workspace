@@ -184,7 +184,7 @@ async fn written_names(
 ) -> Result<HashMap<String, String>, AppError> {
     let objects = views
         .iter()
-        .flat_map(|view| view.config.filters.iter())
+        .flat_map(|view| view.config.filters.clauses())
         .flat_map(|clause| {
             clause
                 .values
@@ -239,9 +239,15 @@ fn view_written(
 ) -> ViewWrite {
     let config = view.config.active(definitions);
     let field = |id: Uuid| definitions.iter().find(|field| field.id == id);
+    // The written form is a list of clauses that all hold. A filter with
+    // "or" groups (T1.5) isn't written yet: the view comes across without
+    // it rather than meaning something else.
+    let flat = !format!("{:?}", config.filters).contains("Or(");
     let filters = config
         .filters
-        .iter()
+        .clauses()
+        .into_iter()
+        .filter(|_| flat)
         .filter_map(|clause| Some(filter_written(clause, field(clause.field)?, names)))
         .collect::<Vec<_>>();
     let sort = config
@@ -565,7 +571,7 @@ async fn config_from_written(
         )
         .await?
         {
-            Ok(clauses) => config.filters = clauses,
+            Ok(clauses) => config.filters = clauses.into(),
             Err(message) => return Ok(Err(message)),
         }
     }
@@ -1282,6 +1288,7 @@ mod tests {
                     name: "High".to_owned(),
                     color: "#ef4444".to_owned(),
                     archived: false,
+                    category: None,
                 }],
                 target: None,
                 collection: None,
@@ -1289,6 +1296,7 @@ mod tests {
             position: 0,
             archived: false,
             version: 1,
+            accessor: crate::fields::Accessor::Stored,
         };
         let written = options_by_name(
             &field,

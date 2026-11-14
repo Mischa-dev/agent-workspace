@@ -13,9 +13,10 @@ use serde_json::Value;
 use sqlx::{FromRow, PgConnection};
 use uuid::Uuid;
 
+use super::filter::Filter;
 use crate::{
     error::AppError,
-    fields::{self, FieldClause, FieldDefinition, FieldType, LinkTarget},
+    fields::{self, FieldDefinition, FieldType, LinkTarget},
 };
 
 /// Views one collection keeps.
@@ -121,8 +122,10 @@ pub struct Column {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ViewConfig {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub filters: Vec<FieldClause>,
+    /// A list of clauses (all must hold), or a tree of "and" and "or"
+    /// groups (`super::filter`).
+    #[serde(default, skip_serializing_if = "Filter::is_empty")]
+    pub filters: Filter,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sort: Vec<SortRule>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -147,12 +150,7 @@ impl ViewConfig {
                 .any(|field| field.id == *id && !field.archived)
         };
         Self {
-            filters: self
-                .filters
-                .iter()
-                .filter(|clause| active(&clause.field))
-                .cloned()
-                .collect(),
+            filters: self.filters.retain(&|clause| active(&clause.field)),
             sort: self
                 .sort
                 .iter()
@@ -223,13 +221,10 @@ pub fn check(config: &ViewConfig, definitions: &[FieldDefinition]) -> Result<(),
             .iter()
             .find(|field| field.id == id && !field.archived)
     };
-    if config.filters.len() > fields::MAX_CLAUSES {
-        return Err(format!(
-            "A view has at most {} filters.",
-            fields::MAX_CLAUSES
-        ));
+    if let Some(problem) = config.filters.size_problem() {
+        return Err(problem);
     }
-    for clause in &config.filters {
+    for clause in config.filters.clauses() {
         let Some(field) = active(clause.field) else {
             return Err("A filter names a field this collection doesn't have.".to_owned());
         };
@@ -240,7 +235,10 @@ pub fn check(config: &ViewConfig, definitions: &[FieldDefinition]) -> Result<(),
                 clause.op.as_str(),
                 match clause.op {
                     fields::FieldOp::Empty | fields::FieldOp::NotEmpty => "no values".to_owned(),
-                    fields::FieldOp::Is | fields::FieldOp::IsNot =>
+                    fields::FieldOp::Is
+                    | fields::FieldOp::IsNot
+                    | fields::FieldOp::CategoryIs
+                    | fields::FieldOp::CategoryIsNot =>
                         format!("1 to {} values", fields::MAX_CLAUSE_VALUES),
                     _ => "one value".to_owned(),
                 }
@@ -338,7 +336,7 @@ pub async fn check_references(
     config: &ViewConfig,
     definitions: &[FieldDefinition],
 ) -> Result<Result<(), String>, AppError> {
-    for clause in &config.filters {
+    for clause in config.filters.clauses() {
         let Some(field) = definitions.iter().find(|field| field.id == clause.field) else {
             continue;
         };
@@ -506,7 +504,7 @@ pub async fn list(
 /// Finds one of `views` by ID or name, ignoring case.
 pub fn find<'a>(views: &'a [View], reference: &str) -> Option<&'a View> {
     let reference = reference.trim();
-    if let Some(id) = super::id_in(reference) {
+    if let Some(id) = crate::collections::id_in(reference) {
         return views.iter().find(|view| view.id == id);
     }
     let name = reference
@@ -530,7 +528,7 @@ pub fn names(views: &[View]) -> String {
 }
 
 /// Starts a new collection with its "All records" table.
-pub(super) async fn insert_first(
+pub(crate) async fn insert_first(
     connection: &mut PgConnection,
     project_id: Uuid,
     collection_id: Uuid,
@@ -547,7 +545,7 @@ pub(super) async fn insert_first(
     .bind(Uuid::now_v7())
     .bind(project_id)
     .bind(collection_id)
-    .bind(super::FIRST_VIEW_NAME)
+    .bind(crate::collections::FIRST_VIEW_NAME)
     .bind(actor_id)
     .execute(&mut *connection)
     .await?;
@@ -582,7 +580,7 @@ pub async fn create(
     actor_id: Uuid,
     new: NewView,
 ) -> Result<CreateViewOutcome, AppError> {
-    if super::normalize_name(&new.name).as_deref() != Some(new.name.as_str()) {
+    if crate::collections::normalize_name(&new.name).as_deref() != Some(new.name.as_str()) {
         return Err(AppError::Validation("name"));
     }
     let existing = list(&mut *connection, project_id, collection_id).await?;
@@ -683,7 +681,7 @@ pub async fn change(
         return Ok(ChangeViewOutcome::NotFound);
     };
     let name = change.name.clone().unwrap_or_else(|| current.name.clone());
-    if super::normalize_name(&name).as_deref() != Some(name.as_str()) {
+    if crate::collections::normalize_name(&name).as_deref() != Some(name.as_str()) {
         return Err(AppError::Validation("name"));
     }
     let config = change
@@ -840,6 +838,7 @@ mod tests {
             position: 0,
             archived,
             version: 1,
+            accessor: crate::fields::Accessor::Stored,
         }
     }
 
@@ -854,7 +853,8 @@ mod tests {
                 field: person.id,
                 op: FieldOp::Is,
                 values: vec!["me".to_owned()],
-            }],
+            }]
+            .into(),
             sort: vec![SortRule {
                 field: "updated".to_owned(),
                 direction: super::Direction::Desc,
@@ -874,7 +874,8 @@ mod tests {
                 field: Uuid::now_v7(),
                 op: FieldOp::NotEmpty,
                 values: Vec::new(),
-            }],
+            }]
+            .into(),
             ..ViewConfig::default()
         };
         assert!(check(&elsewhere, &fields).is_err());

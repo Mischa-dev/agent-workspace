@@ -58,7 +58,7 @@ export type LinkTarget = 'task' | 'page' | 'record'
 
 export type FieldReference = { id: string; kind: 'person' | 'task' | 'page' | 'record'; label: string; key: string | null }
 
-export type FieldOp = 'is' | 'isNot' | 'empty' | 'notEmpty' | 'contains' | 'gt' | 'gte' | 'lt' | 'lte'
+export type FieldOp = 'is' | 'isNot' | 'empty' | 'notEmpty' | 'contains' | 'gt' | 'gte' | 'lt' | 'lte' | 'within' | 'categoryIs' | 'categoryIsNot'
 
 /** One field filter, with stored values (option IDs, actor IDs, "true", numbers, dates). */
 export type FieldClause = { field: string; op: FieldOp; values?: string[] }
@@ -221,6 +221,9 @@ const OP_LABELS: Record<FieldOp, string> = {
   gte: 'is on or after / at least',
   lt: 'is before / below',
   lte: 'is on or before / at most',
+  within: 'is within',
+  categoryIs: 'is in category',
+  categoryIsNot: 'is not in category',
 }
 
 export function opLabel(op: FieldOp, type?: FieldType) {

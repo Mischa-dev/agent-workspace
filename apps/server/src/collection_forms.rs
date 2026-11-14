@@ -395,6 +395,7 @@ mod tests {
             position: 0,
             archived: false,
             version: 1,
+            accessor: crate::fields::Accessor::Stored,
         }
     }
 
@@ -447,6 +448,7 @@ mod tests {
             name: "High".to_owned(),
             color: "red".to_owned(),
             archived: false,
+            category: None,
         }];
         let score = field("Score", FieldType::Number);
         let platforms = field("Platforms", FieldType::MultipleChoice);

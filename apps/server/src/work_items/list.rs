@@ -443,7 +443,7 @@ impl Grouping {
     fn field_sql(self) -> Option<fields::GroupSql> {
         match self {
             Self::Field(id, Some(field_type)) => {
-                fields::group_sql(id, field_type, "item.field_values", "item.project_id")
+                fields::stored_group_sql(id, field_type, "item.field_values", "item.project_id")
             }
             _ => None,
         }

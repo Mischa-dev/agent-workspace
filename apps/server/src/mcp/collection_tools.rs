@@ -1038,7 +1038,7 @@ pub(super) async fn record_query(
             )
             .await?
             {
-                Ok(clauses) => config.filters = clauses,
+                Ok(clauses) => config.filters = clauses.into(),
                 Err(message) => return Ok(ToolResult::invalid("filters", message)),
             }
         }
@@ -1085,14 +1085,14 @@ pub(super) async fn record_query(
         let mut spec = Spec::from_config(&config, &definitions, principal.actor_id)
             .searching(words.clone(), &definitions);
         spec.archived = archived;
-        spec.tasks = collection.acts_like_task;
+        let source = crate::collections::source(&collection);
         if let Some(named) = &named {
             let ids = records::ids_of(
                 &mut *connection,
                 project_id,
                 collection.id,
                 named,
-                spec.tasks,
+                collection.acts_like_task,
             )
             .await?;
             let mut found = Vec::with_capacity(ids.len());
@@ -1118,8 +1118,7 @@ pub(super) async fn record_query(
         }
         let Ok(page) = query::page(
             &mut *connection,
-            project_id,
-            collection.id,
+            source.as_ref(),
             &spec,
             arguments.cursor.as_deref(),
             limit,
@@ -1128,16 +1127,15 @@ pub(super) async fn record_query(
         else {
             return Ok(ToolResult::invalid("cursor", query::CURSOR_MESSAGE));
         };
-        let total = query::total(&mut *connection, project_id, collection.id, &spec).await?;
-        let groups =
-            query::group_counts(&mut *connection, project_id, collection.id, &spec).await?;
+        let total = query::total(&mut *connection, source.as_ref(), &spec).await?;
+        let groups = query::group_counts(&mut *connection, source.as_ref(), &spec).await?;
         let ids = page.rows.iter().map(|(id, _)| *id).collect::<Vec<_>>();
         let found = records::by_ids(
             &mut *connection,
             project_id,
             collection.id,
             &ids,
-            spec.tasks,
+            collection.acts_like_task,
         )
         .await?;
         let references = work_item_fields::references(

@@ -7,9 +7,11 @@
 //!   set of field types, checks, filters and sorts.
 //! * [`records`]: a collection's records, their values and their history.
 //! * [`views`]: the ways to look at a collection (filters, sort, grouping
-//!   and columns), checked against its fields on every write.
-//! * [`query`]: finding records on the server, a page at a time, with
-//!   counts by group. Nothing reads a whole collection.
+//!   and columns), checked against its fields on every write; and
+//!   [`query`]: finding records on the server, a page at a time, with
+//!   counts by group. Both are the one views engine, `crate::views` (T1.5):
+//!   a collection is read through `views::source::CollectionSource`, and a
+//!   collection whose records are tasks through `tasks::TasksSource`.
 //! * [`definition`]: a collection's fields and views by name, so one made
 //!   in one project can be made again in another.
 //! * [`http`]: the web app's routes. Agents use the five tools in
@@ -24,12 +26,13 @@
 
 pub mod definition;
 pub mod http;
-pub mod query;
 pub mod records;
 pub mod task_like;
 pub mod task_writes;
 pub mod tasks;
-pub mod views;
+/// A collection's views and how records are found: the one views engine
+/// (T1.5), kept at their old paths.
+pub use crate::views::{definition as views, query};
 
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
@@ -53,6 +56,22 @@ pub const MAX_RECORDS: i64 = 100_000;
 /// The view every new collection starts with.
 pub const FIRST_VIEW_NAME: &str = "All records";
 pub const DEFAULT_TITLE_NAME: &str = "Name";
+
+/// Where a collection's records are read from by the views engine: its
+/// records, or, when they're tasks, its records with their tasks.
+pub fn source(collection: &Collection) -> Box<dyn crate::views::source::RecordSource> {
+    if collection.acts_like_task {
+        Box::new(tasks::TasksSource {
+            project_id: collection.project_id,
+            collection_id: collection.id,
+        })
+    } else {
+        Box::new(crate::views::source::CollectionSource {
+            project_id: collection.project_id,
+            collection_id: collection.id,
+        })
+    }
+}
 
 /// The kind of record a collection's fields belong to.
 pub fn kind(collection_id: Uuid) -> RecordKind {

@@ -2715,6 +2715,7 @@ mod tests {
                         name: (*name).to_owned(),
                         color: "#336699".to_owned(),
                         archived: false,
+                        category: None,
                     })
                     .collect(),
                 target: (field_type == FieldType::Link).then_some(LinkTarget::Task),
@@ -2723,6 +2724,7 @@ mod tests {
             position: 0,
             archived: false,
             version: 1,
+            accessor: crate::fields::Accessor::Stored,
         }
     }
 

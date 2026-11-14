@@ -19,7 +19,7 @@
 //! it and refuse any other write to it. Reads still come from `work_items`
 //! until the record owns the shared columns.
 
-use sqlx::{FromRow, PgConnection};
+use sqlx::{FromRow, PgConnection, Postgres, QueryBuilder};
 use uuid::{Uuid, uuid};
 
 use crate::{
@@ -27,6 +27,7 @@ use crate::{
     fields::{
         self, ChoiceOption, FieldConfig, FieldDefinition, FieldType, GroupSql, RecordKind, SortKey,
     },
+    views::source::RecordSource,
 };
 
 /// `collections.builtin` for the Tasks collection.
@@ -130,6 +131,7 @@ fn builtin(
         position,
         archived: false,
         version: 1,
+        accessor: fields::Accessor::Stored,
     }
 }
 
@@ -164,6 +166,7 @@ pub async fn fields(
         name,
         color: status_color(&category).to_owned(),
         archived,
+        category: Some(category),
     })
     .collect();
     let labels = sqlx::query_as::<_, OptionRow>(
@@ -179,6 +182,7 @@ pub async fn fields(
         name: row.name,
         color: row.color,
         archived: row.archived,
+        category: None,
     })
     .collect();
     let priorities = PRIORITIES
@@ -188,6 +192,7 @@ pub async fn fields(
             name: (*name).to_owned(),
             color: (*color).to_owned(),
             archived: false,
+            category: None,
         })
         .collect();
     let mut found = vec![
@@ -246,6 +251,38 @@ pub fn source() -> String {
          LEFT JOIN collections tasks ON tasks.project_id = task.project_id AND tasks.builtin = '{BUILTIN}')",
         priority = priority_value(),
     )
+}
+
+/// The records of a collection whose records are tasks, read with their
+/// tasks' built-in fields folded into their values (`source`).
+#[derive(Clone, Copy, Debug)]
+pub struct TasksSource {
+    pub project_id: Uuid,
+    pub collection_id: Uuid,
+}
+
+impl RecordSource for TasksSource {
+    fn from_sql(&self) -> String {
+        format!("{} record", source())
+    }
+
+    fn scope(&self, builder: &mut QueryBuilder<'_, Postgres>) {
+        builder.push(" WHERE record.project_id = ");
+        builder.push_bind(self.project_id);
+        builder.push(" AND record.collection_id = ");
+        builder.push_bind(self.collection_id);
+    }
+
+    fn group_sql(&self, field: &FieldDefinition) -> Option<GroupSql> {
+        if !is_builtin_field(field.id) {
+            return None;
+        }
+        group_sql(field, "record.field_values", "record.project_id")
+    }
+
+    fn identity(&self) -> String {
+        format!("tasks:{}:{}", self.project_id, self.collection_id)
+    }
 }
 
 /// Grouping by Status or Priority, whose options aren't stored in
