@@ -939,14 +939,7 @@ async fn current_version(
 // Who may read and write (shared with secrets)
 
 pub(crate) fn actor_kind(value: &str) -> Result<ActorKind, AppError> {
-    match value {
-        "human" => Ok(ActorKind::Human),
-        "external_agent" => Ok(ActorKind::ExternalAgent),
-        "execution_worker" => Ok(ActorKind::ExecutionWorker),
-        "integration" => Ok(ActorKind::Integration),
-        "system" => Ok(ActorKind::System),
-        _ => Err(AppError::Internal("stored Actor kind")),
-    }
+    crate::accounts::actor_kind(value)
 }
 
 /// A stored membership's role: its plain role, and the custom role's

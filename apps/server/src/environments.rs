@@ -182,14 +182,7 @@ pub(crate) async fn authorize_project(
 }
 
 pub(crate) fn principal_kind(principal: &AuthenticatedActor) -> Result<ActorKind, AppError> {
-    match principal.actor_kind.as_str() {
-        "human" => Ok(ActorKind::Human),
-        "external_agent" => Ok(ActorKind::ExternalAgent),
-        "execution_worker" => Ok(ActorKind::ExecutionWorker),
-        "integration" => Ok(ActorKind::Integration),
-        "system" => Ok(ActorKind::System),
-        _ => Err(AppError::Internal("invalid actor kind")),
-    }
+    crate::accounts::actor_kind(&principal.actor_kind)
 }
 
 /// The project's default environment ID (its `run.environment` setting) as

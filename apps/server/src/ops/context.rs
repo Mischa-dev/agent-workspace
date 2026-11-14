@@ -274,24 +274,10 @@ impl From<&OpContext> for crate::work_item_commands::CommandActor {
 
 /// The stored key of an account kind (`actors.kind`).
 pub fn actor_kind_key(kind: ActorKind) -> &'static str {
-    match kind {
-        ActorKind::Human => "human",
-        ActorKind::ExternalAgent => "external_agent",
-        ActorKind::ExecutionWorker => "execution_worker",
-        ActorKind::Integration => "integration",
-        ActorKind::System => "system",
-    }
+    crate::accounts::actor_kind_key(kind)
 }
 
-/// An account kind from its stored key.
+/// An account kind from its stored key (`accounts::actor_kind`).
 pub fn actor_kind_of(key: &str) -> Option<ActorKind> {
-    [
-        ActorKind::Human,
-        ActorKind::ExternalAgent,
-        ActorKind::ExecutionWorker,
-        ActorKind::Integration,
-        ActorKind::System,
-    ]
-    .into_iter()
-    .find(|kind| actor_kind_key(*kind) == key)
+    crate::accounts::actor_kind(key).ok()
 }

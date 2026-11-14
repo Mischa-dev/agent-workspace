@@ -1072,7 +1072,7 @@ pub(crate) fn creator_actor(
 ) -> Result<CommandActor, AppError> {
     Ok(CommandActor {
         actor_id: principal.actor_id,
-        actor_kind: super::actor_kind(&principal.actor_kind)?,
+        actor_kind: crate::accounts::actor_kind(&principal.actor_kind)?,
         project_id,
         audit: AuditAttribution::Browser {
             session_id: principal.session_id,

@@ -1529,7 +1529,7 @@ fn authorize_organization_create(
 ) -> Result<(), AppError> {
     authorize_project_create(
         principal.actor_id,
-        actor_kind(&principal.actor_kind)?,
+        crate::accounts::actor_kind(&principal.actor_kind)?,
         organization_id,
         role,
         role_permissions,
@@ -1568,7 +1568,7 @@ fn authorize_project_action(
     let role = RoleGrant::stored(project.role(), project.role_permissions())?;
     let subject = subject(
         principal.actor_id,
-        actor_kind(&principal.actor_kind)?,
+        crate::accounts::actor_kind(&principal.actor_kind)?,
         project.project_id(),
         role,
     );
@@ -1621,17 +1621,6 @@ fn subject(actor_id: Uuid, actor_kind: ActorKind, project_id: Uuid, role: RoleGr
         Some(Membership::project(project_id, role, true)),
         None,
     )
-}
-
-fn actor_kind(value: &str) -> Result<ActorKind, AppError> {
-    match value {
-        "human" => Ok(ActorKind::Human),
-        "external_agent" => Ok(ActorKind::ExternalAgent),
-        "execution_worker" => Ok(ActorKind::ExecutionWorker),
-        "integration" => Ok(ActorKind::Integration),
-        "system" => Ok(ActorKind::System),
-        _ => Err(AppError::Internal("stored Actor kind")),
-    }
 }
 
 fn allowed(decision: Decision) -> Result<(), AppError> {

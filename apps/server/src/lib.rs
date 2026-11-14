@@ -3,6 +3,7 @@
 pub mod access;
 pub mod account;
 pub mod account_security;
+pub mod accounts;
 pub mod agent_docs;
 pub mod agent_parity;
 pub mod agent_profiles;

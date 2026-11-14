@@ -54,7 +54,7 @@ impl RunCaller {
     ) -> Result<Self, AppError> {
         Ok(Self {
             actor_id: actor.actor_id,
-            actor_kind: actor_kind(&actor.actor_kind)?,
+            actor_kind: crate::accounts::actor_kind(&actor.actor_kind)?,
             via_grant_id: None,
             audit: AuditAttribution::Browser {
                 session_id: actor.session_id,
@@ -94,17 +94,6 @@ impl RunCaller {
 
     pub fn is_mcp(&self) -> bool {
         matches!(self.audit, AuditAttribution::Mcp { .. })
-    }
-}
-
-fn actor_kind(value: &str) -> Result<ActorKind, AppError> {
-    match value {
-        "human" => Ok(ActorKind::Human),
-        "external_agent" => Ok(ActorKind::ExternalAgent),
-        "execution_worker" => Ok(ActorKind::ExecutionWorker),
-        "integration" => Ok(ActorKind::Integration),
-        "system" => Ok(ActorKind::System),
-        _ => Err(AppError::Internal("invalid actor kind")),
     }
 }
 

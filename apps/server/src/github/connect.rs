@@ -623,7 +623,7 @@ async fn record_claims(
         .ok_or(AppError::Forbidden)?;
     let subject = Subject::new(
         attempt.actor_id,
-        actor_kind(&kind)?,
+        crate::accounts::actor_kind(&kind)?,
         true,
         Some(Membership::project(
             attempt.project_id,
@@ -1015,7 +1015,7 @@ async fn add_repository(
     } = add_picked_repository_as(
         &state,
         principal.actor_id,
-        actor_kind(&principal.actor_kind)?,
+        crate::accounts::actor_kind(&principal.actor_kind)?,
         project_id,
         request.installation_id,
         request.github_repository_id,

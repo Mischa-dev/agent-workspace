@@ -25,7 +25,7 @@ use crate::{
     outbox::{
         ConversationCreatedPayload, OutboxConversationKind, OutboxEventPayload, enqueue_typed,
     },
-    policy::{Action, ActorKind, Decision, Permission, RoleGrant},
+    policy::{Action, Decision, Permission, RoleGrant},
     work_item_commands::{
         AllocatedNumberMetadata, ArchiveCommand, ArchiveOutcome, AuditAttribution,
         AuditVersionMetadata, BoardPlacement, ChangeFinalization, CommandActor, ConflictKind,
@@ -3760,7 +3760,7 @@ fn authorize_work_item(
 ) -> Result<(), AppError> {
     let command_actor = CommandActor {
         actor_id: principal.actor_id,
-        actor_kind: actor_kind(&principal.actor_kind)?,
+        actor_kind: crate::accounts::actor_kind(&principal.actor_kind)?,
         project_id: membership.project_id,
         audit: AuditAttribution::Browser {
             session_id: principal.session_id,
@@ -4839,24 +4839,13 @@ fn browser_actor(
         .map(str::to_owned);
     Ok(CommandActor {
         actor_id: principal.actor_id,
-        actor_kind: actor_kind(&principal.actor_kind)?,
+        actor_kind: crate::accounts::actor_kind(&principal.actor_kind)?,
         project_id,
         audit: AuditAttribution::Browser {
             session_id: principal.session_id,
             request_id,
         },
     })
-}
-
-fn actor_kind(value: &str) -> Result<ActorKind, AppError> {
-    match value {
-        "human" => Ok(ActorKind::Human),
-        "external_agent" => Ok(ActorKind::ExternalAgent),
-        "execution_worker" => Ok(ActorKind::ExecutionWorker),
-        "integration" => Ok(ActorKind::Integration),
-        "system" => Ok(ActorKind::System),
-        _ => Err(AppError::Internal("invalid actor kind")),
-    }
 }
 
 #[cfg(test)]

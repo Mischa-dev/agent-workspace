@@ -22,8 +22,8 @@ use crate::{
     error::AppError,
     outbox::{self, OUTBOX_SCHEMA_VERSION, OutboxEnvelope, OutboxFailureKind, OutboxPublisher},
     policy::{
-        Action, ActorKind, Decision, Membership, MembershipRole, ProjectScope, Resource, RoleGrant,
-        Subject, authorize,
+        Action, Decision, Membership, MembershipRole, ProjectScope, Resource, RoleGrant, Subject,
+        authorize,
     },
 };
 
@@ -569,7 +569,7 @@ fn realtime_policy_allows(
 ) -> Result<bool, AppError> {
     let subject = Subject::new(
         actor_id,
-        parse_actor_kind(actor_kind)?,
+        crate::accounts::actor_kind(actor_kind)?,
         true,
         // Subscribing needs only "Open projects", which every role holds,
         // custom ones included, so the built-in role decides it.
@@ -592,17 +592,6 @@ fn realtime_policy_allows(
         ),
         Decision::Allow
     ))
-}
-
-fn parse_actor_kind(value: &str) -> Result<ActorKind, AppError> {
-    match value {
-        "human" => Ok(ActorKind::Human),
-        "external_agent" => Ok(ActorKind::ExternalAgent),
-        "execution_worker" => Ok(ActorKind::ExecutionWorker),
-        "integration" => Ok(ActorKind::Integration),
-        "system" => Ok(ActorKind::System),
-        _ => Err(AppError::Internal("unknown Actor kind")),
-    }
 }
 
 fn parse_membership_role(value: &str) -> Result<MembershipRole, AppError> {

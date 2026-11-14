@@ -1986,12 +1986,5 @@ impl RunActor for crate::runs::RunCaller {
 }
 
 pub(crate) fn parse_actor_kind(value: &str) -> Result<ActorKind, AppError> {
-    match value {
-        "human" => Ok(ActorKind::Human),
-        "external_agent" => Ok(ActorKind::ExternalAgent),
-        "execution_worker" => Ok(ActorKind::ExecutionWorker),
-        "integration" => Ok(ActorKind::Integration),
-        "system" => Ok(ActorKind::System),
-        _ => Err(AppError::Internal("unknown Actor kind")),
-    }
+    crate::accounts::actor_kind(value)
 }

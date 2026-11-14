@@ -711,7 +711,7 @@ async fn require_project_access(
     require_project_access_as(
         transaction,
         principal.actor_id,
-        actor_kind(&principal.actor_kind)?,
+        crate::accounts::actor_kind(&principal.actor_kind)?,
         project_id,
         action,
     )
@@ -848,17 +848,6 @@ fn repository_view(row: RepositoryRow, manage: bool) -> Result<RepositoryView, A
 
 fn role_allows_manage(role: RoleGrant) -> bool {
     role.permissions().contains(Permission::CodeManage)
-}
-
-fn actor_kind(value: &str) -> Result<ActorKind, AppError> {
-    match value {
-        "human" => Ok(ActorKind::Human),
-        "external_agent" => Ok(ActorKind::ExternalAgent),
-        "execution_worker" => Ok(ActorKind::ExecutionWorker),
-        "integration" => Ok(ActorKind::Integration),
-        "system" => Ok(ActorKind::System),
-        _ => Err(AppError::Internal("invalid actor kind")),
-    }
 }
 
 #[cfg(test)]
