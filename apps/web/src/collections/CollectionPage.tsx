@@ -1,6 +1,6 @@
 import { Suspense, lazy, useCallback, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
 import { useAuthenticatedSession, type SessionUser } from '../auth/session'
@@ -165,6 +165,8 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
   // The built-in Tasks collection (AWD-110) reads the project's tasks: a
   // record opens its task, and only views change here.
   const tasks = collection.data.collection.builtin === 'tasks'
+  // A link to a Tasks record (an embed, an old link) opens its task.
+  if (tasks && recordId) return <Navigate replace to={`/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(recordId)}`} />
   const body = tasks ? { ...collection.data, canBuild: false, canEditRecords: false } : collection.data
   const canSaveViews = collection.data.canBuild && !(Boolean(project.archivedAt) || body.collection.archived)
   const views = [...body.views].sort((left, right) => left.position - right.position)
