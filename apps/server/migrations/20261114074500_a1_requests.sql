@@ -49,7 +49,9 @@ CREATE TABLE requests (
         status IN ('open', 'answered', 'expired', 'cancelled', 'superseded')
     ),
     answer JSONB CHECK (
-        answer IS NULL OR (jsonb_typeof(answer) = 'object' AND octet_length(answer::text) <= 8192)
+        -- 32 KiB: the old tables' longest answers (4,000 characters, each up
+        -- to six bytes once written as JSON) fit with room to spare.
+        answer IS NULL OR (jsonb_typeof(answer) = 'object' AND octet_length(answer::text) <= 32768)
     ),
     answered_by_account_id UUID REFERENCES actors(id),
     answered_via_app_id UUID,
@@ -115,7 +117,7 @@ AS $$
                 ELSE 'cancelled' END,
            CASE WHEN approval.status = 'resolved' THEN
                 CASE WHEN jsonb_typeof(approval.response) = 'object'
-                          AND octet_length(approval.response::text) <= 8192
+                          AND octet_length(approval.response::text) <= 32768
                      THEN approval.response
                      ELSE jsonb_build_object('legacy', true) END END,
            CASE WHEN approval.status = 'resolved' THEN approval.responded_by_actor_id END,

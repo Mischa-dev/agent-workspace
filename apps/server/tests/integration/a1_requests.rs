@@ -123,6 +123,29 @@ async fn old_approvals_and_questions_are_copied_with_their_ids() {
     };
     let asked = question(false).await;
     let answered = question(true).await;
+    // The longest answer the old table takes: 4,000 characters, each of which
+    // JSON writes as six bytes. Its copy must fit, or the upgrade fails.
+    let longest_text = "\u{1}".repeat(4_000);
+    let longest = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO person_questions (
+            id, project_id, asked_by_actor_id, person_actor_id, question, options,
+            conversation_id, status, answer_text, answered_at
+        )
+        VALUES ($1, $2, $3, $4, 'Ship today?', '[{"id": "1", "label": "Yes"}]', $5,
+                'answered', $6, now())
+        "#,
+    )
+    .bind(longest)
+    .bind(seed.project_id)
+    .bind(seed.worker_actor_id)
+    .bind(seed.human_actor_id)
+    .bind(seed.thread_id)
+    .bind(&longest_text)
+    .execute(&pool)
+    .await
+    .expect("the longest answer");
 
     full.run(&pool)
         .await
@@ -190,11 +213,16 @@ async fn old_approvals_and_questions_are_copied_with_their_ids() {
             Some(seed.human_actor_id)
         )
     );
+    assert_eq!(
+        copied(&pool, longest).await.answer,
+        Some(json!({"text": longest_text})),
+        "the longest old answer is copied whole"
+    );
     let total = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM requests")
         .fetch_one(&pool)
         .await
         .expect("count");
-    assert_eq!(total, 5, "each old row is copied once");
+    assert_eq!(total, 6, "each old row is copied once");
 }
 
 #[tokio::test]
