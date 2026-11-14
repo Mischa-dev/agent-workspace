@@ -37,7 +37,8 @@ import { useArchive, useBoardCount, useEditShortcut, useWide } from './taskPageH
 import { TaskProperties } from './TaskProperties'
 import { TaskSearchPicker } from './TaskSearchPicker'
 import { TaskStart, type StartFix } from './TaskStart'
-import type { WorkItem, WorkItemWorkflow } from './types'
+import type { WorkItem, WorkItemPriority, WorkItemWorkflow } from './types'
+import { BlockerPriorityNotice } from './BlockerPriorityNotice'
 import { useTaskSave } from './useTaskSave'
 
 export type TaskLayout = 'panel' | 'page'
@@ -221,6 +222,9 @@ function TaskDetailBody({
     () => pendingMoves.get(moveKey)?.actorId === actorId,
   )
   const [blocking, setBlocking] = useState(false)
+  // A priority the person just raised this task to, while the offer to raise its blockers stands.
+  const [raised, setRaised] = useState<{ taskId: string; priority: WorkItemPriority } | null>(null)
+  const raisedTo = raised?.taskId === item.id ? raised.priority : null
   const [boardDialog, setBoardDialog] = useState<'new' | 'link' | null>(null)
   const [managingLabels, setManagingLabels] = useState(false)
   const [dropping, setDropping] = useState(false)
@@ -347,6 +351,9 @@ function TaskDetailBody({
           <TaskSaveNotices item={item} save={save} />
         </Suspense>
       ) : null}
+      {raisedTo && shown.dependencies && !disabled ? (
+        <BlockerPriorityNotice item={item} onDone={() => setRaised(null)} priority={raisedTo} />
+      ) : null}
       <ClaimNotice item={item} projectArchived={projectArchived} />
       {item.blocked ? (
         <BlockedNotice blocked={item.blocked} onUnblock={disabled ? undefined : () => save.save('blocked', { blockedReason: null })} />
@@ -423,6 +430,7 @@ function TaskDetailBody({
       disabled={disabled}
       item={item}
       onManageLabels={() => setManagingLabels(true)}
+      onRaisePriority={(priority) => setRaised({ taskId: item.id, priority })}
       save={save}
       variant={wide ? 'rail' : 'pills'}
       workflow={workflow}

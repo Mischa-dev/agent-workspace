@@ -105,6 +105,7 @@ export function taskRef(value: unknown): TaskRef | null {
     projectId: string(task.projectId),
     key: string(task.key),
     title: string(task.title),
+    priority: priority(task.priority),
     statusName: string(task.statusName),
     statusCategory,
     finished: typeof task.finished === 'boolean' ? task.finished : statusCategory === 'completed' || statusCategory === 'canceled',
