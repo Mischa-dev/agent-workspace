@@ -410,6 +410,11 @@ fn described_agent(agent: &Value) -> Result<Value, HostError> {
             }))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    bounded(
+        &Value::Array(backends.clone()),
+        16 * 1024,
+        "agents.backends",
+    )?;
     let actions = listed(
         agent["actions"].as_array().map_or(&[][..], Vec::as_slice),
         "agents.actions",
@@ -492,6 +497,7 @@ pub async fn describe(
         }
     }
     let described = Value::Array(agents.clone());
+    bounded(&described, 128 * 1024, "agents")?;
 
     let mut transaction = pool.begin().await?;
     sqlx::query(

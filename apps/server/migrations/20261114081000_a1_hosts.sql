@@ -26,18 +26,18 @@ CREATE TABLE hosts (
     software_version TEXT CHECK (software_version IS NULL OR char_length(software_version) <= 40),
     protocol_version TEXT NOT NULL CHECK (protocol_version ~ '^[0-9]{4}-[0-9]{2}$'),
     capabilities JSONB NOT NULL DEFAULT '{}'::jsonb CHECK (
-        jsonb_typeof(capabilities) = 'object' AND octet_length(capabilities::text) <= 32768
+        jsonb_typeof(capabilities) = 'object' AND octet_length(capabilities::text) <= 65536
     ),
     offers JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (
-        jsonb_typeof(offers) = 'array' AND octet_length(offers::text) <= 32768
+        jsonb_typeof(offers) = 'array' AND octet_length(offers::text) <= 65536
     ),
     actions JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (
-        jsonb_typeof(actions) = 'array' AND octet_length(actions::text) <= 32768
+        jsonb_typeof(actions) = 'array' AND octet_length(actions::text) <= 65536
     ),
     -- The agents the host last described, bound or not: what a person picks
     -- from when binding one.
     described_agents JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (
-        jsonb_typeof(described_agents) = 'array' AND octet_length(described_agents::text) <= 131072
+        jsonb_typeof(described_agents) = 'array' AND octet_length(described_agents::text) <= 262144
     ),
     -- PostgreSQL caps a regex repetition count at 255, so the length is its
     -- own check.
@@ -69,7 +69,7 @@ CREATE TABLE hosts (
         report_interval_seconds BETWEEN 15 AND 3600
     ),
     capacity JSONB NOT NULL DEFAULT '{}'::jsonb CHECK (
-        jsonb_typeof(capacity) = 'object' AND octet_length(capacity::text) <= 4096
+        jsonb_typeof(capacity) = 'object' AND octet_length(capacity::text) <= 8192
     ),
     last_seen_at TIMESTAMPTZ,
     last_command_seq_fetched BIGINT NOT NULL DEFAULT 0,
@@ -116,10 +116,10 @@ CREATE TABLE host_agents (
     -- reference change keeps the account only when this matches.
     lineage TEXT CHECK (lineage IS NULL OR char_length(lineage) BETWEEN 1 AND 200),
     backends JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (
-        jsonb_typeof(backends) = 'array' AND octet_length(backends::text) <= 16384
+        jsonb_typeof(backends) = 'array' AND octet_length(backends::text) <= 32768
     ),
     actions JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (
-        jsonb_typeof(actions) = 'array' AND octet_length(actions::text) <= 16384
+        jsonb_typeof(actions) = 'array' AND octet_length(actions::text) <= 65536
     ),
     status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'paused', 'gone')),
     bound_by_account_id UUID NOT NULL REFERENCES actors(id),
@@ -139,7 +139,7 @@ CREATE TABLE host_notices (
         'agent_profile_changed', 'agent_ref_changed', 'agent_retired'
     )),
     host_agent_ref TEXT NOT NULL CHECK (char_length(host_agent_ref) BETWEEN 1 AND 200),
-    body JSONB NOT NULL CHECK (jsonb_typeof(body) = 'object' AND octet_length(body::text) <= 16384),
+    body JSONB NOT NULL CHECK (jsonb_typeof(body) = 'object' AND octet_length(body::text) <= 32768),
     -- applied: done here; waiting: for K1.7 (outside references) to replay;
     -- request_opened: the account's managers decide.
     outcome TEXT NOT NULL CHECK (outcome IN ('applied', 'waiting', 'request_opened')),
