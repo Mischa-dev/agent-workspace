@@ -1,10 +1,10 @@
 import { useId, useState, type FormEvent, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 
-import { Button, Checkbox, DetailList, Menu, SelectField, StatusChip, TextField, formatFullDate } from '../../ui'
-import type { FieldDecl, FieldValue, Piece, Thing, ThingDecl } from '../contract'
+import { Button, Checkbox, DetailList, Menu, SelectField, StatusChip, TextField, formatFullDate } from '../ui'
+import type { FieldDecl, FieldValue, Piece, Thing, ThingDecl } from '../modules/contract'
 import { fieldOf, fieldText, isLink, isMoment, rawValue, words } from './fields'
-import { Markdown } from '../../ui/markdown'
+import { Markdown } from '../ui/markdown'
 import './pieces.css'
 
 // Pieces the app draws (AWD-75, principle 5 of the build-out plan). A module

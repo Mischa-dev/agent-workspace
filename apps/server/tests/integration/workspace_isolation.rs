@@ -313,7 +313,18 @@ fn every_get_route_and_read_tool_has_an_isolation_case() {
         .find(|(path, _)| path == "mcp.rs")
         .map(|(_, source)| source.as_str())
         .expect("src/mcp.rs");
-    let read_tools = read_only_tools(mcp_source);
+    // Hand-written tools by their annotation, and operations by their kind.
+    let read_tools = read_only_tools(mcp_source)
+        .into_iter()
+        .chain(
+            agent_workspace_server::ops::registry()
+                .entries()
+                .filter(|entry| !entry.meta.kind.writes())
+                .map(|entry| entry.meta.name.to_owned())
+                // ops_kernel's test operations, registered by other tests.
+                .filter(|name| !name.starts_with("echo_")),
+        )
+        .collect::<BTreeSet<_>>();
     assert!(read_tools.len() > 10, "parsed read tools: {read_tools:?}");
     let cased = mcp_case_names()
         .into_iter()
@@ -1921,6 +1932,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "my_permissions",
     "my_work",
     "notification_list",
+    "package_export",
     "page_blocks",
     "page_comments",
     "page_get",
@@ -2120,6 +2132,12 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         by_project("page_list"),
         by_project("skill_list"),
         by_project("decision_list"),
+        case(
+            "package_export",
+            vec![json!({"spaceId": "WORK"}), json!({"wholeWorkspace": true})],
+            vec![json!({"spaceId": b.project}), json!({"spaceId": b.space})],
+            vec![],
+        ),
         by_project("milestone_list"),
         by_project("task_ready_list"),
         by_project("dependency_graph"),

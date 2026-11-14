@@ -157,8 +157,6 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("whiteboard_trash_empty", Some(WhiteboardsEdit)),
     ("whiteboard_duplicate", Some(WhiteboardsEdit)),
     ("whiteboard_link", Some(WhiteboardsEdit)),
-    ("decision_record", Some(PagesEdit)),
-    ("decision_list", None),
     ("approval_list", None),
     ("task_depend", Some(TasksEdit)),
     ("view_list", Some(TasksView)),
@@ -271,9 +269,11 @@ mod tests {
 
     #[test]
     fn every_tool_names_the_permission_it_needs_once() {
+        // Operations name their permission themselves (`Operation::PERMISSION`).
         let tools = super::super::tool_catalog()
             .into_iter()
             .map(|tool| tool.name.to_string())
+            .filter(|name| !crate::ops::mcp::is_operation(name))
             .collect::<BTreeSet<_>>();
         let listed = TOOL_PERMISSIONS
             .iter()

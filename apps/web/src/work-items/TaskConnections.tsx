@@ -10,6 +10,7 @@ import { TaskSection } from './TaskSection'
 import type { ActorRef, TaskRef, WorkItem } from './types'
 import type { TaskSave } from './useTaskSave'
 import { StatusIcon } from './WorkItemIcons'
+import '../styles/work.css'
 
 export type OpenTask = (task: { id: string; projectId: string; href: string }) => void
 

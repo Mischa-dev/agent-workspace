@@ -49,6 +49,7 @@ import { TaskSearchPicker } from './TaskSearchPicker'
 import type { BoardColumnsBy, WorkItemGroupBy, WorkItemSort, WorkItemWorkflow } from './types'
 import { useDebouncedSearch, type UpdateListState } from './useListState'
 import { PriorityIcon, StatusIcon } from './WorkItemIcons'
+import '../styles/work.css'
 
 type Open =
   /** The Filter menu's list of fields. */

@@ -58,8 +58,10 @@ pub mod notification_email;
 pub mod notification_settings;
 pub mod notifications;
 pub mod onboarding;
+pub mod ops;
 pub mod outbound;
 pub mod outbox;
+pub mod packages;
 pub mod page_blocks;
 pub mod page_docs;
 pub mod password_reset;
@@ -157,54 +159,26 @@ pub fn router(state: AppState) -> Router {
             pool: state.pool.clone(),
         }))
         .merge(api::router())
-        .merge(account::router())
+        // Each module's routes, from its registration (M1.3).
+        .merge(modules::registry::Registry::global().router())
+        .merge(ops::web::router())
         .merge(account_security::router())
         .merge(password_reset::router())
-        .merge(conversations::router())
-        .merge(direct::router())
-        .merge(replies::router())
-        .merge(message_edits::router())
-        .merge(reactions::router())
         .merge(files::http::router())
         .merge(link_previews::router())
-        .merge(notifications::router())
-        .merge(usage::router())
         .merge(home::router())
         .merge(push::router())
         .merge(notification_settings::router())
-        .merge(later::router())
-        .merge(questions::router())
-        .merge(scheduled_messages::router())
-        .merge(forwarding::router())
         .merge(mail::http::router())
-        .merge(external_agents::router())
-        .merge(repositories::router())
-        .merge(environments::router())
-        .merge(harnesses::router())
-        .merge(launch::router())
-        .merge(run_views::router())
-        .merge(agent_profiles::router())
-        .merge(agent_sessions::router())
-        .merge(github::router())
-        .merge(invitations::router())
-        .merge(memberships::router())
         .merge(workspace::router())
         .merge(roles::router())
         .merge(workspace_templates::router())
         .merge(server_status::router())
         .merge(onboarding::router())
         .merge(audit_log::router())
-        .merge(work_items::router())
-        .merge(work_items::comments::router())
-        .merge(ai::http::router())
-        .merge(memory::router())
-        .merge(whiteboards::router())
-        .merge(collections::http::router())
-        .merge(sheets::http::router())
         .merge(search::router())
         .merge(connected_apps::router())
         .merge(agent_docs::router())
-        .merge(agent_setup_links::router())
         .merge(settings::router())
         .merge(layouts::router())
         .merge(modules::router())
@@ -213,11 +187,9 @@ pub fn router(state: AppState) -> Router {
         .merge(mcp::oauth_router())
         .merge(mcp::router(state.clone()))
         .merge(public_api::router())
-        .merge(webhooks::router())
-        .merge(automations::router())
-        .merge(bug_reports::router())
         .route("/api/v1", any(api_not_found))
         .route("/api/v1/{*path}", any(api_not_found))
+        .route("/api/v2/{*path}", any(api_not_found))
         // A module's routes answer "turned off" where it's off (AWD-97).
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),

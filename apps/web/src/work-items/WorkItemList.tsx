@@ -12,7 +12,7 @@ import { AssigneeMark, DoneToggle, DueDate, GroupHeader, PickerCell, TaskBadges 
 import { LIST_COLUMNS } from './taskDisplay'
 import { workItemHref } from './links'
 import { PriorityIcon, StatusIcon } from './WorkItemIcons'
-import { useCoarsePointer, usePhoneWidth } from './useCoarsePointer'
+import { useCoarsePointer, usePhoneWidth } from '../ui/useCoarsePointer'
 import { tucksDone, withoutDone } from './doneModel'
 import { listQuery, type ListState } from './listModel'
 import { buildListRows, DONE_GROUP, DONE_LOADING, visibleTaskIds, withDoneRows, type ListRow } from './listRows'
@@ -24,7 +24,8 @@ import { emptySelection, keepLoaded, MAX_BULK, pick, pickerCurrent, pickerTarget
 import { pageHasFocus, useOpenAsYouGo, useTaskShortcuts } from './shortcutKeys'
 import { editErrorMessage, useApplyPick, type EditTarget } from './taskEdits'
 import type { WorkItemCard, WorkItemWorkflow } from './types'
-import { useWindowedRows } from './useWindowedRows'
+import { useWindowedRows } from '../ui/useWindowedRows'
+import '../styles/work.css'
 
 const PICKER_KEYS: Record<string, PickerField> = { s: 'status', a: 'assignee', l: 'labels', p: 'priority', m: 'milestone' }
 

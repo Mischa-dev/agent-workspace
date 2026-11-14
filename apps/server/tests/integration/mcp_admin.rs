@@ -473,7 +473,7 @@ async fn channels_threads_pins_and_decisions_can_be_shaped() {
         .cloned()
         .expect("superseded decision");
     assert_eq!(
-        superseded["supersededBy"], second["value"]["id"],
+        superseded["supersededByDecisionId"], second["value"]["id"],
         "{everything}"
     );
 }

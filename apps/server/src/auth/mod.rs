@@ -494,6 +494,12 @@ pub fn origin_is_allowed(config: &AppConfig, headers: &HeaderMap) -> bool {
     require_allowed_origin(config, headers).is_ok()
 }
 
+/// Whether the request carries a session cookie at all, valid or not: the
+/// operation route refuses a request that brings both a cookie and a bearer.
+pub(crate) fn has_session_cookie(config: &AppConfig, headers: &HeaderMap) -> bool {
+    cookie_value(headers, session_cookie_name(config)).is_some()
+}
+
 pub async fn load_authenticated_actor(
     state: &AppState,
     headers: &HeaderMap,

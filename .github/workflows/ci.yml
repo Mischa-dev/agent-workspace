@@ -79,6 +79,8 @@ jobs:
       - name: Checks
         env:
           AREAS: ${{ steps.changes.outputs.areas || 'rust,web' }}
+          # The budget step prints each asset limit's change against this.
+          BUDGET_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: ./tools/ci/checks.sh "${AREAS}"
       # Per-test times (P0.3) and the schema snapshot (P0.35), kept with the
       # run. actions/upload-artifact v7.0.2

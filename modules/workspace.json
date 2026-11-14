@@ -3,6 +3,7 @@
   "name": "Workspace",
   "description": "The workspace itself: Home, search, people, roles, settings, notifications and files. Always on.",
   "version": 1,
+  "order": 10,
   "kind": "core",
   "switchable": false,
   "needs": [],
@@ -29,6 +30,7 @@
     "workspace_template_list": "query",
     "workspace_template_apply": "change",
     "workspace_template_save": "create",
+    "package_export": "query",
     "role_assign": "change",
     "thing_open": "describe"
   },
@@ -47,6 +49,7 @@
     "/api/public/v1/*",
     "/api/v1",
     "/api/v1/{*path}",
+    "/api/v2/*",
     "/api/v1/account/*",
     "/api/v1/auth/*",
     "/api/v1/client-errors",

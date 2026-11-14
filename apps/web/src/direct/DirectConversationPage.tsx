@@ -48,6 +48,7 @@ import { addGroupMember, conversationTitle, directQueryKey, removeGroupMember, u
 import { usePageTitle } from '../shell/documentTitleModel'
 import { ThreadPanel } from '../threads/ThreadPanel'
 import { uploadFile } from '../files/api'
+import '../styles/conversation.css'
 
 const NO_ENTRIES: ConversationTimelineEntry[] = []
 

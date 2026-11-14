@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { useOptionalRealtime } from '../realtime/realtimeContext'
+import {
+  useMessageUpdates,
+  useOptionalRealtime,
+  useReactionUpdates,
+} from '../realtime/realtimeContext'
 import { describeLoadError } from '../ui'
 import { getConversationMessage } from './api'
 import {
@@ -8,8 +12,6 @@ import {
   isNewerMessage,
   mergeTimelineEntries,
   needsRefresh,
-  NO_MESSAGE_UPDATES,
-  NO_REACTION_UPDATES,
   quotedMessageId,
   quotesRemovedLive,
   tombstoneEntry,
@@ -60,8 +62,8 @@ export function useLiveOlderEntries({
   newestEntries: ConversationTimelineEntry[]
 }) {
   const realtime = useOptionalRealtime()
-  const updates = realtime?.messageUpdates ?? NO_MESSAGE_UPDATES
-  const reactionUpdates = realtime?.reactionUpdates ?? NO_REACTION_UPDATES
+  const updates = useMessageUpdates()
+  const reactionUpdates = useReactionUpdates()
   const resyncGeneration = realtime?.resyncGeneration ?? 0
   const [older, setOlder] = useState<OlderState>(NO_OLDER)
   const [replacements, setReplacements] = useState<Replacements>(NO_REPLACEMENT_STATE)

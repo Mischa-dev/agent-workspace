@@ -48,8 +48,15 @@ fn connection_of(actor: &CommandActor) -> Option<Uuid> {
         AuditAttribution::Mcp {
             external_agent_connection_id,
             ..
+        }
+        | AuditAttribution::PublicApi {
+            external_agent_connection_id,
+            ..
         } => *external_agent_connection_id,
-        AuditAttribution::Browser { .. } | AuditAttribution::Job { .. } => None,
+        AuditAttribution::Browser { .. }
+        | AuditAttribution::Job { .. }
+        | AuditAttribution::Automation { .. }
+        | AuditAttribution::Proposal { .. } => None,
     }
 }
 
@@ -1427,10 +1434,13 @@ pub async fn move_tasks_to_milestone(
                 },
                 summary: "Milestone changed",
                 audit_action: match actor.audit {
-                    AuditAttribution::Browser { .. } | AuditAttribution::Job { .. } => {
-                        "work_item.milestone_changed"
+                    AuditAttribution::Browser { .. }
+                    | AuditAttribution::Job { .. }
+                    | AuditAttribution::Automation { .. }
+                    | AuditAttribution::Proposal { .. } => "work_item.milestone_changed",
+                    AuditAttribution::Mcp { .. } | AuditAttribution::PublicApi { .. } => {
+                        "work_item.mcp_milestone_changed"
                     }
-                    AuditAttribution::Mcp { .. } => "work_item.mcp_milestone_changed",
                 },
                 audit_version_metadata: crate::work_item_commands::AuditVersionMetadata::Include,
             },

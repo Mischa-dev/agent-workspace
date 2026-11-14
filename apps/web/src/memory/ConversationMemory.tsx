@@ -7,6 +7,7 @@ import { toastError } from '../app/mutations'
 import { Icon, IconButton, plainPreview, showToast } from '../ui'
 import { memoryKeys, pin, unpin, type Pin } from './api'
 import { usePins } from './hooks'
+import '../styles/conversation.css'
 
 /** Pin or unpin, then say so, with Undo; a failure says why. */
 function usePinActions(projectId: string, conversationId: string) {

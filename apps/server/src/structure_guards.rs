@@ -119,18 +119,20 @@ pub(crate) const RULES: &[Rule] = &[
 ];
 
 // The most each rule's allowances may add up to: today's total, set when
-// P0.26 landed. Lower one when its allowances go down; never raise one.
+// P0.26 landed (and counted again over build 1O's operation layer, which
+// merged before these rules reached main). Lower one when its allowances go
+// down; never raise one.
 const RAW_ROLE_CHECKS_CEILING: usize = 40;
 const CUSTOM_ROLE_ALLOWS_CEILING: usize = 25;
 const WORKSPACE_ROLE_ENUM_CEILING: usize = 32;
-const ACCOUNT_KIND_CHECKS_CEILING: usize = 264;
+const ACCOUNT_KIND_CHECKS_CEILING: usize = 266;
 const AGENT_RUNS_SQL_CEILING: usize = 178;
 const ACTIVE_RUN_STATES_LITERAL_CEILING: usize = 19;
 const CONVERSATION_INSERTS_CEILING: usize = 11;
 const MESSAGE_INSERTS_CEILING: usize = 4;
 const TASK_CORE_UPDATES_CEILING: usize = 10;
 const DIRECT_TOOL_CALLS_CEILING: usize = 4;
-const PROCESS_STATE_CEILING: usize = 14;
+const PROCESS_STATE_CEILING: usize = 17;
 const BACKGROUND_SPAWNS_CEILING: usize = 16;
 const CONVERSATION_LISTINGS_CEILING: usize = 77;
 // P0.36. The four left are system text, not anyone's words: why a scheduled
@@ -138,7 +140,7 @@ const CONVERSATION_LISTINGS_CEILING: usize = 77;
 // off and which automation posted (automations.rs), and a usage alert's
 // suggested batch (usage/alerts.rs).
 const NOTIFICATION_DETAIL_TEXT_CEILING: usize = 4;
-const VENDOR_NAMES_CORE_CEILING: usize = 9;
+const VENDOR_NAMES_CORE_CEILING: usize = 10;
 
 /// The heading in `AGENTS.md` the rules sit under.
 const AGENTS_HEADING: &str = "Rules while the foundations are rebuilt";

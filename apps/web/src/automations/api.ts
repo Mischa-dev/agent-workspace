@@ -158,6 +158,7 @@ export type RuleAction =
     }
   | { kind: 'notify'; recipients: Recipients; message: string }
   | { kind: 'post_message'; conversationId: string; text: string }
+  | { kind: 'run_operation'; operation: string; input: Record<string, unknown> }
 
 export type RuleActionKind = RuleAction['kind']
 

@@ -2,6 +2,7 @@ import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { createLiveStore, type LiveState } from '../realtime/liveStore'
 import { RealtimeContext, type RealtimeContextValue } from '../realtime/realtimeContext'
 import { normalizeTimelinePage } from './api'
 import type { MessageUpdates } from './liveMessages'
@@ -44,18 +45,28 @@ function entries(...list: unknown[]): ConversationTimelineEntry[] {
 
 let realtime: RealtimeContextValue = {
   connection: 'live',
-  streams: {},
-  messageUpdates: {},
-  reactionUpdates: {},
   resyncGeneration: 1,
+  live: createLiveStore(),
 }
 
 function wrapper({ children }: { children: ReactNode }) {
   return <RealtimeContext.Provider value={realtime}>{children}</RealtimeContext.Provider>
 }
 
-function setRealtime(change: Partial<RealtimeContextValue>) {
-  realtime = { ...realtime, ...change }
+function setRealtime(
+  change: Partial<Omit<RealtimeContextValue, 'live'>> & Partial<Pick<LiveState, 'messageUpdates' | 'reactionUpdates'>>,
+) {
+  const { messageUpdates, reactionUpdates, ...stable } = change
+  realtime = { ...realtime, ...stable }
+  if (messageUpdates || reactionUpdates) {
+    act(() => {
+      realtime.live.update((current) => ({
+        ...current,
+        ...(messageUpdates ? { messageUpdates } : {}),
+        ...(reactionUpdates ? { reactionUpdates } : {}),
+      }))
+    })
+  }
 }
 
 const newest = entries(wireEntry(3, 'Newest'))
@@ -64,7 +75,7 @@ describe('live older timeline pages', () => {
   afterEach(() => {
     cleanup()
     vi.unstubAllGlobals()
-    realtime = { connection: 'live', streams: {}, messageUpdates: {}, reactionUpdates: {}, resyncGeneration: 1 }
+    realtime = { connection: 'live', resyncGeneration: 1, live: createLiveStore() }
   })
 
   it('keeps a removal after its live event expires even when the message fetch fails', async () => {

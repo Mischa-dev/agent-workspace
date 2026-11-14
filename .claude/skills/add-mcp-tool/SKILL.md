@@ -9,6 +9,11 @@ The app's MCP server is how agents and connected apps do everything a person
 can. A tool is three pieces: argument and result types, a function that does
 the work, and a method in the tool router. The tests check the rest.
 
+Anything new is an operation, not a hand-written tool: follow
+`add-operation` (`.claude/skills/add-operation/SKILL.md`), which gives the
+MCP tool, the web route and the v2 API at once. This guide is for changing
+the hand-written tools that are still here.
+
 Before you start, read "Rules while the foundations are rebuilt" in
 `AGENTS.md`. A tool is one edge of an operation (rule 4): the work lives in a
 domain function the HTTP handler calls too, a tool that creates something

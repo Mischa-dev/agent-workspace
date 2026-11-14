@@ -69,9 +69,11 @@
   background: var(--content-hover);
 }
 
+/* Words in the content colour, the icon in the accent: the accent on its
+   own soft tint is too faint in the dark themes (W1.36's axe sweep). */
 .aw-settings__link[aria-current='page'] {
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--content-fg);
   font-weight: var(--weight-bold);
 }
 

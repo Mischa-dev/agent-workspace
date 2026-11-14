@@ -12,7 +12,10 @@ use std::collections::BTreeMap;
 use sqlx::{FromRow, PgConnection};
 use uuid::Uuid;
 
-use super::manifest::{self, Manifest};
+use super::{
+    manifest::{self, Manifest},
+    registry::Registry,
+};
 use crate::error::AppError;
 
 /// The setting that switches a module.
@@ -20,9 +23,59 @@ pub fn setting_key(module: &str) -> String {
     format!("modules.{module}")
 }
 
-/// A set of core modules, one bit each.
+/// A fixed number of 64-bit words, one bit per index.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct Bits<const WORDS: usize>([u64; WORDS]);
+
+impl<const WORDS: usize> Bits<WORDS> {
+    pub const EMPTY: Self = Self([0; WORDS]);
+
+    /// The first `count` indexes.
+    pub fn filled(count: usize) -> Self {
+        let mut bits = Self::EMPTY;
+        for index in 0..count.min(WORDS * 64) {
+            bits = bits.with(index);
+        }
+        bits
+    }
+
+    pub fn has(self, index: usize) -> bool {
+        index < WORDS * 64 && self.0[index / 64] & (1 << (index % 64)) != 0
+    }
+
+    pub fn with(mut self, index: usize) -> Self {
+        if index < WORDS * 64 {
+            self.0[index / 64] |= 1 << (index % 64);
+        }
+        self
+    }
+
+    pub fn without(mut self, index: usize) -> Self {
+        if index < WORDS * 64 {
+            self.0[index / 64] &= !(1 << (index % 64));
+        }
+        self
+    }
+
+    pub fn union(mut self, other: Self) -> Self {
+        for (word, other) in self.0.iter_mut().zip(other.0) {
+            *word |= other;
+        }
+        self
+    }
+
+    pub fn intersect(mut self, other: Self) -> Self {
+        for (word, other) in self.0.iter_mut().zip(other.0) {
+            *word &= other;
+        }
+        self
+    }
+}
+
+/// A set of core modules, one bit each over the registry's order (as many
+/// words as `build.rs` counts modules for, so there's no cap).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ModuleSet(u32);
+pub struct ModuleSet(Bits<{ super::core::CORE_WORDS }>);
 
 impl Default for ModuleSet {
     fn default() -> Self {
@@ -31,21 +84,18 @@ impl Default for ModuleSet {
 }
 
 impl ModuleSet {
+    const NONE: Self = Self(Bits::EMPTY);
+
     pub fn all() -> Self {
-        let count = manifest::core().len();
-        Self(if count >= 32 {
-            u32::MAX
-        } else {
-            (1_u32 << count) - 1
-        })
+        Self(Bits::filled(manifest::core().len()))
     }
 
     /// Only the modules that can't be switched off.
     pub fn always_on() -> Self {
-        let mut set = Self(0);
+        let mut set = Self::NONE;
         for (index, module) in manifest::core().iter().enumerate() {
             if !module.switchable {
-                set.0 |= 1 << index;
+                set.0 = set.0.with(index);
             }
         }
         set
@@ -54,19 +104,19 @@ impl ModuleSet {
     /// Whether a module is in the set. A module this server doesn't know
     /// counts as on: switches fail open, so they never hide more than meant.
     pub fn contains(self, module: &str) -> bool {
-        manifest::index_of(module).is_none_or(|index| self.0 & (1 << index) != 0)
+        manifest::index_of(module).is_none_or(|index| self.0.has(index))
     }
 
     pub fn union(self, other: Self) -> Self {
-        Self(self.0 | other.0)
+        Self(self.0.union(other.0))
     }
 
     pub fn intersect(self, other: Self) -> Self {
-        Self(self.0 & other.0)
+        Self(self.0.intersect(other.0))
     }
 
     fn without(self, index: usize) -> Self {
-        Self(self.0 & !(1 << index))
+        Self(self.0.without(index))
     }
 
     /// The modules that are on, in manifest order.
@@ -74,7 +124,7 @@ impl ModuleSet {
         manifest::core()
             .iter()
             .enumerate()
-            .filter(move |(index, _)| self.0 & (1 << index) != 0)
+            .filter(move |(index, _)| self.0.has(*index))
             .map(|(_, module)| module)
     }
 
@@ -83,7 +133,7 @@ impl ModuleSet {
         manifest::core()
             .iter()
             .enumerate()
-            .filter(move |(index, _)| self.0 & (1 << index) == 0)
+            .filter(move |(index, _)| !self.0.has(*index))
             .map(|(_, module)| module)
     }
 
@@ -122,12 +172,12 @@ impl ModuleSet {
 
     /// Whether an agent tool may be listed and called.
     pub fn allows_tool(self, tool: &str) -> bool {
-        // AWD-75: threads belong to Channels but also work in DMs and
-        // groups, which follow Messages, as the call itself does.
-        if matches!(tool, "thread_start" | "thread_update") && self.contains("messages") {
-            return true;
-        }
+        // AWD-75: a tool another module also serves (threads work in DMs and
+        // groups too) is on wherever either module is, as the call is.
         manifest::of_tool(tool).is_none_or(|module| self.contains(&module.id))
+            || Registry::global()
+                .also_serving(tool)
+                .any(|module| self.contains(module))
     }
 
     pub fn allows_part(self, part: &str) -> bool {
@@ -142,15 +192,14 @@ impl ModuleSet {
         manifest::of_notification(kind).is_none_or(|module| self.contains(&module.id))
     }
 
-    /// Whether conversations of a project of this kind show: DMs and groups
-    /// (in the hidden direct project) need Messages; a project's channels
-    /// and threads need Channels.
+    /// Whether conversations of a project of this kind show: the module
+    /// that governs conversations there (`ModuleFilter::Conversations`) is
+    /// on. DMs and groups (in the hidden direct project) follow one module,
+    /// a project's channels and threads the other.
     pub fn allows_conversations_in(self, project_kind: &str) -> bool {
-        if project_kind == "direct" {
-            self.contains("messages")
-        } else {
-            self.contains("channels")
-        }
+        Registry::global()
+            .conversation_module(project_kind == "direct")
+            .is_none_or(|module| self.contains(module))
     }
 
     /// The modules on in a project of this kind (AWD-96). A project needs
@@ -162,7 +211,8 @@ impl ModuleSet {
         match project_kind {
             "standard" if !self.contains("projects") => Self::always_on(),
             "workspace" => {
-                let pages = manifest::index_of("pages").map_or(Self(0), |index| Self(1 << index));
+                let pages = manifest::index_of("pages")
+                    .map_or(Self::NONE, |index| Self(Bits::EMPTY.with(index)));
                 self.intersect(pages.union(Self::always_on()))
             }
             _ => self,
@@ -510,10 +560,11 @@ impl ProjectModules {
 
     /// Of `projects`, the ones whose workspace has `module` on. For a
     /// project-level module (tasks, pages, ...) the direct project never
-    /// counts; for Messages only it does.
+    /// counts; for the one that lives in the direct space only it does.
     pub fn with(&self, projects: &[Uuid], module: &str) -> Vec<Uuid> {
+        let in_direct = Registry::global().lives_in_direct_space(module);
         self.keep(projects, |set, direct| {
-            set.contains(module) && (direct == (module == "messages"))
+            set.contains(module) && direct == in_direct
         })
     }
 
@@ -545,7 +596,7 @@ impl ProjectModules {
             return true;
         };
         match manifest::of_notification(kind) {
-            Some(module) if module.id == "messages" => {
+            Some(module) if Registry::global().governs_conversations(&module.id) => {
                 set.allows_conversations_in(if *direct { "direct" } else { "standard" })
             }
             Some(module) => set.contains(&module.id),
@@ -600,11 +651,18 @@ pub fn notification_switches_sql() -> &'static str {
         for module in manifest::core() {
             for kind in &module.notifications {
                 let kind = kind.replace('\'', "");
-                let keys = if module.id == "messages" {
+                let registry = Registry::global();
+                let keys = if registry.governs_conversations(&module.id) {
+                    let switches = |direct| {
+                        registry
+                            .conversation_module(direct)
+                            .map(required_switches)
+                            .unwrap_or_default()
+                    };
                     format!(
                         "CASE WHEN module_project.kind = 'direct' THEN {} ELSE {} END",
-                        sql_array(&required_switches("messages")),
-                        sql_array(&required_switches("channels")),
+                        sql_array(&switches(true)),
+                        sql_array(&switches(false)),
                     )
                 } else if module.id == "pages" {
                     // AWD-96: a project's pages need Projects; the

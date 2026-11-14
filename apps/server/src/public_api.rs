@@ -96,7 +96,20 @@ async fn call(
     match mcp::call_tool_direct(state, principal, tool, arguments).await {
         Ok(result) => {
             let status = status_for(&result);
-            Ok((status, Json(result)).into_response())
+            let mut response = (status, Json(result)).into_response();
+            // An old name for an operation (K2 3.6) says it's on its way out.
+            if let Some(old) = crate::ops::aliases::active(tool)
+                && !crate::ops::registry().contains(tool)
+            {
+                let headers = response.headers_mut();
+                headers.insert("deprecation", axum::http::HeaderValue::from_static("true"));
+                if let Some(sunset) = old.sunset_header()
+                    && let Ok(value) = axum::http::HeaderValue::from_str(&sunset)
+                {
+                    headers.insert("sunset", value);
+                }
+            }
+            Ok(response)
         }
         Err(DirectCallError::UnknownTool) => Err(AppError::NotFound("api_route")),
         Err(DirectCallError::InvalidArguments(message)) => Ok((
@@ -136,8 +149,14 @@ fn outcome_status(outcome: &str) -> Option<StatusCode> {
         "invalid_request" | "invalid_transition" | "rejected" => StatusCode::UNPROCESSABLE_ENTITY,
         "conflict" => StatusCode::CONFLICT,
         "cursor_expired" => StatusCode::GONE,
-        "busy" => StatusCode::TOO_MANY_REQUESTS,
+        "busy" | "rate_limited" => StatusCode::TOO_MANY_REQUESTS,
         "temporarily_unavailable" => StatusCode::SERVICE_UNAVAILABLE,
+        // The operation layer's refusals, with the statuses `OpError::status`
+        // gives them.
+        "unauthenticated" => StatusCode::UNAUTHORIZED,
+        "limit_reached" => StatusCode::PAYMENT_REQUIRED,
+        "workspace_suspended" => StatusCode::LOCKED,
+        "too_large" => StatusCode::PAYLOAD_TOO_LARGE,
         _ => return None,
     })
 }

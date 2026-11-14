@@ -5946,6 +5946,7 @@ pub(crate) struct PullRequestMergeView {
 struct MergeTarget {
     pull_request_number: i64,
     head_sha: String,
+    merge_commit_sha: Option<String>,
     state: String,
     draft: bool,
     installation_id: i64,
@@ -5990,6 +5991,7 @@ pub(crate) async fn merge_pull_request_as(
     let target = sqlx::query_as::<_, MergeTarget>(
         r#"
         SELECT pull_request.pull_request_number, pull_request.head_sha,
+               pull_request.merge_commit_sha,
                pull_request.state, pull_request.draft,
                installation.installation_id,
                repository.github_repository_id,
@@ -6026,101 +6028,121 @@ pub(crate) async fn merge_pull_request_as(
     .ok_or(AppError::NotFound("github_pull_request"))?;
     transaction.commit().await?;
 
-    if target.state != "open" {
-        return Err(AppError::Conflict("github_pull_request", "not_open"));
-    }
-    if target.draft {
-        return Err(AppError::Conflict("github_pull_request", "draft"));
-    }
-    if !target.scope_available {
-        return Err(AppError::Conflict(
-            "github_installation",
-            "repository_unavailable",
-        ));
-    }
     let head_sha = request
         .expected_head_sha
         .clone()
         .unwrap_or_else(|| target.head_sha.clone());
-    if head_sha != target.head_sha {
-        return Err(AppError::Conflict("github_pull_request", "head_moved"));
-    }
-    let Some(config) = state.config.github.as_ref() else {
-        return Err(AppError::Conflict("github_integration", "not_configured"));
-    };
-    let (Ok(installation_id), Ok(github_repository_id), Ok(number)) = (
-        u64::try_from(target.installation_id),
-        u64::try_from(target.github_repository_id),
-        u64::try_from(target.pull_request_number),
-    ) else {
-        return Err(AppError::Internal("GitHub identity invalid"));
-    };
-    let client = GitHubClient::new(config).map_err(map_github_error)?;
-    let token = client
-        .installation_token(
-            installation_id,
-            &[github_repository_id],
-            InstallationTokenScope::PullRequestsMerge,
-        )
-        .await
-        .map_err(map_github_error)?;
-    let called = client
-        .merge_pull_request(
-            &token,
-            &target.owner,
-            &target.repository_name,
-            number,
-            &head_sha,
-            method,
-        )
-        .await;
-    let (merge_commit_sha, already_merged) = match called {
-        Ok(MergeCall::Merged(sha)) => (sha, false),
-        Ok(MergeCall::HeadMoved) => {
+    // Merged already, say by an earlier try whose answer was lost: the merge
+    // GitHub recorded at that head is the answer.
+    let recorded = target.state == "merged";
+    let (merge_commit_sha, already_merged) = if recorded {
+        if head_sha != target.head_sha {
             return Err(AppError::Conflict("github_pull_request", "head_moved"));
         }
-        // GitHub refuses a pull request that is merged already; one merged
-        // by an earlier try of this call counts as done.
-        Ok(MergeCall::NotMergeable) | Err(_) => {
-            let current = client
-                .pull_request(&token, &target.owner, &target.repository_name, number)
-                .await;
-            match current {
-                Ok(current)
-                    if current.merged_at.is_some()
-                        && current.head.sha == head_sha
-                        && current
-                            .merge_commit_sha
-                            .as_deref()
-                            .is_some_and(is_commit_sha) =>
-                {
-                    (current.merge_commit_sha.unwrap_or_default(), true)
-                }
-                _ if matches!(called, Ok(MergeCall::NotMergeable)) => {
-                    return Err(AppError::Conflict("github_pull_request", "not_mergeable"));
-                }
-                _ => return Err(AppError::Internal("GitHub integration unavailable")),
-            }
+        match target
+            .merge_commit_sha
+            .clone()
+            .filter(|sha| is_commit_sha(sha))
+        {
+            Some(sha) => (sha, true),
+            None => return Err(AppError::Conflict("github_pull_request", "not_open")),
         }
+    } else {
+        if target.state != "open" {
+            return Err(AppError::Conflict("github_pull_request", "not_open"));
+        }
+        if target.draft {
+            return Err(AppError::Conflict("github_pull_request", "draft"));
+        }
+        if !target.scope_available {
+            return Err(AppError::Conflict(
+                "github_installation",
+                "repository_unavailable",
+            ));
+        }
+        if head_sha != target.head_sha {
+            return Err(AppError::Conflict("github_pull_request", "head_moved"));
+        }
+        let Some(config) = state.config.github.as_ref() else {
+            return Err(AppError::Conflict("github_integration", "not_configured"));
+        };
+        let (Ok(installation_id), Ok(github_repository_id), Ok(number)) = (
+            u64::try_from(target.installation_id),
+            u64::try_from(target.github_repository_id),
+            u64::try_from(target.pull_request_number),
+        ) else {
+            return Err(AppError::Internal("GitHub identity invalid"));
+        };
+        let client = GitHubClient::new(config).map_err(map_github_error)?;
+        let token = client
+            .installation_token(
+                installation_id,
+                &[github_repository_id],
+                InstallationTokenScope::PullRequestsMerge,
+            )
+            .await
+            .map_err(map_github_error)?;
+        let called = client
+            .merge_pull_request(
+                &token,
+                &target.owner,
+                &target.repository_name,
+                number,
+                &head_sha,
+                method,
+            )
+            .await;
+        let (merge_commit_sha, already_merged) = match called {
+            Ok(MergeCall::Merged(sha)) => (sha, false),
+            Ok(MergeCall::HeadMoved) => {
+                return Err(AppError::Conflict("github_pull_request", "head_moved"));
+            }
+            // GitHub refuses a pull request that is merged already; one merged
+            // by an earlier try of this call counts as done.
+            Ok(MergeCall::NotMergeable) | Err(_) => {
+                let current = client
+                    .pull_request(&token, &target.owner, &target.repository_name, number)
+                    .await;
+                match current {
+                    Ok(current)
+                        if current.merged_at.is_some()
+                            && current.head.sha == head_sha
+                            && current
+                                .merge_commit_sha
+                                .as_deref()
+                                .is_some_and(is_commit_sha) =>
+                    {
+                        (current.merge_commit_sha.unwrap_or_default(), true)
+                    }
+                    _ if matches!(called, Ok(MergeCall::NotMergeable)) => {
+                        return Err(AppError::Conflict("github_pull_request", "not_mergeable"));
+                    }
+                    _ => return Err(AppError::Internal("GitHub integration unavailable")),
+                }
+            }
+        };
+        drop(token);
+        (merge_commit_sha, already_merged)
     };
-    drop(token);
 
     let mut transaction = state.pool.begin().await?;
-    record_audit_for(
-        &mut transaction,
-        actor,
-        "github_pull_request",
-        "github.pull_request_merged",
-        pull_request_id,
-        json!({
-            "number": target.pull_request_number,
-            "method": method,
-            "head_sha": head_sha,
-            "merge_commit_sha": merge_commit_sha,
-            "already_merged": already_merged,
-        }),
-    )
-    .await?;
+    if !recorded {
+        record_audit_for(
+            &mut transaction,
+            actor,
+            "github_pull_request",
+            "github.pull_request_merged",
+            pull_request_id,
+            json!({
+                "number": target.pull_request_number,
+                "method": method,
+                "head_sha": head_sha,
+                "merge_commit_sha": merge_commit_sha,
+                "already_merged": already_merged,
+            }),
+        )
+        .await?;
+    }
     let Queued { view: refresh, new } = queue_refresh_in(
         &mut transaction,
         actor.actor_id,

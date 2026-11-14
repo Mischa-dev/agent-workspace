@@ -27,6 +27,7 @@ import {
   type GitHubConnection,
 } from './api'
 import { availableRepositoriesKey as availableKey, useGitHubConnect } from './connect'
+import '../styles/pages.css'
 
 /** The buttons that start the connect flow, and the installations already connected. */
 export function GitHubConnectPanel({ connection, projectId }: { connection: GitHubConnection; projectId: string }) {

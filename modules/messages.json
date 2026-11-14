@@ -3,6 +3,7 @@
   "name": "Messages",
   "description": "Direct messages and group conversations with people and agents, with reactions, replies, scheduling and agents answering on their own.",
   "version": 1,
+  "order": 20,
   "kind": "core",
   "switchable": true,
   "needs": [],
@@ -61,6 +62,7 @@
   ],
   "links": [],
   "embeds": [],
+  "web": { "folder": "direct" },
   "slots": {
     "pages": ["/messages", "/messages/:conversationId"],
     "parts": ["talk.slash_commands", "talk.scheduling", "talk.replies"],

@@ -447,6 +447,11 @@ pub(super) struct CollectionWriteArguments {
     /// true archives it (hidden with its records, nothing deleted), false
     /// restores it.
     pub archived: Option<bool>,
+    /// true makes its records tasks: each gets a status, assignee,
+    /// priority, dates, labels and a key like AWD-12, and is then changed
+    /// with the task tools (task_create with collection, task_update).
+    /// false turns it off again while it has no records.
+    pub acts_like_task: Option<bool>,
     /// The version from collection_describe: if the collection changed
     /// since, a write that would change anything (fields and views too) is
     /// a conflict. Leave it out to change the current one.
@@ -636,19 +641,36 @@ pub(super) async fn collection_write(
                         )));
                     }
                 };
-                if let Some(position) = arguments.position {
-                    collections::change(
+                // Switching on makes a task for each record.
+                if arguments.acts_like_task == Some(true)
+                    && !can_write_in(state, principal, project_id, Action::WorkItemCreate).await?
+                {
+                    return Ok(ToolResult::denied(
+                        "Records that act like tasks are tasks: only people who can make tasks here can switch it on.",
+                    ));
+                }
+                let collection = if arguments.position.is_some()
+                    || arguments.acts_like_task == Some(true)
+                {
+                    match collections::change(
                         &mut transaction,
                         project_id,
                         collection.id,
                         principal.actor_id,
                         CollectionChange {
-                            position: Some(position),
+                            position: arguments.position,
+                            acts_like_task: arguments.acts_like_task,
                             ..CollectionChange::default()
                         },
                     )
-                    .await?;
-                }
+                    .await?
+                    {
+                        ChangeOutcome::Changed { collection, .. } => *collection,
+                        _ => collection,
+                    }
+                } else {
+                    collection
+                };
                 changes.push(format!("collection \"{}\" created", collection.name));
                 (collection, true)
             }
@@ -657,12 +679,21 @@ pub(super) async fn collection_write(
                     Ok(collection) => collection,
                     Err(refusal) => return Ok(refusal),
                 };
+                // Switching on makes a task for each record.
+                if arguments.acts_like_task == Some(true)
+                    && !can_write_in(state, principal, project_id, Action::WorkItemCreate).await?
+                {
+                    return Ok(ToolResult::denied(
+                        "Records that act like tasks are tasks: only people who can make tasks here can switch it on.",
+                    ));
+                }
                 let change = CollectionChange {
                     name,
                     description,
                     title_name,
                     position: arguments.position,
                     archived: arguments.archived,
+                    acts_like_task: arguments.acts_like_task,
                     expected_version: arguments.expected_version,
                 };
                 // Read under the lock, before anything changes: field and
@@ -737,6 +768,9 @@ pub(super) async fn collection_write(
                                 "{project_key} has {} active collections already. Archive one first.",
                                 collections::MAX_ACTIVE_COLLECTIONS
                             )));
+                        }
+                        ChangeOutcome::TaskLike(refusal) => {
+                            return Ok(ToolResult::conflict(refusal));
                         }
                     }
                 };
@@ -1051,7 +1085,7 @@ pub(super) async fn record_query(
         let mut spec = Spec::from_config(&config, &definitions, principal.actor_id)
             .searching(words.clone(), &definitions);
         spec.archived = archived;
-        spec.tasks = collection.is_tasks();
+        spec.tasks = collection.acts_like_task;
         if let Some(named) = &named {
             let ids = records::ids_of(
                 &mut *connection,
@@ -1321,6 +1355,11 @@ pub(super) async fn record_write(
         };
         if collection.is_tasks() {
             return Ok(ToolResult::conflict(collections::tasks::READ_ONLY_MESSAGE));
+        }
+        if collection.acts_like_task {
+            return Ok(ToolResult::conflict(collections::tasks::task_like_message(
+                &collection.name,
+            )));
         }
         if collection.archived {
             return Ok(ToolResult::conflict(format!(

@@ -57,6 +57,22 @@ pub enum AuditAttribution {
         oauth_grant_id: Option<Uuid>,
         external_agent_connection_id: Option<Uuid>,
     },
+    /// The public API (K2): a script or service with a bearer token.
+    PublicApi {
+        authentication_class: &'static str,
+        request_id: String,
+        client_name: String,
+        mcp_credential_id: Option<Uuid>,
+        oauth_grant_id: Option<Uuid>,
+        external_agent_connection_id: Option<Uuid>,
+    },
+    /// An automation rule acting as its maker (K2).
+    Automation { rule_id: Uuid, run_id: Uuid },
+    /// A proposal someone accepted, applied as its proposer (K2, C1).
+    Proposal {
+        proposal_id: Uuid,
+        accepted_by: Uuid,
+    },
     /// Background work acting later for the person who set it up, such as
     /// a recurring task. It rechecks their access before it acts.
     Job {
@@ -170,6 +186,9 @@ pub struct ChangeFinalization<'a> {
 }
 
 pub struct CreateWorkItemCommand<'a> {
+    /// The collection that acts like a task the task's record goes in;
+    /// None for the project's Tasks collection.
+    pub collection_id: Option<Uuid>,
     pub title: &'a str,
     pub description: &'a str,
     pub type_id: Option<Uuid>,
@@ -567,8 +586,8 @@ pub async fn create_work_item_with_id(
             id, project_id, number, title, description, type_id, status_id,
             priority, assignee_actor_id, created_by_actor_id, board_rank,
             parent_work_item_id, milestone_id, start_date, due_date, estimate,
-            field_values
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+            field_values, collection_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
         "#,
     )
     .bind(work_item_id)
@@ -596,6 +615,7 @@ pub async fn create_work_item_with_id(
         }
         values
     })
+    .bind(command.collection_id)
     .execute(&mut **transaction)
     .await?;
     add_watcher(transaction, actor.project_id, work_item_id, actor.actor_id).await?;
@@ -3267,6 +3287,94 @@ pub async fn record_audit_for(
             .bind(oauth_grant_id)
             .bind(external_agent_connection_id)
             .bind(target_kind)
+            .execute(&mut **transaction)
+            .await?;
+        }
+        AuditAttribution::PublicApi {
+            authentication_class,
+            request_id,
+            client_name,
+            mcp_credential_id,
+            oauth_grant_id,
+            external_agent_connection_id,
+        } => {
+            sqlx::query(
+                r#"
+                INSERT INTO audit_events (
+                    id, actor_id, project_id, authentication_class, action,
+                    target_kind, target_id, outcome, request_id, metadata,
+                    channel, client_name, mcp_credential_id, mcp_oauth_grant_id,
+                    external_agent_connection_id
+                ) VALUES ($1, $2, $3, $4, $5, $13, $6, 'succeeded', $7, $8, 'api', $9, $10, $11, $12)
+                "#,
+            )
+            .bind(audit_id)
+            .bind(actor.actor_id)
+            .bind(actor.project_id)
+            .bind(authentication_class)
+            .bind(action)
+            .bind(target_id)
+            .bind(request_id)
+            .bind(metadata)
+            .bind(client_name)
+            .bind(mcp_credential_id)
+            .bind(oauth_grant_id)
+            .bind(external_agent_connection_id)
+            .bind(target_kind)
+            .execute(&mut **transaction)
+            .await?;
+        }
+        AuditAttribution::Automation { rule_id, run_id } => {
+            let mut metadata = metadata;
+            if let Some(object) = metadata.as_object_mut() {
+                object.insert("automationRuleId".into(), rule_id.to_string().into());
+            }
+            sqlx::query(
+                r#"
+                INSERT INTO audit_events (
+                    id, actor_id, project_id, authentication_class, action,
+                    target_kind, target_id, outcome, request_id, metadata,
+                    channel, client_name
+                ) VALUES ($1, $2, $3, 'automation', $4, $5, $6, 'succeeded', $7, $8, 'automation', 'automation')
+                "#,
+            )
+            .bind(audit_id)
+            .bind(actor.actor_id)
+            .bind(actor.project_id)
+            .bind(action)
+            .bind(target_kind)
+            .bind(target_id)
+            .bind(run_id.to_string())
+            .bind(metadata)
+            .execute(&mut **transaction)
+            .await?;
+        }
+        AuditAttribution::Proposal {
+            proposal_id,
+            accepted_by,
+        } => {
+            let mut metadata = metadata;
+            if let Some(object) = metadata.as_object_mut() {
+                object.insert("proposalId".into(), proposal_id.to_string().into());
+                object.insert("acceptedBy".into(), accepted_by.to_string().into());
+            }
+            sqlx::query(
+                r#"
+                INSERT INTO audit_events (
+                    id, actor_id, project_id, authentication_class, action,
+                    target_kind, target_id, outcome, request_id, metadata,
+                    channel, client_name
+                ) VALUES ($1, $2, $3, 'proposal', $4, $5, $6, 'succeeded', $7, $8, 'system', 'proposal')
+                "#,
+            )
+            .bind(audit_id)
+            .bind(actor.actor_id)
+            .bind(actor.project_id)
+            .bind(action)
+            .bind(target_kind)
+            .bind(target_id)
+            .bind(proposal_id.to_string())
+            .bind(metadata)
             .execute(&mut **transaction)
             .await?;
         }

@@ -15,6 +15,7 @@ import {
 } from './api'
 import './files.css'
 import { Download, FileGlyph, FileText, ImageGlyph } from './icons'
+import '../styles/pages.css'
 
 function fileIcon(file: FileAttachment): IconGlyph {
   if (file.contentType.startsWith('image/')) return ImageGlyph

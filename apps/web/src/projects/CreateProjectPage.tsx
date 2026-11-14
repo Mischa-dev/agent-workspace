@@ -9,6 +9,7 @@ import { Banner, Button, ButtonLink, ErrorState, PageHeader, SelectField, TextFi
 import { listProjectTemplates, viewKeys } from '../views/api'
 import { useCreateProject, useSwitchProject } from './hooks'
 import { projectKeyPattern, suggestKey } from './projectKey'
+import '../styles/pages.css'
 
 // The preset cards bring the layout registry, so they load in their own chunk.
 const PresetPicker = lazy(() => import('../experience/PresetPicker'))

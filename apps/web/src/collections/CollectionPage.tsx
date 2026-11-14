@@ -15,7 +15,7 @@ import { usePageTitle } from '../shell/documentTitleModel'
 import { Banner, Button, ButtonLink, ConfirmDialog, ErrorState, IconButton, ListSkeleton, Menu, PageHeader, PageTabs, describeError, showToast, type MenuEntry } from '../ui'
 import { FieldFilterEditor } from '../work-items/FieldFilters'
 import { useDebouncedValue } from '../work-items/pickerModel'
-import { usePhoneWidth } from '../work-items/useCoarsePointer'
+import { usePhoneWidth } from '../ui/useCoarsePointer'
 import {
   collectionKeys,
   createView,
@@ -162,12 +162,14 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
     )
   }
 
-  // The built-in Tasks collection (AWD-110) reads the project's tasks: a
-  // record opens its task, and an edit here is a task change. Its name and
-  // fields are the project's, changed in the task settings.
+  // The built-in Tasks collection (AWD-110) reads the project's tasks, and
+  // the records of a collection that acts like a task are tasks too: a
+  // record opens its task, and an edit here is a task change. Tasks' name
+  // and fields are the project's, changed in the task settings.
   const tasks = collection.data.collection.builtin === 'tasks'
-  // A link to a Tasks record (an embed, an old link) opens its task.
-  if (tasks && recordId) return <Navigate replace to={`/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(recordId)}`} />
+  const taskLike = tasks || collection.data.collection.actsLikeTask === true
+  // A link to such a record (an embed, an old link) opens its task.
+  if (taskLike && recordId) return <Navigate replace to={`/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(recordId)}`} />
   const body = tasks ? { ...collection.data, canBuild: false } : collection.data
   const canSaveViews = collection.data.canBuild && !(Boolean(project.archivedAt) || body.collection.archived)
   const views = [...body.views].sort((left, right) => left.position - right.position)
@@ -190,7 +192,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
   const recordQuery = recordsParams(recordsQuery)
   const layout = view?.type ?? 'table'
   const recordHref = (id: string) => {
-    if (tasks) return `/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(id)}`
+    if (taskLike) return `/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(id)}`
     const next = new URLSearchParams(params)
     next.set('record', id)
     return `?${next.toString()}`
@@ -289,7 +291,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
   }
 
   const collectionMenu: MenuEntry[] = [
-    ...(body.canEditRecords && !tasks ? [{ label: 'Forms…', icon: 'list' as const, onSelect: () => setDialog({ kind: 'forms' }) }] : []),
+    ...(body.canEditRecords && !taskLike ? [{ label: 'Forms…', icon: 'list' as const, onSelect: () => setDialog({ kind: 'forms' }) }] : []),
     ...(canBuild
       ? ([
           { label: 'Edit details…', icon: 'pencil', onSelect: () => setDialog({ kind: 'details' }) },
@@ -312,12 +314,12 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
     edits,
     filtered,
     onClearFilters: clearFilters,
-    onOpenRecord: tasks ? (id: string) => navigate(recordHref(id)) : openRecord,
+    onOpenRecord: taskLike ? (id: string) => navigate(recordHref(id)) : openRecord,
     openRecordId: recordId,
     params: recordQuery,
     projectId,
   }
-  const panel = recordId && !tasks ? (
+  const panel = recordId && !taskLike ? (
     <RecordPanel body={body} canEdit={body.canEditRecords && !readOnly} edits={edits} onClose={closeRecord} projectId={projectId} recordId={recordId} />
   ) : undefined
 

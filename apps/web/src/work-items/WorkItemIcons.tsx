@@ -1,5 +1,6 @@
 import { priorityLabel } from './constants'
 import type { WorkItemPriority } from './types'
+import '../styles/work.css'
 
 /** How far along each workflow category is, drawn as a filling circle. */
 const STATUS_FILL: Record<string, number> = {

@@ -30,6 +30,8 @@ import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import { highlight } from '../../ui/markdown/highlight'
 import { embedHref, NOT_TASK_KEYS, safeHref, TASK_KEY } from '../../ui/markdown/parse'
 import type { EmbedSlots } from './embeds'
+import '../../styles/conversation.css'
+import '../../styles/markdown.css'
 
 // The page editor's document, in exactly the shape the server keeps it
 // (apps/server/src/page_docs/ydoc.rs): the same node and mark names, the same

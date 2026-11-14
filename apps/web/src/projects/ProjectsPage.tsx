@@ -25,6 +25,7 @@ import { useArchivedProjects, useProjects, useProjectSearch, useRestoreProject, 
 import './home.css'
 import { ProjectInitials } from './ProjectInitials'
 import type { Project } from './types'
+import '../styles/pages.css'
 
 /** The list asks the server for this many; past it, typing searches the rest. */
 const LIST_LIMIT = 100

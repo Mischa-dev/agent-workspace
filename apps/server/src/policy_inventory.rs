@@ -40,6 +40,10 @@ pub enum MutationAction {
     /// provider. No person's session is involved; the credential decides
     /// which agent it is.
     AgentCredentialExchange,
+    /// The generated operation route (K2): the operation it names checks
+    /// its own permission, module and target through `ops::dispatch`, the
+    /// same as its MCP tool.
+    Operation,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1312,6 +1316,13 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     boundary_route!("mcp/oauth", Post, "/oauth/revoke", OAuthProtocol),
     boundary_route!("mcp", Protocol, "/api/v1/mcp", McpProtocol),
     boundary_route!("public_api", Post, "/api/public/v1/{tool}", McpProtocol),
+    boundary_route!(
+        "ops/web",
+        Post,
+        "/api/v2/w/{workspace}/ops/{name}",
+        Operation
+    ),
+    boundary_route!("ops/web", Post, "/api/v2/ops/{name}", Operation),
     policy_route!(
         "projects",
         Post,

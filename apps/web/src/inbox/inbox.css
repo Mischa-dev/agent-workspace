@@ -21,10 +21,12 @@
   color: var(--content-fg-muted);
 }
 
+/* The chosen one's words in the content colour: the accent on its own soft
+   tint is too faint in the dark themes (W1.36's axe sweep). */
 .aw-btn.aw-inbox__chip[aria-pressed='true'] {
   border-color: var(--accent);
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--content-fg);
   font-weight: var(--weight-semibold);
 }
 
