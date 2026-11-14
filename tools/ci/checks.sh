@@ -291,6 +291,7 @@ if has rust; then
   step "self-hosted guide" ./tools/verify-self-hosted-guide.sh
   step "hermes fixtures" python3 tools/hermes-connector/verify-fixtures.py
   step "agentos-nyx tests" python3 -m unittest discover -s integrations/agentos-nyx -p 'test_*.py'
+  step "master plan" python3 docs/plans/master/tools/plan.py
 fi
 if has web; then
   step "Node toolchain" fetch_pinned_node
