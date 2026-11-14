@@ -81,6 +81,8 @@ async fn counts_match(pool: &PgPool) {
         ("github_pull_requests", "{pull_request}"),
         ("repositories", "{repository}"),
         ("automation_rules", "{automation}"),
+        ("runs", "{run}"),
+        ("requests", "{request}"),
     ] {
         // Each missing row with what its source view and `things` say.
         let missing = sqlx::query_scalar::<_, String>(&format!(
@@ -359,6 +361,15 @@ async fn every_kind_keeps_its_row_in_step_and_the_backfill_resumes() {
         "task",
         "a record write never takes a task's row"
     );
+    // Ruling R53: a task's thing version is its public revision,
+    // `work_items.version`, never the record's own counter.
+    let revision =
+        sqlx::query_scalar::<_, i64>("SELECT version FROM work_items WHERE id = $1::uuid")
+            .bind(&subtask)
+            .fetch_one(pool)
+            .await
+            .expect("revision");
+    assert_eq!(row(pool, &subtask).await.version, revision);
 
     // The backfill: forget everything, as before the registry, then copy it
     // back a little at a time, stopping halfway.

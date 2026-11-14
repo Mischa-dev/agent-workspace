@@ -34,6 +34,8 @@ pub const SOURCES: &[&str] = &[
     "files",
     "github_pull_requests",
     "automation_rules",
+    "runs",
+    "requests",
 ];
 
 const BATCH: i64 = 5_000;
@@ -122,6 +124,8 @@ async fn set_parents(pool: &PgPool) -> Result<(), AppError> {
         "messages",
         "files",
         "github_pull_requests",
+        "runs",
+        "requests",
     ] {
         sqlx::query(&format!(
             r#"

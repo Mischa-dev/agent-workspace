@@ -74,7 +74,7 @@ macro_rules! spec {
     };
 }
 
-static REGISTRY: [ThingKindSpec; 17] = [
+static REGISTRY: [ThingKindSpec; 19] = [
     spec!(
         PROJECT,
         "projects",
@@ -121,7 +121,7 @@ static REGISTRY: [ThingKindSpec; 17] = [
         DECISION,
         "pages",
         "project_decisions",
-        Support::Not("K3.8 adds decision events"),
+        Support::Yes(&["decision.recorded", "decision.updated"]),
         Support::Yes("decisions")
     ),
     spec!(
@@ -194,6 +194,21 @@ static REGISTRY: [ThingKindSpec; 17] = [
         "automation_rules",
         Support::Not("automation changes aren't events yet"),
         Support::Not("automations are found in their list")
+    ),
+    // K3.11, on build 1G's tables.
+    spec!(
+        RUN,
+        "runs",
+        "runs",
+        Support::Yes(&["run.updated", "run.finished"]),
+        Support::Not("runs are found in their list")
+    ),
+    spec!(
+        REQUEST,
+        "runs",
+        "requests",
+        Support::Not("requests' events come with A2"),
+        Support::Not("requests are found in the inbox")
     ),
 ];
 
@@ -332,6 +347,7 @@ mod tests {
     const SEEDED: &str = concat!(
         include_str!("../../migrations/20261114192000_thing_registry.sql"),
         include_str!("../../migrations/20261114195000_more_thing_kinds.sql"),
+        include_str!("../../migrations/20261114197000_run_and_request_things.sql"),
     );
 
     #[test]

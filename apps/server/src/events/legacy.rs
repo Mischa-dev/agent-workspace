@@ -125,6 +125,20 @@ pub async fn mirror(
             None,
             None,
         ),
+        // A1's run record (build 1G): finished or still going.
+        P::RunChanged(p) => (
+            if crate::runs::RunState::terminal_keys().contains(&p.state.as_str()) {
+                &catalog::RUN_FINISHED
+            } else {
+                &catalog::RUN_UPDATED
+            },
+            "run",
+            p.run_id,
+            p.conversation_id,
+            p.conversation_id.map_or(Audience::Space, conversation),
+            Some(p.version),
+            None,
+        ),
         P::WorkItemUpdated(p) => (
             &catalog::TASK_PLACEMENT_CHANGED,
             "task",
