@@ -670,13 +670,20 @@ pub(super) async fn collection_write(
                 let locked = collections::lock(&mut transaction, project_id, found.id)
                     .await?
                     .ok_or(AppError::NotFound("collection"))?;
-                // The Tasks collection's settings and fields are the tasks';
-                // only its views change here.
-                if locked.is_tasks()
-                    && (!change.is_empty()
-                        || arguments.fields.as_ref().is_some_and(|fields| !fields.is_empty()))
-                {
+                // The Tasks collection's name and settings are fixed. Its
+                // fields are the project's task fields, changed by those who
+                // may change the workflow.
+                if locked.is_tasks() && !change.is_empty() {
                     return Ok(ToolResult::conflict(collections::tasks::READ_ONLY_MESSAGE));
+                }
+                if locked.is_tasks()
+                    && !field_writes.is_empty()
+                    && !can_write_in(state, principal, project_id, Action::WorkflowManage)
+                        .await?
+                {
+                    return Ok(ToolResult::denied(
+                        "Only people whose role can change the workflow can change the task fields.",
+                    ));
                 }
                 if arguments
                     .expected_version

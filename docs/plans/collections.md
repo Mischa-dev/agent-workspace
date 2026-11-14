@@ -296,6 +296,27 @@ task tools, and an "acts like a task" switch on any collection. Step 2
 - Reads don't change yet: the collection still reads `tasks::source()`.
   Search and the links resolver skip Tasks records, so a task is found
   once, as the task.
-- Next (step 3): the record owns title, number, field values and archive
-  state, task code reads through one view of record and task core, and
-  these triggers go.
+
+### Editing Tasks like any collection (step 3)
+
+The first plan had the record take over the shared columns, with task code
+reading through one view. That meant rewriting about 70 server files and
+losing the partial and search indexes the board and search rely on, so the
+two copies stay instead, kept in step in the same transaction:
+
+- A write to a Tasks record (`collections::task_writes`) is a task change,
+  made by the task commands (`update_locked_work_item`, `set_archived`,
+  `create_work_item`), so it gets the task checks, permissions
+  (`WorkItemEdit`, `WorkItemArchive`, `WorkItemCreate`), activity, audit
+  and events. Title is the task title; Status, Assignee, Priority, Start
+  date, Due date and Labels are the task's columns; other values are task
+  field values. The triggers copy the result onto the record.
+- A record added without a title is an "Untitled task".
+- Fields added to Tasks (the fields route or `collection_write`) are task
+  fields (`record_kind = 'task'`), changed by those with the workflow
+  permission. Built-in fields and their names can't be changed or reused.
+- Agents still change Tasks records with the task tools; `record_write`
+  on Tasks is refused with where to go.
+- In the app, Tasks cells, board moves and calendar moves are editable;
+  a record still opens its task. Forms don't target Tasks (a plain bug
+  report link already makes tasks).
