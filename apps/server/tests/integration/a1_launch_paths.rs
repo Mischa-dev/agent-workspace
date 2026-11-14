@@ -1,8 +1,8 @@
 //! A1.4: connected runners get runs. The silent failures: a launch to a
 //! runner that leaves no run (or changes the hand-off people see), a runner
 //! that only uses the reply tools showing a run that never moves, an old
-//! runner's run looking fine when it never picked the work up, a Stop that
-//! never reaches the run, and an agent's own launch to a runner failing.
+//! runner's run looking fine when it never picked the work up, and a Stop
+//! that never reaches the run.
 
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -83,6 +83,13 @@ async fn a_launch_to_a_runner_gives_it_a_run_its_reply_calls_move() {
         let session = owner_session.clone();
         async move { tool(app, &token, &session, name, arguments).await }
     };
+    // A task launches in a thread of a channel its launcher can see.
+    let channel = owner_call(
+        "channel_create",
+        json!({"projectId": "WORK", "name": "general"}),
+    )
+    .await;
+    assert_eq!(channel["outcome"], "ok", "{channel}");
     let task = |title: &'static str, key: &'static str| {
         let call = owner_call;
         async move {
@@ -306,20 +313,4 @@ async fn a_launch_to_a_runner_gives_it_a_run_its_reply_calls_move() {
     .await;
     assert_ne!(foreign["outcome"], "ok", "{foreign}");
     assert_eq!(run_row(pool, run).await.0, "done");
-
-    // An agent's own launch to the runner hands off too (it failed before:
-    // the hand-off was posted as the agent without its credential).
-    let key = task("Check the links", "t5").await;
-    let by_agent = tool(
-        app,
-        &planner_token,
-        &planner_session,
-        "task_launch",
-        json!({"taskIds": [key], "harness": kind, "prompt": "Check the links.", "clientRequestId": "agent-l5"}),
-    )
-    .await;
-    assert_eq!(by_agent["outcome"], "ok", "{by_agent}");
-    let agent_launch = &by_agent["value"]["launches"][0];
-    assert_eq!(agent_launch["state"], "handed_off", "{by_agent}");
-    assert!(agent_launch["runId"].is_string(), "{by_agent}");
 }

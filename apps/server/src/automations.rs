@@ -2463,7 +2463,14 @@ async fn run_action(
                 mcp: acting.actor_kind == ActorKind::ExternalAgent,
                 session_id: None,
                 request_id: Some(format!("automation:{run_id}")),
-                mcp_credential: None,
+                // An agent's rule posts a hand-off to a runner as the agent,
+                // with its live credential (A1.4).
+                mcp_credential: acting.credential_id.zip(acting.connection_id).map(
+                    |(credential_id, connection_id)| crate::conversations::MessageMcpCredential {
+                        credential_id,
+                        connection_id,
+                    },
+                ),
             };
             let idempotency = IdempotencyKey::parse(&format!("automation-{run_id}-{index}"));
             let checks_prompt = context.pull_request.as_ref().map(|pr| {

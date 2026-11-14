@@ -98,16 +98,32 @@ async fn the_journey() {
     assert_eq!(finished["value"]["state"], "done", "{finished}");
 
     let run = run_id.parse::<Uuid>().expect("run UUID");
-    let (account, state, activities) = sqlx::query_as::<_, (Uuid, String, i64)>(
-        "SELECT account_id, state, activity_seq FROM runs WHERE id = $1",
-    )
-    .bind(run)
-    .fetch_one(pool)
-    .await
-    .expect("the run");
+    let (account, state) =
+        sqlx::query_as::<_, (Uuid, String)>("SELECT account_id, state FROM runs WHERE id = $1")
+            .bind(run)
+            .fetch_one(pool)
+            .await
+            .expect("the run");
     assert_eq!(account, agent, "the run is the agent's own");
     assert_eq!(state, "done");
-    assert_eq!(activities, 4, "run_started, two reports and run_finished");
+    let kinds = sqlx::query_scalar::<_, String>(
+        "SELECT kind FROM run_activities WHERE run_id = $1 ORDER BY seq",
+    )
+    .bind(run)
+    .fetch_all(pool)
+    .await
+    .expect("activities");
+    assert_eq!(
+        kinds,
+        [
+            "run_started",
+            "step_started",
+            "text_message",
+            "result",
+            "run_finished"
+        ],
+        "each report once, in order"
+    );
 
     // Steps 2 to 8 are turned on by the builds that make them possible.
 }

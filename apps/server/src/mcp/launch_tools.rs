@@ -227,12 +227,9 @@ fn caller(principal: &McpPrincipal, request_id: Option<String>) -> LaunchCaller 
         mcp: true,
         session_id: None,
         request_id,
-        mcp_credential: principal.external_agent_connection_id.map(|connection_id| {
-            crate::conversations::MessageMcpCredential {
-                credential_id: principal.credential_id,
-                connection_id,
-            }
-        }),
+        // task_launch is for people and their apps; agents ask with
+        // run_request, so there is no agent credential to carry.
+        mcp_credential: None,
     }
 }
 
