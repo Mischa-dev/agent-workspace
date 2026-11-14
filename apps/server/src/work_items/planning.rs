@@ -1365,6 +1365,14 @@ pub(super) async fn bulk_update(
                 item.id,
             )
             .await?;
+            // A task of a collection that acts like a task has its fields.
+            let own = crate::work_item_fields::definitions_for_task_or(
+                &mut write.transaction,
+                project_id,
+                item.id,
+                &definitions,
+            )
+            .await?;
             let resolved = crate::work_item_fields::resolve_for(
                 &mut write.transaction,
                 project_id,
@@ -1372,7 +1380,7 @@ pub(super) async fn bulk_update(
                     actor_id: principal.actor_id,
                     project_key: &project_key,
                 },
-                &definitions,
+                &own,
                 "fieldValues",
                 &written_fields,
                 current.as_ref(),

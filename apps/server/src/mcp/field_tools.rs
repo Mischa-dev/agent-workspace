@@ -506,7 +506,9 @@ pub(super) async fn task_fields(
     project_id: Uuid,
     task_id: Uuid,
 ) -> Result<Vec<TaskFieldValue>, AppError> {
-    let definitions = work_item_fields::definitions(&mut *connection, project_id, false).await?;
+    let definitions =
+        work_item_fields::definitions_for_task(&mut *connection, project_id, task_id, false)
+            .await?;
     if definitions.is_empty() {
         return Ok(Vec::new());
     }
@@ -546,8 +548,9 @@ pub(super) async fn fill_summary_fields(
     if ids.is_empty() {
         return Ok(());
     }
-    let rows = sqlx::query_as::<_, (Uuid, Uuid, Value)>(
-        "SELECT id, project_id, field_values FROM work_items WHERE id = ANY($1) AND field_values <> '{}'::jsonb",
+    let rows = sqlx::query_as::<_, (Uuid, Uuid, Option<Uuid>, Value)>(
+        "SELECT id, project_id, collection_id, field_values FROM work_items \
+         WHERE id = ANY($1) AND field_values <> '{}'::jsonb",
     )
     .bind(&ids)
     .fetch_all(&mut *connection)
@@ -555,14 +558,24 @@ pub(super) async fn fill_summary_fields(
     if rows.is_empty() {
         return Ok(());
     }
-    let mut by_project: HashMap<Uuid, Vec<(Uuid, Value)>> = HashMap::new();
-    for (id, project_id, values) in rows {
-        by_project.entry(project_id).or_default().push((id, values));
+    // Tasks of a collection that acts like a task follow its fields.
+    type Rows = Vec<(Uuid, Value)>;
+    let mut by_kind: HashMap<(Uuid, Option<Uuid>), Rows> = HashMap::new();
+    for (id, project_id, collection_id, values) in rows {
+        by_kind
+            .entry((project_id, collection_id))
+            .or_default()
+            .push((id, values));
     }
     let mut filled: HashMap<Uuid, Map<String, Value>> = HashMap::new();
-    for (project_id, rows) in by_project {
-        let definitions =
-            work_item_fields::definitions(&mut *connection, project_id, false).await?;
+    for ((project_id, collection_id), rows) in by_kind {
+        let definitions = fields::list(
+            &mut *connection,
+            project_id,
+            work_item_fields::kind_of(collection_id),
+            false,
+        )
+        .await?;
         if definitions.is_empty() {
             continue;
         }
@@ -599,23 +612,45 @@ pub(super) async fn fill_summary_fields(
     Ok(())
 }
 
+/// Whose fields a task_create or task_update `fields` argument names.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum FieldsOf {
+    /// A task being changed, so archived options it already holds may stay
+    /// chosen: its own collection's fields.
+    Task(Uuid),
+    /// A new task, made in this collection that acts like a task (None for
+    /// the project's Tasks collection).
+    NewIn(Option<Uuid>),
+}
+
 /// What task_create and task_update's `fields` wrote, checked and resolved
-/// in this transaction, as the web app's `fieldValues` are. `task` is the
-/// task being changed (None for a new one), so archived options it already
-/// holds may stay chosen.
+/// in this transaction, as the web app's `fieldValues` are.
 pub(super) async fn written_values(
     connection: &mut PgConnection,
     principal: &McpPrincipal,
     project_id: Uuid,
     written: &Map<String, Value>,
-    task: Option<Uuid>,
+    of: FieldsOf,
 ) -> Result<Result<FieldValueChanges, ValueProblem>, AppError> {
     let project_key =
         sqlx::query_scalar::<_, String>("SELECT project_key FROM projects WHERE id = $1")
             .bind(project_id)
             .fetch_one(&mut *connection)
             .await?;
-    let definitions = work_item_fields::definitions(&mut *connection, project_id, true).await?;
+    let (task, collection) = match of {
+        FieldsOf::Task(task) => (
+            Some(task),
+            work_item_fields::task_collection(&mut *connection, project_id, task).await?,
+        ),
+        FieldsOf::NewIn(collection) => (None, collection),
+    };
+    let definitions = fields::list(
+        &mut *connection,
+        project_id,
+        work_item_fields::kind_of(collection),
+        true,
+    )
+    .await?;
     let written = written
         .iter()
         .map(|(field, value)| (field.clone(), value.clone()))
@@ -663,6 +698,7 @@ pub(super) async fn filter_clauses(
     project_id: Uuid,
     project_key: &str,
     filters: &[FieldFilterArgument],
+    collection: Option<Uuid>,
 ) -> Result<Result<Vec<FieldClause>, String>, AppError> {
     if filters.len() > fields::MAX_CLAUSES {
         return Ok(Err(format!(
@@ -670,7 +706,13 @@ pub(super) async fn filter_clauses(
             fields::MAX_CLAUSES
         )));
     }
-    let definitions = work_item_fields::definitions(&mut *connection, project_id, true).await?;
+    let definitions = fields::list(
+        &mut *connection,
+        project_id,
+        work_item_fields::kind_of(collection),
+        true,
+    )
+    .await?;
     let mut clauses = Vec::with_capacity(filters.len());
     for filter in filters {
         let Some(field) = fields::find(&definitions, &filter.field) else {

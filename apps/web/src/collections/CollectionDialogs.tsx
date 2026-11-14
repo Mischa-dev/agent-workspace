@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 
-import { Banner, Button, Dialog, SegmentedControl, TextField, describeError } from '../ui'
+import { Banner, Button, Dialog, SegmentedControl, Switch, TextField, describeError } from '../ui'
 import { collectionKeys, createCollection, updateCollection, type CollectionBody, type CollectionSummary, type ViewType } from './api'
 
 /**
- * Makes a collection, or changes one's name, description and what its title
- * column is called (such as Name, Version or Player).
+ * Makes a collection, or changes one's name, description, what its title
+ * column is called (such as Name, Version or Player) and whether its records
+ * act like tasks.
  */
 export function CollectionDetailsDialog({
   collection,
@@ -23,6 +24,7 @@ export function CollectionDetailsDialog({
   const [name, setName] = useState(collection?.name ?? '')
   const [description, setDescription] = useState(collection?.description ?? '')
   const [titleName, setTitleName] = useState(collection?.titleName ?? 'Name')
+  const [taskLike, setTaskLike] = useState(collection?.actsLikeTask === true)
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
   const submit = async () => {
@@ -31,9 +33,14 @@ export function CollectionDetailsDialog({
     setBusy(true)
     const details = { name: name.trim(), description: description.trim(), titleName: titleName.trim() || 'Name' }
     try {
-      const body = collection
-        ? await updateCollection(projectId, collection.id, { expectedVersion: collection.version, ...details })
-        : await createCollection(projectId, { ...details, idempotencyKey: crypto.randomUUID() })
+      const switched = taskLike !== (collection?.actsLikeTask === true) ? { actsLikeTask: taskLike } : {}
+      let body: CollectionBody
+      if (collection) {
+        body = await updateCollection(projectId, collection.id, { expectedVersion: collection.version, ...details, ...switched })
+      } else {
+        body = await createCollection(projectId, { ...details, idempotencyKey: crypto.randomUUID() })
+        if (taskLike) body = await updateCollection(projectId, body.collection.id, { expectedVersion: body.collection.version, actsLikeTask: true })
+      }
       client.setQueryData(collectionKeys.one(projectId, body.collection.id), body)
       void client.invalidateQueries({ queryKey: collectionKeys.all(projectId) })
       onSaved(body)
@@ -82,6 +89,19 @@ export function CollectionDetailsDialog({
         onChange={(event) => setTitleName(event.target.value)}
         value={titleName}
       />
+      {collection?.builtin ? null : (
+        <Switch
+          checked={taskLike}
+          description={
+            collection?.actsLikeTask && collection.records > 0
+              ? 'Its records are tasks now, with their own history, so this stays on.'
+              : 'Each record gets a status, assignee, priority, dates and labels, a key like the project’s tasks, and a task page. Records already here become tasks.'
+          }
+          disabled={collection?.actsLikeTask === true && collection.records > 0}
+          label="Records act like tasks"
+          onChange={setTaskLike}
+        />
+      )}
     </Dialog>
   )
 }

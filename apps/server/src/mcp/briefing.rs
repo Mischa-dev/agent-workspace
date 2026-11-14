@@ -478,6 +478,17 @@ pub(super) struct ProjectOverview {
     /// their tools say they're off. module_list says why.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub modules_off: Vec<String>,
+    /// The project's custom task fields, by name: task_create and
+    /// task_update set them with fields, such as {"Risk": "High"}.
+    /// field_list has their types and options.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub task_fields: Vec<String>,
+    /// Collections whose records act like tasks, such as "Bugs": make one
+    /// with task_create (collection: "Bugs") and list them with task_list
+    /// (collection); their fields are the collection's own
+    /// (collection_describe).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub task_collections: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -765,10 +776,28 @@ pub(super) async fn project_open(
         } else {
             Default::default()
         };
-        let (by_status, next, blocked, claimed, labels) = if on("tasks") {
-            (by_status, next, blocked, claimed, labels)
+        let task_fields = crate::work_item_fields::definitions(&state.pool, project_id, false)
+            .await?
+            .into_iter()
+            .map(|field| field.name)
+            .collect::<Vec<_>>();
+        let task_collections = sqlx::query_scalar::<_, String>(
+            "SELECT name FROM collections \
+             WHERE project_id = $1 AND acts_like_task AND builtin IS NULL AND archived_at IS NULL \
+             ORDER BY position, id",
+        )
+        .bind(project_id)
+        .fetch_all(&state.pool)
+        .await?;
+        let (by_status, next, blocked, claimed, labels, task_fields) = if on("tasks") {
+            (by_status, next, blocked, claimed, labels, task_fields)
         } else {
             Default::default()
+        };
+        let task_collections = if on("tasks") && on("collections") {
+            task_collections
+        } else {
+            Vec::new()
         };
         let (channels, open_threads) = if on("channels") {
             (channels, open_threads)
@@ -812,6 +841,8 @@ pub(super) async fn project_open(
             labels,
             layout,
             modules_off,
+            task_fields,
+            task_collections,
         }))
     }
     .await;
