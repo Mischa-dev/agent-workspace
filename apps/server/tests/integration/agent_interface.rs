@@ -671,6 +671,30 @@ async fn connected_apps_and_agents_see_exactly_what_they_should() {
         .expect("drop schema");
 }
 
+#[tokio::test]
+async fn recording_a_decision_again_records_it_once() {
+    let Some(setup) = super::mcp_admin::setup("decision_retry").await else {
+        return;
+    };
+    let work = super::mcp_admin::create_project(&setup, "WORK", "Work").await;
+    let space = super::mcp_tasks::space(&setup).await;
+    let (rook, token) = create_agent(&setup.app, &setup.browser, &space, "Rook", "rook").await;
+    super::mcp_tasks::add_member(&setup, &work, rook, "member").await;
+    let session = initialize(&setup.app, &token).await.expect("agent MCP");
+    let key = "decision-retry-1";
+    creates_once(
+        &setup.app,
+        &setup.pool,
+        &token,
+        &session,
+        "decision_record",
+        json!({"projectId": work, "title": "Ship on Fridays", "clientRequestId": key}),
+        json!({"projectId": work, "title": "Never ship on Fridays", "clientRequestId": key}),
+        "SELECT count(*) FROM project_decisions",
+    )
+    .await;
+}
+
 pub(super) async fn create_agent(
     app: &axum::Router,
     browser: &Browser,
@@ -909,6 +933,42 @@ pub(super) async fn tool(
         panic!("{name} result doesn't match its outputSchema at {path}: {content}");
     }
     content
+}
+
+/// A create that takes a `clientRequestId` makes one thing however often
+/// it's retried: the same call twice answers the first call's thing again,
+/// marked `idempotentReplay`, and another call with the same id is refused.
+/// `count` counts the things made. Returns the first answer.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn creates_once(
+    app: &axum::Router,
+    pool: &PgPool,
+    token: &str,
+    session: &str,
+    name: &str,
+    arguments: Value,
+    different: Value,
+    count: &str,
+) -> Value {
+    let counted = || async {
+        sqlx::query_scalar::<_, i64>(count)
+            .fetch_one(pool)
+            .await
+            .expect("count")
+    };
+    let before = counted().await;
+    let first = tool(app, token, session, name, arguments.clone()).await;
+    assert_eq!(first["outcome"], "ok", "{first}");
+    assert!(first["value"].get("idempotentReplay").is_none(), "{first}");
+    let again = tool(app, token, session, name, arguments).await;
+    let mut expected = first.clone();
+    expected["value"]["idempotentReplay"] = json!(true);
+    assert_eq!(again, expected, "a retry answers the first call");
+    assert_eq!(counted().await, before + 1, "{name} made one thing");
+    let refused = tool(app, token, session, name, different).await;
+    assert_eq!(refused["outcome"], "conflict", "{refused}");
+    assert_eq!(counted().await, before + 1, "{name} made nothing more");
+    first
 }
 
 async fn output_schema(app: &axum::Router, token: &str, session: &str, name: &str) -> Value {

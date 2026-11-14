@@ -204,7 +204,7 @@ pub fn wrap_text(text: &str, font_size: f64, width: f64) -> String {
 
 /// One thing an agent asked for. Flat on purpose: every operation takes the
 /// fields it needs and ignores none silently (see `apply`).
-#[derive(Clone, Debug, Default, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Operation {
     /// add, update, delete, connect, move, align, distribute, layout, group,
@@ -283,7 +283,7 @@ pub struct Operation {
     pub position: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct OperationResult {
     pub op: String,

@@ -13,6 +13,7 @@ use super::{
         public_url, scope_projects, string_or_number, truncate_text,
     },
     talk::can_write_in,
+    writes::{CreateRetry, REQUEST_ID_MESSAGE, complete_create, parse_request_id, reserve_create},
 };
 use crate::{
     AppState,
@@ -330,6 +331,9 @@ pub(super) struct PageValue {
     /// (the page is someone else's); the page above doesn't have it yet.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suggestion: Option<SuggestionMade>,
+    /// True when this answers a retry: the page the first call created.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub idempotent_replay: bool,
 }
 
 fn is_zero(value: &i64) -> bool {
@@ -408,6 +412,7 @@ pub(super) async fn page_get(
             open_comments,
             pending_suggestions,
             suggestion: None,
+            idempotent_replay: false,
             url: public_url(
                 state,
                 &format!("/projects/{}/pages/{}", page.project_id, page.id),
@@ -441,7 +446,7 @@ pub(super) async fn page_get(
     result.unwrap_or_else(|error| ToolResult::from_error(error, "page_get"))
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct PageWriteArguments {
     /// The page to change. Leave it out to create a page (then projectId and
@@ -471,6 +476,10 @@ pub(super) struct PageWriteArguments {
     pub note: Option<String>,
     /// Also pin the page to this conversation.
     pub pin_to_conversation_id: Option<String>,
+    /// Makes creating a page safe to retry: send the same one again and you
+    /// get the page the first call made, not a second one. Used only when
+    /// creating.
+    pub client_request_id: Option<String>,
 }
 
 pub(super) async fn page_write(
@@ -501,6 +510,14 @@ pub(super) async fn page_write(
         },
         None => None,
     };
+    let retry_key = match arguments.client_request_id.as_deref() {
+        Some(value) if page_id.is_none() => match parse_request_id(value) {
+            Some(key) => Some(key),
+            None => return ToolResult::invalid("clientRequestId", REQUEST_ID_MESSAGE),
+        },
+        _ => None,
+    };
+    let retried = arguments.clone();
     let mut input = PageInput {
         title: arguments.title,
         body: arguments.body,
@@ -531,6 +548,37 @@ pub(super) async fn page_write(
                 "Pages live in projects, not in Messages. Pick a project.",
             ));
         }
+        let reservation = if page_id.is_none() {
+            match reserve_create(
+                &mut transaction,
+                principal,
+                "pages",
+                retry_key.as_ref(),
+                &retried,
+            )
+            .await?
+            {
+                CreateRetry::Fresh(reservation) => reservation,
+                CreateRetry::Replay(page_id, _) => {
+                    transaction.commit().await?;
+                    let mut value = page_get(
+                        state,
+                        principal,
+                        PageGetArguments {
+                            page_id: page_id.to_string(),
+                            version: None,
+                        },
+                    )
+                    .await;
+                    if let ToolResult::Ok { value: page } = &mut value {
+                        page.idempotent_replay = true;
+                    }
+                    return Ok(value);
+                }
+            }
+        } else {
+            None
+        };
         let mut suggestion = None;
         let page_id = match page_id {
             Some(page_id) => {
@@ -572,7 +620,11 @@ pub(super) async fn page_write(
                 page_id
             }
             None => {
-                memory::create_page(&mut transaction, writer(principal), project_id, &input).await?
+                let created =
+                    memory::create_page(&mut transaction, writer(principal), project_id, &input)
+                        .await?;
+                complete_create(&mut transaction, reservation.as_ref(), created).await?;
+                created
             }
         };
         if let Some(conversation_id) = pin_to {
@@ -1560,7 +1612,7 @@ pub(super) async fn skill_get(
 // ---------------------------------------------------------------------------
 // Decisions
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct DecisionRecordArguments {
     // Read by the MCP middleware, which scopes the call to this project.
@@ -1579,6 +1631,9 @@ pub(super) struct DecisionRecordArguments {
     pub supersedes: Option<String>,
     /// Also pin the decision to its conversation.
     pub pin: Option<bool>,
+    /// Makes recording safe to retry: send the same one again and you get
+    /// the decision the first call recorded, not a second one.
+    pub client_request_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -1596,6 +1651,9 @@ pub(super) struct DecisionValue {
     pub source_conversation: Option<String>,
     pub decided_by: String,
     pub decided_at: String,
+    /// True when this answers a retry: the decision the first call recorded.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub idempotent_replay: bool,
 }
 
 impl From<memory::DecisionView> for DecisionValue {
@@ -1610,6 +1668,7 @@ impl From<memory::DecisionView> for DecisionValue {
             source_conversation: decision.source_conversation_name,
             decided_by: decision.decided_by,
             decided_at: decision.created_at,
+            idempotent_replay: false,
         }
     }
 }
@@ -1701,6 +1760,14 @@ pub(super) async fn decision_record(
             "Say which project (projectId), or pass the message or conversation it came from.",
         );
     }
+    let retry_key = match arguments.client_request_id.as_deref() {
+        Some(value) => match parse_request_id(value) {
+            Some(key) => Some(key),
+            None => return ToolResult::invalid("clientRequestId", REQUEST_ID_MESSAGE),
+        },
+        None => None,
+    };
+    let retried = arguments.clone();
     let input = DecisionInput {
         title: arguments.title,
         detail: arguments.detail,
@@ -1724,9 +1791,31 @@ pub(super) async fn decision_record(
             Action::PageEdit,
         )
         .await?;
+        let reservation = match reserve_create(
+            &mut transaction,
+            principal,
+            "decisions",
+            retry_key.as_ref(),
+            &retried,
+        )
+        .await?
+        {
+            CreateRetry::Fresh(reservation) => reservation,
+            CreateRetry::Replay(decision_id, _) => {
+                transaction.commit().await?;
+                let decision = memory::get_decision(&state.pool, decision_id, principal.actor_id)
+                    .await?
+                    .ok_or(AppError::NotFound("decision"))?;
+                return Ok(ToolResult::ok(DecisionValue {
+                    idempotent_replay: true,
+                    ..DecisionValue::from(decision)
+                }));
+            }
+        };
         let decision_id =
             memory::record_decision(&mut transaction, writer(principal), project_id, &input)
                 .await?;
+        complete_create(&mut transaction, reservation.as_ref(), decision_id).await?;
         if arguments.pin.unwrap_or(false) {
             let conversation = match (input.source_conversation_id, input.source_message_id) {
                 (Some(id), _) => Some(id),

@@ -20,7 +20,7 @@ use yrs::{
 };
 
 use super::{
-    agent_interface::{Browser, create_agent, initialize, send, tool},
+    agent_interface::{Browser, create_agent, creates_once, initialize, send, tool},
     mcp_admin::{Setup, create_project, setup},
     mcp_tasks::{add_member, space},
     message_edits::add_person,
@@ -182,6 +182,42 @@ async fn create_page(setup: &Setup, project: &str, body: &str) -> String {
     .await;
     assert!(status.is_success(), "{page}");
     page["id"].as_str().expect("page").to_owned()
+}
+
+#[tokio::test]
+async fn creating_a_page_again_creates_it_once() {
+    let Some(setup) = setup("awd53_retry").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (mara, token) =
+        create_agent(app, &setup.browser, &space(&setup).await, "Mara", "mara").await;
+    add_member(&setup, &work, mara, "member").await;
+    let session = initialize(app, &token).await.expect("Mara MCP");
+    let key = "page-retry-1";
+    let created = creates_once(
+        app,
+        &setup.pool,
+        &token,
+        &session,
+        "page_write",
+        json!({"projectId": work, "title": "Plan", "body": BODY, "clientRequestId": key}),
+        json!({"projectId": work, "title": "Other plan", "body": BODY, "clientRequestId": key}),
+        "SELECT count(*) FROM project_pages",
+    )
+    .await;
+    // Editing a page takes no retry id: it's already safe with a version.
+    let page = created["value"]["id"].as_str().expect("page");
+    let edited = tool(
+        app,
+        &token,
+        &session,
+        "page_write",
+        json!({"pageId": page, "title": "Plan B", "expectedVersion": 1, "clientRequestId": key}),
+    )
+    .await;
+    assert_eq!(edited["outcome"], "ok", "{edited}");
 }
 
 #[tokio::test]

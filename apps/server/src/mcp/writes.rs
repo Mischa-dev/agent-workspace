@@ -2092,6 +2092,75 @@ pub(super) fn parse_request_id(value: &str) -> Option<IdempotencyKey> {
     IdempotencyKey::parse(value).ok()
 }
 
+/// Where a create that took a `clientRequestId` stands: new (and reserved,
+/// when it took one), or a retry of one that made `id` already.
+pub(super) enum CreateRetry {
+    Fresh(Option<IdempotencyReservation>),
+    /// The thing the first call made, and what else it kept
+    /// (`complete_create_with`).
+    Replay(Uuid, serde_json::Value),
+}
+
+/// Reserves a create's `clientRequestId` in `project_id`, so a retry with
+/// the same id gets the first call's thing and a different call with it is
+/// refused (`idempotency_key` conflict). `kind` names what's created
+/// (`pages`, `decisions`, `whiteboards`).
+pub(super) async fn reserve_create<T: Serialize>(
+    transaction: &mut Transaction<'_, Postgres>,
+    principal: &McpPrincipal,
+    kind: &str,
+    key: Option<&IdempotencyKey>,
+    arguments: &T,
+) -> Result<CreateRetry, AppError> {
+    let Some(key) = key else {
+        return Ok(CreateRetry::Fresh(None));
+    };
+    let scope = resource_bound_scope(&format!("mcp_{kind}"), principal.project_id, "create")?;
+    match reserve(
+        transaction,
+        principal.actor_id,
+        &scope,
+        key,
+        RequestHash::for_value(arguments)?,
+    )
+    .await?
+    {
+        IdempotencyOutcome::Replay(replay) => {
+            let body = replay.response_body();
+            body.get("id")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|id| id.parse().ok())
+                .map(|id| CreateRetry::Replay(id, body.clone()))
+                .ok_or(AppError::Internal("a stored create names no id"))
+        }
+        IdempotencyOutcome::Reserved(reservation) => Ok(CreateRetry::Fresh(Some(reservation))),
+    }
+}
+
+/// Keeps what a reserved create made, for its retries.
+pub(super) async fn complete_create(
+    transaction: &mut Transaction<'_, Postgres>,
+    reservation: Option<&IdempotencyReservation>,
+    id: Uuid,
+) -> Result<(), AppError> {
+    complete_create_with(transaction, reservation, id, serde_json::json!({})).await
+}
+
+/// Keeps what a reserved create made, and `kept` (an object) beside it, for
+/// its retries to answer with.
+pub(super) async fn complete_create_with(
+    transaction: &mut Transaction<'_, Postgres>,
+    reservation: Option<&IdempotencyReservation>,
+    id: Uuid,
+    mut kept: serde_json::Value,
+) -> Result<(), AppError> {
+    if let Some(reservation) = reservation {
+        kept["id"] = serde_json::json!(id);
+        complete(transaction, reservation, StatusCode::OK, &kept).await?;
+    }
+    Ok(())
+}
+
 /// The conflict to return when the caller's version is stale or the task is
 /// archived, or None when the change can go ahead.
 async fn conflict_for(

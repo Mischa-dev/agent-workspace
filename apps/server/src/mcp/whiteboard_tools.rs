@@ -15,6 +15,10 @@ use uuid::Uuid;
 use super::{
     McpPrincipal,
     common::{ToolResult, confined_project, parse_id, public_url},
+    writes::{
+        CreateRetry, REQUEST_ID_MESSAGE, complete_create, complete_create_with, parse_request_id,
+        reserve_create,
+    },
 };
 use crate::{
     AppState,
@@ -517,7 +521,7 @@ pub(super) async fn whiteboard_render(
 // ---------------------------------------------------------------------------
 // whiteboard_create
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct LinkArgument {
     /// task, project, or page.
@@ -525,7 +529,7 @@ pub(super) struct LinkArgument {
     pub target_id: String,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct WhiteboardCreateArguments {
     pub title: String,
@@ -539,6 +543,9 @@ pub(super) struct WhiteboardCreateArguments {
     pub link_to: Option<LinkArgument>,
     /// Draw something straight away: the same operations as whiteboard_edit.
     pub operations: Option<Vec<Operation>>,
+    /// Makes creating safe to retry: send the same one again and you get
+    /// the board the first call made, not a second one.
+    pub client_request_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -547,6 +554,9 @@ pub(super) struct WhiteboardChangeValue {
     pub whiteboard: WhiteboardLine,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub edit: Option<EditOutcome>,
+    /// True when this answers a retry: the board the first call made.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub idempotent_replay: bool,
 }
 
 /// The target to link, or which field is wrong and why.
@@ -615,6 +625,13 @@ pub(super) async fn whiteboard_create(
         Ok(link) => link,
         Err((field, message)) => return ToolResult::invalid(field, message),
     };
+    let retry_key = match arguments.client_request_id.as_deref() {
+        Some(value) => match parse_request_id(value) {
+            Some(key) => Some(key),
+            None => return ToolResult::invalid("clientRequestId", REQUEST_ID_MESSAGE),
+        },
+        None => None,
+    };
     // AWD-75: a board across a workspace needs Whiteboards on in that
     // workspace; the gate saw a project, or every workspace, not this one.
     // Only for someone create would let in (an active member, not confined
@@ -641,6 +658,22 @@ pub(super) async fn whiteboard_create(
     }
     let result = async {
         let mut transaction = state.pool.begin().await?;
+        let reservation = match reserve_create(
+            &mut transaction,
+            principal,
+            "whiteboards",
+            retry_key.as_ref(),
+            &arguments,
+        )
+        .await?
+        {
+            CreateRetry::Fresh(reservation) => reservation,
+            CreateRetry::Replay(id, kept) => {
+                transaction.commit().await?;
+                let edit = serde_json::from_value(kept["edit"].clone()).unwrap_or(None);
+                return Ok((id, edit, true));
+            }
+        };
         let id =
             whiteboards::create(&mut transaction, &caller, placement, &arguments.title).await?;
         if let Some((kind, target_id)) = link {
@@ -653,15 +686,19 @@ pub(super) async fn whiteboard_create(
             }
             _ => None,
         };
+        // A retry answers with the drawing this call did, too.
+        let kept = serde_json::json!({ "edit": edit });
+        complete_create_with(&mut transaction, reservation.as_ref(), id, kept).await?;
         transaction.commit().await?;
-        Ok::<_, EditError>((id, edit))
+        Ok::<_, EditError>((id, edit, false))
     }
     .await;
     match result {
-        Ok((id, edit)) => match whiteboards::summary(&state.pool, id).await {
+        Ok((id, edit, idempotent_replay)) => match whiteboards::summary(&state.pool, id).await {
             Ok(summary) => ToolResult::ok(WhiteboardChangeValue {
                 whiteboard: line(state, summary),
                 edit,
+                idempotent_replay,
             }),
             Err(error) => refused(error, "whiteboard_create"),
         },
@@ -917,6 +954,7 @@ pub(super) async fn whiteboard_update(
         Ok(summary) => ToolResult::ok(WhiteboardChangeValue {
             whiteboard: line(state, summary),
             edit: None,
+            idempotent_replay: false,
         }),
         Err(AppError::NotFound("whiteboard revision")) => ToolResult::not_found("That revision"),
         Err(error) => refused(error, "whiteboard_update"),
@@ -991,12 +1029,15 @@ pub(super) async fn whiteboard_trash_empty(
 // ---------------------------------------------------------------------------
 // whiteboard_duplicate
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct WhiteboardDuplicateArguments {
     pub whiteboard_id: String,
     /// The copy's title. Default: "Copy of …".
     pub title: Option<String>,
+    /// Makes duplicating safe to retry: send the same one again and you get
+    /// the copy the first call made, not a second one.
+    pub client_request_id: Option<String>,
 }
 
 pub(super) async fn whiteboard_duplicate(
@@ -1010,6 +1051,13 @@ pub(super) async fn whiteboard_duplicate(
     let Some(id) = whiteboard_id(&arguments.whiteboard_id) else {
         return ToolResult::invalid("whiteboardId", "Pass a whiteboard ID or link.");
     };
+    let retry_key = match arguments.client_request_id.as_deref() {
+        Some(value) => match parse_request_id(value) {
+            Some(key) => Some(key),
+            None => return ToolResult::invalid("clientRequestId", REQUEST_ID_MESSAGE),
+        },
+        None => None,
+    };
     let caller = caller(principal);
     match board_module_off(state, &caller, id).await {
         Ok(true) => return ToolResult::module_off("whiteboard_duplicate", "Whiteboards"),
@@ -1018,17 +1066,37 @@ pub(super) async fn whiteboard_duplicate(
     }
     let result = async {
         let mut transaction = state.pool.begin().await?;
-        let copy =
-            whiteboards::duplicate(&mut transaction, &caller, id, arguments.title.as_deref())
+        let (copy, replayed) = match reserve_create(
+            &mut transaction,
+            principal,
+            "whiteboards",
+            retry_key.as_ref(),
+            &arguments,
+        )
+        .await?
+        {
+            CreateRetry::Replay(copy, _) => (copy, true),
+            CreateRetry::Fresh(reservation) => {
+                let copy = whiteboards::duplicate(
+                    &mut transaction,
+                    &caller,
+                    id,
+                    arguments.title.as_deref(),
+                )
                 .await?;
+                complete_create(&mut transaction, reservation.as_ref(), copy).await?;
+                (copy, false)
+            }
+        };
         transaction.commit().await?;
-        whiteboards::summary(&state.pool, copy).await
+        Ok::<_, AppError>((whiteboards::summary(&state.pool, copy).await?, replayed))
     }
     .await;
     match result {
-        Ok(summary) => ToolResult::ok(WhiteboardChangeValue {
+        Ok((summary, idempotent_replay)) => ToolResult::ok(WhiteboardChangeValue {
             whiteboard: line(state, summary),
             edit: None,
+            idempotent_replay,
         }),
         Err(error) => refused(error, "whiteboard_duplicate"),
     }
