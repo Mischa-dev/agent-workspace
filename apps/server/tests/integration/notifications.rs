@@ -689,3 +689,53 @@ async fn everyone_reaches_the_people_who_can_see_the_conversation() {
     assert_eq!(in_group[0]["count"], 1, "{page}");
     assert!(items(&inbox(&setup, &pat_browser, "").await).is_empty());
 }
+
+/// P0.5: a person reading through a connected app reads their mentions too,
+/// with mark_read and with conversation_read's markRead, the same as in the
+/// browser, so the inbox empties and no push or email goes out later.
+#[tokio::test]
+async fn reading_through_a_connected_app_reads_the_mentions() {
+    let Some(setup) = setup("notify_app_reads").await else {
+        return;
+    };
+    let project = create_project(&setup, "NTA", "Notify apps").await;
+    let general = create_channel(&setup, &project, "general").await;
+    let random = create_channel(&setup, &project, "random").await;
+    let (mara, mara_browser) = add_person(&setup, &[&project], "mara").await;
+    say(&setup, &setup.browser, &general, "a1", mention(mara, "One ")).await;
+    say(&setup, &setup.browser, &random, "a2", mention(mara, "Two ")).await;
+    drain(&setup).await;
+    assert_eq!(inbox(&setup, &mara_browser, "").await["unreadCount"], 2);
+
+    let token = connect_app(&setup.app, &mara_browser, "Mara's app", "full").await;
+    let session = initialize(&setup.app, &token).await.expect("app MCP");
+    let marked = tool(
+        &setup.app,
+        &token,
+        &session,
+        "mark_read",
+        json!({"conversationId": general}),
+    )
+    .await;
+    assert_eq!(marked["outcome"], "ok", "{marked}");
+    assert_eq!(inbox(&setup, &mara_browser, "").await["unreadCount"], 1);
+
+    let read = tool(
+        &setup.app,
+        &token,
+        &session,
+        "conversation_read",
+        json!({"conversationId": random, "markRead": true}),
+    )
+    .await;
+    assert_eq!(read["outcome"], "ok", "{read}");
+    assert_eq!(inbox(&setup, &mara_browser, "").await["unreadCount"], 0);
+    let unread = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM notifications WHERE recipient_actor_id = $1 AND read_at IS NULL",
+    )
+    .bind(mara)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("unread notifications");
+    assert_eq!(unread, 0);
+}

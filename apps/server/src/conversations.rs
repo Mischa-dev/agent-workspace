@@ -2754,45 +2754,15 @@ async fn mark_conversation_seen(
         }));
     }
 
-    let row = sqlx::query_as::<_, ReadStateRow>(
-        r#"
-        INSERT INTO conversation_read_states (
-            project_id, conversation_id, actor_id, highest_seen_sequence, version
-        )
-        VALUES ($1, $2, $3, $4, 1)
-        ON CONFLICT (project_id, conversation_id, actor_id) DO UPDATE
-        SET highest_seen_sequence = EXCLUDED.highest_seen_sequence,
-            version = conversation_read_states.version + 1,
-            updated_at = now()
-        WHERE EXCLUDED.highest_seen_sequence > conversation_read_states.highest_seen_sequence
-        RETURNING highest_seen_sequence, version
-        "#,
-    )
-    .bind(conversation.project_id)
-    .bind(conversation.id)
-    .bind(principal.actor_id)
-    .bind(request.highest_seen_sequence)
-    .fetch_one(&mut *transaction)
-    .await?;
-    enqueue_event(
+    let row = crate::read_state::mark_seen(
         &mut transaction,
         conversation.project_id,
-        OutboxEventPayload::ReadStateUpdated(ReadStateUpdatedPayload {
-            conversation_id: conversation.id,
-            actor_id: principal.actor_id,
-            highest_seen_sequence: row.highest_seen_sequence,
-            version: row.version,
-        }),
-    )
-    .await?;
-    crate::notifications::read_for_conversation(
-        &mut transaction,
-        conversation.project_id,
-        principal.actor_id,
         conversation.id,
-        row.highest_seen_sequence,
+        principal.actor_id,
+        request.highest_seen_sequence,
     )
-    .await?;
+    .await?
+    .ok_or(AppError::Internal("read state moved under its lock"))?;
     transaction.commit().await?;
     Ok(Json(ReadStateView {
         highest_seen_sequence: row.highest_seen_sequence,
