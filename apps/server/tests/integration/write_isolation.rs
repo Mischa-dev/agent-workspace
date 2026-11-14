@@ -3122,8 +3122,13 @@ impl<'a> Sender<'a> {
         first: &'a Browser,
         more: &'a [Browser],
     ) -> Self {
-        let mut browsers = vec![first];
-        browsers.extend(more.iter());
+        // The first session made the fixture's own writes in this same
+        // minute, so it only sends when there are no others.
+        let browsers = if more.is_empty() {
+            vec![first]
+        } else {
+            more.iter().collect()
+        };
         Self {
             app,
             pool,

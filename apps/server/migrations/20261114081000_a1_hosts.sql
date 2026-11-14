@@ -39,9 +39,16 @@ CREATE TABLE hosts (
     described_agents JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (
         jsonb_typeof(described_agents) = 'array' AND octet_length(described_agents::text) <= 131072
     ),
-    issuer TEXT CHECK (issuer IS NULL OR issuer ~ '^https://[^[:space:][:cntrl:]]{1,500}$'),
+    -- PostgreSQL caps a regex repetition count at 255, so the length is its
+    -- own check.
+    issuer TEXT CHECK (
+        issuer IS NULL
+        OR (issuer ~ '^https://[^[:space:][:cntrl:]]+$' AND char_length(issuer) <= 1008)
+    ),
     module_manifest_url TEXT CHECK (
-        module_manifest_url IS NULL OR module_manifest_url ~ '^https://[^[:space:][:cntrl:]]{1,1000}$'
+        module_manifest_url IS NULL
+        OR (module_manifest_url ~ '^https://[^[:space:][:cntrl:]]+$'
+            AND char_length(module_manifest_url) <= 1008)
     ),
     connection TEXT NOT NULL DEFAULT 'dial_out' CHECK (connection IN ('dial_out', 'push')),
     push_url TEXT CHECK (push_url IS NULL OR push_url ~ '^https://[^[:space:][:cntrl:]]+$'),
