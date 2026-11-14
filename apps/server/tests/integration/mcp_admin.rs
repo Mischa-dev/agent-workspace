@@ -2,82 +2,36 @@
 //! parts are who may change a project, and that an archived project can be
 //! brought back.
 
-use agent_workspace_server::bootstrap::{BootstrapCommand, bootstrap_admin};
 use axum::http::StatusCode;
 use serde_json::{Value, json};
-use sqlx::{Executor, PgPool, postgres::PgPoolOptions};
+use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::agent_interface::{
-    Browser, PASSWORD, connect_app, create_agent, initialize, login, schema_pool, send, test_app,
-    test_app_with, tool,
+use super::support::app::{
+    connect_app, create_agent, creates_once, initialize, send, test_app_with, tool,
 };
 
-pub(super) struct Setup {
-    pub(super) app: axum::Router,
-    pub(super) browser: Browser,
-    pub(super) organization_id: Uuid,
-    /// The test's own schema, for checking rows directly.
-    pub(super) pool: PgPool,
-}
+pub(super) use super::support::world::{Setup, create_project, setup};
 
-pub(super) async fn setup(prefix: &str) -> Option<Setup> {
-    let Ok(database_url) = std::env::var("AGENT_WORKSPACE_DATABASE_URL") else {
-        eprintln!("skipping PostgreSQL integration test: AGENT_WORKSPACE_DATABASE_URL is unset");
-        return None;
+#[tokio::test]
+async fn creating_a_project_again_creates_it_once() {
+    let Some(setup) = setup("mcp_project_retry").await else {
+        return;
     };
-    let admin = PgPoolOptions::new()
-        .max_connections(2)
-        .connect(&database_url)
-        .await
-        .expect("connect to PostgreSQL");
-    let schema = format!("{prefix}_{}", Uuid::now_v7().simple());
-    admin
-        .execute(format!("CREATE SCHEMA {schema}").as_str())
-        .await
-        .expect("create schema");
-    let pool = schema_pool(&database_url, &schema).await;
-    sqlx::migrate!("./migrations")
-        .run(&pool)
-        .await
-        .expect("apply migrations");
-    let owner = bootstrap_admin(
-        &pool,
-        BootstrapCommand {
-            login_name: "owner".to_owned(),
-            display_name: "Owner".to_owned(),
-            organization_name: Some("Admin Organization".to_owned()),
-            organization_slug: Some(format!("admin-{}", Uuid::now_v7().simple())),
-            adopt_actor_id: None,
-            organization_id: None,
-        },
-        PASSWORD.to_owned(),
-    )
-    .await
-    .expect("bootstrap owner");
-    let app = test_app(pool.clone(), &database_url);
-    let browser = login(&app).await;
-    Some(Setup {
+    let app = &setup.app;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    creates_once(
         app,
-        browser,
-        organization_id: owner.organization_id,
-        pool,
-    })
-}
-
-pub(super) async fn create_project(setup: &Setup, key: &str, name: &str) -> String {
-    let (status, project) = send(
-        &setup.app,
-        setup.browser.request(
-            "POST",
-            "/api/v1/projects",
-            Some(&format!("create-{key}")),
-            json!({"organizationId": setup.organization_id, "key": key, "name": name}),
-        ),
+        &setup.pool,
+        &codex,
+        &session,
+        "project_create",
+        json!({"key": "WEB", "name": "Website", "clientRequestId": "project-retry-1"}),
+        json!({"key": "APP", "name": "App", "clientRequestId": "project-retry-1"}),
+        "SELECT count(*) FROM projects",
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{project}");
-    project["id"].as_str().expect("project").to_owned()
 }
 
 #[tokio::test]

@@ -24,6 +24,7 @@ import {
   type ChipTone,
 } from '../../ui'
 import { OneTimeValue } from '../OneTimeValue'
+import { actorKind } from '../../ui/identityModel'
 import { listWorkspaceMembers, workspaceKeys } from '../workspace/api'
 import {
   bindHostAgent,
@@ -61,7 +62,7 @@ export function HostsView({ mode, workspace }: { mode: 'workspace' | 'account'; 
     queryFn: () => listWorkspaceMembers(workspace?.id ?? ''),
     enabled: Boolean(workspace),
   })
-  const agents = (members.data?.members ?? []).filter((member) => member.kind === 'external_agent' && member.enabled)
+  const agents = (members.data?.members ?? []).filter((member) => actorKind(member.kind) === 'agent' && member.enabled)
   const [code, setCode] = useState<EnrolmentCode | null>(null)
   const [label, setLabel] = useState('')
   const [unlinking, setUnlinking] = useState<Host | null>(null)
@@ -85,7 +86,6 @@ export function HostsView({ mode, workspace }: { mode: 'workspace' | 'account'; 
     },
     onSettled: refresh,
   })
-  const canLink = mode === 'account' || workspace?.role === 'owner' || workspace?.role === 'admin'
   const owner = mode === 'workspace' ? (workspace?.name ?? 'the workspace') : 'you'
 
   return (
@@ -108,32 +108,30 @@ export function HostsView({ mode, workspace }: { mode: 'workspace' | 'account'; 
           {formatFullDate(code.expiresAt)}, and links a host owned by {code.owner.name}.
         </OneTimeValue>
       )}
-      {canLink && (
-        <Section id="link-host-heading" title="Link a host">
-          <form
-            className="aw-card aw-formcard aw-form"
-            onSubmit={(event: FormEvent<HTMLFormElement>) => {
-              event.preventDefault()
-              enrol.mutate()
-            }}
-          >
-            <TextField
-              hint={`A note for you, such as the machine’s name. The host will belong to ${owner}.`}
-              id="host-label"
-              label="Label"
-              maxLength={80}
-              onChange={(event) => setLabel(event.target.value)}
-              value={label}
-            />
-            {enrol.isError && <Banner tone="danger">{`No code was made. ${describeError(enrol.error).message}`}</Banner>}
-            <div className="aw-form__actions">
-              <Button busy={enrol.isPending} icon="plus" type="submit" variant="primary">
-                Make a code
-              </Button>
-            </div>
-          </form>
-        </Section>
-      )}
+      <Section id="link-host-heading" title="Link a host">
+        <form
+          className="aw-card aw-formcard aw-form"
+          onSubmit={(event: FormEvent<HTMLFormElement>) => {
+            event.preventDefault()
+            enrol.mutate()
+          }}
+        >
+          <TextField
+            hint={`A note for you, such as the machine’s name. The host will belong to ${owner}.`}
+            id="host-label"
+            label="Label"
+            maxLength={80}
+            onChange={(event) => setLabel(event.target.value)}
+            value={label}
+          />
+          {enrol.isError && <Banner tone="danger">{`No code was made. ${describeError(enrol.error).message}`}</Banner>}
+          <div className="aw-form__actions">
+            <Button busy={enrol.isPending} icon="plus" type="submit" variant="primary">
+              Make a code
+            </Button>
+          </div>
+        </form>
+      </Section>
       <Section id="hosts-heading" title={mode === 'workspace' ? 'Hosts here' : 'Your hosts'}>
         {hosts.isPending ? (
           <ListSkeleton label="Loading hosts" rows={2} />

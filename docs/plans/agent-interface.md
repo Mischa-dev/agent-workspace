@@ -1,3 +1,5 @@
+> **Superseded where [`docs/plans/master/`](master/README.md) says otherwise.** This plan explains how the existing pieces were built; the master plan decides what changes.
+
 # Plan: how agents work in Agent Workspace
 
 September 28, 2026. Approved by Mischa the same day, with the changes below

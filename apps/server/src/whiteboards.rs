@@ -147,6 +147,28 @@ pub struct OnIn {
     pub workspaces: Vec<Uuid>,
 }
 
+/// Where Whiteboards is on for `actor_id` among `projects`, narrowed by
+/// their roles, and the workspaces where it is on for boards across one.
+/// The web's list and MCP's `whiteboard_list` both filter by it (P0.7).
+pub async fn on_for(
+    connection: &mut sqlx::PgConnection,
+    actor_id: Uuid,
+    projects: &[Uuid],
+) -> Result<OnIn, AppError> {
+    let in_projects =
+        crate::modules::state::ProjectModules::load(connection, actor_id, projects).await?;
+    let workspaces = crate::modules::state::by_workspace(connection, actor_id)
+        .await?
+        .into_iter()
+        .filter(|(_, set)| set.contains("whiteboards"))
+        .map(|(workspace, _)| workspace)
+        .collect();
+    Ok(OnIn {
+        projects: in_projects.with(projects, "whiteboards"),
+        workspaces,
+    })
+}
+
 /// Boards the caller can see, most recently changed first.
 pub async fn list(
     pool: &PgPool,

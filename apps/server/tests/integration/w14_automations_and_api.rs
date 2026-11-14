@@ -1440,7 +1440,7 @@ async fn seed_failing_pull_request(
             author_login, draft, state, external_created_at, external_updated_at, checks_state
         ) VALUES (
             $1, $2, $3, $4, $5, 7, $6, $7, 'offline-mode', repeat('b', 40), 'main',
-            'Offline mode', 'mischa', false, 'open', now(), now(), 'failure'
+            'Offline mode', 'octo', false, 'open', now(), now(), 'failure'
         )
         "#,
     )

@@ -186,7 +186,7 @@ async fn login(
     };
     if let Err(error) = state
         .rate_limits
-        .check_login_sender(crate::rate_limit::client_address(&headers))
+        .check_login_sender(crate::rate_limit::client_address(&state.config, &headers))
         .and_then(|()| state.rate_limits.check_login(&login_name))
     {
         request.password.zeroize();
@@ -236,13 +236,18 @@ async fn login(
 
     let Some(credential) = credential else {
         password::verify_unknown_login(request.password).await?;
+        state.rate_limits.note_login_failure();
         return Err(AppError::InvalidCredentials);
     };
     let verified =
         password::verify_password(request.password, credential.password_phc.clone()).await?;
     if !verified {
+        state.rate_limits.note_login_failure();
         return Err(AppError::InvalidCredentials);
     }
+    // A right password lets the name through while junk sign-ins flood in,
+    // even when a second factor is still to come.
+    state.rate_limits.note_login_success(&login_name);
 
     let mut transaction = state.pool.begin().await?;
     if crate::account_security::two_factor_enabled(&mut transaction, credential.user_id).await? {

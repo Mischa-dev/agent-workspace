@@ -182,7 +182,8 @@ fn g1_run_sql_lives_in_the_run_service() {
     check(
         "G1",
         LEGACY_RUN_SQL,
-        |name| name.starts_with("runs/"),
+        // structure_guards.rs names the tables as the patterns it counts.
+        |name| name.starts_with("runs/") || name == "structure_guards.rs",
         touches_run_tables,
     );
 }
@@ -192,7 +193,7 @@ fn g4_active_states_are_listed_once() {
     check(
         "G4",
         LEGACY_STATE_LISTS,
-        |name| name == "runs/state.rs" || name == "runs/guards.rs",
+        |name| name == "runs/state.rs" || name == "runs/guards.rs" || name == "structure_guards.rs",
         lists_states,
     );
 }

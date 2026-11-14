@@ -81,8 +81,9 @@ resume it instead of starting another; both are `null` when there is none.
 
 Webhooks set up before typed wakeups receive `{"event": "inbox.available",
 "deliveryId", "agentId", "replyRequestId"}` instead, and no stop events. That
-format stays for one release. Saving the webhook again on the Agents page
-issues a new secret and switches it to typed wakeups.
+format stays until the runner is ready: saving the webhook again keeps it,
+and **Switch to typed wakeups** on the Agents page issues a new secret and
+switches it.
 
 ## 2. Claim
 

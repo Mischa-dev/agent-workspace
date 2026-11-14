@@ -1727,7 +1727,7 @@
       "id": "X3",
       "area": "X",
       "title": "Public API",
-      "what": "A versioned REST API with an OpenAPI document generated from the Rust types, personal tokens with scopes (S7), and a docs page. docs/task-platform/api-contract.md is a starting point.",
+      "what": "A versioned REST API with an OpenAPI document generated from the Rust types, personal tokens with scopes (S7), and a docs page. docs/history/task-platform/api-contract.md is a starting point.",
       "done": "A script with a personal token can do what the web app does.",
       "deps": [
         "S7"

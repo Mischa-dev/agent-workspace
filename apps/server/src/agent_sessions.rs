@@ -38,7 +38,7 @@ pub struct SessionView {
     pub source: String,
     /// What runs it, such as codex_cloud, claude_code or codex.
     pub harness: String,
-    /// The harness's name for people, such as "Codex Cloud".
+    /// The harness's name for people, from its manifest.
     #[sqlx(default)]
     pub harness_name: String,
     /// The runner's or harness's own reference, such as a task or session
@@ -72,12 +72,17 @@ fn named(state: &AppState, mut session: SessionView) -> SessionView {
 
 /// A name people know a harness by: its manifest's, for ones the server
 /// knows, otherwise the runner's own word with each part capitalised
-/// (`night_runner` reads "Night Runner"). No names are kept here (A1.4).
+/// (`night_runner` reads "Night Runner").
 pub(crate) fn harness_name(state: &AppState, harness: &str) -> String {
     if let Some(manifest) = state.supervisors.manifest(harness) {
         return manifest.display_name.clone();
     }
-    readable(harness)
+    match harness {
+        // The usual runner kinds, named as their adapters name themselves.
+        "claude_code" => crate::provider::claude_code::claude_code_manifest().display_name,
+        "codex" => crate::provider::codex_manifest().display_name,
+        other => readable(other),
+    }
 }
 
 fn readable(harness: &str) -> String {

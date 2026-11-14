@@ -100,6 +100,25 @@ async fn list_http(
     ApiQuery(query): ApiQuery<ListQuery>,
 ) -> Result<Json<ListResponse>, AppError> {
     let caller = Caller::browser(&principal)?;
+    // Boards where Whiteboards is off (for the workspace or the person's
+    // role) are left out, as MCP's whiteboard_list leaves them out (P0.7).
+    let on_in = {
+        let mut connection = state.pool.acquire().await?;
+        let projects = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            SELECT project.id
+            FROM projects project
+            JOIN organization_memberships membership
+              ON membership.organization_id = project.organization_id
+             AND membership.actor_id = $1 AND membership.enabled
+            WHERE actor_can_access_project($1, NULL, project.id)
+            "#,
+        )
+        .bind(caller.actor_id)
+        .fetch_all(&mut *connection)
+        .await?;
+        super::on_for(&mut connection, caller.actor_id, &projects).await?
+    };
     let whiteboards = super::list(
         &state.pool,
         &caller,
@@ -109,7 +128,7 @@ async fn list_http(
             query: query.q,
             deleted: query.deleted.unwrap_or(false),
             limit: 200,
-            on_in: None,
+            on_in: Some(on_in),
         },
     )
     .await?;

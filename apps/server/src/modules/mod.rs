@@ -417,47 +417,57 @@ mod tests {
         });
     }
 
-    // -----------------------------------------------------------------------
-    // Reading the routes from the source, as `policy_inventory` does.
-
-    const ROUTE_CALL: &str = concat!(".route", "(");
-
-    fn route_paths() -> BTreeSet<String> {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let mut folders = vec![root];
-        let mut paths = BTreeSet::new();
-        while let Some(folder) = folders.pop() {
-            for entry in std::fs::read_dir(&folder).expect("read source folder") {
-                let path = entry.expect("source entry").path();
-                if path.is_dir() {
-                    folders.push(path);
-                    continue;
-                }
-                if path.extension().is_none_or(|extension| extension != "rs") {
-                    continue;
-                }
-                let mut source = std::fs::read_to_string(&path).expect("read source file");
-                // Test modules build throwaway routers.
-                if let Some(tests) = source.find("\n#[cfg(test)]\nmod ") {
-                    source.truncate(tests);
-                }
-                let mut remaining = source.as_str();
-                while let Some(start) = remaining.find(ROUTE_CALL) {
-                    remaining = &remaining[start + ROUTE_CALL.len()..];
-                    let Some(open) = remaining.find('"') else {
-                        break;
-                    };
-                    // The path is the call's first argument.
-                    if !remaining[..open].trim().is_empty() {
-                        continue;
-                    }
-                    let rest = &remaining[open + 1..];
-                    if let Some(close) = rest.find('"') {
-                        paths.insert(rest[..close].to_owned());
-                    }
-                }
+    /// P0.7: every route a switchable module owns that names its content by
+    /// id is looked up by the gate (`ID_FAMILIES`) or exempt with a reason
+    /// (`ID_EXEMPT`), so a new family can't step around the gate.
+    #[test]
+    fn every_id_routed_family_is_gated_or_exempt() {
+        use super::gate::{ID_EXEMPT, ID_FAMILIES};
+        let mut missing = BTreeSet::new();
+        for path in route_paths() {
+            let Some(module) = manifest::of_route(&path) else {
+                continue;
+            };
+            if !module.switchable {
+                continue;
+            }
+            let mut parts = path.trim_start_matches('/').split('/');
+            let (Some("api"), Some("v1"), Some(family), Some(id)) =
+                (parts.next(), parts.next(), parts.next(), parts.next())
+            else {
+                continue;
+            };
+            if !id.starts_with('{') || family == "projects" || family == "organizations" {
+                continue;
+            }
+            let prefix = format!("/api/v1/{family}/");
+            let known = ID_FAMILIES.iter().any(|(gated, _, _)| *gated == prefix)
+                || ID_EXEMPT.iter().any(|(exempt, _)| *exempt == prefix);
+            if !known {
+                missing.insert(format!("{prefix} ({path}, module {})", module.id));
             }
         }
-        paths
+        assert!(
+            missing.is_empty(),
+            "id-routed families of switchable modules the module gate neither looks up \
+             (modules/gate.rs ID_FAMILIES) nor exempts with a reason (ID_EXEMPT): {missing:#?}"
+        );
+        for (prefix, reason) in ID_EXEMPT {
+            assert!(!reason.is_empty(), "{prefix} needs a reason");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Reading the routes from the source through the shared scanner (P0.24),
+    // as `policy_inventory` does.
+
+    fn route_paths() -> BTreeSet<String> {
+        use crate::test_support::source::{routes, rust_files, server_src, strip_tests};
+        rust_files(&server_src())
+            .iter()
+            // Test modules build throwaway routers.
+            .flat_map(|(_, source)| routes(strip_tests(source)))
+            .map(|route| route.path)
+            .collect()
     }
 }

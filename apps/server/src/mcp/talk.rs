@@ -29,10 +29,7 @@ use crate::{
     error::AppError,
     idempotency::IdempotencyKey,
     message_content::MessageContent,
-    outbox::{
-        ConversationCreatedPayload, OutboxConversationKind, OutboxEventPayload,
-        ReadStateUpdatedPayload,
-    },
+    outbox::{ConversationCreatedPayload, OutboxConversationKind, OutboxEventPayload},
     policy::{Action, ActorKind},
     reactions::reaction_rows,
 };
@@ -269,7 +266,7 @@ pub(super) struct ConversationListValue {
     pub next_cursor: Option<String>,
 }
 
-/// One message (or Codex run event) in a conversation.
+/// One message (or run event) in a conversation.
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct MessageItem {
@@ -1158,7 +1155,7 @@ pub(super) fn person_label(name: &str, handle: &str, kind: Option<&str>) -> Stri
 fn message_item(row: MessageRow) -> MessageItem {
     let author = match (&row.author_name, &row.author_handle) {
         (Some(name), Some(handle)) => person_label(name, handle, row.author_kind.as_deref()),
-        _ if row.event_summary.is_some() => "Codex run".to_owned(),
+        _ if row.event_summary.is_some() => "Agent run".to_owned(),
         _ => "Former member".to_owned(),
     };
     let removed = row.removed.unwrap_or(false);
@@ -1398,40 +1395,16 @@ async fn mark(
     conversation: &ConversationAccessRow,
     up_to: i64,
 ) -> Result<i64, AppError> {
+    // The same read as the web's: the mark, the event and the inbox (P0.5).
     let mut transaction = state.pool.begin().await?;
-    let row = sqlx::query_as::<_, (i64, i64)>(
-        r#"
-        INSERT INTO conversation_read_states (
-            project_id, conversation_id, actor_id, highest_seen_sequence, version
-        )
-        VALUES ($1, $2, $3, $4, 1)
-        ON CONFLICT (project_id, conversation_id, actor_id) DO UPDATE
-        SET highest_seen_sequence = EXCLUDED.highest_seen_sequence,
-            version = conversation_read_states.version + 1,
-            updated_at = now()
-        WHERE EXCLUDED.highest_seen_sequence > conversation_read_states.highest_seen_sequence
-        RETURNING highest_seen_sequence, version
-        "#,
+    crate::read_state::mark_seen(
+        &mut transaction,
+        conversation.project_id,
+        conversation.id,
+        principal.actor_id,
+        up_to,
     )
-    .bind(conversation.project_id)
-    .bind(conversation.id)
-    .bind(principal.actor_id)
-    .bind(up_to)
-    .fetch_optional(&mut *transaction)
     .await?;
-    if let Some((highest_seen_sequence, version)) = row {
-        enqueue_event(
-            &mut transaction,
-            conversation.project_id,
-            OutboxEventPayload::ReadStateUpdated(ReadStateUpdatedPayload {
-                conversation_id: conversation.id,
-                actor_id: principal.actor_id,
-                highest_seen_sequence,
-                version,
-            }),
-        )
-        .await?;
-    }
     transaction.commit().await?;
     read_sequence(state, conversation.id, principal.actor_id).await
 }

@@ -173,9 +173,9 @@ async fn repository_registration_preparation_archive_and_policy_are_safe_and_ide
     let csrf = csrf_from_cookie(&cookie);
     let registration = json!({
         "githubRepositoryId": 9000000002_i64,
-        "owner": "Mischa-dev",
+        "owner": "example-org",
         "name": "m3-registration-fixture",
-        "cloneUrl": "https://github.com/Mischa-dev/m3-registration-fixture.git",
+        "cloneUrl": "https://github.com/example-org/m3-registration-fixture.git",
         "defaultBranch": "main",
         "trustAcknowledged": true
     });
@@ -236,9 +236,9 @@ async fn repository_registration_preparation_archive_and_policy_are_safe_and_ide
         &base,
         json!({
             "githubRepositoryId": 9000000003_i64,
-            "owner": "Mischa-dev",
+            "owner": "example-org",
             "name": "unsafe",
-            "cloneUrl": "https://token@github.com/Mischa-dev/unsafe.git",
+            "cloneUrl": "https://token@github.com/example-org/unsafe.git",
             "defaultBranch": "-upload-pack",
             "trustAcknowledged": true
         }),

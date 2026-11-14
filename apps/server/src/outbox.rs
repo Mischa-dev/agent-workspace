@@ -727,6 +727,9 @@ pub enum OutboxFailureKind {
     MalformedEvent,
     Serialization,
     PublicationUnavailable,
+    /// Notifications or webhook and automation routing failed; not
+    /// permanent, so the event is retried with backoff.
+    SideEffectsUnavailable,
 }
 
 impl OutboxFailureKind {
@@ -735,6 +738,9 @@ impl OutboxFailureKind {
             Self::MalformedEvent => "outbox event is malformed",
             Self::Serialization => "outbox event serialization failed",
             Self::PublicationUnavailable => "realtime publication was unavailable",
+            Self::SideEffectsUnavailable => {
+                "notifications or webhook and automation routing were unavailable"
+            }
         }
     }
 

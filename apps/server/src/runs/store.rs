@@ -128,6 +128,8 @@ pub async fn active_in_conversation_tree(
 ) -> Result<bool, AppError> {
     Ok(sqlx::query_scalar::<_, bool>(
         r#"
+        -- visibility: says only whether a run is active there; the caller
+        -- has checked the conversation, and nothing of it is returned.
         SELECT EXISTS (
             SELECT 1
             FROM runs run

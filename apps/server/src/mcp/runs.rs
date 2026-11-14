@@ -20,7 +20,7 @@ use crate::{
     runs::RunCaller,
 };
 
-const NOT_FOR_AGENTS: &str = "Agents ask a person to start Codex with run_request; run_start spends a person's own Codex account.";
+const NOT_FOR_AGENTS: &str = "Agents ask a person to start a run with run_request; run_start spends a person's own provider account.";
 
 /// AWD-75: the projects the caller belongs to where `module` is off for
 /// them, for lists that reach projects through membership rather than a
@@ -53,7 +53,7 @@ pub(super) struct RunStartArguments {
     /// (thread_start), link it to the task (task_link), then start the run
     /// there, so the run's pull request is linked to the task.
     pub thread_id: String,
-    /// What Codex should do, written out in full: Codex sees only this and
+    /// What the run should do, written out in full: it sees only this and
     /// the repository.
     pub prompt: String,
     /// The repository, if the project has more than one ready.
@@ -138,7 +138,7 @@ pub(super) struct RunValue {
     pub failure: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pull_request: Option<PullRequestLine>,
-    /// Approvals Codex is waiting on in this run.
+    /// Approvals this run is waiting on.
     pub approvals_waiting: i64,
     /// What to do next, in words.
     pub next: String,
@@ -254,17 +254,17 @@ fn stage(row: &RunRow) -> (&'static str, String, Option<u32>) {
     match row.state.as_str() {
         "created" | "queued" => (
             "queued",
-            "Waiting for Codex to pick it up.".to_owned(),
+            "Waiting for the harness to pick it up.".to_owned(),
             Some(60),
         ),
         "blocked" if row.approvals_waiting > 0 => (
             "waiting_for_approval",
-            "Codex is waiting on an approval; answer it in the thread (approval_list shows it).".to_owned(),
+            "The run is waiting on an approval; answer it in the thread (approval_list shows it).".to_owned(),
             Some(60),
         ),
         "starting" | "working" | "blocked" | "recovering" => (
             "working",
-            "Codex is working.".to_owned(),
+            "The run is working.".to_owned(),
             Some(60),
         ),
         "failed" => (
@@ -279,13 +279,13 @@ fn stage(row: &RunRow) -> (&'static str, String, Option<u32>) {
         ),
         _ if row.published => (
             "published",
-            "Codex's branch is published. Open a pull request from the run in the web app."
+            "The run's branch is published. Open a pull request from the run in the web app."
                 .to_owned(),
             None,
         ),
         _ => (
             "finished",
-            "Codex finished. Publish its branch and open a pull request from the run in the web app."
+            "The run finished. Publish its branch and open a pull request from the run in the web app."
                 .to_owned(),
             None,
         ),
@@ -440,7 +440,7 @@ pub(super) async fn run_start(
         return ToolResult::invalid("clientRequestId", "Use up to 128 plain characters.");
     };
     if arguments.prompt.trim().is_empty() {
-        return ToolResult::invalid("prompt", "Say what Codex should do.");
+        return ToolResult::invalid("prompt", "Say what the run should do.");
     }
     let caller = RunCaller::mcp(principal, request_id);
     let result = async {
@@ -476,7 +476,7 @@ pub(super) async fn run_start(
         AppError::NotFound(_) => ToolResult::not_found("That thread"),
         AppError::Invalid(message) => ToolResult::invalid("threadId", message),
         AppError::Forbidden => ToolResult::denied(
-            "You can't start Codex in that project (it needs a member or above).",
+            "You can't start a run in that project (it needs a member or above).",
         ),
         AppError::Conflict(_, message) => ToolResult::conflict(message),
         AppError::RepositoryBindingConflict => ToolResult::conflict(

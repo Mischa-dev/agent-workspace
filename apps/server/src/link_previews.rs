@@ -303,13 +303,17 @@ async fn fetch_job(context: JobContext) -> Result<(), JobError> {
     let result = match outcome {
         Ok((found, picture)) => {
             let room = match &picture {
-                Some((bytes, _, _, _)) => crate::files::require_room(
-                    state,
-                    organization_id,
-                    u64::try_from(bytes.len()).unwrap_or(u64::MAX),
-                )
-                .await
-                .is_ok(),
+                Some((bytes, _, _, _)) => match state.pool.acquire().await {
+                    Ok(mut connection) => crate::files::require_room(
+                        state,
+                        &mut connection,
+                        organization_id,
+                        u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+                    )
+                    .await
+                    .is_ok(),
+                    Err(_) => false,
+                },
                 None => false,
             };
             // A full workspace or disk keeps the preview's words, not its picture.

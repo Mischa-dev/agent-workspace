@@ -209,8 +209,8 @@ pub async fn prepare_m3_upgrade(
             require_contained_exact_path(&config.data_root, &stored)?;
             continue;
         }
-        if repository.owner != "Mischa-dev"
-            || repository.name != "agent-workspace-m0-spike"
+        if repository.owner != crate::seed::DEMO_REPOSITORY_OWNER
+            || repository.name != crate::seed::DEMO_REPOSITORY_NAME
             || stored != legacy_mirror
         {
             tracing::error!(

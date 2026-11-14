@@ -19,7 +19,10 @@ use super::{
     McpPrincipal,
     common::{ToolResult, accessible_project_ids_in, archived_task_message, parse_id, public_url},
     tasks::{command_actor, resolve_tasks},
-    writes::{WriteAccess, check_access_for, check_write_access},
+    writes::{
+        CreateRetry, REQUEST_ID_MESSAGE, WriteAccess, check_access_for, check_write_access,
+        complete_create, parse_request_id, reserve_create,
+    },
 };
 use crate::{
     AppState,
@@ -754,6 +757,10 @@ pub(super) struct MilestoneValue {
     /// Completed over total, from 0 to 1.
     #[serde(default)]
     pub progress: f64,
+    /// True when this answers a retried create: the milestone the first
+    /// call made.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub idempotent_replay: bool,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -782,6 +789,7 @@ fn milestone_value(state: &AppState, project_id: Uuid, view: MilestoneView) -> M
         version: view.version,
         open: view.open,
         progress: view.progress,
+        idempotent_replay: false,
     }
 }
 
@@ -823,7 +831,7 @@ pub(super) async fn milestone_list(
     result.unwrap_or_else(|error| ToolResult::from_error(error, "milestone_list"))
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct MilestoneWriteArguments {
     /// The project's ID, link or key (such as "AWD").
@@ -845,6 +853,9 @@ pub(super) struct MilestoneWriteArguments {
     pub remove_tasks: Option<Vec<String>>,
     /// The version you last read. Leave it out to change the current one.
     pub expected_version: Option<i64>,
+    /// Makes creating safe to retry: send the same one again and you get
+    /// the milestone the first call made. Changes need expectedVersion.
+    pub client_request_id: Option<String>,
 }
 
 pub(super) async fn milestone_write(
@@ -892,6 +903,13 @@ pub(super) async fn milestone_write(
     if add.len() + remove.len() > 200 {
         return ToolResult::invalid("addTasks", "Move at most 200 tasks in one call.");
     }
+    let retry_key = match arguments.client_request_id.as_deref() {
+        Some(value) if arguments.milestone_id.is_none() => match parse_request_id(value) {
+            Some(key) => Some(key),
+            None => return ToolResult::invalid("clientRequestId", REQUEST_ID_MESSAGE),
+        },
+        _ => None,
+    };
     let result = async {
         let references = add.iter().chain(remove.iter()).cloned().collect::<Vec<_>>();
         let found = resolve_tasks(state, principal, &references).await?;
@@ -915,6 +933,28 @@ pub(super) async fn milestone_write(
         {
             return Ok(refusal);
         }
+        let reservation = match reserve_create(
+            &mut transaction,
+            principal,
+            "milestones",
+            retry_key.as_ref(),
+            &arguments,
+        )
+        .await?
+        {
+            CreateRetry::Fresh(reservation) => reservation,
+            CreateRetry::Replay(milestone_id, _) => {
+                let view =
+                    work_item_planning::milestone(&mut transaction, project_id, milestone_id)
+                        .await?
+                        .ok_or(AppError::NotFound("milestone"))?;
+                transaction.commit().await?;
+                return Ok(ToolResult::ok(MilestoneValue {
+                    idempotent_replay: true,
+                    ..milestone_value(state, project_id, view)
+                }));
+            }
+        };
         // An archived task takes no changes until it's restored; refuse
         // rather than skip it and report success. Locked so it stays so.
         let locked = sqlx::query_as::<_, (String, bool)>(
@@ -971,7 +1011,7 @@ pub(super) async fn milestone_write(
                 let Some(name) = name.clone() else {
                     return Ok(ToolResult::invalid("name", "Give the new milestone a name."));
                 };
-                work_item_planning::create_milestone(
+                let created = work_item_planning::create_milestone(
                     &mut transaction,
                     &actor,
                     &name,
@@ -979,7 +1019,9 @@ pub(super) async fn milestone_write(
                     target_date.flatten(),
                 )
                 .await?
-                .0
+                .0;
+                complete_create(&mut transaction, reservation.as_ref(), created).await?;
+                created
             }
         };
         if !add_ids.is_empty() {

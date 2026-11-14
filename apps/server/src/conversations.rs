@@ -813,6 +813,7 @@ async fn list_channels(
         WHERE conversation.project_id = $1
           AND conversation.kind = 'channel'
           AND conversation.archived_at IS NULL
+          AND conversation_visible_to(conversation.id, $2)
         ORDER BY lower(conversation.name), conversation.id
         LIMIT $3
         "#,
@@ -2753,45 +2754,15 @@ async fn mark_conversation_seen(
         }));
     }
 
-    let row = sqlx::query_as::<_, ReadStateRow>(
-        r#"
-        INSERT INTO conversation_read_states (
-            project_id, conversation_id, actor_id, highest_seen_sequence, version
-        )
-        VALUES ($1, $2, $3, $4, 1)
-        ON CONFLICT (project_id, conversation_id, actor_id) DO UPDATE
-        SET highest_seen_sequence = EXCLUDED.highest_seen_sequence,
-            version = conversation_read_states.version + 1,
-            updated_at = now()
-        WHERE EXCLUDED.highest_seen_sequence > conversation_read_states.highest_seen_sequence
-        RETURNING highest_seen_sequence, version
-        "#,
-    )
-    .bind(conversation.project_id)
-    .bind(conversation.id)
-    .bind(principal.actor_id)
-    .bind(request.highest_seen_sequence)
-    .fetch_one(&mut *transaction)
-    .await?;
-    enqueue_event(
+    let row = crate::read_state::mark_seen(
         &mut transaction,
         conversation.project_id,
-        OutboxEventPayload::ReadStateUpdated(ReadStateUpdatedPayload {
-            conversation_id: conversation.id,
-            actor_id: principal.actor_id,
-            highest_seen_sequence: row.highest_seen_sequence,
-            version: row.version,
-        }),
-    )
-    .await?;
-    crate::notifications::read_for_conversation(
-        &mut transaction,
-        conversation.project_id,
-        principal.actor_id,
         conversation.id,
-        row.highest_seen_sequence,
+        principal.actor_id,
+        request.highest_seen_sequence,
     )
-    .await?;
+    .await?
+    .ok_or(AppError::Internal("read state moved under its lock"))?;
     transaction.commit().await?;
     Ok(Json(ReadStateView {
         highest_seen_sequence: row.highest_seen_sequence,
@@ -3419,6 +3390,7 @@ async fn project_conversation_sidebar(
         WHERE channel.project_id = $1
           AND channel.kind = 'channel'
           AND ($3 OR channel.archived_at IS NULL)
+          AND conversation_visible_to(channel.id, $2)
         ORDER BY channel.archived_at NULLS FIRST, lower(channel.name), channel.id
         LIMIT $4
         "#,
@@ -3497,6 +3469,7 @@ async fn project_conversation_sidebar(
         WHERE thread.project_id = $1
           AND thread.kind = 'thread'
           AND ($5 OR (thread.archived_at IS NULL AND parent.archived_at IS NULL))
+          AND conversation_visible_to(thread.id, $2)
         ORDER BY latest_activity_sequence DESC, thread.id DESC
         LIMIT $6
         "#,
