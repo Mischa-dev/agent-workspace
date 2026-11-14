@@ -170,6 +170,7 @@ fn request(caller: Caller, request_id: Option<&str>) -> DispatchRequest {
         workspace: None,
         request_id: request_id.map(str::to_owned),
         preview: false,
+        renamed_from: None,
     }
 }
 

@@ -497,3 +497,145 @@ async fn every_edge_runs_the_same_operation() {
     assert!(!listed.is_empty());
     assert!(!listed.contains(&"echo_create".to_owned()), "{listed:?}");
 }
+
+/// K2.6: an old tool name runs its operation with its old arguments,
+/// answers in its old shape byte for byte, says what to use instead, and is
+/// counted once per call.
+#[tokio::test]
+async fn an_old_name_answers_in_its_old_shape_and_is_counted() {
+    use agent_workspace_server::ops::aliases::{Alias, register_alias_for_tests};
+
+    let Some(setup) = setup("k2_ops_alias").await else {
+        return;
+    };
+    register_for_tests(add_echo);
+    register_alias_for_tests(Alias {
+        name: "echo_make",
+        canonical: |_| "echo_create",
+        runs: &["echo_create"],
+        adapt_in: |mut arguments| {
+            if let Some(words) = arguments.remove("words") {
+                arguments.insert("text".into(), words);
+            }
+            arguments
+        },
+        adapt_out: |_, value| json!({ "echo": { "words": value["text"] } }),
+        sunset: Some("2027-06-01"),
+    });
+    scratch_table(&setup.pool).await;
+    let app = &setup.app;
+    let space = create_project(&setup, "ALI", "Aliases").await;
+    let token = connect_app(app, &setup.browser, "Old client", "full").await;
+    let session = initialize(app, &token).await.expect("MCP session");
+
+    let (status, reply) = rpc(
+        app,
+        &token,
+        "/api/v1/mcp",
+        &session,
+        json!({
+            "jsonrpc": "2.0", "id": 9, "method": "tools/call",
+            "params": {
+                "name": "echo_make",
+                "arguments": { "space": space, "words": "kept", "clientRequestId": "old-1" }
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    let answered = reply
+        .pointer("/result/structuredContent")
+        .cloned()
+        .unwrap_or_else(|| panic!("no structured content: {reply}"));
+    assert_eq!(
+        serde_json::to_string(&answered).expect("JSON"),
+        r#"{"echo":{"words":"kept"}}"#
+    );
+    assert_eq!(
+        reply.pointer("/result/_meta/deprecated"),
+        Some(&json!(
+            "use echo_create; echo_make stops working after 2027-06-01"
+        )),
+        "{reply}"
+    );
+    // The old name isn't listed; the canonical one is.
+    let names = tool_names(app, &token).await;
+    assert!(names.iter().any(|name| name == "echo_create"), "{names:?}");
+    assert!(!names.iter().any(|name| name == "echo_make"), "{names:?}");
+
+    // The public API's v1 route: the old shape, with Deprecation and Sunset.
+    let response = app
+        .clone()
+        .oneshot(bearer(
+            &token,
+            "POST",
+            "/api/public/v1/echo_make",
+            None,
+            &json!({ "space": space, "words": "again", "clientRequestId": "old-2" }),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("deprecation")
+            .and_then(|value| value.to_str().ok()),
+        Some("true")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("sunset")
+            .and_then(|value| value.to_str().ok()),
+        Some("Tue, 01 Jun 2027 00:00:00 GMT")
+    );
+    let bytes = to_bytes(response.into_body(), 1_000_000)
+        .await
+        .expect("body");
+    assert_eq!(
+        std::str::from_utf8(&bytes).expect("utf-8"),
+        r#"{"echo":{"words":"again"}}"#
+    );
+
+    // Each call ran the operation once and was counted once.
+    let rows: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM ops_kernel_echo WHERE text IN ('kept', 'again')")
+            .fetch_one(&setup.pool)
+            .await
+            .expect("rows");
+    assert_eq!(rows, 2);
+    let calls: i64 = sqlx::query_scalar(
+        "SELECT calls FROM operation_alias_usage WHERE workspace_id = $1 AND alias = 'echo_make'",
+    )
+    .bind(setup.organization_id)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("usage");
+    assert_eq!(calls, 2);
+    // A retry with the same request id replays without counting again.
+    let (_, again) = rpc(
+        app,
+        &token,
+        "/api/v1/mcp",
+        &session,
+        json!({
+            "jsonrpc": "2.0", "id": 10, "method": "tools/call",
+            "params": {
+                "name": "echo_make",
+                "arguments": { "space": space, "words": "kept", "clientRequestId": "old-1" }
+            }
+        }),
+    )
+    .await;
+    assert_eq!(
+        again.pointer("/result/structuredContent"),
+        Some(&json!({ "echo": { "words": "kept" } })),
+        "{again}"
+    );
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM ops_kernel_echo WHERE text = 'kept'")
+        .fetch_one(&setup.pool)
+        .await
+        .expect("rows");
+    assert_eq!(rows, 1);
+}

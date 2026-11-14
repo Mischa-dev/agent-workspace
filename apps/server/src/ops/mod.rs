@@ -34,8 +34,10 @@ use rmcp::schemars::JsonSchema;
 use serde::{Serialize, de::DeserializeOwned};
 
 pub mod access_shim;
+pub mod aliases;
 pub mod codegen;
 pub mod context;
+pub mod conventions;
 pub mod dispatch;
 pub mod envelope;
 pub mod error;

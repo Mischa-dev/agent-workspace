@@ -2487,6 +2487,7 @@ async fn run_operation(
         workspace: None,
         request_id,
         preview: false,
+        renamed_from: None,
     };
     let answer = crate::ops::dispatch(state, request, operation, input).await;
     if answer.is_ok() {

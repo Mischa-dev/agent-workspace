@@ -117,6 +117,7 @@ pub(crate) async fn run_for_session(
                 .then(|| uuid::Uuid::now_v7().to_string())
         }),
         preview: false,
+        renamed_from: None,
     };
     let mut outcome = dispatch(state, request, name, input).await;
     if outcome.status == StatusCode::OK && outcome.body["outcome"] == "ok" {
@@ -261,6 +262,7 @@ async fn call(
         workspace,
         request_id: text("idempotency-key"),
         preview,
+        renamed_from: None,
     };
     answer(dispatch(state, request, name, input).await)
 }

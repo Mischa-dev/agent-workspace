@@ -35,6 +35,8 @@ pub struct DispatchRequest {
     pub request_id: Option<String>,
     /// Run and roll back (operations with `PREVIEW`).
     pub preview: bool,
+    /// The old name the caller used (`aliases`), counted once the call is done.
+    pub renamed_from: Option<&'static str>,
 }
 
 /// What an edge sends back: the status its outcome maps to and the
@@ -265,6 +267,13 @@ async fn pipeline<O: Operation>(
     if request.preview {
         // Dropping the transaction rolls it back.
         return Ok(answer);
+    }
+    if let Some(alias) = request.renamed_from {
+        let workspace_id = ctx.workspace_id;
+        let tx = call.tx().await?;
+        super::aliases::count(tx, workspace_id, alias)
+            .await
+            .map_err(|error| OpError::logged(O::NAME, &error.into()))?;
     }
     if writes {
         let audit = call.audit.take();
