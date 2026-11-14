@@ -58,6 +58,7 @@ pub mod notification_email;
 pub mod notification_settings;
 pub mod notifications;
 pub mod onboarding;
+pub mod ops;
 pub mod outbound;
 pub mod outbox;
 pub mod page_blocks;
