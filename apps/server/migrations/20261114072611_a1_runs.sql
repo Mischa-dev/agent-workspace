@@ -80,7 +80,7 @@ CREATE TABLE runs (
     gap_count INTEGER NOT NULL DEFAULT 0 CHECK (gap_count >= 0),
     -- Settings the run used, frozen once set (the rule agent_runs.config has).
     settings JSONB NOT NULL DEFAULT '{}'::jsonb CHECK (
-        jsonb_typeof(settings) = 'object' AND octet_length(settings::text) <= 16384
+        jsonb_typeof(settings) = 'object' AND octet_length(settings::text) <= 32768
     ),
     version BIGINT NOT NULL DEFAULT 1 CHECK (version > 0),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -149,7 +149,7 @@ CREATE TABLE run_activities (
     parent_ref TEXT CHECK (parent_ref IS NULL OR char_length(parent_ref) <= 200),
     summary TEXT NOT NULL CHECK (char_length(summary) <= 2000),
     payload JSONB NOT NULL DEFAULT '{}'::jsonb CHECK (
-        jsonb_typeof(payload) = 'object' AND octet_length(payload::text) <= 65536
+        jsonb_typeof(payload) = 'object' AND octet_length(payload::text) <= 131072
     ),
     occurred_at TIMESTAMPTZ NOT NULL,
     received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
