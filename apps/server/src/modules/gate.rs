@@ -115,6 +115,7 @@ pub(crate) const ID_FAMILIES: &[(&str, &str, &str)] = &[
 
 /// Id-routed families the gate doesn't look up, and why. Every switchable
 /// route named by id is in `ID_FAMILIES` or here (a test in `modules`).
+#[cfg(test)]
 pub(crate) const ID_EXEMPT: &[(&str, &str)] = &[
     (
         "/api/v1/agent-approvals/",

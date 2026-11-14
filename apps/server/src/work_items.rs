@@ -4829,27 +4829,6 @@ async fn record_work_item_change(
     Ok(())
 }
 
-pub(crate) async fn insert_work_item_activity(
-    transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
-    work_item_id: Uuid,
-    actor_id: Uuid,
-    kind: &str,
-    summary: &str,
-    payload: &serde_json::Value,
-) -> Result<Uuid, AppError> {
-    insert_activity(
-        transaction,
-        project_id,
-        work_item_id,
-        actor_id,
-        kind,
-        summary,
-        payload,
-    )
-    .await
-}
-
 fn browser_actor(
     headers: &HeaderMap,
     principal: &AuthenticatedActor,
