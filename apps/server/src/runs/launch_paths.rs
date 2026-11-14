@@ -160,10 +160,18 @@ pub async fn follow_reply(
     let Some(run) = for_reply_request(transaction, account_id, request_id).await? else {
         return Ok(None);
     };
-    // A claim after the run finished is a retried request (Retry after a
-    // release, a stop or a lost lease): a new attempt, not the old run.
+    // A claim after the run finished, or while a stop is still settling,
+    // is a retried request (Retry after a release, a stop or a lost lease):
+    // a new attempt, not the old run. A stop still settling ends now, so
+    // it never later ends the attempt that holds the new claim.
+    let current = run.run_state()?;
     let run = match step {
-        ReplyStep::Claimed { generation } if run.run_state()?.is_terminal() => {
+        ReplyStep::Claimed { generation }
+            if current.is_terminal() || current == RunState::CancelRequested =>
+        {
+            if current == RunState::CancelRequested {
+                ops::end_by_service(transaction, run.id, RunState::Cancelled, "Stopped.").await?;
+            }
             match next_attempt(transaction, &run, request_id, generation).await? {
                 Some(next) => next,
                 None => return Ok(Some(run)),
