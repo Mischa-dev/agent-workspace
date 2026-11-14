@@ -36,8 +36,8 @@ function task(blockedBy: TaskRef[], priority: WorkItemPriority = 'high') {
   return { id: 'aw-1', projectId: 'project-a', key: 'AW-1', priority, blockedBy } as unknown as WorkItem
 }
 
-function fresh(key: string, priority: WorkItemPriority, projectId = 'project-a') {
-  return { id: key.toLowerCase(), projectId, key, priority, version: 7, archivedAt: null } as unknown as WorkItem
+function fresh(key: string, priority: WorkItemPriority, projectId = 'project-a', done = false) {
+  return { id: key.toLowerCase(), projectId, key, priority, version: 7, archivedAt: null, status: { semanticCategory: done ? 'completed' : 'unstarted' } } as unknown as WorkItem
 }
 
 function renderNotice(item: WorkItem, priority: WorkItemPriority = 'high') {
@@ -74,14 +74,16 @@ describe('BlockerPriorityNotice', () => {
     ])
   })
 
-  it('never brings a blocker down when it moved up since the task was read', async () => {
-    vi.mocked(getWorkItem).mockImplementation(async (_project, id) => (id === 'aw-2' ? fresh('AW-2', 'urgent') : fresh('AW-6', 'medium', 'project-b')))
-    const onDone = renderNotice(task([ref('AW-2', 'low'), ref('AW-6', 'no_priority', { projectId: 'project-b' })]))
+  it('never touches a blocker that moved up or finished since the task was read', async () => {
+    vi.mocked(getWorkItem).mockImplementation(async (_project, id) =>
+      id === 'aw-2' ? fresh('AW-2', 'urgent') : id === 'aw-7' ? fresh('AW-7', 'low', 'project-a', true) : fresh('AW-6', 'medium', 'project-b'),
+    )
+    const onDone = renderNotice(task([ref('AW-2', 'low'), ref('AW-6', 'no_priority', { projectId: 'project-b' }), ref('AW-7', 'low')]))
 
-    expect(screen.getByRole('status').textContent).toContain('AW-2 and AW-6 block this at a lower priority.')
+    expect(screen.getByRole('status').textContent).toContain('AW-2, AW-6 and AW-7 block this at a lower priority.')
     fireEvent.click(screen.getByRole('button', { name: 'Raise to High' }))
     await waitFor(() => expect(onDone).toHaveBeenCalled())
-    // Each project changes on its own, and AW-2 (now urgent) isn't touched.
+    // Each project changes on its own; AW-2 (now urgent) and AW-7 (now done) aren't touched.
     expect(vi.mocked(bulkUpdateWorkItems).mock.calls.map(([input]) => [input.projectId, input.items])).toEqual([
       ['project-b', [{ id: 'aw-6', expectedVersion: 7 }]],
     ])

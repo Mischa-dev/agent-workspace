@@ -351,7 +351,7 @@ function TaskDetailBody({
           <TaskSaveNotices item={item} save={save} />
         </Suspense>
       ) : null}
-      {raisedTo && !disabled ? (
+      {raisedTo && shown.dependencies && !disabled ? (
         <BlockerPriorityNotice item={item} onDone={() => setRaised(null)} priority={raisedTo} />
       ) : null}
       <ClaimNotice item={item} projectArchived={projectArchived} />

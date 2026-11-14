@@ -30,7 +30,8 @@ function blockersAgainst(blockedBy: TaskRef[], priority: WorkItemPriority) {
  */
 async function raiseBlockers(blockers: TaskRef[], priority: WorkItemPriority) {
   const fresh = await Promise.all(blockers.map((task) => getWorkItem(task.projectId, task.id)))
-  const due = fresh.filter((task) => !task.archivedAt && priorityRank(task.priority) < priorityRank(priority))
+  const finished = (task: WorkItem) => task.status.semanticCategory === 'completed' || task.status.semanticCategory === 'canceled'
+  const due = fresh.filter((task) => !task.archivedAt && !finished(task) && priorityRank(task.priority) < priorityRank(priority))
   const byProject = new Map<string, WorkItem[]>()
   for (const task of due) byProject.set(task.projectId, [...(byProject.get(task.projectId) ?? []), task])
   for (const [projectId, tasks] of byProject) {
