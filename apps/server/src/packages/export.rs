@@ -121,8 +121,10 @@ impl Names {
                 Some((name, part.key.clone()))
             })
             .collect::<HashMap<_, _>>();
+        // Only live collections, as the snapshot carries them, so an
+        // archived one of the same name stays an id and is left for setup.
         let collections = sqlx::query_as::<_, (Uuid, String)>(
-            "SELECT id, name FROM collections WHERE project_id = $1",
+            "SELECT id, name FROM collections WHERE project_id = $1 AND archived_at IS NULL",
         )
         .bind(space_id)
         .fetch_all(&mut *connection)

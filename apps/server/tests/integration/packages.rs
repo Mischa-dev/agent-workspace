@@ -157,6 +157,36 @@ async fn an_exported_space_carries_its_setup_and_nothing_private() {
     .await
     .expect("rule posting to the hidden channel");
 
+    // An archived collection named like the carried one: a rule on it must
+    // not export as a rule on the live one.
+    let archived_collection = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO collections (id, project_id, name, created_by_actor_id, archived_at, \
+         archived_by_actor_id) VALUES ($1, $2, 'Feedback', $3, now(), $3)",
+    )
+    .bind(archived_collection)
+    .bind(space_id)
+    .bind(owner)
+    .execute(pool)
+    .await
+    .expect("archived collection");
+    sqlx::query(
+        r#"
+        INSERT INTO automation_rules (
+            id, organization_id, project_id, owner_actor_id, name, trigger_kind, trigger, actions
+        ) VALUES ($1, $2, $3, $4, 'Old triage', 'record_created', $5, $6)
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(setup.organization_id)
+    .bind(space_id)
+    .bind(owner)
+    .bind(json!({"collectionId": archived_collection}))
+    .bind(json!([{"kind": "notify", "recipients": "owner", "message": "Old"}]))
+    .execute(pool)
+    .await
+    .expect("rule on the archived collection");
+
     let exported = call("package_export", json!({"spaceId": "PKG"})).await;
     assert_eq!(exported["outcome"], "ok", "{exported}");
     let document = &exported["value"]["package"];
@@ -217,6 +247,17 @@ async fn an_exported_space_carries_its_setup_and_nothing_private() {
         json!(["actions.conversationId"]),
         "{hidden_post}"
     );
+    let old_triage = part("automation", "old_triage");
+    assert_eq!(
+        old_triage["trigger"].get("collectionId"),
+        None,
+        "{old_triage}"
+    );
+    assert_eq!(
+        old_triage["needsSetup"],
+        json!(["trigger.collectionId"]),
+        "{old_triage}"
+    );
     assert_eq!(
         part("automation", "builds_out")["webhook"]["host"],
         "hooks.example.org"
@@ -245,6 +286,7 @@ async fn an_exported_space_carries_its_setup_and_nothing_private() {
         &collection_id.to_string(),
         &setup.organization_id.to_string(),
         &hidden.to_string(),
+        &archived_collection.to_string(),
     ] {
         assert!(!whole.contains(private), "{private} leaked: {whole}");
     }
