@@ -14,3 +14,8 @@ export const workItemPriorities: Array<{
 export function priorityLabel(priority: WorkItemPriority) {
   return workItemPriorities.find((candidate) => candidate.value === priority)?.label ?? 'No priority'
 }
+
+/** How urgent a priority is, for comparing two: no priority is the least. */
+export function priorityRank(priority: WorkItemPriority) {
+  return workItemPriorities.findIndex((entry) => entry.value === priority)
+}

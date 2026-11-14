@@ -92,6 +92,7 @@ export type TaskRef = {
   projectId: string
   key: string
   title: string
+  priority: WorkItemPriority
   statusName: string
   statusCategory: string
   finished: boolean

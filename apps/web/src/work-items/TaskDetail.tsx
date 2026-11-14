@@ -37,7 +37,7 @@ import { useArchive, useBoardCount, useEditShortcut, useWide } from './taskPageH
 import { TaskProperties } from './TaskProperties'
 import { TaskSearchPicker } from './TaskSearchPicker'
 import { TaskStart, type StartFix } from './TaskStart'
-import type { WorkItem, WorkItemWorkflow } from './types'
+import type { WorkItem, WorkItemPriority, WorkItemWorkflow } from './types'
 import { useTaskSave } from './useTaskSave'
 
 export type TaskLayout = 'panel' | 'page'
@@ -55,6 +55,7 @@ const ReferencedIn = lazy(() => import('../modules/references/ReferencedIn'))
 const TaskLinks = lazy(() => import('./TaskLinks').then((module) => ({ default: module.TaskLinks })))
 // What to do about a save that stopped loads only when one does.
 const TaskSaveNotices = lazy(() => import('./TaskSaveNotices').then((module) => ({ default: module.TaskSaveNotices })))
+const BlockerPriorityNotice = lazy(() => import('./BlockerPriorityNotice').then((module) => ({ default: module.BlockerPriorityNotice })))
 // Moving to another project (AWD-102) loads only when someone starts one.
 const MoveTaskDialog = lazy(() => import('./MoveTaskDialog'))
 // Comments and changes are their own chunk, fetched while the task loads.
@@ -221,6 +222,9 @@ function TaskDetailBody({
     () => pendingMoves.get(moveKey)?.actorId === actorId,
   )
   const [blocking, setBlocking] = useState(false)
+  // A priority the person just raised this task to, while the offer to raise its blockers stands.
+  const [raised, setRaised] = useState<{ taskId: string; priority: WorkItemPriority } | null>(null)
+  const raisedTo = raised?.taskId === item.id ? raised.priority : null
   const [boardDialog, setBoardDialog] = useState<'new' | 'link' | null>(null)
   const [managingLabels, setManagingLabels] = useState(false)
   const [dropping, setDropping] = useState(false)
@@ -347,6 +351,11 @@ function TaskDetailBody({
           <TaskSaveNotices item={item} save={save} />
         </Suspense>
       ) : null}
+      {raisedTo && !disabled ? (
+        <Suspense fallback={null}>
+          <BlockerPriorityNotice item={item} onDone={() => setRaised(null)} priority={raisedTo} />
+        </Suspense>
+      ) : null}
       <ClaimNotice item={item} projectArchived={projectArchived} />
       {item.blocked ? (
         <BlockedNotice blocked={item.blocked} onUnblock={disabled ? undefined : () => save.save('blocked', { blockedReason: null })} />
@@ -423,6 +432,7 @@ function TaskDetailBody({
       disabled={disabled}
       item={item}
       onManageLabels={() => setManagingLabels(true)}
+      onRaisePriority={(priority) => setRaised({ taskId: item.id, priority })}
       save={save}
       variant={wide ? 'rail' : 'pills'}
       workflow={workflow}
