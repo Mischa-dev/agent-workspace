@@ -65,3 +65,7 @@ are gated or exempt with a reason (P0.7).
 | `conversation_readable_by_is_one_call` | `apps/server/src/structure_guards.rs` | P0.28 |
 | trigger refusal texts | `apps/server/src/domain.rs` test `admission_refusal_texts_match_the_trigger` | P0.29 |
 | master plan consistency (`plan.py`) | `tools/ci/checks.sh` step "master plan" | P0.30 |
+| front-door links resolve | `tools/ci/test_docs_links.py` | P0.31 |
+| tool titles, descriptions and schemas name no vendor | `mcp.rs` test `tool_descriptions_name_no_vendor` | P0.32 |
+| `personal_hosts` (no tailnet address or home path outside docs/history) | `tools/ci/test_personal_hosts.py` | P0.33 |
+| runner SDK tests run in CI | `tools/ci/checks.sh` steps "runner SDK tests" | P0.34 |

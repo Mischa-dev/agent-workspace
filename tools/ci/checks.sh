@@ -291,6 +291,7 @@ if has rust; then
   step "self-hosted guide" ./tools/verify-self-hosted-guide.sh
   step "hermes fixtures" python3 tools/hermes-connector/verify-fixtures.py
   step "agentos-nyx tests" python3 -m unittest discover -s integrations/agentos-nyx -p 'test_*.py'
+  step "runner SDK tests (Python)" python3 -m unittest discover -s sdks/runner-python/tests -t sdks/runner-python
   step "master plan" python3 docs/plans/master/tools/plan.py
 fi
 if has web; then
@@ -312,6 +313,7 @@ if has web; then
   step "pnpm install" pnpm install --frozen-lockfile --reporter=silent
   step "web lint" pnpm lint
   step "web typecheck" pnpm typecheck
+  step "runner SDK tests (TypeScript)" node --test 'sdks/runner-typescript/test/*.test.ts'
 fi
 
 # 2. Web tests and build: in the background next to the Rust checks on a big

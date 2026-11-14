@@ -5,7 +5,7 @@
     "agent_profiles.rs": 5,
     "ai/detect.rs": 1,
     "ai/plans.rs": 1,
-    "api.rs": 2,
+    "api.rs": 1,
     "auth/mod.rs": 2,
     "automations.rs": 13,
     "bootstrap.rs": 3,
@@ -79,7 +79,7 @@
   "active_run_states_literal": {
     "account.rs": 1,
     "agent_profiles.rs": 1,
-    "api.rs": 3,
+    "api.rs": 2,
     "conversations.rs": 2,
     "external_execution.rs": 1,
     "github.rs": 3,
@@ -96,7 +96,7 @@
     "account.rs": 2,
     "agent_profiles.rs": 3,
     "agent_sessions.rs": 1,
-    "api.rs": 29,
+    "api.rs": 25,
     "automations.rs": 1,
     "conversations.rs": 10,
     "domain.rs": 4,
@@ -154,7 +154,7 @@
   },
   "conversation_listings": {
     "ai/summaries.rs": 1,
-    "api.rs": 9,
+    "api.rs": 6,
     "automations.rs": 1,
     "conversations.rs": 9,
     "direct.rs": 3,
@@ -209,7 +209,7 @@
     "public_api.rs": 1
   },
   "message_inserts": {
-    "api.rs": 2,
+    "api.rs": 1,
     "conversations.rs": 1,
     "external_execution.rs": 1,
     "provider.rs": 1
@@ -227,7 +227,7 @@
   },
   "raw_role_checks": {
     "account_security.rs": 2,
-    "api.rs": 2,
+    "api.rs": 1,
     "automations.rs": 2,
     "bootstrap.rs": 3,
     "conversations.rs": 2,
@@ -256,7 +256,6 @@
   },
   "vendor_names_core": {
     "agent_setup_links.rs": 2,
-    "api.rs": 2,
     "environments.rs": 2,
     "error.rs": 1,
     "main.rs": 1,

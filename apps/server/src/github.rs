@@ -6417,7 +6417,7 @@ mod tests {
     #[test]
     fn signed_or_canonical_merge_commit_recovers_a_missing_rest_projection() {
         let fixture: Value = serde_json::from_str(include_str!(
-            "../../../tools/github-spike/fixtures/merged-close-rest-null-sha.json"
+            "../tests/fixtures/merged-close-rest-null-sha.json"
         ))
         .expect("merged close compatibility fixture");
         let signed_webhook = &fixture["signed_webhook"];

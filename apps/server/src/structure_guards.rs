@@ -114,20 +114,20 @@ pub(crate) const RULES: &[Rule] = &[
 
 // The most each rule's allowances may add up to: today's total, set when
 // P0.26 landed. Lower one when its allowances go down; never raise one.
-const RAW_ROLE_CHECKS_CEILING: usize = 41;
+const RAW_ROLE_CHECKS_CEILING: usize = 40;
 const CUSTOM_ROLE_ALLOWS_CEILING: usize = 25;
 const WORKSPACE_ROLE_ENUM_CEILING: usize = 32;
-const ACCOUNT_KIND_CHECKS_CEILING: usize = 265;
-const AGENT_RUNS_SQL_CEILING: usize = 182;
-const ACTIVE_RUN_STATES_LITERAL_CEILING: usize = 20;
+const ACCOUNT_KIND_CHECKS_CEILING: usize = 264;
+const AGENT_RUNS_SQL_CEILING: usize = 178;
+const ACTIVE_RUN_STATES_LITERAL_CEILING: usize = 19;
 const CONVERSATION_INSERTS_CEILING: usize = 11;
-const MESSAGE_INSERTS_CEILING: usize = 5;
+const MESSAGE_INSERTS_CEILING: usize = 4;
 const TASK_CORE_UPDATES_CEILING: usize = 10;
 const DIRECT_TOOL_CALLS_CEILING: usize = 4;
 const PROCESS_STATE_CEILING: usize = 14;
 const BACKGROUND_SPAWNS_CEILING: usize = 16;
-const CONVERSATION_LISTINGS_CEILING: usize = 80;
-const VENDOR_NAMES_CORE_CEILING: usize = 11;
+const CONVERSATION_LISTINGS_CEILING: usize = 77;
+const VENDOR_NAMES_CORE_CEILING: usize = 9;
 
 /// The heading in `AGENTS.md` the rules sit under.
 const AGENTS_HEADING: &str = "Rules while the foundations are rebuilt";
