@@ -662,13 +662,15 @@ function AgentEditForm({
         })
       }
       if (input.resaveWebhook || urlChanged) {
-        const result = await setExternalAgentWebhook(projectId, connection.id, input.resaveWebhook ? savedUrl : url.trim() || null)
+        const result = input.resaveWebhook
+          ? await setExternalAgentWebhook(projectId, connection.id, savedUrl, 'typed')
+          : await setExternalAgentWebhook(projectId, connection.id, url.trim() || null)
         secret = result.webhookSecret
       }
       return secret
     },
     onSuccess: (secret, input) => {
-      showToast({ tone: 'success', title: input?.resaveWebhook ? 'Wakeups updated' : 'Changes saved' })
+      showToast({ tone: 'success', title: input?.resaveWebhook ? 'Switched to typed wakeups' : 'Changes saved' })
       if (secret) onSecret(secret)
       if (!input?.resaveWebhook) onClose()
     },
@@ -711,13 +713,14 @@ function AgentEditForm({
           <Banner
             action={
               <Button busy={busy} onClick={() => save.mutate({ resaveWebhook: true })} size="sm">
-                Update wakeups
+                Switch to typed wakeups
               </Button>
             }
             tone="warning"
           >
-            This webhook gets the old “check your inbox” wakeups, which stop working in a later release. Update it for wakeups
-            that say what happened (a new request, a follow-up, a stop), then give the runner the new secret.
+            This webhook gets the old “check your inbox” wakeups, which stop working in a later release. Switch it to typed
+            wakeups that say what happened (a new request, a follow-up, a stop) once the runner reads them, then give it the
+            new secret. Saving a new address keeps the format it has.
           </Banner>
         ) : null}
         <TextField

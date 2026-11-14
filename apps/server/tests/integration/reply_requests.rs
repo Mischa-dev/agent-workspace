@@ -1171,6 +1171,131 @@ async fn webhooks_say_what_happened_without_message_text() {
         .expect("drop schema");
 }
 
+/// P0.18: saving a webhook from before typed wakeups (a new address, a new
+/// secret) keeps its `inbox.available` format, so a runner that reads only
+/// that keeps working; it switches only when asked to.
+#[tokio::test]
+async fn saving_an_old_webhook_keeps_its_wake_format() {
+    let Some(Fixture {
+        admin,
+        schema,
+        pool,
+        app,
+        owner,
+        space,
+    }) = fixture("reply_wake_format").await
+    else {
+        return;
+    };
+    let received = Arc::new(tokio::sync::Mutex::new(
+        Vec::<(String, String, String)>::new(),
+    ));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let address = listener.local_addr().expect("address");
+    let sink = Arc::clone(&received);
+    tokio::spawn(async move {
+        let runner = axum::Router::new().route(
+            "/wake",
+            axum::routing::post(move |body: String| {
+                let sink = Arc::clone(&sink);
+                async move {
+                    sink.lock().await.push((String::new(), String::new(), body));
+                    StatusCode::NO_CONTENT
+                }
+            }),
+        );
+        axum::serve(listener, runner).await.expect("serve");
+    });
+    let origin = format!("http://{address}");
+    let mara = owner.add_agent(&app, &space, "Mara", "mara").await;
+    let webhook_path = format!(
+        "/api/v1/projects/{space}/external-agents/{}/webhook",
+        mara.connection_id
+    );
+    // Saved through the page, then pointed at the local receiver, which
+    // only a trusted origin may reach.
+    let save = |body: Value| {
+        let (app, owner, path, pool, connection, origin) = (
+            app.clone(),
+            &owner,
+            webhook_path.clone(),
+            pool.clone(),
+            mara.connection_id.clone(),
+            origin.clone(),
+        );
+        async move {
+            let (status, saved) = owner.call(&app, "POST", &path, None, body).await;
+            assert_eq!(status, StatusCode::OK, "{saved}");
+            sqlx::query(
+                "UPDATE external_agent_connections SET webhook_url = $2 WHERE id = $1::uuid",
+            )
+            .bind(&connection)
+            .bind(format!("{origin}/wake"))
+            .execute(&pool)
+            .await
+            .expect("local webhook");
+            saved
+        }
+    };
+    save(json!({ "url": "https://runner.example/wake" })).await;
+    sqlx::query(
+        "UPDATE external_agent_connections SET wakeup_format = 'inbox' WHERE id = $1::uuid",
+    )
+    .bind(&mara.connection_id)
+    .execute(&pool)
+    .await
+    .expect("a webhook from before typed wakeups");
+    let saved = save(json!({ "url": "https://runner.example/wake-again" })).await;
+    assert_eq!(saved["connection"]["wakeupFormat"], "inbox", "{saved}");
+    let (status, refused) = owner
+        .call(
+            &app,
+            "POST",
+            &webhook_path,
+            None,
+            json!({ "url": "https://runner.example/wake", "wakeupFormat": "inbox" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+
+    let (shutdown, shutdown_receiver) = tokio::sync::watch::channel(false);
+    let worker = tokio::spawn(agent_workspace_server::replies::run(
+        test_state_trusting(pool.clone(), &origin),
+        shutdown_receiver,
+    ));
+    let (_, dm) = owner
+        .call(
+            &app,
+            "POST",
+            "/api/v1/direct/dms",
+            None,
+            json!({ "actorId": mara.actor_id }),
+        )
+        .await;
+    let dm_id = dm["conversation"]["id"].as_str().expect("dm").to_owned();
+    owner.say(&app, &dm_id, "format-1", "first question").await;
+    let (_, _, body) = next_wakeup(&received, 1).await;
+    let wakeup: Value = serde_json::from_str(&body).expect("JSON body");
+    assert_eq!(wakeup["event"], "inbox.available", "{wakeup}");
+
+    // Switched on purpose, it gets typed wakeups.
+    let saved =
+        save(json!({ "url": "https://runner.example/wake", "wakeupFormat": "typed" })).await;
+    assert_eq!(saved["connection"]["wakeupFormat"], "typed", "{saved}");
+    owner.say(&app, &dm_id, "format-2", "second question").await;
+    let (_, _, body) = next_wakeup(&received, 2).await;
+    let wakeup: Value = serde_json::from_str(&body).expect("JSON body");
+    assert_eq!(wakeup["event"], "reply.requested", "{wakeup}");
+
+    shutdown.send(true).expect("stop worker");
+    worker.await.expect("worker");
+    agent_workspace_server::test_support::drop_schema(&admin, &schema)
+        .await
+        .expect("drop schema");
+}
+
 /// P0.10: a wakeup is posted outside any transaction, so a runner that
 /// takes its time holds neither the delivery row nor a database connection.
 #[tokio::test]

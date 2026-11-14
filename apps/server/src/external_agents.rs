@@ -170,8 +170,8 @@ struct ConnectionView {
     last_wakeup_at: Option<String>,
     last_wakeup_error: Option<String>,
     /// `typed` wakeups say what happened; `inbox` is the old
-    /// `inbox.available` body, kept for one release for webhooks set up
-    /// before typed wakeups. Saving the webhook again switches to typed.
+    /// `inbox.available` body, kept for webhooks set up before typed
+    /// wakeups until someone switches them (`wakeupFormat: "typed"`).
     wakeup_format: String,
 }
 
@@ -630,6 +630,10 @@ async fn update_connection(
 struct WebhookRequest {
     /// Where to send wakeups, or null to stop them.
     url: Option<String>,
+    /// `typed` switches an old `inbox` webhook to typed wakeups. Left out,
+    /// the format stays as it is, so saving a runner that only reads
+    /// `inbox.available` doesn't break it.
+    wakeup_format: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -650,6 +654,11 @@ async fn set_webhook(
     ApiJson(request): ApiJson<WebhookRequest>,
 ) -> Result<Json<WebhookResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
+    let to_typed = match request.wakeup_format.as_deref() {
+        None => false,
+        Some("typed") => true,
+        Some(_) => return Err(AppError::Validation("wakeupFormat")),
+    };
     let url = validate_webhook_url(request.url, &state.config.webhook_trusted_origins)?;
     let secret = url.as_ref().map(|_| crate::replies::new_webhook_secret());
     let mut transaction = state.pool.begin().await?;
@@ -686,9 +695,9 @@ async fn set_webhook(
         UPDATE external_agent_connections
         SET webhook_url = $3, webhook_secret = NULL, webhook_secret_id = $4,
             last_wakeup_error = NULL,
-            -- A new secret means the runner is set up again, so it gets
-            -- typed wakeups from here on.
-            wakeup_format = 'typed',
+            -- The format changes only when asked: a runner that reads only
+            -- inbox.available keeps working when its address is saved.
+            wakeup_format = CASE WHEN $5 THEN 'typed' ELSE wakeup_format END,
             version = version + 1, updated_at = now()
         WHERE project_id = $1 AND id = $2 AND status <> 'removed'
         "#,
@@ -697,6 +706,7 @@ async fn set_webhook(
     .bind(connection_id)
     .bind(&url)
     .bind(secret_id)
+    .bind(to_typed)
     .execute(&mut *transaction)
     .await?;
     if updated.rows_affected() != 1 {
@@ -712,7 +722,7 @@ async fn set_webhook(
         project_id,
         connection_id,
         "external_agent.webhook_updated",
-        serde_json::json!({ "enabled": url.is_some() }),
+        serde_json::json!({ "enabled": url.is_some(), "switched_to_typed": to_typed }),
     )
     .await?;
     let row = load_connection_tx(&mut transaction, project_id, connection_id).await?;
