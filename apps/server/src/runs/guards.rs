@@ -209,8 +209,8 @@ fn g5_the_run_service_never_asks_what_kind_of_account_reports() {
         for forbidden in [
             "ActorKind::",
             "actor.kind =",
-            "kind = 'human'",
-            "kind = 'external_agent'",
+            "kind = 'human'",          // kind-check: mechanical (G5's own pattern)
+            "kind = 'external_agent'", // kind-check: mechanical (G5's own pattern)
         ] {
             assert!(
                 !source.contains(forbidden),
