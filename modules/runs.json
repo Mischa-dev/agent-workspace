@@ -71,8 +71,24 @@
       "many": "Runs",
       "href": "/runs/{id}",
       "fields": [
+        {
+          "id": "state",
+          "label": "State",
+          "type": "labels",
+          "tones": {
+            "Waiting for a slot": "agent",
+            "Starting": "agent",
+            "Working": "agent",
+            "Recovering": "agent",
+            "Waiting on you": "warning",
+            "Needs approval": "warning"
+          }
+        },
+        { "id": "project", "label": "Project", "type": "text" },
         { "id": "harness", "label": "Harness", "type": "text" },
-        { "id": "startedAt", "label": "Started", "type": "date" }
+        { "id": "model", "label": "Model", "type": "text" },
+        { "id": "startedAt", "label": "Started", "type": "date" },
+        { "id": "startedBy", "label": "Started by", "type": "person" }
       ]
     }
   ],

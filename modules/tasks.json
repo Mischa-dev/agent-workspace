@@ -85,7 +85,14 @@
         { "id": "priority", "label": "Priority", "type": "single_choice", "options": ["no_priority", "low", "medium", "high", "urgent"] },
         { "id": "dueDate", "label": "Due", "type": "date" },
         { "id": "estimate", "label": "Estimate", "type": "number" },
-        { "id": "labels", "label": "Labels", "type": "labels" }
+        { "id": "labels", "label": "Labels", "type": "labels" },
+        { "id": "project", "label": "Project", "type": "text" },
+        {
+          "id": "flags",
+          "label": "Needs attention",
+          "type": "labels",
+          "tones": { "Overdue": "danger", "Blocked": "warning" }
+        }
       ]
     },
     {

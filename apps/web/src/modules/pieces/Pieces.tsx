@@ -91,13 +91,20 @@ function FieldValueView({ decl, id, thing }: { decl: ThingDecl; id: string; thin
 }
 
 function ThingTitle({ thing }: { thing: Thing }) {
+  const title = thing.key ? (
+    <>
+      <span className="aw-piece__key">{thing.key}</span> {thing.title}
+    </>
+  ) : (
+    thing.title
+  )
   return thing.href.startsWith('/') ? (
     <Link className="aw-piece__title" to={thing.href}>
-      {thing.title}
+      {title}
     </Link>
   ) : (
     <a className="aw-piece__title" href={thing.href} rel="noreferrer" target="_blank">
-      {thing.title}
+      {title}
     </a>
   )
 }
@@ -120,8 +127,8 @@ function Meta({ decl, piece, thing, summaries = true }: { decl: ThingDecl; piece
           // Who, right after when, reads "Edited 5 min ago by Ana".
           const by = field.type === 'person' && index > 0 && fieldOf(decl, ids[index - 1]).type === 'date'
           const value = rawValue(thing, id)
-          // Labels, a status or a link with none to show leave no "None" behind, nor does a missing "by".
-          if (fieldText(field, value) === null && (field.type === 'labels' || field.type === 'status' || field.type === 'link' || by)) return null
+          // In a row or a card, a field with nothing to show leaves nothing behind (a table cell still says "None").
+          if (fieldText(field, value) === null) return null
           return (
             <div className={by ? 'aw-piece__meta-item aw-piece__meta-item--by' : 'aw-piece__meta-item'} key={id}>
               <dt className={named ? 'aw-piece__label' : 'visually-hidden'}>{field.label}</dt>

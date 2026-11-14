@@ -45,7 +45,14 @@ export const WEB_ASSET_LIMITS = Object.freeze({
   // taken with every hash replaced by the same placeholder (withoutHashes),
   // which measured 139,036 for both, 2,270 less; the gzip limit came down
   // by that much, so it is exactly as full as before (November 2026).
-  initialJavascriptRawBytes: 424 * 1024 + 256,
+  // Home's cards drawn with the pieces (Working now, Your tasks) add no code
+  // to the shell, only the names of the chunks Home now preloads (the pieces,
+  // their stylesheet, the markdown renderer and the module manifests): 434,409
+  // raw bytes before, 434,463 after, 31 over. Loading the markdown renderer
+  // lazily inside the pieces instead reshuffled the shared chunks and pushed
+  // the task panel 16 KB over its own limit. The raw limit went up another
+  // 256 bytes by decision (November 2026); gzip is unchanged.
+  initialJavascriptRawBytes: 424 * 1024 + 512,
   initialJavascriptGzipBytes: 138 * 1024 - 2270,
   // index.html's stylesheets: the design system's five theme presets,
   // components and page layouts. Measured 101,925 raw bytes; the UI kit
