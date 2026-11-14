@@ -725,6 +725,8 @@ pub async fn save(
     note: Option<&str>,
     history: History,
 ) -> Result<(i64, bool), AppError> {
+    crate::events::ensure_actor(transaction, writer.actor_id).await?;
+    crate::domain::set_via_grant(transaction, writer.via_grant_id).await?;
     let body = &change.derived.markdown;
     if !change.changed && *body == page.body {
         return Ok((page.version, false));

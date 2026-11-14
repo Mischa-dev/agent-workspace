@@ -342,11 +342,23 @@ mod tests {
 
     #[test]
     fn every_event_names_its_module() {
-        let events = crate::events::EVENT_TYPES
+        // The event catalogue (K3.2): every entry is listed by its module's
+        // manifest, and every name a manifest lists is in the catalogue.
+        let events = crate::events::catalog::catalog()
             .iter()
-            .map(|(name, _)| (*name).to_owned())
+            .map(|ty| ty.name.to_owned())
             .collect::<BTreeSet<_>>();
         each_named("events", &events, |module| &module.events.emits);
+        for ty in crate::events::catalog::catalog() {
+            let owner = manifest::owner_by(|module| &module.events.emits, ty.name)
+                .map(|module| module.id.as_str());
+            assert_eq!(
+                owner,
+                Some(ty.module),
+                "{} is listed by another module",
+                ty.name
+            );
+        }
         for module in core() {
             for event in &module.events.listens {
                 assert!(events.contains(event), "{} listens to {event}", module.id);

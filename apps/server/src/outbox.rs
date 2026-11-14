@@ -266,6 +266,29 @@ pub struct SheetUpdatedPayload {
     pub revision: i64,
 }
 
+/// Every outbox event type; each has a catalogue entry naming it as a
+/// legacy name (`events::catalog`).
+pub const LEGACY_EVENT_TYPES: &[&str] = &[
+    "conversation.created",
+    "conversation.updated",
+    "conversation.reply_requests.updated",
+    "conversation.archived",
+    "conversation.message.created",
+    "conversation.message.updated",
+    "conversation.message.reactions.updated",
+    "conversation.read_state.updated",
+    "conversation.member.removed",
+    "conversation.agent_run.updated",
+    "work_item.updated",
+    "project.membership.updated",
+    "notifications.updated",
+    "whiteboard.updated",
+    "page.updated",
+    "page.discussion.updated",
+    "collection.updated",
+    "sheet.updated",
+];
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OutboxEventPayload {
     ConversationCreated(ConversationCreatedPayload),
@@ -762,6 +785,15 @@ pub async fn enqueue(
     .bind(&event.payload_json)
     .bind(event.max_attempts)
     .execute(&mut **transaction)
+    .await?;
+    // K3.2: the same event, with the same id, in the event log.
+    crate::events::legacy::mirror(
+        transaction,
+        event.event_id,
+        event.project_id,
+        &event.payload,
+        &event.payload_json,
+    )
     .await?;
     Ok(event.event_id)
 }

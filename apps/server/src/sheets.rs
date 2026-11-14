@@ -867,6 +867,7 @@ pub async fn apply(
     changes: &[Change],
     limit: usize,
 ) -> Result<Result<Applied, Problem>, AppError> {
+    crate::events::ensure_actor(connection, actor_id).await?;
     apply_with(connection, sheet, actor_id, changes, limit, &IronCalc).await
 }
 

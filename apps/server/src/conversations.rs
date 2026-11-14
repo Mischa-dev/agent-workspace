@@ -1742,6 +1742,11 @@ pub(crate) async fn append_message_command_with(
     };
     let scope = idempotency::resource_bound_scope("conversation", conversation_id, "message_send")?;
     let mut transaction = state.pool.begin().await?;
+    crate::events::set_context(
+        &mut transaction,
+        &crate::events::EventContext::actor(actor.actor_id, actor.via_grant_id),
+    )
+    .await?;
     let conversation = lock_message_conversation(
         &mut transaction,
         &actor,

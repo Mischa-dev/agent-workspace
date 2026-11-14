@@ -44,7 +44,7 @@
     "/api/v1/scheduled-messages*",
     "/api/v1/reply-requests/*"
   ],
-  "events": { "emits": ["message.created"], "listens": [] },
+  "events": { "emits": ["conversation.created", "conversation.updated", "conversation.archived", "conversation.member.removed", "conversation.reply_requests_changed", "conversation.read", "message.created", "message.edited", "message.removed", "message.reactions_changed"], "listens": [] },
   "notifications": ["mention", "conversation_message", "scheduled_send_failed"],
   "search": ["messages"],
   "automations": { "triggers": ["message_posted"], "actions": ["post_message"] },

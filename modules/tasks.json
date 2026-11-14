@@ -71,7 +71,7 @@
     "/api/v1/bug-report-links/*",
     "/api/v1/bug-reports/*"
   ],
-  "events": { "emits": ["task.created", "task.updated"], "listens": ["run.finished", "pull_request.merged"] },
+  "events": { "emits": ["task.created", "task.updated", "task.placement_changed"], "listens": ["run.finished", "pull_request.merged"] },
   "notifications": ["assigned", "comment_mention", "task_changed", "ai_plan_import"],
   "search": ["tasks"],
   "automations": { "triggers": ["task_created", "task_matches"], "actions": ["set_field"] },

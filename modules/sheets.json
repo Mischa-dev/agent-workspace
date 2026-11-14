@@ -15,7 +15,7 @@
     "sheet_write": "change"
   },
   "routes": ["/api/v1/projects/{project_id}/sheets*"],
-  "events": { "emits": [], "listens": [] },
+  "events": { "emits": ["sheet.updated"], "listens": [] },
   "notifications": [],
   "search": [],
   "automations": { "triggers": [], "actions": [] },

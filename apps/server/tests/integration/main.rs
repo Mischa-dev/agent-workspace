@@ -30,6 +30,7 @@ mod bug_report_links;
 mod bug_sweep;
 mod compat_clients;
 mod direct_conversations;
+mod event_log;
 mod github_task_keys;
 mod harness_support;
 mod layouts;

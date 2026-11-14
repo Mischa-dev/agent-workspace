@@ -423,9 +423,20 @@ pub(super) async fn begin(
         .execute(&mut *tx)
         .await
         .map_err(|error| OpError::logged(ctx.op, &error.into()))?;
-    crate::domain::set_via_grant(&mut tx, ctx.caller.via_grant_id)
-        .await
-        .map_err(|error| OpError::logged(ctx.op, &error))?;
+    // Every event the operation emits names who acted, through which app,
+    // for whom, in which run, and the request id (K3.2).
+    crate::events::set_context(
+        &mut tx,
+        &crate::events::EventContext {
+            actor: Some(ctx.caller.account_id),
+            via_credential: ctx.caller.via_grant_id,
+            requested_by: ctx.caller.requested_by,
+            run: ctx.caller.run_id,
+            request_id: ctx.request_id.clone(),
+        },
+    )
+    .await
+    .map_err(|error| OpError::logged(ctx.op, &error))?;
     Ok(tx)
 }
 

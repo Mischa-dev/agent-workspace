@@ -2835,6 +2835,7 @@ pub async fn finalize_changes(
     if activities.is_empty() {
         return Err(AppError::Internal("a task change needs an activity"));
     }
+    crate::events::ensure_actor(&mut **transaction, actor.actor_id).await?;
     let mut activity_ids = Vec::with_capacity(activities.len());
     for activity in activities {
         activity_ids.push(

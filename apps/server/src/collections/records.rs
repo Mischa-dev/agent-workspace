@@ -730,6 +730,7 @@ pub async fn write(
     values_argument: &str,
     inputs: &[RecordInput],
 ) -> Result<Result<Vec<Written>, WriteProblem>, AppError> {
+    crate::events::ensure_actor(connection, writer.actor_id).await?;
     if inputs.len() > MAX_RECORDS_PER_WRITE {
         return Ok(Err(WriteProblem {
             index: MAX_RECORDS_PER_WRITE,

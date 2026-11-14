@@ -44,7 +44,7 @@
     "/api/v1/organizations/{organization_id}/project-templates*",
     "/api/v1/project-invitations/*"
   ],
-  "events": { "emits": [], "listens": [] },
+  "events": { "emits": ["space.member.changed"], "listens": [] },
   "notifications": [],
   "search": [],
   "automations": { "triggers": [], "actions": [] },

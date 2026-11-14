@@ -284,7 +284,12 @@ pub(super) async fn mark_via(
     transaction: &mut Transaction<'_, Postgres>,
     principal: &McpPrincipal,
 ) -> Result<(), AppError> {
-    crate::domain::set_via_grant(transaction, principal.via_grant_id()).await
+    // K3.2: the events this write emits name who acted and through which app.
+    crate::events::set_context(
+        transaction,
+        &crate::events::EventContext::actor(principal.actor_id, principal.via_grant_id()),
+    )
+    .await
 }
 
 pub(super) async fn insert_audit(

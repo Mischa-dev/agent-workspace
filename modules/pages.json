@@ -32,7 +32,7 @@
     "/api/v1/projects/{id}/decisions",
     "/api/v1/organizations/{organization_id}/pages-space"
   ],
-  "events": { "emits": [], "listens": [] },
+  "events": { "emits": ["page.content_saved", "page.discussion_changed"], "listens": [] },
   "notifications": ["page_suggestion", "page_comment"],
   "search": ["pages", "decisions"],
   "automations": { "triggers": [], "actions": [] },

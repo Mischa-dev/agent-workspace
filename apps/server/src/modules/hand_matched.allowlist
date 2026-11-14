@@ -4,7 +4,7 @@
 src/ai/plans.rs: 1
 src/automations.rs: 1
 src/conversations.rs: 1
-src/events.rs: 2
+src/events/route.rs: 2
 # mcp.rs: a JSON-RPC error's "code" field, not the Code module.
 src/mcp.rs: 1
 src/mcp/admin.rs: 2
