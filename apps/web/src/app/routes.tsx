@@ -11,6 +11,7 @@ import {
 } from './boundaries'
 import type { ModuleRoute } from '../modules/define'
 import { WEB_MODULES } from '../modules/registry'
+import { ShellLayout } from '../shell/ShellLayout'
 import {
   DesignSystemPage,
   ForgotPasswordPage,
@@ -113,7 +114,18 @@ export const appRoutes: RouteObject[] = [
   {
     element: <RootLayout />,
     errorElement: <RouteErrorPage />,
-    children: [...publicRoutes, { element: <SessionBoundary />, children: sessionRoutes }],
+    children: [
+      ...publicRoutes,
+      {
+        element: <SessionBoundary />,
+        children: [
+          // W1.11: every shell page inside one persistent shell, so the rail
+          // and sidebar stay mounted from page to page.
+          { element: <ShellLayout />, children: sessionRoutes.filter((route) => route.handle?.layout === 'shell') },
+          ...sessionRoutes.filter((route) => route.handle?.layout !== 'shell'),
+        ],
+      },
+    ],
   },
 ]
 
