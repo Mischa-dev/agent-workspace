@@ -3,6 +3,7 @@
   "name": "Pages",
   "description": "Pages and decisions, in a project or for the whole workspace: guides, notes, plans, agent skills and what was decided. Every version is kept.",
   "version": 1,
+  "order": 60,
   "kind": "core",
   "switchable": true,
   "needs": [],

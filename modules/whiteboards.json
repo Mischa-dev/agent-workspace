@@ -3,6 +3,7 @@
   "name": "Whiteboards",
   "description": "Sketches and diagrams that people and agents draw together, linked to projects, tasks and pages.",
   "version": 1,
+  "order": 70,
   "kind": "core",
   "switchable": true,
   "needs": ["projects"],

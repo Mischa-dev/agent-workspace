@@ -3,6 +3,7 @@
   "name": "Code",
   "description": "Connected repositories, branches and pull requests, through GitHub.",
   "version": 1,
+  "order": 100,
   "kind": "core",
   "switchable": true,
   "needs": ["projects"],

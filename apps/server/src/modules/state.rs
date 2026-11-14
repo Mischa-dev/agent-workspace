@@ -20,9 +20,59 @@ pub fn setting_key(module: &str) -> String {
     format!("modules.{module}")
 }
 
-/// A set of core modules, one bit each.
+/// A fixed number of 64-bit words, one bit per index.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct Bits<const WORDS: usize>([u64; WORDS]);
+
+impl<const WORDS: usize> Bits<WORDS> {
+    pub const EMPTY: Self = Self([0; WORDS]);
+
+    /// The first `count` indexes.
+    pub fn filled(count: usize) -> Self {
+        let mut bits = Self::EMPTY;
+        for index in 0..count.min(WORDS * 64) {
+            bits = bits.with(index);
+        }
+        bits
+    }
+
+    pub fn has(self, index: usize) -> bool {
+        index < WORDS * 64 && self.0[index / 64] & (1 << (index % 64)) != 0
+    }
+
+    pub fn with(mut self, index: usize) -> Self {
+        if index < WORDS * 64 {
+            self.0[index / 64] |= 1 << (index % 64);
+        }
+        self
+    }
+
+    pub fn without(mut self, index: usize) -> Self {
+        if index < WORDS * 64 {
+            self.0[index / 64] &= !(1 << (index % 64));
+        }
+        self
+    }
+
+    pub fn union(mut self, other: Self) -> Self {
+        for (word, other) in self.0.iter_mut().zip(other.0) {
+            *word |= other;
+        }
+        self
+    }
+
+    pub fn intersect(mut self, other: Self) -> Self {
+        for (word, other) in self.0.iter_mut().zip(other.0) {
+            *word &= other;
+        }
+        self
+    }
+}
+
+/// A set of core modules, one bit each over the registry's order (as many
+/// words as `build.rs` counts modules for, so there's no cap).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ModuleSet(u32);
+pub struct ModuleSet(Bits<{ super::core::CORE_WORDS }>);
 
 impl Default for ModuleSet {
     fn default() -> Self {
@@ -31,21 +81,18 @@ impl Default for ModuleSet {
 }
 
 impl ModuleSet {
+    const NONE: Self = Self(Bits::EMPTY);
+
     pub fn all() -> Self {
-        let count = manifest::core().len();
-        Self(if count >= 32 {
-            u32::MAX
-        } else {
-            (1_u32 << count) - 1
-        })
+        Self(Bits::filled(manifest::core().len()))
     }
 
     /// Only the modules that can't be switched off.
     pub fn always_on() -> Self {
-        let mut set = Self(0);
+        let mut set = Self::NONE;
         for (index, module) in manifest::core().iter().enumerate() {
             if !module.switchable {
-                set.0 |= 1 << index;
+                set.0 = set.0.with(index);
             }
         }
         set
@@ -54,19 +101,19 @@ impl ModuleSet {
     /// Whether a module is in the set. A module this server doesn't know
     /// counts as on: switches fail open, so they never hide more than meant.
     pub fn contains(self, module: &str) -> bool {
-        manifest::index_of(module).is_none_or(|index| self.0 & (1 << index) != 0)
+        manifest::index_of(module).is_none_or(|index| self.0.has(index))
     }
 
     pub fn union(self, other: Self) -> Self {
-        Self(self.0 | other.0)
+        Self(self.0.union(other.0))
     }
 
     pub fn intersect(self, other: Self) -> Self {
-        Self(self.0 & other.0)
+        Self(self.0.intersect(other.0))
     }
 
     fn without(self, index: usize) -> Self {
-        Self(self.0 & !(1 << index))
+        Self(self.0.without(index))
     }
 
     /// The modules that are on, in manifest order.
@@ -74,7 +121,7 @@ impl ModuleSet {
         manifest::core()
             .iter()
             .enumerate()
-            .filter(move |(index, _)| self.0 & (1 << index) != 0)
+            .filter(move |(index, _)| self.0.has(*index))
             .map(|(_, module)| module)
     }
 
@@ -83,7 +130,7 @@ impl ModuleSet {
         manifest::core()
             .iter()
             .enumerate()
-            .filter(move |(index, _)| self.0 & (1 << index) == 0)
+            .filter(move |(index, _)| !self.0.has(*index))
             .map(|(_, module)| module)
     }
 
@@ -162,7 +209,8 @@ impl ModuleSet {
         match project_kind {
             "standard" if !self.contains("projects") => Self::always_on(),
             "workspace" => {
-                let pages = manifest::index_of("pages").map_or(Self(0), |index| Self(1 << index));
+                let pages = manifest::index_of("pages")
+                    .map_or(Self::NONE, |index| Self(Bits::EMPTY.with(index)));
                 self.intersect(pages.union(Self::always_on()))
             }
             _ => self,

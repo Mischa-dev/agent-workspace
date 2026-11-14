@@ -3,6 +3,7 @@
   "name": "Tasks",
   "description": "Tasks and the ways to see them: a list, a board, a timeline, milestones, planning, labels, saved views and templates.",
   "version": 1,
+  "order": 50,
   "kind": "core",
   "switchable": true,
   "needs": ["projects"],

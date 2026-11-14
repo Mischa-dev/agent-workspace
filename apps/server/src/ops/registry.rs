@@ -1,5 +1,7 @@
 //! The list of operations, built once. Each module adds its operations with
-//! `register_ops(&mut Registry)`; `entry::<O>()` erases an operation into an
+//! `register_ops(&mut Registry)`, which its registration in
+//! `modules/core/<id>/mod.rs` hands to the module registry
+//! (`module.operations(...)`); `entry::<O>()` erases an operation into an
 //! entry.
 
 use std::{
@@ -113,10 +115,11 @@ impl Registry {
 
     /// Every module's operations.
     fn build() -> Self {
-        #[allow(unused_mut)]
         let mut registry = Self::default();
-        // Modules' `register_ops` are added here (M1.1 moves them into each
-        // module's registration).
+        for (_module, add) in crate::modules::registry::Registry::global().operation_registrations()
+        {
+            add(&mut registry);
+        }
         for extra in extras().iter() {
             extra(&mut registry);
         }

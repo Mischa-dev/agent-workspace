@@ -3,6 +3,7 @@
   "name": "Channels",
   "description": "A project's channels and their threads, for talking with people and agents about the work.",
   "version": 1,
+  "order": 40,
   "kind": "core",
   "switchable": true,
   "needs": ["projects", "messages"],

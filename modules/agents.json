@@ -3,6 +3,7 @@
   "name": "Agents",
   "description": "The workspace's agents: who they are, how they connect, their profiles, and @-mentioning them in conversations.",
   "version": 1,
+  "order": 120,
   "kind": "core",
   "switchable": true,
   "needs": [],

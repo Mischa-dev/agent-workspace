@@ -13,6 +13,9 @@
 //! Modules are switched with `modules.<id>` settings at workspace scope;
 //! off means hidden, never deleted.
 //!
+//! - [`registry`]: the module registry, built from one folder per core
+//!   module (`core/<id>/mod.rs`, listed by `build.rs`); the only place that
+//!   answers which module owns what.
 //! - [`manifest`]: the manifest format and the core manifests.
 //! - [`contract`]: the shared contract (things, links, embeds, fields,
 //!   views, pieces, events and the agent tool pattern).
@@ -27,9 +30,13 @@
 //! navigation, palette, shortcuts, slash commands and settings pages.
 
 pub mod contract;
+pub mod core;
 pub mod gate;
+#[cfg(test)]
+mod guards;
 pub mod http;
 pub mod manifest;
+pub mod registry;
 pub mod state;
 pub mod things;
 
@@ -103,9 +110,8 @@ mod tests {
             .collect::<BTreeSet<_>>();
         assert_eq!(
             parsed, files,
-            "every manifest in modules/ parses and is in CORE_SOURCES"
+            "every manifest in modules/ parses and has a folder in modules/core"
         );
-        assert!(core().len() <= manifest::MAX_CORE);
     }
 
     #[test]
@@ -176,7 +182,7 @@ mod tests {
             }
         }
         // Needs never go round in a circle: each module's needs come before
-        // it in CORE_SOURCES.
+        // it in the registry's order.
         for (index, module) in core().iter().enumerate() {
             for need in &module.needs {
                 assert!(

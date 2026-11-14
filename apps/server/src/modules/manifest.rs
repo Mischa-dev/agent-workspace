@@ -80,6 +80,13 @@ pub struct Manifest {
     /// One or two sentences on what it's for.
     pub description: String,
     pub version: u32,
+    /// The manifest format: 2 adds `order`; absent means 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<u32>,
+    /// Where the module comes in lists, before the id breaks ties. A module
+    /// always comes after the ones it needs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order: Option<u32>,
     pub kind: ModuleKind,
     /// Whether a workspace can turn it off. Only the workspace itself can't.
     pub switchable: bool,
@@ -124,80 +131,18 @@ pub struct Manifest {
     pub nouns: Vec<String>,
 }
 
-/// The core manifests, in the order screens list them. Add a module by
-/// adding its file here (a test checks every file in `modules/` is listed).
-const CORE_SOURCES: &[(&str, &str)] = &[
-    (
-        "workspace",
-        include_str!("../../../../modules/workspace.json"),
-    ),
-    (
-        "messages",
-        include_str!("../../../../modules/messages.json"),
-    ),
-    (
-        "projects",
-        include_str!("../../../../modules/projects.json"),
-    ),
-    (
-        "channels",
-        include_str!("../../../../modules/channels.json"),
-    ),
-    ("tasks", include_str!("../../../../modules/tasks.json")),
-    ("pages", include_str!("../../../../modules/pages.json")),
-    (
-        "whiteboards",
-        include_str!("../../../../modules/whiteboards.json"),
-    ),
-    (
-        "collections",
-        include_str!("../../../../modules/collections.json"),
-    ),
-    ("sheets", include_str!("../../../../modules/sheets.json")),
-    ("code", include_str!("../../../../modules/code.json")),
-    ("runs", include_str!("../../../../modules/runs.json")),
-    ("agents", include_str!("../../../../modules/agents.json")),
-    ("inbox", include_str!("../../../../modules/inbox.json")),
-    (
-        "automations",
-        include_str!("../../../../modules/automations.json"),
-    ),
-    (
-        "suggestions",
-        include_str!("../../../../modules/suggestions.json"),
-    ),
-];
-
-/// The most core modules there can be: they're switched as bits of a `u32`.
-pub(super) const MAX_CORE: usize = 32;
-
-/// Every core module. A manifest that doesn't parse is a bug the tests
-/// catch, so here it's skipped rather than taking the server down.
+/// Every core module, in the registry's order (the order screens list
+/// them). Add a module by adding its folder, `modules/core/<id>/mod.rs`.
 pub fn core() -> &'static [Manifest] {
-    static CORE: OnceLock<Vec<Manifest>> = OnceLock::new();
-    CORE.get_or_init(|| {
-        CORE_SOURCES
-            .iter()
-            .filter_map(
-                |(id, source)| match serde_json::from_str::<Manifest>(source) {
-                    Ok(manifest) if manifest.id == *id => Some(manifest),
-                    _ => {
-                        tracing::error!(module = id, "a core module manifest doesn't parse");
-                        None
-                    }
-                },
-            )
-            .take(MAX_CORE)
-            .collect()
-    })
+    super::registry::Registry::global().descriptions()
 }
 
 pub fn get(id: &str) -> Option<&'static Manifest> {
-    core().iter().find(|manifest| manifest.id == id)
+    super::registry::Registry::global().describe(id)
 }
 
 pub(super) fn index_of(id: &str) -> Option<usize> {
-    core().iter().position(|manifest| manifest.id == id)
+    super::registry::Registry::global().index_of(id)
 }
 
 /// Whether `pattern` (exact, or ending in `*` for a prefix) matches `value`,
@@ -228,9 +173,7 @@ pub fn owner_by(list: fn(&Manifest) -> &[String], value: &str) -> Option<&'stati
 
 /// The module a tool belongs to.
 pub fn of_tool(tool: &str) -> Option<&'static Manifest> {
-    core()
-        .iter()
-        .find(|manifest| manifest.tools.contains_key(tool))
+    super::registry::Registry::global().module_of_tool(tool)
 }
 
 /// The module a server route belongs to.

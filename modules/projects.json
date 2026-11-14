@@ -3,6 +3,7 @@
   "name": "Projects",
   "description": "Projects: where a team keeps its channels, tasks, pages and code, with their own members and settings.",
   "version": 1,
+  "order": 30,
   "kind": "core",
   "switchable": true,
   "needs": [],
