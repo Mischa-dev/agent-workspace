@@ -97,7 +97,7 @@ async fn a_projects_tasks_read_as_its_built_in_collection() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["canEditRecords"], false, "{body}");
+    assert_eq!(body["canEditRecords"], true, "{body}");
     let names = body["fields"]
         .as_array()
         .expect("fields")
@@ -158,8 +158,8 @@ async fn a_projects_tasks_read_as_its_built_in_collection() {
         "{by_priority}"
     );
 
-    // A view of it is saved like any other; its records, fields and name
-    // change only as tasks.
+    // A view of it is saved like any other; its name stays, and agents
+    // change its records with the task tools.
     let viewed = call(
         "collection_write",
         json!({
@@ -187,7 +187,8 @@ async fn a_projects_tasks_read_as_its_built_in_collection() {
     )
     .await;
     assert_eq!(written["outcome"], "conflict", "{written}");
-    let (status, _) = send(
+    // A field added to Tasks is a task field; a built-in name is refused.
+    let (status, mood) = send(
         app,
         setup.browser.request(
             "POST",
@@ -197,7 +198,38 @@ async fn a_projects_tasks_read_as_its_built_in_collection() {
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(status, StatusCode::CREATED, "{mood}");
+    let kind = sqlx::query_scalar::<_, String>(
+        "SELECT record_kind FROM field_definitions WHERE project_id = $1::uuid AND name = 'Mood'",
+    )
+    .bind(&work)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("Mood");
+    assert_eq!(kind, "task");
+    let (status, _) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/collections/{tasks_id}/fields"),
+            Some("field-status"),
+            json!({"name": "status", "type": "text"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let agent_field = call(
+        "collection_write",
+        json!({"projectId": "WORK", "collection": "Tasks", "fields": [{"name": "Effort", "type": "number"}]}),
+    )
+    .await;
+    assert_eq!(agent_field["outcome"], "ok", "{agent_field}");
+    let agent_status = call(
+        "collection_write",
+        json!({"projectId": "WORK", "collection": "Tasks", "fields": [{"field": "Status", "name": "State"}]}),
+    )
+    .await;
+    assert_eq!(agent_status["outcome"], "invalid_request", "{agent_status}");
     // Nor does a form add to it.
     let form = call(
         "bug_report_link_write",
@@ -226,4 +258,174 @@ async fn a_projects_tasks_read_as_its_built_in_collection() {
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_tasks_record_changes_as_its_task() {
+    let Some(setup) = setup("awd110_tasks_editable").await else {
+        return;
+    };
+    let app = &setup.app;
+    let pool = &setup.pool;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let made = tool(
+        app,
+        &codex,
+        &session,
+        "task_create",
+        json!({"projectId": "WORK", "title": "Fix the bridge", "clientRequestId": "bridge"}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "applied", "{made}");
+    let (_, listed) = send(
+        app,
+        setup.browser.request(
+            "GET",
+            &format!("/api/v1/projects/{work}/collections"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    let tasks_id = listed["collections"][0]["id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+    let (task, version) = sqlx::query_as::<_, (uuid::Uuid, i64)>(
+        "SELECT id, version FROM work_items WHERE project_id = $1::uuid",
+    )
+    .bind(&work)
+    .fetch_one(pool)
+    .await
+    .expect("task");
+    let next_status = sqlx::query_scalar::<_, uuid::Uuid>(
+        "SELECT status.id FROM work_item_statuses status \
+         WHERE status.project_id = $1::uuid AND status.enabled \
+           AND status.id <> (SELECT status_id FROM work_items WHERE id = $2) \
+         ORDER BY status.position LIMIT 1",
+    )
+    .bind(&work)
+    .bind(task)
+    .fetch_one(pool)
+    .await
+    .expect("status");
+    let record = format!("/api/v1/projects/{work}/collections/{tasks_id}/records/{task}");
+
+    // Title, status, priority and due date in one edit, as one task change.
+    let (status, body) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            &record,
+            Some("edit-1"),
+            json!({
+                "expectedVersion": version,
+                "title": "Fix the old bridge",
+                "values": {
+                    "0192f5c0-0000-7000-8000-000000000001": next_status.to_string(),
+                    "0192f5c0-0000-7000-8000-000000000003": "0192f5c0-0000-7000-8000-0000000000a2",
+                    "0192f5c0-0000-7000-8000-000000000005": "2026-12-01",
+                },
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["record"]["title"], "Fix the old bridge", "{body}");
+    let (title, status_id, priority, due, now) =
+        sqlx::query_as::<_, (String, uuid::Uuid, String, Option<chrono::NaiveDate>, i64)>(
+            "SELECT title, status_id, priority, due_date, version FROM work_items WHERE id = $1",
+        )
+        .bind(task)
+        .fetch_one(pool)
+        .await
+        .expect("task now");
+    assert_eq!(title, "Fix the old bridge");
+    assert_eq!(status_id, next_status);
+    assert_eq!(priority, "high");
+    assert_eq!(due, chrono::NaiveDate::from_ymd_opt(2026, 12, 1));
+    assert_eq!(now, version + 1, "one task change");
+    let activity = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM work_item_activity WHERE work_item_id = $1",
+    )
+    .bind(task)
+    .fetch_one(pool)
+    .await
+    .expect("activity");
+    assert!(activity >= 2, "the change is in the task's activity");
+
+    // A stale version is refused; archiving archives the task.
+    let (status, _) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            &record,
+            Some("edit-stale"),
+            json!({"expectedVersion": version, "title": "Stale"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, body) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            &record,
+            Some("edit-archive"),
+            json!({"expectedVersion": now, "archived": true}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["record"]["archived"], true, "{body}");
+
+    // A new record is a new task, with the next key.
+    let (status, body) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/collections/{tasks_id}/records"),
+            Some("new-task"),
+            json!({"title": "Paint the lighthouse"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["record"]["number"], 2, "{body}");
+    let made = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM work_items WHERE project_id = $1::uuid AND title = 'Paint the lighthouse'",
+    )
+    .bind(&work)
+    .fetch_one(pool)
+    .await
+    .expect("made");
+    assert_eq!(made, 1);
+    let (status, _) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/collections/{tasks_id}/records"),
+            Some("untitled-task"),
+            json!({"title": ""}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, _) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            &record,
+            Some("blank-title"),
+            json!({"expectedVersion": now + 1, "archived": false, "title": " "}),
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a task keeps a title"
+    );
 }
