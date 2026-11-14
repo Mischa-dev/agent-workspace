@@ -36,7 +36,7 @@ use crate::{
         UpdateWorkItemCommand, UpdateWorkItemOutcome, authorize_mutation, change_criteria,
         change_pull_request_link, change_repository_link, change_thread_link, conflict_kind,
         create_work_item as execute_create_work_item, finalize_change, finalize_comment,
-        insert_activity, lock_membership, lock_work_item, place_in_column, set_archived,
+        lock_membership, lock_work_item, set_archived, update_locked_work_item,
         update_work_item_by_id, valid_estimate,
     },
     work_item_labels::LabelDelta,
@@ -2418,88 +2418,65 @@ async fn move_work_item(
     .fetch_optional(&mut *transaction)
     .await?
     .ok_or(AppError::Validation("targetStatusId"))?;
-    if current.status_id != request.target_status_id {
-        let allowed = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM work_item_status_transitions WHERE project_id = $1 AND from_status_id = $2 AND to_status_id = $3)",
-        )
-        .bind(project_id)
-        .bind(current.status_id)
-        .bind(request.target_status_id)
-        .fetch_one(&mut *transaction)
-        .await?;
-        if !allowed {
+    // The move is a task change like any other: one version bump, an
+    // activity with what changed and its before and after, the assigned
+    // agent's event, watching agents' notes, one audit row and one outbox
+    // event (P0.12).
+    let locked = lock_work_item(&mut transaction, project_id, work_item_id)
+        .await?
+        .ok_or(AppError::NotFound("work_item"))?;
+    let outcome = update_locked_work_item(
+        &mut transaction,
+        &browser_actor(&headers, &principal, project_id)?,
+        locked,
+        UpdateWorkItemCommand {
+            expected_version: request.expected_version,
+            title: None,
+            description: None,
+            type_id: None,
+            status_id: Some(target_status.id),
+            priority: None,
+            assignee_actor_id: None,
+            parent_work_item_id: None,
+            board_placement: Some(placement),
+            labels: None,
+            fields: TaskFieldChanges::default(),
+            field_values: None,
+            summary: "Work Item moved",
+            audit_action: "work_item.moved",
+            audit_version_metadata: AuditVersionMetadata::Include,
+        },
+    )
+    .await?;
+    match outcome {
+        UpdateWorkItemOutcome::Applied { .. } | UpdateWorkItemOutcome::Noop(_) => {}
+        UpdateWorkItemOutcome::Conflict(_) => {
+            return work_item_version_conflict_response(work_item_view(current, caps)?);
+        }
+        UpdateWorkItemOutcome::NotFound => return Err(AppError::NotFound("work_item")),
+        UpdateWorkItemOutcome::InvalidTransition { .. } => {
             return Err(AppError::Conflict("work_item_status", "transition"));
         }
-    }
-    let current_rank = sqlx::query_scalar::<_, i64>(
-        "SELECT board_rank FROM work_items WHERE project_id = $1 AND id = $2",
-    )
-    .bind(project_id)
-    .bind(work_item_id)
-    .fetch_one(&mut *transaction)
-    .await?;
-    let board_rank = match place_in_column(
-        &mut transaction,
-        project_id,
-        request.target_status_id,
-        work_item_id,
-        Some((current.status_id, current_rank)),
-        placement,
-    )
-    .await?
-    {
-        Ok(placed) => placed.board_rank,
-        Err(PlacementProblem::OutOfRange { .. }) => {
+        UpdateWorkItemOutcome::InvalidPlacement(PlacementProblem::OutOfRange { .. }) => {
             return Err(AppError::Validation("targetPosition"));
         }
-        Err(PlacementProblem::AnchorIsSelf | PlacementProblem::AnchorNotInColumn { .. }) => {
+        UpdateWorkItemOutcome::InvalidPlacement(
+            PlacementProblem::AnchorIsSelf | PlacementProblem::AnchorNotInColumn { .. },
+        ) => {
             return Err(AppError::Validation(if request.before_id.is_some() {
                 "beforeId"
             } else {
                 "afterId"
             }));
         }
-    };
-    let updated = sqlx::query(
-        r#"
-        UPDATE work_items
-        SET status_id = $3, board_rank = $4, version = version + 1, updated_at = now()
-        WHERE project_id = $1 AND id = $2 AND version = $5
-        "#,
-    )
-    .bind(project_id)
-    .bind(work_item_id)
-    .bind(request.target_status_id)
-    .bind(board_rank)
-    .bind(request.expected_version)
-    .execute(&mut *transaction)
-    .await?;
-    if updated.rows_affected() != 1 {
-        return Err(AppError::Internal("locked Work Item move lost its version"));
+        UpdateWorkItemOutcome::InvalidAssignee
+        | UpdateWorkItemOutcome::TooManyLabels { .. }
+        | UpdateWorkItemOutcome::InvalidParent(_)
+        | UpdateWorkItemOutcome::InvalidMilestone
+        | UpdateWorkItemOutcome::InvalidDates => {
+            return Err(AppError::Internal("a move changed more than its place"));
+        }
     }
-    let version = request
-        .expected_version
-        .checked_add(1)
-        .ok_or(AppError::Validation("expectedVersion"))?;
-    record_work_item_change(
-        &mut transaction,
-        &headers,
-        &principal,
-        project_id,
-        work_item_id,
-        "work_item_updated",
-        "Work Item moved",
-        "work_item.moved",
-        serde_json::json!({
-            "previousStatusId": current.status_id,
-            "statusId": target_status.id,
-            "targetPosition": request.target_position,
-            "beforeId": request.before_id,
-            "afterId": request.after_id,
-        }),
-        version,
-    )
-    .await?;
     let item = current_work_item_view(
         &mut transaction,
         project_id,

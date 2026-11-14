@@ -1279,3 +1279,203 @@ async fn lists_page_every_sort_and_grouping_quickly_at_ten_thousand_tasks() {
     // machines get headroom.
     assert!(slowest < 1_000, "slowest list request took {slowest} ms");
 }
+
+/// P0.12: every way of changing a task's status or blocker writes the same
+/// kind of record: an activity with `changedFields` and the before and
+/// after, and a `task.updated` webhook that carries what changed.
+#[tokio::test]
+async fn every_status_change_says_what_changed() {
+    use super::{
+        agent_interface::{connect_app, initialize, send, tool},
+        mcp_admin::{create_project, setup},
+        message_edits::owner_id,
+    };
+    use agent_workspace_server::realtime::publish_ready_outbox_batch;
+    let Some(setup) = setup("p12_changes").await else {
+        return;
+    };
+    let app = &setup.app;
+    let pool = &setup.pool;
+    let work = create_project(&setup, "MOVE", "Move").await;
+    let project = work.parse::<Uuid>().expect("project");
+    let owner = connect_app(app, &setup.browser, "Owner's app", "full").await;
+    let session = initialize(app, &owner).await.expect("owner's app");
+    let call = |name: &'static str, arguments: Value| {
+        let owner = owner.clone();
+        let session = session.clone();
+        async move { tool(app, &owner, &session, name, arguments).await }
+    };
+    let mut tasks = Vec::new();
+    for title in ["Dragged", "Marked ready", "Updated", "Blocked"] {
+        let created = call("task_create", json!({"projectId": work, "title": title})).await;
+        tasks.push(
+            created["workItemId"]
+                .as_str()
+                .unwrap_or_else(|| panic!("task: {created}"))
+                .parse::<Uuid>()
+                .expect("task id"),
+        );
+    }
+    // Start each where it can move into the one review status.
+    let (from, review, review_name) = sqlx::query_as::<_, (Uuid, Uuid, String)>(
+        r#"
+        SELECT transition.from_status_id, target.id, target.name
+        FROM work_item_status_transitions transition
+        JOIN work_item_statuses target
+          ON target.project_id = transition.project_id AND target.id = transition.to_status_id
+        WHERE transition.project_id = $1 AND target.semantic_category = 'review'
+          AND target.enabled
+        ORDER BY transition.from_status_id
+        LIMIT 1
+        "#,
+    )
+    .bind(project)
+    .fetch_one(pool)
+    .await
+    .expect("a transition into review");
+    sqlx::query("UPDATE work_items SET status_id = $2 WHERE id = ANY($1)")
+        .bind(&tasks)
+        .bind(from)
+        .execute(pool)
+        .await
+        .expect("start");
+    sqlx::query(
+        r#"
+        INSERT INTO webhook_subscriptions (
+            id, organization_id, project_id, owner_actor_id, name, url, event_types
+        ) VALUES ($1, $2, $3, $4, 'Changes', 'https://127.0.0.1/hook', '{task.updated}')
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(setup.organization_id)
+    .bind(project)
+    .bind(owner_id(pool).await)
+    .execute(pool)
+    .await
+    .expect("webhook");
+    let database_url = std::env::var("AGENT_WORKSPACE_DATABASE_URL").expect("database URL");
+    let config = AppConfig::from_values(&BTreeMap::from([(
+        "AGENT_WORKSPACE_DATABASE_URL".to_owned(),
+        database_url,
+    )]))
+    .expect("configuration");
+    let state = AppState {
+        supervisors: SupervisorRegistry::new(&config).expect("supervisors"),
+        config: Arc::new(config),
+        pool: pool.clone(),
+        rate_limits: RateLimiters::default(),
+        realtime: RealtimeHub::new(64),
+    };
+    let pump = || async {
+        let registry = agent_workspace_server::jobs::default_registry();
+        let options = agent_workspace_server::jobs::WorkerOptions {
+            concurrency: 1,
+            poll_interval: std::time::Duration::from_millis(20),
+            lease: std::time::Duration::from_secs(30),
+            worker_id: "p12-test".to_owned(),
+        };
+        for _ in 0..10 {
+            let published = publish_ready_outbox_batch(pool, &state.realtime, "p12-test")
+                .await
+                .expect("publish outbox");
+            let ran = agent_workspace_server::jobs::run_due(&state, &registry, &options)
+                .await
+                .expect("run jobs");
+            if published == 0 && ran == 0 {
+                return;
+            }
+        }
+    };
+    pump().await;
+    sqlx::query("DELETE FROM webhook_deliveries")
+        .execute(pool)
+        .await
+        .expect("clear");
+    let version = |task: Uuid| async move {
+        sqlx::query_scalar::<_, i64>("SELECT version FROM work_items WHERE id = $1")
+            .bind(task)
+            .fetch_one(pool)
+            .await
+            .expect("version")
+    };
+
+    // The board drag.
+    let (status, moved) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/work-items/{}/move", tasks[0]),
+            Some("p12-drag"),
+            json!({
+                "expectedVersion": version(tasks[0]).await,
+                "targetStatusId": review,
+                "targetPosition": 1,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{moved}");
+    // Marked ready for review, and the same through task_update.
+    let ready = call(
+        "task_mark_ready_for_review",
+        json!({"workItemId": tasks[1], "expectedVersion": version(tasks[1]).await, "clientRequestId": "p12-ready"}),
+    )
+    .await;
+    assert_eq!(ready["outcome"], "applied", "{ready}");
+    let updated = call(
+        "task_update",
+        json!({"taskId": tasks[2], "expectedVersion": version(tasks[2]).await, "status": review_name, "clientRequestId": "p12-update"}),
+    )
+    .await;
+    assert_eq!(updated["outcome"], "applied", "{updated}");
+    let blocked = call(
+        "task_mark_blocked",
+        json!({"workItemId": tasks[3], "expectedVersion": version(tasks[3]).await, "reason": "Waiting on the design", "clientRequestId": "p12-blocked"}),
+    )
+    .await;
+    assert_eq!(blocked["outcome"], "applied", "{blocked}");
+
+    let latest = |task: Uuid| async move {
+        sqlx::query_scalar::<_, Value>(
+            "SELECT payload FROM work_item_activity WHERE work_item_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1",
+        )
+        .bind(task)
+        .fetch_one(pool)
+        .await
+        .expect("activity")
+    };
+    for task in &tasks[..3] {
+        let payload = latest(*task).await;
+        let changed = payload["changedFields"].as_array().expect("changedFields");
+        assert!(changed.contains(&json!("status")), "{payload}");
+        assert_eq!(payload["previousStatusId"], json!(from), "{payload}");
+        assert_eq!(payload["statusId"], json!(review), "{payload}");
+    }
+    let payload = latest(tasks[3]).await;
+    assert_eq!(
+        payload["changedFields"],
+        json!(["blockedReason"]),
+        "{payload}"
+    );
+    assert_eq!(
+        payload["changes"]["blockedReason"]["to"], "Waiting on the design",
+        "{payload}"
+    );
+
+    pump().await;
+    let subjects = sqlx::query_scalar::<_, Value>(
+        "SELECT subject FROM webhook_deliveries WHERE event_type = 'task.updated' ORDER BY created_at",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("deliveries");
+    assert_eq!(subjects.len(), 4, "{subjects:?}");
+    for subject in &subjects {
+        assert!(
+            subject["changedFields"]
+                .as_array()
+                .is_some_and(|fields| !fields.is_empty()),
+            "{subject}"
+        );
+    }
+}

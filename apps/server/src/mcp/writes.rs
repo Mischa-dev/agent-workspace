@@ -32,8 +32,8 @@ use crate::{
         TaskFieldChanges, UpdateWorkItemCommand, UpdateWorkItemOutcome, authorize_mutation,
         change_pull_request_link, conflict_kind, create_work_item as execute_create_work_item,
         finalize_change, finalize_comment, lock_membership, lock_work_item,
-        normalize_criterion_text, place_in_column, record_audit,
-        set_archived as execute_set_archived, update_work_item_by_id,
+        normalize_criterion_text, record_audit, set_archived as execute_set_archived,
+        update_locked_work_item, update_work_item_by_id,
     },
     work_item_labels::{self, LabelDelta, MAX_LABELS_PER_TASK, echo},
 };
@@ -1608,44 +1608,42 @@ pub async fn mark_blocked(
         {
             return Ok(conflict);
         }
-        if current.blocked_reason.as_deref() == Some(&reason) {
-            return finalize_noop(
-                transaction,
-                state,
-                principal,
-                &reservation,
-                work_item_id,
-                current.version,
-                "work_item.mcp_blocker_unchanged",
-                key.as_str(),
-                false,
-            )
-            .await;
-        }
-        sqlx::query(
-            "UPDATE work_items SET blocked_reason = $3, blocked_at = now(), blocked_by_actor_id = $4, version = version + 1, updated_at = now() WHERE project_id = $1 AND id = $2 AND version = $5",
+        let outcome = update_locked_work_item(
+            &mut transaction,
+            &mcp_actor(principal, key.as_str().to_owned()),
+            current,
+            UpdateWorkItemCommand {
+                field_values: None,
+                expected_version: arguments.expected_version,
+                title: None,
+                description: None,
+                type_id: None,
+                status_id: None,
+                priority: None,
+                assignee_actor_id: None,
+                parent_work_item_id: None,
+                board_placement: None,
+                labels: None,
+                fields: TaskFieldChanges {
+                    blocked_reason: Some(Some(reason)),
+                    ..TaskFieldChanges::default()
+                },
+                summary: "Work Item marked blocked through MCP",
+                audit_action: "work_item.mcp_marked_blocked",
+                audit_version_metadata: AuditVersionMetadata::Include,
+            },
         )
-        .bind(principal.project_id)
-        .bind(work_item_id)
-        .bind(reason)
-        .bind(principal.actor_id)
-        .bind(arguments.expected_version)
-        .execute(&mut *transaction)
         .await?;
-        finalize_work_item_change(
+        finish_update_outcome(
             transaction,
             state,
             principal,
             &reservation,
-            work_item_id,
-            arguments.expected_version + 1,
-            ChangePayload {
-                changed_fields: vec!["blockedReason".to_owned()],
-                ..ChangePayload::default()
-            },
-            "Work Item marked blocked through MCP",
-            "work_item.mcp_marked_blocked",
+            arguments.expected_version,
+            outcome,
+            "work_item.mcp_blocker_unchanged",
             key.as_str(),
+            false,
         )
         .await
     }
@@ -1728,69 +1726,43 @@ pub async fn mark_ready_for_review(
                 review_status_id,
             ));
         }
-        let mut changed = Vec::new();
-        if current.status_id != review_status_id {
-            changed.push("status".to_owned());
-        }
-        if current.blocked_reason.is_some() {
-            changed.push("blockedReason".to_owned());
-        }
-        if changed.is_empty() {
-            return finalize_noop(
-                transaction,
-                state,
-                principal,
-                &reservation,
-                work_item_id,
-                current.version,
-                "work_item.mcp_review_unchanged",
-                key.as_str(),
-                false,
-            )
-            .await;
-        }
         // Like any status change, it goes to the bottom of its new column.
-        let board_rank = if current.status_id == review_status_id {
-            current.board_rank
-        } else {
-            place_in_column(
-                &mut transaction,
-                principal.project_id,
-                review_status_id,
-                work_item_id,
-                Some((current.status_id, current.board_rank)),
-                BoardPlacement::Bottom,
-            )
-            .await?
-            .map_err(|_| AppError::Internal("place a task at the bottom of review"))?
-            .board_rank
-        };
-        sqlx::query(
-            "UPDATE work_items SET status_id = $3, board_rank = $5, blocked_reason = NULL, blocked_at = NULL, blocked_by_actor_id = NULL, version = version + 1, updated_at = now() WHERE project_id = $1 AND id = $2 AND version = $4",
+        let outcome = update_locked_work_item(
+            &mut transaction,
+            &mcp_actor(principal, key.as_str().to_owned()),
+            current,
+            UpdateWorkItemCommand {
+                field_values: None,
+                expected_version: arguments.expected_version,
+                title: None,
+                description: None,
+                type_id: None,
+                status_id: Some(review_status_id),
+                priority: None,
+                assignee_actor_id: None,
+                parent_work_item_id: None,
+                board_placement: None,
+                labels: None,
+                fields: TaskFieldChanges {
+                    blocked_reason: Some(None),
+                    ..TaskFieldChanges::default()
+                },
+                summary: "Work Item marked ready for review through MCP",
+                audit_action: "work_item.mcp_ready_for_review",
+                audit_version_metadata: AuditVersionMetadata::Include,
+            },
         )
-        .bind(principal.project_id)
-        .bind(work_item_id)
-        .bind(review_status_id)
-        .bind(arguments.expected_version)
-        .bind(board_rank)
-        .execute(&mut *transaction)
         .await?;
-        finalize_work_item_change(
+        finish_update_outcome(
             transaction,
             state,
             principal,
             &reservation,
-            work_item_id,
-            arguments.expected_version + 1,
-            ChangePayload {
-                status: (current.status_id != review_status_id)
-                    .then_some((current.status_id, review_status_id)),
-                changed_fields: changed,
-                ..ChangePayload::default()
-            },
-            "Work Item marked ready for review through MCP",
-            "work_item.mcp_ready_for_review",
+            arguments.expected_version,
+            outcome,
+            "work_item.mcp_review_unchanged",
             key.as_str(),
+            false,
         )
         .await
     }
@@ -2660,47 +2632,6 @@ pub(super) async fn locate(
             &format!("/projects/{project_id}/work-items/{work_item_id}"),
         ),
     ))
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn finalize_work_item_change(
-    mut transaction: Transaction<'_, Postgres>,
-    state: &AppState,
-    principal: &McpPrincipal,
-    reservation: &IdempotencyReservation,
-    work_item_id: Uuid,
-    version: i64,
-    payload: ChangePayload,
-    summary: &str,
-    action: &str,
-    request_id: &str,
-) -> Result<WriteResult, AppError> {
-    let finalized = finalize_change(
-        &mut transaction,
-        &mcp_actor(principal, request_id.to_owned()),
-        work_item_id,
-        ChangeFinalization {
-            activity_kind: "work_item_updated",
-            summary,
-            audit_action: action,
-            activity_payload: payload.activity(),
-            audit_metadata: payload.audit(version),
-            version,
-        },
-    )
-    .await?;
-    let location = locate(&mut transaction, state, principal.project_id, work_item_id).await?;
-    let result = applied(
-        work_item_id,
-        version,
-        payload.changed_fields,
-        Some(finalized.activity_id),
-        finalized.audit_id,
-        location,
-    );
-    complete(&mut transaction, reservation, StatusCode::OK, &result).await?;
-    transaction.commit().await?;
-    Ok(result)
 }
 
 async fn insert_mcp_audit(
