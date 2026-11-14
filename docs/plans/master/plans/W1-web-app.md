@@ -303,7 +303,7 @@ off it one folder at a time.
 
 **Static files (R24.1).** The web app is static files any CDN can serve: no server-rendered
 page and no value written into `index.html` by the server. At start the app fetches its
-configuration (`GET /api/v1/client-config`: API origin, live origin, feature switches, sign-in
+configuration (`GET /client-config`: API origin, live origin, feature switches, sign-in
 methods) and caches it with the shell. The server may still serve the files for a self-hoster.
 The API origin may differ from the app's origin (CORS and cookie rules are H1's and K5's).
 
@@ -1298,7 +1298,7 @@ contrast test; grid keyboard e2e.
 - Depends on: K1's role data. Size: S.
 
 **W1.38 The web app as static files (R24.1).** Remove every server-written value from
-`index.html` and the shell; the app reads `GET /api/v1/client-config` at start (API and live
+`index.html` and the shell; the app reads `GET /client-config` at start (API and live
 origins, sign-in methods, switches) and caches it; a build that runs from a plain static file
 server against an API on another origin; the server's static serving stays as an option for a
 self-hoster.

@@ -407,7 +407,7 @@ gets a fresh UUIDv7 recorded in `workspace_import_ids`, and every declared refer
 ids inside text and URLs, is rewritten through the map. Task keys (`AWD-142`) are kept in both
 modes, so people's habits survive.
 
-**Each module declares how its things export** (H1.8), through M1's registrar: each module
+**Each module declares how its things export** (H1.8; built in 1H with every workspace table a kind named after its table, and `ExportPart` a declaration only, until H1.9 adds hand-written parts), through M1's registrar: each module
 calls `Registrar::export(&'static dyn ExportPart)` (M1 3.2, M1.3) with an `ExportPart` that
 carries its declaration. There is no `export` section in `modules/*.json`. The declaration's
 shape, written here as JSON for reading (in code it is a `const ExportDecl`):
@@ -1134,7 +1134,8 @@ format at any time, including after a downgrade or a failed payment).
 **The web app is static files (R24 rule 1).** `apps/web` builds to `dist/` with no origin
 baked in; it can be served by the server (self-host default, as today), by any static host or
 by a CDN. At start it fetches **`GET /client-config`** (H1's route, R30; public, cacheable for
-60 s): `{apiOrigin, liveOrigin, signIn: {methods, oidc?}, signup: mode, features, version}`,
+60 s; first from its own origin, where a static host keeps a file naming `apiOrigin`, then from
+that origin; `apiOrigin` is `null` to a page the server served itself): `{apiOrigin, liveOrigin, signIn: {methods, oidc?}, signup: mode, features, version}`,
 built from the server's configuration and never holding a secret. The server sets CORS for
 the configured web origins only. No page is rendered by the server. The one exception that is
 not part of the app shell, `/panel-frame/{launch}` (M1's frame host page), is served by the
@@ -1464,7 +1465,7 @@ mechanical slices, one per server module directory, mergeable in any order behin
 Strict row rules switch on only when the ratchet reads zero.
 
 **H1.44 Unscoped call-site ratchet** — S
-`tests/tenancy_ratchet.rs`: a source scan counts, per directory, call sites that run a query
+`tenancy/ratchet.rs` (a unit test beside `ratchet.json`, built in 1H): a source scan counts, per directory, call sites that run a query
 on the pool outside `scoped_tx`, `scoped_one` or K2's runner, and compares against
 `tenancy/ratchet.json`. A count above the stored one fails; a count below it fails until the
 file is lowered in the same pull request, so the number only goes down. The observe log (H1.20)
@@ -1477,9 +1478,9 @@ Mechanical: wrap each listed call site in `scoped_tx` or `scoped_one` (or move i
 runner where the operation already exists), lower that directory's entry in `ratchet.json`, no
 behaviour change. One slice per directory under `apps/server/src/`, and the files directly in
 `src/` in four alphabetical groups:
-H1.45 `mcp/`; H1.46 `work_items/`; H1.47 `ai/`; H1.48 `auth/`; H1.49 `collections/`;
+H1.45 `usage/`; H1.46 `push/` (done in build 1H, which took the two directories other builds weren't changing); H1.47 `ai/`; H1.48 `auth/`; H1.49 `collections/`;
 H1.50 `github/`; H1.51 `mail/`; H1.52 `modules/`; H1.53 `page_docs/`; H1.54 `provider/`;
-H1.55 `push/`; H1.56 `sheets/`; H1.57 `usage/`; H1.58 `whiteboards/`; H1.59 `src/*.rs` a to c;
+H1.55 `mcp/`; H1.56 `sheets/`; H1.57 `work_items/`; H1.58 `whiteboards/`; H1.59 `src/*.rs` a to c;
 H1.60 `src/*.rs` d to l; H1.61 `src/*.rs` m to r; H1.62 `src/*.rs` s to z. A directory created
 later gets its entry in the ratchet file from birth and is scoped from the start.
 Depends on: H1.44 each; none on each other. Acceptance per slice: that directory's ratchet
