@@ -5,6 +5,7 @@
 //!   named by its id or slug. A target in another workspace is `not_found`.
 //! - `POST /api/v2/ops/{name}`: an operation whose target says where it acts
 //!   (or, for a caller in one workspace, one that needs none named).
+//! - `GET /api/v2/openapi.json`: the document for them (`codegen::openapi`).
 //!
 //! The body is the operation's input. A session cookie (with the CSRF
 //! header) makes the web edge, a bearer token the public API edge; a request
@@ -21,7 +22,7 @@ use axum::{
     extract::{Path, State},
     http::{HeaderMap, HeaderValue, StatusCode, Uri, header},
     response::{IntoResponse, Response},
-    routing::post,
+    routing::{get, post},
 };
 
 use super::{
@@ -33,11 +34,30 @@ use crate::{AppState, auth, error::AppError, mcp};
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/api/v2/openapi.json", get(openapi_document))
         .route(
             "/api/v2/w/{workspace}/ops/{name}",
             post(workspace_operation),
         )
         .route("/api/v2/ops/{name}", post(operation))
+}
+
+/// The v2 OpenAPI document, generated from the registry.
+async fn openapi_document() -> Response {
+    match super::codegen::openapi::document(&registry()) {
+        Ok(document) => {
+            let mut response = Json(document).into_response();
+            response.headers_mut().insert(
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("public, max-age=300"),
+            );
+            response
+        }
+        Err(error) => {
+            tracing::error!(%error, "the v2 OpenAPI document didn't generate");
+            refused(&OpError::Unavailable)
+        }
+    }
 }
 
 async fn workspace_operation(

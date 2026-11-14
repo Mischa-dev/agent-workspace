@@ -17,6 +17,12 @@ fi
 
 while IFS= read -r file; do
   case "${file}" in
+    # Generated from the server's operations: a hand edit must fail the
+    # server's drift check, and a regenerated file must pass the web's.
+    apps/web/src/api/generated/*)
+      rust=true
+      web=true
+      ;;
     apps/web/* | scripts/*)
       web=true
       ;;

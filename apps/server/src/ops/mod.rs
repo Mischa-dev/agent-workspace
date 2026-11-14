@@ -25,6 +25,8 @@
 //! - `registry`: the list of operations, built once.
 //! - `web` and `mcp`: the generated edges (the v2 route for the web app and
 //!   scripts, and the agent tools).
+//! - `codegen`: the web app's types and client, the catalogue and the v2
+//!   OpenAPI document, generated from the registry and checked for drift.
 
 use std::future::Future;
 
@@ -32,6 +34,7 @@ use rmcp::schemars::JsonSchema;
 use serde::{Serialize, de::DeserializeOwned};
 
 pub mod access_shim;
+pub mod codegen;
 pub mod context;
 pub mod dispatch;
 pub mod envelope;
