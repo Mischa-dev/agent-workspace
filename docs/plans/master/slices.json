@@ -1,0 +1,7063 @@
+{
+ "version": 2,
+ "note": "The one list of the work. BUILD-ORDER.md and SLICES.md are generated from it by tools/plan.py; never edit their generated parts by hand.",
+ "stages": [
+  {
+   "id": 0,
+   "name": "Steady ground",
+   "gate": "Private things stay private: no DM thread names in anyone else's sidebar, no comment text in notifications, no reset mail through a workspace someone merely joined, no strangers in people search. CI fails on flaky tests. The plan documents are in the repository."
+  },
+  {
+   "id": 1,
+   "name": "Foundations",
+   "gate": "The app works as before on the new foundations, and one connected (outside) agent takes a run and finishes it through operations. The event log receives every write; one operation is defined once and served to the web and to MCP; the access module answers every check in compare mode with no differences; your own agents hold any role and edit directly; a host can enrol."
+  },
+  {
+   "id": 2,
+   "name": "Agents are accounts everywhere",
+   "gate": "The journey passes as an automated test (section 5): one outside agent, one identity, two workspaces; it receives an event, edits through an operation, raises a request an authorised account answers, retries without duplicating, and loses access the moment its membership is revoked. Every hosted-cheap guard of R24 is on."
+  },
+  {
+   "id": 3,
+   "name": "The whole product on the foundations",
+   "gate": "A workspace with only Chat on is whole (the shape walk passes for every shape). An agent can be added three ways. Open sign-up works. The web app is live on protocol 2 with resume. Every area of the server answers through the access module. Row security runs in observe mode with no unscoped call sites left."
+  },
+  {
+   "id": 4,
+   "name": "Complete, hosted and connected",
+   "gate": "The eleven-point test for done (END-STATE) is walked end to end by the harness. The hosted profile starts only with every cost metered; plans, checkout and budgets work; strict row rules are on."
+  },
+  {
+   "id": 5,
+   "name": "Clean-up and release",
+   "gate": "The old paths are deleted (no release in between is needed, R51). The whole build is rehearsed on a copy of the live database and then deployed once. Trust documents are published and the licence is chosen (R25)."
+  }
+ ],
+ "builds": [
+  {
+   "id": "0",
+   "stage": 0,
+   "name": "Steady ground",
+   "delivers": "Silent bugs, privacy leaks, shared limits, safe retries, guards, honest CI, the plan in the repository."
+  },
+  {
+   "id": "1A",
+   "stage": 1,
+   "name": "Access and roles",
+   "delivers": "The access module, roles as rows, agents at any role editing directly, workspace slugs, the workspace's own space, invitation links, conversations that carry their workspace."
+  },
+  {
+   "id": "1E",
+   "stage": 1,
+   "name": "Event log and many servers",
+   "delivers": "The event log and sequencer, the thing registry, the link store, leases, fan-out across instances, shared limits, pooler-safe database use."
+  },
+  {
+   "id": "1H",
+   "stage": 1,
+   "name": "Hosting groundwork",
+   "delivers": "One outbound guard, the tenant table registry, container-ready configuration, tenancy scope, portable backup and restore, the static web app, export declarations, the call-site ratchet."
+  },
+  {
+   "id": "1O",
+   "stage": 1,
+   "name": "Operation layer, modules and the web shell",
+   "delivers": "The ops kernel with generated web, MCP and v2 edges; the module registry, module state and packages; the persistent shell drawn from module registrations; the op client; the pieces foundation; the test-for-done harness."
+  },
+  {
+   "id": "1T",
+   "stage": 1,
+   "name": "Tasks become records",
+   "delivers": "The record owns title, values and archive; every task reader moves; the cached columns go; the views module; easy field types."
+  },
+  {
+   "id": "1C",
+   "stage": 1,
+   "name": "Chat and comments basics",
+   "delivers": "Right unread counts, DMs and thread replies that reach you, status, any emoji, drafts across devices, the discussion foundation, sheets that don't lock the project, PDF export, templates."
+  },
+  {
+   "id": "1G",
+   "stage": 1,
+   "name": "Runs, requests and hosts",
+   "delivers": "Run records, run operations for any agent, connected runners that get runs, the requests record, hosts and enrolment, the code-host seam."
+  },
+  {
+   "id": "2A",
+   "stage": 2,
+   "name": "One account everywhere: credentials, DMs, spaces",
+   "delivers": "One credentials table, short-lived tokens, accounts across workspaces, the direct scope, one DM per pair, space operations, private channels, personal spaces, groups and guests, addresses."
+  },
+  {
+   "id": "2E",
+   "stage": 2,
+   "name": "Live protocol, storage and cold start",
+   "delivers": "Protocol 2 with resume, presence and typing, the storage seam and S3-compatible store, process roles, the tick endpoint and a cold api, the live contract and its conformance suite."
+  },
+  {
+   "id": "2H",
+   "stage": 2,
+   "name": "Workspace lifecycle, metering, export, first run",
+   "delivers": "Workspace lifecycle and export, limit scopes, server mail, the metering core, the idle-cost guard, image and compose, first run in the browser."
+  },
+  {
+   "id": "2O",
+   "stage": 2,
+   "name": "Operations for chat, tasks and automations; packages and shapes",
+   "delivers": "Messages, threads, tasks, whiteboards, automations and long operations on the operation layer; package preview and install; templates as packages; workspace shapes."
+  },
+  {
+   "id": "2W",
+   "stage": 2,
+   "name": "Web: addresses, the thing store and the main pieces",
+   "delivers": "Workspace in the address with a switcher, the thing store, table, list, board and detail pieces, pages off the old shell, install and push."
+  },
+  {
+   "id": "2C",
+   "stage": 2,
+   "name": "Conversations everywhere",
+   "delivers": "Page and task comments become conversations, private channels, sidebar sections, badge and needs-you counts from the server, one-tap undo, the proposals record, triage, schedules, slash commands."
+  },
+  {
+   "id": "2G",
+   "stage": 2,
+   "name": "Delivery to agents and the host protocol",
+   "delivers": "Requests answered by role, run leases, the host command channel, the built-in host on the protocol, connections and subscriptions, webhooks and the stream, the contract suite, the example host with its conformance tests, the runs page."
+  },
+  {
+   "id": "3A",
+   "stage": 3,
+   "name": "Everything onto the access module; chat-only; the DM move",
+   "delivers": "Every area of the server onto access, permissions in the web, per-thing grants and link tokens, sensitive requests by permission, a chat-only workspace made whole, existing DMs moved, the rename at the interface."
+  },
+  {
+   "id": "3E",
+   "stage": 3,
+   "name": "Search, links, activity and cold storage",
+   "delivers": "Write-time domain events, links from text and as operations, the search index, activity feeds and the audit trail from the log, cold log and history, direct upload and a workspace's own bucket."
+  },
+  {
+   "id": "3H",
+   "stage": 3,
+   "name": "Sign-up, sign-in, billing seam, staff console",
+   "delivers": "Meters wired in, workspace import, OpenID Connect and company single sign-on, open sign-up, abuse controls, the billing seam, the staff console, self-host documentation."
+  },
+  {
+   "id": "3R",
+   "stage": 3,
+   "name": "Workspace columns and row security",
+   "delivers": "Every table gets its workspace column, the remaining call sites are scoped, row security policies on every table in observe mode."
+  },
+  {
+   "id": "3O",
+   "stage": 3,
+   "name": "Operations for documents and settings; connected modules and panels",
+   "delivers": "Pages, sheets, collections, inbox, settings and runs on the operation layer; MCP resources; connected modules; remote operations; panel blocks; the file source contract."
+  },
+  {
+   "id": "3W",
+   "stage": 3,
+   "name": "Web: live on protocol 2, phone, offline queue",
+   "delivers": "Per-event handlers, the live client on protocol 2, space routes and thing addresses, phone navigation, the outbound queue, the request card and run view, the shape walk test."
+  },
+  {
+   "id": "3T",
+   "stage": 3,
+   "name": "Tasks page on views; formulas, dashboards, outside data",
+   "delivers": "Views shared and pinned, the views engine on collections, the Tasks page on views, aggregates and charts, dashboards, the formula language, outside data."
+  },
+  {
+   "id": "3C",
+   "stage": 3,
+   "name": "DMs owned by their participants; chat alone; sheets and proposals",
+   "delivers": "DMs that belong to the people in them, chat standing alone, profiles, guests, group mentions, search grammar, sheet history, formats, proposals for sheets, boards and records, one attachment model."
+  },
+  {
+   "id": "3G",
+   "stage": 3,
+   "name": "Add an agent three ways; one launch path; open protocols",
+   "delivers": "The add-agent flow, offers and registration, starting one on a linked host, the built-in host packaged, one launch path, A2A and ACP, the reference channel adapter, the bridged Agent OS connector."
+  },
+  {
+   "id": "4C",
+   "stage": 4,
+   "name": "Chat complete",
+   "delivers": "Channel details and tabs, make a page, record, row or sticky from messages, presence and @here, answers with sources, agents in the room, request cards, saved inbox views, phone flows, speed."
+  },
+  {
+   "id": "4D",
+   "stage": 4,
+   "name": "Documents complete",
+   "delivers": "Validation and charts in sheets, page sharing levels and public links, live cursors, element comments, history on every document, files from an outside source, moving a page between spaces."
+  },
+  {
+   "id": "4G",
+   "stage": 4,
+   "name": "Agent plugins, memory, consent and ambient mode",
+   "delivers": "Following and ambient mode, scope and consent screens, memory pages, the Hermes and OpenClaw plugins, the bridged connector's runs and offers, the team guard."
+  },
+  {
+   "id": "4H",
+   "stage": 4,
+   "name": "The hosted service",
+   "delivers": "Spend limits and budgets, checkout and plans, strict row rules, noisy-neighbour controls, directory sync, the staff review queue, the hosted operations profile, upgrades and releases."
+  },
+  {
+   "id": "4T",
+   "stage": 4,
+   "name": "Records act like tasks",
+   "delivers": "Relations and rollups, validation, file and button fields, triage, cycles, initiatives, forms, templates and recurring records, automations on records, delegation, the keyboard-first pass."
+  },
+  {
+   "id": "4W",
+   "stage": 4,
+   "name": "Web on operations and pieces everywhere",
+   "delivers": "Every page onto the op client and the shared pieces, the panel renderer and framed panels, built modules in the app, package upgrades, offline reading, speed in CI."
+  },
+  {
+   "id": "5X",
+   "stage": 5,
+   "name": "Remove the old paths and release",
+   "delivers": "Every plan's contract slice: old tables, edges, dispatchers and redirects deleted. Then the deploy rehearsal on a copy of the live database, the one deploy, and the trust documents and publication.",
+   "starts_after_note": "every other build has merged (R51: no release in between; old names that outside clients use keep their aliases until their sunset, counted from the deploy)"
+  }
+ ],
+ "slices": [
+  {
+   "id": "P0.0",
+   "name": "The sidebar shows only conversations the caller can see",
+   "size": "S",
+   "plan": "P0",
+   "build": "0",
+   "needs": [],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.1",
+   "name": "Events keep their side effects",
+   "size": "S",
+   "plan": "P0",
+   "build": "0",
+   "needs": [],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.2",
+   "name": "A database blip doesn't stop the server",
+   "size": "S",
+   "plan": "P0",
+   "build": "0",
+   "needs": [],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.3",
+   "name": "CI tells the truth (flaky fails; web files run Rust tests)",
+   "size": "S",
+   "plan": "P0",
+   "build": "0",
+   "needs": [],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.4",
+   "name": "Agents' task comments mention and reference",
+   "size": "S",
+   "plan": "P0",
+   "build": "0",
+   "needs": [],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.5",
+   "name": "Reading through an app clears notifications",
+   "size": "S",
+   "plan": "P0",
+   "build": "0",
+   "needs": [],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.6",
+   "name": "One rule for managing and acting as an agent",
+   "size": "S",
+   "plan": "P0",
+   "build": "0",
+   "needs": [],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.7",
+   "name": "Module gate covers pages and boards named by id",
+   "size": "S",
+   "plan": "P0",
+   "build": "0",
+   "needs": [],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.8",
+   "name": "SQL permission helpers respect the base role",
+   "size": "S",
+   "plan": "P0",
+   "build": "0",
+   "needs": [],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.9",
+   "name": "Refusals match tool schemas; public API maps every outcome",
+   "size": "S",
+   "plan": "P0",
+   "build": "0",
+   "needs": [],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.10",
+   "name": "Wake-ups posted outside the transaction",
+   "size": "S",
+   "plan": "P0",
+   "build": "0",
+   "needs": [],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.11",
+   "name": "GitHub-driven task moves through the task command",
+   "size": "S",
+   "plan": "P0",
+   "build": "0",
+   "needs": [],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.12",
+   "name": "Board drag, mark-blocked, ready-for-review through the task command",
+   "size": "M",
+   "plan": "P0",
+   "build": "0",
+   "needs": [
+    "P0.4",
+    "P0.11"
+   ],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.13",
+   "name": "Valid callers never share a global budget; address header setting",
+   "size": "S",
+   "plan": "P0",
+   "build": "0",
+   "needs": [],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.14",
+   "name": "OAuth registration counts only unclaimed clients",
+   "size": "S",
+   "plan": "P0",
+   "build": "0",
+   "needs": [
+    "P0.13"
+   ],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.15",
+   "name": "Safe retries on creates, part 1",
+   "size": "S",
+   "plan": "P0",
+   "build": "0",
+   "needs": [],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.16",
+   "name": "Safe retries on creates, part 2; honest instructions; create guard",
+   "size": "S",
+   "plan": "P0",
+   "build": "0",
+   "needs": [],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.17",
+   "name": "Contract tests for connected clients",
+   "size": "S",
+   "plan": "P0",
+   "build": "0",
+   "needs": [],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.18",
+   "name": "Saving a webhook keeps its wake format",
+   "size": "S",
+   "plan": "P0",
+   "build": "0",
+   "needs": [],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.19",
+   "name": "Race tests run on today's schema; naming guard file",
+   "size": "S",
+   "plan": "P0",
+   "build": "0",
+   "needs": [],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.20",
+   "name": "Shared integration fixtures",
+   "size": "M",
+   "plan": "P0",
+   "build": "0",
+   "needs": [],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.21",
+   "name": "Template database per run; fast test databases",
+   "size": "M",
+   "plan": "P0",
+   "build": "0",
+   "needs": [
+    "P0.20"
+   ],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.22",
+   "name": "Privacy net inside a workspace",
+   "size": "M",
+   "plan": "P0",
+   "build": "0",
+   "needs": [
+    "P0.20",
+    "P0.24"
+   ],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.23",
+   "name": "Read-only tools change nothing",
+   "size": "S",
+   "plan": "P0",
+   "build": "0",
+   "needs": [
+    "P0.20"
+   ],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.24",
+   "name": "One source scanner for every guard",
+   "size": "S",
+   "plan": "P0",
+   "build": "0",
+   "needs": [],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.25",
+   "name": "Retire upgrade replays for data that no longer exists",
+   "size": "S",
+   "plan": "P0",
+   "build": "0",
+   "needs": [
+    "P0.19"
+   ],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.26",
+   "name": "Rules in AGENTS.md and server structure guards",
+   "size": "M",
+   "plan": "P0",
+   "build": "0",
+   "needs": [
+    "P0.24"
+   ],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.27",
+   "name": "Web structure guards",
+   "size": "S",
+   "plan": "P0",
+   "build": "0",
+   "needs": [],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.28",
+   "name": "Conversation access: the AGENTS.md wording, the thin `conversation_readable_by` wrapper (R32) and the pairing test",
+   "size": "S",
+   "plan": "P0",
+   "build": "0",
+   "needs": [
+    "P0.26"
+   ],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.29",
+   "name": "Trigger refusal texts pinned",
+   "size": "S",
+   "plan": "P0",
+   "build": "0",
+   "needs": [],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.30",
+   "name": "The master plan lives in the repository",
+   "size": "S",
+   "plan": "P0",
+   "build": "0",
+   "needs": [],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.31",
+   "name": "The front door describes today; history moved",
+   "size": "S",
+   "plan": "P0",
+   "build": "0",
+   "needs": [
+    "P0.30"
+   ],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.32",
+   "name": "No vendor in tool descriptions and core messages",
+   "size": "S",
+   "plan": "P0",
+   "build": "0",
+   "needs": [
+    "P0.26"
+   ],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.33",
+   "name": "Personal machines and repositories out of config, seed and docs",
+   "size": "S",
+   "plan": "P0",
+   "build": "0",
+   "needs": [
+    "P0.26"
+   ],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.34",
+   "name": "Dead code out of the build; SDK tests in CI",
+   "size": "S",
+   "plan": "P0",
+   "build": "0",
+   "needs": [],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.35",
+   "name": "Schema snapshot on demand",
+   "size": "S",
+   "plan": "P0",
+   "build": "0",
+   "needs": [],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.36",
+   "name": "Page comment notifications hold ids, not text (the 140-character preview, `page_docs/comments.rs:451`; C1 and C2's \"P0's new preview slice after P0.35\")",
+   "size": "S",
+   "plan": "P0",
+   "build": "0",
+   "needs": [],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.37",
+   "name": "Account mail never goes through a workspace someone merely joined",
+   "size": "S",
+   "plan": "P0",
+   "build": "0",
+   "needs": [],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "P0.38",
+   "name": "No account reveals its other workspaces",
+   "size": "S",
+   "plan": "P0",
+   "build": "0",
+   "needs": [
+    "P0.20"
+   ],
+   "soft": [],
+   "seq": 0
+  },
+  {
+   "id": "K1.1",
+   "name": "Guard rails with a ratchet",
+   "size": "S",
+   "plan": "K1",
+   "build": "1A",
+   "needs": [
+    "P0.24",
+    "P0.26"
+   ],
+   "soft": [],
+   "seq": 1
+  },
+  {
+   "id": "K1.2",
+   "name": "The access module and compare mode",
+   "size": "M",
+   "plan": "K1",
+   "build": "1A",
+   "needs": [],
+   "soft": [],
+   "seq": 1
+  },
+  {
+   "id": "K1.3",
+   "name": "A complete SQL role check (fix done by P0.8)",
+   "size": "S",
+   "plan": "K1",
+   "build": "1A",
+   "needs": [
+    "P0.8"
+   ],
+   "soft": [],
+   "seq": 1
+  },
+  {
+   "id": "K1.4",
+   "name": "One rule for managing an agent",
+   "size": "M",
+   "plan": "K1",
+   "build": "1A",
+   "needs": [
+    "P0.6",
+    "K1.2"
+   ],
+   "soft": [],
+   "seq": 2
+  },
+  {
+   "id": "K1.5",
+   "name": "Account kinds and one parser",
+   "size": "M",
+   "plan": "K1",
+   "build": "1A",
+   "needs": [],
+   "soft": [],
+   "seq": 1
+  },
+  {
+   "id": "K1.6",
+   "name": "Agents belong to the workspace, not a project",
+   "size": "L",
+   "plan": "K1",
+   "build": "1A",
+   "needs": [
+    "K1.4",
+    "K1.5"
+   ],
+   "soft": [],
+   "seq": 3
+  },
+  {
+   "id": "K1.7",
+   "name": "Outside reference and rebind",
+   "size": "M",
+   "plan": "K1",
+   "build": "2A",
+   "needs": [
+    "K1.6"
+   ],
+   "soft": [
+    "A1.7",
+    "A1.11"
+   ],
+   "seq": 5
+  },
+  {
+   "id": "K1.8",
+   "name": "Profile and worker agents become agent accounts",
+   "size": "M",
+   "plan": "K1",
+   "build": "3A",
+   "needs": [
+    "K1.4",
+    "K1.5",
+    "A1.1"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "K1.9",
+   "name": "Catalogue shape: kinds, levels, capabilities",
+   "size": "M",
+   "plan": "K1",
+   "build": "1A",
+   "needs": [
+    "K1.3"
+   ],
+   "soft": [],
+   "seq": 2
+  },
+  {
+   "id": "K1.10",
+   "name": "Every membership names a role row",
+   "size": "M",
+   "plan": "K1",
+   "build": "1A",
+   "needs": [
+    "K1.9"
+   ],
+   "soft": [],
+   "seq": 3
+  },
+  {
+   "id": "K1.11",
+   "name": "Modules off is a permission (gate fix done by P0.7)",
+   "size": "M",
+   "plan": "K1",
+   "build": "3A",
+   "needs": [
+    "P0.7",
+    "K1.2",
+    "K1.10",
+    "M1.2"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "K1.12",
+   "name": "Suggest instead of edit is a permission",
+   "size": "M",
+   "plan": "K1",
+   "build": "1A",
+   "needs": [
+    "K1.10"
+   ],
+   "soft": [],
+   "seq": 4
+  },
+  {
+   "id": "K1.13",
+   "name": "Kind refusals become permissions, part 1",
+   "size": "M",
+   "plan": "K1",
+   "build": "1A",
+   "needs": [
+    "K1.2"
+   ],
+   "soft": [],
+   "seq": 3
+  },
+  {
+   "id": "K1.14a",
+   "name": "Agents may hold any role (role caps and `people_only` removed)",
+   "size": "S",
+   "plan": "K1",
+   "build": "1A",
+   "needs": [
+    "K1.12",
+    "K1.13"
+   ],
+   "soft": [],
+   "seq": 5
+  },
+  {
+   "id": "K1.14b",
+   "name": "Kind refusals, part 2 (new capabilities, sensitive requests)",
+   "size": "M",
+   "plan": "K1",
+   "build": "3A",
+   "needs": [
+    "K1.14a",
+    "A1.8",
+    "A2.8"
+   ],
+   "soft": [],
+   "seq": 8
+  },
+  {
+   "id": "K1.15",
+   "name": "Chat onto access",
+   "size": "M",
+   "plan": "K1",
+   "build": "3A",
+   "needs": [
+    "K1.2",
+    "K1.10"
+   ],
+   "soft": [],
+   "seq": 8
+  },
+  {
+   "id": "K1.16",
+   "name": "Tasks and task comments onto access",
+   "size": "M",
+   "plan": "K1",
+   "build": "3A",
+   "needs": [
+    "K1.2",
+    "K1.10"
+   ],
+   "soft": [],
+   "seq": 8
+  },
+  {
+   "id": "K1.17",
+   "name": "Documents and records onto access",
+   "size": "M",
+   "plan": "K1",
+   "build": "3A",
+   "needs": [
+    "K1.2",
+    "K1.10"
+   ],
+   "soft": [],
+   "seq": 8
+  },
+  {
+   "id": "K1.18",
+   "name": "Runs, approvals and code onto access",
+   "size": "M",
+   "plan": "K1",
+   "build": "3A",
+   "needs": [
+    "K1.2",
+    "K1.10"
+   ],
+   "soft": [],
+   "seq": 8
+  },
+  {
+   "id": "K1.19",
+   "name": "Members, roles and workspace admin onto access",
+   "size": "M",
+   "plan": "K1",
+   "build": "3A",
+   "needs": [
+    "K1.2",
+    "K1.10"
+   ],
+   "soft": [],
+   "seq": 8
+  },
+  {
+   "id": "K1.20",
+   "name": "Lists, search and notifications in SQL",
+   "size": "L",
+   "plan": "K1",
+   "build": "2A",
+   "needs": [
+    "K1.2",
+    "K1.10"
+   ],
+   "soft": [
+    "K3.10",
+    "K4.2"
+   ],
+   "seq": 4
+  },
+  {
+   "id": "K1.21",
+   "name": "The MCP edge onto access",
+   "size": "M",
+   "plan": "K1",
+   "build": "3A",
+   "needs": [
+    "K1.2",
+    "K1.11",
+    "K2.3"
+   ],
+   "soft": [],
+   "seq": 8
+  },
+  {
+   "id": "K1.22",
+   "name": "One credentials table and one resolver",
+   "size": "M",
+   "plan": "K1",
+   "build": "2A",
+   "needs": [
+    "K1.6"
+   ],
+   "soft": [],
+   "seq": 4
+  },
+  {
+   "id": "K1.23",
+   "name": "Exchange, short-lived tokens, rotation, revocation; acting for bound agents; reach",
+   "size": "M",
+   "plan": "K1",
+   "build": "2A",
+   "needs": [
+    "K1.22"
+   ],
+   "soft": [
+    "A1.11"
+   ],
+   "seq": 5
+  },
+  {
+   "id": "K1.24",
+   "name": "Narrow tokens for runs and tasks",
+   "size": "M",
+   "plan": "K1",
+   "build": "2A",
+   "needs": [
+    "K1.22"
+   ],
+   "soft": [],
+   "seq": 6
+  },
+  {
+   "id": "K1.25",
+   "name": "Acting context on every action",
+   "size": "M",
+   "plan": "K1",
+   "build": "2A",
+   "needs": [
+    "K1.22",
+    "K3.2"
+   ],
+   "soft": [],
+   "seq": 6
+  },
+  {
+   "id": "K1.26",
+   "name": "Permissions in the web",
+   "size": "M",
+   "plan": "K1",
+   "build": "3A",
+   "needs": [
+    "K1.10"
+   ],
+   "soft": [
+    "K2.4",
+    "W1.4"
+   ],
+   "seq": 8
+  },
+  {
+   "id": "K1.27",
+   "name": "Groups, guests and role grants",
+   "size": "M",
+   "plan": "K1",
+   "build": "2A",
+   "needs": [
+    "K1.10",
+    "K1.20"
+   ],
+   "soft": [],
+   "seq": 6
+  },
+  {
+   "id": "K1.28",
+   "name": "One name per account per workspace",
+   "size": "M",
+   "plan": "K1",
+   "build": "2A",
+   "needs": [
+    "K1.5"
+   ],
+   "soft": [],
+   "seq": 4
+  },
+  {
+   "id": "K1.29",
+   "name": "One way to create a person; one invitation engine; unclaimed accounts",
+   "size": "M",
+   "plan": "K1",
+   "build": "1A",
+   "needs": [
+    "K1.5"
+   ],
+   "soft": [],
+   "seq": 2
+  },
+  {
+   "id": "K1.30",
+   "name": "Server roles and the identity provider seam",
+   "size": "M",
+   "plan": "K1",
+   "build": "2A",
+   "needs": [
+    "K1.22"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "K1.31",
+   "name": "Contract: delete the old paths",
+   "size": "M",
+   "plan": "K1",
+   "build": "5X",
+   "needs": [],
+   "soft": [],
+   "seq": 14
+  },
+  {
+   "id": "K1.32",
+   "name": "Per-thing grants and link tokens",
+   "size": "M",
+   "plan": "K1",
+   "build": "3A",
+   "needs": [
+    "K1.20",
+    "K3.10"
+   ],
+   "soft": [],
+   "seq": 9
+  },
+  {
+   "id": "K1.33",
+   "name": "Accounts across workspaces",
+   "size": "M",
+   "plan": "K1",
+   "build": "2A",
+   "needs": [
+    "K1.6",
+    "K1.23",
+    "K4.23"
+   ],
+   "soft": [],
+   "seq": 6
+  },
+  {
+   "id": "K2.1",
+   "name": "Protocol matrix and vendor-free descriptions (rewrite done by P0.32)",
+   "size": "S",
+   "plan": "K2",
+   "build": "1O",
+   "needs": [],
+   "soft": [
+    "P0.32"
+   ],
+   "seq": 1
+  },
+  {
+   "id": "K2.2",
+   "name": "The ops kernel",
+   "size": "M",
+   "plan": "K2",
+   "build": "1O",
+   "needs": [],
+   "soft": [],
+   "seq": 1
+  },
+  {
+   "id": "K2.3",
+   "name": "Generated edges: web, MCP, the v2 route, automations",
+   "size": "M",
+   "plan": "K2",
+   "build": "1O",
+   "needs": [
+    "K2.2"
+   ],
+   "soft": [
+    "H1.20"
+   ],
+   "seq": 2
+  },
+  {
+   "id": "K2.4",
+   "name": "Code generation and drift checks",
+   "size": "M",
+   "plan": "K2",
+   "build": "1O",
+   "needs": [
+    "K2.2",
+    "K2.3"
+   ],
+   "soft": [],
+   "seq": 2
+  },
+  {
+   "id": "K2.5",
+   "name": "Template slice: decisions, add-operation skill",
+   "size": "S",
+   "plan": "K2",
+   "build": "1O",
+   "needs": [
+    "K2.3",
+    "K2.4"
+   ],
+   "soft": [],
+   "seq": 3
+  },
+  {
+   "id": "K2.6",
+   "name": "Conventions guard and aliases",
+   "size": "S",
+   "plan": "K2",
+   "build": "1O",
+   "needs": [
+    "K2.3"
+   ],
+   "soft": [],
+   "seq": 3
+  },
+  {
+   "id": "K2.7",
+   "name": "Messages (mark-seen fix done by P0.5)",
+   "size": "M",
+   "plan": "K2",
+   "build": "2O",
+   "needs": [
+    "P0.5",
+    "K2.5",
+    "K2.6"
+   ],
+   "soft": [],
+   "seq": 4
+  },
+  {
+   "id": "K2.8",
+   "name": "Threads and conversations (C1.2's create_thread)",
+   "size": "M",
+   "plan": "K2",
+   "build": "2O",
+   "needs": [
+    "K2.7"
+   ],
+   "soft": [
+    "K4.24",
+    "C1.2"
+   ],
+   "seq": 12
+  },
+  {
+   "id": "K2.9",
+   "name": "Reply requests as typed functions and ops",
+   "size": "M",
+   "plan": "K2",
+   "build": "2O",
+   "needs": [
+    "K2.7"
+   ],
+   "soft": [],
+   "seq": 12
+  },
+  {
+   "id": "K2.10",
+   "name": "Pages, skills, page discussion (proposable)",
+   "size": "M",
+   "plan": "K2",
+   "build": "3O",
+   "needs": [
+    "K2.6",
+    "C1.7"
+   ],
+   "soft": [
+    "K1.12"
+   ],
+   "seq": 9
+  },
+  {
+   "id": "K2.11",
+   "name": "Sheets and collections",
+   "size": "M",
+   "plan": "K2",
+   "build": "3O",
+   "needs": [
+    "K2.6"
+   ],
+   "soft": [],
+   "seq": 9
+  },
+  {
+   "id": "K2.12",
+   "name": "Whiteboards",
+   "size": "S",
+   "plan": "K2",
+   "build": "2O",
+   "needs": [
+    "K2.6"
+   ],
+   "soft": [],
+   "seq": 11
+  },
+  {
+   "id": "K2.13",
+   "name": "Tasks core writes (mentions fix done by P0.4)",
+   "size": "M",
+   "plan": "K2",
+   "build": "2O",
+   "needs": [
+    "P0.4",
+    "K2.6"
+   ],
+   "soft": [
+    "T1.3"
+   ],
+   "seq": 5
+  },
+  {
+   "id": "K2.14",
+   "name": "Tasks: claims, links, planning",
+   "size": "M",
+   "plan": "K2",
+   "build": "2O",
+   "needs": [
+    "K2.13"
+   ],
+   "soft": [
+    "K3.15"
+   ],
+   "seq": 12
+  },
+  {
+   "id": "K2.15",
+   "name": "Task and space reads (one list engine)",
+   "size": "M",
+   "plan": "K2",
+   "build": "2O",
+   "needs": [
+    "K2.13"
+   ],
+   "soft": [
+    "T1.9"
+   ],
+   "seq": 12
+  },
+  {
+   "id": "K2.16",
+   "name": "Inbox, notifications, Later, questions, files",
+   "size": "M",
+   "plan": "K2",
+   "build": "3O",
+   "needs": [
+    "K2.6"
+   ],
+   "soft": [],
+   "seq": 9
+  },
+  {
+   "id": "K2.17",
+   "name": "Workspace, members, roles, settings (space ops are K4.7, K4.8)",
+   "size": "M",
+   "plan": "K2",
+   "build": "3O",
+   "needs": [],
+   "soft": [
+    "K1.2",
+    "K1.10",
+    "K1.12",
+    "K4.7",
+    "K4.8"
+   ],
+   "seq": 9
+  },
+  {
+   "id": "K2.18",
+   "name": "Automations, webhooks, code, environments",
+   "size": "M",
+   "plan": "K2",
+   "build": "2O",
+   "needs": [
+    "K2.3",
+    "A1.18"
+   ],
+   "soft": [],
+   "seq": 12
+  },
+  {
+   "id": "K2.19",
+   "name": "Runs, approvals, launch, usage: aliases",
+   "size": "S",
+   "plan": "K2",
+   "build": "3O",
+   "needs": [
+    "A1.3",
+    "A1.8"
+   ],
+   "soft": [],
+   "seq": 11
+  },
+  {
+   "id": "K2.20",
+   "name": "MCP resources, skills, server card",
+   "size": "M",
+   "plan": "K2",
+   "build": "3O",
+   "needs": [
+    "K2.1",
+    "K2.10"
+   ],
+   "soft": [],
+   "seq": 12
+  },
+  {
+   "id": "K2.21",
+   "name": "MCP Tasks extension for long operations",
+   "size": "M",
+   "plan": "K2",
+   "build": "2O",
+   "needs": [
+    "K2.3"
+   ],
+   "soft": [],
+   "seq": 12
+  },
+  {
+   "id": "K2.22",
+   "name": "Contract: delete hand-written edges (per batch)",
+   "size": "M",
+   "plan": "K2",
+   "build": "5X",
+   "needs": [],
+   "soft": [],
+   "seq": 14
+  },
+  {
+   "id": "K2.23",
+   "name": "Alias sunset and public v1 retirement",
+   "size": "S",
+   "plan": "K2",
+   "build": "5X",
+   "needs": [],
+   "soft": [],
+   "seq": 14
+  },
+  {
+   "id": "K3.1",
+   "name": "Outbox side effects retry instead of being lost (done by P0.1)",
+   "size": "S",
+   "plan": "K3",
+   "build": "1E",
+   "needs": [
+    "P0.1"
+   ],
+   "soft": [],
+   "seq": 1
+  },
+  {
+   "id": "K3.2",
+   "name": "The event log and the catalogue",
+   "size": "M",
+   "plan": "K3",
+   "build": "1E",
+   "needs": [],
+   "soft": [],
+   "seq": 1
+  },
+  {
+   "id": "K3.3",
+   "name": "Sequencer, cursors and the consumer runtime",
+   "size": "M",
+   "plan": "K3",
+   "build": "1E",
+   "needs": [
+    "K3.2"
+   ],
+   "soft": [],
+   "seq": 2
+  },
+  {
+   "id": "K3.4",
+   "name": "Webhooks and automations read the log",
+   "size": "M",
+   "plan": "K3",
+   "build": "1E",
+   "needs": [
+    "K3.3"
+   ],
+   "soft": [],
+   "seq": 3
+  },
+  {
+   "id": "K3.5",
+   "name": "Pages, sheets and whiteboards in events, automations and webhooks",
+   "size": "M",
+   "plan": "K3",
+   "build": "3E",
+   "needs": [
+    "K3.4"
+   ],
+   "soft": [],
+   "seq": 8
+  },
+  {
+   "id": "K3.6",
+   "name": "Boards and sheets in search",
+   "size": "S",
+   "plan": "K3",
+   "build": "1E",
+   "needs": [],
+   "soft": [],
+   "seq": 1
+  },
+  {
+   "id": "K3.7",
+   "name": "Write-time domain events for tasks, records, messages, runs, PRs",
+   "size": "M",
+   "plan": "K3",
+   "build": "3E",
+   "needs": [
+    "K3.4"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "K3.8",
+   "name": "Events for the writes that have none",
+   "size": "M",
+   "plan": "K3",
+   "build": "1E",
+   "needs": [
+    "K3.2"
+   ],
+   "soft": [],
+   "seq": 2
+  },
+  {
+   "id": "K3.9",
+   "name": "Notifications read the log",
+   "size": "S",
+   "plan": "K3",
+   "build": "3E",
+   "needs": [
+    "K3.3"
+   ],
+   "soft": [],
+   "seq": 12
+  },
+  {
+   "id": "K3.10",
+   "name": "The thing registry",
+   "size": "L",
+   "plan": "K3",
+   "build": "1E",
+   "needs": [],
+   "soft": [
+    "T1.3"
+   ],
+   "seq": 1
+  },
+  {
+   "id": "K3.11",
+   "name": "More kinds in the registry",
+   "size": "M",
+   "plan": "K3",
+   "build": "1E",
+   "needs": [
+    "K3.10"
+   ],
+   "soft": [],
+   "seq": 2
+  },
+  {
+   "id": "K3.12",
+   "name": "The link store, copied and mirrored",
+   "size": "M",
+   "plan": "K3",
+   "build": "1E",
+   "needs": [
+    "K3.10",
+    "K3.11"
+   ],
+   "soft": [],
+   "seq": 3
+  },
+  {
+   "id": "K3.13",
+   "name": "Links from text, without route regexes",
+   "size": "M",
+   "plan": "K3",
+   "build": "3E",
+   "needs": [
+    "K3.12"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "K3.14",
+   "name": "One link reader",
+   "size": "M",
+   "plan": "K3",
+   "build": "3E",
+   "needs": [
+    "K3.12",
+    "K3.13"
+   ],
+   "soft": [
+    "T1.18"
+   ],
+   "seq": 8
+  },
+  {
+   "id": "K3.15",
+   "name": "Links as operations",
+   "size": "M",
+   "plan": "K3",
+   "build": "3E",
+   "needs": [
+    "K3.14"
+   ],
+   "soft": [
+    "K2.3"
+   ],
+   "seq": 9
+  },
+  {
+   "id": "K3.16",
+   "name": "Dependency and relation readers move to links",
+   "size": "M",
+   "plan": "K3",
+   "build": "3E",
+   "needs": [
+    "K3.15"
+   ],
+   "soft": [],
+   "seq": 11
+  },
+  {
+   "id": "K3.17",
+   "name": "The search index",
+   "size": "M",
+   "plan": "K3",
+   "build": "3E",
+   "needs": [
+    "K3.3",
+    "K3.11"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "K3.18",
+   "name": "Search reads the index",
+   "size": "M",
+   "plan": "K3",
+   "build": "3E",
+   "needs": [
+    "K3.17"
+   ],
+   "soft": [
+    "K1.20"
+   ],
+   "seq": 9
+  },
+  {
+   "id": "K3.19",
+   "name": "History as a seam",
+   "size": "M",
+   "plan": "K3",
+   "build": "1E",
+   "needs": [
+    "K3.10"
+   ],
+   "soft": [],
+   "seq": 3
+  },
+  {
+   "id": "K3.20",
+   "name": "Activity feeds and the audit trail from the log",
+   "size": "M",
+   "plan": "K3",
+   "build": "3E",
+   "needs": [
+    "K3.7"
+   ],
+   "soft": [
+    "K1.25"
+   ],
+   "seq": 9
+  },
+  {
+   "id": "K3.21",
+   "name": "Guard rails",
+   "size": "S",
+   "plan": "K3",
+   "build": "2E",
+   "needs": [
+    "K3.2",
+    "K3.10"
+   ],
+   "soft": [],
+   "seq": 5
+  },
+  {
+   "id": "K3.22",
+   "name": "The outbox retires",
+   "size": "S",
+   "plan": "K3",
+   "build": "5X",
+   "needs": [
+    "K3.4",
+    "K3.9",
+    "K5.5"
+   ],
+   "soft": [],
+   "seq": 14
+  },
+  {
+   "id": "K3.23",
+   "name": "Contract the old link stores",
+   "size": "S",
+   "plan": "K3",
+   "build": "5X",
+   "needs": [
+    "K3.16",
+    "A2.28"
+   ],
+   "soft": [],
+   "seq": 15
+  },
+  {
+   "id": "K3.24",
+   "name": "The direct scope and merged streams in the log",
+   "size": "S",
+   "plan": "K3",
+   "build": "2A",
+   "needs": [
+    "K3.3",
+    "K4.23"
+   ],
+   "soft": [],
+   "seq": 6
+  },
+  {
+   "id": "K3.25",
+   "name": "Cold log and history",
+   "size": "M",
+   "plan": "K3",
+   "build": "3E",
+   "needs": [
+    "K3.20",
+    "K5.11"
+   ],
+   "soft": [],
+   "seq": 12
+  },
+  {
+   "id": "K4.1",
+   "name": "Space words in the database (views, columns, kinds)",
+   "size": "M",
+   "plan": "K4",
+   "build": "1A",
+   "needs": [],
+   "soft": [],
+   "seq": 1
+  },
+  {
+   "id": "K4.2",
+   "name": "`spaces` module and access helpers",
+   "size": "M",
+   "plan": "K4",
+   "build": "1A",
+   "needs": [
+    "K4.1"
+   ],
+   "soft": [],
+   "seq": 2
+  },
+  {
+   "id": "K4.3",
+   "name": "Guard rails, first set",
+   "size": "S",
+   "plan": "K4",
+   "build": "1A",
+   "needs": [
+    "P0.0",
+    "P0.26",
+    "K4.1",
+    "K4.2"
+   ],
+   "soft": [],
+   "seq": 3
+  },
+  {
+   "id": "K4.4",
+   "name": "Conversations carry their workspace; one full visibility rule",
+   "size": "M",
+   "plan": "K4",
+   "build": "1A",
+   "needs": [
+    "P0.0",
+    "K4.2"
+   ],
+   "soft": [],
+   "seq": 3
+  },
+  {
+   "id": "K4.5",
+   "name": "Workspace slugs",
+   "size": "S",
+   "plan": "K4",
+   "build": "1A",
+   "needs": [],
+   "soft": [
+    "K2.3"
+   ],
+   "seq": 1
+  },
+  {
+   "id": "K4.6",
+   "name": "Explicit workspace on workspace-level requests",
+   "size": "M",
+   "plan": "K4",
+   "build": "3A",
+   "needs": [
+    "K4.5"
+   ],
+   "soft": [],
+   "seq": 9
+  },
+  {
+   "id": "K4.7",
+   "name": "Space operations: list, open, create, update, archive",
+   "size": "M",
+   "plan": "K4",
+   "build": "2A",
+   "needs": [
+    "K2.3",
+    "K2.5",
+    "K4.2"
+   ],
+   "soft": [],
+   "seq": 4
+  },
+  {
+   "id": "K4.8",
+   "name": "Space membership operations and events",
+   "size": "M",
+   "plan": "K4",
+   "build": "2A",
+   "needs": [
+    "K4.7"
+   ],
+   "soft": [
+    "K1.10"
+   ],
+   "seq": 5
+  },
+  {
+   "id": "K4.9",
+   "name": "Personal spaces",
+   "size": "M",
+   "plan": "K4",
+   "build": "2A",
+   "needs": [
+    "K1.4",
+    "K4.7"
+   ],
+   "soft": [],
+   "seq": 6
+  },
+  {
+   "id": "K4.10",
+   "name": "The workspace space as a plain kind",
+   "size": "M",
+   "plan": "K4",
+   "build": "1A",
+   "needs": [
+    "K4.2"
+   ],
+   "soft": [
+    "M1.2"
+   ],
+   "seq": 3
+  },
+  {
+   "id": "K4.11",
+   "name": "Private channels: rule and operations",
+   "size": "M",
+   "plan": "K4",
+   "build": "2A",
+   "needs": [
+    "K4.4"
+   ],
+   "soft": [],
+   "seq": 4
+  },
+  {
+   "id": "K4.12",
+   "name": "DM permissions from a shared workspace's role",
+   "size": "M",
+   "plan": "K4",
+   "build": "2A",
+   "needs": [
+    "K4.4"
+   ],
+   "soft": [
+    "K1.2",
+    "K1.9"
+   ],
+   "seq": 4
+  },
+  {
+   "id": "K4.13",
+   "name": "Workspace-level carriers off the Messages space",
+   "size": "M",
+   "plan": "K4",
+   "build": "2A",
+   "needs": [
+    "K3.2",
+    "K4.4"
+   ],
+   "soft": [
+    "K5.5"
+   ],
+   "seq": 4
+  },
+  {
+   "id": "K4.14",
+   "name": "DM storage, expand",
+   "size": "S",
+   "plan": "K4",
+   "build": "2A",
+   "needs": [
+    "K4.4"
+   ],
+   "soft": [],
+   "seq": 4
+  },
+  {
+   "id": "K4.15",
+   "name": "DMs written and read without a project",
+   "size": "M",
+   "plan": "K4",
+   "build": "2A",
+   "needs": [
+    "K4.12",
+    "K4.13",
+    "K4.14"
+   ],
+   "soft": [
+    "K1.28"
+   ],
+   "seq": 5
+  },
+  {
+   "id": "K4.16",
+   "name": "Move existing DM rows",
+   "size": "S",
+   "plan": "K4",
+   "build": "3A",
+   "needs": [
+    "K4.15"
+   ],
+   "soft": [
+    "A1.1"
+   ],
+   "seq": 10
+  },
+  {
+   "id": "K4.17",
+   "name": "Retire the hidden Messages projects",
+   "size": "S",
+   "plan": "K4",
+   "build": "3A",
+   "needs": [
+    "K1.6",
+    "K1.22",
+    "K4.16",
+    "A1.1"
+   ],
+   "soft": [],
+   "seq": 11
+  },
+  {
+   "id": "K4.18",
+   "name": "The address module and resolver",
+   "size": "M",
+   "plan": "K4",
+   "build": "2A",
+   "needs": [
+    "K4.5"
+   ],
+   "soft": [],
+   "seq": 8
+  },
+  {
+   "id": "K4.19",
+   "name": "Links switch to workspace addresses",
+   "size": "S",
+   "plan": "K4",
+   "build": "3A",
+   "needs": [
+    "K4.18",
+    "W1.14a"
+   ],
+   "soft": [],
+   "seq": 11
+  },
+  {
+   "id": "K4.20",
+   "name": "Space starting shapes (M1's package format)",
+   "size": "M",
+   "plan": "K4",
+   "build": "3A",
+   "needs": [
+    "K4.7"
+   ],
+   "soft": [
+    "M1.2",
+    "M1.17"
+   ],
+   "seq": 9
+  },
+  {
+   "id": "K4.21",
+   "name": "The rename at the interface",
+   "size": "M",
+   "plan": "K4",
+   "build": "3A",
+   "needs": [
+    "K2.6",
+    "K4.7"
+   ],
+   "soft": [],
+   "seq": 9
+  },
+  {
+   "id": "K4.22",
+   "name": "The flip (base tables renamed, old names as views)",
+   "size": "M",
+   "plan": "K4",
+   "build": "5X",
+   "needs": [],
+   "soft": [],
+   "seq": 14
+  },
+  {
+   "id": "K4.23",
+   "name": "The direct scope",
+   "size": "S",
+   "plan": "K4",
+   "build": "2A",
+   "needs": [
+    "K4.14"
+   ],
+   "soft": [],
+   "seq": 5
+  },
+  {
+   "id": "K4.24",
+   "name": "Personal DMs: one per pair, one list everywhere",
+   "size": "M",
+   "plan": "K4",
+   "build": "2A",
+   "needs": [
+    "K4.12",
+    "K4.15",
+    "K4.23"
+   ],
+   "soft": [
+    "K2.3"
+   ],
+   "seq": 6
+  },
+  {
+   "id": "K4.25",
+   "name": "A chat-only workspace is whole",
+   "size": "S",
+   "plan": "K4",
+   "build": "3A",
+   "needs": [
+    "K4.10",
+    "K4.24"
+   ],
+   "soft": [
+    "M1.17"
+   ],
+   "seq": 7
+  },
+  {
+   "id": "K4.26",
+   "name": "Invitation link tokens",
+   "size": "S",
+   "plan": "K4",
+   "build": "1A",
+   "needs": [],
+   "soft": [
+    "K1.29",
+    "K2.3"
+   ],
+   "seq": 3
+  },
+  {
+   "id": "K5.1",
+   "name": "Cluster test harness and app assembly",
+   "size": "S",
+   "plan": "K5",
+   "build": "1E",
+   "needs": [],
+   "soft": [],
+   "seq": 1
+  },
+  {
+   "id": "K5.2",
+   "name": "Instances and leases",
+   "size": "M",
+   "plan": "K5",
+   "build": "1E",
+   "needs": [
+    "P0.2",
+    "K5.1"
+   ],
+   "soft": [],
+   "seq": 2
+  },
+  {
+   "id": "K5.3",
+   "name": "The built-in host behind one lease",
+   "size": "M",
+   "plan": "K5",
+   "build": "1E",
+   "needs": [
+    "K5.2"
+   ],
+   "soft": [],
+   "seq": 3
+  },
+  {
+   "id": "K5.4",
+   "name": "Event positions and the wake (shadow)",
+   "size": "M",
+   "plan": "K5",
+   "build": "1E",
+   "needs": [
+    "K3.2",
+    "K5.1"
+   ],
+   "soft": [],
+   "seq": 2
+  },
+  {
+   "id": "K5.5",
+   "name": "Fan-out across instances",
+   "size": "M",
+   "plan": "K5",
+   "build": "1E",
+   "needs": [
+    "K5.4"
+   ],
+   "soft": [],
+   "seq": 3
+  },
+  {
+   "id": "K5.6",
+   "name": "Shared limits",
+   "size": "M",
+   "plan": "K5",
+   "build": "1E",
+   "needs": [
+    "P0.13",
+    "K5.1"
+   ],
+   "soft": [],
+   "seq": 3
+  },
+  {
+   "id": "K5.7",
+   "name": "Process roles, drain and readiness",
+   "size": "M",
+   "plan": "K5",
+   "build": "2E",
+   "needs": [
+    "K5.2",
+    "K5.5"
+   ],
+   "soft": [],
+   "seq": 4
+  },
+  {
+   "id": "K5.8",
+   "name": "Subscriptions at subscribe time",
+   "size": "M",
+   "plan": "K5",
+   "build": "2E",
+   "needs": [
+    "K5.5"
+   ],
+   "soft": [
+    "K1.20",
+    "K4.2"
+   ],
+   "seq": 4
+  },
+  {
+   "id": "K5.9",
+   "name": "Protocol 2, resume, and `follow`",
+   "size": "M",
+   "plan": "K5",
+   "build": "2E",
+   "needs": [
+    "K5.8"
+   ],
+   "soft": [],
+   "seq": 5
+  },
+  {
+   "id": "K5.10",
+   "name": "Presence, typing, and document watching",
+   "size": "M",
+   "plan": "K5",
+   "build": "2E",
+   "needs": [
+    "K5.9"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "K5.11",
+   "name": "Storage seam and streaming uploads",
+   "size": "M",
+   "plan": "K5",
+   "build": "2E",
+   "needs": [
+    "K5.1"
+   ],
+   "soft": [],
+   "seq": 5
+  },
+  {
+   "id": "K5.12",
+   "name": "S3-compatible store and signed links",
+   "size": "M",
+   "plan": "K5",
+   "build": "2E",
+   "needs": [
+    "K5.11"
+   ],
+   "soft": [],
+   "seq": 6
+  },
+  {
+   "id": "K5.13",
+   "name": "Moving files between stores",
+   "size": "S",
+   "plan": "K5",
+   "build": "3E",
+   "needs": [
+    "K5.12"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "K5.14",
+   "name": "Provider sign-ins through the database",
+   "size": "S",
+   "plan": "K5",
+   "build": "2E",
+   "needs": [
+    "K5.3"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "K5.15",
+   "name": "Remove the old paths",
+   "size": "S",
+   "plan": "K5",
+   "build": "5X",
+   "needs": [
+    "K5.9",
+    "W1.6"
+   ],
+   "soft": [],
+   "seq": 14
+  },
+  {
+   "id": "K5.16",
+   "name": "One owner per document (deferred)",
+   "size": "L",
+   "plan": "K5",
+   "build": null,
+   "needs": [
+    "K5.2",
+    "K5.10",
+    "C1.30"
+   ],
+   "soft": [],
+   "seq": 99,
+   "parked": "One owner per document: deferred by K5 until measurements ask for it."
+  },
+  {
+   "id": "K5.17",
+   "name": "Pooler-safe database use",
+   "size": "S",
+   "plan": "K5",
+   "build": "1E",
+   "needs": [
+    "K5.4"
+   ],
+   "soft": [],
+   "seq": 3
+  },
+  {
+   "id": "K5.18",
+   "name": "The tick endpoint and a cold `api`",
+   "size": "S",
+   "plan": "K5",
+   "build": "2E",
+   "needs": [
+    "K5.7"
+   ],
+   "soft": [],
+   "seq": 5
+  },
+  {
+   "id": "K5.19",
+   "name": "The live contract and its conformance suite",
+   "size": "M",
+   "plan": "K5",
+   "build": "2E",
+   "needs": [
+    "K5.7",
+    "K5.9"
+   ],
+   "soft": [],
+   "seq": 6
+  },
+  {
+   "id": "K5.20",
+   "name": "Direct upload and download, and a workspace's own bucket",
+   "size": "M",
+   "plan": "K5",
+   "build": "3E",
+   "needs": [
+    "K5.12"
+   ],
+   "soft": [
+    "K2.3"
+   ],
+   "seq": 11
+  },
+  {
+   "id": "K5.21",
+   "name": "Live document rooms under the contract",
+   "size": "S",
+   "plan": "K5",
+   "build": "3E",
+   "needs": [
+    "K5.10",
+    "K5.19"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "T1.1",
+   "name": "Freeze guard for task-side views",
+   "size": "S",
+   "plan": "T1",
+   "build": "1T",
+   "needs": [],
+   "soft": [],
+   "seq": 1
+  },
+  {
+   "id": "T1.2",
+   "name": "One field and view vocabulary",
+   "size": "S",
+   "plan": "T1",
+   "build": "1T",
+   "needs": [],
+   "soft": [],
+   "seq": 1
+  },
+  {
+   "id": "T1.3",
+   "name": "Step 3a: record owns title, values, archive",
+   "size": "M",
+   "plan": "T1",
+   "build": "1T",
+   "needs": [
+    "P0.11",
+    "P0.12"
+   ],
+   "soft": [],
+   "seq": 2
+  },
+  {
+   "id": "T1.4a",
+   "name": "Step 3b: task readers move (task routes)",
+   "size": "M",
+   "plan": "T1",
+   "build": "1T",
+   "needs": [
+    "T1.3"
+   ],
+   "soft": [],
+   "seq": 3
+  },
+  {
+   "id": "T1.4b",
+   "name": "Step 3b: task readers move (MCP, briefing, My work)",
+   "size": "M",
+   "plan": "T1",
+   "build": "1T",
+   "needs": [
+    "T1.3"
+   ],
+   "soft": [],
+   "seq": 4
+  },
+  {
+   "id": "T1.4c",
+   "name": "Step 3b: task readers move (the rest)",
+   "size": "M",
+   "plan": "T1",
+   "build": "1T",
+   "needs": [
+    "T1.3"
+   ],
+   "soft": [],
+   "seq": 5
+  },
+  {
+   "id": "T1.4d",
+   "name": "Step 3c: drop the cached columns",
+   "size": "S",
+   "plan": "T1",
+   "build": "1T",
+   "needs": [
+    "T1.4a"
+   ],
+   "soft": [],
+   "seq": 6
+  },
+  {
+   "id": "T1.5",
+   "name": "`views` module and `RecordSource`",
+   "size": "M",
+   "plan": "T1",
+   "build": "1T",
+   "needs": [],
+   "soft": [],
+   "seq": 1
+  },
+  {
+   "id": "T1.6",
+   "name": "Personal, shared, pinned, default views",
+   "size": "M",
+   "plan": "T1",
+   "build": "3T",
+   "needs": [
+    "K1.9",
+    "T1.5"
+   ],
+   "soft": [],
+   "seq": 3
+  },
+  {
+   "id": "T1.7",
+   "name": "Tasks source, accessors, indexes, 10k guard",
+   "size": "M",
+   "plan": "T1",
+   "build": "1T",
+   "needs": [
+    "T1.5"
+   ],
+   "soft": [],
+   "seq": 2
+  },
+  {
+   "id": "T1.8",
+   "name": "Task saved views into the one store",
+   "size": "M",
+   "plan": "T1",
+   "build": "3T",
+   "needs": [
+    "T1.6",
+    "T1.7"
+   ],
+   "soft": [],
+   "seq": 5
+  },
+  {
+   "id": "T1.9",
+   "name": "Task lists, `task_list`, automations on the compiler",
+   "size": "L",
+   "plan": "T1",
+   "build": "3T",
+   "needs": [
+    "T1.8"
+   ],
+   "soft": [],
+   "seq": 6
+  },
+  {
+   "id": "T1.10",
+   "name": "Easy field types and system fields",
+   "size": "M",
+   "plan": "T1",
+   "build": "1T",
+   "needs": [
+    "T1.5"
+   ],
+   "soft": [],
+   "seq": 4
+  },
+  {
+   "id": "T1.11",
+   "name": "Step 4: edit Tasks like any collection",
+   "size": "M",
+   "plan": "T1",
+   "build": "3T",
+   "needs": [
+    "P0.11",
+    "P0.12",
+    "T1.4d",
+    "T1.10"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "T1.12",
+   "name": "Step 5: `fields` and `collection` on task tools",
+   "size": "M",
+   "plan": "T1",
+   "build": "4T",
+   "needs": [
+    "K2.13",
+    "T1.11"
+   ],
+   "soft": [],
+   "seq": 13
+  },
+  {
+   "id": "T1.13",
+   "name": "Web views engine on collections, adapters, `FilterEditor`",
+   "size": "M",
+   "plan": "T1",
+   "build": "3T",
+   "needs": [
+    "T1.6",
+    "W1.17"
+   ],
+   "soft": [
+    "W1.18"
+   ],
+   "seq": 4
+  },
+  {
+   "id": "T1.13a",
+   "name": "The field registry (from W1.16)",
+   "size": "M",
+   "plan": "T1",
+   "build": "4T",
+   "needs": [
+    "T1.2",
+    "W1.17"
+   ],
+   "soft": [],
+   "seq": 13
+  },
+  {
+   "id": "T1.14",
+   "name": "Timeline and list kinds for every collection",
+   "size": "M",
+   "plan": "T1",
+   "build": "3T",
+   "needs": [
+    "T1.13"
+   ],
+   "soft": [],
+   "seq": 5
+  },
+  {
+   "id": "T1.15",
+   "name": "Tasks page on views: list (with W1.27a, W1.27d)",
+   "size": "M",
+   "plan": "T1",
+   "build": "3T",
+   "needs": [
+    "T1.9",
+    "T1.13",
+    "T1.14",
+    "W1.18"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "T1.16",
+   "name": "Tasks page on views: board and timeline (with W1.27b)",
+   "size": "M",
+   "plan": "T1",
+   "build": "3T",
+   "needs": [
+    "T1.15",
+    "W1.19"
+   ],
+   "soft": [],
+   "seq": 8
+  },
+  {
+   "id": "T1.17",
+   "name": "Formula language, same-record recalculation",
+   "size": "M",
+   "plan": "T1",
+   "build": "3T",
+   "needs": [
+    "T1.10"
+   ],
+   "soft": [],
+   "seq": 9
+  },
+  {
+   "id": "T1.18",
+   "name": "Two-way relations, rollups, recalculation jobs",
+   "size": "M",
+   "plan": "T1",
+   "build": "4T",
+   "needs": [
+    "T1.17"
+   ],
+   "soft": [
+    "K3.12"
+   ],
+   "seq": 13
+  },
+  {
+   "id": "T1.19",
+   "name": "Validation, required, defaults, builder-only",
+   "size": "S",
+   "plan": "T1",
+   "build": "4T",
+   "needs": [
+    "K1.9",
+    "T1.10"
+   ],
+   "soft": [],
+   "seq": 13
+  },
+  {
+   "id": "T1.20",
+   "name": "File field",
+   "size": "M",
+   "plan": "T1",
+   "build": "4T",
+   "needs": [
+    "K5.11",
+    "T1.10",
+    "C1.33"
+   ],
+   "soft": [],
+   "seq": 13
+  },
+  {
+   "id": "T1.21",
+   "name": "Button field",
+   "size": "S",
+   "plan": "T1",
+   "build": "4T",
+   "needs": [
+    "K2.2",
+    "T1.10"
+   ],
+   "soft": [],
+   "seq": 13
+  },
+  {
+   "id": "T1.22",
+   "name": "Delegate",
+   "size": "S",
+   "plan": "T1",
+   "build": "4T",
+   "needs": [
+    "T1.7",
+    "A1.13"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "T1.23",
+   "name": "Triage queue",
+   "size": "M",
+   "plan": "T1",
+   "build": "4T",
+   "needs": [
+    "T1.7",
+    "T1.15"
+   ],
+   "soft": [],
+   "seq": 13
+  },
+  {
+   "id": "T1.24",
+   "name": "Cycles",
+   "size": "M",
+   "plan": "T1",
+   "build": "4T",
+   "needs": [
+    "T1.7",
+    "T1.31"
+   ],
+   "soft": [],
+   "seq": 13
+  },
+  {
+   "id": "T1.25",
+   "name": "Step 6: acts like a task",
+   "size": "L",
+   "plan": "T1",
+   "build": "4T",
+   "needs": [
+    "T1.12",
+    "T1.16"
+   ],
+   "soft": [],
+   "seq": 14
+  },
+  {
+   "id": "T1.26",
+   "name": "Initiatives (containment by `parent_id`)",
+   "size": "M",
+   "plan": "T1",
+   "build": "4T",
+   "needs": [
+    "K3.10",
+    "K4.10",
+    "T1.14"
+   ],
+   "soft": [],
+   "seq": 13
+  },
+  {
+   "id": "T1.27",
+   "name": "Keyboard-first pass",
+   "size": "M",
+   "plan": "T1",
+   "build": "4T",
+   "needs": [
+    "T1.16",
+    "T1.41"
+   ],
+   "soft": [],
+   "seq": 14
+  },
+  {
+   "id": "T1.28",
+   "name": "Forms: definitions, internal, conditions",
+   "size": "M",
+   "plan": "T1",
+   "build": "4T",
+   "needs": [
+    "T1.11"
+   ],
+   "soft": [],
+   "seq": 13
+  },
+  {
+   "id": "T1.29",
+   "name": "Public form limits",
+   "size": "S",
+   "plan": "T1",
+   "build": "3T",
+   "needs": [],
+   "soft": [
+    "K5.6"
+   ],
+   "seq": 7
+  },
+  {
+   "id": "T1.30",
+   "name": "Record templates and recurring records",
+   "size": "M",
+   "plan": "T1",
+   "build": "4T",
+   "needs": [
+    "T1.11"
+   ],
+   "soft": [],
+   "seq": 13
+  },
+  {
+   "id": "T1.31",
+   "name": "Aggregates and chart view kind",
+   "size": "M",
+   "plan": "T1",
+   "build": "3T",
+   "needs": [
+    "T1.13"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "T1.32",
+   "name": "Dashboards module",
+   "size": "M",
+   "plan": "T1",
+   "build": "3T",
+   "needs": [
+    "T1.31",
+    "M1.1"
+   ],
+   "soft": [
+    "M1.4"
+   ],
+   "seq": 8
+  },
+  {
+   "id": "T1.33",
+   "name": "Sheets as a dashboard source",
+   "size": "S",
+   "plan": "T1",
+   "build": "4T",
+   "needs": [
+    "T1.32",
+    "C1.20"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "T1.34",
+   "name": "Outside data: connections, saved queries",
+   "size": "M",
+   "plan": "T1",
+   "build": "3T",
+   "needs": [
+    "K1.9",
+    "K5.6",
+    "T1.32"
+   ],
+   "soft": [],
+   "seq": 10
+  },
+  {
+   "id": "T1.35",
+   "name": "Reviewed queries, shared results",
+   "size": "M",
+   "plan": "T1",
+   "build": "4T",
+   "needs": [
+    "T1.34"
+   ],
+   "soft": [],
+   "seq": 13
+  },
+  {
+   "id": "T1.36",
+   "name": "Fields on pages; page lists through views",
+   "size": "M",
+   "plan": "T1",
+   "build": "4T",
+   "needs": [
+    "T1.13"
+   ],
+   "soft": [
+    "C1.27"
+   ],
+   "seq": 13
+  },
+  {
+   "id": "T1.37",
+   "name": "Record comments slot",
+   "size": "S",
+   "plan": "T1",
+   "build": "3T",
+   "needs": [
+    "C1.3",
+    "W1.21"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "T1.38",
+   "name": "Automations on records",
+   "size": "M",
+   "plan": "T1",
+   "build": "4T",
+   "needs": [
+    "K2.3",
+    "T1.9"
+   ],
+   "soft": [],
+   "seq": 13
+  },
+  {
+   "id": "T1.39",
+   "name": "Contract: remove the second task engine (deletes W1.27a/b/d's old screens)",
+   "size": "M",
+   "plan": "T1",
+   "build": "5X",
+   "needs": [
+    "T1.9",
+    "T1.15",
+    "T1.16"
+   ],
+   "soft": [],
+   "seq": 14
+  },
+  {
+   "id": "T1.40",
+   "name": "Contract: drop `saved_views`",
+   "size": "S",
+   "plan": "T1",
+   "build": "5X",
+   "needs": [
+    "T1.39"
+   ],
+   "soft": [],
+   "seq": 15
+  },
+  {
+   "id": "T1.41",
+   "name": "Records and tasks proposable, with K3 history",
+   "size": "M",
+   "plan": "T1",
+   "build": "4T",
+   "needs": [
+    "K3.19",
+    "T1.11",
+    "C1.7",
+    "C1.9"
+   ],
+   "soft": [],
+   "seq": 13
+  },
+  {
+   "id": "A1.1",
+   "name": "Run record tables and mirror",
+   "size": "M",
+   "plan": "A1",
+   "build": "1G",
+   "needs": [],
+   "soft": [],
+   "seq": 1
+  },
+  {
+   "id": "A1.2",
+   "name": "Run service reads, part 1, and the guard",
+   "size": "M",
+   "plan": "A1",
+   "build": "1G",
+   "needs": [
+    "A1.1"
+   ],
+   "soft": [],
+   "seq": 3
+  },
+  {
+   "id": "A1.3",
+   "name": "Run operations for any agent",
+   "size": "L",
+   "plan": "A1",
+   "build": "1G",
+   "needs": [
+    "A1.1"
+   ],
+   "soft": [
+    "K2.2",
+    "K2.3",
+    "K3.3",
+    "K5.6"
+   ],
+   "seq": 2
+  },
+  {
+   "id": "A1.4",
+   "name": "Connected runners get runs",
+   "size": "M",
+   "plan": "A1",
+   "build": "1G",
+   "needs": [
+    "A1.3"
+   ],
+   "soft": [],
+   "seq": 8
+  },
+  {
+   "id": "A1.5",
+   "name": "Runs page and run view for every agent",
+   "size": "M",
+   "plan": "A1",
+   "build": "2G",
+   "needs": [
+    "A1.2",
+    "A1.3"
+   ],
+   "soft": [
+    "W1.18"
+   ],
+   "seq": 8
+  },
+  {
+   "id": "A1.6",
+   "name": "Run service reads, part 2, and neutral wording",
+   "size": "M",
+   "plan": "A1",
+   "build": "2G",
+   "needs": [
+    "A1.2"
+   ],
+   "soft": [],
+   "seq": 8
+  },
+  {
+   "id": "A1.7",
+   "name": "Requests record",
+   "size": "M",
+   "plan": "A1",
+   "build": "1G",
+   "needs": [
+    "A1.1"
+   ],
+   "soft": [],
+   "seq": 2
+  },
+  {
+   "id": "A1.8",
+   "name": "Request operations and answering by role",
+   "size": "L",
+   "plan": "A1",
+   "build": "2G",
+   "needs": [
+    "A1.7"
+   ],
+   "soft": [
+    "K1.13",
+    "K1.27",
+    "C1.7"
+   ],
+   "seq": 4
+  },
+  {
+   "id": "A1.9",
+   "name": "Run leases and recovery",
+   "size": "M",
+   "plan": "A1",
+   "build": "2G",
+   "needs": [],
+   "soft": [
+    "K5.3"
+   ],
+   "seq": 4
+  },
+  {
+   "id": "A1.10",
+   "name": "One run creation path",
+   "size": "M",
+   "plan": "A1",
+   "build": "2G",
+   "needs": [
+    "A1.2",
+    "A1.3"
+   ],
+   "soft": [],
+   "seq": 4
+  },
+  {
+   "id": "A1.11",
+   "name": "Hosts and enrolment",
+   "size": "L",
+   "plan": "A1",
+   "build": "1G",
+   "needs": [
+    "A1.1"
+   ],
+   "soft": [
+    "K1.7",
+    "K1.22",
+    "K1.23",
+    "M1.12"
+   ],
+   "seq": 3
+  },
+  {
+   "id": "A1.12",
+   "name": "Host command channel",
+   "size": "L",
+   "plan": "A1",
+   "build": "2G",
+   "needs": [
+    "A1.3",
+    "A1.11"
+   ],
+   "soft": [
+    "K1.24",
+    "A2.2"
+   ],
+   "seq": 4
+  },
+  {
+   "id": "A1.13",
+   "name": "One launch path",
+   "size": "M",
+   "plan": "A1",
+   "build": "3G",
+   "needs": [
+    "A1.4",
+    "A1.10",
+    "A1.12"
+   ],
+   "soft": [
+    "T1.22",
+    "A2.2",
+    "H1.25"
+   ],
+   "seq": 10
+  },
+  {
+   "id": "A1.14",
+   "name": "Built-in host, step (a)",
+   "size": "L",
+   "plan": "A1",
+   "build": "2G",
+   "needs": [
+    "A1.8",
+    "A1.9",
+    "A1.10",
+    "A1.12"
+   ],
+   "soft": [],
+   "seq": 5
+  },
+  {
+   "id": "A1.15",
+   "name": "Usage by window with confidence",
+   "size": "M",
+   "plan": "A1",
+   "build": "3G",
+   "needs": [
+    "A1.3"
+   ],
+   "soft": [],
+   "seq": 8
+  },
+  {
+   "id": "A1.16",
+   "name": "Built-in host, step (b)",
+   "size": "L",
+   "plan": "A1",
+   "build": "2G",
+   "needs": [
+    "A1.14"
+   ],
+   "soft": [],
+   "seq": 6
+  },
+  {
+   "id": "A1.17",
+   "name": "Built-in host, step (c)",
+   "size": "L",
+   "plan": "A1",
+   "build": "3G",
+   "needs": [
+    "A1.16",
+    "H1.13"
+   ],
+   "soft": [
+    "M1.14"
+   ],
+   "seq": 7
+  },
+  {
+   "id": "A1.18",
+   "name": "Code-host seam, part 1",
+   "size": "M",
+   "plan": "A1",
+   "build": "1G",
+   "needs": [],
+   "soft": [],
+   "seq": 2
+  },
+  {
+   "id": "A1.19",
+   "name": "Code-host seam, part 2",
+   "size": "L",
+   "plan": "A1",
+   "build": "3G",
+   "needs": [
+    "P0.11",
+    "T1.3",
+    "A1.3",
+    "A1.18"
+   ],
+   "soft": [],
+   "seq": 10
+  },
+  {
+   "id": "A1.20",
+   "name": "A2A binding",
+   "size": "L",
+   "plan": "A1",
+   "build": "3G",
+   "needs": [
+    "A1.8",
+    "A1.12"
+   ],
+   "soft": [],
+   "seq": 10
+  },
+  {
+   "id": "A1.21",
+   "name": "ACP in the built-in host",
+   "size": "L",
+   "plan": "A1",
+   "build": "3G",
+   "needs": [
+    "A1.16"
+   ],
+   "soft": [],
+   "seq": 10
+  },
+  {
+   "id": "A1.22",
+   "name": "Contract",
+   "size": "M",
+   "plan": "A1",
+   "build": "5X",
+   "needs": [
+    "A1.6",
+    "A1.8",
+    "A1.14",
+    "A1.17"
+   ],
+   "soft": [],
+   "seq": 14
+  },
+  {
+   "id": "A1.23",
+   "name": "Example host and conformance suite",
+   "size": "M",
+   "plan": "A1",
+   "build": "2G",
+   "needs": [
+    "A1.11",
+    "A1.12"
+   ],
+   "soft": [
+    "A2.19"
+   ],
+   "seq": 11
+  },
+  {
+   "id": "A2.1",
+   "name": "Connections, subscriptions and the delivery core",
+   "size": "M",
+   "plan": "A2",
+   "build": "2G",
+   "needs": [
+    "K3.2"
+   ],
+   "soft": [
+    "K1.6",
+    "K3.24"
+   ],
+   "seq": 4
+  },
+  {
+   "id": "A2.2",
+   "name": "Poll, long-poll and SSE stream from the log",
+   "size": "M",
+   "plan": "A2",
+   "build": "2G",
+   "needs": [
+    "A2.1"
+   ],
+   "soft": [
+    "K2.3",
+    "K5.9"
+   ],
+   "seq": 6
+  },
+  {
+   "id": "A2.3",
+   "name": "Standard Webhooks push with alias headers",
+   "size": "M",
+   "plan": "A2",
+   "build": "2G",
+   "needs": [
+    "A2.1"
+   ],
+   "soft": [
+    "H1.2"
+   ],
+   "seq": 5
+  },
+  {
+   "id": "A2.4",
+   "name": "Missing wake-ups (tasks, comments, requests, reminders)",
+   "size": "M",
+   "plan": "A2",
+   "build": "2G",
+   "needs": [
+    "P0.4",
+    "K3.2",
+    "A2.1"
+   ],
+   "soft": [
+    "C1.1"
+   ],
+   "seq": 5
+  },
+  {
+   "id": "A2.5",
+   "name": "Reply wake-ups on the log",
+   "size": "S",
+   "plan": "A2",
+   "build": "2G",
+   "needs": [
+    "A2.3",
+    "A2.4"
+   ],
+   "soft": [],
+   "seq": 6
+  },
+  {
+   "id": "A2.6",
+   "name": "Merge the three old systems behind the new one",
+   "size": "M",
+   "plan": "A2",
+   "build": "3G",
+   "needs": [
+    "A2.5"
+   ],
+   "soft": [],
+   "seq": 10
+  },
+  {
+   "id": "A2.7",
+   "name": "Contract suite and fixtures",
+   "size": "M",
+   "plan": "A2",
+   "build": "2G",
+   "needs": [
+    "A2.2",
+    "A2.3"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "A2.8",
+   "name": "Mentions by anyone, chain depth and turn allowance",
+   "size": "M",
+   "plan": "A2",
+   "build": "2G",
+   "needs": [
+    "A2.5"
+   ],
+   "soft": [
+    "K1.13"
+   ],
+   "seq": 7
+  },
+  {
+   "id": "A2.9",
+   "name": "Following and ambient mode",
+   "size": "M",
+   "plan": "A2",
+   "build": "4G",
+   "needs": [
+    "A2.4",
+    "A2.8"
+   ],
+   "soft": [],
+   "seq": 11
+  },
+  {
+   "id": "A2.10",
+   "name": "Status, pause, presence and unresponsive handling",
+   "size": "M",
+   "plan": "A2",
+   "build": "3G",
+   "needs": [
+    "A2.2",
+    "C2.15"
+   ],
+   "soft": [
+    "K5.10"
+   ],
+   "seq": 7
+  },
+  {
+   "id": "A2.11",
+   "name": "Self-scheduled follow-ups",
+   "size": "S",
+   "plan": "A2",
+   "build": "2G",
+   "needs": [
+    "A2.4"
+   ],
+   "soft": [
+    "K5.2"
+   ],
+   "seq": 5
+  },
+  {
+   "id": "A2.12",
+   "name": "Echoes, client ids, attachments, content marking",
+   "size": "S",
+   "plan": "A2",
+   "build": "3G",
+   "needs": [
+    "A2.2"
+   ],
+   "soft": [
+    "K5.12"
+   ],
+   "seq": 7
+  },
+  {
+   "id": "A2.13",
+   "name": "Ask an agent",
+   "size": "S",
+   "plan": "A2",
+   "build": "3G",
+   "needs": [
+    "A2.8"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "A2.14",
+   "name": "Budgets (rows in H1's spend limits)",
+   "size": "M",
+   "plan": "A2",
+   "build": "4H",
+   "needs": [
+    "K2.2",
+    "K5.6",
+    "H1.25",
+    "H1.27"
+   ],
+   "soft": [],
+   "seq": 12
+  },
+  {
+   "id": "A2.15",
+   "name": "Scope, requested-by and app consent",
+   "size": "M",
+   "plan": "A2",
+   "build": "4G",
+   "needs": [
+    "K1.25",
+    "K3.2",
+    "A2.1"
+   ],
+   "soft": [],
+   "seq": 11
+  },
+  {
+   "id": "A2.16",
+   "name": "Memory pages",
+   "size": "M",
+   "plan": "A2",
+   "build": "4G",
+   "needs": [],
+   "soft": [
+    "C1.27"
+   ],
+   "seq": 11
+  },
+  {
+   "id": "A2.17",
+   "name": "Agent Plugin and generic setup",
+   "size": "M",
+   "plan": "A2",
+   "build": "3G",
+   "needs": [
+    "A2.2",
+    "A2.3"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "A2.18",
+   "name": "Add-agent flow: pick, connect, add one you already have, reconnect",
+   "size": "M",
+   "plan": "A2",
+   "build": "3G",
+   "needs": [
+    "K1.4",
+    "K1.6",
+    "A2.17"
+   ],
+   "soft": [
+    "M1.11"
+   ],
+   "seq": 8
+  },
+  {
+   "id": "A2.19",
+   "name": "Offers, registration, actions and notices",
+   "size": "M",
+   "plan": "A2",
+   "build": "3G",
+   "needs": [
+    "A1.8",
+    "A1.11",
+    "A1.12"
+   ],
+   "soft": [
+    "K1.7"
+   ],
+   "seq": 8
+  },
+  {
+   "id": "A2.20",
+   "name": "Start one on a linked host",
+   "size": "M",
+   "plan": "A2",
+   "build": "3G",
+   "needs": [
+    "A2.18",
+    "A2.19"
+   ],
+   "soft": [
+    "M1.14"
+   ],
+   "seq": 10
+  },
+  {
+   "id": "A2.22",
+   "name": "Reference channel adapter",
+   "size": "M",
+   "plan": "A2",
+   "build": "3G",
+   "needs": [
+    "A2.7",
+    "A2.10",
+    "A2.12"
+   ],
+   "soft": [],
+   "seq": 9
+  },
+  {
+   "id": "A2.23",
+   "name": "Hermes plugin",
+   "size": "M",
+   "plan": "A2",
+   "build": "4G",
+   "needs": [
+    "A2.22"
+   ],
+   "soft": [],
+   "seq": 11
+  },
+  {
+   "id": "A2.24",
+   "name": "OpenClaw plugin",
+   "size": "M",
+   "plan": "A2",
+   "build": "4G",
+   "needs": [
+    "A2.22"
+   ],
+   "soft": [],
+   "seq": 11
+  },
+  {
+   "id": "A2.25",
+   "name": "Agent OS connector, bridged",
+   "size": "M",
+   "plan": "A2",
+   "build": "3G",
+   "needs": [
+    "A1.11",
+    "A1.12",
+    "A2.2"
+   ],
+   "soft": [],
+   "seq": 9
+  },
+  {
+   "id": "A2.26",
+   "name": "Bridged connector: runs, offers and actions",
+   "size": "M",
+   "plan": "A2",
+   "build": "4G",
+   "needs": [
+    "A1.12",
+    "A1.15",
+    "A2.19",
+    "A2.25"
+   ],
+   "soft": [],
+   "seq": 11
+  },
+  {
+   "id": "A2.27",
+   "name": "Team guard",
+   "size": "M",
+   "plan": "A2",
+   "build": "4G",
+   "needs": [
+    "K2.2",
+    "A1.8",
+    "M1.3"
+   ],
+   "soft": [],
+   "seq": 11
+  },
+  {
+   "id": "A2.28",
+   "name": "Contract the old paths",
+   "size": "S",
+   "plan": "A2",
+   "build": "5X",
+   "needs": [
+    "K1.31",
+    "A2.6"
+   ],
+   "soft": [],
+   "seq": 15
+  },
+  {
+   "id": "M1.1",
+   "name": "The registry",
+   "size": "M",
+   "plan": "M1",
+   "build": "1O",
+   "needs": [],
+   "soft": [],
+   "seq": 1
+  },
+  {
+   "id": "M1.2",
+   "name": "Module state in a table; gate follows roles and id routes",
+   "size": "M",
+   "plan": "M1",
+   "build": "1O",
+   "needs": [
+    "P0.7",
+    "M1.1"
+   ],
+   "soft": [],
+   "seq": 2
+  },
+  {
+   "id": "M1.3",
+   "name": "Server registrations without neighbours",
+   "size": "M",
+   "plan": "M1",
+   "build": "1O",
+   "needs": [
+    "M1.1"
+   ],
+   "soft": [],
+   "seq": 2
+  },
+  {
+   "id": "M1.3k",
+   "name": "Kinds, events, search from registrations",
+   "size": "M",
+   "plan": "M1",
+   "build": "4W",
+   "needs": [
+    "K3.2",
+    "K3.10",
+    "M1.1"
+   ],
+   "soft": [],
+   "seq": 12
+  },
+  {
+   "id": "M1.3o",
+   "name": "Operations and permissions from registrations",
+   "size": "S",
+   "plan": "M1",
+   "build": "5X",
+   "needs": [
+    "K1.9",
+    "K2.2",
+    "M1.1"
+   ],
+   "soft": [],
+   "seq": 14
+  },
+  {
+   "id": "M1.4",
+   "name": "Web registry (the one registration contract, with W1's shell fields)",
+   "size": "M",
+   "plan": "M1",
+   "build": "1O",
+   "needs": [
+    "M1.1"
+   ],
+   "soft": [],
+   "seq": 2
+  },
+  {
+   "id": "M1.5",
+   "name": "Web registry: embeds, live, tabs, composer; web scaffold",
+   "size": "M",
+   "plan": "M1",
+   "build": "3O",
+   "needs": [
+    "M1.4"
+   ],
+   "soft": [],
+   "seq": 9
+  },
+  {
+   "id": "M1.6",
+   "name": "Built modules: tables and operations",
+   "size": "M",
+   "plan": "M1",
+   "build": "1O",
+   "needs": [
+    "M1.2"
+   ],
+   "soft": [],
+   "seq": 3
+  },
+  {
+   "id": "M1.7",
+   "name": "Built modules in the app",
+   "size": "M",
+   "plan": "M1",
+   "build": "4W",
+   "needs": [
+    "M1.4",
+    "M1.6"
+   ],
+   "soft": [],
+   "seq": 12
+  },
+  {
+   "id": "M1.8",
+   "name": "Package format and export",
+   "size": "M",
+   "plan": "M1",
+   "build": "1O",
+   "needs": [
+    "M1.1"
+   ],
+   "soft": [],
+   "seq": 3
+  },
+  {
+   "id": "M1.9",
+   "name": "Package preview and install",
+   "size": "L",
+   "plan": "M1",
+   "build": "2O",
+   "needs": [
+    "M1.6",
+    "M1.8"
+   ],
+   "soft": [],
+   "seq": 4
+  },
+  {
+   "id": "M1.10",
+   "name": "Package upgrades",
+   "size": "M",
+   "plan": "M1",
+   "build": "4W",
+   "needs": [
+    "M1.9"
+   ],
+   "soft": [],
+   "seq": 12
+  },
+  {
+   "id": "M1.11",
+   "name": "Templates become packages; the directory; switch contract step",
+   "size": "M",
+   "plan": "M1",
+   "build": "2O",
+   "needs": [
+    "M1.2",
+    "M1.9"
+   ],
+   "soft": [],
+   "seq": 5
+  },
+  {
+   "id": "M1.12",
+   "name": "Connected modules: install, approve, revoke",
+   "size": "L",
+   "plan": "M1",
+   "build": "3O",
+   "needs": [
+    "K1.5",
+    "K1.22",
+    "M1.2",
+    "M1.6"
+   ],
+   "soft": [],
+   "seq": 6
+  },
+  {
+   "id": "M1.13",
+   "name": "Remote operations and events in",
+   "size": "M",
+   "plan": "M1",
+   "build": "3O",
+   "needs": [
+    "K2.3",
+    "K3.3",
+    "M1.12"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "M1.14",
+   "name": "Panel blocks (`PanelHost` through W1.25's `PanelBlocks`)",
+   "size": "M",
+   "plan": "M1",
+   "build": "3O",
+   "needs": [
+    "M1.4",
+    "M1.12"
+   ],
+   "soft": [
+    "W1.25"
+   ],
+   "seq": 8
+  },
+  {
+   "id": "M1.15",
+   "name": "Framed panels",
+   "size": "M",
+   "plan": "M1",
+   "build": "4W",
+   "needs": [
+    "M1.14"
+   ],
+   "soft": [],
+   "seq": 11
+  },
+  {
+   "id": "M1.16",
+   "name": "Agent-creation offers, panels and actions end to end",
+   "size": "S",
+   "plan": "M1",
+   "build": "4W",
+   "needs": [
+    "A2.20",
+    "M1.15"
+   ],
+   "soft": [],
+   "seq": 14
+  },
+  {
+   "id": "M1.17",
+   "name": "Shapes",
+   "size": "M",
+   "plan": "M1",
+   "build": "2O",
+   "needs": [
+    "M1.9",
+    "M1.11"
+   ],
+   "soft": [],
+   "seq": 6
+  },
+  {
+   "id": "M1.18",
+   "name": "File sources: the contract",
+   "size": "M",
+   "plan": "M1",
+   "build": "3O",
+   "needs": [
+    "M1.12",
+    "M1.13"
+   ],
+   "soft": [],
+   "seq": 9
+  },
+  {
+   "id": "C1.1",
+   "name": "Task comment parity now (beyond P0.4)",
+   "size": "S",
+   "plan": "C1",
+   "build": "1C",
+   "needs": [
+    "P0.4"
+   ],
+   "soft": [],
+   "seq": 3
+  },
+  {
+   "id": "C1.2",
+   "name": "One thread-creation function",
+   "size": "M",
+   "plan": "C1",
+   "build": "1C",
+   "needs": [],
+   "soft": [],
+   "seq": 1
+  },
+  {
+   "id": "C1.3",
+   "name": "Discussion foundation (R3 split first if not landed)",
+   "size": "L",
+   "plan": "C1",
+   "build": "1C",
+   "needs": [
+    "P0.0",
+    "C1.2"
+   ],
+   "soft": [
+    "K3.10"
+   ],
+   "seq": 2
+  },
+  {
+   "id": "C1.4",
+   "name": "Task comments become conversations",
+   "size": "L",
+   "plan": "C1",
+   "build": "2C",
+   "needs": [
+    "C1.1",
+    "C1.3"
+   ],
+   "soft": [],
+   "seq": 5
+  },
+  {
+   "id": "C1.5",
+   "name": "Page comments become conversations",
+   "size": "M",
+   "plan": "C1",
+   "build": "2C",
+   "needs": [
+    "C1.3"
+   ],
+   "soft": [],
+   "seq": 4
+  },
+  {
+   "id": "C1.6",
+   "name": "Retire the old comment tables",
+   "size": "S",
+   "plan": "C1",
+   "build": "5X",
+   "needs": [
+    "C1.4",
+    "C1.5",
+    "C1.7"
+   ],
+   "soft": [],
+   "seq": 14
+  },
+  {
+   "id": "C1.7",
+   "name": "Proposals record, pages moved onto it",
+   "size": "M",
+   "plan": "C1",
+   "build": "2C",
+   "needs": [
+    "C1.3"
+   ],
+   "soft": [
+    "A1.7"
+   ],
+   "seq": 7
+  },
+  {
+   "id": "C1.8",
+   "name": "Suggest is a role setting (routing only)",
+   "size": "M",
+   "plan": "C1",
+   "build": "3C",
+   "needs": [
+    "K1.12",
+    "K2.2",
+    "C1.7"
+   ],
+   "soft": [],
+   "seq": 8
+  },
+  {
+   "id": "C1.9",
+   "name": "Change sets and one-tap undo",
+   "size": "L",
+   "plan": "C1",
+   "build": "2C",
+   "needs": [
+    "C1.12"
+   ],
+   "soft": [],
+   "seq": 6
+  },
+  {
+   "id": "C1.10",
+   "name": "Recent-edit outlines in the editors",
+   "size": "M",
+   "plan": "C1",
+   "build": "4D",
+   "needs": [
+    "C1.9"
+   ],
+   "soft": [],
+   "seq": 11
+  },
+  {
+   "id": "C1.11",
+   "name": "Proposals for sheets, boards, records",
+   "size": "L",
+   "plan": "C1",
+   "build": "3C",
+   "needs": [
+    "C1.8",
+    "C1.9"
+   ],
+   "soft": [
+    "T1.41"
+   ],
+   "seq": 9
+  },
+  {
+   "id": "C1.12",
+   "name": "Sheet writes stop holding the project lock",
+   "size": "S",
+   "plan": "C1",
+   "build": "1C",
+   "needs": [],
+   "soft": [],
+   "seq": 1
+  },
+  {
+   "id": "C1.13",
+   "name": "Sheet history: snapshots and restore",
+   "size": "M",
+   "plan": "C1",
+   "build": "3C",
+   "needs": [
+    "C1.9",
+    "C1.12"
+   ],
+   "soft": [],
+   "seq": 8
+  },
+  {
+   "id": "C1.14",
+   "name": "Number formats and cell styles",
+   "size": "M",
+   "plan": "C1",
+   "build": "3C",
+   "needs": [
+    "C1.12"
+   ],
+   "soft": [],
+   "seq": 9
+  },
+  {
+   "id": "C1.15",
+   "name": "Validation and dropdowns",
+   "size": "M",
+   "plan": "C1",
+   "build": "4D",
+   "needs": [
+    "C1.12"
+   ],
+   "soft": [],
+   "seq": 11
+  },
+  {
+   "id": "C1.16",
+   "name": "Find and replace, sort, filter views",
+   "size": "L",
+   "plan": "C1",
+   "build": "3C",
+   "needs": [
+    "C1.12"
+   ],
+   "soft": [],
+   "seq": 10
+  },
+  {
+   "id": "C1.17",
+   "name": "Conditional formatting",
+   "size": "S",
+   "plan": "C1",
+   "build": "3C",
+   "needs": [
+    "C1.14"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "C1.18",
+   "name": "Charts",
+   "size": "M",
+   "plan": "C1",
+   "build": "4D",
+   "needs": [
+    "T1.31",
+    "C1.14"
+   ],
+   "soft": [],
+   "seq": 11
+  },
+  {
+   "id": "C1.19",
+   "name": "Cell comments in the grid",
+   "size": "S",
+   "plan": "C1",
+   "build": "1C",
+   "needs": [
+    "C1.3"
+   ],
+   "soft": [],
+   "seq": 3
+  },
+  {
+   "id": "C1.20",
+   "name": "A sheet as a thing and a source (`sheets::read_range`)",
+   "size": "M",
+   "plan": "C1",
+   "build": "3C",
+   "needs": [
+    "K3.11"
+   ],
+   "soft": [],
+   "seq": 10
+  },
+  {
+   "id": "C1.21",
+   "name": "Raise sheet limits after measuring",
+   "size": "S",
+   "plan": "C1",
+   "build": "1C",
+   "needs": [
+    "C1.12"
+   ],
+   "soft": [],
+   "seq": 3
+  },
+  {
+   "id": "C1.22",
+   "name": "Ask in a page comment",
+   "size": "S",
+   "plan": "C1",
+   "build": "2C",
+   "needs": [
+    "C1.5",
+    "C1.9"
+   ],
+   "soft": [],
+   "seq": 5
+  },
+  {
+   "id": "C1.23",
+   "name": "PDF export",
+   "size": "M",
+   "plan": "C1",
+   "build": "1C",
+   "needs": [],
+   "soft": [],
+   "seq": 1
+  },
+  {
+   "id": "C1.24",
+   "name": "Templates for pages and boards",
+   "size": "M",
+   "plan": "C1",
+   "build": "1C",
+   "needs": [],
+   "soft": [],
+   "seq": 1
+  },
+  {
+   "id": "C1.25",
+   "name": "A page from a message, thread or selection",
+   "size": "M",
+   "plan": "C1",
+   "build": "3C",
+   "needs": [],
+   "soft": [
+    "K3.12",
+    "C2.20"
+   ],
+   "seq": 10
+  },
+  {
+   "id": "C1.26",
+   "name": "A page tab on a channel (`conversation_tabs`)",
+   "size": "S",
+   "plan": "C1",
+   "build": "4C",
+   "needs": [
+    "C2.8"
+   ],
+   "soft": [
+    "K3.12"
+   ],
+   "seq": 7
+  },
+  {
+   "id": "C1.27",
+   "name": "Page sharing levels and public links",
+   "size": "M",
+   "plan": "C1",
+   "build": "4D",
+   "needs": [
+    "K1.32",
+    "C1.3"
+   ],
+   "soft": [],
+   "seq": 11
+  },
+  {
+   "id": "C1.28",
+   "name": "Documents in events and search",
+   "size": "M",
+   "plan": "C1",
+   "build": "4D",
+   "needs": [
+    "K3.5",
+    "K3.17"
+   ],
+   "soft": [],
+   "seq": 10
+  },
+  {
+   "id": "C1.29",
+   "name": "Board images through the storage seam",
+   "size": "M",
+   "plan": "C1",
+   "build": "4D",
+   "needs": [
+    "K5.11",
+    "C1.33"
+   ],
+   "soft": [],
+   "seq": 11
+  },
+  {
+   "id": "C1.30",
+   "name": "Live cursors, selections and follow",
+   "size": "M",
+   "plan": "C1",
+   "build": "4D",
+   "needs": [
+    "K5.9"
+   ],
+   "soft": [],
+   "seq": 11
+  },
+  {
+   "id": "C1.31",
+   "name": "Element comments and ask about a selection",
+   "size": "M",
+   "plan": "C1",
+   "build": "4D",
+   "needs": [
+    "C1.3"
+   ],
+   "soft": [],
+   "seq": 11
+  },
+  {
+   "id": "C1.32",
+   "name": "Stickies into tasks, a board into a page",
+   "size": "M",
+   "plan": "C1",
+   "build": "4D",
+   "needs": [],
+   "soft": [
+    "K3.12"
+   ],
+   "seq": 11
+  },
+  {
+   "id": "C1.33",
+   "name": "One attachment model and previews",
+   "size": "M",
+   "plan": "C1",
+   "build": "3C",
+   "needs": [
+    "C1.3"
+   ],
+   "soft": [
+    "K5.11"
+   ],
+   "seq": 9
+  },
+  {
+   "id": "C1.34",
+   "name": "History on every document via K3's seam; compaction",
+   "size": "M",
+   "plan": "C1",
+   "build": "4D",
+   "needs": [
+    "K3.19",
+    "C1.13",
+    "W1.21"
+   ],
+   "soft": [],
+   "seq": 11
+  },
+  {
+   "id": "C1.35",
+   "name": "Document-kind contract test",
+   "size": "S",
+   "plan": "C1",
+   "build": "4D",
+   "needs": [
+    "C1.11",
+    "C1.28",
+    "C1.34"
+   ],
+   "soft": [],
+   "seq": 14
+  },
+  {
+   "id": "C1.36",
+   "name": "Files from an outside source, by reference",
+   "size": "M",
+   "plan": "C1",
+   "build": "4D",
+   "needs": [
+    "M1.18",
+    "C1.33"
+   ],
+   "soft": [
+    "K5.14"
+   ],
+   "seq": 12
+  },
+  {
+   "id": "C1.37",
+   "name": "Move a page between spaces",
+   "size": "S/M",
+   "plan": "C1",
+   "build": "4D",
+   "needs": [
+    "K4.9",
+    "C1.3",
+    "C1.33"
+   ],
+   "soft": [],
+   "seq": 13
+  },
+  {
+   "id": "C2.1",
+   "name": "Close the listing gaps (beyond P0.0, P0.28)",
+   "size": "S",
+   "plan": "C2",
+   "build": "1C",
+   "needs": [
+    "P0.0",
+    "P0.28"
+   ],
+   "soft": [],
+   "seq": 1
+  },
+  {
+   "id": "C2.2",
+   "name": "One read path (from P0.5's `mark_seen`)",
+   "size": "S",
+   "plan": "C2",
+   "build": "1C",
+   "needs": [
+    "P0.5"
+   ],
+   "soft": [],
+   "seq": 1
+  },
+  {
+   "id": "C2.3",
+   "name": "Unread rules and counts",
+   "size": "M",
+   "plan": "C2",
+   "build": "1C",
+   "needs": [
+    "C2.2"
+   ],
+   "soft": [],
+   "seq": 2
+  },
+  {
+   "id": "C2.4",
+   "name": "Badge and needs-you on the server",
+   "size": "S",
+   "plan": "C2",
+   "build": "2C",
+   "needs": [
+    "C2.3"
+   ],
+   "soft": [],
+   "seq": 5
+  },
+  {
+   "id": "C2.5",
+   "name": "DMs and threads reach you; A2 kinds",
+   "size": "M",
+   "plan": "C2",
+   "build": "1C",
+   "needs": [],
+   "soft": [
+    "P0.4"
+   ],
+   "seq": 2
+  },
+  {
+   "id": "C2.6",
+   "name": "Private channels",
+   "size": "M",
+   "plan": "C2",
+   "build": "2C",
+   "needs": [
+    "C2.1"
+   ],
+   "soft": [],
+   "seq": 5
+  },
+  {
+   "id": "C2.7",
+   "name": "Join, leave, browse, topic",
+   "size": "M",
+   "plan": "C2",
+   "build": "2C",
+   "needs": [
+    "C2.6"
+   ],
+   "soft": [],
+   "seq": 6
+  },
+  {
+   "id": "C2.7b",
+   "name": "Remove membership fallback",
+   "size": "S",
+   "plan": "C2",
+   "build": "5X",
+   "needs": [
+    "C2.7"
+   ],
+   "soft": [],
+   "seq": 14
+  },
+  {
+   "id": "C2.8",
+   "name": "Channel details and tabs (part `channel.tabs`)",
+   "size": "M",
+   "plan": "C2",
+   "build": "4C",
+   "needs": [
+    "C2.7"
+   ],
+   "soft": [
+    "K3.12"
+   ],
+   "seq": 11
+  },
+  {
+   "id": "C2.9",
+   "name": "Sidebar sections",
+   "size": "S/M",
+   "plan": "C2",
+   "build": "2C",
+   "needs": [
+    "C2.3",
+    "W1.11",
+    "W1.13"
+   ],
+   "soft": [],
+   "seq": 4
+  },
+  {
+   "id": "C2.10",
+   "name": "Triage, faster",
+   "size": "S",
+   "plan": "C2",
+   "build": "2C",
+   "needs": [
+    "C2.4"
+   ],
+   "soft": [],
+   "seq": 5
+  },
+  {
+   "id": "C2.11",
+   "name": "Saved inbox views",
+   "size": "M",
+   "plan": "C2",
+   "build": "4C",
+   "needs": [
+    "C2.4"
+   ],
+   "soft": [],
+   "seq": 12
+  },
+  {
+   "id": "C2.12",
+   "name": "Request cards",
+   "size": "S",
+   "plan": "C2",
+   "build": "4C",
+   "needs": [
+    "A1.8",
+    "W1.24"
+   ],
+   "soft": [],
+   "seq": 13
+  },
+  {
+   "id": "C2.13",
+   "name": "Keyword alerts",
+   "size": "S",
+   "plan": "C2",
+   "build": "1C",
+   "needs": [
+    "C2.5"
+   ],
+   "soft": [],
+   "seq": 3
+  },
+  {
+   "id": "C2.14",
+   "name": "Schedules and away",
+   "size": "S",
+   "plan": "C2",
+   "build": "2C",
+   "needs": [
+    "C2.15"
+   ],
+   "soft": [],
+   "seq": 5
+  },
+  {
+   "id": "C2.15",
+   "name": "Status (account and nullable workspace; A2's columns)",
+   "size": "M",
+   "plan": "C2",
+   "build": "1C",
+   "needs": [],
+   "soft": [],
+   "seq": 1
+  },
+  {
+   "id": "C2.16",
+   "name": "Presence, typing, @here (K5's presence)",
+   "size": "M",
+   "plan": "C2",
+   "build": "4C",
+   "needs": [
+    "K5.10"
+   ],
+   "soft": [],
+   "seq": 12
+  },
+  {
+   "id": "C2.17",
+   "name": "Profiles and avatars",
+   "size": "M",
+   "plan": "C2",
+   "build": "3C",
+   "needs": [
+    "K1.5",
+    "K1.28"
+   ],
+   "soft": [],
+   "seq": 6
+  },
+  {
+   "id": "C2.18",
+   "name": "User group mentions",
+   "size": "S",
+   "plan": "C2",
+   "build": "3C",
+   "needs": [
+    "K1.27"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "C2.19",
+   "name": "Any emoji and custom emoji",
+   "size": "M",
+   "plan": "C2",
+   "build": "1C",
+   "needs": [],
+   "soft": [],
+   "seq": 1
+  },
+  {
+   "id": "C2.20",
+   "name": "Make from messages: registry and chip",
+   "size": "M",
+   "plan": "C2",
+   "build": "4C",
+   "needs": [],
+   "soft": [
+    "K3.12"
+   ],
+   "seq": 11
+  },
+  {
+   "id": "C2.21",
+   "name": "Make a page or a record",
+   "size": "S",
+   "plan": "C2",
+   "build": "4C",
+   "needs": [
+    "C1.25",
+    "C2.20"
+   ],
+   "soft": [
+    "T1.11"
+   ],
+   "seq": 7
+  },
+  {
+   "id": "C2.22",
+   "name": "Make a sheet row or a sticky",
+   "size": "S",
+   "plan": "C2",
+   "build": "4C",
+   "needs": [
+    "C2.20"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "C2.23",
+   "name": "Internal link cards",
+   "size": "S/M",
+   "plan": "C2",
+   "build": "3C",
+   "needs": [
+    "K3.10",
+    "W1.21"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "C2.24",
+   "name": "Slash commands from manifests",
+   "size": "S",
+   "plan": "C2",
+   "build": "2C",
+   "needs": [],
+   "soft": [
+    "M1.4",
+    "M1.5"
+   ],
+   "seq": 5
+  },
+  {
+   "id": "C2.25",
+   "name": "Search filters and grammar",
+   "size": "M",
+   "plan": "C2",
+   "build": "3C",
+   "needs": [],
+   "soft": [
+    "K3.17",
+    "K3.18"
+   ],
+   "seq": 9
+  },
+  {
+   "id": "C2.26",
+   "name": "Saved searches and jump-to",
+   "size": "S",
+   "plan": "C2",
+   "build": "3C",
+   "needs": [
+    "C2.25"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "C2.27",
+   "name": "Answers with sources",
+   "size": "M",
+   "plan": "C2",
+   "build": "4C",
+   "needs": [
+    "K3.17",
+    "K3.18",
+    "C2.25"
+   ],
+   "soft": [],
+   "seq": 12
+  },
+  {
+   "id": "C2.28",
+   "name": "Drafts across devices",
+   "size": "S/M",
+   "plan": "C2",
+   "build": "1C",
+   "needs": [],
+   "soft": [],
+   "seq": 1
+  },
+  {
+   "id": "C2.29",
+   "name": "Speed",
+   "size": "M",
+   "plan": "C2",
+   "build": "4C",
+   "needs": [],
+   "soft": [],
+   "seq": 12
+  },
+  {
+   "id": "C2.30",
+   "name": "Keyboard and the chat gate",
+   "size": "S",
+   "plan": "C2",
+   "build": "1C",
+   "needs": [],
+   "soft": [],
+   "seq": 1
+  },
+  {
+   "id": "C2.31",
+   "name": "Phone flows",
+   "size": "M",
+   "plan": "C2",
+   "build": "4C",
+   "needs": [
+    "W1.29"
+   ],
+   "soft": [],
+   "seq": 12
+  },
+  {
+   "id": "C2.32",
+   "name": "Share and capture",
+   "size": "S",
+   "plan": "C2",
+   "build": "2C",
+   "needs": [],
+   "soft": [
+    "K4.9"
+   ],
+   "seq": 5
+  },
+  {
+   "id": "C2.33",
+   "name": "Offline reading for chat (W1.31's store)",
+   "size": "S",
+   "plan": "C2",
+   "build": null,
+   "needs": [
+    "W1.31"
+   ],
+   "soft": [],
+   "seq": 99,
+   "parked": "Offline reading in C2: W1.31 does it; waits for the owner's agreement."
+  },
+  {
+   "id": "C2.34",
+   "name": "Push that acts",
+   "size": "S",
+   "plan": "C2",
+   "build": "2C",
+   "needs": [
+    "C2.3",
+    "C2.4"
+   ],
+   "soft": [],
+   "seq": 5
+  },
+  {
+   "id": "C2.35",
+   "name": "Agents in the room",
+   "size": "M",
+   "plan": "C2",
+   "build": "4C",
+   "needs": [
+    "A1.3",
+    "A1.5",
+    "A2.8"
+   ],
+   "soft": [],
+   "seq": 12
+  },
+  {
+   "id": "C2.36",
+   "name": "Threads view and outcome",
+   "size": "S/M",
+   "plan": "C2",
+   "build": "1C",
+   "needs": [
+    "C2.5"
+   ],
+   "soft": [],
+   "seq": 3
+  },
+  {
+   "id": "C2.37",
+   "name": "Guests",
+   "size": "S",
+   "plan": "C2",
+   "build": "3C",
+   "needs": [
+    "K1.27",
+    "C2.7"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "C2.38",
+   "name": "Shared channels (sketch)",
+   "size": "L",
+   "plan": "C2",
+   "build": null,
+   "needs": [
+    "K4.24",
+    "C2.37"
+   ],
+   "soft": [],
+   "seq": 99,
+   "parked": "Shared channels: a sketch only, later."
+  },
+  {
+   "id": "C2.39",
+   "name": "DMs belong to their participants",
+   "size": "L",
+   "plan": "C2",
+   "build": "3C",
+   "needs": [
+    "P0.0",
+    "K1.33",
+    "K4.12",
+    "K4.23",
+    "K4.24",
+    "C2.3"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "C2.40",
+   "name": "Chat standing alone",
+   "size": "M",
+   "plan": "C2",
+   "build": "3C",
+   "needs": [
+    "K1.29",
+    "K4.10",
+    "K4.26",
+    "M1.17",
+    "C2.9",
+    "W1.13"
+   ],
+   "soft": [
+    "K4.25"
+   ],
+   "seq": 7
+  },
+  {
+   "id": "W1.1",
+   "name": "Realtime context split",
+   "size": "S",
+   "plan": "W1",
+   "build": "1O",
+   "needs": [],
+   "soft": [],
+   "seq": 1
+  },
+  {
+   "id": "W1.2",
+   "name": "Every key from a factory",
+   "size": "M",
+   "plan": "W1",
+   "build": "2W",
+   "needs": [],
+   "soft": [],
+   "seq": 6
+  },
+  {
+   "id": "W1.3",
+   "name": "Per-event handlers, no project-wide refetch",
+   "size": "M",
+   "plan": "W1",
+   "build": "3W",
+   "needs": [
+    "W1.2"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "W1.4",
+   "name": "Op client and error sentences",
+   "size": "M",
+   "plan": "W1",
+   "build": "1O",
+   "needs": [
+    "K2.4"
+   ],
+   "soft": [],
+   "seq": 3
+  },
+  {
+   "id": "W1.5",
+   "name": "The thing store",
+   "size": "M",
+   "plan": "W1",
+   "build": "2W",
+   "needs": [
+    "K2.2",
+    "K3.10",
+    "W1.4"
+   ],
+   "soft": [],
+   "seq": 4
+  },
+  {
+   "id": "W1.6",
+   "name": "Live client on protocol 2",
+   "size": "L",
+   "plan": "W1",
+   "build": "3W",
+   "needs": [
+    "K3.3",
+    "K5.9",
+    "K5.10",
+    "W1.3",
+    "W1.5"
+   ],
+   "soft": [],
+   "seq": 10
+  },
+  {
+   "id": "W1.6b",
+   "name": "Remove the old dispatcher",
+   "size": "S",
+   "plan": "W1",
+   "build": "5X",
+   "needs": [
+    "K5.9",
+    "W1.6"
+   ],
+   "soft": [],
+   "seq": 14
+  },
+  {
+   "id": "W1.7",
+   "name": "Recorded event streams",
+   "size": "S",
+   "plan": "W1",
+   "build": "3W",
+   "needs": [
+    "W1.3"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "W1.9a",
+   "name": "Tasks onto the op client",
+   "size": "M",
+   "plan": "W1",
+   "build": "3W",
+   "needs": [
+    "K2.13",
+    "T1.4a",
+    "W1.5"
+   ],
+   "soft": [],
+   "seq": 10
+  },
+  {
+   "id": "W1.9b",
+   "name": "Conversations, inbox, later onto the op client",
+   "size": "M",
+   "plan": "W1",
+   "build": "4W",
+   "needs": [
+    "K2.7",
+    "K2.16",
+    "W1.5"
+   ],
+   "soft": [],
+   "seq": 13
+  },
+  {
+   "id": "W1.9c",
+   "name": "Pages, sheets, whiteboards onto the op client",
+   "size": "M",
+   "plan": "W1",
+   "build": "4W",
+   "needs": [
+    "K2.10",
+    "K2.11",
+    "K2.12",
+    "W1.5"
+   ],
+   "soft": [],
+   "seq": 13
+  },
+  {
+   "id": "W1.9d",
+   "name": "Collections, fields, views, forms onto the op client",
+   "size": "M",
+   "plan": "W1",
+   "build": "4W",
+   "needs": [
+    "K2.11",
+    "W1.5"
+   ],
+   "soft": [],
+   "seq": 13
+  },
+  {
+   "id": "W1.9e",
+   "name": "Runs, launch, agents onto the op client",
+   "size": "M",
+   "plan": "W1",
+   "build": "4W",
+   "needs": [
+    "K2.19",
+    "A1.3",
+    "W1.5"
+   ],
+   "soft": [],
+   "seq": 13
+  },
+  {
+   "id": "W1.9f",
+   "name": "Settings, team, spaces, onboarding onto the op client",
+   "size": "M",
+   "plan": "W1",
+   "build": "4W",
+   "needs": [
+    "K2.17",
+    "W1.5"
+   ],
+   "soft": [],
+   "seq": 13
+  },
+  {
+   "id": "W1.10",
+   "name": "Data router, same URLs",
+   "size": "M",
+   "plan": "W1",
+   "build": "1O",
+   "needs": [],
+   "soft": [],
+   "seq": 1
+  },
+  {
+   "id": "W1.11",
+   "name": "Persistent shell",
+   "size": "M",
+   "plan": "W1",
+   "build": "1O",
+   "needs": [
+    "W1.10"
+   ],
+   "soft": [],
+   "seq": 2
+  },
+  {
+   "id": "W1.12a",
+   "name": "Pages off AppShell: chat and inbox folders",
+   "size": "M",
+   "plan": "W1",
+   "build": "2W",
+   "needs": [
+    "W1.11"
+   ],
+   "soft": [],
+   "seq": 5
+  },
+  {
+   "id": "W1.12b",
+   "name": "Pages off AppShell: tasks, views, runs, pages folders",
+   "size": "M",
+   "plan": "W1",
+   "build": "3W",
+   "needs": [
+    "W1.11"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "W1.12c",
+   "name": "Pages off AppShell: the rest, delete workarounds",
+   "size": "M",
+   "plan": "W1",
+   "build": "3W",
+   "needs": [
+    "W1.12a",
+    "W1.12b"
+   ],
+   "soft": [],
+   "seq": 10
+  },
+  {
+   "id": "W1.13",
+   "name": "Shell drawn from module registrations",
+   "size": "L",
+   "plan": "W1",
+   "build": "1O",
+   "needs": [
+    "M1.4",
+    "W1.11"
+   ],
+   "soft": [],
+   "seq": 3
+  },
+  {
+   "id": "W1.14a",
+   "name": "Workspace in the address, switcher with unread marks, DM routes, redirects",
+   "size": "M",
+   "plan": "W1",
+   "build": "2W",
+   "needs": [
+    "K4.5",
+    "W1.10",
+    "W1.11"
+   ],
+   "soft": [],
+   "seq": 4
+  },
+  {
+   "id": "W1.14b",
+   "name": "Space routes and thing addresses",
+   "size": "M",
+   "plan": "W1",
+   "build": "3W",
+   "needs": [
+    "K3.10",
+    "K4.7",
+    "K4.18",
+    "W1.13",
+    "W1.14a"
+   ],
+   "soft": [],
+   "seq": 10
+  },
+  {
+   "id": "W1.14c",
+   "name": "Internal links through href helpers",
+   "size": "S",
+   "plan": "W1",
+   "build": "4W",
+   "needs": [
+    "W1.14b"
+   ],
+   "soft": [],
+   "seq": 11
+  },
+  {
+   "id": "W1.14d",
+   "name": "Delete legacy redirects",
+   "size": "S",
+   "plan": "W1",
+   "build": "5X",
+   "needs": [
+    "K4.19",
+    "W1.14c"
+   ],
+   "soft": [],
+   "seq": 14
+  },
+  {
+   "id": "W1.15",
+   "name": "Initial-load diet and budget policy",
+   "size": "S",
+   "plan": "W1",
+   "build": "1O",
+   "needs": [],
+   "soft": [],
+   "seq": 1
+  },
+  {
+   "id": "W1.17",
+   "name": "Pieces foundation (kit moves, SidePanel, Sheet, grid)",
+   "size": "M",
+   "plan": "W1",
+   "build": "1O",
+   "needs": [],
+   "soft": [],
+   "seq": 1
+  },
+  {
+   "id": "W1.18",
+   "name": "Table and list pieces; collections onto them",
+   "size": "L",
+   "plan": "W1",
+   "build": "2W",
+   "needs": [
+    "W1.5",
+    "W1.17"
+   ],
+   "soft": [],
+   "seq": 5
+  },
+  {
+   "id": "W1.19",
+   "name": "Board piece; collections onto it",
+   "size": "M",
+   "plan": "W1",
+   "build": "2W",
+   "needs": [
+    "W1.17"
+   ],
+   "soft": [],
+   "seq": 6
+  },
+  {
+   "id": "W1.20",
+   "name": "Calendar and gallery pieces (timeline is T1.14)",
+   "size": "M",
+   "plan": "W1",
+   "build": "3W",
+   "needs": [
+    "W1.17"
+   ],
+   "soft": [],
+   "seq": 10
+  },
+  {
+   "id": "W1.21",
+   "name": "Detail view, history panel, chips, discussion shell",
+   "size": "M",
+   "plan": "W1",
+   "build": "2W",
+   "needs": [
+    "K3.19",
+    "C1.3",
+    "W1.17"
+   ],
+   "soft": [],
+   "seq": 6
+  },
+  {
+   "id": "W1.22",
+   "name": "Form piece (filter builder is T1.13)",
+   "size": "M",
+   "plan": "W1",
+   "build": "4W",
+   "needs": [
+    "W1.17"
+   ],
+   "soft": [
+    "T1.13a"
+   ],
+   "seq": 13
+  },
+  {
+   "id": "W1.24",
+   "name": "Request card and run view",
+   "size": "M",
+   "plan": "W1",
+   "build": "3W",
+   "needs": [
+    "A1.5",
+    "A1.8"
+   ],
+   "soft": [],
+   "seq": 9
+  },
+  {
+   "id": "W1.25",
+   "name": "Panel block renderer",
+   "size": "M",
+   "plan": "W1",
+   "build": "4W",
+   "needs": [
+    "M1.12"
+   ],
+   "soft": [
+    "T1.31"
+   ],
+   "seq": 13
+  },
+  {
+   "id": "W1.26",
+   "name": "Embeds through registrations and pieces",
+   "size": "M",
+   "plan": "W1",
+   "build": "4W",
+   "needs": [
+    "M1.5",
+    "W1.13",
+    "W1.18"
+   ],
+   "soft": [
+    "C1.5"
+   ],
+   "seq": 13
+  },
+  {
+   "id": "W1.27c",
+   "name": "Task detail onto the detail view",
+   "size": "M",
+   "plan": "W1",
+   "build": "4W",
+   "needs": [
+    "T1.15",
+    "C1.3",
+    "W1.9a",
+    "W1.21"
+   ],
+   "soft": [],
+   "seq": 13
+  },
+  {
+   "id": "W1.28",
+   "name": "Other lists onto the list piece",
+   "size": "M",
+   "plan": "W1",
+   "build": "4W",
+   "needs": [
+    "W1.18",
+    "W1.20"
+   ],
+   "soft": [
+    "C2.11"
+   ],
+   "seq": 13
+  },
+  {
+   "id": "W1.29",
+   "name": "Phone navigation",
+   "size": "M",
+   "plan": "W1",
+   "build": "3W",
+   "needs": [
+    "W1.13",
+    "W1.21"
+   ],
+   "soft": [],
+   "seq": 10
+  },
+  {
+   "id": "W1.30",
+   "name": "Outbound queue for any queueable operation",
+   "size": "M",
+   "plan": "W1",
+   "build": "3W",
+   "needs": [
+    "K2.2",
+    "W1.4",
+    "W1.5"
+   ],
+   "soft": [],
+   "seq": 10
+  },
+  {
+   "id": "W1.31",
+   "name": "Offline reading (opt-in per person, workspace can switch off)",
+   "size": "M",
+   "plan": "W1",
+   "build": "4W",
+   "needs": [
+    "W1.5",
+    "W1.30"
+   ],
+   "soft": [],
+   "seq": 13
+  },
+  {
+   "id": "W1.32",
+   "name": "Install, push and capture",
+   "size": "S",
+   "plan": "W1",
+   "build": "2W",
+   "needs": [
+    "A1.7",
+    "W1.13",
+    "W1.14a"
+   ],
+   "soft": [],
+   "seq": 5
+  },
+  {
+   "id": "W1.33",
+   "name": "Speed in CI",
+   "size": "M",
+   "plan": "W1",
+   "build": "4W",
+   "needs": [
+    "W1.11",
+    "W1.18"
+   ],
+   "soft": [],
+   "seq": 13
+  },
+  {
+   "id": "W1.34",
+   "name": "Test diet",
+   "size": "M",
+   "plan": "W1",
+   "build": "4W",
+   "needs": [
+    "W1.12c",
+    "W1.13"
+   ],
+   "soft": [],
+   "seq": 13
+  },
+  {
+   "id": "W1.35",
+   "name": "The test-for-done harness",
+   "size": "M",
+   "plan": "W1",
+   "build": "1O",
+   "needs": [],
+   "soft": [],
+   "seq": 2
+  },
+  {
+   "id": "W1.36",
+   "name": "Accessibility gate",
+   "size": "S",
+   "plan": "W1",
+   "build": "1O",
+   "needs": [
+    "W1.13",
+    "W1.17"
+   ],
+   "soft": [],
+   "seq": 3
+  },
+  {
+   "id": "W1.37",
+   "name": "Role choices from the server, not account kind",
+   "size": "S",
+   "plan": "W1",
+   "build": "2W",
+   "needs": [
+    "K1.10"
+   ],
+   "soft": [],
+   "seq": 3
+  },
+  {
+   "id": "W1.38",
+   "name": "The web app as static files, config fetched at start",
+   "size": "S",
+   "plan": "W1",
+   "build": "2W",
+   "needs": [
+    "W1.10"
+   ],
+   "soft": [
+    "H1.41"
+   ],
+   "seq": 4
+  },
+  {
+   "id": "W1.39",
+   "name": "Shape walk test",
+   "size": "M",
+   "plan": "W1",
+   "build": "3W",
+   "needs": [
+    "M1.17",
+    "W1.13",
+    "W1.35"
+   ],
+   "soft": [
+    "K4.25",
+    "C2.40"
+   ],
+   "seq": 7
+  },
+  {
+   "id": "H1.1",
+   "name": "Limit scopes, no global bucket for good callers [owner now]",
+   "size": "M",
+   "plan": "H1",
+   "build": "2H",
+   "needs": [],
+   "soft": [
+    "K5.6"
+   ],
+   "seq": 5
+  },
+  {
+   "id": "H1.2",
+   "name": "One outbound guard [owner now]",
+   "size": "S",
+   "plan": "H1",
+   "build": "1H",
+   "needs": [],
+   "soft": [],
+   "seq": 1
+  },
+  {
+   "id": "H1.3",
+   "name": "Tenant table registry and guard",
+   "size": "S",
+   "plan": "H1",
+   "build": "1H",
+   "needs": [],
+   "soft": [],
+   "seq": 1
+  },
+  {
+   "id": "H1.4",
+   "name": "Workspace column: chat",
+   "size": "M",
+   "plan": "H1",
+   "build": "3R",
+   "needs": [
+    "H1.3"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "H1.5",
+   "name": "Workspace column: tasks and planning",
+   "size": "M",
+   "plan": "H1",
+   "build": "3R",
+   "needs": [
+    "H1.3"
+   ],
+   "soft": [
+    "T1.3"
+   ],
+   "seq": 7
+  },
+  {
+   "id": "H1.6",
+   "name": "Workspace column: documents and records",
+   "size": "M",
+   "plan": "H1",
+   "build": "3R",
+   "needs": [
+    "H1.3"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "H1.7",
+   "name": "Workspace column: agents, runs, code, MCP",
+   "size": "M",
+   "plan": "H1",
+   "build": "3R",
+   "needs": [
+    "H1.3"
+   ],
+   "soft": [
+    "K1.6",
+    "A1.1",
+    "A1.22",
+    "A2.1"
+   ],
+   "seq": 7
+  },
+  {
+   "id": "H1.8",
+   "name": "Export declarations",
+   "size": "M",
+   "plan": "H1",
+   "build": "1H",
+   "needs": [
+    "H1.3"
+   ],
+   "soft": [
+    "M1.3"
+   ],
+   "seq": 3
+  },
+  {
+   "id": "H1.9",
+   "name": "Workspace export [owner now]",
+   "size": "L",
+   "plan": "H1",
+   "build": "2H",
+   "needs": [
+    "K1.9",
+    "H1.8"
+   ],
+   "soft": [
+    "K2.3"
+   ],
+   "seq": 5
+  },
+  {
+   "id": "H1.10",
+   "name": "Workspace import",
+   "size": "L",
+   "plan": "H1",
+   "build": "3H",
+   "needs": [
+    "K1.29",
+    "H1.9",
+    "H1.24"
+   ],
+   "soft": [
+    "A2.18"
+   ],
+   "seq": 8
+  },
+  {
+   "id": "H1.11",
+   "name": "Lossless round-trip guard",
+   "size": "M",
+   "plan": "H1",
+   "build": "4H",
+   "needs": [
+    "H1.10"
+   ],
+   "soft": [],
+   "seq": 12
+  },
+  {
+   "id": "H1.12",
+   "name": "Container-ready configuration [owner now]",
+   "size": "M",
+   "plan": "H1",
+   "build": "1H",
+   "needs": [],
+   "soft": [],
+   "seq": 1
+  },
+  {
+   "id": "H1.13",
+   "name": "Image and compose",
+   "size": "M",
+   "plan": "H1",
+   "build": "2H",
+   "needs": [
+    "H1.12"
+   ],
+   "soft": [
+    "A1.17"
+   ],
+   "seq": 6
+  },
+  {
+   "id": "H1.14",
+   "name": "First run in the browser",
+   "size": "M",
+   "plan": "H1",
+   "build": "2H",
+   "needs": [
+    "K1.29",
+    "H1.24"
+   ],
+   "soft": [
+    "M1.17"
+   ],
+   "seq": 6
+  },
+  {
+   "id": "H1.15",
+   "name": "Startup under a lease, upgrades, releases",
+   "size": "S",
+   "plan": "H1",
+   "build": "4H",
+   "needs": [
+    "K5.2"
+   ],
+   "soft": [],
+   "seq": 14
+  },
+  {
+   "id": "H1.16",
+   "name": "Portable backup and restore [owner now]",
+   "size": "M",
+   "plan": "H1",
+   "build": "1H",
+   "needs": [
+    "H1.12"
+   ],
+   "soft": [],
+   "seq": 2
+  },
+  {
+   "id": "H1.17",
+   "name": "Server mail transport",
+   "size": "S",
+   "plan": "H1",
+   "build": "2H",
+   "needs": [],
+   "soft": [],
+   "seq": 5
+  },
+  {
+   "id": "H1.18",
+   "name": "Plain OpenID Connect sign-in",
+   "size": "M",
+   "plan": "H1",
+   "build": "3H",
+   "needs": [
+    "K1.30",
+    "K5.14"
+   ],
+   "soft": [],
+   "seq": 8
+  },
+  {
+   "id": "H1.19",
+   "name": "Self-host documentation and offline check",
+   "size": "M",
+   "plan": "H1",
+   "build": "3H",
+   "needs": [
+    "H1.13",
+    "H1.16"
+   ],
+   "soft": [],
+   "seq": 8
+  },
+  {
+   "id": "H1.20",
+   "name": "Tenancy scope",
+   "size": "M",
+   "plan": "H1",
+   "build": "1H",
+   "needs": [],
+   "soft": [
+    "K2.3"
+   ],
+   "seq": 1
+  },
+  {
+   "id": "H1.21",
+   "name": "Row security: framework and chat",
+   "size": "M",
+   "plan": "H1",
+   "build": "3R",
+   "needs": [
+    "H1.4",
+    "H1.20"
+   ],
+   "soft": [],
+   "seq": 8
+  },
+  {
+   "id": "H1.22",
+   "name": "Row security: every other table's policies, observe mode",
+   "size": "M",
+   "plan": "H1",
+   "build": "3R",
+   "needs": [
+    "H1.5",
+    "H1.6",
+    "H1.7",
+    "H1.21"
+   ],
+   "soft": [],
+   "seq": 10
+  },
+  {
+   "id": "H1.23",
+   "name": "Noisy-neighbour controls",
+   "size": "M",
+   "plan": "H1",
+   "build": "4H",
+   "needs": [
+    "K5.6",
+    "H1.1",
+    "H1.2"
+   ],
+   "soft": [],
+   "seq": 12
+  },
+  {
+   "id": "H1.24",
+   "name": "Workspace lifecycle",
+   "size": "M",
+   "plan": "H1",
+   "build": "2H",
+   "needs": [
+    "K4.5",
+    "H1.8"
+   ],
+   "soft": [],
+   "seq": 4
+  },
+  {
+   "id": "H1.25",
+   "name": "Metering core",
+   "size": "M",
+   "plan": "H1",
+   "build": "2H",
+   "needs": [
+    "K2.2",
+    "H1.24"
+   ],
+   "soft": [
+    "K5.6"
+   ],
+   "seq": 5
+  },
+  {
+   "id": "H1.26",
+   "name": "Meters wired in",
+   "size": "M",
+   "plan": "H1",
+   "build": "3H",
+   "needs": [
+    "H1.25"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "H1.27",
+   "name": "Spend limits per account, space, conversation",
+   "size": "S",
+   "plan": "H1",
+   "build": "4H",
+   "needs": [
+    "H1.25"
+   ],
+   "soft": [
+    "K5.6"
+   ],
+   "seq": 11
+  },
+  {
+   "id": "H1.28",
+   "name": "Open sign-up with verified email",
+   "size": "M",
+   "plan": "H1",
+   "build": "3H",
+   "needs": [
+    "K1.29",
+    "K4.5",
+    "H1.17",
+    "H1.24"
+   ],
+   "soft": [
+    "M1.17"
+   ],
+   "seq": 8
+  },
+  {
+   "id": "H1.29",
+   "name": "Abuse controls and review queue",
+   "size": "M",
+   "plan": "H1",
+   "build": "3H",
+   "needs": [
+    "H1.1",
+    "H1.28"
+   ],
+   "soft": [],
+   "seq": 9
+  },
+  {
+   "id": "H1.30",
+   "name": "Sign-in with common providers",
+   "size": "S",
+   "plan": "H1",
+   "build": "4H",
+   "needs": [
+    "H1.18"
+   ],
+   "soft": [],
+   "seq": 14
+  },
+  {
+   "id": "H1.31",
+   "name": "Company single sign-on",
+   "size": "M",
+   "plan": "H1",
+   "build": "3H",
+   "needs": [
+    "H1.18",
+    "H1.25"
+   ],
+   "soft": [],
+   "seq": 9
+  },
+  {
+   "id": "H1.32",
+   "name": "Directory sync",
+   "size": "M",
+   "plan": "H1",
+   "build": "4H",
+   "needs": [
+    "K1.27",
+    "H1.31"
+   ],
+   "soft": [],
+   "seq": 12
+  },
+  {
+   "id": "H1.33",
+   "name": "Billing seam and plan state",
+   "size": "M",
+   "plan": "H1",
+   "build": "3H",
+   "needs": [
+    "H1.25",
+    "H1.26"
+   ],
+   "soft": [],
+   "seq": 9
+  },
+  {
+   "id": "H1.34",
+   "name": "Checkout, trials, downgrades, dunning",
+   "size": "M",
+   "plan": "H1",
+   "build": "4H",
+   "needs": [
+    "H1.33"
+   ],
+   "soft": [],
+   "seq": 12
+  },
+  {
+   "id": "H1.35",
+   "name": "Staff console: core",
+   "size": "M",
+   "plan": "H1",
+   "build": "3H",
+   "needs": [
+    "H1.20",
+    "H1.24",
+    "H1.25"
+   ],
+   "soft": [],
+   "seq": 9
+  },
+  {
+   "id": "H1.36",
+   "name": "Staff console: review queue, metrics, support access",
+   "size": "M",
+   "plan": "H1",
+   "build": "4H",
+   "needs": [
+    "H1.29",
+    "H1.35"
+   ],
+   "soft": [],
+   "seq": 12
+  },
+  {
+   "id": "H1.37",
+   "name": "Hosted operations profile",
+   "size": "M",
+   "plan": "H1",
+   "build": "4H",
+   "needs": [
+    "K5.7",
+    "K5.12",
+    "H1.12",
+    "H1.17",
+    "H1.26"
+   ],
+   "soft": [],
+   "seq": 12
+  },
+  {
+   "id": "H1.38",
+   "name": "Hosted agent service seam",
+   "size": "S",
+   "plan": "H1",
+   "build": "4H",
+   "needs": [
+    "A1.3",
+    "A1.11",
+    "A1.13",
+    "H1.25"
+   ],
+   "soft": [],
+   "seq": 14
+  },
+  {
+   "id": "H1.39",
+   "name": "Release readiness (parts [owner now])",
+   "size": "M",
+   "plan": "H1",
+   "build": "3H",
+   "needs": [
+    "H1.19"
+   ],
+   "soft": [],
+   "seq": 9
+  },
+  {
+   "id": "H1.40",
+   "name": "Trust documents and publication (licence chosen at release, R25)",
+   "size": "M",
+   "plan": "H1",
+   "build": "5X",
+   "needs": [
+    "H1.39"
+   ],
+   "soft": [],
+   "seq": 100
+  },
+  {
+   "id": "H1.41",
+   "name": "Static web app and client config",
+   "size": "S",
+   "plan": "H1",
+   "build": "1H",
+   "needs": [
+    "H1.12"
+   ],
+   "soft": [],
+   "seq": 2
+  },
+  {
+   "id": "H1.42",
+   "name": "Idle-cost guard and hosting shapes",
+   "size": "M",
+   "plan": "H1",
+   "build": "2H",
+   "needs": [
+    "H1.24"
+   ],
+   "soft": [
+    "K5.7",
+    "K5.18"
+   ],
+   "seq": 5
+  },
+  {
+   "id": "H1.43",
+   "name": "A workspace's own bucket: screen and plan rule",
+   "size": "S",
+   "plan": "H1",
+   "build": "4H",
+   "needs": [
+    "K5.20",
+    "H1.26"
+   ],
+   "soft": [],
+   "seq": 12
+  },
+  {
+   "id": "H1.44",
+   "name": "Unscoped call-site ratchet",
+   "size": "S",
+   "plan": "H1",
+   "build": "1H",
+   "needs": [
+    "H1.20"
+   ],
+   "soft": [],
+   "seq": 2
+  },
+  {
+   "id": "H1.45",
+   "name": "Scope call sites, one module directory (1 of 18)",
+   "size": "S",
+   "plan": "H1",
+   "build": "1H",
+   "needs": [
+    "H1.44"
+   ],
+   "soft": [],
+   "seq": 3
+  },
+  {
+   "id": "H1.46",
+   "name": "Scope call sites, one module directory (2 of 18)",
+   "size": "S",
+   "plan": "H1",
+   "build": "1H",
+   "needs": [
+    "H1.44"
+   ],
+   "soft": [],
+   "seq": 3
+  },
+  {
+   "id": "H1.47",
+   "name": "Scope call sites, one module directory (3 of 18)",
+   "size": "S",
+   "plan": "H1",
+   "build": "2H",
+   "needs": [
+    "H1.44"
+   ],
+   "soft": [],
+   "seq": 4
+  },
+  {
+   "id": "H1.48",
+   "name": "Scope call sites, one module directory (4 of 18)",
+   "size": "S",
+   "plan": "H1",
+   "build": "2H",
+   "needs": [
+    "H1.44"
+   ],
+   "soft": [],
+   "seq": 4
+  },
+  {
+   "id": "H1.49",
+   "name": "Scope call sites, one module directory (5 of 18)",
+   "size": "S",
+   "plan": "H1",
+   "build": "2H",
+   "needs": [
+    "H1.44"
+   ],
+   "soft": [],
+   "seq": 5
+  },
+  {
+   "id": "H1.50",
+   "name": "Scope call sites, one module directory (6 of 18)",
+   "size": "S",
+   "plan": "H1",
+   "build": "2H",
+   "needs": [
+    "H1.44"
+   ],
+   "soft": [],
+   "seq": 5
+  },
+  {
+   "id": "H1.51",
+   "name": "Scope call sites, one module directory (7 of 18)",
+   "size": "S",
+   "plan": "H1",
+   "build": "2H",
+   "needs": [
+    "H1.44"
+   ],
+   "soft": [],
+   "seq": 6
+  },
+  {
+   "id": "H1.52",
+   "name": "Scope call sites, one module directory (8 of 18)",
+   "size": "S",
+   "plan": "H1",
+   "build": "2H",
+   "needs": [
+    "H1.44"
+   ],
+   "soft": [],
+   "seq": 6
+  },
+  {
+   "id": "H1.53",
+   "name": "Scope call sites, one module directory (9 of 18)",
+   "size": "S",
+   "plan": "H1",
+   "build": "3R",
+   "needs": [
+    "H1.44"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "H1.54",
+   "name": "Scope call sites, one module directory (10 of 18)",
+   "size": "S",
+   "plan": "H1",
+   "build": "3R",
+   "needs": [
+    "H1.44"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "H1.55",
+   "name": "Scope call sites, one module directory (11 of 18)",
+   "size": "S",
+   "plan": "H1",
+   "build": "3R",
+   "needs": [
+    "H1.44"
+   ],
+   "soft": [],
+   "seq": 7
+  },
+  {
+   "id": "H1.56",
+   "name": "Scope call sites, one module directory (12 of 18)",
+   "size": "S",
+   "plan": "H1",
+   "build": "3R",
+   "needs": [
+    "H1.44"
+   ],
+   "soft": [],
+   "seq": 8
+  },
+  {
+   "id": "H1.57",
+   "name": "Scope call sites, one module directory (13 of 18)",
+   "size": "S",
+   "plan": "H1",
+   "build": "3R",
+   "needs": [
+    "H1.44"
+   ],
+   "soft": [],
+   "seq": 8
+  },
+  {
+   "id": "H1.58",
+   "name": "Scope call sites, one module directory (14 of 18)",
+   "size": "S",
+   "plan": "H1",
+   "build": "3R",
+   "needs": [
+    "H1.44"
+   ],
+   "soft": [],
+   "seq": 8
+  },
+  {
+   "id": "H1.59",
+   "name": "Scope call sites, one module directory (15 of 18)",
+   "size": "S",
+   "plan": "H1",
+   "build": "3R",
+   "needs": [
+    "H1.44"
+   ],
+   "soft": [],
+   "seq": 9
+  },
+  {
+   "id": "H1.60",
+   "name": "Scope call sites, one module directory (16 of 18)",
+   "size": "S",
+   "plan": "H1",
+   "build": "3R",
+   "needs": [
+    "H1.44"
+   ],
+   "soft": [],
+   "seq": 9
+  },
+  {
+   "id": "H1.61",
+   "name": "Scope call sites, one module directory (17 of 18)",
+   "size": "S",
+   "plan": "H1",
+   "build": "3R",
+   "needs": [
+    "H1.44"
+   ],
+   "soft": [],
+   "seq": 10
+  },
+  {
+   "id": "H1.62",
+   "name": "Scope call sites, one module directory (18 of 18)",
+   "size": "S",
+   "plan": "H1",
+   "build": "3R",
+   "needs": [
+    "H1.44"
+   ],
+   "soft": [],
+   "seq": 10
+  },
+  {
+   "id": "H1.63",
+   "name": "Strict row rules",
+   "size": "S",
+   "plan": "H1",
+   "build": "4H",
+   "needs": [
+    "H1.22",
+    "H1.44",
+    "H1.45",
+    "H1.46",
+    "H1.47",
+    "H1.48",
+    "H1.49",
+    "H1.50",
+    "H1.51",
+    "H1.52",
+    "H1.53",
+    "H1.54",
+    "H1.55",
+    "H1.56",
+    "H1.57",
+    "H1.58",
+    "H1.59",
+    "H1.60",
+    "H1.61",
+    "H1.62"
+   ],
+   "soft": [],
+   "seq": 11
+  }
+ ],
+ "retired": [
+  {
+   "id": "A2.21",
+   "name": "Removed (R21: the builder is a host's offer)"
+  },
+  {
+   "id": "W1.16",
+   "name": "(moved to T1.13a: field registry)"
+  },
+  {
+   "id": "W1.23",
+   "name": "(moved to T1.31: chart renderer)"
+  },
+  {
+   "id": "W1.27a",
+   "name": "(merged into T1.15)"
+  },
+  {
+   "id": "W1.27b",
+   "name": "(merged into T1.16)"
+  },
+  {
+   "id": "W1.27d",
+   "name": "(merged into T1.15 and T1.39)"
+  }
+ ],
+ "milestones": [
+  {
+   "name": "Private things stay private",
+   "slices": [
+    "P0.0",
+    "P0.36",
+    "P0.37",
+    "P0.38"
+   ]
+  },
+  {
+   "name": "The app feels settled: right unread counts, DMs and thread replies always reach you, no reload between pages",
+   "slices": [
+    "C2.3",
+    "C2.5",
+    "W1.11"
+   ]
+  },
+  {
+   "name": "Your own agents edit directly, at any role, Admin and Owner included",
+   "slices": [
+    "K1.9",
+    "K1.10",
+    "K1.12",
+    "K1.13",
+    "K1.14a"
+   ]
+  },
+  {
+   "name": "A connected outside agent takes a run and finishes it through operations",
+   "slices": [
+    "A1.1",
+    "A1.3",
+    "A1.4"
+   ]
+  },
+  {
+   "name": "Workspace addresses /w/<slug> and a switcher with unread marks",
+   "slices": [
+    "K4.5",
+    "W1.14a"
+   ]
+  },
+  {
+   "name": "One agent in all your workspaces, with one DM with you everywhere",
+   "slices": [
+    "K1.5",
+    "K1.6",
+    "K1.22",
+    "K1.23",
+    "K1.33",
+    "K4.23",
+    "K4.24"
+   ]
+  },
+  {
+   "name": "Agents are woken for tasks, comments, requests and reminders, by webhook or stream, with a contract suite and an example host",
+   "slices": [
+    "A2.1",
+    "A2.2",
+    "A2.3",
+    "A2.4",
+    "A2.5",
+    "A2.7",
+    "A1.12",
+    "A1.23"
+   ]
+  },
+  {
+   "name": "Every hosted-cheap guard of R24 is on",
+   "slices": [
+    "K5.17",
+    "K5.18",
+    "K5.19",
+    "H1.41",
+    "H1.42"
+   ]
+  },
+  {
+   "name": "A workspace with only Chat on is whole",
+   "slices": [
+    "K4.10",
+    "K4.26",
+    "M1.17",
+    "C2.40",
+    "K4.25",
+    "W1.39",
+    "C2.39"
+   ]
+  },
+  {
+   "name": "Sensitive requests answered by whoever holds the permission, person or agent",
+   "slices": [
+    "K1.14b"
+   ]
+  },
+  {
+   "name": "Add an agent three ways: from the directory, by pasting a link into one you run, or on a host you have linked, with the host's steps drawn in the app",
+   "slices": [
+    "A2.18",
+    "A2.19",
+    "A2.20",
+    "A1.11",
+    "A1.12",
+    "M1.14"
+   ]
+  },
+  {
+   "name": "Open sign-up with a verified email, asking what the workspace is for",
+   "slices": [
+    "H1.28",
+    "H1.14"
+   ]
+  },
+  {
+   "name": "Live everywhere on one protocol with resume; phone navigation; offline writes queue",
+   "slices": [
+    "W1.6",
+    "W1.29",
+    "W1.30"
+   ]
+  },
+  {
+   "name": "A host's own framed panels, checked end to end",
+   "slices": [
+    "M1.15",
+    "M1.16"
+   ]
+  },
+  {
+   "name": "The hosted service can open: every cost metered, plans and checkout, budgets, files from outside sources",
+   "slices": [
+    "H1.26",
+    "H1.33",
+    "H1.34",
+    "H1.37",
+    "A2.14",
+    "C1.36"
+   ]
+  },
+  {
+   "name": "Records act like tasks; dashboards and outside data",
+   "slices": [
+    "T1.17",
+    "T1.18",
+    "T1.25",
+    "T1.32",
+    "T1.34",
+    "T1.41"
+   ]
+  },
+  {
+   "name": "Old paths gone; release with trust documents",
+   "slices": [
+    "K1.31",
+    "K2.22",
+    "T1.39",
+    "A1.22",
+    "H1.40"
+   ]
+  }
+ ],
+ "decisions": [
+  {
+   "question": "Is a role's `modules_off` a permission or only a view? (P0 Q1)",
+   "slices": [
+    "P0.7",
+    "K1.11"
+   ],
+   "slices_text": "P0.7, K1.11",
+   "recommendation": "A permission"
+  },
+  {
+   "question": "Is any database still from before migration 0010? (P0 Q2)",
+   "slices": [
+    "P0.25"
+   ],
+   "slices_text": "P0.25",
+   "recommendation": "If not, retire the five replays"
+  },
+  {
+   "question": "May research files go into the repository as they are? (P0 Q3)",
+   "slices": [
+    "P0.30"
+   ],
+   "slices_text": "P0.30",
+   "recommendation": "Only end state and plans now; research after stripping owner detail"
+  },
+  {
+   "question": "Keep `tools/ci/run.sh` here? (P0 Q4)",
+   "slices": [
+    "P0.33"
+   ],
+   "slices_text": "P0.33",
+   "recommendation": "Yes, hosts from an untracked file"
+  },
+  {
+   "question": "Build new task view features only on the collections side until T1 merges the engines? (P0 Q5)",
+   "slices": [
+    "P0.26",
+    "T1.1"
+   ],
+   "slices_text": "P0.26 rule 4, T1.1",
+   "recommendation": "Yes"
+  },
+  {
+   "question": "How long is the event log kept? (K3 Q1)",
+   "slices": [
+    "K3.2",
+    "K3.25"
+   ],
+   "slices_text": "K3.2, K3.25",
+   "recommendation": "Facts 400 days, signals 7, history for ever"
+  },
+  {
+   "question": "Does a retired workspace slug stay reserved? (K4 Q3)",
+   "slices": [
+    "K4.5"
+   ],
+   "slices_text": "K4.5",
+   "recommendation": "Yes"
+  },
+  {
+   "question": "PDF through a library in the server? (C1 Q4)",
+   "slices": [
+    "C1.23"
+   ],
+   "slices_text": "C1.23",
+   "recommendation": "Yes"
+  },
+  {
+   "question": "One envelope for old tool names too? (K2 Q2)",
+   "slices": [
+    "K2.3"
+   ],
+   "slices_text": "K2.3",
+   "recommendation": "No; old names keep old shapes"
+  },
+  {
+   "question": "PostgreSQL notifications rather than a broker? (K5 Q2)",
+   "slices": [
+    "K5.4"
+   ],
+   "slices_text": "K5.4",
+   "recommendation": "Yes"
+  },
+  {
+   "question": "The task key stays on the task core? (T1 Q6)",
+   "slices": [
+    "T1.3"
+   ],
+   "slices_text": "T1.3",
+   "recommendation": "Yes"
+  },
+  {
+   "question": "A separate \"comment\" permission? (C1 Q2)",
+   "slices": [
+    "K1.9",
+    "C1.3"
+   ],
+   "slices_text": "K1.9, C1.3",
+   "recommendation": "Yes, given wherever edit was"
+  },
+  {
+   "question": "DMs push by default; replying follows a thread? (C2 Q1, Q2)",
+   "slices": [
+    "C2.5"
+   ],
+   "slices_text": "C2.5",
+   "recommendation": "Yes; yes with push off"
+  },
+  {
+   "question": "May members read an open team space without joining? (K4 Q2)",
+   "slices": [
+    "K4.4",
+    "K4.7"
+   ],
+   "slices_text": "K4.4, K4.7",
+   "recommendation": "Yes, per space"
+  },
+  {
+   "question": "`#general` in new workspaces? (K4 Q5)",
+   "slices": [
+    "K4.10",
+    "C2.40"
+   ],
+   "slices_text": "K4.10, C2.40",
+   "recommendation": "Yes"
+  },
+  {
+   "question": "A built module in one space and also workspace-wide? (M1 Q1)",
+   "slices": [
+    "M1.6"
+   ],
+   "slices_text": "M1.6",
+   "recommendation": "Both, default the space"
+  },
+  {
+   "question": "Words in addresses (`tasks`, `runs`, `chat`, `s/<key>`)? (W1 Q3)",
+   "slices": [
+    "W1.14a"
+   ],
+   "slices_text": "W1.14a",
+   "recommendation": "Yes, with the workspace change"
+  },
+  {
+   "question": "Labels per project or per workspace? (T1 Q1)",
+   "slices": [
+    "T1.10"
+   ],
+   "slices_text": "T1.10",
+   "recommendation": "Per project, opt-in per collection"
+  },
+  {
+   "question": "Who answers built-in approvals by default? (A1 Q2)",
+   "slices": [
+    "A1.8"
+   ],
+   "slices_text": "A1.8",
+   "recommendation": "Owners and admins (`runs.approve`)"
+  },
+  {
+   "question": "Who may create workspaces on a self-hosted server? (H1 Q5)",
+   "slices": [
+    "H1.24"
+   ],
+   "slices_text": "H1.24",
+   "recommendation": "A server setting, operators only"
+  },
+  {
+   "question": "Two instances on the live server after K5.7? (K5 Q1)",
+   "slices": [
+    "K5.7"
+   ],
+   "slices_text": "K5.7",
+   "recommendation": "Yes, behind the existing proxy"
+  },
+  {
+   "question": "The built-in host's store in the same PostgreSQL? (A1 Q4)",
+   "slices": [
+    "A1.14"
+   ],
+   "slices_text": "A1.14",
+   "recommendation": "Yes, own schema"
+  },
+  {
+   "question": "The free plan's numbers (H1 Q1)",
+   "slices": [
+    "H1.25",
+    "H1.27",
+    "H1.33"
+   ],
+   "slices_text": "H1.25, H1.27, H1.33",
+   "recommendation": "H1 3.8's table"
+  },
+  {
+   "question": "May an agent's managers read its personal space? (K4 Q1)",
+   "slices": [
+    "K4.9"
+   ],
+   "slices_text": "K4.9",
+   "recommendation": "Yes, read-only"
+  },
+  {
+   "question": "Connected modules from any URL on hosted? (M1 Q2)",
+   "slices": [
+    "M1.12"
+   ],
+   "slices_text": "M1.12",
+   "recommendation": "Any URL, with preview and outbound check"
+  },
+  {
+   "question": "Bottom bar on the phone? (W1 Q4)",
+   "slices": [
+    "W1.29",
+    "C2.40"
+   ],
+   "slices_text": "W1.29, C2.40",
+   "recommendation": "Yes"
+  },
+  {
+   "question": "Default chain depth and turn allowance (A2 Q2)",
+   "slices": [
+    "A2.8"
+   ],
+   "slices_text": "A2.8",
+   "recommendation": "4 and 6"
+  },
+  {
+   "question": "Pasted URLs with a thing's id count as references? (K3 Q2)",
+   "slices": [
+    "K3.13"
+   ],
+   "slices_text": "K3.13",
+   "recommendation": "Yes in the same workspace"
+  },
+  {
+   "question": "Formula syntax; per-field permissions (T1 Q2, Q3)",
+   "slices": [
+    "T1.17",
+    "T1.19"
+   ],
+   "slices_text": "T1.17, T1.19",
+   "recommendation": "Yes; builder-only, no hidden fields"
+  },
+  {
+   "question": "Agents see others' activity in feeds? (K3 Q3)",
+   "slices": [
+    "K3.20"
+   ],
+   "slices_text": "K3.20",
+   "recommendation": "Yes, same access rule"
+  },
+  {
+   "question": "Staff impersonation? (H1 Q4)",
+   "slices": [
+    "H1.36"
+   ],
+   "slices_text": "H1.36",
+   "recommendation": "None; support through an invited guest"
+  },
+  {
+   "question": "Git history at release (H1 Q3)",
+   "slices": [
+    "H1.39",
+    "H1.40"
+   ],
+   "slices_text": "H1.39, H1.40",
+   "recommendation": "Scan, then rewrite infrastructure strings once"
+  },
+  {
+   "question": "Public page links on hosted, on by default? (C1 Q3)",
+   "slices": [
+    "C1.27"
+   ],
+   "slices_text": "C1.27",
+   "recommendation": "Off by default"
+  },
+  {
+   "question": "`@here` means active now? (C2 Q5)",
+   "slices": [
+    "C2.16"
+   ],
+   "slices_text": "C2.16",
+   "recommendation": "Yes"
+  },
+  {
+   "question": "Hosted infrastructure separate from the owner's server? (H1 Q7)",
+   "slices": [
+    "H1.37"
+   ],
+   "slices_text": "H1.37",
+   "recommendation": "Yes"
+  },
+  {
+   "question": "Alias window; public v1 retirement (K2 Q1, Q4)",
+   "slices": [
+    "K2.22",
+    "K2.23"
+   ],
+   "slices_text": "K2.22, K2.23",
+   "recommendation": "180 days and 30 days unused, counted from the one deploy (R51); public v1 retired 12 months after v2 is live"
+  },
+  {
+   "question": "Sunset for old agent delivery formats (A2 Q1)",
+   "slices": [
+    "A2.28"
+   ],
+   "slices_text": "A2.28",
+   "recommendation": "2027-06-01 or 30 days unused, the later"
+  },
+  {
+   "question": "Licence (R25, H1 Q2)",
+   "slices": [
+    "H1.40"
+   ],
+   "slices_text": "H1.40",
+   "recommendation": "Chosen at release"
+  }
+ ],
+ "hot_files": [
+  {
+   "files": [
+    "conversations.rs"
+   ],
+   "slices": [
+    "P0.0",
+    "P0.28"
+   ]
+  },
+  {
+   "files": [
+    "notifications.rs"
+   ],
+   "slices": [
+    "P0.5",
+    "P0.36"
+   ]
+  },
+  {
+   "files": [
+    "work_item_commands.rs",
+    "work_items.rs"
+   ],
+   "slices": [
+    "P0.4",
+    "P0.11",
+    "P0.12"
+   ]
+  },
+  {
+   "files": [
+    "AGENTS.md"
+   ],
+   "slices": [
+    "P0.26",
+    "P0.27",
+    "P0.28",
+    "P0.30"
+   ]
+  },
+  {
+   "files": [
+    "mcp.rs",
+    "auth/mod.rs"
+   ],
+   "slices": [
+    "K1.2",
+    "K1.5",
+    "K2.1"
+   ]
+  },
+  {
+   "files": [
+    "policy.rs"
+   ],
+   "slices": [
+    "K1.2",
+    "K1.3"
+   ]
+  },
+  {
+   "files": [
+    "lib.rs",
+    "main.rs"
+   ],
+   "slices": [
+    "K1.2",
+    "K5.1",
+    "H1.12"
+   ]
+  },
+  {
+   "files": [
+    "conversations.rs"
+   ],
+   "slices": [
+    "C1.2",
+    "P0.0"
+   ]
+  },
+  {
+   "files": [
+    "App.tsx"
+   ],
+   "slices": [
+    "W1.10"
+   ]
+  },
+  {
+   "files": [
+    "mcp.rs",
+    "api.rs",
+    "lib.rs"
+   ],
+   "slices": [
+    "K2.3",
+    "K4.2",
+    "K5.2"
+   ]
+  },
+  {
+   "files": [
+    "realtime.rs"
+   ],
+   "slices": [
+    "K3.3",
+    "K5.4"
+   ]
+  },
+  {
+   "files": [
+    "mcp/oauth.rs"
+   ],
+   "slices": [
+    "K1.4"
+   ]
+  },
+  {
+   "files": [
+    "conversations.rs",
+    "notifications.rs"
+   ],
+   "slices": [
+    "C1.3",
+    "C2.5"
+   ]
+  },
+  {
+   "files": [
+    "workspace_isolation.rs"
+   ],
+   "slices": [
+    "A1.3",
+    "K4.2"
+   ]
+  },
+  {
+   "files": [
+    "conversations.rs"
+   ],
+   "slices": [
+    "K4.4",
+    "A1.2"
+   ]
+  },
+  {
+   "files": [
+    "mcp.rs",
+    "external_agents.rs"
+   ],
+   "slices": [
+    "K1.6",
+    "A1.2",
+    "K4.10"
+   ]
+  },
+  {
+   "files": [
+    "work_items.rs"
+   ],
+   "slices": [
+    "K4.4",
+    "C1.1",
+    "T1.4a",
+    "A1.2"
+   ]
+  },
+  {
+   "files": [
+    "policy.rs",
+    "roles.rs"
+   ],
+   "slices": [
+    "K1.10",
+    "K1.13"
+   ]
+  },
+  {
+   "files": [
+    "modules/gate.rs",
+    "registry.json",
+    "App.tsx"
+   ],
+   "slices": [
+    "K4.10",
+    "W1.13"
+   ]
+  },
+  {
+   "files": [
+    "notifications.rs"
+   ],
+   "slices": [
+    "A1.8",
+    "K1.20",
+    "K4.13"
+   ]
+  },
+  {
+   "files": [
+    "conversations.rs",
+    "direct.rs"
+   ],
+   "slices": [
+    "K4.11",
+    "K4.12",
+    "K2.7",
+    "A1.8"
+   ]
+  },
+  {
+   "files": [
+    "realtime.rs",
+    "outbox.rs"
+   ],
+   "slices": [
+    "K4.13",
+    "K5.8",
+    "K4.7"
+   ]
+  },
+  {
+   "files": [
+    "roles.rs"
+   ],
+   "slices": [
+    "K1.12"
+   ]
+  },
+  {
+   "files": [
+    "App.tsx"
+   ],
+   "slices": [
+    "W1.14a"
+   ]
+  },
+  {
+   "files": [
+    "direct.rs",
+    "notifications.rs"
+   ],
+   "slices": [
+    "K4.15",
+    "K4.23",
+    "A2.4"
+   ]
+  },
+  {
+   "files": [
+    "external_agents.rs",
+    "replies.rs"
+   ],
+   "slices": [
+    "A2.3",
+    "A2.4"
+   ]
+  },
+  {
+   "files": [
+    "work_item_commands.rs"
+   ],
+   "slices": [
+    "K2.13",
+    "T1.4c"
+   ]
+  },
+  {
+   "files": [
+    "direct.rs",
+    "workspace_isolation.rs"
+   ],
+   "slices": [
+    "K4.24",
+    "K1.33",
+    "K5.12"
+   ]
+  },
+  {
+   "files": [
+    "conversations.rs",
+    "direct.rs"
+   ],
+   "slices": [
+    "C2.39",
+    "K3.13"
+   ]
+  },
+  {
+   "files": [
+    "policy.rs",
+    "roles.rs",
+    "mcp.rs"
+   ],
+   "slices": [
+    "K1.21",
+    "K1.14a",
+    "K1.14b",
+    "K1.15",
+    "K1.16",
+    "K1.17",
+    "K1.18",
+    "K1.19",
+    "K1.20"
+   ]
+  }
+ ]
+}
