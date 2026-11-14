@@ -38,7 +38,9 @@ CREATE TABLE requests (
     -- [{"id", "label", "style"?: "approve" | "deny"}]
     options JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (
         jsonb_typeof(options) = 'array' AND jsonb_array_length(options) <= 8
-        AND octet_length(options::text) <= 4000
+        -- Byte caps on JSON are twice what the code accepts: jsonb's text
+        -- adds spaces, and a character can take six bytes once escaped.
+        AND octet_length(options::text) <= 32768
     ),
     allow_text BOOLEAN NOT NULL DEFAULT false,
     answer_permission TEXT NOT NULL CHECK (answer_permission ~ '^[a-z]+\.[a-z_.]+$'),
@@ -101,7 +103,7 @@ AS $$
                     CASE approval.kind WHEN 'question' THEN 'A question' ELSE 'An approval' END),
            CASE WHEN jsonb_typeof(approval.options) = 'array'
                      AND jsonb_array_length(approval.options) <= 8
-                     AND octet_length(approval.options::text) <= 4000
+                     AND octet_length(approval.options::text) <= 32768
                 THEN approval.options ELSE '[]'::jsonb END,
            approval.kind = 'question',
            CASE approval.kind WHEN 'question' THEN 'requests.answer' ELSE 'runs.approve' END,
