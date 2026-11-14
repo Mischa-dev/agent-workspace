@@ -31,7 +31,8 @@ async fn hits(setup: &Setup, browser: &Browser, text: &str) -> Vec<Value> {
 }
 
 fn found(hits: &[Value], kind: &str, id: &str) -> bool {
-    hits.iter().any(|hit| hit["kind"] == kind && hit["id"] == id)
+    hits.iter()
+        .any(|hit| hit["kind"] == kind && hit["id"] == id)
 }
 
 #[tokio::test]
@@ -138,17 +139,30 @@ async fn board_and_sheet_words_are_found_only_by_those_who_can_open_them() {
     );
 
     // A workspace member sees the workspace's board, not WORK's sheet.
-    assert!(found(&hits(&setup, &bea, "quokka").await, "whiteboard", &board));
+    assert!(found(
+        &hits(&setup, &bea, "quokka").await,
+        "whiteboard",
+        &board
+    ));
     assert!(hits(&setup, &bea, "wombat").await.is_empty());
     // Someone outside the workspace sees neither.
     assert!(hits(&setup, &ola, "quokka").await.is_empty());
     assert!(hits(&setup, &ola, "wombat").await.is_empty());
 
     // With Sheets off, the sheet leaves search; the board stays.
-    let (status, body) = switch(&setup, &setup.browser, json!({"switches": {"sheets": false}})).await;
+    let (status, body) = switch(
+        &setup,
+        &setup.browser,
+        json!({"switches": {"sheets": false}}),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(
-        !found(&hits(&setup, &setup.browser, "wombat").await, "sheet", &sheet),
+        !found(
+            &hits(&setup, &setup.browser, "wombat").await,
+            "sheet",
+            &sheet
+        ),
         "the sheet is found with Sheets off"
     );
     let by_tool = call("search", json!({"query": "wombat"})).await;

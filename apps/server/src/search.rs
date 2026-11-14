@@ -55,6 +55,11 @@ impl SearchKind {
         Self::Files,
     ];
 
+    /// The module whose manifest lists this kind.
+    pub fn module(self) -> Option<&'static str> {
+        crate::modules::manifest::of_search(self.name()).map(|manifest| manifest.id.as_str())
+    }
+
     /// The kind's name, as search results and module manifests use it.
     pub fn name(self) -> &'static str {
         match self {
@@ -162,12 +167,15 @@ pub async fn search(
     // Workspace boards (in no project) come from the workspaces of the
     // projects searched, where Whiteboards is on for the viewer; the board's
     // own rule (`whiteboard_visible_to`) decides each one.
-    let board_workspaces = if kinds.contains(&SearchKind::Whiteboards) {
+    let board_module = SearchKind::Whiteboards.module();
+    let board_workspaces = if let (true, Some(board_module)) =
+        (kinds.contains(&SearchKind::Whiteboards), board_module)
+    {
         let mut connection = pool.acquire().await?;
         let on = crate::modules::state::by_workspace(&mut connection, viewer)
             .await?
             .into_iter()
-            .filter(|(_, set)| set.contains("whiteboards"))
+            .filter(|(_, set)| set.contains(board_module))
             .map(|(workspace, _)| workspace)
             .collect::<Vec<_>>();
         sqlx::query_scalar::<_, Uuid>(
@@ -188,15 +196,19 @@ pub async fn search(
             SearchKind::Tasks => task_projects.clone(),
             SearchKind::Pages | SearchKind::Decisions => modules.with(projects, "pages"),
             SearchKind::Records => modules.with(projects, "collections"),
-            SearchKind::Whiteboards => modules.with(projects, "whiteboards"),
-            SearchKind::Sheets => modules.with(projects, "sheets"),
+            // Kinds since K3.6 follow the module whose manifest lists them.
+            SearchKind::Whiteboards | SearchKind::Sheets => kind
+                .module()
+                .map(|module| modules.with(projects, module))
+                .unwrap_or_default(),
             // Files hang off messages and tasks.
             SearchKind::Files => modules.keep(projects, |set, direct| {
                 set.allows_conversations_in(if direct { "direct" } else { "standard" })
                     || (!direct && set.contains("tasks"))
             }),
         };
-        if projects.is_empty() && !(*kind == SearchKind::Whiteboards && !board_workspaces.is_empty())
+        if projects.is_empty()
+            && !(*kind == SearchKind::Whiteboards && !board_workspaces.is_empty())
         {
             continue;
         }
