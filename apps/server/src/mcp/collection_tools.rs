@@ -246,6 +246,11 @@ pub(super) async fn collection_list(
         if module_off(state, principal).await? {
             return Ok(ToolResult::module_off("collection_list", "Collections"));
         }
+        {
+            let mut connection = state.pool.acquire().await?;
+            collections::tasks::ensure(&mut connection, principal.project_id, principal.actor_id)
+                .await?;
+        }
         let listed = collections::list(
             &state.pool,
             principal.project_id,
@@ -356,7 +361,7 @@ pub(super) async fn collection_describe(
                 Err(refusal) => return Ok(refusal),
             };
         let definitions =
-            collections::field_definitions(&mut *connection, project_id, collection.id, true)
+            collections::field_definitions(&mut connection, project_id, collection.id, true)
                 .await?;
         let saved = views::list(&mut *connection, project_id, collection.id).await?;
         let definition = definition::describe(
@@ -665,6 +670,14 @@ pub(super) async fn collection_write(
                 let locked = collections::lock(&mut transaction, project_id, found.id)
                     .await?
                     .ok_or(AppError::NotFound("collection"))?;
+                // The Tasks collection's settings and fields are the tasks';
+                // only its views change here.
+                if locked.is_tasks()
+                    && (!change.is_empty()
+                        || arguments.fields.as_ref().is_some_and(|fields| !fields.is_empty()))
+                {
+                    return Ok(ToolResult::conflict(collections::tasks::READ_ONLY_MESSAGE));
+                }
                 if arguments
                     .expected_version
                     .is_some_and(|expected| expected != locked.version)
@@ -697,7 +710,7 @@ pub(super) async fn collection_write(
                                     changed.join(", ")
                                 ),
                             });
-                            collection
+                            *collection
                         }
                         ChangeOutcome::Unchanged(collection) => collection,
                         ChangeOutcome::NotFound => {
@@ -947,7 +960,7 @@ pub(super) async fn record_query(
                 Err(refusal) => return Ok(refusal),
             };
         let definitions =
-            collections::field_definitions(&mut *connection, project_id, collection.id, true)
+            collections::field_definitions(&mut connection, project_id, collection.id, true)
                 .await?;
         let writer = Writer {
             actor_id: principal.actor_id,
@@ -1031,8 +1044,16 @@ pub(super) async fn record_query(
         let mut spec = Spec::from_config(&config, &definitions, principal.actor_id)
             .searching(words.clone(), &definitions);
         spec.archived = archived;
+        spec.tasks = collection.is_tasks();
         if let Some(named) = &named {
-            let ids = records::ids_of(&mut *connection, project_id, collection.id, named).await?;
+            let ids = records::ids_of(
+                &mut *connection,
+                project_id,
+                collection.id,
+                named,
+                spec.tasks,
+            )
+            .await?;
             let mut found = Vec::with_capacity(ids.len());
             for (reference, id) in named.iter().zip(ids) {
                 match id {
@@ -1070,7 +1091,14 @@ pub(super) async fn record_query(
         let groups =
             query::group_counts(&mut *connection, project_id, collection.id, &spec).await?;
         let ids = page.rows.iter().map(|(id, _)| *id).collect::<Vec<_>>();
-        let found = records::by_ids(&mut *connection, project_id, collection.id, &ids).await?;
+        let found = records::by_ids(
+            &mut *connection,
+            project_id,
+            collection.id,
+            &ids,
+            spec.tasks,
+        )
+        .await?;
         let references = work_item_fields::references(
             &mut connection,
             project_id,
@@ -1284,6 +1312,9 @@ pub(super) async fn record_write(
         else {
             return Ok(ToolResult::not_found("That collection"));
         };
+        if collection.is_tasks() {
+            return Ok(ToolResult::conflict(collections::tasks::READ_ONLY_MESSAGE));
+        }
         if collection.archived {
             return Ok(ToolResult::conflict(format!(
                 "\"{}\" is archived. Restore it with collection_write (archived: false) first.",
@@ -1291,7 +1322,7 @@ pub(super) async fn record_write(
             )));
         }
         let definitions =
-            collections::field_definitions(&mut *transaction, project_id, collection.id, true)
+            collections::field_definitions(&mut transaction, project_id, collection.id, true)
                 .await?;
         let writer = Writer {
             actor_id: principal.actor_id,

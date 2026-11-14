@@ -252,3 +252,25 @@ records.
   collection, found by ID, `#number` or title, and sorts by its title. Both
   records list the link as things. A definition exports the target as
   `record:<collection name>`.
+
+## Tasks as the built-in collection (AWD-110)
+
+- Each project has one collection with `builtin = 'tasks'` (migration
+  `20261113094000_builtin_tasks_collection.sql`), made the first time
+  someone in the project lists its collections, with an "All tasks" table.
+- Its records are the project's tasks, read through `collections::query`
+  like any records: `collections::tasks::source()` is a subquery over
+  `work_items` with a record's columns, the built-in fields (Status,
+  Assignee, Priority, Start date, Due date, Labels, under fixed IDs) folded
+  into the field values next to the task fields. Grouping by Status or
+  Priority reads the statuses and the fixed priorities
+  (`tasks::group_sql`), since their options aren't in `field_definitions`.
+- Only its views are stored and change here. Writes to its records, fields,
+  name or archive state are refused (409 `builtin_collection`, or a
+  conflict from the tools) with where to change tasks instead. It isn't
+  copied into workspace templates, can't be a record link's target, and
+  has no record events.
+- In the app it's listed first; a record opens its task's page, and the
+  board, gallery and calendar views are the collection ones.
+- Tasks still live in `work_items`, with their own screens and tools.
+  Moving their storage into records is left for later.

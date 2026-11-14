@@ -265,8 +265,19 @@ pub(crate) async fn checked_form(
             "The collection is archived. Restore it to take answers.".to_owned(),
         ));
     }
-    let definitions =
-        crate::collections::field_definitions(pool, project_id, collection_id, false).await?;
+    if collection.is_tasks() {
+        return Ok(Err(
+            "Tasks is the built-in collection of this project's tasks, so a form can't add to it. A bug report link without a collection makes tasks."
+                .to_owned(),
+        ));
+    }
+    let definitions = crate::collections::field_definitions(
+        &mut *pool.acquire().await?,
+        project_id,
+        collection_id,
+        false,
+    )
+    .await?;
     Ok(collection_forms::check(form, &definitions))
 }
 
@@ -1088,9 +1099,13 @@ async fn receive_answer(
         Ok(answer) => answer,
         Err(message) => return Ok(refused(StatusCode::UNPROCESSABLE_ENTITY, &message)),
     };
-    let definitions =
-        crate::collections::field_definitions(&state.pool, link.project_id, collection_id, false)
-            .await?;
+    let definitions = crate::collections::field_definitions(
+        &mut *state.pool.acquire().await?,
+        link.project_id,
+        collection_id,
+        false,
+    )
+    .await?;
     let (title, values) =
         match collection_forms::record_from_answer(&collection, &form, &definitions, &answer) {
             Ok(record) => record,
@@ -1191,9 +1206,13 @@ async fn read_form(state: &AppState, token: &str) -> Result<Response, AppError> 
             "This form isn't taking answers.",
         ));
     }
-    let definitions =
-        crate::collections::field_definitions(&state.pool, project_id, collection_id, false)
-            .await?;
+    let definitions = crate::collections::field_definitions(
+        &mut *state.pool.acquire().await?,
+        project_id,
+        collection_id,
+        false,
+    )
+    .await?;
     let mut response = Json(collection_forms::public(
         &name,
         &collection,
