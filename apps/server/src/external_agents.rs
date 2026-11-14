@@ -1284,23 +1284,41 @@ fn authorize_management(
     access: &AccessRow,
     project_id: Uuid,
 ) -> Result<(), AppError> {
-    if principal.actor_kind != "human"
-        || !access.organization_enabled
+    let kind = crate::api::parse_actor_kind(&principal.actor_kind)?;
+    if management_allowed(kind, true, access, project_id) {
+        Ok(())
+    } else {
+        Err(AppError::NotFound("project"))
+    }
+}
+
+/// The one rule for managing an agent, and so for acting as it (P0.6): an
+/// active manager who is an enabled owner or admin of the agent's workspace
+/// and whose role in the agent's home project allows ExternalAgentManage.
+/// "agents.manage" is people-only in the catalogue, so the policy refuses
+/// other kinds of account; no kind check is written here.
+fn management_allowed(
+    manager_kind: ActorKind,
+    manager_active: bool,
+    access: &AccessRow,
+    project_id: Uuid,
+) -> bool {
+    if !access.organization_enabled
         || !matches!(access.organization_role.as_str(), "owner" | "admin")
     {
-        return Err(AppError::NotFound("project"));
+        return false;
     }
     let role = match RoleGrant::stored(
         &access.project_role,
         access.project_role_permissions.as_deref(),
     ) {
         Ok(role) if role.role() != MembershipRole::Worker => role,
-        _ => return Err(AppError::NotFound("project")),
+        _ => return false,
     };
     let subject = Subject::new(
-        principal.actor_id,
-        ActorKind::Human,
-        true,
+        access_manager(access),
+        manager_kind,
+        manager_active,
         Some(Membership::project(
             project_id,
             role,
@@ -1308,14 +1326,108 @@ fn authorize_management(
         )),
         None,
     );
-    match authorize(
-        &subject,
-        Action::ExternalAgentManage,
-        Resource::Project(ProjectScope::project(project_id)),
-    ) {
-        Decision::Allow => Ok(()),
-        Decision::Deny(_) => Err(AppError::NotFound("project")),
+    matches!(
+        authorize(
+            &subject,
+            Action::ExternalAgentManage,
+            Resource::Project(ProjectScope::project(project_id)),
+        ),
+        Decision::Allow
+    )
+}
+
+/// The policy reads the subject's id only for self-checks, which
+/// ExternalAgentManage has none of.
+fn access_manager(_access: &AccessRow) -> Uuid {
+    Uuid::nil()
+}
+
+/// An agent connection someone may manage, with where it lives.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ManagedAgent {
+    pub(crate) connection_id: Uuid,
+    pub(crate) project_id: Uuid,
+    pub(crate) agent_actor_id: Uuid,
+    pub(crate) organization_id: Uuid,
+}
+
+/// Whether `manager` may manage agents whose home is `project_id`: the web
+/// rule ([`management_allowed`]) read from the rows, for callers that don't
+/// hold the project's access row already.
+pub(crate) async fn may_manage_in(
+    connection: &mut sqlx::PgConnection,
+    manager: Uuid,
+    project_id: Uuid,
+) -> Result<bool, AppError> {
+    let Some(access) = sqlx::query_as::<_, AccessRow>(access_sql(false))
+        .bind(manager)
+        .bind(project_id)
+        .fetch_optional(&mut *connection)
+        .await?
+    else {
+        return Ok(false);
+    };
+    if access.project_archived {
+        return Ok(false);
     }
+    let Some((kind, status)) =
+        sqlx::query_as::<_, (String, String)>("SELECT kind, status FROM actors WHERE id = $1")
+            .bind(manager)
+            .fetch_optional(&mut *connection)
+            .await?
+    else {
+        return Ok(false);
+    };
+    let Ok(kind) = crate::api::parse_actor_kind(&kind) else {
+        return Ok(false);
+    };
+    Ok(management_allowed(
+        kind,
+        status == "active",
+        &access,
+        project_id,
+    ))
+}
+
+/// The active agent connection `connection_id` and its home project, when
+/// `manager` may manage it. The consent screen, the connected-apps list and
+/// revocation, and the web all decide by this rule; K1 later replaces its
+/// body with the access module.
+pub(crate) async fn may_manage(
+    connection: &mut sqlx::PgConnection,
+    manager: Uuid,
+    connection_id: Uuid,
+) -> Result<Option<ManagedAgent>, AppError> {
+    let Some((project_id, agent_actor_id, organization_id)) =
+        sqlx::query_as::<_, (Uuid, Uuid, Uuid)>(
+            r#"
+            SELECT connection.project_id, connection.actor_id, project.organization_id
+            FROM external_agent_connections connection
+            JOIN projects project ON project.id = connection.project_id
+            JOIN actors agent ON agent.id = connection.actor_id AND agent.status = 'active'
+            JOIN project_memberships agent_membership
+              ON agent_membership.project_id = connection.project_id
+             AND agent_membership.actor_id = connection.actor_id
+             AND agent_membership.enabled
+            WHERE connection.id = $1 AND connection.status = 'active'
+              AND project.archived_at IS NULL
+            "#,
+        )
+        .bind(connection_id)
+        .fetch_optional(&mut *connection)
+        .await?
+    else {
+        return Ok(None);
+    };
+    if !may_manage_in(connection, manager, project_id).await? {
+        return Ok(None);
+    }
+    Ok(Some(ManagedAgent {
+        connection_id,
+        project_id,
+        agent_actor_id,
+        organization_id,
+    }))
 }
 
 async fn lock_project(

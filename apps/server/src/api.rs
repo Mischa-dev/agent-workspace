@@ -2517,7 +2517,7 @@ impl RunActor for crate::runs::RunCaller {
     }
 }
 
-fn parse_actor_kind(value: &str) -> Result<ActorKind, AppError> {
+pub(crate) fn parse_actor_kind(value: &str) -> Result<ActorKind, AppError> {
     match value {
         "human" => Ok(ActorKind::Human),
         "external_agent" => Ok(ActorKind::ExternalAgent),
