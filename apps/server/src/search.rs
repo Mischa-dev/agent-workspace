@@ -386,6 +386,8 @@ const RECORDS_SQL: &str = r#"
       AND record.project_id = ANY($2)
       AND record.archived_at IS NULL
       AND collection.archived_at IS NULL
+      -- A task's record (the built-in Tasks collection) is found as the task.
+      AND collection.builtin IS NULL
       AND $4::uuid IS NULL
       AND ($5::uuid IS NULL OR record.updated_by_actor_id = $5)
       AND ($6::timestamptz IS NULL OR record.updated_at >= $6)
