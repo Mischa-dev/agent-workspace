@@ -92,7 +92,10 @@ fn one_line(value: &str, max: usize) -> String {
     trimmed.chars().take(max).collect()
 }
 
-/// Redact and cap every string in a JSON value.
+/// Redact and cap every string in a JSON value. An entry whose key names a
+/// secret (`password`, `apiKey`, `Authorization`, ...) loses its whole value,
+/// at any depth and inside arrays, since the value alone needn't look like
+/// one.
 pub fn redact_value(value: Value) -> Value {
     match value {
         Value::String(text) => {
@@ -102,10 +105,12 @@ pub fn redact_value(value: Value) -> Value {
         Value::Object(map) => Value::Object(
             map.into_iter()
                 .map(|(key, value)| {
-                    (
-                        key.chars().take(MAX_REF_CHARS).collect(),
-                        redact_value(value),
-                    )
+                    let value = if run_log::secret_field(&key) && !value.is_null() {
+                        run_log::redacted()
+                    } else {
+                        redact_value(value)
+                    };
+                    (key.chars().take(MAX_REF_CHARS).collect(), value)
                 })
                 .collect(),
         ),
@@ -327,6 +332,38 @@ mod tests {
             !text.contains("ghp_abcdefghijklmnopqrstuvwxyz0123"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn values_under_secret_names_go_whatever_they_look_like() {
+        let value = super::redact_value(json!({
+            "password": "correct-horse-battery-staple",
+            "config": {"client_secret": "plain words here",
+                       "headers": [{"Authorization": "Basic Zm9vOmJhcg=="},
+                                   {"X-Api-Key": "abc123"}]},
+            "Set-Cookie": ["session=1"],
+            "usage": {"inputTokens": 1200, "maxTokens": 4000},
+            "tokenizer": "kept",
+            "token": null
+        }));
+        let text = value.to_string();
+        for secret in [
+            "correct-horse-battery-staple",
+            "plain words here",
+            "Zm9vOmJhcg==",
+            "abc123",
+            "session=1",
+        ] {
+            assert!(!text.contains(secret), "{secret}: {text}");
+        }
+        assert_eq!(value["password"], "[redacted]");
+        assert_eq!(
+            value["usage"],
+            json!({"inputTokens": 1200, "maxTokens": 4000}),
+            "counts named for tokens are kept"
+        );
+        assert_eq!(value["tokenizer"], "kept");
+        assert_eq!(value["token"], serde_json::Value::Null);
     }
 
     #[test]

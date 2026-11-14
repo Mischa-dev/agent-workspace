@@ -222,12 +222,20 @@ async fn an_agent_reports_its_own_run_and_nobody_else_can() {
 
     // The largest valid ask (8 options, 40-character ids, 200-character
     // labels of three-byte characters) is stored, not rolled back.
+    // Settings carry a password under its name: it is not stored.
     let asking = call(
         "run_open",
-        json!({"title": "Big ask", "cause": {"kind": "manual"}}),
+        json!({"title": "Big ask", "cause": {"kind": "manual"},
+               "settings": {"password": "correct-horse-battery-staple",
+                            "endpoints": [{"apiKey": "plain-words-key"}]}}),
     )
     .await;
     assert_eq!(asking["outcome"], "ok", "{asking}");
+    let asking_run = asking["value"]["run"]["runId"]
+        .as_str()
+        .expect("run")
+        .parse::<Uuid>()
+        .expect("run UUID");
     let options = (0..8)
         .map(|index| json!({"id": format!("{index}{}", "i".repeat(39)), "label": "漢".repeat(200)}))
         .collect::<Vec<_>>();
@@ -241,6 +249,33 @@ async fn an_agent_reports_its_own_run_and_nobody_else_can() {
     .await;
     assert_eq!(asked["outcome"], "ok", "{asked}");
     assert_eq!(asked["value"]["state"], "waiting", "{asked}");
+
+    // So does a step's payload, at any depth.
+    let step = call(
+        "run_activity",
+        json!({"runId": asking_run.to_string(), "activities": [{"id": "login", "kind": "tool_call",
+            "payload": {"toolCallRef": "t9", "input": {"user": "dana",
+                        "password": "correct-horse-battery-staple",
+                        "headers": [{"Authorization": "Basic plain-words-key"}]}}}]}),
+    )
+    .await;
+    assert_eq!(step["outcome"], "ok", "{step}");
+    let stored = sqlx::query_scalar::<_, String>(
+        r#"
+        SELECT run.settings::text || (SELECT string_agg(activity.payload::text, ' ')
+                                      FROM run_activities activity WHERE activity.run_id = run.id)
+        FROM runs run WHERE run.id = $1
+        "#,
+    )
+    .bind(asking_run)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("stored");
+    assert!(
+        !stored.contains("correct-horse-battery-staple") && !stored.contains("plain-words-key"),
+        "{stored}"
+    );
+    assert!(stored.contains("dana"), "the rest is kept: {stored}");
     let events = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM outbox_events WHERE event_type = 'run.changed' AND resource_id = $1",
     )
