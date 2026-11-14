@@ -94,6 +94,12 @@
   line-clamp: 2;
 }
 
+/* A thing's short handle before its title, such as a task's key. */
+.aw-piece__key {
+  font: var(--t-code);
+  color: var(--content-fg-muted);
+}
+
 /* Markdown (why a decision was made) reads in full. */
 .aw-piece__summary--full {
   display: block;

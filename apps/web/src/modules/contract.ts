@@ -64,6 +64,8 @@ export type Thing = {
   kind: string
   module: string
   title: string
+  /** A short handle drawn before the title, such as a task's key ("AWD-12"). */
+  key?: string
   status?: string
   owner?: { id: string; name: string }
   projectId?: string

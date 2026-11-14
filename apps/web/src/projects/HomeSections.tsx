@@ -7,10 +7,12 @@ import { isExternalHref, useInbox, useUpdateInbox, type InboxNotification } from
 import { getOnboarding, onboardingKeys, progressText, STEP_TITLES, updateOnboarding } from '../onboarding/api'
 import { listUsage, usageKeys, type AccountUsage, type UsageWindow } from '../settings/account/usageApi'
 import { formatCountdown, useNow, windowTone } from '../settings/account/usageModel'
-import { Button, ButtonLink, ErrorState, ListSkeleton, Row, RowList, Section, StatusChip, countLabel, formatFullDate, formatRelative } from '../ui'
+import { Button, ButtonLink, ErrorState, ListSkeleton, Row, RowList, Section, countLabel, formatFullDate, formatRelative } from '../ui'
 import { getMyWork, viewKeys, type MyWork } from '../views/api'
-import { priorityLabel } from '../work-items/constants'
-import type { WorkItemPriority } from '../work-items/types'
+import type { Piece, Thing, ThingDecl } from '../modules/contract'
+import { PieceView } from '../modules/pieces/Pieces'
+import { things as runThings } from '../../../../modules/runs.json'
+import { things as taskThings } from '../../../../modules/tasks.json'
 import { getHome, homeKeys, type WorkingRun } from './homeApi'
 import type { QuietSections } from './homeQuiet'
 import { MoreLink } from './MoreLink'
@@ -135,10 +137,28 @@ const RUN_STATES: Record<string, string> = {
   recovering: 'Recovering',
 }
 
-function runMeta(run: WorkingRun) {
-  return [run.projectName, run.harnessName, run.model, run.mine ? 'started by you' : `started by ${run.startedBy}`]
-    .filter(Boolean)
-    .join(' · ')
+const RUN_THING = runThings.find((thing) => thing.kind === 'run') as ThingDecl
+const RUN_ROWS: Piece = { type: 'list', thing: 'run', fields: ['state', 'project', 'harness', 'model', 'startedAt', 'startedBy'] }
+
+/** A run working now, as the list piece draws it: its task (or thread), where, on what, and since when. */
+function runThing(run: WorkingRun, keys: boolean): Thing {
+  return {
+    id: run.id,
+    kind: 'run',
+    module: 'runs',
+    key: keys ? run.task?.key : undefined,
+    title: run.task ? run.task.title : run.threadName,
+    projectId: run.projectId,
+    href: run.href,
+    fields: {
+      state: [run.approvalsWaiting > 0 ? 'Needs approval' : (RUN_STATES[run.state] ?? 'Working')],
+      project: run.projectName,
+      harness: run.harnessName,
+      model: run.model,
+      startedAt: run.startedAt ?? run.createdAt,
+      startedBy: run.mine ? 'you' : run.startedBy,
+    },
+  }
 }
 
 const waitingText = (queued: number) => `${countLabel(queued, 'run')} waiting for a slot`
@@ -161,35 +181,7 @@ export function WorkingNow() {
         </p>
       ) : (
         <>
-          <RowList label="Working now">
-            {home.data.working.map((run) => (
-              <Row
-                actions={
-                  <StatusChip tone={run.state === 'blocked' || run.approvalsWaiting > 0 ? 'warning' : 'agent'}>
-                    {run.approvalsWaiting > 0 ? 'Needs approval' : (RUN_STATES[run.state] ?? 'Working')}
-                  </StatusChip>
-                }
-                className="aw-row--link"
-                key={run.id}
-                meta={
-                  <span title={formatFullDate(run.startedAt ?? run.createdAt)}>
-                    {runMeta(run)} · {formatRelative(run.startedAt ?? run.createdAt)}
-                  </span>
-                }
-                title={
-                  <Link className="aw-row__link" to={run.href}>
-                    {run.task ? (
-                      <>
-                        {keys ? <span className="aw-home__key">{run.task.key}</span> : null} {run.task.title}
-                      </>
-                    ) : (
-                      run.threadName
-                    )}
-                  </Link>
-                }
-              />
-            ))}
-          </RowList>
+          <PieceView decl={RUN_THING} label="Working now" piece={RUN_ROWS} things={home.data.working.map((run) => runThing(run, keys))} />
           {home.data.workingTotal > home.data.working.length || home.data.queuedLaunches > 0 ? (
             <p className="aw-home__more">
               {[
@@ -281,9 +273,26 @@ function moreTasks(work: MyWork, shown: number, unique: number) {
   return 'More in My work.'
 }
 
-function taskMeta(item: MyWork['assigned']['items'][number]) {
-  const priority = item.priority && item.priority !== 'no_priority' ? priorityLabel(item.priority as WorkItemPriority) : null
-  return [item.projectName, item.statusName, priority].filter(Boolean).join(' · ')
+const TASK_THING = taskThings.find((thing) => thing.kind === 'task') as ThingDecl
+const TASK_ROWS: Piece = { type: 'list', thing: 'task', fields: ['flags', 'project', 'status', 'priority'] }
+
+/** One of your tasks, as the list piece draws it: what needs attention first, then where it is and how urgent. */
+function taskThing(item: MyWork['assigned']['items'][number], keys: boolean): Thing {
+  return {
+    id: item.id,
+    kind: 'task',
+    module: 'tasks',
+    key: keys ? item.key : undefined,
+    title: item.title,
+    status: item.statusName,
+    projectId: item.projectId,
+    href: `/projects/${encodeURIComponent(item.projectId)}/work-items/${encodeURIComponent(item.id)}`,
+    fields: {
+      flags: item.overdue ? ['Overdue'] : item.blocked ? ['Blocked'] : [],
+      project: item.projectName,
+      priority: item.priority && item.priority !== 'no_priority' ? item.priority : null,
+    },
+  }
 }
 
 export function YourTasks() {
@@ -304,21 +313,7 @@ export function YourTasks() {
         <p className="aw-home__quiet">Nothing is assigned to you. Tasks assigned to you or claimed by you show here.</p>
       ) : (
         <>
-          <RowList label="Your tasks">
-            {unique.slice(0, MAX_ROWS).map((item) => (
-              <Row
-                actions={item.overdue ? <StatusChip tone="danger">Overdue</StatusChip> : item.blocked ? <StatusChip tone="warning">Blocked</StatusChip> : null}
-                className="aw-row--link"
-                key={item.id}
-                meta={taskMeta(item)}
-                title={
-                  <Link className="aw-row__link" to={`/projects/${encodeURIComponent(item.projectId)}/work-items/${encodeURIComponent(item.id)}`}>
-                    {keys ? <span className="aw-home__key">{item.key}</span> : null} {item.title}
-                  </Link>
-                }
-              />
-            ))}
-          </RowList>
+          <PieceView decl={TASK_THING} label="Your tasks" piece={TASK_ROWS} things={unique.slice(0, MAX_ROWS).map((item) => taskThing(item, keys))} />
           {more ? <p className="aw-home__more">{more}</p> : null}
         </>
       )}
