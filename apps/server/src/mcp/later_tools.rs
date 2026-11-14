@@ -16,6 +16,7 @@ use super::{
     },
     talk::{message_actor, message_content},
     tasks::resolve_task,
+    writes::{HeldCreate, REQUEST_ID_MESSAGE, parse_request_id},
 };
 use crate::{
     AppState,
@@ -460,7 +461,7 @@ pub(super) async fn later_update(
     result.unwrap_or_else(|error| ToolResult::from_error(error, "later_update"))
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct MessageScheduleArguments {
     pub conversation_id: String,
@@ -472,12 +473,18 @@ pub(super) struct MessageScheduleArguments {
     /// When to send it, as RFC 3339, up to a year ahead. It sends as you,
     /// checked then as if you sent it then.
     pub send_at: String,
+    /// Makes scheduling safe to retry: send the same one again and you get
+    /// the message the first call scheduled, not a second one.
+    pub client_request_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct ScheduledValue {
     pub scheduled: ScheduledLine,
+    /// True when this answers a retry: the message the first call scheduled.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub idempotent_replay: bool,
 }
 
 fn schedule_refusal<T>(error: AppError, operation: &'static str) -> ToolResult<T> {
@@ -510,6 +517,36 @@ pub(super) async fn message_schedule(
         Ok(actor) => actor,
         Err(message) => return ToolResult::denied(message),
     };
+    let retry_key = match arguments.client_request_id.as_deref() {
+        Some(value) => match parse_request_id(value) {
+            Some(key) => Some(key),
+            None => return ToolResult::invalid("clientRequestId", REQUEST_ID_MESSAGE),
+        },
+        None => None,
+    };
+    let retry = match HeldCreate::begin(
+        state,
+        principal,
+        "scheduled_messages",
+        retry_key.as_ref(),
+        &arguments,
+    )
+    .await
+    {
+        Ok(HeldCreate::Replay(id)) => {
+            return match scheduled_messages::get_scheduled(&state.pool, principal.actor_id, id)
+                .await
+            {
+                Ok(message) => ToolResult::ok(ScheduledValue {
+                    scheduled: scheduled_line(state, message),
+                    idempotent_replay: true,
+                }),
+                Err(error) => schedule_refusal(error, "message_schedule"),
+            };
+        }
+        Ok(retry) => retry,
+        Err(error) => return schedule_refusal(error, "message_schedule"),
+    };
     let content = match message_content(
         state,
         principal,
@@ -532,9 +569,13 @@ pub(super) async fn message_schedule(
     )
     .await
     {
-        Ok(message) => ToolResult::ok(ScheduledValue {
-            scheduled: scheduled_line(state, message),
-        }),
+        Ok(message) => match retry.finish(message.id).await {
+            Ok(()) => ToolResult::ok(ScheduledValue {
+                scheduled: scheduled_line(state, message),
+                idempotent_replay: false,
+            }),
+            Err(error) => schedule_refusal(error, "message_schedule"),
+        },
         Err(error) => schedule_refusal(error, "message_schedule"),
     }
 }

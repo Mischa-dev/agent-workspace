@@ -14,7 +14,10 @@ use super::{
     common::{ToolResult, parse_id, public_url, scope_projects},
     planning::{DATE_MESSAGE, milestone_change},
     tasks::{TaskListArguments, command_actor, resolve_assignee},
-    writes::{WriteAccess, check_access_for},
+    writes::{
+        CreateRetry, REQUEST_ID_MESSAGE, WriteAccess, check_access_for, complete_create_with,
+        parse_request_id, reserve_create,
+    },
 };
 use crate::{
     AppState,
@@ -1288,7 +1291,7 @@ pub(super) async fn recurring_write(
     result.unwrap_or_else(|error| ToolResult::from_error(error, "recurring_write"))
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct TaskFromTemplateArguments {
     /// The project's ID, link or key.
@@ -1305,9 +1308,12 @@ pub(super) struct TaskFromTemplateArguments {
     pub start_date: Option<String>,
     /// YYYY-MM-DD.
     pub due_date: Option<String>,
+    /// Makes creating safe to retry: send the same one again and you get
+    /// the task the first call made, not a second one.
+    pub client_request_id: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct TaskFromTemplateValue {
     pub id: String,
@@ -1316,6 +1322,9 @@ pub(super) struct TaskFromTemplateValue {
     /// Labels the template named that the project had to make.
     pub created_labels: Vec<String>,
     pub url: String,
+    /// True when this answers a retry: the task the first call made.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub idempotent_replay: bool,
 }
 
 pub(super) async fn task_from_template(
@@ -1338,6 +1347,13 @@ pub(super) async fn task_from_template(
     let Ok(due_date) = date(&arguments.due_date) else {
         return ToolResult::invalid("dueDate", DATE_MESSAGE);
     };
+    let retry_key = match arguments.client_request_id.as_deref() {
+        Some(value) => match parse_request_id(value) {
+            Some(key) => Some(key),
+            None => return ToolResult::invalid("clientRequestId", REQUEST_ID_MESSAGE),
+        },
+        None => None,
+    };
     let project_id = principal.project_id;
     let result = async {
         let mut transaction = state.pool.begin().await?;
@@ -1346,6 +1362,26 @@ pub(super) async fn task_from_template(
         ) {
             return Ok(refusal);
         }
+        let reservation = match reserve_create(
+            &mut transaction,
+            principal,
+            "template_tasks",
+            retry_key.as_ref(),
+            &arguments,
+        )
+        .await?
+        {
+            CreateRetry::Fresh(reservation) => reservation,
+            CreateRetry::Replay(_, kept) => {
+                transaction.commit().await?;
+                let value = serde_json::from_value::<TaskFromTemplateValue>(kept)
+                    .map_err(|_| AppError::Internal("a stored task from a template"))?;
+                return Ok(ToolResult::ok(TaskFromTemplateValue {
+                    idempotent_replay: true,
+                    ..value
+                }));
+            }
+        };
         let template_id = sqlx::query_scalar::<_, Uuid>(
             r#"
             SELECT id FROM task_templates
@@ -1404,8 +1440,7 @@ pub(super) async fn task_from_template(
                 return Ok(ToolResult::invalid(field, message));
             }
         };
-        transaction.commit().await?;
-        Ok::<_, AppError>(ToolResult::ok(TaskFromTemplateValue {
+        let value = TaskFromTemplateValue {
             id: applied.work_item_id.to_string(),
             url: public_url(
                 state,
@@ -1414,7 +1449,20 @@ pub(super) async fn task_from_template(
             key: applied.key,
             subtasks: applied.subtask_count,
             created_labels: applied.created_labels,
-        }))
+            idempotent_replay: false,
+        };
+        // A retry answers with this, labels made and all.
+        let kept = serde_json::to_value(&value)
+            .map_err(|_| AppError::Internal("keep a task from a template"))?;
+        complete_create_with(
+            &mut transaction,
+            reservation.as_ref(),
+            applied.work_item_id,
+            kept,
+        )
+        .await?;
+        transaction.commit().await?;
+        Ok::<_, AppError>(ToolResult::ok(value))
     }
     .await;
     result.unwrap_or_else(|error| ToolResult::from_error(error, "task_from_template"))

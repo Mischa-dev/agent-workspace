@@ -34,7 +34,9 @@ use sqlx::{Executor, PgPool, postgres::PgPoolOptions};
 use uuid::Uuid;
 
 use super::{
-    agent_interface::{Browser, PASSWORD, connect_app, initialize, login, schema_pool, send, tool},
+    agent_interface::{
+        Browser, PASSWORD, connect_app, creates_once, initialize, login, schema_pool, send, tool,
+    },
     m3_scheduler_http::{create_test_mirror, wait_for_state},
 };
 
@@ -955,6 +957,19 @@ async fn an_agent_writes_task_templates_and_uses_them() {
         )
         .await;
     assert_eq!(task["value"]["subtasks"], 2, "{task}");
+    // Sent again with one clientRequestId, it makes the task (and its
+    // subtasks) once.
+    creates_once(
+        &f.app,
+        &f.pool,
+        &f.token,
+        &f.session,
+        "task_from_template",
+        json!({"projectId": project, "template": "Bug report", "title": "Fix: logout", "clientRequestId": "template-retry-1"}),
+        json!({"projectId": project, "template": "Bug report", "title": "Fix: signup", "clientRequestId": "template-retry-1"}),
+        "SELECT count(*) FROM work_items WHERE parent_work_item_id IS NULL",
+    )
+    .await;
 
     // The person sees the same template in the app.
     let listed = f

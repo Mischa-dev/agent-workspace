@@ -23,7 +23,7 @@ use super::{
     common::{ToolResult, accessible_project_ids, confined_project, parse_id, parse_message_id},
     talk::{can_write_in, message_actor},
     tasks::resolve_task,
-    writes::{WriteAccess, check_access_for},
+    writes::{HeldCreate, REQUEST_ID_MESSAGE, WriteAccess, check_access_for, parse_request_id},
 };
 use crate::{
     AppState,
@@ -54,6 +54,10 @@ pub(super) struct FileSummary {
     /// The task comment it was posted with.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comment_id: Option<String>,
+    /// True when this answers a retry of file_upload: the file the first
+    /// call stored.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub idempotent_replay: bool,
 }
 
 impl From<&FileRow> for FileSummary {
@@ -66,6 +70,7 @@ impl From<&FileRow> for FileSummary {
             width: row.image_width,
             height: row.image_height,
             comment_id: row.comment_id.map(|id| id.to_string()),
+            idempotent_replay: false,
         }
     }
 }
@@ -137,6 +142,7 @@ pub(super) async fn message_attachments(
             width: row.image_width,
             height: row.image_height,
             comment_id: None,
+            idempotent_replay: false,
         });
     }
     Ok(found)
@@ -392,7 +398,7 @@ fn read_result(
 // ---------------------------------------------------------------------------
 // file_upload
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct FileUploadArguments {
     /// Upload for a message in this conversation (channel, thread, DM or
@@ -413,6 +419,9 @@ pub(super) struct FileUploadArguments {
     pub text: Option<String>,
     /// Or the bytes, base64. Up to 4 MiB.
     pub data_base64: Option<String>,
+    /// Makes uploading safe to retry: send the same one again and you get
+    /// the file the first call stored, not a second copy.
+    pub client_request_id: Option<String>,
 }
 
 pub(super) async fn file_upload(
@@ -423,6 +432,30 @@ pub(super) async fn file_upload(
     if !principal.can_write() {
         return ToolResult::read_only();
     }
+    let retry_key = match arguments.client_request_id.as_deref() {
+        Some(value) => match parse_request_id(value) {
+            Some(key) => Some(key),
+            None => return ToolResult::invalid("clientRequestId", REQUEST_ID_MESSAGE),
+        },
+        None => None,
+    };
+    let retry =
+        match HeldCreate::begin(state, principal, "files", retry_key.as_ref(), &arguments).await {
+            Ok(HeldCreate::Replay(file_id)) => {
+                return match files::readable_file(&state.pool, reader(principal), file_id).await {
+                    Ok(row) => ToolResult::ok(FileSummary {
+                        idempotent_replay: true,
+                        ..FileSummary::from(&row)
+                    }),
+                    Err(AppError::NotFound(_)) => {
+                        ToolResult::not_found("The file that request stored (it was removed since)")
+                    }
+                    Err(error) => ToolResult::from_error(error, "file_upload"),
+                };
+            }
+            Ok(retry) => retry,
+            Err(error) => return ToolResult::from_error(error, "file_upload"),
+        };
     let bytes = match (arguments.text, arguments.data_base64) {
         (Some(text), None) => text.into_bytes(),
         (None, Some(data)) => match STANDARD.decode(data.trim()) {
@@ -456,6 +489,10 @@ pub(super) async fn file_upload(
         _ => {
             return ToolResult::invalid("conversationId", "Pass either conversationId or taskId.");
         }
+    };
+    let outcome = match outcome {
+        Ok(row) => retry.finish(row.id).await.map(|()| row),
+        Err(error) => Err(error),
     };
     match outcome {
         Ok(row) => ToolResult::ok(FileSummary::from(&row)),

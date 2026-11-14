@@ -2137,6 +2137,49 @@ pub(super) async fn reserve_create<T: Serialize>(
     }
 }
 
+/// A create whose command commits its own transaction (a file, a scheduled
+/// message, a task from a template): the reservation is held in a
+/// transaction of its own over the command, so a retry sent meanwhile waits
+/// for it and answers with what it made.
+pub(super) enum HeldCreate {
+    /// No `clientRequestId`.
+    Unkeyed,
+    /// A retry: what the first call made.
+    Replay(Uuid),
+    Held(Transaction<'static, Postgres>, IdempotencyReservation),
+}
+
+impl HeldCreate {
+    pub(super) async fn begin<T: Serialize>(
+        state: &AppState,
+        principal: &McpPrincipal,
+        kind: &str,
+        key: Option<&IdempotencyKey>,
+        arguments: &T,
+    ) -> Result<Self, AppError> {
+        if key.is_none() {
+            return Ok(Self::Unkeyed);
+        }
+        let mut transaction = state.pool.begin().await?;
+        Ok(
+            match reserve_create(&mut transaction, principal, kind, key, arguments).await? {
+                CreateRetry::Replay(id, _) => Self::Replay(id),
+                CreateRetry::Fresh(Some(reservation)) => Self::Held(transaction, reservation),
+                CreateRetry::Fresh(None) => Self::Unkeyed,
+            },
+        )
+    }
+
+    /// Keeps `id` for retries once the command made it.
+    pub(super) async fn finish(self, id: Uuid) -> Result<(), AppError> {
+        if let Self::Held(mut transaction, reservation) = self {
+            complete_create(&mut transaction, Some(&reservation), id).await?;
+            transaction.commit().await?;
+        }
+        Ok(())
+    }
+}
+
 /// Keeps what a reserved create made, for its retries.
 pub(super) async fn complete_create(
     transaction: &mut Transaction<'_, Postgres>,

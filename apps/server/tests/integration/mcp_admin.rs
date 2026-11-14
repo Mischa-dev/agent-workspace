@@ -9,8 +9,8 @@ use sqlx::{Executor, PgPool, postgres::PgPoolOptions};
 use uuid::Uuid;
 
 use super::agent_interface::{
-    Browser, PASSWORD, connect_app, create_agent, initialize, login, schema_pool, send, test_app,
-    test_app_with, tool,
+    Browser, PASSWORD, connect_app, create_agent, creates_once, initialize, login, schema_pool,
+    send, test_app, test_app_with, tool,
 };
 
 pub(super) struct Setup {
@@ -78,6 +78,27 @@ pub(super) async fn create_project(setup: &Setup, key: &str, name: &str) -> Stri
     .await;
     assert_eq!(status, StatusCode::CREATED, "{project}");
     project["id"].as_str().expect("project").to_owned()
+}
+
+#[tokio::test]
+async fn creating_a_project_again_creates_it_once() {
+    let Some(setup) = setup("mcp_project_retry").await else {
+        return;
+    };
+    let app = &setup.app;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    creates_once(
+        app,
+        &setup.pool,
+        &codex,
+        &session,
+        "project_create",
+        json!({"key": "WEB", "name": "Website", "clientRequestId": "project-retry-1"}),
+        json!({"key": "APP", "name": "App", "clientRequestId": "project-retry-1"}),
+        "SELECT count(*) FROM projects",
+    )
+    .await;
 }
 
 #[tokio::test]

@@ -12,7 +12,7 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 use super::{
-    agent_interface::{Browser, create_agent, initialize, send, test_app_with, tool},
+    agent_interface::{Browser, create_agent, creates_once, initialize, send, test_app_with, tool},
     mcp_admin::{Setup, create_project, setup},
     mcp_tasks::{add_member, space},
     message_edits::{add_person, create_channel, text},
@@ -142,6 +142,30 @@ async fn timeline_entry(
         .find(|entry| entry["message"]["id"] == message)
         .cloned()
         .unwrap_or_else(|| panic!("message {message} not in {timeline}"))
+}
+
+#[tokio::test]
+async fn uploading_again_stores_one_file() {
+    let Some((setup, _root)) = with_data_root("w20_retry").await else {
+        return;
+    };
+    let work = create_project(&setup, "WORK", "Work").await;
+    let space = space(&setup).await;
+    let (agent, token) = create_agent(&setup.app, &setup.browser, &space, "Rook", "rook").await;
+    add_member(&setup, &work, agent, "member").await;
+    let session = initialize(&setup.app, &token).await.expect("MCP session");
+    let channel = create_channel(&setup, &work, "general").await;
+    creates_once(
+        &setup.app,
+        &setup.pool,
+        &token,
+        &session,
+        "file_upload",
+        json!({"conversationId": channel, "name": "run.log", "text": "all green", "clientRequestId": "upload-retry-1"}),
+        json!({"conversationId": channel, "name": "run.log", "text": "all red", "clientRequestId": "upload-retry-1"}),
+        "SELECT count(*) FROM files",
+    )
+    .await;
 }
 
 #[tokio::test]

@@ -19,6 +19,7 @@ use super::{
     },
     tasks::command_actor,
     workflow::Workflow,
+    writes::{CreateRetry, REQUEST_ID_MESSAGE, complete_create, parse_request_id, reserve_create},
 };
 use crate::{
     AppState,
@@ -570,6 +571,10 @@ pub(super) struct ProjectValue {
     pub version: i64,
     #[sqlx(skip)]
     pub url: String,
+    /// True when this answers a retry: the project the first call made.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[sqlx(skip)]
+    pub idempotent_replay: bool,
 }
 
 #[derive(Debug, FromRow)]
@@ -669,6 +674,9 @@ pub(super) struct ProjectCreateArguments {
     /// (project_template_list): its workflow, labels, channels, settings and
     /// task templates are set up in the new project.
     pub template: Option<String>,
+    /// Makes creating safe to retry: send the same one again and you get
+    /// the project the first call made.
+    pub client_request_id: Option<String>,
 }
 
 const PROJECT_CREATE_ONLY: &str = "Only people can create projects, through an app connected for their whole account, in a workspace where they may create projects.";
@@ -698,6 +706,13 @@ pub(super) async fn project_create(
             "name",
             "Give the project a name of 1 to 120 bytes, on one line.",
         );
+    };
+    let retry_key = match arguments.client_request_id.as_deref() {
+        Some(value) => match parse_request_id(value) {
+            Some(key) => Some(key),
+            None => return ToolResult::invalid("clientRequestId", REQUEST_ID_MESSAGE),
+        },
+        None => None,
     };
     let result = async {
         let mut transaction = state.pool.begin().await?;
@@ -755,6 +770,24 @@ pub(super) async fn project_create(
         {
             return Ok(ToolResult::module_off("project_create", "Projects"));
         }
+        let reservation = match reserve_create(
+            &mut transaction,
+            principal,
+            "projects",
+            retry_key.as_ref(),
+            &arguments,
+        )
+        .await?
+        {
+            CreateRetry::Fresh(reservation) => reservation,
+            CreateRetry::Replay(project_id, _) => {
+                transaction.commit().await?;
+                return Ok(ToolResult::ok(ProjectValue {
+                    idempotent_replay: true,
+                    ..project_value(state, project_id).await?
+                }));
+            }
+        };
         let created = crate::projects::insert_new_project(
             &mut transaction,
             organization_id,
@@ -821,6 +854,7 @@ pub(super) async fn project_create(
             }),
         )
         .await?;
+        complete_create(&mut transaction, reservation.as_ref(), project_id).await?;
         transaction.commit().await?;
         Ok::<_, AppError>(ToolResult::ok(project_value(state, project_id).await?))
     }
