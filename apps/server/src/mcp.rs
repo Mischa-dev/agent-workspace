@@ -4453,6 +4453,24 @@ async fn authenticate_mcp(
                     };
                     match scoped {
                         Ok(Some(project_id)) => {
+                            // Through a workspace's alias path a hand-written
+                            // tool acts only on that workspace's spaces;
+                            // operations check this in the dispatcher.
+                            if let Some(crate::ops::mcp::AliasWorkspace(workspace)) =
+                                parts.extensions.get().copied()
+                            {
+                                match project_in_workspace(&state, project_id, workspace).await {
+                                    Ok(true) => {}
+                                    Ok(false) => {
+                                        let error = crate::ops::dispatch::Answer::error(
+                                            &crate::ops::OpError::not_found("That space"),
+                                        );
+                                        return (error.status, axum::Json(error.body))
+                                            .into_response();
+                                    }
+                                    Err(error) => return error.into_response(),
+                                }
+                            }
                             principal.project_id = project_id;
                             principal.project_explicit = true;
                         }
@@ -4478,6 +4496,21 @@ async fn authenticate_mcp(
             StatusCode::SERVICE_UNAVAILABLE.into_response()
         }
     }
+}
+
+/// Whether a space belongs to a workspace.
+async fn project_in_workspace(
+    state: &AppState,
+    project_id: Uuid,
+    workspace: Uuid,
+) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM projects WHERE id = $1 AND organization_id = $2)",
+    )
+    .bind(project_id)
+    .bind(workspace)
+    .fetch_one(&state.pool)
+    .await?)
 }
 
 /// The workspace an alias path names, if the credential reaches it; one it

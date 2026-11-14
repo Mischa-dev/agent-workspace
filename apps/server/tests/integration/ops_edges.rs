@@ -394,6 +394,51 @@ async fn every_edge_runs_the_same_operation() {
     .await
     .expect("note rows");
     assert_eq!(workspaces, [workspace, other]);
+    // Through the other workspace's path, a hand-written tool doesn't reach
+    // this workspace's space, for a write or a read; through its own path
+    // it does.
+    let (status, refused) = rpc(
+        app,
+        &token,
+        &format!("/api/v1/w/{other_slug}/mcp"),
+        &session,
+        json!({
+            "jsonrpc": "2.0", "id": 7, "method": "tools/call",
+            "params": { "name": "task_create", "arguments": { "projectId": space, "title": "Elsewhere" } }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{refused}");
+    let made: i64 = sqlx::query_scalar("SELECT count(*) FROM work_items WHERE title = 'Elsewhere'")
+        .fetch_one(&setup.pool)
+        .await
+        .expect("tasks");
+    assert_eq!(made, 0);
+    let (status, refused) = rpc(
+        app,
+        &token,
+        &format!("/api/v1/w/{other_slug}/mcp"),
+        &session,
+        json!({
+            "jsonrpc": "2.0", "id": 7, "method": "tools/call",
+            "params": { "name": "project_open", "arguments": { "projectId": "EDG" } }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{refused}");
+    let (status, opened) = rpc(
+        app,
+        &token,
+        &format!("/api/v1/w/{slug}/mcp"),
+        &session,
+        json!({
+            "jsonrpc": "2.0", "id": 7, "method": "tools/call",
+            "params": { "name": "project_open", "arguments": { "projectId": "EDG" } }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{opened}");
+    assert_ne!(opened["result"]["isError"], json!(true), "{opened}");
     // The alias path and the argument disagreeing is refused.
     let disagree = call_at(
         app,
