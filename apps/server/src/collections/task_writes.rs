@@ -207,6 +207,13 @@ async fn labels_active(
     Ok(found == unique)
 }
 
+fn labels_problem() -> WriteProblem {
+    invalid(
+        &format!("values.{}", tasks::LABELS),
+        "That isn't one of the project's labels.",
+    )
+}
+
 fn forbidden(what: &str) -> WriteProblem {
     WriteProblem {
         index: 0,
@@ -305,14 +312,6 @@ pub async fn write(
             )));
         }
     };
-    if let Some(labels) = &change.labels
-        && !labels_active(transaction, actor.project_id, labels).await?
-    {
-        return Ok(Err(invalid(
-            &format!("values.{}", tasks::LABELS),
-            "That isn't one of the project's labels.",
-        )));
-    }
     match input.record {
         None => create(transaction, actor, project_key, input, change, title).await,
         Some(reference) => {
@@ -354,6 +353,9 @@ async fn create(
             Err(problem) => return Ok(Err(problem)),
         };
     let labels = change.labels.unwrap_or_default();
+    if !labels_active(transaction, actor.project_id, &labels).await? {
+        return Ok(Err(labels_problem()));
+    }
     let outcome = crate::work_item_commands::create_work_item(
         transaction,
         actor,
@@ -498,6 +500,11 @@ async fn update(
             }
             None => (Vec::new(), Vec::new()),
         };
+        // Labels the task holds stay even when archived since; only the
+        // ones it gains must be active.
+        if !labels_active(transaction, actor.project_id, &add).await? {
+            return Ok(Err(labels_problem()));
+        }
         let current = lock_work_item(transaction, actor.project_id, task_id)
             .await?
             .ok_or(AppError::Internal("task is missing"))?;

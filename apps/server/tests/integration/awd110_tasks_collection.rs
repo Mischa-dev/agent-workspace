@@ -356,6 +356,87 @@ async fn a_tasks_record_changes_as_its_task() {
     .expect("activity");
     assert!(activity >= 2, "the change is in the task's activity");
 
+    // A label the task holds stays when it's archived since; a newly
+    // added one must be active.
+    let label = |name: &'static str| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move {
+            let made = tool(
+                app,
+                &codex,
+                &session,
+                "label_write",
+                json!({"projectId": "WORK", "name": name}),
+            )
+            .await;
+            assert_eq!(made["outcome"], "ok", "{made}");
+            made["value"]["label"]["id"]
+                .as_str()
+                .expect("label id")
+                .to_owned()
+        }
+    };
+    let (old, fresh, gone) = (
+        label("Old").await,
+        label("Fresh").await,
+        label("Gone").await,
+    );
+    let version_now = || async {
+        sqlx::query_scalar::<_, i64>("SELECT version FROM work_items WHERE id = $1")
+            .bind(task)
+            .fetch_one(pool)
+            .await
+            .expect("version")
+    };
+    let labels = "0192f5c0-0000-7000-8000-000000000006";
+    let (status, body) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            &record,
+            Some("labels-1"),
+            json!({"expectedVersion": version_now().await, "values": {labels: [old]}}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    sqlx::query(
+        "UPDATE project_labels SET archived_at = now(), archived_by_actor_id = created_by_actor_id \
+         WHERE id = ANY($1::uuid[])",
+    )
+    .bind(vec![old.clone(), gone.clone()])
+    .execute(pool)
+    .await
+    .expect("archive labels");
+    let (status, body) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            &record,
+            Some("labels-2"),
+            json!({"expectedVersion": version_now().await, "values": {labels: [old, fresh]}}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            &record,
+            Some("labels-3"),
+            json!({"expectedVersion": version_now().await, "values": {labels: [old, fresh, gone]}}),
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "an archived label isn't added"
+    );
+    let now = version_now().await;
+
     // A stale version is refused; archiving archives the task.
     let (status, _) = send(
         app,
