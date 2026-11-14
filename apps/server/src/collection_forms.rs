@@ -405,6 +405,7 @@ mod tests {
             archived: false,
             version: 1,
             builtin: None,
+            acts_like_task: false,
             created_at: String::new(),
             updated_at: String::new(),
         }

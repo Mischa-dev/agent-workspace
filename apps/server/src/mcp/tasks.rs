@@ -180,8 +180,13 @@ pub(super) struct TaskListArguments {
     pub view: Option<String>,
     /// Filters on the project's custom fields (see field_list), all of
     /// which must match, such as [{"field": "Risk", "op": "is", "values":
-    /// ["High"]}]. Needs projectId.
+    /// ["High"]}]. Needs projectId. With collection, that collection's
+    /// fields.
     pub field_filters: Option<Vec<field_tools::FieldFilterArgument>>,
+    /// Only the tasks of one collection that acts like a task, such as
+    /// "Bugs", by name or ID (project_open lists them); "Tasks" for plain
+    /// tasks. Needs projectId.
+    pub collection: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema, FromRow)]
@@ -334,6 +339,9 @@ struct ListFilters {
     view: Option<ViewFilters>,
     /// Custom field filters, as stored values (one project only).
     fields: Vec<crate::fields::FieldClause>,
+    /// Only tasks made in this collection (`work_items.collection_id`; None
+    /// for the Tasks collection).
+    collection: Option<Option<Uuid>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -475,6 +483,11 @@ impl ListFilters {
             view.push_where(builder);
         }
         crate::fields::push_clauses(builder, "item.field_values", &self.fields);
+        if let Some(collection) = self.collection {
+            builder
+                .push(" AND item.collection_id IS NOT DISTINCT FROM ")
+                .push_bind(collection);
+        }
     }
 }
 
@@ -1091,6 +1104,41 @@ async fn list_tasks(
         (Ok(any), Ok(not)) => (any, not),
         (Err(refusal), _) | (_, Err(refusal)) => return Ok(invalid(refusal)),
     };
+    // One collection that acts like a task, in the one project named.
+    let collection = match arguments
+        .collection
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        None => None,
+        Some(reference) => {
+            const ONE_PROJECT: &str =
+                "Collections belong to one project: pass projectId with collection.";
+            if !principal.project_explicit && arguments.project_id.is_none() {
+                return Ok(Err(ToolResult::invalid("collection", ONE_PROJECT)));
+            }
+            let [project] = projects.as_slice() else {
+                return Ok(Err(ToolResult::invalid("collection", ONE_PROJECT)));
+            };
+            let mut connection = state.pool.acquire().await?;
+            match crate::collections::task_like::find(&mut connection, *project, reference).await? {
+                Some(found) => Some(found.task_collection_id()),
+                None => {
+                    let names =
+                        crate::collections::task_like::names(&mut *connection, *project).await?;
+                    return Ok(Err(ToolResult::invalid(
+                        "collection",
+                        format!(
+                            "{place} has no collection called \"{}\" that acts like a task. Ones that do: {}.",
+                            crate::work_item_labels::echo(reference),
+                            names.join(", ")
+                        ),
+                    )));
+                }
+            }
+        }
+    };
     let field_clauses = match arguments.field_filters.as_deref() {
         None | Some([]) => Vec::new(),
         Some(filters) => {
@@ -1106,8 +1154,15 @@ async fn list_tasks(
                 return Ok(Err(ToolResult::invalid("fieldFilters", ONE_PROJECT)));
             };
             let mut connection = state.pool.acquire().await?;
-            match field_tools::filter_clauses(&mut connection, principal, *project, &place, filters)
-                .await?
+            match field_tools::filter_clauses(
+                &mut connection,
+                principal,
+                *project,
+                &place,
+                filters,
+                collection.flatten(),
+            )
+            .await?
             {
                 Ok(clauses) => clauses,
                 Err(message) => return Ok(Err(ToolResult::invalid("fieldFilters", message))),
@@ -1158,7 +1213,8 @@ async fn list_tasks(
         && parent != Some(Parent::TopLevel)
         && due_after.is_none()
         && view.is_none()
-        && field_clauses.is_empty();
+        && field_clauses.is_empty()
+        && collection.is_none();
     let more = (!expressible).then(|| {
         format!(
             "{:?}",
@@ -1171,6 +1227,7 @@ async fn list_tasks(
                     due_after,
                     view.as_ref().map(ViewFilters::fingerprint),
                     crate::fields::clauses_param(&field_clauses),
+                    collection,
                 ),
             )
         )
@@ -1264,6 +1321,7 @@ async fn list_tasks(
         overdue: arguments.overdue,
         view,
         fields: field_clauses,
+        collection,
     };
 
     // One snapshot for both queries, so the total and the page agree.
@@ -1911,6 +1969,10 @@ pub(super) struct TaskDetail {
     /// The task it's a subtask of.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<planning::TaskRef>,
+    /// The collection that acts like a task it's a record of, such as
+    /// "Bugs"; left out for a plain task. Its fields are that collection's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collection: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub milestone: Option<MilestoneRef>,
     /// YYYY-MM-DD.
@@ -2228,6 +2290,16 @@ pub(super) async fn task_open(
             planning::visible_links(&mut connection, principal, project_id, task_id).await?;
         let watchers = planning::visible_watchers(&mut connection, project_id, task_id).await?;
         let fields = field_tools::task_fields(&mut connection, project_id, task_id).await?;
+        let collection = sqlx::query_scalar::<_, String>(
+            "SELECT collection.name FROM work_items task \
+             JOIN collections collection \
+               ON collection.project_id = task.project_id AND collection.id = task.collection_id \
+             WHERE task.project_id = $1 AND task.id = $2",
+        )
+        .bind(project_id)
+        .bind(task_id)
+        .fetch_optional(&mut *connection)
+        .await?;
         let mut subtasks = subtasks;
         field_tools::fill_summary_fields(&mut connection, &mut subtasks).await?;
         drop(connection);
@@ -2236,6 +2308,7 @@ pub(super) async fn task_open(
             fields,
             handoffs,
             parent,
+            collection,
             milestone: planning_row.milestone_id.map(|id| MilestoneRef {
                 id: id.to_string(),
                 name: planning_row.milestone_name.clone().unwrap_or_default(),
@@ -2321,8 +2394,12 @@ pub(super) struct TaskCreateArguments {
     /// workflow_get), from 0 to 100000.
     pub estimate: Option<f64>,
     /// Custom field values by field name (see field_list), such as
-    /// {"Risk": "High", "Owner": "@ana", "Shipped": true}.
+    /// {"Risk": "High", "Owner": "@ana", "Shipped": true}. In a collection
+    /// that acts like a task, its own fields (see collection_describe).
     pub fields: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Make it in a collection that acts like a task, such as "Bugs", by
+    /// name or ID (project_open lists them). Left out, it's a plain task.
+    pub collection: Option<String>,
 }
 
 pub(super) async fn task_create(
@@ -2350,6 +2427,7 @@ pub(super) async fn task_create(
         due_date: arguments.due_date.clone(),
         estimate: arguments.estimate,
         fields: arguments.fields.clone().filter(|fields| !fields.is_empty()),
+        collection: arguments.collection.clone(),
     };
     if arguments.parent_id.is_none() {
         // Tasks never go in the hidden Messages space, where nobody would
