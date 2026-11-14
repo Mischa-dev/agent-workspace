@@ -1356,6 +1356,55 @@ pub async fn mark_not_started(
     Ok(saved)
 }
 
+/// The run service ends a run for something outside it: the request a
+/// launched run answered ended, or a stop went unconfirmed. `next` is
+/// `done`, `failed` or `cancelled`; a move the run can't make ends it
+/// `interrupted`. Nothing is left open: what the run still asked for is
+/// withdrawn. `None` when the run had already finished.
+pub async fn end_by_service(
+    transaction: &mut Transaction<'_, Postgres>,
+    run_id: Uuid,
+    next: RunState,
+    reason: &str,
+) -> Result<Option<RunRow>, AppError> {
+    let Some(run) = load(transaction, run_id).await? else {
+        return Ok(None);
+    };
+    let current = run.run_state()?;
+    if current.is_terminal() {
+        return Ok(None);
+    }
+    let moved = match next {
+        RunState::Cancelled if current != RunState::CancelRequested => {
+            reduce(current, RunEvent::CancelRequested { has_runner: false })
+        }
+        other => reduce(current, RunEvent::Update(other)),
+    };
+    let target = moved
+        .ok()
+        .filter(|state| state.is_terminal())
+        .unwrap_or(RunState::Interrupted);
+    let saved = save_state(transaction, &run, target, false).await?;
+    let reason: String = one_line(reason).chars().take(MAX_LINE_CHARS).collect();
+    let saved = sqlx::query_as::<_, RunRow>(&format!(
+        r#"
+        UPDATE runs run
+           SET status_line = $2,
+               failure_reason = CASE WHEN $3 THEN COALESCE(run.failure_reason, $2)
+                                     ELSE run.failure_reason END
+         WHERE run.id = $1
+        RETURNING {RUN_COLUMNS}
+        "#
+    ))
+    .bind(saved.id)
+    .bind(&reason)
+    .bind(target != RunState::Done && target != RunState::Cancelled)
+    .fetch_one(&mut **transaction)
+    .await?;
+    emit(transaction, &saved, "finished").await?;
+    Ok(Some(saved))
+}
+
 /// A host can no longer report these runs: it was unlinked, retired the
 /// agent, or the agent was unbound from it (A1.11). Every active run on the
 /// host (for one agent, when named) without a built-in detail row becomes

@@ -269,6 +269,12 @@ async fn a_launch_to_a_runner_gives_it_a_run_its_reply_calls_move() {
     let stop = owner_call("reply_stop", json!({"requestId": stop_request})).await;
     assert_eq!(stop["outcome"], "ok", "{stop}");
     assert_eq!(run_row(pool, stopped_run).await.0, "cancel_requested");
+    // A runner that only uses the reply tools never confirms: the stop
+    // completes on the server.
+    agent_workspace_server::runs::liveness::settle(pool)
+        .await
+        .expect("settle");
+    assert_eq!(run_row(pool, stopped_run).await.0, "cancelled");
 
     let released = launch(task("Write the notes", "t4").await, "l4").await;
     let released_run = uuid_at(&released, "/runId");
@@ -301,6 +307,99 @@ async fn a_launch_to_a_runner_gives_it_a_run_its_reply_calls_move() {
     .expect("run");
     assert_eq!(state, "failed");
     assert_eq!(failure.as_deref(), Some("The notes need a decision first."));
+
+    // Retry: the next claim is a new attempt that can still succeed.
+    let retried = owner_call("reply_retry", json!({"requestId": released_request})).await;
+    assert_eq!(retried["outcome"], "ok", "{retried}");
+    let again = runner_call("reply_claim", json!({"requestId": released_request})).await;
+    assert_eq!(again["outcome"], "ok", "{again}");
+    let attempt = again["value"]["run"]["runId"]
+        .as_str()
+        .expect("a new attempt")
+        .parse::<Uuid>()
+        .expect("run UUID");
+    assert_ne!(attempt, released_run, "{again}");
+    assert_eq!(again["value"]["run"]["state"], "working");
+    let (predecessor, shown) = sqlx::query_as::<_, (Option<Uuid>, Option<Uuid>)>(
+        "SELECT run.predecessor_run_id, (SELECT run_id FROM launches WHERE id = $2) FROM runs run WHERE run.id = $1",
+    )
+    .bind(attempt)
+    .bind(uuid_at(&released, "/id"))
+    .fetch_one(pool)
+    .await
+    .expect("attempt");
+    assert_eq!((predecessor, shown), (Some(released_run), Some(attempt)));
+    let answered = runner_call(
+        "reply_send",
+        json!({"requestId": released_request, "generation": again["value"]["request"]["generation"],
+               "text": "Notes written."}),
+    )
+    .await;
+    assert_eq!(answered["outcome"], "ok", "{answered}");
+    assert_eq!(run_row(pool, attempt).await.0, "done");
+    assert_eq!(run_row(pool, released_run).await.0, "failed");
+
+    // A stop nobody confirms ends the run after the grace period.
+    let unconfirmed = owner_call(
+        "run_cancel",
+        json!({"runId": silent_run, "clientRequestId": "stop-silent"}),
+    )
+    .await;
+    assert_eq!(unconfirmed["outcome"], "ok", "{unconfirmed}");
+    assert_eq!(run_row(pool, silent_run).await.0, "cancel_requested");
+    sqlx::query(
+        "UPDATE runs SET cancel_requested_at = now() - interval '11 minutes' WHERE id = $1",
+    )
+    .bind(silent_run)
+    .execute(pool)
+    .await
+    .expect("age the stop");
+    agent_workspace_server::runs::liveness::settle(pool)
+        .await
+        .expect("settle");
+    assert_eq!(run_row(pool, silent_run).await.0, "cancelled");
+
+    // A lease that ran out fails the run, with the reason.
+    let lapsed = launch(task("Check the links", "t5").await, "l5").await;
+    let lapsed_run = uuid_at(&lapsed, "/runId");
+    let lapsed_request = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT request.id FROM reply_requests request
+        JOIN launches launch ON launch.handoff_message_id = request.message_id
+        WHERE launch.id = $1 AND request.agent_actor_id = $2
+        "#,
+    )
+    .bind(uuid_at(&lapsed, "/id"))
+    .bind(runner)
+    .fetch_one(pool)
+    .await
+    .expect("request");
+    let claimed = runner_call("reply_claim", json!({"requestId": lapsed_request})).await;
+    assert_eq!(claimed["value"]["run"]["state"], "working", "{claimed}");
+    sqlx::query(
+        "UPDATE reply_requests SET status = 'expired', lease_expires_at = NULL, reason = 'The agent stopped checking in before replying.' WHERE id = $1",
+    )
+    .bind(lapsed_request)
+    .execute(pool)
+    .await
+    .expect("lapse the lease");
+    agent_workspace_server::runs::liveness::settle(pool)
+        .await
+        .expect("settle");
+    let (state, failure) = sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT state, failure_reason FROM runs WHERE id = $1",
+    )
+    .bind(lapsed_run)
+    .fetch_one(pool)
+    .await
+    .expect("run");
+    assert_eq!(
+        (state.as_str(), failure.as_deref()),
+        (
+            "failed",
+            Some("The agent stopped checking in before replying.")
+        )
+    );
 
     // Nobody else's reply calls touch the runner's run.
     let foreign = tool(

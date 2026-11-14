@@ -160,6 +160,17 @@ pub async fn follow_reply(
     let Some(run) = for_reply_request(transaction, account_id, request_id).await? else {
         return Ok(None);
     };
+    // A claim after the run finished is a retried request (Retry after a
+    // release, a stop or a lost lease): a new attempt, not the old run.
+    let run = match step {
+        ReplyStep::Claimed { generation } if run.run_state()?.is_terminal() => {
+            match next_attempt(transaction, &run, request_id, generation).await? {
+                Some(next) => next,
+                None => return Ok(Some(run)),
+            }
+        }
+        _ => run,
+    };
     let reporter = Reporter::Account { account_id };
     let state = run.run_state()?;
     let batch = match step {
@@ -239,6 +250,64 @@ pub async fn follow_reply(
         Err(RunOpError::App(error)) => Err(error),
         Err(_) => Ok(Some(run)),
     }
+}
+
+/// Open the next attempt of a launched run whose request was retried: the
+/// same cause, a new run, and the launch shows it. `None` when the runner
+/// can't have one now.
+async fn next_attempt(
+    transaction: &mut Transaction<'_, Postgres>,
+    previous: &RunRow,
+    request_id: Uuid,
+    generation: i32,
+) -> Result<Option<RunRow>, AppError> {
+    let (Some(space_id), Some(launch_id)) = (previous.space_id, previous.launch_id) else {
+        return Ok(None);
+    };
+    let opened = ops::open(
+        transaction,
+        Reporter::Account {
+            account_id: previous.account_id,
+        },
+        RunOpen {
+            space_id,
+            client_run_id: Some(format!("launch:{launch_id}:{request_id}:{generation}")),
+            title: previous.title.clone(),
+            cause: Cause {
+                kind: previous.cause_kind.clone(),
+                conversation_id: None,
+                work_item_id: previous.work_item_id,
+                message_id: previous.cause_message_id,
+                reference: None,
+            },
+            parent_run_id: None,
+            report_interval_seconds: Some(previous.report_interval_seconds),
+            settings: None,
+            initial: RunState::Accepted,
+            requested_by: previous.requested_by_account_id,
+            via_app_id: None,
+            launch_id: Some(launch_id),
+        },
+    )
+    .await;
+    let next = match opened {
+        Ok(opened) => opened.run,
+        Err(RunOpError::App(error)) => return Err(error),
+        Err(_) => return Ok(None),
+    };
+    let next = sqlx::query_as::<_, RunRow>(&format!(
+        "UPDATE runs run SET predecessor_run_id = $2 WHERE run.id = $1 RETURNING {RUN_COLUMNS}"
+    ))
+    .bind(next.id)
+    .bind(previous.id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    sqlx::query("UPDATE launches SET run_id = $2 WHERE id = $1")
+        .bind(launch_id)
+        .bind(next.id)
+        .execute(&mut **transaction)
+        .await?;
+    Ok(Some(next))
 }
 
 /// A person stopped these requests: their runs are asked to stop.
