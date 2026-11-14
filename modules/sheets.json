@@ -17,7 +17,7 @@
   "routes": ["/api/v1/projects/{project_id}/sheets*"],
   "events": { "emits": ["sheet.updated"], "listens": [] },
   "notifications": [],
-  "search": [],
+  "search": ["sheets"],
   "automations": { "triggers": [], "actions": [] },
   "things": [],
   "links": [],

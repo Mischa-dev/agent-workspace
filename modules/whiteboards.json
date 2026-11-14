@@ -23,7 +23,7 @@
   "routes": ["/api/v1/whiteboards*", "/api/v1/whiteboard-links", "/api/v1/whiteboard-trash/*"],
   "events": { "emits": ["whiteboard.scene_changed"], "listens": [] },
   "notifications": [],
-  "search": [],
+  "search": ["whiteboards"],
   "automations": { "triggers": [], "actions": [] },
   "things": [
     {

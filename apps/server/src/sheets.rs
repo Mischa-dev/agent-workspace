@@ -1848,7 +1848,8 @@ async fn apply_unbounded(
         }));
     }
     sqlx::query(
-        "UPDATE sheets SET revision = $3, updated_by_actor_id = $4, updated_at = now() \
+        "UPDATE sheets SET revision = $3, updated_by_actor_id = $4, updated_at = now(), \
+         text_content = sheet_text_content(id) \
          WHERE project_id = $1 AND id = $2",
     )
     .bind(sheet.project_id)

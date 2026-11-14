@@ -47,7 +47,7 @@ pub(super) fn writer(principal: &McpPrincipal) -> Writer {
 pub(super) struct SearchArguments {
     /// What to look for. Quotes match a phrase; -word excludes a word.
     pub query: String,
-    /// Any of: messages, threads, tasks, pages, decisions, records, files. Default: all.
+    /// Any of: messages, threads, tasks, pages, decisions, records, files, whiteboards, sheets. Default: all.
     pub kinds: Option<Vec<String>>,
     // Read by the MCP middleware, which scopes the call to this project.
     #[allow(dead_code)]
@@ -72,7 +72,11 @@ pub(super) struct SearchResult {
     pub id: String,
     pub title: String,
     pub snippet: String,
+    /// The project's name, or "Workspace" for a workspace's own board.
     pub project: String,
+    /// None for a workspace's own board, which is in no project.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conversation_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -109,7 +113,7 @@ pub(super) async fn search_tool(
             None => {
                 return ToolResult::invalid(
                     "kinds",
-                    "Use messages, threads, tasks, pages, decisions, records, or files.",
+                    "Use messages, threads, tasks, pages, decisions, records, files, whiteboards, or sheets.",
                 );
             }
         }
@@ -195,6 +199,7 @@ pub(super) async fn search_tool(
                     },
                     snippet: hit.snippet,
                     project: hit.project_name,
+                    project_id: hit.project_id.map(|id| id.to_string()),
                     conversation_id: hit.conversation_id.map(|id| id.to_string()),
                     conversation: hit.conversation_name,
                     author: hit.author,

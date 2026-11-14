@@ -93,6 +93,7 @@ mod privacy_inside_workspace;
 mod reply_requests;
 mod review_sweep;
 mod roles_and_access;
+mod search_kinds;
 mod server_operators;
 mod settings_accounts;
 mod support;

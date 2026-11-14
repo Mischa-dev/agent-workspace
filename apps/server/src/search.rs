@@ -1,5 +1,5 @@
 //! Full-text search across messages, thread outcomes, tasks, pages,
-//! decisions, collection records and file names. Results only ever include what the viewer can
+//! decisions, collection records, whiteboards, sheets and file names. Results only ever include what the viewer can
 //! see: messages, threads and message files go through
 //! `conversation_visible_to`, and a decision from a private conversation
 //! stays as private as it.
@@ -35,16 +35,22 @@ pub enum SearchKind {
     Decisions,
     /// A collection's records (AWD-110).
     Records,
+    /// Boards by title and the text on them (K3.6).
+    Whiteboards,
+    /// Sheets by name, tab names and text cells (K3.6).
+    Sheets,
     Files,
 }
 
 impl SearchKind {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 9] = [
         Self::Decisions,
         Self::Pages,
         Self::Threads,
         Self::Tasks,
         Self::Records,
+        Self::Whiteboards,
+        Self::Sheets,
         Self::Messages,
         Self::Files,
     ];
@@ -58,6 +64,8 @@ impl SearchKind {
             Self::Pages => "pages",
             Self::Decisions => "decisions",
             Self::Records => "records",
+            Self::Whiteboards => "whiteboards",
+            Self::Sheets => "sheets",
             Self::Files => "files",
         }
     }
@@ -70,6 +78,8 @@ impl SearchKind {
             "page" | "pages" => Some(Self::Pages),
             "decision" | "decisions" => Some(Self::Decisions),
             "record" | "records" => Some(Self::Records),
+            "whiteboard" | "whiteboards" | "board" | "boards" => Some(Self::Whiteboards),
+            "sheet" | "sheets" => Some(Self::Sheets),
             "file" | "files" => Some(Self::Files),
             _ => None,
         }
@@ -93,7 +103,9 @@ pub struct SearchHit {
     /// A thread's or task's status, or "superseded" for a replaced decision.
     pub status: Option<String>,
     pub snippet: String,
-    pub project_id: Uuid,
+    /// None for a workspace's own board, which is in no project.
+    pub project_id: Option<Uuid>,
+    pub workspace_id: Uuid,
     pub project_name: String,
     pub conversation_id: Option<Uuid>,
     pub conversation_name: Option<String>,
@@ -147,6 +159,28 @@ pub async fn search(
     } else {
         Vec::new()
     };
+    // Workspace boards (in no project) come from the workspaces of the
+    // projects searched, where Whiteboards is on for the viewer; the board's
+    // own rule (`whiteboard_visible_to`) decides each one.
+    let board_workspaces = if kinds.contains(&SearchKind::Whiteboards) {
+        let mut connection = pool.acquire().await?;
+        let on = crate::modules::state::by_workspace(&mut connection, viewer)
+            .await?
+            .into_iter()
+            .filter(|(_, set)| set.contains("whiteboards"))
+            .map(|(workspace, _)| workspace)
+            .collect::<Vec<_>>();
+        sqlx::query_scalar::<_, Uuid>(
+            "SELECT DISTINCT organization_id FROM projects \
+             WHERE id = ANY($1) AND organization_id = ANY($2)",
+        )
+        .bind(projects)
+        .bind(&on)
+        .fetch_all(&mut *connection)
+        .await?
+    } else {
+        Vec::new()
+    };
     let mut hits = Vec::new();
     for kind in kinds {
         let projects = match kind {
@@ -154,13 +188,16 @@ pub async fn search(
             SearchKind::Tasks => task_projects.clone(),
             SearchKind::Pages | SearchKind::Decisions => modules.with(projects, "pages"),
             SearchKind::Records => modules.with(projects, "collections"),
+            SearchKind::Whiteboards => modules.with(projects, "whiteboards"),
+            SearchKind::Sheets => modules.with(projects, "sheets"),
             // Files hang off messages and tasks.
             SearchKind::Files => modules.keep(projects, |set, direct| {
                 set.allows_conversations_in(if direct { "direct" } else { "standard" })
                     || (!direct && set.contains("tasks"))
             }),
         };
-        if projects.is_empty() {
+        if projects.is_empty() && !(*kind == SearchKind::Whiteboards && !board_workspaces.is_empty())
+        {
             continue;
         }
         let projects = projects.as_slice();
@@ -171,6 +208,8 @@ pub async fn search(
             SearchKind::Pages => PAGES_SQL,
             SearchKind::Decisions => DECISIONS_SQL,
             SearchKind::Records => RECORDS_SQL,
+            SearchKind::Whiteboards => WHITEBOARDS_SQL,
+            SearchKind::Sheets => SHEETS_SQL,
             SearchKind::Files => FILES_SQL,
         };
         let mut query = sqlx::query_as::<_, SearchHit>(sql)
@@ -186,6 +225,9 @@ pub async fn search(
             query = query
                 .bind(&task_projects[..])
                 .bind(&conversation_projects[..]);
+        }
+        if *kind == SearchKind::Whiteboards {
+            query = query.bind(&board_workspaces[..]);
         }
         let rows = query.fetch_all(pool).await?;
         hits.extend(rows);
@@ -217,7 +259,7 @@ const MESSAGES_SQL: &str = r#"
            NULL::text AS status,
            ts_headline('english', message.plain_text, query.q,
                        'MaxWords=40, MinWords=12, StartSel=**, StopSel=**') AS snippet,
-           message.project_id,
+           message.project_id, project.organization_id AS workspace_id,
            CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END AS project_name,
            conversation.id AS conversation_id, conversation.name AS conversation_name,
            author.display_name AS author, message.created_at::text AS at,
@@ -251,7 +293,7 @@ const THREADS_SQL: &str = r#"
     SELECT 'thread' AS kind, thread.id,
            thread.name AS title, thread.thread_status AS status,
            COALESCE(thread.thread_outcome, '') AS snippet,
-           thread.project_id,
+           thread.project_id, project.organization_id AS workspace_id,
            CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END AS project_name,
            parent.id AS conversation_id, parent.name AS conversation_name,
            NULL::text AS author,
@@ -284,7 +326,7 @@ const TASKS_SQL: &str = r#"
            status.name AS status,
            ts_headline('english', item.description, query.q,
                        'MaxWords=30, MinWords=8, StartSel=**, StopSel=**') AS snippet,
-           item.project_id, project.name AS project_name,
+           item.project_id, project.organization_id AS workspace_id, project.name AS project_name,
            NULL::uuid AS conversation_id, NULL::text AS conversation_name,
            NULL::text AS author, item.updated_at::text AS at,
            '/projects/' || item.project_id::text || '/work-items/' || item.id::text AS path,
@@ -310,7 +352,7 @@ const PAGES_SQL: &str = r#"
     SELECT 'page' AS kind, page.id, page.title, NULL::text AS status,
            ts_headline('english', page.body, query.q,
                        'MaxWords=40, MinWords=12, StartSel=**, StopSel=**') AS snippet,
-           page.project_id, project.name AS project_name,
+           page.project_id, project.organization_id AS workspace_id, project.name AS project_name,
            NULL::uuid AS conversation_id, NULL::text AS conversation_name,
            editor.display_name AS author, page.updated_at::text AS at,
            '/projects/' || page.project_id::text || '/pages/' || page.id::text AS path,
@@ -337,7 +379,7 @@ const DECISIONS_SQL: &str = r#"
            decision.title AS title,
            CASE WHEN decision.status = 'superseded' THEN 'superseded' END AS status,
            left(decision.detail, 400) AS snippet,
-           decision.project_id,
+           decision.project_id, project.organization_id AS workspace_id,
            CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END AS project_name,
            decision.source_conversation_id AS conversation_id, source.name AS conversation_name,
            decider.display_name AS author, decision.created_at::text AS at,
@@ -370,7 +412,7 @@ const RECORDS_SQL: &str = r#"
                 ELSE record.title END AS title,
            NULL::text AS status,
            'In ' || collection.name AS snippet,
-           record.project_id, project.name AS project_name,
+           record.project_id, project.organization_id AS workspace_id, project.name AS project_name,
            NULL::uuid AS conversation_id, NULL::text AS conversation_name,
            editor.display_name AS author, record.updated_at::text AS at,
            '/projects/' || record.project_id::text || '/collections/' ||
@@ -397,6 +439,76 @@ const RECORDS_SQL: &str = r#"
     LIMIT $8
 "#;
 
+/// Whiteboards by title and the text on them, in projects searched and,
+/// as `$9`, the workspaces whose own boards show. Deleted boards aren't
+/// found; each board passes its own rule.
+const WHITEBOARDS_SQL: &str = r#"
+    WITH query AS (
+        SELECT websearch_to_tsquery('simple', $3) AS q,
+               '%' || replace(replace(replace($3, '\', '\\'), '%', '\%'), '_', '\_') || '%'
+                   AS pattern
+    )
+    SELECT 'whiteboard' AS kind, board.id, board.title, NULL::text AS status,
+           CASE WHEN board.text_content = '' THEN ''
+                ELSE ts_headline('simple', board.text_content, query.q,
+                                 'MaxWords=30, MinWords=8, StartSel=**, StopSel=**') END AS snippet,
+           board.project_id, board.organization_id AS workspace_id,
+           COALESCE(project.name, 'Workspace') AS project_name,
+           NULL::uuid AS conversation_id, NULL::text AS conversation_name,
+           COALESCE(profile.display_name, account.display_name) AS author,
+           board.updated_at::text AS at,
+           '/whiteboards/' || board.id::text AS path,
+           (CASE WHEN board.search_vector @@ query.q
+                 THEN ts_rank(board.search_vector, query.q) * 1.2 ELSE 0.05 END)::real AS rank
+    FROM query, whiteboards board
+    LEFT JOIN projects project ON project.id = board.project_id
+    LEFT JOIN organization_actor_profiles profile
+      ON profile.organization_id = board.organization_id
+     AND profile.actor_id = COALESCE(board.updated_by_actor_id, board.created_by_actor_id)
+    LEFT JOIN users account
+      ON account.actor_id = COALESCE(board.updated_by_actor_id, board.created_by_actor_id)
+    WHERE (board.search_vector @@ query.q OR board.title ILIKE query.pattern)
+      AND board.deleted_at IS NULL
+      AND (board.project_id = ANY($2)
+           OR (board.project_id IS NULL AND board.organization_id = ANY($9)))
+      AND whiteboard_visible_to(board.id, $1)
+      AND $4::uuid IS NULL
+      AND ($5::uuid IS NULL OR COALESCE(board.updated_by_actor_id, board.created_by_actor_id) = $5)
+      AND ($6::timestamptz IS NULL OR board.updated_at >= $6)
+      AND ($7::timestamptz IS NULL OR board.created_at <= $7)
+    ORDER BY rank DESC, board.updated_at DESC
+    LIMIT $8
+"#;
+
+/// Sheets by name, description, tab names and text cells, in projects
+/// where Sheets is on. Archived sheets aren't found.
+const SHEETS_SQL: &str = r#"
+    WITH query AS (SELECT websearch_to_tsquery('simple', $3) AS q)
+    SELECT 'sheet' AS kind, sheet.id, sheet.name AS title, NULL::text AS status,
+           CASE WHEN sheet.text_content = '' THEN sheet.description
+                ELSE ts_headline('simple', sheet.text_content, query.q,
+                                 'MaxWords=30, MinWords=8, StartSel=**, StopSel=**') END AS snippet,
+           sheet.project_id, project.organization_id AS workspace_id, project.name AS project_name,
+           NULL::uuid AS conversation_id, NULL::text AS conversation_name,
+           editor.display_name AS author, sheet.updated_at::text AS at,
+           '/projects/' || sheet.project_id::text || '/sheets/' || sheet.id::text AS path,
+           (ts_rank(sheet.search_vector, query.q) * 1.2)::real AS rank
+    FROM query, sheets sheet
+    JOIN projects project ON project.id = sheet.project_id
+    LEFT JOIN project_memberships editor
+      ON editor.project_id = sheet.project_id AND editor.actor_id = sheet.updated_by_actor_id
+    WHERE sheet.search_vector @@ query.q
+      AND sheet.project_id = ANY($2)
+      AND sheet.archived_at IS NULL
+      AND $4::uuid IS NULL
+      AND ($5::uuid IS NULL OR sheet.updated_by_actor_id = $5)
+      AND ($6::timestamptz IS NULL OR sheet.updated_at >= $6)
+      AND ($7::timestamptz IS NULL OR sheet.created_at <= $7)
+      AND $1::uuid IS NOT NULL
+    ORDER BY rank DESC
+    LIMIT $8
+"#;
+
 /// Files by name, on messages the viewer can see and on tasks.
 const FILES_SQL: &str = r#"
     WITH query AS (
@@ -409,7 +521,7 @@ const FILES_SQL: &str = r#"
                     'In ' || CASE WHEN conversation.kind = 'dm' THEN 'a DM' ELSE conversation.name END
                 ELSE 'On ' || project.project_key || '-' || item.number::text || ' ' || item.title
            END AS snippet,
-           file.project_id,
+           file.project_id, project.organization_id AS workspace_id,
            CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END AS project_name,
            conversation.id AS conversation_id, conversation.name AS conversation_name,
            uploader.display_name AS author, file.created_at::text AS at,
