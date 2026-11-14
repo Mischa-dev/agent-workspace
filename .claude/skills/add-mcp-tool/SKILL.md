@@ -9,6 +9,14 @@ The app's MCP server is how agents and connected apps do everything a person
 can. A tool is three pieces: argument and result types, a function that does
 the work, and a method in the tool router. The tests check the rest.
 
+Before you start, read "Rules while the foundations are rebuilt" in
+`AGENTS.md`. A tool is one edge of an operation (rule 4): the work lives in a
+domain function the HTTP handler calls too, a tool that creates something
+takes a `clientRequestId` (rule 9), and its permission comes from the policy,
+never a role name or the caller's kind of account (rules 1 and 2). The
+structure guards in `apps/server/src/structure_guards.rs` fail on a new
+offender.
+
 ## 1. Types and the function
 
 Put them in the module for the area, in `apps/server/src/mcp/` (tasks in
