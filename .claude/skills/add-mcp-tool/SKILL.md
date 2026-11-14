@@ -94,7 +94,9 @@ is new; `/mcp-tools.md` and the OpenAPI document pick it up from there.
   `tests/integration/awd91_agent_parity.rs`.
 - Write an integration test where a bug would be silent: someone outside the
   project reading or writing, a claim or version conflict, a private
-  conversation. See `w22_agent_kit.rs` for a compact one.
+  conversation. See `w22_agent_kit.rs` for a compact one. Build it on
+  `tests/integration/support/` (the app, test databases, a person, an agent
+  and a connected app as `Caller`s, `WorldBuilder`).
 - Don't count tools anywhere; other branches add them too.
 
 ## 5. Check

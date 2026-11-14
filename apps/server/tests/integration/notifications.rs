@@ -10,9 +10,11 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::{
-    agent_interface::{Browser, connect_app, initialize, send, tool},
-    mcp_admin::{Setup, create_project, setup},
     message_edits::{add_person, create_channel, direct_space, get, owner_id, remove, say},
+    support::{
+        app::{Browser, connect_app, initialize, send, tool},
+        world::{Setup, create_project, setup},
+    },
 };
 
 /// Publishes everything in the outbox, including the events notifications

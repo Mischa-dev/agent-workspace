@@ -71,6 +71,9 @@ running the build another way, and don't use plain `systemd-run --user
   matrices for UI details, and don't produce acceptance-evidence documents.
 - Database changes get a migration; integration tests use real PostgreSQL via
   `AGENT_WORKSPACE_DATABASE_URL`.
+- Integration tests build on `apps/server/tests/integration/support/`: the
+  app, test databases, a person, an agent and a connected app as callers,
+  and `WorldBuilder` for a workspace with all of them.
 
 ## Working alongside other branches
 

@@ -15,10 +15,12 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 use super::{
-    agent_interface::{Browser, connect_app, create_agent, initialize, send, tool},
-    mcp_admin::{Setup, create_project, setup},
     mcp_tasks::{add_member, space},
     message_edits::{add_person, create_channel, direct_space, owner_id, say, text},
+    support::{
+        app::{Browser, connect_app, create_agent, initialize, send, tool},
+        world::{Setup, create_project, setup},
+    },
     w20_files::{read, with_data_root},
 };
 

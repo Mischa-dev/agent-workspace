@@ -28,6 +28,10 @@ all Rust tests against a throwaway database (`cargo nextest`), doc tests,
 browser smoke tests. Fix what fails before pushing; one validated push beats
 several guesses.
 
+New integration tests build on `apps/server/tests/integration/support/`
+(the app, test databases, callers and worlds) rather than a file's private
+helpers.
+
 ## Conflicts and a moving main
 
 - Several workstreams merge into `main` while you work, and the repository
