@@ -20,14 +20,20 @@ pub const KIND: &str = "things.backfill";
 /// hold, and tasks before records, so a task's record is a `task` at once.
 pub const SOURCES: &[&str] = &[
     "projects",
+    "repositories",
     "conversations",
     "collections",
     "project_pages",
     "project_decisions",
     "whiteboards",
     "sheets",
+    "project_milestones",
     "work_items",
     "collection_records",
+    "messages",
+    "files",
+    "github_pull_requests",
+    "automation_rules",
 ];
 
 const BATCH: i64 = 5_000;
@@ -113,6 +119,9 @@ async fn set_parents(pool: &PgPool) -> Result<(), AppError> {
         "project_decisions",
         "work_items",
         "collection_records",
+        "messages",
+        "files",
+        "github_pull_requests",
     ] {
         sqlx::query(&format!(
             r#"

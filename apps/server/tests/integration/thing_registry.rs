@@ -75,16 +75,30 @@ async fn counts_match(pool: &PgPool) {
         ("whiteboards", "{whiteboard}"),
         ("sheets", "{sheet}"),
         ("collections", "{collection}"),
+        ("messages", "{message}"),
+        ("files", "{file}"),
+        ("project_milestones", "{milestone}"),
+        ("github_pull_requests", "{pull_request}"),
+        ("repositories", "{repository}"),
+        ("automation_rules", "{automation}"),
     ] {
-        let missing = sqlx::query_scalar::<_, i64>(&format!(
-            "SELECT count(*) FROM {table} source \
+        // Each missing row with what its source view and `things` say.
+        let missing = sqlx::query_scalar::<_, String>(&format!(
+            "SELECT source.id::text || ' view: ' || COALESCE((SELECT row_to_json(view)::text \
+                 FROM thing_source_{table} view WHERE view.id = source.id), 'none') \
+                 || ' things: ' || COALESCE((SELECT row_to_json(thing)::text \
+                 FROM things thing WHERE thing.id = source.id), 'none') \
+             FROM {table} source \
              WHERE NOT EXISTS (SELECT 1 FROM things WHERE id = source.id AND kind = ANY($1::text[]))"
         ))
         .bind(kinds)
-        .fetch_one(pool)
+        .fetch_all(pool)
         .await
         .expect("count");
-        assert_eq!(missing, 0, "{table} rows missing from things");
+        assert!(
+            missing.is_empty(),
+            "{table} rows missing from things: {missing:#?}"
+        );
     }
     // Records: their own kind, or the task they are.
     let missing = sqlx::query_scalar::<_, i64>(
@@ -388,4 +402,81 @@ async fn every_kind_keeps_its_row_in_step_and_the_backfill_resumes() {
             done: true
         }
     );
+}
+
+/// K3.11: messages, milestones and the rest. A removed message leaves a
+/// tombstone, and no text of a message is ever in `things`.
+#[tokio::test]
+async fn messages_and_milestones_are_things_and_a_removed_message_is_a_tombstone() {
+    let Some(setup) = setup("k3_11_things").await else {
+        return;
+    };
+    let app = &setup.app;
+    let pool = &setup.pool;
+    create_project(&setup, "WORK", "Work").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move {
+            let result = tool(app, &codex, &session, name, arguments).await;
+            assert!(
+                matches!(result["outcome"].as_str(), Some("ok" | "applied")),
+                "{name}: {result}"
+            );
+            result
+        }
+    };
+    let channel = id_of(
+        &call(
+            "channel_create",
+            json!({"projectId": "WORK", "name": "talk"}),
+        )
+        .await,
+    );
+    let said = call(
+        "message_send",
+        json!({"conversationId": channel, "text": "the vault code is 1234"}),
+    )
+    .await;
+    let message = said["value"]["messageId"]
+        .as_str()
+        .expect("message")
+        .to_owned();
+    let found = row(pool, &message).await;
+    assert_eq!(found.kind, "message");
+    assert_eq!(found.title, None, "a message's text is never its title");
+    assert_eq!(found.parent_id, Some(channel.parse().expect("id")));
+    call("message_delete", json!({"messageId": message})).await;
+    let tombstone = row(pool, &message).await;
+    assert!(tombstone.deleted, "a removed message leaves a tombstone");
+    let leaked =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM things WHERE title LIKE '%vault code%'")
+            .fetch_one(pool)
+            .await
+            .expect("count");
+    assert_eq!(leaked, 0, "no message text in things");
+
+    let milestone = call(
+        "milestone_write",
+        json!({"projectId": "WORK", "name": "Spring"}),
+    )
+    .await;
+    let milestone = id_of(&milestone);
+    let found = row(pool, &milestone).await;
+    assert_eq!(
+        (found.kind.as_str(), found.title.as_deref()),
+        ("milestone", Some("Spring"))
+    );
+
+    sqlx::query("DELETE FROM things")
+        .execute(pool)
+        .await
+        .expect("forget");
+    let done = backfill::run(pool, 3, usize::MAX).await.expect("backfill");
+    assert!(done.done);
+    counts_match(pool).await;
+    let tombstone = row(pool, &message).await;
+    assert!(tombstone.deleted && tombstone.title.is_none());
 }

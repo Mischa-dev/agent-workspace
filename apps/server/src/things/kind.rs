@@ -23,6 +23,12 @@ impl ThingKind {
     pub const SHEET: Self = Self::named("sheet");
     pub const COLLECTION: Self = Self::named("collection");
     pub const RECORD: Self = Self::named("record");
+    pub const MESSAGE: Self = Self::named("message");
+    pub const FILE: Self = Self::named("file");
+    pub const MILESTONE: Self = Self::named("milestone");
+    pub const PULL_REQUEST: Self = Self::named("pull_request");
+    pub const REPOSITORY: Self = Self::named("repository");
+    pub const AUTOMATION: Self = Self::named("automation");
 
     pub const fn named(name: &'static str) -> Self {
         Self(Cow::Borrowed(name))

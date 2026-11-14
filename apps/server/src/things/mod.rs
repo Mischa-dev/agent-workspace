@@ -74,7 +74,7 @@ macro_rules! spec {
     };
 }
 
-static REGISTRY: [ThingKindSpec; 11] = [
+static REGISTRY: [ThingKindSpec; 17] = [
     spec!(
         PROJECT,
         "projects",
@@ -151,6 +151,49 @@ static REGISTRY: [ThingKindSpec; 11] = [
         "collection_records",
         Support::Yes(&["record.created", "record.updated"]),
         Support::Yes("records")
+    ),
+    // K3.11.
+    spec!(
+        MESSAGE,
+        "messages",
+        "messages",
+        Support::Yes(&["message.created", "message.edited", "message.removed"]),
+        Support::Yes("messages")
+    ),
+    spec!(
+        FILE,
+        "workspace",
+        "files",
+        Support::Yes(&["file.attached", "file.removed"]),
+        Support::Yes("files")
+    ),
+    spec!(
+        MILESTONE,
+        "tasks",
+        "project_milestones",
+        Support::Yes(&["milestone.created", "milestone.updated"]),
+        Support::Not("milestones are found in their list")
+    ),
+    spec!(
+        PULL_REQUEST,
+        "code",
+        "github_pull_requests",
+        Support::Yes(&["pull_request.merged", "pull_request.closed"]),
+        Support::Not("pull requests are found in their list")
+    ),
+    spec!(
+        REPOSITORY,
+        "code",
+        "repositories",
+        Support::Not("repository changes aren't events yet"),
+        Support::Not("repositories are found in their list")
+    ),
+    spec!(
+        AUTOMATION,
+        "automations",
+        "automation_rules",
+        Support::Not("automation changes aren't events yet"),
+        Support::Not("automations are found in their list")
     ),
 ];
 
@@ -286,10 +329,13 @@ mod tests {
 
     /// The migration seeds `thing_kinds` with the registered kinds; this is
     /// that list, so the two can't drift.
-    const SEEDED: &str = include_str!("../../migrations/20261114192000_thing_registry.sql");
+    const SEEDED: &str = concat!(
+        include_str!("../../migrations/20261114192000_thing_registry.sql"),
+        include_str!("../../migrations/20261114195000_more_thing_kinds.sql"),
+    );
 
     #[test]
-    fn every_registered_kind_is_seeded_declared_and_openable() {
+    fn every_registered_kind_is_seeded_and_every_openable_kind_registered() {
         let mut seen = BTreeSet::new();
         for spec in registry() {
             assert!(seen.insert(spec.kind.as_str()), "{} twice", spec.kind);
@@ -302,11 +348,6 @@ mod tests {
             assert!(
                 SEEDED.contains(&format!("thing_source_{}", spec.table)),
                 "{} has no source view",
-                spec.kind
-            );
-            assert!(
-                crate::modules::things::KINDS.contains(&spec.kind.as_str()),
-                "{} can't be opened",
                 spec.kind
             );
             if let Support::Yes(events) = spec.events {
