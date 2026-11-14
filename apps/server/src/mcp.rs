@@ -684,7 +684,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Archive a project, or restore one with archived: false. Archiving hides the project, its tasks and its channels from everyone, and is refused while Codex is running there. Nothing is deleted. Owners and admins only, as themselves.",
+        description = "Archive a project, or restore one with archived: false. Archiving hides the project, its tasks and its channels from everyone, and is refused while a run is going there. Nothing is deleted. Owners and admins only, as themselves.",
         annotations(
             title = "Archive or restore project",
             read_only_hint = false,
@@ -1245,7 +1245,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "List the agents you share a project with: handle, status, when they last checked in, the projects you share, what they're working on (claimed tasks, and reply requests in conversations you can see). People who manage an agent also see how it connects, whether it gets wakeups, its access, whether it can ask for Codex runs or answer approvals, and its last error. Never shows tokens or other secrets; agents are added and changed in the web app.",
+        description = "List the agents you share a project with: handle, status, when they last checked in, the projects you share, what they're working on (claimed tasks, and reply requests in conversations you can see). People who manage an agent also see how it connects, whether it gets wakeups, its access, whether it can ask for runs or answer approvals, and its last error. Never shows tokens or other secrets; agents are added and changed in the web app.",
         annotations(title = "List agents", read_only_hint = true, open_world_hint = false)
     )]
     async fn agent_list(
@@ -1328,7 +1328,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Change a channel, thread or group: rename it, set a thread's status and outcome, or archive or restore a channel or thread (archived). Archiving keeps everything and is refused while Codex is running there. DMs can't be changed.",
+        description = "Change a channel, thread or group: rename it, set a thread's status and outcome, or archive or restore a channel or thread (archived). Archiving keeps everything and is refused while a run is going there. DMs can't be changed.",
         annotations(
             title = "Update conversation",
             read_only_hint = false,
@@ -1429,7 +1429,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Agents: record your runner's own session (a Claude Code session, a Codex thread) in a conversation you were asked to reply in, so the thread links to it and later wakeups and reply_claim name it (sessionRef) for you to resume. Bind again to move it, or with state idle when you stop.",
+        description = "Agents: record your runner's own session (its session or thread id) in a conversation you were asked to reply in, so the thread links to it and later wakeups and reply_claim name it (sessionRef) for you to resume. Bind again to move it, or with state idle when you stop.",
         annotations(
             title = "Bind agent session",
             read_only_hint = false,
@@ -1880,7 +1880,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Link a task to where it came from or what it touches: a thread or conversation, a message, a page, a decision, a repository (role primary or related; the primary is the one Codex runs on this task's thread use), or a pull request Agent Workspace already knows about (with the project's GitHub automation on, a linked pull request moves the task when it's opened or merged). Pass remove to unlink. Linking twice changes nothing.",
+        description = "Link a task to where it came from or what it touches: a thread or conversation, a message, a page, a decision, a repository (role primary or related; the primary is the one runs on this task's thread use), or a pull request Agent Workspace already knows about (with the project's GitHub automation on, a linked pull request moves the task when it's opened or merged). Pass remove to unlink. Linking twice changes nothing.",
         annotations(
             title = "Link task",
             read_only_hint = false,
@@ -2552,7 +2552,7 @@ impl McpServer {
     // -- Code, runs and approvals --------------------------------------------
 
     #[tool(
-        description = "Approvals Codex is waiting on that you can answer, oldest first (people only). Answer one with approval_respond. Approvals that need a person are answered in the web app, where the step is shown in full; inWebApp counts them.",
+        description = "Approvals runs are waiting on that you can answer, oldest first (people only). Answer one with approval_respond. Approvals that need a person are answered in the web app, where the step is shown in full; inWebApp counts them.",
         annotations(
             title = "List approvals",
             read_only_hint = true,
@@ -3111,9 +3111,9 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Start Codex on your own Codex account, in a thread. To work on a task: thread_start in a channel, task_link the thread to the task, then run_start there with the full instructions (Codex sees only your prompt and the repository). Returns the run; follow it with run_get. People with full access only; at most 5 of your runs at once through connected apps.",
+        description = "Start a run on your own provider account, in a thread. To work on a task: thread_start in a channel, task_link the thread to the task, then run_start there with the full instructions (the run sees only your prompt and the repository). Returns the run; follow it with run_get. People with full access only; at most 5 of your runs at once through connected apps.",
         annotations(
-            title = "Start Codex run",
+            title = "Start a run",
             read_only_hint = false,
             destructive_hint = true,
             idempotent_hint = false,
@@ -3149,7 +3149,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "A Codex run: its stage (queued, working, waiting_for_approval, finished, failed, published, checks_pending, checks_passed, checks_failed), its pull request and checks, and what to do next. Poll it every pollAfterSeconds to follow a run.",
+        description = "A run: its stage (queued, working, waiting_for_approval, finished, failed, published, checks_pending, checks_passed, checks_failed), its pull request and checks, and what to do next. Poll it every pollAfterSeconds to follow a run.",
         annotations(title = "Get run", read_only_hint = true, open_world_hint = false)
     )]
     async fn run_get(
@@ -3257,7 +3257,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "List Codex runs you can see, newest first: active ones by default, or finished, failed, or all. mine: true for only runs you started.",
+        description = "List runs you can see, newest first: active ones by default, or finished, failed, or all. mine: true for only runs you started.",
         annotations(title = "List runs", read_only_hint = true, open_world_hint = false)
     )]
     async fn run_list(
@@ -3376,7 +3376,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "A project's environments: where its runs execute (this server, or a provider's cloud such as Codex Cloud), with the harness, the provider's environment ID, repository, branch, setup notes and which one is the default. They are set up in project settings.",
+        description = "A project's environments: where its runs execute (this server, or a provider's cloud), with the harness, the provider's environment ID, repository, branch, setup notes and which one is the default. They are set up in project settings.",
         annotations(
             title = "List environments",
             read_only_hint = true,
@@ -3431,7 +3431,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "List repositories in a project, or in every project you can reach: default branch, whether its copy on the server is prepared, whether GitHub is connected, and whether Codex can run on it now (readyForRuns, with notReadyBecause if not). People add, prepare and archive them with repository_write.",
+        description = "List repositories in a project, or in every project you can reach: default branch, whether its copy on the server is prepared, whether GitHub is connected, and whether runs can start on it now (readyForRuns, with notReadyBecause if not). People add, prepare and archive them with repository_write.",
         annotations(
             title = "List repositories",
             read_only_hint = true,
@@ -3593,9 +3593,9 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Agents: ask for a Codex run in an existing thread. A person approves it before anything runs.",
+        description = "Agents: ask for a run in an existing thread. A person approves it before anything runs.",
         annotations(
-            title = "Request a Codex run",
+            title = "Request a run",
             read_only_hint = false,
             destructive_hint = false,
             idempotent_hint = true,
@@ -3624,7 +3624,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Read an approval Codex is waiting on: what it asks, its options, and whether you can answer it. People see approvals addressed to them or their role; agents see ones addressed to them.",
+        description = "Read an approval a run is waiting on: what it asks, its options, and whether you can answer it. People see approvals addressed to them or their role; agents see ones addressed to them.",
         annotations(
             title = "Get approval",
             read_only_hint = true,
@@ -3645,7 +3645,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Answer an approval Codex is waiting on (approve, deny, or answer a question), passing its version as expectedVersion. Approving lets Codex continue on that run. Approvals that need a person are answered in the web app.",
+        description = "Answer an approval a run is waiting on (approve, deny, or answer a question), passing its version as expectedVersion. Approving lets the run continue. Approvals that need a person are answered in the web app.",
         annotations(
             title = "Answer approval",
             read_only_hint = false,
@@ -6168,6 +6168,74 @@ mod tests {
     /// a pull request by its run's branch.
     const CREATES_WITHOUT_RETRY_ID: &[&str] =
         &["channel_create", "label_write", "pull_request_create"];
+
+    /// Agents read the tool list (titles, descriptions, argument and result
+    /// schemas) to decide what to do, so it names no harness or provider
+    /// (AGENTS.md rule 8): a run is a run, whichever adapter carries it. The names come from the adapters' own manifests,
+    /// so this test names none.
+    #[test]
+    fn tool_descriptions_name_no_vendor() {
+        use crate::provider::{
+            claude_cloud::claude_cloud_manifest, claude_code::claude_code_manifest,
+            codex_cloud_manifest, codex_manifest,
+        };
+        let mut names = Vec::new();
+        for manifest in [
+            claude_cloud_manifest(),
+            claude_code_manifest(),
+            codex_manifest(),
+            codex_cloud_manifest(),
+        ] {
+            let brand = manifest
+                .display_name
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .to_owned();
+            names.push(manifest.display_name);
+            names.push(brand);
+        }
+        names.sort();
+        names.dedup();
+        let named = |text: &str| {
+            names
+                .iter()
+                .filter(|name| text.contains(name.as_str()))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let mut found = Vec::new();
+        for tool in super::tool_catalog() {
+            let title = tool
+                .annotations
+                .as_ref()
+                .and_then(|annotations| annotations.title.clone())
+                .unwrap_or_default();
+            // The argument and result descriptions are agent-facing too.
+            let text = format!(
+                "{title} {} {} {} {}",
+                tool.title.as_deref().unwrap_or_default(),
+                tool.description.as_deref().unwrap_or_default(),
+                serde_json::to_string(&*tool.input_schema).expect("input schema"),
+                tool.output_schema
+                    .as_deref()
+                    .map(|schema| serde_json::to_string(schema).expect("output schema"))
+                    .unwrap_or_default()
+            );
+            let hits = named(&text);
+            if !hits.is_empty() {
+                found.push(format!("{}: {hits:?}", tool.name));
+            }
+        }
+        let hits = named(super::SERVER_INSTRUCTIONS);
+        if !hits.is_empty() {
+            found.push(format!("SERVER_INSTRUCTIONS: {hits:?}"));
+        }
+        assert!(
+            found.is_empty(),
+            "vendor names in agent-facing text: {found:#?}"
+        );
+    }
 
     /// Every tool that creates something takes a `clientRequestId`, so an
     /// agent's retry never makes it twice (the server instructions say so).

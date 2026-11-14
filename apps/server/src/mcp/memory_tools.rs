@@ -1514,7 +1514,7 @@ pub(super) struct SkillValue {
     pub stale: bool,
     /// The same skill as a SKILL.md file, to save as
     /// `<skills folder>/<name>/SKILL.md` for a harness that loads skills from
-    /// disk (Claude Code reads .claude/skills).
+    /// disk.
     pub skill_md: String,
     pub url: String,
 }

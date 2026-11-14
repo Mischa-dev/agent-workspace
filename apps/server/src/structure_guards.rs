@@ -127,7 +127,7 @@ const DIRECT_TOOL_CALLS_CEILING: usize = 4;
 const PROCESS_STATE_CEILING: usize = 14;
 const BACKGROUND_SPAWNS_CEILING: usize = 16;
 const CONVERSATION_LISTINGS_CEILING: usize = 80;
-const VENDOR_NAMES_CORE_CEILING: usize = 44;
+const VENDOR_NAMES_CORE_CEILING: usize = 11;
 
 /// The heading in `AGENTS.md` the rules sit under.
 const AGENTS_HEADING: &str = "Rules while the foundations are rebuilt";

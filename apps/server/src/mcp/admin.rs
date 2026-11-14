@@ -1067,7 +1067,7 @@ pub(super) async fn project_archive(
             .await?;
             if has_active_run {
                 return Ok(ToolResult::conflict(
-                    "Codex is still running in that project. Wait for its runs to finish, or interrupt them, then archive it.",
+                    "A run is still going in that project. Wait for its runs to finish, or interrupt them, then archive it.",
                 ));
             }
             sqlx::query(

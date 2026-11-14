@@ -285,7 +285,7 @@ pub(crate) async fn start_run_in(
     {
         return Err(AppError::Conflict(
             "agent_run",
-            "you already have 5 Codex runs queued or working; wait for one to finish",
+            "you already have 5 runs queued or working; wait for one to finish",
         ));
     }
     if sqlx::query_scalar::<_, bool>(
@@ -590,7 +590,7 @@ pub(crate) async fn retry_run_in(
     {
         return Err(AppError::Conflict(
             "agent_run",
-            "you already have 5 Codex runs queued or working; wait for one to finish",
+            "you already have 5 runs queued or working; wait for one to finish",
         ));
     }
     let (

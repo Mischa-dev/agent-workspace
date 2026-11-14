@@ -38,7 +38,7 @@ pub struct SessionView {
     pub source: String,
     /// What runs it, such as codex_cloud, claude_code or codex.
     pub harness: String,
-    /// The harness's name for people, such as "Codex Cloud".
+    /// The harness's name for people, from its manifest.
     #[sqlx(default)]
     pub harness_name: String,
     /// The runner's or harness's own reference, such as a task or session
@@ -77,8 +77,9 @@ pub(crate) fn harness_name(state: &AppState, harness: &str) -> String {
         return manifest.display_name.clone();
     }
     match harness {
-        "claude_code" => "Claude Code".to_owned(),
-        "codex" => "Codex".to_owned(),
+        // The usual runner kinds, named as their adapters name themselves.
+        "claude_code" => crate::provider::claude_code::claude_code_manifest().display_name,
+        "codex" => crate::provider::codex_manifest().display_name,
         other => other.replace('_', " "),
     }
 }

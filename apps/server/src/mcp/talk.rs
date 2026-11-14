@@ -266,7 +266,7 @@ pub(super) struct ConversationListValue {
     pub next_cursor: Option<String>,
 }
 
-/// One message (or Codex run event) in a conversation.
+/// One message (or run event) in a conversation.
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct MessageItem {
@@ -1155,7 +1155,7 @@ pub(super) fn person_label(name: &str, handle: &str, kind: Option<&str>) -> Stri
 fn message_item(row: MessageRow) -> MessageItem {
     let author = match (&row.author_name, &row.author_handle) {
         (Some(name), Some(handle)) => person_label(name, handle, row.author_kind.as_deref()),
-        _ if row.event_summary.is_some() => "Codex run".to_owned(),
+        _ if row.event_summary.is_some() => "Agent run".to_owned(),
         _ => "Former member".to_owned(),
     };
     let removed = row.removed.unwrap_or(false);

@@ -255,19 +255,13 @@
     "work_items.rs": 1
   },
   "vendor_names_core": {
-    "agent_sessions.rs": 2,
     "agent_setup_links.rs": 2,
-    "api.rs": 4,
+    "api.rs": 2,
     "environments.rs": 2,
     "error.rs": 1,
     "main.rs": 1,
-    "mcp.rs": 17,
-    "mcp/admin.rs": 1,
-    "mcp/channels.rs": 1,
-    "mcp/history.rs": 2,
+    "mcp.rs": 1,
     "mcp/oauth.rs": 1,
-    "mcp/runs.rs": 8,
-    "mcp/talk.rs": 1,
     "settings.rs": 1
   },
   "workspace_role_enum": {
