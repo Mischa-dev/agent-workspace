@@ -17,6 +17,15 @@ fi
 
 while IFS= read -r file; do
   case "${file}" in
+    # Web files the Rust tests read (include_str! and parity fixtures): a
+    # change to one can break a Rust test, so it runs both sides.
+    apps/web/src/experience/registry.json | \
+      apps/web/src/ui/markdown/*.json | \
+      apps/web/src/memory/live/*.json | \
+      apps/web/src/settings/workspace/roles.ts)
+      rust=true
+      web=true
+      ;;
     apps/web/* | scripts/*)
       web=true
       ;;

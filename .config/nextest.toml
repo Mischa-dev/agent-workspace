@@ -1,8 +1,22 @@
 # Used by tools/ci/checks.sh (`cargo nextest run --profile ci`).
 [profile.ci]
-# A test that fails and then passes on retry is reported as FLAKY instead of
-# failing the run; it still shows in the summary so it gets fixed.
-retries = 1
+# No retries: a test that fails and then passes on retry is a race, and CI
+# must go red on it (P0.3). A test that truly needs one gets a named override
+# below with a comment saying why; race, claim, lease, bootstrap and
+# credential tests never do.
+retries = 0
 fail-fast = false
 failure-output = "final"
 slow-timeout = { period = "60s", terminate-after = 5 }
+
+# Per-test times, kept with the run (target/nextest/ci/junit.xml).
+[profile.ci.junit]
+path = "junit.xml"
+
+# Failed once and passed on retry on main (2026-11-14, a loaded runner) and
+# didn't fail in eight local runs; no race was found by reading it. One retry
+# while it is looked into (P0.3's follow-up task). Never add one of these for
+# a race, claim, lease, bootstrap or credential test.
+[[profile.ci.overrides]]
+filter = "test(=w7_launch::launches_use_the_defaults_queue_in_order_and_recheck_access)"
+retries = 1
