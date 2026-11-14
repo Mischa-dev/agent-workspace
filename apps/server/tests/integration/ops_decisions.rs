@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use super::{
     agent_interface::{create_agent, initialize, send, tool},
     mcp_admin::{create_project, setup},
+    message_edits::direct_space,
 };
 
 async fn decisions_titled(pool: &sqlx::PgPool, title: &str) -> i64 {
@@ -28,7 +29,6 @@ async fn decisions_are_recorded_once_and_stay_private() {
     let app = &setup.app;
     let work = create_project(&setup, "WORK", "Work").await;
     let (_, mara) = create_agent(app, &setup.browser, &work, "Mara", "mara").await;
-    let (_, _rook) = create_agent(app, &setup.browser, &work, "Rook", "rook").await;
     let mara_session = initialize(app, &mara).await.expect("Mara MCP");
 
     // The web app's route: the same body as before, recorded once per request id.
@@ -109,13 +109,17 @@ async fn decisions_are_recorded_once_and_stay_private() {
         1
     );
 
-    // Mara and Rook have a DM the owner isn't in: the owner can't decide from it.
+    // Two agents with a DM the owner isn't in: the owner can't decide from it.
+    let direct = direct_space(&setup).await;
+    let (_, nell) = create_agent(app, &setup.browser, &direct, "Nell", "nell").await;
+    let (_, _otto) = create_agent(app, &setup.browser, &direct, "Otto", "otto").await;
+    let nell_session = initialize(app, &nell).await.expect("Nell MCP");
     let private = tool(
         app,
-        &mara,
-        &mara_session,
+        &nell,
+        &nell_session,
         "conversation_start",
-        json!({"people": ["@rook"], "text": "Private note about the zeppelin budget"}),
+        json!({"people": ["@otto"], "text": "Private note about the zeppelin budget"}),
     )
     .await;
     assert_eq!(private["outcome"], "ok", "{private}");
@@ -151,11 +155,11 @@ async fn decisions_are_recorded_once_and_stay_private() {
         0
     );
 
-    // Mara, who is in it, can: the decision is as private as the DM.
+    // Nell, who is in it, can: the decision is as private as the DM.
     let decided = tool(
         app,
-        &mara,
-        &mara_session,
+        &nell,
+        &nell_session,
         "decision_record",
         json!({"conversationId": private_dm, "title": "Zeppelin budget is capped"}),
     )

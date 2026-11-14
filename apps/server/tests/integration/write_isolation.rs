@@ -620,7 +620,18 @@ fn every_write_route_and_write_tool_has_an_isolation_case() {
         .find(|(path, _)| path.ends_with("src/mcp.rs"))
         .map(|(_, source)| source.as_str())
         .expect("src/mcp.rs");
-    let write_tools = write_tools(mcp_source);
+    // Hand-written tools by their annotation, and operations by their kind.
+    let write_tools = write_tools(mcp_source)
+        .into_iter()
+        .chain(
+            agent_workspace_server::ops::registry()
+                .entries()
+                .filter(|entry| entry.meta.kind.writes())
+                .map(|entry| entry.meta.name.to_owned())
+                // ops_kernel's test operations, registered by other tests.
+                .filter(|name| !name.starts_with("echo_")),
+        )
+        .collect::<BTreeSet<_>>();
     assert!(
         write_tools.len() > 10,
         "parsed write tools: {write_tools:?}"
