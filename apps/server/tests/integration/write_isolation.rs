@@ -253,6 +253,7 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{project_id}/provider-accounts/{account_id}/login/device-code",
     "POST /api/v1/projects/{project_id}/provider-accounts/{account_id}/logout",
     "POST /api/v1/projects/{project_id}/provider-accounts/{account_id}/use",
+    "POST /api/v1/projects/{project_id}/pull-requests/{pull_request_id}/merge",
     "POST /api/v1/projects/{project_id}/pull-requests/{pull_request_id}/refresh",
     "POST /api/v1/projects/{project_id}/recurring-tasks",
     "DELETE /api/v1/projects/{project_id}/recurring-tasks/{recurring_id}",
@@ -288,6 +289,8 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/files",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/move",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/project-move",
+    "DELETE /api/v1/projects/{project_id}/work-items/{work_item_id}/pull-requests/{pull_request_id}",
+    "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/pull-requests/{pull_request_id}",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/relations",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/release-claim",
     "DELETE /api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}",
@@ -473,6 +476,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "project_member_set",
     "project_update",
     "pull_request_create",
+    "pull_request_merge",
     "pull_request_refresh",
     "reply_claim",
     "reply_pass",
@@ -4896,6 +4900,12 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         )
         .without_own(NEEDS_CLI),
         path_case(
+            "POST /api/v1/projects/{project_id}/pull-requests/{pull_request_id}/merge",
+            &[project(), id(a.pull_request, b.pull_request)],
+            |_| Payload::Json(json!({})),
+        )
+        .without_own(NEEDS_GITHUB),
+        path_case(
             "POST /api/v1/projects/{project_id}/pull-requests/{pull_request_id}/refresh",
             &[project(), id(a.pull_request, b.pull_request)],
             empty(),
@@ -5225,6 +5235,16 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             "a move needs its own fresh preview; a made-up snapshot stops there, past every access check",
         )
         .last(),
+        path_case(
+            "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/pull-requests/{pull_request_id}",
+            &[project(), task(), id(a.pull_request, b.pull_request)],
+            versioned("work_items", 1, json!({})),
+        ),
+        path_case(
+            "DELETE /api/v1/projects/{project_id}/work-items/{work_item_id}/pull-requests/{pull_request_id}",
+            &[project(), task(), id(a.pull_request, b.pull_request)],
+            versioned("work_items", 1, json!({})),
+        ),
         path_case(
             "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/relations",
             &[project(), task()],
@@ -6918,6 +6938,12 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 json!({"runId": b.run, "title": "Net"}),
                 json!({"runId": a.run, "title": "Net", "taskIds": [b.task]}),
             ],
+        )
+        .without_own(NEEDS_GITHUB),
+        mcp_case(
+            "pull_request_merge",
+            json!({"pullRequestId": a.pull_request}),
+            vec![json!({"pullRequestId": b.pull_request})],
         )
         .without_own(NEEDS_GITHUB),
         mcp_case(

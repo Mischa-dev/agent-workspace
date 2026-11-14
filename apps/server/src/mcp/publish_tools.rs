@@ -3,7 +3,8 @@
 //! opens a pull request from it, and pull_request_refresh reads a pull
 //! request's checks and review again. Each queues a job the GitHub worker
 //! runs; everything goes through `crate::github`, for whoever the project's
-//! roles let do it.
+//! roles let do it. pull_request_merge (AWD-59) merges one, as the task's
+//! Merge button does.
 
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
@@ -14,7 +15,7 @@ use super::{
     McpPrincipal,
     common::{ToolResult, accessible_project_ids, insert_audit, mark_via, parse_id},
     runs::load_run,
-    tasks::resolve_tasks,
+    tasks::{command_actor, resolve_tasks},
 };
 use crate::{AppState, error::AppError, github, policy::Action};
 
@@ -47,6 +48,31 @@ pub(super) struct PullRequestCreateArguments {
 pub(super) struct PullRequestRefreshArguments {
     /// The pull request (pull_request_list, pull_request_get).
     pub pull_request_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PullRequestMergeArguments {
+    /// The pull request (pull_request_list, pull_request_get, task_open).
+    pub pull_request_id: String,
+    /// Merge only if its head is still this commit (pull_request_get's
+    /// headSha). Default: the head Agent Workspace last read.
+    #[serde(default)]
+    pub expected_head_sha: Option<String>,
+    /// squash (default), merge or rebase. The repository must allow it.
+    #[serde(default)]
+    pub method: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct MergedValue {
+    pub pull_request_id: String,
+    pub number: i64,
+    pub method: String,
+    pub merge_commit_sha: String,
+    /// true when it was merged already (an earlier try, or on GitHub).
+    pub already_merged: bool,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -274,6 +300,69 @@ pub(super) async fn pull_request_refresh(
     }
     .await;
     outcome(result, "pull_request_refresh")
+}
+
+pub(super) async fn pull_request_merge(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: PullRequestMergeArguments,
+) -> ToolResult<MergedValue> {
+    if !principal.can_write() {
+        return ToolResult::read_only();
+    }
+    let Some(pull_request_id) = parse_id(&arguments.pull_request_id) else {
+        return ToolResult::invalid("pullRequestId", "Pass the pull request's ID.");
+    };
+    let result = async {
+        let projects = accessible_project_ids(state, principal).await?;
+        let project_id = sqlx::query_scalar::<_, Uuid>(
+            "SELECT project_id FROM github_pull_requests WHERE id = $1 AND project_id = ANY($2)",
+        )
+        .bind(pull_request_id)
+        .bind(&projects)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::NotFound("github_pull_request"))?;
+        let merged = github::merge_pull_request_as(
+            state,
+            &command_actor(principal, project_id),
+            pull_request_id,
+            &github::MergePullRequestRequest {
+                expected_head_sha: arguments.expected_head_sha,
+                method: arguments.method,
+            },
+        )
+        .await?;
+        Ok(MergedValue {
+            pull_request_id: merged.pull_request_id.to_string(),
+            number: merged.number,
+            method: merged.method,
+            merge_commit_sha: merged.merge_commit_sha,
+            already_merged: merged.already_merged,
+        })
+    }
+    .await;
+    match result {
+        Ok(value) => ToolResult::ok(value),
+        Err(AppError::NotFound(_)) => ToolResult::not_found("That pull request"),
+        Err(AppError::Forbidden) => ToolResult::denied(
+            "Your role in that project doesn't let you merge pull requests (it needs Manage repositories).",
+        ),
+        Err(AppError::Invalid("merge method")) => {
+            ToolResult::invalid("method", "Pass squash, merge or rebase.")
+        }
+        Err(AppError::Invalid("expected head sha")) => ToolResult::invalid(
+            "expectedHeadSha",
+            "Pass the head commit's full 40-character SHA.",
+        ),
+        Err(AppError::Conflict("github_pull_request", "head_moved")) => ToolResult::conflict(
+            "Its head moved since you looked. Read it again (pull_request_get) and check the new commit before merging.",
+        ),
+        Err(AppError::Conflict(what, why)) => {
+            ToolResult::conflict(github::merge_refusal(what, why).unwrap_or(why))
+        }
+        Err(error) => ToolResult::from_error(error, "pull_request_merge"),
+    }
 }
 
 fn outcome(result: Result<QueuedValue, AppError>, tool: &'static str) -> ToolResult<QueuedValue> {
