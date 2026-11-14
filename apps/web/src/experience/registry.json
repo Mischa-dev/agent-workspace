@@ -360,6 +360,13 @@
       "label": "Runs page",
       "description": "Every run across your projects, in one list.",
       "default": true
+    },
+    {
+      "id": "workspace.hosts",
+      "group": "workspace",
+      "label": "Hosts",
+      "description": "Machines and services that run agents, linked to the workspace or to you, in settings.",
+      "default": true
     }
   ],
   "nouns": [

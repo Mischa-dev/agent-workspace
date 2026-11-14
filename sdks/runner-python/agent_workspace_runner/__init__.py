@@ -312,11 +312,13 @@ class ReplyTools:
         self,
         conversation_id: str,
         external_ref: str,
-        harness: str,
+        harness: str | None = None,
         url: str | None = None,
         state: str | None = None,
     ) -> dict[str, Any]:
-        args: dict[str, Any] = {"conversationId": conversation_id, "externalRef": external_ref, "harness": harness}
+        args: dict[str, Any] = {"conversationId": conversation_id, "externalRef": external_ref}
+        if harness:
+            args["harness"] = harness
         if url:
             args["url"] = url
         if state:
@@ -357,6 +359,22 @@ class ReplyTools:
         if generation is not None:
             args["generation"] = generation
         return _unwrap(self.mcp.call_tool("reply_release", args))
+
+    # The run a launch opened for a request (``claim["run"]``). The reply
+    # calls above already move it; these say more about the work.
+
+    def run_activity(self, run_id: str, activities: list[dict[str, Any]]) -> dict[str, Any]:
+        """Report steps, tool calls, messages or a plan. Each activity needs
+        its own ``id``; sending one again is a duplicate, never an error."""
+        return _unwrap(self.mcp.call_tool("run_activity_report", {"runId": run_id, "activities": activities}))
+
+    def run_update(self, run_id: str, **change: Any) -> dict[str, Any]:
+        """Change the status line, title, link (``externalUrl``) or state."""
+        return _unwrap(self.mcp.call_tool("run_update", {"runId": run_id, **change}))
+
+    def run_result(self, run_id: str, results: list[dict[str, Any]]) -> dict[str, Any]:
+        """What the run produced: a pull request, branch, file or link."""
+        return _unwrap(self.mcp.call_tool("run_result_report", {"runId": run_id, "results": results}))
 
 
 # ---------------------------------------------------------------------------
@@ -421,6 +439,30 @@ class RequestContext:
     @property
     def generation(self) -> int:
         return self.request["generation"]
+
+    @property
+    def run_id(self) -> str | None:
+        """The run a launch opened for this request, or None."""
+        run = self.claim.get("run")
+        return run.get("runId") if isinstance(run, dict) else None
+
+    def step(self, title: str, step_id: str | None = None) -> None:
+        """One step of the work on the run (a no-op without one)."""
+        if not self.run_id:
+            return
+        ref = step_id or "step:" + hashlib.sha256(title.encode()).hexdigest()[:16]
+        self._tools.run_activity(
+            self.run_id, [{"id": ref, "kind": "step_started", "summary": title[:200], "payload": {"title": title[:200]}}]
+        )
+
+    def result(self, kind: str, url: str, title: str | None = None) -> None:
+        """Something the run produced, such as a pull request (a no-op without a run)."""
+        if not self.run_id:
+            return
+        item: dict[str, Any] = {"kind": kind, "url": url}
+        if title:
+            item["title"] = title
+        self._tools.run_result(self.run_id, [item])
 
     def progress(self, status: str) -> None:
         """One status line under the agent's name. Renews the lease."""

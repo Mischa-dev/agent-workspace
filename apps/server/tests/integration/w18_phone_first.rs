@@ -221,6 +221,10 @@ async fn approve_from_the_notification_answers_once_as_the_person() {
     .execute(pool)
     .await
     .expect("approval");
+    // Like every approval writer, keep its request copy current (A1.7).
+    agent_workspace_server::requests::legacy::approval_written(pool, approval)
+        .await
+        .expect("approval request");
     let notification = Uuid::now_v7();
     sqlx::query(
         r#"
@@ -311,6 +315,9 @@ async fn approve_from_the_notification_answers_once_as_the_person() {
     .execute(pool)
     .await
     .expect("next approval");
+    agent_workspace_server::requests::legacy::approval_written(pool, next)
+        .await
+        .expect("next approval request");
     sqlx::query("UPDATE notifications SET approval_id = $2 WHERE id = $1")
         .bind(notification)
         .bind(next)

@@ -177,8 +177,10 @@ pub(super) struct SessionBindArguments {
     /// Your runner's own reference for the session, such as its session or
     /// thread ID; wakeups name it as sessionRef.
     pub external_ref: String,
-    /// What runs it, such as claude_code or codex.
-    pub harness: String,
+    /// What runs it, as one lower-case word such as night_runner. Optional; your launched
+    /// run there shows it as its backend.
+    #[serde(default)]
+    pub harness: Option<String>,
     /// An https page where people can watch the session.
     #[serde(default)]
     pub url: Option<String>,
@@ -208,7 +210,7 @@ fn launch_value(state: &AppState, project_id: Uuid, view: LaunchView) -> LaunchV
         environment: view.environment_name,
         harness: view.harness_name,
         requested_by: view.requested_by_name,
-        run_id: view.agent_run_id.map(|id| id.to_string()),
+        run_id: view.run_id.map(|id| id.to_string()),
         run_state: view.run_state,
         thread_url: view
             .conversation_id
@@ -225,6 +227,9 @@ fn caller(principal: &McpPrincipal, request_id: Option<String>) -> LaunchCaller 
         mcp: true,
         session_id: None,
         request_id,
+        // task_launch is for people and their apps; agents ask with
+        // run_request, so there is no agent credential to carry.
+        mcp_credential: None,
     }
 }
 
@@ -448,15 +453,26 @@ pub(super) async fn session_bind(
     let Some(conversation_id) = parse_id(&arguments.conversation_id) else {
         return ToolResult::invalid("conversationId", "Pass the conversation's ID or link.");
     };
-    let harness = arguments.harness.trim();
-    if harness.is_empty()
-        || harness.len() > 64
-        || !harness
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+    // Stored as the session's kind, which is a lower-case word; left out,
+    // the session is just "agent" (A1.4).
+    let named_harness = arguments
+        .harness
+        .as_deref()
+        .map(str::trim)
+        .filter(|harness| !harness.is_empty());
+    if let Some(harness) = named_harness
+        && (harness.len() > 64
+            || !harness.starts_with(|first: char| first.is_ascii_lowercase())
+            || !harness
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'))
     {
-        return ToolResult::invalid("harness", "Use a short name such as claude_code.");
+        return ToolResult::invalid(
+            "harness",
+            "Use a short lower-case name such as night_runner, or leave it out.",
+        );
     }
+    let harness = named_harness.unwrap_or("agent");
     let session_state = match arguments.state.as_deref().map(str::trim) {
         None | Some("" | "active") => "active",
         Some("idle") => "idle",
@@ -519,6 +535,14 @@ pub(super) async fn session_bind(
                 agent_run_id: None,
                 reply_request_id: None,
             },
+        )
+        .await?;
+        crate::runs::launch_paths::session_bound(
+            &mut transaction,
+            principal.actor_id,
+            conversation_id,
+            url,
+            named_harness,
         )
         .await?;
         crate::replies::notify(&mut transaction, project_id, conversation_id).await?;

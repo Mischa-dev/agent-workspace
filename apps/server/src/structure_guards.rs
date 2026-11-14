@@ -126,15 +126,15 @@ const RAW_ROLE_CHECKS_CEILING: usize = 40;
 const CUSTOM_ROLE_ALLOWS_CEILING: usize = 25;
 const WORKSPACE_ROLE_ENUM_CEILING: usize = 32;
 const ACCOUNT_KIND_CHECKS_CEILING: usize = 266;
-const AGENT_RUNS_SQL_CEILING: usize = 178;
-const ACTIVE_RUN_STATES_LITERAL_CEILING: usize = 19;
+const AGENT_RUNS_SQL_CEILING: usize = 173;
+const ACTIVE_RUN_STATES_LITERAL_CEILING: usize = 15;
 const CONVERSATION_INSERTS_CEILING: usize = 11;
 const MESSAGE_INSERTS_CEILING: usize = 4;
 const TASK_CORE_UPDATES_CEILING: usize = 10;
 const DIRECT_TOOL_CALLS_CEILING: usize = 4;
 const PROCESS_STATE_CEILING: usize = 17;
 const BACKGROUND_SPAWNS_CEILING: usize = 16;
-const CONVERSATION_LISTINGS_CEILING: usize = 77;
+const CONVERSATION_LISTINGS_CEILING: usize = 75;
 // P0.36. The four left are system text, not anyone's words: why a scheduled
 // message wasn't sent (scheduled_messages.rs), why an automation was turned
 // off and which automation posted (automations.rs), and a usage alert's
@@ -407,6 +407,8 @@ fn exempt(rule: &str, path: &str) -> bool {
                 || path.starts_with("ai/providers/")
                 || path == "harnesses.rs"
         }
+        // The run service (A1) is where run SQL belongs (rule 3).
+        "agent_runs_sql" | "active_run_states_literal" => path.starts_with("runs/"),
         _ => false,
     }
 }

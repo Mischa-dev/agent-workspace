@@ -53,6 +53,9 @@ await runner.poll({ intervalMs: 30_000 })
 | `pass(reason?)` | Nothing to add (optional requests only). |
 | `release(reason)` | You can't do it; people see the reason. |
 | `bindSession(ref, { url?, state? })` | Names your session so the thread links to it and later wakeups carry it. |
+| `runId` | The run a launch opened for this request, or `null`. The reply calls already move it. |
+| `step(title)` | One step of the work on the run (nothing without one). |
+| `result(kind, url, title?)` | Something the run produced, such as a `pull_request` (nothing without a run). |
 | `onFollowup(listener)` | Follow-ups in this thread while you work. Each is a request of its own. |
 
 If `onRequest` throws, the runner releases the request with a short reason.

@@ -46,6 +46,26 @@ fn same_out(_canonical: &str, value: Value) -> Value {
     value
 }
 
+/// Tools that already answered in the `{outcome, value}` envelope (A1.3's
+/// run tools) keep it.
+fn enveloped(_canonical: &str, value: Value) -> Value {
+    serde_json::json!({ "outcome": "ok", "value": value })
+}
+
+/// A run tool renamed when it became an operation, answering as it did.
+macro_rules! run_renamed {
+    ($old:literal => $new:literal) => {
+        Alias {
+            name: $old,
+            canonical: |_| $new,
+            runs: &[$new],
+            adapt_in: same_in,
+            adapt_out: enveloped,
+            sunset: None,
+        }
+    };
+}
+
 macro_rules! renamed {
     ($old:literal => $new:literal) => {
         Alias {
@@ -114,6 +134,9 @@ pub const ALIASES: &[Alias] = &[
     renamed!("project_layout_set" => "layout_update"),
     renamed!("ai_summarize" => "conversation_summarize"),
     renamed!("ai_analyze" => "thing_analyze"),
+    run_renamed!("run_open" => "run_create"),
+    run_renamed!("run_activity" => "run_activity_report"),
+    run_renamed!("run_result" => "run_result_report"),
 ];
 
 /// Aliases added by tests outside the crate.

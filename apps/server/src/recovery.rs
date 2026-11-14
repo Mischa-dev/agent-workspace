@@ -282,6 +282,7 @@ pub async fn reconcile_registered_worktrees(state: &AppState) -> Result<u64, App
 }
 
 pub async fn cancel_terminal_run_approvals(state: &AppState) -> Result<u64, AppError> {
+    let mut transaction = state.pool.begin().await?;
     let result = sqlx::query(
         r#"
         UPDATE agent_approvals aa
@@ -292,8 +293,10 @@ pub async fn cancel_terminal_run_approvals(state: &AppState) -> Result<u64, AppE
           AND ar.state IN ('completed', 'failed', 'canceled', 'interrupted')
         "#,
     )
-    .execute(&state.pool)
+    .execute(&mut *transaction)
     .await?;
+    crate::requests::legacy::settled_approvals_written(&mut *transaction).await?;
+    transaction.commit().await?;
     Ok(result.rows_affected())
 }
 
@@ -366,6 +369,7 @@ async fn cancel_pending_approvals(
     .bind(run_id)
     .execute(&mut **transaction)
     .await?;
+    crate::requests::legacy::run_approvals_written(&mut **transaction, run_id).await?;
     Ok(())
 }
 

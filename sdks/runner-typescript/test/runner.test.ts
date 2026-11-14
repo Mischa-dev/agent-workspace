@@ -193,3 +193,39 @@ test('a wakeup is claimed, worked and answered; Stop aborts it; follow-ups join 
   })
   assert.deepEqual(calls.find((call) => call.name === 'reply_progress')?.arguments, { requestId: 'r1', generation: 3, status: 'Working' })
 })
+
+test('a launched request reports steps and results on its run; one without a run reports nothing', async () => {
+  const launched = claimFor('r1', 'go') as { outcome: string; value: Record<string, unknown> }
+  launched.value.run = { runId: 'run-1', state: 'working' }
+  const ok = () => ({ outcome: 'ok', value: {} })
+  const { fetchImpl, calls } = fakeMcp({
+    reply_claim: (args) => (args.requestId === 'r1' ? launched : claimFor('r2', 'go')),
+    run_activity_report: ok,
+    run_result_report: ok,
+    reply_send: ok,
+  })
+  const seen: Record<string, string | null> = {}
+  const runner = new Runner({
+    mcpUrl: 'https://aw.example/api/v1/mcp',
+    token: 'token-1',
+    harness: 'custom',
+    fetch: fetchImpl,
+    onRequest: async (context) => {
+      seen[context.request.requestId] = context.runId
+      await context.step('Reading the code')
+      await context.result('pull_request', 'https://aw.example/pr/1', 'Fix it')
+      await context.reply('done')
+    },
+  })
+  await runner.dispatch({ event: 'reply.requested', deliveryId: 'd1', agentId: 'a', replyRequestId: 'r1' })
+  await runner.dispatch({ event: 'reply.requested', deliveryId: 'd2', agentId: 'a', replyRequestId: 'r2' })
+  assert.deepEqual(seen, { r1: 'run-1', r2: null })
+  const runCalls = calls.filter((call) => call.name.startsWith('run_'))
+  assert.deepEqual(
+    runCalls.map((call) => call.name),
+    ['run_activity_report', 'run_result_report'],
+  )
+  const [activity] = (runCalls[0].arguments as { activities: { kind: string; summary: string }[] }).activities
+  assert.deepEqual([activity.kind, activity.summary], ['step_started', 'Reading the code'])
+  assert.deepEqual(runCalls[1].arguments, { runId: 'run-1', results: [{ kind: 'pull_request', url: 'https://aw.example/pr/1', title: 'Fix it' }] })
+})

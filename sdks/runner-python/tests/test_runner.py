@@ -227,3 +227,38 @@ class RunnerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_a_launched_request_reports_on_its_run(self):
+        launched = request("r1", "go")
+        launched["value"]["run"] = {"runId": "run-1", "state": "working"}
+        plain = request("r2", "go")
+        seen = {}
+
+        def tools(name, args):
+            if name == "reply_claim":
+                return launched if args["requestId"] == "r1" else plain
+            return {"outcome": "ok", "value": {}}
+
+        fake = FakeMcp(tools)
+
+        def on_request(context):
+            seen[context.request_id] = context.run_id
+            context.step("Reading the code")
+            context.result("pull_request", "https://example.test/pr/1", "Fix it")
+            context.reply("done")
+
+        runner = aw.Runner("https://example.test/mcp", "test-token", "custom", on_request, transport=fake)
+        runner.dispatch({"event": "reply.requested", "replyRequestId": "r1"})
+        runner.dispatch({"event": "reply.requested", "replyRequestId": "r2"})
+        self.assertEqual(seen, {"r1": "run-1", "r2": None})
+        run_calls = [(name, args) for name, args in fake.calls if name.startswith("run_")]
+        self.assertEqual([name for name, _ in run_calls], ["run_activity_report", "run_result_report"], "a request without a run reports nothing")
+        activity = run_calls[0][1]["activities"][0]
+        self.assertEqual((activity["kind"], activity["summary"]), ("step_started", "Reading the code"))
+        self.assertEqual(run_calls[1][1], {"runId": "run-1", "results": [{"kind": "pull_request", "url": "https://example.test/pr/1", "title": "Fix it"}]})
+
+    def test_session_bind_leaves_the_harness_out_when_there_is_none(self):
+        fake = FakeMcp(lambda name, args: {"outcome": "ok", "value": {}})
+        tools = aw.ReplyTools(aw.McpClient("https://example.test/mcp", "test-token", transport=fake))
+        tools.session_bind("thread-1", "session-1")
+        self.assertEqual(fake.calls[-1], ("session_bind", {"conversationId": "thread-1", "externalRef": "session-1"}))

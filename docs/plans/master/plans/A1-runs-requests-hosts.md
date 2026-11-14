@@ -1557,8 +1557,11 @@ A1.22.
 | `agent_runs` | `agent_runs_mirror` (`AFTER INSERT`, `AFTER UPDATE OF state, …`) | `runs` | A1.1 | A1.22 |
 | `agent_run_events` | `agent_run_events_mirror` (`AFTER INSERT/UPDATE`) | `run_activities` | A1.1 | A1.22 |
 | `agent_run_usage` | `agent_run_usage_mirror` (`AFTER INSERT/UPDATE`) | `run_usage` | A1.1 | A1.22 (the table becomes a view) |
+| `organizations` | `organizations_builtin_host` (`AFTER INSERT`) | `actors` (one `integration` account), `hosts` (the built-in host row) | A1.11 | A1.17 (the built-in host is made where the server enrols itself) |
 
 No other A1 table gets a trigger: `requests::legacy` dual-writes in code, not by trigger.
+The built-in host trigger only inserts, once per workspace (`hosts_ensure_builtin`), so a
+workspace made by any path (sign-up, bootstrap, a template, a test) has its built-in host.
 Each mirror writes only its own target, and no other plan's trigger writes `runs`,
 `run_activities` or `run_usage`. K3's thing sync for kind `run` must sit on `runs` (and for
 kind `request` on `requests`), not on `agent_runs`, so that a legacy write does not reach

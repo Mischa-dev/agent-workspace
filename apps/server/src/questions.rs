@@ -160,6 +160,7 @@ pub async fn ask(
     .bind(question.work_item_id)
     .execute(&mut **transaction)
     .await?;
+    crate::requests::legacy::question_written(&mut **transaction, id).await?;
     // A question about a task opens the task; one about a conversation opens
     // it (the inbox works that out from conversation_id); otherwise the card
     // is the place to answer.
@@ -339,6 +340,7 @@ pub async fn answer(
     .bind(&text)
     .fetch_one(&mut *transaction)
     .await?;
+    crate::requests::legacy::question_written(&mut *transaction, question_id).await?;
 
     // The card has been dealt with.
     sqlx::query(
