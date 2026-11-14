@@ -83,6 +83,7 @@ mod oauth_agent;
 mod phase3_takedown;
 mod phase4_groundwork;
 mod polish_leftovers;
+mod privacy_inside_workspace;
 mod reply_requests;
 mod review_sweep;
 mod roles_and_access;

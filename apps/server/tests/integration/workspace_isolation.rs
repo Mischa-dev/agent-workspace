@@ -483,10 +483,10 @@ pub(super) fn leaked(body: &str, b_ids: &HashSet<String>) -> Vec<String> {
 // HTTP
 // ---------------------------------------------------------------------------
 
-struct HttpCase {
-    route: &'static str,
+pub(super) struct HttpCase {
+    pub(super) route: &'static str,
     /// A's own requests: must succeed and carry nothing of B's.
-    own: Vec<String>,
+    pub(super) own: Vec<String>,
     /// Requests naming B's resources: must not return B's data (404 or 403
     /// expected; a success without B data is reported as a note).
     foreign: Vec<String>,
@@ -495,7 +495,7 @@ struct HttpCase {
     filtered: Vec<String>,
 }
 
-fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
+pub(super) fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
     fn case(
         route: &'static str,
         own: Vec<String>,
@@ -1777,7 +1777,11 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
     cases
 }
 
-async fn get_text(app: &axum::Router, browser: &Browser, uri: &str) -> (StatusCode, String) {
+pub(super) async fn get_text(
+    app: &axum::Router,
+    browser: &Browser,
+    uri: &str,
+) -> (StatusCode, String) {
     let response = app
         .clone()
         .oneshot(browser.request("GET", uri, None, Value::Null))
@@ -1862,12 +1866,12 @@ async fn check_http(
 // MCP
 // ---------------------------------------------------------------------------
 
-struct McpCase {
-    tool: &'static str,
+pub(super) struct McpCase {
+    pub(super) tool: &'static str,
     /// Who must succeed with `own`: most tools are for A's connected app
     /// (acting as A's owner); a few are only for agents.
     agent_only: bool,
-    own: Vec<Value>,
+    pub(super) own: Vec<Value>,
     foreign: Vec<Value>,
     filtered: Vec<Value>,
 }
@@ -1959,7 +1963,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "workspace_template_list",
 ];
 
-fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
+pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
     fn case(
         tool: &'static str,
         own: Vec<Value>,
