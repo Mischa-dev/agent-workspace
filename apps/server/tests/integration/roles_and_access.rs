@@ -1968,6 +1968,57 @@ async fn reads_naming_tasks_or_repositories_follow_the_role_and_limit() {
 /// channels" in the app's agent limit as well as in the person's role: an
 /// app acting for a project admin can't delete another person's task
 /// comment while its limit leaves moderation out.
+/// P0.8: the SQL permission helpers hold to the membership's base role, so
+/// a viewer or a worker (no custom role) never keeps what only members hold.
+#[tokio::test]
+async fn sql_permission_helpers_hold_to_the_base_role() {
+    use agent_workspace_server::{policy::Permission, search::projects_allowing};
+    let Some(setup) = setup("p08_base_role").await else {
+        return;
+    };
+    let work = create_project(&setup, "BASE", "Base").await;
+    let project = work.parse::<Uuid>().expect("project");
+    let (member, _) = add_person(&setup, &[&work], "mia").await;
+    let (viewer, _) = add_person(&setup, &[&work], "vic").await;
+    sqlx::query(
+        "UPDATE project_memberships SET role = 'viewer', role_id = NULL WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project)
+    .bind(viewer)
+    .execute(&setup.pool)
+    .await
+    .expect("viewer");
+    let worker = Uuid::now_v7();
+    sqlx::query("INSERT INTO actors (id, kind) VALUES ($1, 'execution_worker')")
+        .bind(worker)
+        .execute(&setup.pool)
+        .await
+        .expect("worker actor");
+    sqlx::query(
+        "INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle) \
+         VALUES ($1, $2, $3, 'worker', 'Base worker', 'base-worker')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(project)
+    .bind(worker)
+    .execute(&setup.pool)
+    .await
+    .expect("worker membership");
+    let allowing = |actor: Uuid, permission: Permission| {
+        let pool = setup.pool.clone();
+        async move {
+            projects_allowing(&pool, actor, &[project], permission)
+                .await
+                .expect("projects allowing")
+        }
+    };
+    assert_eq!(allowing(member, Permission::TasksEdit).await, vec![project]);
+    assert!(allowing(viewer, Permission::TasksEdit).await.is_empty());
+    assert!(allowing(worker, Permission::TasksEdit).await.is_empty());
+    assert_eq!(allowing(viewer, Permission::TasksView).await, vec![project]);
+    assert!(allowing(worker, Permission::TasksView).await.is_empty());
+}
+
 #[tokio::test]
 async fn an_app_moderates_only_within_its_agent_limit() {
     let Some(setup) = setup("awd74_moderation").await else {
