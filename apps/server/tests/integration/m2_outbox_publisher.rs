@@ -413,3 +413,120 @@ async fn schema_pool(database_url: &str, schema: &str) -> PgPool {
         .await
         .expect("connect to isolated outbox schema")
 }
+
+/// P0.1: an event whose notifications or webhook and automation routing
+/// fail is retried, not marked published, so its inbox rows, pushes, emails
+/// and webhooks aren't lost after one transient error.
+#[tokio::test]
+async fn an_event_whose_notifications_fail_is_retried_not_published() {
+    use agent_workspace_server::realtime::publish_ready_outbox_batch;
+    use serde_json::json;
+
+    use super::{
+        mcp_admin::{create_project, setup},
+        message_edits::{add_person, create_channel, say},
+        notifications::drain,
+    };
+
+    let Some(setup) = setup("outbox_side_effects").await else {
+        return;
+    };
+    let project = create_project(&setup, "OSE", "Side effects").await;
+    let general = create_channel(&setup, &project, "general").await;
+    let (mara, _) = add_person(&setup, &[&project], "mara").await;
+    drain(&setup).await;
+    let hub = RealtimeHub::new(64);
+    let mention = |text: &str| {
+        json!({
+            "version": 1,
+            "nodes": [
+                {"type": "text", "text": text},
+                {"type": "mention", "actorId": mara}
+            ]
+        })
+    };
+    let state = |message: String| {
+        let pool = setup.pool.clone();
+        async move {
+            sqlx::query_as::<_, (bool, i32, Option<String>)>(
+                r#"
+                SELECT published_at IS NOT NULL, attempt_count, last_error_summary
+                FROM outbox_events
+                WHERE event_type = 'conversation.message.created'
+                  AND resource_id = $1
+                "#,
+            )
+            .bind(message.parse::<Uuid>().expect("message"))
+            .fetch_one(&pool)
+            .await
+            .expect("message event")
+        }
+    };
+    let retry_now = || {
+        let pool = setup.pool.clone();
+        async move {
+            sqlx::query(
+                "UPDATE outbox_events SET available_at = now() WHERE published_at IS NULL AND failed_at IS NULL",
+            )
+            .execute(&pool)
+            .await
+            .expect("make due");
+        }
+    };
+
+    // Notifications can't be written: the event stays unpublished.
+    let message = say(&setup, &setup.browser, &general, "m1", mention("Look ")).await;
+    sqlx::query("ALTER TABLE notifications RENAME TO notifications_away")
+        .execute(&setup.pool)
+        .await
+        .expect("rename notifications");
+    publish_ready_outbox_batch(&setup.pool, &hub, "side-effects-test")
+        .await
+        .expect("publish");
+    let (published, attempts, summary) = state(message.clone()).await;
+    assert!(!published, "the event was acknowledged without its notifications");
+    assert_eq!(attempts, 1);
+    assert_eq!(
+        summary.as_deref(),
+        Some("notifications or webhook and automation routing were unavailable")
+    );
+
+    // Back again, the retry delivers exactly one notification.
+    sqlx::query("ALTER TABLE notifications_away RENAME TO notifications")
+        .execute(&setup.pool)
+        .await
+        .expect("restore notifications");
+    retry_now().await;
+    drain(&setup).await;
+    let (published, _, _) = state(message.clone()).await;
+    assert!(published);
+    let delivered = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM notifications WHERE recipient_actor_id = $1",
+    )
+    .bind(mara)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("notifications");
+    assert_eq!(delivered, 1);
+
+    // The same for routing to webhooks and automations.
+    let message = say(&setup, &setup.browser, &general, "m2", mention("Again ")).await;
+    sqlx::query("ALTER TABLE webhook_subscriptions RENAME TO webhook_subscriptions_away")
+        .execute(&setup.pool)
+        .await
+        .expect("rename webhook subscriptions");
+    publish_ready_outbox_batch(&setup.pool, &hub, "side-effects-test")
+        .await
+        .expect("publish");
+    let (published, attempts, _) = state(message.clone()).await;
+    assert!(!published, "the event was acknowledged without its routing");
+    assert_eq!(attempts, 1);
+    sqlx::query("ALTER TABLE webhook_subscriptions_away RENAME TO webhook_subscriptions")
+        .execute(&setup.pool)
+        .await
+        .expect("restore webhook subscriptions");
+    retry_now().await;
+    drain(&setup).await;
+    let (published, _, _) = state(message).await;
+    assert!(published);
+}
