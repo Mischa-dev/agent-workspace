@@ -443,6 +443,19 @@ async fn queued_runs_are_idempotent_and_create_no_workspace_before_admission() {
     assert_eq!(question.0, StatusCode::OK);
     assert_eq!(question.2["kind"], "question");
     assert_eq!(question.2["response"]["answer"], "Aurora");
+    // A1.7: the answer reaches the request record in the same commit.
+    let (request_status, request_answer) = sqlx::query_as::<_, (String, Option<Value>)>(
+        "SELECT status, answer FROM requests WHERE id = $1 AND legacy_source = 'agent_approval'",
+    )
+    .bind(question_id)
+    .fetch_one(&pool)
+    .await
+    .expect("the approval's request");
+    assert_eq!(request_status, "answered");
+    assert_eq!(
+        request_answer.as_ref().and_then(|answer| answer.get("answer")),
+        Some(&json!("Aurora"))
+    );
     let repeated_question = respond_to_approval(
         &application,
         &cookie,

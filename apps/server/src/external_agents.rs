@@ -1529,6 +1529,7 @@ async fn cancel_pending_execution_requests(
     .bind(&request_ids)
     .execute(&mut **transaction)
     .await?;
+    crate::requests::legacy::request_approvals_written(&mut **transaction, &request_ids).await?;
     sqlx::query(
         r#"
         UPDATE external_execution_requests

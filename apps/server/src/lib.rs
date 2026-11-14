@@ -78,6 +78,7 @@ pub mod realtime;
 pub mod recovery;
 pub mod replies;
 pub mod repositories;
+pub mod requests;
 pub mod retention;
 pub mod roles;
 pub mod run_log;
