@@ -72,7 +72,7 @@ fn named(state: &AppState, mut session: SessionView) -> SessionView {
 
 /// A name people know a harness by: its manifest's, for ones the server
 /// knows, otherwise the runner's own word with each part capitalised
-/// (`claude_code` reads "Claude Code"). No names are kept here (A1.4).
+/// (`night_runner` reads "Night Runner"). No names are kept here (A1.4).
 pub(crate) fn harness_name(state: &AppState, harness: &str) -> String {
     if let Some(manifest) = state.supervisors.manifest(harness) {
         return manifest.display_name.clone();
@@ -345,8 +345,8 @@ mod tests {
 
     #[test]
     fn harness_words_read_as_names() {
-        assert_eq!(readable("claude_code"), "Claude Code");
-        assert_eq!(readable("codex"), "Codex");
+        assert_eq!(readable("night_runner"), "Night Runner");
+        assert_eq!(readable("runner"), "Runner");
         assert_eq!(readable("my-runner_2"), "My Runner 2");
         assert_eq!(readable(""), "");
     }

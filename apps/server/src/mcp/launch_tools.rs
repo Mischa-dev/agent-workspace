@@ -177,7 +177,7 @@ pub(super) struct SessionBindArguments {
     /// Your runner's own reference for the session, such as a Claude Code
     /// session ID or a Codex thread ID; wakeups name it as sessionRef.
     pub external_ref: String,
-    /// What runs it, such as claude_code or codex. Optional; your launched
+    /// What runs it, as one lower-case word such as night_runner. Optional; your launched
     /// run there shows it as its backend.
     #[serde(default)]
     pub harness: Option<String>,
@@ -469,7 +469,7 @@ pub(super) async fn session_bind(
     {
         return ToolResult::invalid(
             "harness",
-            "Use a short lower-case name such as claude_code, or leave it out.",
+            "Use a short lower-case name such as night_runner, or leave it out.",
         );
     }
     let harness = named_harness.unwrap_or("agent");
