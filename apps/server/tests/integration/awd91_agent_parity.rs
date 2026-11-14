@@ -511,7 +511,10 @@ async fn an_agent_takes_an_empty_project_from_goal_to_finished_run_through_mcp_a
         agent
     );
     let records_by_agent = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM collection_records WHERE project_id = $1 AND created_by_actor_id = $2",
+        "SELECT count(*) FROM collection_records record \
+         JOIN collections collection ON collection.id = record.collection_id \
+         WHERE record.project_id = $1 AND record.created_by_actor_id = $2 \
+           AND collection.builtin IS NULL",
     )
     .bind(f.seed.project_id)
     .bind(agent)

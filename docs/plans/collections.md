@@ -273,4 +273,29 @@ records.
 - In the app it's listed first; a record opens its task's page, and the
   board, gallery and calendar views are the collection ones.
 - Tasks still live in `work_items`, with their own screens and tools.
-  Moving their storage into records is left for later.
+
+### Records under tasks (step 2 of moving tasks into records)
+
+Mischa chose to move tasks into collection records for real, in six steps:
+the Tasks collection (above), records under tasks, one owner for the shared
+columns, editing Tasks like any collection, `fields` and `collection` on the
+task tools, and an "acts like a task" switch on any collection. Step 2
+(migration `20261114010000_task_records.sql`):
+
+- Every task has a record in its project's Tasks collection with the same
+  ID, number, title, custom field values (keyed by the task field IDs the
+  collection lists), creator, archive state and times. A project's first
+  task makes the Tasks collection (`ensure_tasks_collection`, which
+  `tasks::ensure` calls too), taking the first free name of "Tasks",
+  "Tasks (built in)", "Tasks (built in 2)" and so on.
+- The task is still the one that changes. Triggers on `work_items` copy
+  each insert, change and delete onto the record in the same transaction;
+  a title is cleaned for the record (trimmed, no control characters).
+  `collection_records_task_guard` refuses any other write to a Tasks
+  record, so the copy can't drift.
+- Reads don't change yet: the collection still reads `tasks::source()`.
+  Search and the links resolver skip Tasks records, so a task is found
+  once, as the task.
+- Next (step 3): the record owns title, number, field values and archive
+  state, task code reads through one view of record and task core, and
+  these triggers go.
