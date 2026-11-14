@@ -1534,3 +1534,96 @@ pub(super) async fn schema_pool(database_url: &str, schema: &str) -> PgPool {
         .await
         .expect("connect scheduler schema pool")
 }
+
+/// An app state on a fresh, migrated schema, for running a background loop
+/// directly. Returns the state, the admin pool and the schema to drop.
+pub(super) async fn background_state(prefix: &str) -> Option<(AppState, PgPool, String)> {
+    let Ok(database_url) = std::env::var("AGENT_WORKSPACE_DATABASE_URL") else {
+        eprintln!("skipping PostgreSQL integration test: AGENT_WORKSPACE_DATABASE_URL is unset");
+        return None;
+    };
+    let admin = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&database_url)
+        .await
+        .expect("connect to PostgreSQL");
+    let schema = format!("{prefix}_{}", Uuid::now_v7().simple());
+    admin
+        .execute(format!("CREATE SCHEMA {schema}").as_str())
+        .await
+        .expect("create schema");
+    let pool = super::agent_interface::schema_pool(&database_url, &schema).await;
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .expect("apply migrations");
+    let config = AppConfig::from_values(&BTreeMap::from([(
+        "AGENT_WORKSPACE_DATABASE_URL".to_owned(),
+        database_url,
+    )]))
+    .expect("test configuration");
+    let supervisors = SupervisorRegistry::new(&config).expect("supervisors");
+    let state = AppState {
+        config: Arc::new(config),
+        pool,
+        rate_limits: RateLimiters::default(),
+        realtime: RealtimeHub::new(32),
+        supervisors,
+    };
+    Some((state, admin, schema))
+}
+
+/// Runs a background loop through a stretch when its table is missing,
+/// then shuts it down: it must still be running after the errors, and
+/// return `Ok` on shutdown.
+pub(super) async fn survives_a_missing_table<F, Fut>(
+    state: AppState,
+    table: &str,
+    run: F,
+) where
+    F: FnOnce(AppState, tokio::sync::watch::Receiver<bool>) -> Fut,
+    Fut: std::future::Future<Output = Result<(), agent_workspace_server::error::AppError>>
+        + Send
+        + 'static,
+{
+    sqlx::query(&format!("ALTER TABLE {table} RENAME TO {table}_away"))
+        .execute(&state.pool)
+        .await
+        .expect("rename table");
+    let (shutdown, receiver) = tokio::sync::watch::channel(false);
+    let task = tokio::spawn(run(state.clone(), receiver));
+    // Three ticks of the one-second interval, each failing.
+    sleep(Duration::from_millis(3_200)).await;
+    assert!(
+        !task.is_finished(),
+        "the loop stopped after a database error, which stops the server"
+    );
+    sqlx::query(&format!("ALTER TABLE {table}_away RENAME TO {table}"))
+        .execute(&state.pool)
+        .await
+        .expect("restore table");
+    sleep(Duration::from_millis(1_200)).await;
+    assert!(!task.is_finished());
+    shutdown.send(true).expect("send shutdown");
+    let finished = tokio::time::timeout(Duration::from_secs(10), task)
+        .await
+        .expect("the loop stops on shutdown")
+        .expect("the loop didn't panic");
+    assert!(finished.is_ok(), "{finished:?}");
+}
+
+/// P0.2: a database error in a pass doesn't end the scheduler loop.
+#[tokio::test]
+async fn scheduler_keeps_running_through_a_database_error() {
+    let Some((state, admin, schema)) = background_state("scheduler_blip").await else {
+        return;
+    };
+    survives_a_missing_table(state.clone(), "agent_runs", |state, shutdown| {
+        agent_workspace_server::scheduler::run(state, shutdown)
+    })
+    .await;
+    state.pool.close().await;
+    agent_workspace_server::test_support::drop_schema(&admin, &schema)
+        .await
+        .expect("drop schema");
+}

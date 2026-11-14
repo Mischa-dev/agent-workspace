@@ -841,3 +841,21 @@ async fn schema_pool(database_url: &str, schema: &str) -> PgPool {
         .await
         .expect("connect schema-scoped M5 GitHub pool")
 }
+
+/// P0.2: a database error in a pass doesn't end the GitHub job worker.
+#[tokio::test]
+async fn github_jobs_keep_running_through_a_database_error() {
+    use super::m3_scheduler_http::{background_state, survives_a_missing_table};
+
+    let Some((state, admin, schema)) = background_state("github_jobs_blip").await else {
+        return;
+    };
+    survives_a_missing_table(state.clone(), "github_jobs", |state, shutdown| {
+        agent_workspace_server::github::run_jobs(state, shutdown)
+    })
+    .await;
+    state.pool.close().await;
+    agent_workspace_server::test_support::drop_schema(&admin, &schema)
+        .await
+        .expect("drop schema");
+}

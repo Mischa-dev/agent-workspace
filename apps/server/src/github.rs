@@ -151,7 +151,16 @@ pub async fn run_jobs(
     let mut interval = tokio::time::interval(Duration::from_secs(1));
     loop {
         tokio::select! {
-            _ = interval.tick() => drain_jobs(&state).await?,
+            // A database blip must not stop the server: log and try again
+            // on the next tick.
+            _ = interval.tick() => {
+                if let Err(error) = drain_jobs(&state).await {
+                    tracing::error!(
+                        error_category = error.log_category(),
+                        "GitHub job worker pass failed"
+                    );
+                }
+            }
             changed = shutdown.changed() => {
                 if changed.is_err() || *shutdown.borrow() {
                     return Ok(());
