@@ -870,9 +870,12 @@ pub(super) struct RecordQueryArguments {
     /// Up to 3 sort keys: a field's name, or title, number or updated.
     /// Records come by number when left out.
     pub sort: Option<Vec<SortWrite>>,
-    /// A single choice, person or checkbox field to group by: the answer
-    /// counts the records in each group.
+    /// A choice, status, person, checkbox or date field to group by: the
+    /// answer counts the records in each group.
     pub group_by: Option<String>,
+    /// Grouped by a date: "day", "week" (from Monday) or "month" (the
+    /// default).
+    pub group_bucket: Option<crate::fields::DateBucket>,
     /// The fields to return, by name. Left out, every field with a value;
     /// [] returns numbers and titles only.
     pub fields: Option<Vec<String>>,
@@ -1054,6 +1057,9 @@ pub(super) async fn record_query(
                 Err(message) => return Ok(ToolResult::invalid("groupBy", message)),
             }
         }
+        if arguments.group_bucket.is_some() {
+            config.group_bucket = arguments.group_bucket;
+        }
         if let Err(message) = views::check(&config, &definitions) {
             return Ok(ToolResult::invalid("filters", message));
         }
@@ -1142,7 +1148,11 @@ pub(super) async fn record_query(
             &mut connection,
             project_id,
             &definitions,
-            found.iter().map(|record| &record.field_values),
+            found
+                .iter()
+                .map(|record| record.shown_values(&definitions))
+                .collect::<Vec<_>>()
+                .iter(),
         )
         .await?;
         let mut group_of = page
@@ -1412,7 +1422,11 @@ pub(super) async fn record_write(
             &mut transaction,
             project_id,
             &definitions,
-            written.iter().map(|written| &written.record().field_values),
+            written
+                .iter()
+                .map(|written| written.record().shown_values(&definitions))
+                .collect::<Vec<_>>()
+                .iter(),
         )
         .await?;
         let value = RecordWriteValue {

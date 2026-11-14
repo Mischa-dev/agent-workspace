@@ -44,6 +44,9 @@ pub const MAX_OPTIONS: usize = 100;
 pub const MAX_OPTION_NAME_CHARACTERS: usize = 60;
 pub const MAX_TEXT_CHARACTERS: usize = 5_000;
 pub const MAX_URL_CHARACTERS: usize = 2_048;
+pub const MAX_LONG_TEXT_CHARACTERS: usize = 20_000;
+pub const MAX_EMAIL_CHARACTERS: usize = 320;
+pub const MAX_PHONE_CHARACTERS: usize = 32;
 /// Sorts on text compare this many characters of it, lowercased: plenty to
 /// order by, and few enough that a list's cursor, which carries the last
 /// row's sort values, stays small. Values that share them fall through to
@@ -64,7 +67,8 @@ const MAX_CLAUSE_VALUE_CHARACTERS: usize = 200;
 /// manifest names types from (T1.2; `modules::contract::FieldType` is this
 /// type). [`FieldType::ALL`] are the types a field can be made with; the
 /// rest are named by module manifests only, until the field layer stores
-/// them (`FieldType::is_stored`).
+/// them (`FieldType::is_stored`). System types (`FieldType::is_system`)
+/// store nothing: they read the record's own columns.
 #[derive(
     Clone,
     Copy,
@@ -81,14 +85,14 @@ const MAX_CLAUSE_VALUE_CHARACTERS: usize = 200;
 #[serde(rename_all = "snake_case")]
 pub enum FieldType {
     Text,
-    /// Paragraphs of text. Declared by manifests only, for now.
+    /// Paragraphs of text.
     LongText,
     Number,
     Date,
     SingleChoice,
     MultipleChoice,
-    /// A status from the thing's workflow. Declared by manifests only, for
-    /// now.
+    /// One of its options, each of a status category ("started",
+    /// "completed"...), which lists filter, sort and group by.
     Status,
     Person,
     /// Several people. Declared by manifests only.
@@ -96,27 +100,88 @@ pub enum FieldType {
     /// The project's labels. Declared by manifests only.
     Labels,
     Url,
+    /// An email address, kept lowercase.
+    Email,
+    /// A phone number as written, with its digits compared.
+    Phone,
     Checkbox,
     // A link to a task or a page in the same project (`FieldConfig::target`).
     Link,
+    /// When the record was made (system).
+    CreatedTime,
+    /// When the record last changed (system).
+    EditedTime,
+    /// Who made the record (system).
+    CreatedBy,
+    /// Who last changed the record (system).
+    EditedBy,
+    /// The record's number (system).
+    AutoId,
 }
 
 impl FieldType {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 18] = [
         Self::Text,
+        Self::LongText,
         Self::Number,
         Self::Date,
         Self::SingleChoice,
         Self::MultipleChoice,
+        Self::Status,
         Self::Person,
         Self::Url,
+        Self::Email,
+        Self::Phone,
         Self::Checkbox,
         Self::Link,
+        Self::CreatedTime,
+        Self::EditedTime,
+        Self::CreatedBy,
+        Self::EditedBy,
+        Self::AutoId,
     ];
 
-    /// Whether fields of this type can be made and stored.
+    /// Whether fields of this type can be made.
     pub fn is_stored(self) -> bool {
         Self::ALL.contains(&self)
+    }
+
+    /// Whether it reads the record's own columns instead of a stored value:
+    /// nobody writes it.
+    pub fn is_system(self) -> bool {
+        matches!(
+            self,
+            Self::CreatedTime | Self::EditedTime | Self::CreatedBy | Self::EditedBy | Self::AutoId
+        )
+    }
+
+    /// Where a system type's value is read: the record's column (aliased
+    /// `record`).
+    pub fn system_accessor(self) -> Option<Accessor> {
+        let (expr, sql_type) = match self {
+            Self::CreatedTime => ("record.created_at", "timestamptz"),
+            Self::EditedTime => ("record.updated_at", "timestamptz"),
+            Self::CreatedBy => ("record.created_by_actor_id", "uuid"),
+            Self::EditedBy => ("record.updated_by_actor_id", "uuid"),
+            Self::AutoId => ("record.number", "bigint"),
+            _ => return None,
+        };
+        Some(Accessor::Column {
+            expr: expr.to_owned(),
+            sql_type,
+            category: None,
+        })
+    }
+
+    /// The type it filters, sorts and groups like: a system type's value's
+    /// own (a time is a date, a maker a person, an ID a number).
+    pub fn behaves_as(self) -> Self {
+        match self {
+            Self::CreatedTime | Self::EditedTime => Self::Date,
+            Self::CreatedBy | Self::EditedBy => Self::Person,
+            Self::AutoId => Self::Number,
+            other => other,
+        }
     }
 
     pub fn as_str(self) -> &'static str {
@@ -132,13 +197,20 @@ impl FieldType {
             Self::MultipleChoice => "multiple_choice",
             Self::Person => "person",
             Self::Url => "url",
+            Self::Email => "email",
+            Self::Phone => "phone",
             Self::Checkbox => "checkbox",
             Self::Link => "link",
+            Self::CreatedTime => "created_time",
+            Self::EditedTime => "edited_time",
+            Self::CreatedBy => "created_by",
+            Self::EditedBy => "edited_by",
+            Self::AutoId => "auto_id",
         }
     }
 
     /// A type as stored, or as people and agents tend to write it ("select",
-    /// "multi select", "user", "boolean", "relation").
+    /// "multi select", "user", "boolean", "relation", "paragraph").
     pub fn parse(value: &str) -> Option<Self> {
         let squashed = value
             .trim()
@@ -146,34 +218,62 @@ impl FieldType {
             .replace([' ', '-', '_'], "");
         Some(match squashed.as_str() {
             "text" | "string" => Self::Text,
+            "longtext" | "paragraph" | "paragraphs" | "textarea" | "richtext" | "notes" => {
+                Self::LongText
+            }
             "number" | "numeric" => Self::Number,
             "date" => Self::Date,
             "singlechoice" | "choice" | "select" | "singleselect" => Self::SingleChoice,
             "multiplechoice" | "multichoice" | "multiselect" | "multipleselect" | "choices" => {
                 Self::MultipleChoice
             }
+            "status" | "state" => Self::Status,
             "person" | "user" | "people" | "member" => Self::Person,
             "url" | "website" => Self::Url,
+            "email" | "emailaddress" | "mail" => Self::Email,
+            "phone" | "phonenumber" | "telephone" | "tel" | "mobile" => Self::Phone,
             "checkbox" | "boolean" | "bool" => Self::Checkbox,
             "link" | "relation" | "reference" => Self::Link,
+            "createdtime" | "createdat" | "created" | "createdon" => Self::CreatedTime,
+            "editedtime" | "lasteditedtime" | "updatedat" | "updated" | "edited" | "lastedited"
+            | "modified" => Self::EditedTime,
+            "createdby" | "creator" | "maker" => Self::CreatedBy,
+            "editedby" | "lasteditedby" | "updatedby" | "modifiedby" => Self::EditedBy,
+            "autoid" | "autonumber" | "uniqueid" => Self::AutoId,
             _ => return None,
         })
     }
 
-    pub fn has_options(self) -> bool {
-        matches!(self, Self::SingleChoice | Self::MultipleChoice)
+    /// Whether a task field can be of this type: tasks have their own
+    /// status and record columns, so not those.
+    pub fn suits_tasks(self) -> bool {
+        self.is_stored() && !self.is_system() && self != Self::Status
     }
 
-    /// Whether a list can be grouped by a field of this type.
+    pub fn has_options(self) -> bool {
+        matches!(
+            self,
+            Self::SingleChoice | Self::MultipleChoice | Self::Status
+        )
+    }
+
+    /// Whether a list can be grouped by a field of this type, one group per
+    /// record (`FieldDefinition::can_group` adds choices and dates).
     pub fn can_group(self) -> bool {
-        matches!(self, Self::SingleChoice | Self::Person | Self::Checkbox)
+        matches!(
+            self.behaves_as(),
+            Self::SingleChoice | Self::Status | Self::Person | Self::Checkbox
+        )
     }
 
     /// The filter operations that make sense for it.
     pub fn ops(self) -> &'static [FieldOp] {
         use FieldOp::*;
-        match self {
-            Self::Text | Self::LongText | Self::Url => &[Contains, Is, IsNot, Empty, NotEmpty],
+        match self.behaves_as() {
+            Self::Text | Self::Url | Self::Email | Self::Phone => {
+                &[Contains, Is, IsNot, Empty, NotEmpty]
+            }
+            Self::LongText => &[Contains, Empty, NotEmpty],
             Self::Number => &[Is, IsNot, Gt, Gte, Lt, Lte, Empty, NotEmpty],
             Self::Date => &[Is, IsNot, Gt, Gte, Lt, Lte, Within, Empty, NotEmpty],
             Self::Status => &[Is, IsNot, CategoryIs, CategoryIsNot, Empty, NotEmpty],
@@ -184,6 +284,34 @@ impl FieldType {
             | Self::People
             | Self::Link => &[Is, IsNot, Empty, NotEmpty],
             Self::Checkbox => &[Is, Empty, NotEmpty],
+            Self::CreatedTime
+            | Self::EditedTime
+            | Self::CreatedBy
+            | Self::EditedBy
+            | Self::AutoId => &[Empty, NotEmpty],
+        }
+    }
+}
+
+/// How a list grouped by a date puts records together: by day, by week
+/// (from Monday) or by month.
+#[derive(
+    Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum DateBucket {
+    Day,
+    Week,
+    #[default]
+    Month,
+}
+
+impl DateBucket {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Day => "day",
+            Self::Week => "week",
+            Self::Month => "month",
         }
     }
 }
@@ -343,12 +471,16 @@ impl FieldDefinition {
         ops
     }
 
-    /// Whether a list can be grouped by the field: its type can, or it's a
-    /// labels or parent field its source groups (a task's).
+    /// Whether a list can be grouped by the field: its type can; it holds
+    /// several choices (a record in each of its groups) or a date (by
+    /// `DateBucket`); or it's a parent field its source groups (a task's).
     pub fn can_group(&self) -> bool {
         self.field_type.can_group()
-            || (self.accessor != Accessor::Stored
-                && matches!(self.field_type, FieldType::MultipleChoice | FieldType::Link))
+            || matches!(
+                self.field_type.behaves_as(),
+                FieldType::MultipleChoice | FieldType::Date
+            )
+            || (self.accessor != Accessor::Stored && self.field_type == FieldType::Link)
     }
 
     /// The option with this ID, archived or not.
@@ -425,18 +557,19 @@ impl TryFrom<DefinitionRow> for FieldDefinition {
     type Error = AppError;
 
     fn try_from(row: DefinitionRow) -> Result<Self, AppError> {
+        let field_type =
+            FieldType::parse(&row.field_type).ok_or(AppError::Internal("stored field type"))?;
         Ok(Self {
             id: row.id,
             name: row.name,
             description: row.description,
-            field_type: FieldType::parse(&row.field_type)
-                .ok_or(AppError::Internal("stored field type"))?,
             config: serde_json::from_value(row.config)
                 .map_err(|_| AppError::Internal("stored field config"))?,
             position: row.position,
             archived: row.archived,
             version: row.version,
-            accessor: Accessor::Stored,
+            accessor: field_type.system_accessor().unwrap_or_default(),
+            field_type,
         })
     }
 }
@@ -474,6 +607,9 @@ pub struct OptionView {
     pub color: String,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub archived: bool,
+    /// Status options: the option's category.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
 }
 
 impl From<&FieldDefinition> for FieldView {
@@ -492,6 +628,7 @@ impl From<&FieldDefinition> for FieldView {
                     name: option.name.clone(),
                     color: option.color.clone(),
                     archived: option.archived,
+                    category: option.category.clone(),
                 })
                 .collect(),
             target: field.config.target,
@@ -555,6 +692,39 @@ pub struct OptionInput {
     /// pink or gray. Left out, it's picked from the name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    /// Status fields: the option's category, one of backlog, unstarted,
+    /// started, review, verification, completed or canceled. Left out, an
+    /// existing option keeps its own and a new one is unstarted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+}
+
+/// A status option's category as written, if it's one.
+pub fn status_category(value: &str) -> Option<&'static str> {
+    let value = value.trim().to_ascii_lowercase().replace([' ', '-'], "_");
+    STATUS_CATEGORIES
+        .iter()
+        .copied()
+        .find(|category| *category == value)
+}
+
+/// The options a new status field starts with.
+fn default_status_options() -> Vec<ChoiceOption> {
+    [
+        ("Not started", "unstarted", "gray"),
+        ("In progress", "started", "blue"),
+        ("Done", "completed", "green"),
+    ]
+    .into_iter()
+    .map(|(name, category, color)| ChoiceOption {
+        id: Uuid::now_v7(),
+        name: name.to_owned(),
+        color: work_item_labels::normalize_color(color)
+            .unwrap_or_else(|| work_item_labels::default_color(name).to_owned()),
+        archived: false,
+        category: Some(category.to_owned()),
+    })
+    .collect()
 }
 
 /// Why a field's settings were refused: the argument and what would work.
@@ -695,12 +865,38 @@ pub fn normalize_config(
             if next.iter().any(|option: &ChoiceOption| option.id == id) {
                 return Err(problem("options", "Each option can appear once."));
             }
+            let category = match (field_type, input.category.as_deref()) {
+                (FieldType::Status, Some(category)) => {
+                    Some(status_category(category).ok_or_else(|| {
+                        problem(
+                            "options",
+                            format!(
+                                "\"{name}\" needs a category: {}.",
+                                STATUS_CATEGORIES.join(", ")
+                            ),
+                        )
+                    })?)
+                }
+                (FieldType::Status, None) => Some(
+                    config
+                        .options
+                        .iter()
+                        .find(|option| option.id == id)
+                        .and_then(|option| option.category.as_deref())
+                        .and_then(status_category)
+                        .unwrap_or("unstarted"),
+                ),
+                (_, Some(_)) => {
+                    return Err(problem("options", "Only status options have a category."));
+                }
+                (_, None) => None,
+            };
             next.push(ChoiceOption {
                 id,
                 name,
                 color,
                 archived: false,
-                category: None,
+                category: category.map(str::to_owned),
             });
         }
         // Options left out are archived, after the active ones.
@@ -728,6 +924,8 @@ pub fn normalize_config(
             ));
         }
         config.options = next;
+    } else if field_type == FieldType::Status && current.is_none() {
+        config.options = default_status_options();
     }
     Ok(config)
 }
@@ -810,6 +1008,76 @@ pub fn normalize_url(value: &str) -> Option<String> {
     (candidate.chars().count() <= MAX_URL_CHARACTERS).then_some(candidate)
 }
 
+/// A lowercased email address of a plain shape (RFC 5321's limits: a
+/// local part of at most 64 characters and a domain with a dot), or None.
+pub fn normalize_email(value: &str) -> Option<String> {
+    let value = value.trim().trim_start_matches("mailto:").to_lowercase();
+    if value.chars().count() > MAX_EMAIL_CHARACTERS {
+        return None;
+    }
+    let (local, domain) = value.rsplit_once('@')?;
+    let local_ok = !local.is_empty()
+        && local.len() <= 64
+        && !local.starts_with('.')
+        && !local.ends_with('.')
+        && !local.contains("..")
+        && local.chars().all(|character| {
+            character.is_alphanumeric() || "!#$%&'*+/=?^_`{|}~.-".contains(character)
+        });
+    let labels = domain.split('.').collect::<Vec<_>>();
+    let domain_ok = labels.len() >= 2
+        && domain.len() <= 253
+        && labels.iter().all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .chars()
+                    .all(|character| character.is_alphanumeric() || character == '-')
+        });
+    (local_ok && domain_ok).then_some(value)
+}
+
+/// A phone number as written, spaces and all, if it has a plausible number
+/// of digits and nothing but digits, one leading +, spaces, dots, dashes
+/// and brackets. The error says what's wrong with it.
+pub fn normalize_phone(value: &str) -> Result<String, &'static str> {
+    let value = collapse(value.trim());
+    if value.chars().count() > MAX_PHONE_CHARACTERS {
+        return Err("at most 32 characters.");
+    }
+    if let Some(bad) = value.chars().enumerate().find(|(index, character)| {
+        !(character.is_ascii_digit()
+            || matches!(character, ' ' | '.' | '-' | '(' | ')')
+            || (*character == '+' && *index == 0))
+    }) {
+        return Err(if bad.1 == '+' {
+            "a + only at the start."
+        } else {
+            "only digits, a leading +, spaces, dots, dashes and brackets."
+        });
+    }
+    let digits = phone_digits(&value);
+    if !(4..=15).contains(&digits.trim_start_matches('+').len()) {
+        return Err("4 to 15 digits.");
+    }
+    Ok(value)
+}
+
+/// A phone number's digits (and its leading +), as `is` compares them.
+pub fn phone_digits(value: &str) -> String {
+    value
+        .trim()
+        .chars()
+        .enumerate()
+        .filter(|(index, character)| {
+            character.is_ascii_digit() || (*character == '+' && *index == 0)
+        })
+        .map(|(_, character)| character)
+        .collect()
+}
+
 /// Checks a value written for `field`. The message says what would work.
 pub fn normalize_value(field: &FieldDefinition, input: &Value) -> Result<Normalized, String> {
     normalize_value_keeping(field, input, None)
@@ -828,12 +1096,53 @@ pub fn normalize_value_keeping(
     let name = &field.name;
     let blank = input.as_str().is_some_and(|text| text.trim().is_empty());
     match field.field_type {
-        FieldType::LongText | FieldType::Status | FieldType::People | FieldType::Labels => {
-            Err(format!(
-                "\"{name}\" is a {} field, which records don't store.",
-                field.field_type.as_str()
-            ))
+        FieldType::People | FieldType::Labels => Err(format!(
+            "\"{name}\" is a {} field, which records don't store.",
+            field.field_type.as_str()
+        )),
+        FieldType::CreatedTime
+        | FieldType::EditedTime
+        | FieldType::CreatedBy
+        | FieldType::EditedBy
+        | FieldType::AutoId => Err(format!(
+            "\"{name}\" is set by the app from the record itself, so it can't be written."
+        )),
+        FieldType::LongText => {
+            let Value::String(text) = input else {
+                return Err(format!("\"{name}\" takes text."));
+            };
+            let text = text.trim();
+            if text.is_empty() {
+                return Ok(Normalized::Clear);
+            }
+            if text.chars().count() > MAX_LONG_TEXT_CHARACTERS || !text_is_clean(text) {
+                return Err(format!(
+                    "\"{name}\" takes up to {MAX_LONG_TEXT_CHARACTERS} characters, with no control characters except line breaks and tabs."
+                ));
+            }
+            Ok(Normalized::Value(Value::String(text.to_owned())))
         }
+        FieldType::Email => match input {
+            Value::String(text) if text.trim().is_empty() => Ok(Normalized::Clear),
+            Value::String(text) => normalize_email(text)
+                .map(|email| Normalized::Value(Value::String(email)))
+                .ok_or_else(|| {
+                    format!("\"{name}\" takes an email address, such as ada@example.com.")
+                }),
+            _ => Err(format!("\"{name}\" takes an email address.")),
+        },
+        FieldType::Phone => match input {
+            Value::String(text) if text.trim().is_empty() => Ok(Normalized::Clear),
+            Value::String(text) => normalize_phone(text)
+                .map(|phone| Normalized::Value(Value::String(phone)))
+                .map_err(|reason| format!("\"{name}\" takes a phone number: {reason}")),
+            Value::Number(number) => normalize_phone(&number.to_string())
+                .map(|phone| Normalized::Value(Value::String(phone)))
+                .map_err(|reason| format!("\"{name}\" takes a phone number: {reason}")),
+            _ => Err(format!(
+                "\"{name}\" takes a phone number, such as +44 20 7946 0958."
+            )),
+        },
         FieldType::Text => {
             let Value::String(text) = input else {
                 return Err(format!("\"{name}\" takes text."));
@@ -868,7 +1177,7 @@ pub fn normalize_value_keeping(
                 .map(|date| Normalized::Value(Value::String(date.to_string())))
                 .ok_or_else(|| format!("\"{name}\" takes a date as YYYY-MM-DD."))
         }
-        FieldType::SingleChoice => {
+        FieldType::SingleChoice | FieldType::Status => {
             if blank {
                 return Ok(Normalized::Clear);
             }
@@ -979,7 +1288,7 @@ pub fn display_value(
             .map_or(Value::Null, |option| Value::String(option.name.clone()))
     };
     match field.field_type {
-        FieldType::SingleChoice => option_name(value),
+        FieldType::SingleChoice | FieldType::Status => option_name(value),
         FieldType::MultipleChoice => Value::Array(
             value
                 .as_array()
@@ -991,10 +1300,12 @@ pub fn display_value(
                 })
                 .unwrap_or_default(),
         ),
-        FieldType::Person | FieldType::Link => match value.as_str() {
-            Some(id) => Value::String(name_of(id).unwrap_or_else(|| id.to_owned())),
-            None => Value::Null,
-        },
+        FieldType::Person | FieldType::Link | FieldType::CreatedBy | FieldType::EditedBy => {
+            match value.as_str() {
+                Some(id) => Value::String(name_of(id).unwrap_or_else(|| id.to_owned())),
+                None => Value::Null,
+            }
+        }
         _ => value.clone(),
     }
 }
@@ -1018,9 +1329,12 @@ pub fn display_text(value: &Value) -> String {
 /// The IDs of people and linked records a stored value names, for the
 /// record's module to look up in one go.
 pub fn referenced_id(field: &FieldDefinition, value: &Value) -> Option<Uuid> {
-    matches!(field.field_type, FieldType::Person | FieldType::Link)
-        .then(|| value.as_str()?.parse().ok())
-        .flatten()
+    matches!(
+        field.field_type.behaves_as(),
+        FieldType::Person | FieldType::Link
+    )
+    .then(|| value.as_str()?.parse().ok())
+    .flatten()
 }
 
 // ---------------------------------------------------------------------------
@@ -1145,9 +1459,9 @@ pub fn resolve_me_in(
     reader: Uuid,
 ) {
     for clause in clauses {
-        let person = definitions
-            .iter()
-            .any(|field| field.id == clause.field && field.field_type == FieldType::Person);
+        let person = definitions.iter().any(|field| {
+            field.id == clause.field && field.field_type.behaves_as() == FieldType::Person
+        });
         if !person {
             continue;
         }
@@ -1201,25 +1515,36 @@ pub fn check_clause(field: &FieldDefinition, clause: &FieldClause) -> Result<(),
         _ => {}
     }
     for value in &clause.values {
-        let ok = match (field.field_type, clause.op) {
-            (FieldType::Number, _) => value.trim().parse::<f64>().is_ok_and(f64::is_finite),
-            (FieldType::Date, _) => NaiveDate::parse_from_str(value.trim(), "%Y-%m-%d").is_ok(),
-            (FieldType::SingleChoice | FieldType::MultipleChoice, _) => {
+        let ok = match field.field_type.behaves_as() {
+            // A record's number is whole.
+            FieldType::Number if field.field_type == FieldType::AutoId => {
+                value.trim().parse::<i64>().is_ok()
+            }
+            FieldType::Number => value.trim().parse::<f64>().is_ok_and(f64::is_finite),
+            FieldType::Date => NaiveDate::parse_from_str(value.trim(), "%Y-%m-%d").is_ok(),
+            FieldType::SingleChoice | FieldType::MultipleChoice | FieldType::Status => {
                 field.option(value).is_some()
             }
-            (FieldType::Person | FieldType::Link, _) => value.parse::<Uuid>().is_ok(),
-            (FieldType::Checkbox, _) => value == "true",
-            (FieldType::Text | FieldType::Url, _) => true,
-            (
-                FieldType::LongText | FieldType::Status | FieldType::People | FieldType::Labels,
-                _,
-            ) => false,
+            FieldType::Person | FieldType::Link => value.parse::<Uuid>().is_ok(),
+            FieldType::Checkbox => value == "true",
+            FieldType::Text
+            | FieldType::LongText
+            | FieldType::Url
+            | FieldType::Email
+            | FieldType::Phone => true,
+            FieldType::People
+            | FieldType::Labels
+            | FieldType::CreatedTime
+            | FieldType::EditedTime
+            | FieldType::CreatedBy
+            | FieldType::EditedBy
+            | FieldType::AutoId => false,
         };
         if !ok {
-            return Err(match field.field_type {
+            return Err(match field.field_type.behaves_as() {
                 FieldType::Number => format!("\"{name}\" filters by numbers."),
                 FieldType::Date => format!("\"{name}\" filters by dates as YYYY-MM-DD."),
-                FieldType::SingleChoice | FieldType::MultipleChoice => format!(
+                FieldType::SingleChoice | FieldType::MultipleChoice | FieldType::Status => format!(
                     "\"{name}\" filters by its options: {}.",
                     field.active_option_names()
                 ),
@@ -1250,8 +1575,8 @@ pub fn clause_from_written(
             stored.push(value.trim().to_ascii_lowercase().replace([' ', '-'], "_"));
             continue;
         }
-        match field.field_type {
-            FieldType::SingleChoice | FieldType::MultipleChoice => {
+        match field.field_type.behaves_as() {
+            FieldType::SingleChoice | FieldType::MultipleChoice | FieldType::Status => {
                 let option = field
                     .config
                     .options
@@ -1277,6 +1602,9 @@ pub fn clause_from_written(
             },
             FieldType::Date => stored.push(value.trim().to_owned()),
             FieldType::Number => stored.push(value.trim().replace([',', '_'], "")),
+            FieldType::Email if op != FieldOp::Contains => {
+                stored.push(value.trim().to_lowercase());
+            }
             _ => stored.push(value.clone()),
         }
     }
@@ -1400,9 +1728,39 @@ pub fn push_condition(
                 wanted.insert(clause.field.to_string(), held);
                 builder.push(format!("{column} @> "));
                 builder.push_bind(Value::Object(wanted));
+            } else if field.field_type == FieldType::Phone
+                && matches!(clause.op, FieldOp::Is | FieldOp::IsNot)
+            {
+                // Numbers match by their digits, however they're spaced.
+                let digits = format!(
+                    "regexp_replace({}, '[^0-9+]', '', 'g')",
+                    text_at(column, clause.field)
+                );
+                builder.push(if clause.op == FieldOp::Is {
+                    format!("{digits} = ANY(")
+                } else {
+                    format!("({digits} IS NULL OR NOT {digits} = ANY(")
+                });
+                builder.push_bind(
+                    clause
+                        .values
+                        .iter()
+                        .map(|value| phone_digits(value))
+                        .collect::<Vec<_>>(),
+                );
+                builder.push(if clause.op == FieldOp::Is { ")" } else { "))" });
             } else {
                 push_stored_condition(builder, column, clause, today);
             }
+        }
+        Accessor::Column {
+            expr,
+            sql_type,
+            category,
+        } if *sql_type == "timestamptz" && field.field_type.behaves_as() == FieldType::Date => {
+            // A time filters by its day (UTC), as a date field does.
+            let day = format!("(({expr}) AT TIME ZONE 'UTC')::date");
+            push_column_condition(builder, &day, "date", category.as_deref(), clause, today);
         }
         Accessor::Column {
             expr,
@@ -1784,13 +2142,19 @@ pub fn sort_keys(field: &FieldDefinition, column: &str, project: &str) -> Vec<So
         ty: "integer",
         follows_direction: false,
     };
-    let by_value = match field.field_type {
+    let by_value = match field.field_type.behaves_as() {
         FieldType::Text
         | FieldType::Url
+        | FieldType::Email
+        | FieldType::Phone
         | FieldType::LongText
-        | FieldType::Status
         | FieldType::People
-        | FieldType::Labels => key(
+        | FieldType::Labels
+        | FieldType::CreatedTime
+        | FieldType::EditedTime
+        | FieldType::CreatedBy
+        | FieldType::EditedBy
+        | FieldType::AutoId => key(
             format!("left(lower(COALESCE({text}, '')), {SORT_PREFIX_CHARACTERS})"),
             "text",
         ),
@@ -1813,6 +2177,14 @@ pub fn sort_keys(field: &FieldDefinition, column: &str, project: &str) -> Vec<So
             format!(
                 "COALESCE(array_position({}, {text}), 0)",
                 uuid_array(field.config.options.iter().map(|option| option.id))
+            ),
+            "integer",
+        ),
+        // By category, in workflow order, then by option.
+        FieldType::Status => key(
+            format!(
+                "COALESCE(array_position({}, {text}), 0)",
+                uuid_array(status_order(field))
             ),
             "integer",
         ),
@@ -1862,6 +2234,25 @@ pub fn sort_keys(field: &FieldDefinition, column: &str, project: &str) -> Vec<So
         },
     };
     vec![empty_last, by_value]
+}
+
+/// A status field's option IDs by category (workflow order), then in the
+/// field's own order.
+fn status_order(field: &FieldDefinition) -> impl Iterator<Item = Uuid> + '_ {
+    let rank = |option: &ChoiceOption| {
+        option
+            .category
+            .as_deref()
+            .and_then(|category| {
+                STATUS_CATEGORIES
+                    .iter()
+                    .position(|known| *known == category)
+            })
+            .unwrap_or(STATUS_CATEGORIES.len())
+    };
+    let mut options = field.config.options.iter().enumerate().collect::<Vec<_>>();
+    options.sort_by_key(|(index, option)| (rank(option), *index));
+    options.into_iter().map(|(_, option)| option.id)
 }
 
 /// A field's value as SQL, wherever it comes from (`Accessor`): whether it
@@ -1939,20 +2330,105 @@ pub struct GroupSql {
     pub order: Vec<SortKey>,
 }
 
-/// SQL for grouping by a field whose type `can_group`. The join is aliased
-/// `group_field`.
-pub fn group_sql(definition: &FieldDefinition, column: &str, project: &str) -> Option<GroupSql> {
+/// SQL for grouping by a field that `can_group`; a date by `bucket`. The
+/// join is aliased `group_field`. A record holding several choices joins a
+/// row for each, so it's in each of their groups.
+pub fn group_sql(
+    definition: &FieldDefinition,
+    column: &str,
+    project: &str,
+    bucket: DateBucket,
+) -> Option<GroupSql> {
     let field = definition.id;
     let Reading {
         text,
         checked,
         uuid,
+        elements,
         ..
     } = Reading::of(definition, column);
-    Some(match definition.field_type {
+    Some(match definition.field_type.behaves_as() {
         // Options of fields that aren't stored are their source's to name
         // (`views::source::RecordSource::group_sql`).
-        FieldType::SingleChoice if definition.accessor != Accessor::Stored => return None,
+        FieldType::SingleChoice | FieldType::MultipleChoice | FieldType::Status
+            if definition.accessor != Accessor::Stored =>
+        {
+            return None;
+        }
+        FieldType::MultipleChoice => GroupSql {
+            join: format!(
+                " LEFT JOIN LATERAL (SELECT choice.option ->> 'id' AS id, \
+                   choice.option ->> 'name' AS name, \
+                   choice.option ->> 'color' AS color, choice.position \
+                   FROM field_definitions group_definition \
+                   CROSS JOIN LATERAL jsonb_array_elements(group_definition.config -> 'options') \
+                     WITH ORDINALITY AS choice(option, position) \
+                   WHERE group_definition.project_id = {project} AND group_definition.id = '{field}' \
+                     AND choice.option ->> 'id' IN (SELECT element.value FROM {elements})) \
+                 group_field ON true"
+            ),
+            key: "COALESCE(group_field.id, 'none')".to_owned(),
+            label: "COALESCE(group_field.name, 'No value')".to_owned(),
+            color: "group_field.color".to_owned(),
+            order: vec![
+                key("(group_field.name IS NULL)::integer".to_owned(), "integer"),
+                key("COALESCE(group_field.position, 0)".to_owned(), "bigint"),
+            ],
+        },
+        // By category, in workflow order, then by option.
+        FieldType::Status => GroupSql {
+            join: format!(
+                " LEFT JOIN LATERAL (SELECT choice.option ->> 'name' AS name, \
+                   choice.option ->> 'color' AS color \
+                   FROM field_definitions group_definition \
+                   CROSS JOIN LATERAL jsonb_array_elements(group_definition.config -> 'options') \
+                     AS choice(option) \
+                   WHERE group_definition.project_id = {project} AND group_definition.id = '{field}' \
+                     AND choice.option ->> 'id' = {text}) group_field ON true"
+            ),
+            key: format!("CASE WHEN group_field.name IS NULL THEN 'none' ELSE {text} END"),
+            label: "COALESCE(group_field.name, 'No value')".to_owned(),
+            color: "group_field.color".to_owned(),
+            order: vec![
+                key("(group_field.name IS NULL)::integer".to_owned(), "integer"),
+                key(
+                    format!(
+                        "COALESCE(array_position({}, {text}), 0)",
+                        uuid_array(status_order(definition))
+                    ),
+                    "integer",
+                ),
+            ],
+        },
+        FieldType::Date => {
+            let day = match &definition.accessor {
+                Accessor::Column { expr, sql_type, .. } if *sql_type == "timestamptz" => {
+                    format!("((({expr}) AT TIME ZONE 'UTC')::date)")
+                }
+                Accessor::Column { expr, sql_type, .. } if *sql_type == "date" => {
+                    format!("({expr})")
+                }
+                _ => format!(
+                    "(CASE WHEN {text} ~ '^[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}$' THEN ({text})::date END)"
+                ),
+            };
+            let start = format!("(date_trunc('{}', {day})::date)", bucket.as_str());
+            let named = match bucket {
+                DateBucket::Day => format!("to_char({start}, 'FMDD Mon YYYY')"),
+                DateBucket::Week => format!("'Week of ' || to_char({start}, 'FMDD Mon YYYY')"),
+                DateBucket::Month => format!("to_char({start}, 'FMMonth YYYY')"),
+            };
+            GroupSql {
+                join: String::new(),
+                key: format!("COALESCE(to_char({start}, 'YYYY-MM-DD'), 'none')"),
+                label: format!("COALESCE({named}, 'No date')"),
+                color: "NULL::text".to_owned(),
+                order: vec![
+                    key(format!("({day} IS NULL)::integer"), "integer"),
+                    key(format!("COALESCE({start}, '-infinity'::date)"), "date"),
+                ],
+            }
+        }
         FieldType::SingleChoice => GroupSql {
             join: format!(
                 " LEFT JOIN LATERAL (SELECT choice.option ->> 'name' AS name, \
@@ -2029,7 +2505,7 @@ pub fn stored_group_sql(
         version: 0,
         accessor: Accessor::Stored,
     };
-    group_sql(&definition, column, project)
+    group_sql(&definition, column, project, DateBucket::default())
 }
 
 /// The clause that narrows a list to one group of a field.
@@ -2164,6 +2640,9 @@ pub async fn create(
     }
     if normalize_description(&new.description).as_deref() != Some(new.description.as_str()) {
         return Err(AppError::Validation("description"));
+    }
+    if !new.field_type.is_stored() || (kind == RecordKind::Task && !new.field_type.suits_tasks()) {
+        return Err(AppError::Validation("type"));
     }
     // A link to records names a live collection of this project (AWD-110).
     if let Some(collection) = new.config.collection {
@@ -2471,6 +2950,131 @@ mod tests {
         }
     }
 
+    #[test]
+    fn emails_and_phones_are_checked_and_kept_as_written() {
+        assert_eq!(
+            normalize_email(" Ada.Lovelace+notes@Example.CO.uk "),
+            Some("ada.lovelace+notes@example.co.uk".to_owned())
+        );
+        for bad in [
+            "ada",
+            "ada@",
+            "@example.com",
+            "ada@example",
+            "a..b@example.com",
+            "ada@-x.com",
+        ] {
+            assert_eq!(normalize_email(bad), None, "{bad}");
+        }
+        assert_eq!(
+            normalize_phone("+44  20 7946 0958"),
+            Ok("+44 20 7946 0958".to_owned())
+        );
+        assert_eq!(
+            normalize_phone("(020) 7946-0001"),
+            Ok("(020) 7946-0001".to_owned())
+        );
+        assert!(normalize_phone("call me").is_err());
+        assert!(normalize_phone("44+20").is_err());
+        assert!(normalize_phone("12").is_err());
+        assert_eq!(phone_digits("+44 (20) 7946-0958"), "+442079460958");
+        let email = field(FieldType::Email);
+        assert_eq!(
+            normalize_value(&email, &json!("Ada@Example.com")),
+            Ok(Normalized::Value(json!("ada@example.com")))
+        );
+        let phone = field(FieldType::Phone);
+        assert!(
+            normalize_value(&phone, &json!("ring ring"))
+                .unwrap_err()
+                .contains("only digits")
+        );
+        let long = field(FieldType::LongText);
+        assert_eq!(
+            normalize_value(&long, &json!("Line one\nLine two")),
+            Ok(Normalized::Value(json!("Line one\nLine two")))
+        );
+        assert!(normalize_value(&long, &json!("x".repeat(MAX_LONG_TEXT_CHARACTERS + 1))).is_err());
+    }
+
+    #[test]
+    fn system_fields_read_the_record_and_take_no_values() {
+        for field_type in FieldType::ALL {
+            assert_eq!(FieldType::parse(field_type.as_str()), Some(field_type));
+            let definition = field(field_type);
+            if field_type.is_system() {
+                assert!(field_type.system_accessor().is_some());
+                assert!(normalize_value(&definition, &json!("x")).is_err());
+                assert!(!field_type.suits_tasks());
+            }
+        }
+        assert_eq!(FieldType::CreatedBy.behaves_as(), FieldType::Person);
+        assert_eq!(FieldType::AutoId.ops(), FieldType::Number.ops());
+        let auto = field(FieldType::AutoId);
+        let clause = |value: &str| FieldClause {
+            field: auto.id,
+            op: FieldOp::Gt,
+            values: vec![value.to_owned()],
+        };
+        assert!(check_clause(&auto, &clause("12")).is_ok());
+        assert!(check_clause(&auto, &clause("1.5")).is_err());
+    }
+
+    #[test]
+    fn status_options_carry_categories() {
+        let made = normalize_config(FieldType::Status, None, None, None).expect("defaults");
+        assert_eq!(
+            made.options
+                .iter()
+                .map(|option| option.category.as_deref().unwrap_or_default())
+                .collect::<Vec<_>>(),
+            ["unstarted", "started", "completed"]
+        );
+        let option = |name: &str, category: Option<&str>| OptionInput {
+            id: None,
+            name: name.to_owned(),
+            color: None,
+            category: category.map(str::to_owned),
+        };
+        let written = normalize_config(
+            FieldType::Status,
+            None,
+            Some(&[option("Shipped", Some("Completed")), option("New", None)]),
+            None,
+        )
+        .expect("written");
+        assert_eq!(written.options[0].category.as_deref(), Some("completed"));
+        assert_eq!(written.options[1].category.as_deref(), Some("unstarted"));
+        let refused = normalize_config(
+            FieldType::Status,
+            None,
+            Some(&[option("Odd", Some("someday"))]),
+            None,
+        );
+        assert!(refused.is_err());
+        assert!(
+            normalize_config(
+                FieldType::SingleChoice,
+                None,
+                Some(&[option("A", Some("started"))]),
+                None
+            )
+            .is_err()
+        );
+        // Kept by ID, an option keeps its category.
+        let kept = normalize_config(
+            FieldType::Status,
+            Some(&written),
+            Some(&[OptionInput {
+                id: Some(written.options[0].id.to_string()),
+                ..option("Released", None)
+            }]),
+            None,
+        )
+        .expect("kept");
+        assert_eq!(kept.options[0].category.as_deref(), Some("completed"));
+    }
+
     fn choice(field_type: FieldType) -> FieldDefinition {
         let mut field = field(field_type);
         field.config = normalize_config(
@@ -2481,11 +3085,13 @@ mod tests {
                     id: None,
                     name: "Low".to_owned(),
                     color: None,
+                    category: None,
                 },
                 OptionInput {
                     id: None,
                     name: " High ".to_owned(),
                     color: Some("red".to_owned()),
+                    category: None,
                 },
             ]),
             None,
@@ -2594,6 +3200,7 @@ mod tests {
                 id: Some(high.id.to_string()),
                 name: "Very high".to_owned(),
                 color: None,
+                category: None,
             }]),
             None,
         )
@@ -2610,11 +3217,13 @@ mod tests {
                     id: None,
                     name: "a".to_owned(),
                     color: None,
+                    category: None,
                 },
                 OptionInput {
                     id: None,
                     name: "A".to_owned(),
                     color: None,
+                    category: None,
                 },
             ]),
             None,
@@ -2627,6 +3236,7 @@ mod tests {
                 id: Some(Uuid::now_v7().to_string()),
                 name: "x".to_owned(),
                 color: None,
+                category: None,
             }]),
             None,
         );
@@ -2825,7 +3435,13 @@ mod tests {
         for key in sort_keys(&single, "item.field_values", "item.project_id") {
             assert!(!key.expr.contains("DROP"));
         }
-        let group = group_sql(&single, "item.field_values", "item.project_id").expect("test value");
+        let group = group_sql(
+            &single,
+            "item.field_values",
+            "item.project_id",
+            DateBucket::Month,
+        )
+        .expect("test value");
         assert!(!group.join.contains("DROP"));
         assert!(stored_group_sql(single.id, FieldType::Text, "c", "p").is_none());
     }

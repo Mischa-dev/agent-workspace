@@ -24,7 +24,7 @@ use uuid::Uuid;
 use super::Collection;
 use crate::{
     error::AppError,
-    fields::{self, FieldDefinition, LinkTarget, Normalized},
+    fields::{self, FieldDefinition, FieldType, LinkTarget, Normalized},
     work_item_fields::{self, FieldValueChange, FieldValueChanges, ValueReference, Writer},
     work_item_labels::echo,
 };
@@ -108,6 +108,29 @@ pub struct Record {
     pub version: i64,
     pub created_at: String,
     pub updated_at: String,
+}
+
+impl Record {
+    /// Its values as they read: the stored ones, and what its system fields
+    /// (`FieldType::is_system`) read from its own columns. Never written
+    /// back: system values aren't stored.
+    pub fn shown_values(&self, definitions: &[FieldDefinition]) -> Value {
+        let mut values = self.field_values.as_object().cloned().unwrap_or_default();
+        for field in definitions
+            .iter()
+            .filter(|field| field.field_type.is_system())
+        {
+            let value = match field.field_type {
+                FieldType::CreatedTime => Value::String(self.created_at.clone()),
+                FieldType::EditedTime => Value::String(self.updated_at.clone()),
+                FieldType::CreatedBy => Value::String(self.created_by_actor_id.to_string()),
+                FieldType::EditedBy => Value::String(self.updated_by_actor_id.to_string()),
+                _ => Value::from(self.number),
+            };
+            values.insert(field.id.to_string(), value);
+        }
+        Value::Object(values)
+    }
 }
 
 /// The tables a record is read from, aliased `record`: the collection's
@@ -289,7 +312,8 @@ pub struct RecordView {
 
 impl RecordView {
     pub fn of(record: &Record, definitions: &[FieldDefinition]) -> Self {
-        let stored = record.field_values.as_object();
+        let shown = record.shown_values(definitions);
+        let stored = shown.as_object();
         let values = definitions
             .iter()
             .filter(|field| !field.archived)
@@ -332,7 +356,11 @@ pub async fn references(
         connection,
         project_id,
         definitions,
-        records.iter().map(|record| &record.field_values),
+        records
+            .iter()
+            .map(|record| record.shown_values(definitions))
+            .collect::<Vec<_>>()
+            .iter(),
     )
     .await?;
     let mut references = found.into_values().collect::<Vec<_>>();
@@ -372,11 +400,15 @@ impl RecordLine {
         references: &HashMap<Uuid, ValueReference>,
         only: Option<&HashSet<Uuid>>,
     ) -> Self {
-        let fields = work_item_fields::named_values(definitions, &record.field_values, references)
-            .into_iter()
-            .filter(|(field, _)| only.is_none_or(|only| only.contains(&field.id)))
-            .map(|(field, value)| (field.name, value))
-            .collect();
+        let fields = work_item_fields::named_values(
+            definitions,
+            &record.shown_values(definitions),
+            references,
+        )
+        .into_iter()
+        .filter(|(field, _)| only.is_none_or(|only| only.contains(&field.id)))
+        .map(|(field, value)| (field.name, value))
+        .collect();
         Self {
             number: record.number,
             id: record.id.to_string(),

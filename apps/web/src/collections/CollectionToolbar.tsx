@@ -1,10 +1,10 @@
 import { ArrowUpDown, CalendarDays, Columns3, ListFilter, Rows3 } from 'lucide-react'
 
-import { clauseText, type FieldDefinition, type FieldReference } from '../fields/fieldModel'
+import { DATE_BUCKETS, behavesAs, clauseText, type FieldDefinition, type FieldReference } from '../fields/fieldModel'
 import { Button, Icon, Menu, TextField, type MenuEntry } from '../ui'
 import { useNamedActors } from '../work-items/hooks'
 import type { CollectionBody, SortRule, ViewConfig, ViewType } from './api'
-import { columnOrder, dateFields, groupableFields, sortName, sortText, withColumnHidden } from './collectionModel'
+import { boardFields, columnOrder, dateFields, groupableFields, sortName, sortText, withColumnHidden } from './collectionModel'
 
 /** What sorts a view: the title column, the record's number, when it last changed, or a field. */
 function sortKeys(body: CollectionBody) {
@@ -91,14 +91,27 @@ export function CollectionToolbar({
     })),
     ...(sorted ? [{ separator: true as const }, { label: 'Don’t sort', icon: 'x' as const, onSelect: () => onChange({ ...config, sort: [] }) }] : []),
   ]
-  const groupable = groupableFields(body.fields)
+  const groupable = layout === 'board' ? boardFields(body.fields) : groupableFields(body.fields)
+  const groupedBy = groupable.find((field) => field.id === config.groupBy)
   const groupItems: MenuEntry[] = groupable.length
     ? [
         { heading: 'Group by' },
         ...groupable.map((field) => ({ label: field.name, checked: config.groupBy === field.id, onSelect: () => onChange({ ...config, groupBy: field.id }) })),
+        // A date groups by day, week or month.
+        ...(groupedBy && behavesAs(groupedBy.type) === 'date'
+          ? [
+              { separator: true as const },
+              { heading: `${groupedBy.name} by` },
+              ...DATE_BUCKETS.map(({ bucket, label }) => ({
+                label,
+                checked: (config.groupBucket ?? 'month') === bucket,
+                onSelect: () => onChange({ ...config, groupBucket: bucket }),
+              })),
+            ]
+          : []),
         ...(config.groupBy && layout !== 'board' ? [{ separator: true as const }, { label: 'Don’t group', icon: 'x' as const, onSelect: () => onChange({ ...config, groupBy: null }) }] : []),
       ]
-    : [{ label: 'Group by a choice, person or checkbox field', disabled: true, onSelect: () => undefined }]
+    : [{ label: 'Group by a choice, status, person, checkbox or date field', disabled: true, onSelect: () => undefined }]
   const dated = dateFields(body.fields)
   const dateItems: MenuEntry[] = dated.length
     ? [{ heading: 'Show records by' }, ...dated.map((field) => ({ label: field.name, checked: config.dateField === field.id, onSelect: () => onChange({ ...config, dateField: field.id }) }))]

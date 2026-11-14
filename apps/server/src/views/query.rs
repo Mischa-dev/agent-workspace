@@ -24,7 +24,7 @@ use super::{
 };
 use crate::{
     error::AppError,
-    fields::{self, FieldClause, FieldDefinition, FieldOp, FieldType, GroupSql},
+    fields::{self, DateBucket, FieldClause, FieldDefinition, FieldOp, FieldType, GroupSql},
 };
 
 pub const DEFAULT_LIMIT: i64 = 50;
@@ -87,6 +87,8 @@ pub struct Spec {
     pub sorts: Vec<Sort>,
     /// A field whose type can group.
     pub group: Option<FieldDefinition>,
+    /// How a date `group` puts records together.
+    pub bucket: DateBucket,
     pub archived: Archived,
     /// Only these records.
     pub only: Option<Vec<Uuid>>,
@@ -112,6 +114,7 @@ impl Default for Spec {
             words: Vec::new(),
             sorts: Vec::new(),
             group: None,
+            bucket: DateBucket::default(),
             archived: Archived::default(),
             only: None,
             in_group: None,
@@ -165,6 +168,7 @@ impl Spec {
             filter,
             sorts,
             group,
+            bucket: config.group_bucket.unwrap_or_default(),
             reader,
             definitions: definitions.to_vec(),
             ..Self::default()
@@ -187,8 +191,12 @@ impl Spec {
         let mut search = SearchFields::default();
         for field in active {
             match field.field_type {
-                FieldType::Text | FieldType::Url => search.text.push(field.id.to_string()),
-                FieldType::SingleChoice | FieldType::MultipleChoice => {
+                FieldType::Text
+                | FieldType::LongText
+                | FieldType::Url
+                | FieldType::Email
+                | FieldType::Phone => search.text.push(field.id.to_string()),
+                FieldType::SingleChoice | FieldType::MultipleChoice | FieldType::Status => {
                     search.choices.push(field.id.to_string());
                     for option in &field.config.options {
                         search
@@ -209,9 +217,14 @@ impl Spec {
 
     fn group_sql(&self, source: &dyn RecordSource) -> Option<GroupSql> {
         let field = self.group.as_ref()?;
-        source
-            .group_sql(field)
-            .or_else(|| fields::group_sql(field, "record.field_values", "record.project_id"))
+        source.group_sql(field).or_else(|| {
+            fields::group_sql(
+                field,
+                "record.field_values",
+                "record.project_id",
+                self.bucket,
+            )
+        })
     }
 
     fn keys(&self, source: &dyn RecordSource) -> Vec<Key> {
@@ -305,6 +318,7 @@ impl Spec {
         if let Some(group) = &self.group {
             hasher.update(group.id.as_bytes());
             hasher.update(format!("{:?}", group.config));
+            hasher.update(self.bucket.as_str());
         }
         hasher.update(self.archived.as_str());
         if let Some(key) = &self.in_group {

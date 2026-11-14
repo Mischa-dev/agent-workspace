@@ -1,7 +1,7 @@
 import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query'
 
 import { requestJson } from '../api/client'
-import { normalizeField, normalizeReferences, normalizeValues, type FieldClause, type FieldDefinition, type FieldReference, type FieldValue, type FieldValues } from '../fields/fieldModel'
+import { normalizeField, normalizeReferences, normalizeValues, type DateBucket, type FieldClause, type FieldDefinition, type FieldReference, type FieldValue, type FieldValues } from '../fields/fieldModel'
 import type { ViewKind } from '../views/kinds'
 
 /**
@@ -35,6 +35,8 @@ export type ViewConfig = {
   filters: FieldClause[]
   sort: SortRule[]
   groupBy: string | null
+  /** Grouped by a date: by day, week or month (the server's default). */
+  groupBucket?: DateBucket | null
   columns: ViewColumn[]
   titleWidth: number | null
   /** The date field a calendar puts records on. */
@@ -132,6 +134,7 @@ export function normalizeConfig(value: unknown): ViewConfig {
       return typeof rule.field === 'string' ? [{ field: rule.field, direction: rule.direction === 'desc' ? ('desc' as const) : ('asc' as const) }] : []
     }),
     groupBy: typeof raw.groupBy === 'string' && raw.groupBy ? raw.groupBy : null,
+    groupBucket: raw.groupBucket === 'day' || raw.groupBucket === 'week' || raw.groupBucket === 'month' ? raw.groupBucket : null,
     columns: asArray(raw.columns).flatMap((entry) => {
       const column = asRecord(entry)
       if (typeof column.field !== 'string') return []
@@ -272,6 +275,7 @@ export function configJson(config: ViewConfig) {
     ...(config.filters.length ? { filters: config.filters } : {}),
     ...(config.sort.length ? { sort: config.sort } : {}),
     ...(config.groupBy ? { groupBy: config.groupBy } : {}),
+    ...(config.groupBy && config.groupBucket ? { groupBucket: config.groupBucket } : {}),
     ...(config.columns.length ? { columns: config.columns } : {}),
     ...(config.titleWidth ? { titleWidth: config.titleWidth } : {}),
     ...(config.dateField ? { dateField: config.dateField } : {}),
@@ -311,6 +315,7 @@ export type RecordsQuery = {
   filters?: FieldClause[]
   sort?: SortRule[]
   groupBy?: string | null
+  groupBucket?: DateBucket | null
   search?: string
   archived?: 'only'
   /** One group of the grouping: a board's column. */
@@ -326,6 +331,7 @@ export function recordsParams(query: RecordsQuery) {
   if (query.filters) params.set('filters', JSON.stringify(query.filters))
   if (query.sort) params.set('sort', JSON.stringify(query.sort))
   if (query.groupBy !== undefined) params.set('groupBy', query.groupBy ?? '')
+  if (query.groupBy && query.groupBucket) params.set('groupBucket', query.groupBucket)
   if (query.search?.trim()) params.set('search', query.search.trim())
   if (query.archived) params.set('archived', query.archived)
   if (query.group !== undefined) params.set('group', query.group)

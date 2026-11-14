@@ -2519,6 +2519,7 @@ mod tests {
                 id: None,
                 name: (*name).to_owned(),
                 color: None,
+                category: None,
             })
             .collect::<Vec<_>>();
         FieldDefinition {
@@ -2683,6 +2684,7 @@ mod tests {
                         id: None,
                         name: (*name).to_owned(),
                         color: None,
+                        category: None,
                     })
                     .collect::<Vec<_>>();
                 fields::normalize_config(field_type, None, Some(&options), None)

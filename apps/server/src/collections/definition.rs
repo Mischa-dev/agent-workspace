@@ -50,15 +50,19 @@ pub struct FieldWrite {
     /// Its name, or a new name when `field` names it: 1 to 60 characters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// For a new field: text, number, date, single_choice,
-    /// multiple_choice, person, url, checkbox or link. It never changes.
+    /// For a new field: text, long_text, number, date, single_choice,
+    /// multiple_choice, status, person, url, email, phone, checkbox or link;
+    /// or created_time, edited_time, created_by, edited_by or auto_id,
+    /// which show the record's own and take no values. It never changes.
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub field_type: Option<String>,
     /// What it's for, on one line. "" clears it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// Choice fields: every option, in order. An option keeps its records
-    /// by name; one left out is archived, never removed.
+    /// Choice and status fields: every option, in order (a status option
+    /// with its category). An option keeps its records by name; one left
+    /// out is archived, never removed. A status field made without options
+    /// gets Not started, In progress and Done.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub options: Option<Vec<OptionInput>>,
     /// For a new link field: "task", "page", or "record:<collection>" for
@@ -136,10 +140,14 @@ pub struct ViewWrite {
     /// Up to 3 sort keys, first one first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sort: Option<Vec<SortWrite>>,
-    /// A single choice, person or checkbox field to group by; "" stops
-    /// grouping.
+    /// A choice, status, person, checkbox or date field to group by; ""
+    /// stops grouping.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_by: Option<String>,
+    /// Grouped by a date: "day", "week" (from Monday) or "month" (the
+    /// default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_bucket: Option<fields::DateBucket>,
     /// Columns in order; fields left out show after them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub columns: Option<Vec<ColumnWrite>>,
@@ -214,8 +222,8 @@ fn filter_written(
     let values = clause
         .values
         .iter()
-        .map(|value| match field.field_type {
-            FieldType::SingleChoice | FieldType::MultipleChoice => field
+        .map(|value| match field.field_type.behaves_as() {
+            FieldType::SingleChoice | FieldType::MultipleChoice | FieldType::Status => field
                 .option(value)
                 .map_or_else(|| value.clone(), |option| option.name.clone()),
             FieldType::Person | FieldType::Link => {
@@ -284,6 +292,7 @@ fn view_written(
             .group_by
             .and_then(field)
             .map(|field| field.name.clone()),
+        group_bucket: config.group_bucket,
         columns: (!columns.is_empty()).then_some(columns),
         title_width: config.title_width,
         date_field: config
@@ -332,6 +341,7 @@ pub async fn describe(
                             id: None,
                             name: option.name.clone(),
                             color: Some(option.color.clone()),
+                            category: option.category.clone(),
                         })
                         .collect()
                 }),
@@ -408,7 +418,7 @@ pub async fn clauses_from_written(
         let mut values = Vec::with_capacity(filter.values.len());
         let mut me = false;
         for value in &filter.values {
-            match field.field_type {
+            match field.field_type.behaves_as() {
                 FieldType::Person if value.trim().eq_ignore_ascii_case(views::ME) => {
                     // Checked as anyone in the project; stored as "me".
                     me = true;
@@ -523,9 +533,9 @@ pub fn group_from_written(
         return Ok(None);
     }
     let field = active_field(collection, definitions, group_by)?;
-    if !field.field_type.can_group() {
+    if !field.can_group() {
         return Err(format!(
-            "\"{}\" can't group. Group by a single choice, person or checkbox field.",
+            "\"{}\" can't group. Group by a choice, status, person, checkbox or date field.",
             field.name
         ));
     }
@@ -586,6 +596,9 @@ async fn config_from_written(
             Ok(group) => config.group_by = group,
             Err(message) => return Ok(Err(message)),
         }
+    }
+    if write.group_bucket.is_some() {
+        config.group_bucket = write.group_bucket;
     }
     if let Some(columns) = &write.columns {
         match columns_from_written(collection, definitions, columns) {
@@ -802,12 +815,17 @@ pub async fn apply(
                     "Give the new field a name.",
                 ));
             };
-            let Some(field_type) = write.field_type.as_deref().and_then(FieldType::parse) else {
+            let Some(field_type) = write
+                .field_type
+                .as_deref()
+                .and_then(FieldType::parse)
+                .filter(|field_type| field_type.is_stored())
+            else {
                 return Ok(stop(
                     ProblemKind::Invalid,
                     format!("{at}.type"),
                     format!(
-                        "\"{name}\" is a new field: give its type, one of text, number, date, single_choice, multiple_choice, person, url, checkbox or link."
+                        "\"{name}\" is a new field: give its type, one of text, long_text, number, date, single_choice, multiple_choice, status, person, url, email, phone, checkbox, link, created_time, edited_time, created_by, edited_by or auto_id."
                     ),
                 ));
             };
@@ -1305,11 +1323,13 @@ mod tests {
                     id: None,
                     name: " high ".to_owned(),
                     color: None,
+                    category: None,
                 },
                 OptionInput {
                     id: None,
                     name: "Low".to_owned(),
                     color: None,
+                    category: None,
                 },
             ],
         );

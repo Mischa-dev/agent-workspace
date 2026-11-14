@@ -589,7 +589,7 @@ pub async fn references<'a>(
             let Some(id) = fields::referenced_id(field, value) else {
                 continue;
             };
-            match (field.field_type, field.config.target) {
+            match (field.field_type.behaves_as(), field.config.target) {
                 (FieldType::Person, _) => people.insert(id),
                 (FieldType::Link, Some(LinkTarget::Page)) => pages.insert(id),
                 (FieldType::Link, Some(LinkTarget::Record)) => records.insert(id),

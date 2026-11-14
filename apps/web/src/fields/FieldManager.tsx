@@ -16,7 +16,7 @@ import {
   showToast,
 } from '../ui'
 import { useFieldMutations, useFields, type FieldScope, type OptionInput } from './api'
-import { FIELD_TYPES, typeLabel, type FieldDefinition, type FieldType } from './fieldModel'
+import { CATEGORY_LABELS, FIELD_TYPES, STATUS_CATEGORIES, isSystemType, typeLabel, type FieldDefinition, type FieldType, type StatusCategory } from './fieldModel'
 
 /** Named colors the server takes, in the order labels offer them. */
 const COLORS = ['red', 'orange', 'yellow', 'green', 'teal', 'blue', 'purple', 'pink', 'gray'] as const
@@ -173,16 +173,25 @@ export function FieldDialog({
   // "task", "page", or "record:<collection ID>".
   const [target, setTarget] = useState('task')
   const [options, setOptions] = useState<OptionDraft[]>(
-    () => field?.options.filter((option) => !option.archived).map((option) => ({ key: option.id, id: option.id, name: option.name, color: option.color })) ?? [],
+    () =>
+      field?.options
+        .filter((option) => !option.archived)
+        .map((option) => ({ key: option.id, id: option.id, name: option.name, color: option.color, category: option.category ?? undefined })) ?? [],
   )
   const [problem, setProblem] = useState<string | null>(null)
-  const choices = type === 'single_choice' || type === 'multiple_choice'
+  const status = type === 'status'
+  // A new status field without options gets the server's three.
+  const choices = type === 'single_choice' || type === 'multiple_choice' || (status && (Boolean(field) || options.length > 0))
+  // Tasks have their own status and record columns; a collection can have any type.
+  const offered = FIELD_TYPES.filter((entry) => scope.path !== undefined || entry.tasks !== false)
   const pending = create.isPending || update.isPending
   const submit = () => {
     setProblem(null)
     if (!name.trim()) return setProblem('Give the field a name.')
     const optionInputs = choices
-      ? options.filter((option) => option.name.trim()).map(({ id, name: optionName, color }) => ({ id, name: optionName.trim(), color }))
+      ? options
+          .filter((option) => option.name.trim())
+          .map(({ id, name: optionName, color, category }) => ({ id, name: optionName.trim(), color, ...(status && category ? { category } : {}) }))
       : undefined
     const done = {
       onSuccess: (saved: FieldDefinition) => {
@@ -244,7 +253,7 @@ export function FieldDialog({
         <p className="aw-pagesection__desc">Type: {typeLabel(field.type)}. A field’s type can’t change; add a new field for another.</p>
       ) : (
         <SelectField label="Type" onChange={(event) => setType(event.target.value as FieldType)} value={type}>
-          {FIELD_TYPES.map((entry) => (
+          {offered.map((entry) => (
             <option key={entry.type} value={entry.type}>
               {entry.label}: {entry.hint}
             </option>
@@ -269,6 +278,25 @@ export function FieldDialog({
         onChange={(event) => setDescription(event.target.value)}
         value={description}
       />
+      {!field && isSystemType(type) ? <p className="aw-pagesection__desc">Filled in from each {records === 'tasks' ? 'task' : 'record'} itself; nobody edits it.</p> : null}
+      {!field && status && !options.length ? (
+        <p className="aw-pagesection__desc">
+          Starts with Not started, In progress and Done.{' '}
+          <Button
+            onClick={() =>
+              setOptions([
+                { key: crypto.randomUUID(), name: 'Not started', category: 'unstarted' },
+                { key: crypto.randomUUID(), name: 'In progress', category: 'started' },
+                { key: crypto.randomUUID(), name: 'Done', category: 'completed' },
+              ])
+            }
+            size="sm"
+            variant="ghost"
+          >
+            Change the options
+          </Button>
+        </p>
+      ) : null}
       {choices ? (
         <fieldset className="aw-fieldset">
           <legend className="aw-field__label">Options</legend>
@@ -298,6 +326,22 @@ export function FieldDialog({
                   </option>
                 ))}
               </SelectField>
+              {status ? (
+                <SelectField
+                  aria-label={`Category of option ${index + 1}`}
+                  compact
+                  onChange={(event) =>
+                    setOptions(options.map((entry) => (entry.key === option.key ? { ...entry, category: event.target.value as StatusCategory } : entry)))
+                  }
+                  value={option.category ?? 'unstarted'}
+                >
+                  {STATUS_CATEGORIES.map((category) => (
+                    <option key={category} value={category}>
+                      {CATEGORY_LABELS[category]}
+                    </option>
+                  ))}
+                </SelectField>
+              ) : null}
               <IconButton
                 icon="x"
                 label={`Remove option ${option.name || index + 1}`}

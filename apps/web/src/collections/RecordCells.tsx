@@ -1,7 +1,7 @@
 import { useRef, useState, type KeyboardEvent, type RefObject } from 'react'
 
 import { FieldValueView } from '../fields/FieldValueView'
-import { displayText, isEmpty, type FieldDefinition, type FieldReference } from '../fields/fieldModel'
+import { displayText, isEmpty, isSystemType, type FieldDefinition, type FieldReference } from '../fields/fieldModel'
 import { Icon, IconButton, TextField } from '../ui'
 import type { CollectionRecord } from './api'
 import { recordName } from './collectionModel'
@@ -91,7 +91,8 @@ export function ValueCell({
   references: readonly FieldReference[]
 }) {
   const value = record.values[field.id]
-  if (!editable) {
+  // A system field shows the record's own: nobody edits it.
+  if (!editable || isSystemType(field.type)) {
     return (
       <span className="aw-records__value">
         <FieldValueView field={field} references={references} value={value} />
@@ -122,8 +123,8 @@ export function ValueCell({
       tabIndex={-1}
       type="button"
     >
-      {/* A web address reads as text here: a link can't sit inside a button. */}
-      {field.type === 'url' ? <span className="aw-prop__text">{shown}</span> : <FieldValueView field={field} references={references} value={value} />}
+      {/* A web address, email or phone reads as text here: a link can't sit inside a button. */}
+      {field.type === 'url' || field.type === 'email' || field.type === 'phone' ? <span className="aw-prop__text">{shown}</span> : <FieldValueView field={field} references={references} value={value} />}
     </button>
   )
 }

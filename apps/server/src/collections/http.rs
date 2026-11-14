@@ -1376,6 +1376,8 @@ struct RecordsQuery {
     sort: Option<String>,
     /// A field's ID, or "" for no grouping.
     group_by: Option<String>,
+    /// Grouped by a date: "day", "week" or "month".
+    group_bucket: Option<crate::fields::DateBucket>,
     /// Only records in this group (a key from `groups`): a board's column.
     group: Option<String>,
     /// A date field's ID, with `from` and `to`: only records whose date is
@@ -1468,6 +1470,9 @@ async fn list_records(
                 Err(_) => return Ok(invalid("groupBy", "Group by a field's ID.")),
             }
         };
+    }
+    if query.group_bucket.is_some() {
+        config.group_bucket = query.group_bucket;
     }
     if let Err(message) = views::check(&config, &definitions) {
         return Ok(invalid("filters", message));

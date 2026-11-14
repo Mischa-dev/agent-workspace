@@ -31,7 +31,7 @@ import {
   type CollectionView,
   type ViewConfig,
 } from './api'
-import { activeConfig, dateFields, groupableFields, sameConfig, withColumnHidden } from './collectionModel'
+import { activeConfig, boardFields, dateFields, sameConfig, withColumnHidden } from './collectionModel'
 import { CollectionDetailsDialog, ViewNameDialog } from './CollectionDialogs'
 import { CollectionToolbar } from './CollectionToolbar'
 import type { ColumnActions } from './ColumnMenus'
@@ -187,7 +187,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
   const archived = showArchived ? ('only' as const) : undefined
   const recordsQuery: RecordsQuery =
     view && draft && !sameQuery(draft, viewConfig)
-      ? { view: view.id, filters: config.filters, sort: config.sort, groupBy: config.groupBy, search: searched, archived }
+      ? { view: view.id, filters: config.filters, sort: config.sort, groupBy: config.groupBy, groupBucket: config.groupBucket, search: searched, archived }
       : { view: view?.id ?? null, search: searched, archived }
   const recordQuery = recordsParams(recordsQuery)
   const layout = view?.type ?? 'table'
@@ -392,7 +392,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
         {layout === 'board' ? (
           <RecordBoard
             {...shared}
-            groupable={groupableFields(body.fields)}
+            groupable={boardFields(body.fields)}
             onGroupBy={(fieldId) => setConfig({ ...config, groupBy: fieldId })}
             query={recordsQuery}
             recordHref={recordHref}

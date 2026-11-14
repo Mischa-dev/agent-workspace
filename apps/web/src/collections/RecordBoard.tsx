@@ -40,13 +40,14 @@ type Moved = { record: CollectionRecord; key: string; at: number; savedAt?: numb
  * value; the card shows there at once and saves like any other change.
  */
 export function RecordBoard(props: Props) {
-  const field = props.body.fields.find((entry) => entry.id === props.config.groupBy && !entry.archived)
+  // A grouping a card can't move between (a date, several choices) isn't a board's.
+  const field = props.groupable.find((entry) => entry.id === props.config.groupBy)
   if (!field) {
     return (
       <EmptyState icon="board" title="Pick what the columns are">
         {props.groupable.length ? (
           <>
-            A board has a column for each value of a choice, person or checkbox field.
+            A board has a column for each value of a choice, status, person or checkbox field.
             <span className="aw-cboard__pick">
               {props.groupable.map((entry) => (
                 <Button key={entry.id} onClick={() => props.onGroupBy(entry.id)} size="sm">
@@ -56,7 +57,7 @@ export function RecordBoard(props: Props) {
             </span>
           </>
         ) : (
-          'A board has a column for each value of a choice, person or checkbox field. Add one to this collection first.'
+          'A board has a column for each value of a choice, status, person or checkbox field. Add one to this collection first.'
         )}
       </EmptyState>
     )

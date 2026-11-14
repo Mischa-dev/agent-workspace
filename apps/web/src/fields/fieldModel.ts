@@ -14,8 +14,9 @@
  * A field's type: the one list (T1.2) tasks, collections and module
  * manifests name types from; `modules/contract.ts` re-exports it. The
  * server's `crate::fields::FieldType` is the same list. `FIELD_TYPES` are
- * the ones a field can be made with; `long_text`, `status`, `people` and
- * `labels` are named by manifests only, for now.
+ * the ones a field can be made with; `people` and `labels` are named by
+ * manifests only, for now. System types (`isSystemType`) show the record's
+ * own columns and take no values.
  */
 export type FieldType =
   | 'text'
@@ -29,10 +30,31 @@ export type FieldType =
   | 'people'
   | 'labels'
   | 'url'
+  | 'email'
+  | 'phone'
   | 'checkbox'
   | 'link'
+  | 'created_time'
+  | 'edited_time'
+  | 'created_by'
+  | 'edited_by'
+  | 'auto_id'
 
-export type FieldOption = { id: string; name: string; color: string; archived: boolean }
+/** What kind of status a status option is, in workflow order (the server's STATUS_CATEGORIES). */
+export const STATUS_CATEGORIES = ['backlog', 'unstarted', 'started', 'review', 'verification', 'completed', 'canceled'] as const
+export type StatusCategory = (typeof STATUS_CATEGORIES)[number]
+
+export const CATEGORY_LABELS: Record<StatusCategory, string> = {
+  backlog: 'Backlog',
+  unstarted: 'Not started',
+  started: 'Started',
+  review: 'In review',
+  verification: 'Verifying',
+  completed: 'Done',
+  canceled: 'Canceled',
+}
+
+export type FieldOption = { id: string; name: string; color: string; archived: boolean; category?: StatusCategory | null }
 
 export type FieldDefinition = {
   id: string
@@ -63,17 +85,40 @@ export type FieldOp = 'is' | 'isNot' | 'empty' | 'notEmpty' | 'contains' | 'gt' 
 /** One field filter, with stored values (option IDs, actor IDs, "true", numbers, dates). */
 export type FieldClause = { field: string; op: FieldOp; values?: string[] }
 
-export const FIELD_TYPES: Array<{ type: FieldType; label: string; hint: string }> = [
+/** The types a field can be made with. `tasks: false` ones are for collections only. */
+export const FIELD_TYPES: Array<{ type: FieldType; label: string; hint: string; tasks?: false }> = [
   { type: 'text', label: 'Text', hint: 'A line or a few lines of text' },
+  { type: 'long_text', label: 'Long text', hint: 'Paragraphs, such as notes' },
   { type: 'number', label: 'Number', hint: 'Such as 3 or 2.5' },
   { type: 'date', label: 'Date', hint: 'A day' },
   { type: 'single_choice', label: 'Choice', hint: 'One of a set of options' },
   { type: 'multiple_choice', label: 'Choices', hint: 'Any of a set of options' },
+  { type: 'status', label: 'Status', hint: 'Where it is: options in categories such as started or done', tasks: false },
   { type: 'person', label: 'Person', hint: 'Someone in the project' },
   { type: 'url', label: 'Link (URL)', hint: 'A web address' },
+  { type: 'email', label: 'Email', hint: 'An email address' },
+  { type: 'phone', label: 'Phone', hint: 'A phone number' },
   { type: 'checkbox', label: 'Checkbox', hint: 'Yes or no' },
   { type: 'link', label: 'Task, page or record', hint: 'A task, a page or a collection’s record in the project' },
+  { type: 'created_time', label: 'Created time', hint: 'When the record was made', tasks: false },
+  { type: 'edited_time', label: 'Edited time', hint: 'When the record last changed', tasks: false },
+  { type: 'created_by', label: 'Created by', hint: 'Who made the record', tasks: false },
+  { type: 'edited_by', label: 'Edited by', hint: 'Who last changed the record', tasks: false },
+  { type: 'auto_id', label: 'ID', hint: 'The record’s number', tasks: false },
 ]
+
+/** Whether a type shows the record's own columns: nobody fills it in. */
+export function isSystemType(type: FieldType) {
+  return type === 'created_time' || type === 'edited_time' || type === 'created_by' || type === 'edited_by' || type === 'auto_id'
+}
+
+/** The type it filters, sorts and groups like (the server's `behaves_as`). */
+export function behavesAs(type: FieldType): FieldType {
+  if (type === 'created_time' || type === 'edited_time') return 'date'
+  if (type === 'created_by' || type === 'edited_by') return 'person'
+  if (type === 'auto_id') return 'number'
+  return type
+}
 
 export function typeLabel(type: FieldType) {
   return FIELD_TYPES.find((entry) => entry.type === type)?.label ?? type
@@ -105,6 +150,7 @@ export function normalizeField(value: unknown): FieldDefinition {
         name: asString(option.name),
         color: asString(option.color) || '#8b8d98',
         archived: option.archived === true,
+        category: STATUS_CATEGORIES.includes(option.category as StatusCategory) ? (option.category as StatusCategory) : null,
       }
     }),
     target: field.target === 'page' || field.target === 'task' || field.target === 'record' ? field.target : null,
@@ -169,6 +215,14 @@ function formatNumber(value: number) {
   return value.toLocaleString(undefined, { maximumFractionDigits: 6 })
 }
 
+/** A time (as the server writes one) as "Nov 4, 14:05", with the year when it isn't this year. */
+export function formatFieldTime(value: string) {
+  const time = new Date(value.replace(' ', 'T').replace(/\+00$/, 'Z'))
+  if (Number.isNaN(time.getTime())) return value
+  const sameYear = time.getFullYear() === new Date().getFullYear()
+  return time.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', ...(sameYear ? {} : { year: 'numeric' }) })
+}
+
 /** A date as "Nov 4", with the year when it isn't this year. */
 export function formatFieldDate(value: string) {
   const [year, month, day] = value.split('-').map(Number)
@@ -190,17 +244,25 @@ export function displayText(
       return typeof value === 'number' ? formatNumber(value) : String(value)
     case 'date':
       return typeof value === 'string' ? formatFieldDate(value) : ''
+    case 'auto_id':
+      return typeof value === 'number' ? `#${value}` : String(value)
+    case 'created_time':
+    case 'edited_time':
+      return typeof value === 'string' ? formatFieldTime(value) : ''
     case 'single_choice':
     case 'multiple_choice':
+    case 'status':
       return chosenOptions(field, value)
         .map((option) => option.name)
         .join(', ')
     case 'checkbox':
       return value === true ? 'Yes' : ''
     case 'person':
+    case 'created_by':
+    case 'edited_by':
     case 'link': {
       const reference = references.find((entry) => entry.id === value)
-      if (!reference) return field.type === 'person' ? 'Someone' : 'Not found'
+      if (!reference) return field.type === 'link' ? 'Not found' : 'Someone'
       return reference.kind === 'task' && reference.key ? `${reference.key} ${reference.label}` : reference.label
     }
     default:
@@ -227,6 +289,7 @@ const OP_LABELS: Record<FieldOp, string> = {
 }
 
 export function opLabel(op: FieldOp, type?: FieldType) {
+  type = type ? behavesAs(type) : type
   if (type === 'date') return { gt: 'is after', gte: 'is on or after', lt: 'is before', lte: 'is on or before' }[op as 'gt'] ?? OP_LABELS[op]
   if (type === 'number') return { gt: 'is above', gte: 'is at least', lt: 'is below', lte: 'is at most' }[op as 'gt'] ?? OP_LABELS[op]
   if (type === 'checkbox' && op === 'is') return 'is checked'
@@ -236,15 +299,21 @@ export function opLabel(op: FieldOp, type?: FieldType) {
 
 /** The filter operations a type offers, as the server accepts them. */
 export function opsFor(type: FieldType): FieldOp[] {
-  switch (type) {
+  switch (behavesAs(type)) {
     case 'text':
     case 'url':
+    case 'email':
+    case 'phone':
       return ['contains', 'is', 'isNot', 'empty', 'notEmpty']
+    case 'long_text':
+      return ['contains', 'empty', 'notEmpty']
     case 'number':
     case 'date':
       return ['is', 'gt', 'gte', 'lt', 'lte', 'empty', 'notEmpty']
     case 'checkbox':
       return ['is', 'empty']
+    case 'status':
+      return ['is', 'isNot', 'categoryIs', 'categoryIsNot', 'empty', 'notEmpty']
     default:
       return ['is', 'isNot', 'empty', 'notEmpty']
   }
@@ -254,9 +323,28 @@ export function opTakesValues(op: FieldOp) {
   return op !== 'empty' && op !== 'notEmpty'
 }
 
+/** Whether a task list groups by a field of the type: one group per task. */
 export function canGroup(type: FieldType) {
-  return type === 'single_choice' || type === 'person' || type === 'checkbox'
+  const like = behavesAs(type)
+  return like === 'single_choice' || like === 'status' || like === 'person' || like === 'checkbox'
 }
+
+/**
+ * Whether a collection's views group by a field of the type: also several
+ * choices (a record in each of its groups) and dates (by day, week or month).
+ */
+export function canGroupRecords(type: FieldType) {
+  const like = behavesAs(type)
+  return canGroup(type) || like === 'multiple_choice' || like === 'date'
+}
+
+/** How a view grouped by a date puts records together. */
+export type DateBucket = 'day' | 'week' | 'month'
+export const DATE_BUCKETS: Array<{ bucket: DateBucket; label: string }> = [
+  { bucket: 'day', label: 'Day' },
+  { bucket: 'week', label: 'Week' },
+  { bucket: 'month', label: 'Month' },
+]
 
 /** Field filters as a list request carries them, or [] for anything else. */
 export function parseClauses(param: string | undefined | null): FieldClause[] {
@@ -327,11 +415,13 @@ export function fieldIdOf(key: string | undefined | null): string | null {
 export function clauseText(clause: FieldClause, field: FieldDefinition | undefined, references: readonly FieldReference[] = []) {
   if (!field) return 'A removed field'
   const values = (clause.values ?? []).map((value) => {
-    if (field.type === 'single_choice' || field.type === 'multiple_choice') {
+    if (clause.op === 'categoryIs' || clause.op === 'categoryIsNot') return CATEGORY_LABELS[value as StatusCategory] ?? value
+    if (field.type === 'single_choice' || field.type === 'multiple_choice' || field.type === 'status') {
       return field.options.find((option) => option.id === value)?.name ?? 'an old option'
     }
-    if (field.type === 'person' || field.type === 'link') return references.find((entry) => entry.id === value)?.label ?? 'someone'
-    if (field.type === 'date') return formatFieldDate(value)
+    const like = behavesAs(field.type)
+    if (like === 'person' || like === 'link') return references.find((entry) => entry.id === value)?.label ?? 'someone'
+    if (like === 'date') return formatFieldDate(value)
     if (field.type === 'checkbox') return ''
     return value
   })

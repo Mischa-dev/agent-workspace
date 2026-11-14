@@ -758,16 +758,25 @@ async fn carry_value(
     }
     Ok(match source.field_type {
         // Types only manifests declare are never stored, so never carried.
-        FieldType::LongText | FieldType::Status | FieldType::People | FieldType::Labels => None,
+        FieldType::People | FieldType::Labels => None,
+        // The record's own columns: nothing stored to carry.
+        FieldType::CreatedTime
+        | FieldType::EditedTime
+        | FieldType::CreatedBy
+        | FieldType::EditedBy
+        | FieldType::AutoId => None,
         FieldType::Text
+        | FieldType::LongText
         | FieldType::Number
         | FieldType::Date
         | FieldType::Url
+        | FieldType::Email
+        | FieldType::Phone
         | FieldType::Checkbox => match fields::normalize_value(target, value) {
             Ok(Normalized::Value(stored)) => Some(Carry::Stored(stored)),
             _ => None,
         },
-        FieldType::SingleChoice => value
+        FieldType::SingleChoice | FieldType::Status => value
             .as_str()
             .and_then(|id| source.option(id))
             .and_then(|option| active_option_by_name(target, &option.name))
@@ -820,7 +829,9 @@ fn issue_reason(source: &FieldDefinition, same_name: Option<&FieldDefinition>) -
         return IssueReason::NoMatchingField;
     }
     match (source.field_type, source.config.target) {
-        (FieldType::SingleChoice | FieldType::MultipleChoice, _) => IssueReason::OptionMissing,
+        (FieldType::SingleChoice | FieldType::MultipleChoice | FieldType::Status, _) => {
+            IssueReason::OptionMissing
+        }
         (FieldType::Person, _) => IssueReason::PersonNotInTarget,
         (FieldType::Link, Some(LinkTarget::Page)) => IssueReason::PageLink,
         (FieldType::Link, _) => IssueReason::LinkOutsideMove,

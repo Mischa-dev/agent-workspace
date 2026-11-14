@@ -7,8 +7,10 @@ import {
   activeConfig,
   boardColumns,
   boardKey,
+  boardFields,
   boardValue,
   calendarMonth,
+  groupableFields,
   columnOrder,
   historyValue,
   recordsByDay,
@@ -226,5 +228,22 @@ describe('a calendar', () => {
       ['2026-11-02', ['a', 'c']],
       ['2026-11-05', ['d']],
     ])
+  })
+})
+
+describe('statuses, dates and system fields (T1.10)', () => {
+  it('puts a status board’s columns in category order, and leaves out what a card can’t move between', () => {
+    const stage: FieldDefinition = {
+      ...field('stage', 'status', 1),
+      options: [
+        { id: 'won', name: 'Won', color: 'green', archived: false, category: 'completed' },
+        { id: 'lead', name: 'Lead', color: 'gray', archived: false, category: 'backlog' },
+        { id: 'talk', name: 'Talking', color: 'blue', archived: false, category: 'started' },
+      ],
+    }
+    expect(boardColumns(stage, []).map((column) => column.key)).toEqual(['lead', 'talk', 'won', 'none'])
+    const fields = [stage, field('met', 'date', 2), field('tags', 'multiple_choice', 3), field('maker', 'created_by', 4), field('notes', 'long_text', 5)]
+    expect(groupableFields(fields).map((entry) => entry.id)).toEqual(['stage', 'met', 'tags', 'maker'])
+    expect(boardFields(fields).map((entry) => entry.id)).toEqual(['stage'])
   })
 })

@@ -16,7 +16,7 @@ use uuid::Uuid;
 use super::filter::Filter;
 use crate::{
     error::AppError,
-    fields::{self, FieldDefinition, FieldType, LinkTarget},
+    fields::{self, DateBucket, FieldDefinition, FieldType, LinkTarget},
 };
 
 /// Views one collection keeps.
@@ -135,6 +135,9 @@ pub struct ViewConfig {
     pub sort: Vec<SortRule>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_by: Option<Uuid>,
+    /// Grouped by a date: by day, week or month (the default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_bucket: Option<DateBucket>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub columns: Vec<Column>,
     /// The title column's width, in pixels.
@@ -167,6 +170,7 @@ impl ViewConfig {
                 .cloned()
                 .collect(),
             group_by: self.group_by.filter(active),
+            group_bucket: self.group_bucket,
             columns: self
                 .columns
                 .iter()
@@ -251,7 +255,7 @@ pub fn check(config: &ViewConfig, definitions: &[FieldDefinition]) -> Result<(),
         }
         // "me" stands for the reader; any member's ID checks the same way.
         let mut checked = clause.clone();
-        if field.field_type == FieldType::Person {
+        if field.field_type.behaves_as() == FieldType::Person {
             for value in &mut checked.values {
                 if value == ME {
                     *value = Uuid::nil().to_string();
@@ -278,9 +282,9 @@ pub fn check(config: &ViewConfig, definitions: &[FieldDefinition]) -> Result<(),
         // Only records that are tasks have a place on the board, and only
         // their fields read a task's columns.
         if by == SortBy::Rank
-            && !definitions
-                .iter()
-                .any(|field| field.accessor != fields::Accessor::Stored)
+            && !definitions.iter().any(|field| {
+                field.accessor != fields::Accessor::Stored && !field.field_type.is_system()
+            })
         {
             return Err(
                 "Sort by title, number, updated, or one of the collection's fields.".to_owned(),
@@ -295,7 +299,7 @@ pub fn check(config: &ViewConfig, definitions: &[FieldDefinition]) -> Result<(),
             Some(field) if field.can_group() => {}
             Some(field) => {
                 return Err(format!(
-                    "\"{}\" can't group a view. Group by a single choice, person or checkbox field.",
+                    "\"{}\" can't group a view. Group by a choice, status, person, checkbox or date field.",
                     field.name
                 ));
             }
@@ -365,7 +369,7 @@ pub async fn check_references(
         if ids.is_empty() {
             continue;
         }
-        let found = match (field.field_type, field.config.target) {
+        let found = match (field.field_type.behaves_as(), field.config.target) {
             (FieldType::Person, _) => {
                 sqlx::query_scalar::<_, i64>(
                     "SELECT count(*) FROM project_memberships WHERE project_id = $1 AND actor_id = ANY($2)",
@@ -411,7 +415,7 @@ pub async fn check_references(
             return Ok(Err(format!(
                 "A filter on \"{}\" names {} that isn't in this project.",
                 field.name,
-                if field.field_type == FieldType::Person {
+                if field.field_type.behaves_as() == FieldType::Person {
                     "someone"
                 } else {
                     "something"
@@ -876,6 +880,7 @@ mod tests {
                 direction: super::Direction::Desc,
             }],
             group_by: Some(person.id),
+            group_bucket: None,
             columns: vec![Column {
                 field: text.id,
                 hidden: true,

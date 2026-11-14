@@ -98,8 +98,10 @@ pub mod telemetry;
 pub mod test_support;
 pub mod usage;
 pub mod views;
+// Test-only, but not "#[cfg(test)] mod" on its own lines: tests that read
+// this file's routes stop at the first such line.
 #[cfg(test)]
-mod views_guard;
+pub(crate) mod views_guard;
 pub mod webhooks;
 pub mod whiteboards;
 pub mod work_item_commands;

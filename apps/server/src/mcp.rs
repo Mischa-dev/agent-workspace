@@ -1936,7 +1936,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "List a project's task fields (custom fields such as Risk or Customer): each one's name, type (text, number, date, single_choice, multiple_choice, person, url, checkbox, link), options, and the version field_write needs. Set values with task_update's fields, by name; filter with task_list's fieldFilters. Archived fields are left out unless includeArchived.",
+        description = "List a project's task fields (custom fields such as Risk or Customer): each one's name, type (text, long_text, number, date, single_choice, multiple_choice, person, url, email, phone, checkbox, link), options, and the version field_write needs. Set values with task_update's fields, by name; filter with task_list's fieldFilters. Archived fields are left out unless includeArchived.",
         annotations(title = "List fields", read_only_hint = true, open_world_hint = false)
     )]
     async fn field_list(
@@ -2023,7 +2023,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Create a collection with its fields and views in one call (name, fields: [{name, type, options}], views: [{name, filters, sort, groupBy, columns}]), or change one (pass collection: its name or ID). Fields and views are matched by name, so writing the same definition again changes nothing; pass field or view to rename one, remove: true to remove a view, archived: true to archive a field or the collection (nothing is deleted) and false to restore it. Field types: text, number, date, single_choice, multiple_choice, person, url, checkbox, link (target task, page, or record:<collection name> for that collection's records). A field's type never changes. Needs collections.build.",
+        description = "Create a collection with its fields and views in one call (name, fields: [{name, type, options}], views: [{name, filters, sort, groupBy, columns}]), or change one (pass collection: its name or ID). Fields and views are matched by name, so writing the same definition again changes nothing; pass field or view to rename one, remove: true to remove a view, archived: true to archive a field or the collection (nothing is deleted) and false to restore it. Field types: text, long_text, number, date, single_choice, multiple_choice, status (options with a category: backlog, unstarted, started, review, verification, completed, canceled), person, url, email, phone, checkbox, link (target task, page, or record:<collection name> for that collection's records), and the record's own created_time, edited_time, created_by, edited_by and auto_id, which nobody writes. A field's type never changes. Needs collections.build.",
         annotations(
             title = "Write collection",
             read_only_hint = false,

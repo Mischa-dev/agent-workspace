@@ -1,6 +1,9 @@
 import { useState } from 'react'
 
 import {
+  CATEGORY_LABELS,
+  STATUS_CATEGORIES,
+  behavesAs,
   clauseText,
   opLabel,
   opTakesValues,
@@ -83,15 +86,21 @@ export function FieldFilterEditor({
   const [values, setValues] = useState<string[]>(clause?.values ?? [])
   const people = useAssignableActors(projectId, '')
   const toggle = (value: string) => setValues(values.includes(value) ? values.filter((entry) => entry !== value) : [...values, value])
-  const needsValues = opTakesValues(op) && field.type !== 'checkbox'
+  // A record's maker filters as a person, its times as dates, its ID as a number.
+  const like = behavesAs(field.type)
+  const byCategory = op === 'categoryIs' || op === 'categoryIsNot'
+  const choices = like === 'single_choice' || like === 'multiple_choice' || like === 'status'
+  const needsValues = opTakesValues(op) && like !== 'checkbox'
   const ready = !needsValues || values.some((value) => value.trim())
   // A typed value box (not a list of options or people) takes one value for
   // these, and several separated by commas for a text field's "is".
-  const typed = field.type !== 'single_choice' && field.type !== 'multiple_choice' && field.type !== 'person' && field.type !== 'checkbox'
+  const typed = !choices && like !== 'person' && like !== 'checkbox'
   const oneValue = (next: FieldOp) => next === 'contains' || next === 'gt' || next === 'gte' || next === 'lt' || next === 'lte' || field.type !== 'text'
   const single = oneValue(op)
   const changeOp = (next: FieldOp) => {
     setOp(next)
+    // Categories and options are different values.
+    if ((next === 'categoryIs' || next === 'categoryIsNot') !== byCategory) setValues([])
     // Several values typed for "is" become one, written as the box showed
     // them, rather than staying several that a one-value match can't take.
     if (typed && oneValue(next) && values.length > 1) setValues([values.join(',')])
@@ -107,7 +116,15 @@ export function FieldFilterEditor({
   }
   let chooser = null
   if (needsValues) {
-    if (field.type === 'single_choice' || field.type === 'multiple_choice') {
+    if (byCategory) {
+      chooser = (
+        <div role="group" aria-label={`${field.name} categories`}>
+          {STATUS_CATEGORIES.map((category) => (
+            <Checkbox checked={values.includes(category)} key={category} label={CATEGORY_LABELS[category]} onChange={() => toggle(category)} />
+          ))}
+        </div>
+      )
+    } else if (choices) {
       chooser = (
         <div role="group" aria-label={`${field.name} options`}>
           {field.options
@@ -117,7 +134,7 @@ export function FieldFilterEditor({
             ))}
         </div>
       )
-    } else if (field.type === 'person') {
+    } else if (like === 'person') {
       chooser = (
         <div role="group" aria-label="People">
           <Checkbox checked={values.includes('me')} label="Me" onChange={() => toggle('me')} />
@@ -132,9 +149,9 @@ export function FieldFilterEditor({
           aria-label={`${field.name} value`}
           autoFocus
           compact
-          inputMode={field.type === 'number' ? 'decimal' : undefined}
+          inputMode={like === 'number' ? 'decimal' : undefined}
           onChange={(event) => setValues(single ? [event.target.value] : event.target.value.split(','))}
-          type={field.type === 'date' ? 'date' : 'text'}
+          type={like === 'date' ? 'date' : 'text'}
           value={values.join(single ? '' : ',')}
         />
       )

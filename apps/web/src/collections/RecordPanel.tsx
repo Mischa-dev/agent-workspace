@@ -4,7 +4,7 @@ import { useProjectExperience } from '../experience/layout'
 
 import { FieldEditor } from '../fields/FieldEditor'
 import { FieldValueView } from '../fields/FieldValueView'
-import { displayText, isEmpty, type FieldDefinition, type FieldReference, type FieldType, type FieldValue } from '../fields/fieldModel'
+import { displayText, isEmpty, isSystemType, type FieldDefinition, type FieldReference, type FieldType, type FieldValue } from '../fields/fieldModel'
 import { Banner, DocumentSkeleton, ErrorState, Icon, IconButton, Menu, TextArea, formatFullDate, formatRelative, showToast, type MenuEntry } from '../ui'
 import { useRecord, type CollectionBody, type HistoryEntry } from './api'
 import { historyValue, recordName, referenceKind } from './collectionModel'
@@ -133,7 +133,7 @@ export function RecordPanel({
           const value = current.values[field.id]
           const shown = displayText(field, value, references)
           let control
-          if (!editable) {
+          if (!editable || isSystemType(field.type)) {
             control = <FieldValueView empty="Empty" field={field} references={references} value={value} />
           } else if (field.type === 'checkbox') {
             control = (
@@ -159,7 +159,7 @@ export function RecordPanel({
               >
                 {isEmpty(value) ? (
                   <span className="aw-prop__empty">Empty</span>
-                ) : field.type === 'url' ? (
+                ) : field.type === 'url' || field.type === 'email' || field.type === 'phone' ? (
                   <span className="aw-prop__text">{shown}</span>
                 ) : (
                   <FieldValueView field={field} references={references} value={value} />

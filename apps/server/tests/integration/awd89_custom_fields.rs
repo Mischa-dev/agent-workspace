@@ -2014,3 +2014,274 @@ async fn field_tools_and_bulk_arguments_refuse_without_the_role() {
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
     assert_eq!(tasks().await, tasks_before);
 }
+
+/// T1.10: the easy field types and the record's own system fields, in a
+/// collection: each one's values are normalised as written, filter, sort and
+/// group on the server; a phone number that isn't one is refused with the
+/// reason, and nobody writes a system field.
+#[tokio::test]
+async fn every_field_type_normalises_filters_sorts_and_groups() {
+    let Some(setup) = setup("awd89_types").await else {
+        return;
+    };
+    let app = &setup.app;
+    create_project(&setup, "WORK", "Work").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+    let created = call(
+        "collection_write",
+        json!({
+            "projectId": "WORK",
+            "name": "Contacts",
+            "fields": [
+                {"name": "Notes", "type": "long_text"},
+                {"name": "Email", "type": "email"},
+                {"name": "Phone", "type": "phone"},
+                {"name": "Stage", "type": "status", "options": [
+                    {"name": "Won", "category": "completed"},
+                    {"name": "Lead", "category": "backlog"},
+                    {"name": "Lost", "category": "canceled"},
+                    {"name": "Talking", "category": "started"},
+                ]},
+                {"name": "Tags", "type": "multiple_choice", "options": [{"name": "Press"}, {"name": "Partner"}]},
+                {"name": "Met", "type": "date"},
+                {"name": "Pipeline", "type": "status"},
+                {"name": "Created", "type": "created_time"},
+                {"name": "Edited", "type": "edited_time"},
+                {"name": "Maker", "type": "created_by"},
+                {"name": "Editor", "type": "edited_by"},
+                {"name": "Ref", "type": "auto_id"},
+            ],
+            "clientRequestId": "contacts",
+        }),
+    )
+    .await;
+    assert_eq!(created["outcome"], "ok", "{created}");
+    // A status field made without options starts with three, by category.
+    let described = call(
+        "collection_describe",
+        json!({"projectId": "WORK", "collection": "Contacts"}),
+    )
+    .await;
+    let pipeline = described["value"]["fields"]
+        .as_array()
+        .expect("fields")
+        .iter()
+        .find(|field| field["name"] == "Pipeline")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let categories = pipeline["options"]
+        .as_array()
+        .map(|options| {
+            options
+                .iter()
+                .map(|option| option["category"].as_str().unwrap_or_default().to_owned())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    assert_eq!(
+        categories,
+        ["unstarted", "started", "completed"],
+        "{described}"
+    );
+
+    let write = |records: Value, key: &'static str| {
+        call(
+            "record_write",
+            json!({"projectId": "WORK", "collection": "Contacts", "records": records, "clientRequestId": key}),
+        )
+    };
+    let written = write(
+        json!([
+            {"title": "Ada", "fields": {"Email": " Ada@Example.COM ", "Phone": "+44 20 7946 0958",
+              "Stage": "talking", "Tags": ["Press", "Partner"], "Met": "2026-10-03",
+              "Notes": "Met at the conference.\nWants a demo."}},
+            {"title": "Grace", "fields": {"Email": "grace@example.org", "Phone": "(020) 7946-0001",
+              "Stage": "Won", "Tags": ["Partner"], "Met": "2026-10-28"}},
+            {"title": "Linus", "fields": {"Stage": "Lost", "Met": "2026-11-02"}},
+            {"title": "Margaret", "fields": {"Stage": "Lead", "Tags": "Press"}},
+        ]),
+        "people",
+    )
+    .await;
+    assert_eq!(written["outcome"], "ok", "{written}");
+    assert_eq!(written["value"]["created"], 4);
+
+    // Values come back as stored: the email lowercased, the phone as
+    // written, and the system fields from the record itself.
+    let all = call(
+        "record_query",
+        json!({"projectId": "WORK", "collection": "Contacts", "sort": [{"field": "Ref", "direction": "asc"}]}),
+    )
+    .await;
+    assert_eq!(all["outcome"], "ok", "{all}");
+    let ada = &all["value"]["records"][0];
+    assert_eq!(ada["fields"]["Email"], "ada@example.com", "{ada}");
+    assert_eq!(ada["fields"]["Phone"], "+44 20 7946 0958");
+    assert_eq!(ada["fields"]["Stage"], "Talking");
+    assert_eq!(ada["fields"]["Ref"], 1);
+    assert!(
+        ada["fields"]["Maker"]
+            .as_str()
+            .is_some_and(|maker| !maker.is_empty()),
+        "{ada}"
+    );
+    assert!(ada["fields"]["Created"].as_str().is_some(), "{ada}");
+
+    // A phone that isn't one, an email that isn't one, and a system field
+    // are refused with the reason, and nothing is written.
+    for (fields, says) in [
+        (json!({"Phone": "call me"}), "phone number: only digits"),
+        (json!({"Phone": "+1 2"}), "4 to 15 digits"),
+        (json!({"Email": "ada.example.com"}), "email address"),
+        (json!({"Created": "2020-01-01"}), "set by the app"),
+        (json!({"Stage": "Pending"}), "Won, Lead, Lost, Talking"),
+    ] {
+        let refused = write(json!([{"title": "Bad", "fields": fields}]), "bad").await;
+        assert_eq!(refused["outcome"], "invalid_request", "{fields}: {refused}");
+        assert!(refused.to_string().contains(says), "{fields}: {refused}");
+    }
+
+    let titles = |page: &Value| {
+        page["value"]["records"]
+            .as_array()
+            .unwrap_or_else(|| panic!("no records: {page}"))
+            .iter()
+            .map(|record| record["title"].as_str().unwrap_or_default().to_owned())
+            .collect::<Vec<_>>()
+    };
+    // Filters: by the email in any case, the phone by its digits, a
+    // status's category, words in long text, the record's number, the
+    // maker, and when it was made.
+    for (filter, expected) in [
+        (
+            json!({"field": "Email", "op": "is", "values": ["ADA@example.com"]}),
+            vec!["Ada"],
+        ),
+        (
+            json!({"field": "Phone", "op": "is", "values": ["020 7946 0001"]}),
+            vec!["Grace"],
+        ),
+        (
+            json!({"field": "Phone", "op": "is", "values": ["+442079460958"]}),
+            vec!["Ada"],
+        ),
+        (
+            json!({"field": "Stage", "op": "categoryIs", "values": ["completed", "canceled"]}),
+            vec!["Grace", "Linus"],
+        ),
+        (
+            json!({"field": "Notes", "op": "contains", "values": ["demo"]}),
+            vec!["Ada"],
+        ),
+        (
+            json!({"field": "Ref", "op": "gte", "values": ["3"]}),
+            vec!["Linus", "Margaret"],
+        ),
+        (
+            json!({"field": "Maker", "op": "is", "values": ["me"]}),
+            vec!["Ada", "Grace", "Linus", "Margaret"],
+        ),
+        (
+            json!({"field": "Created", "op": "within", "values": ["last_7_days"]}),
+            vec!["Ada", "Grace", "Linus", "Margaret"],
+        ),
+        (
+            json!({"field": "Edited", "op": "lt", "values": ["2020-01-01"]}),
+            vec![],
+        ),
+        (
+            json!({"field": "Tags", "op": "is", "values": ["Partner"]}),
+            vec!["Ada", "Grace"],
+        ),
+    ] {
+        let page = call(
+            "record_query",
+            json!({"projectId": "WORK", "collection": "Contacts", "filters": [filter],
+                   "sort": [{"field": "Ref", "direction": "asc"}]}),
+        )
+        .await;
+        assert_eq!(page["outcome"], "ok", "{filter}: {page}");
+        assert_eq!(titles(&page), expected, "{filter}: {page}");
+    }
+
+    // Sorts: a status by category (backlog, started, completed, canceled),
+    // an email as text, the record's number.
+    for (sort, expected) in [
+        (
+            json!({"field": "Stage", "direction": "asc"}),
+            vec!["Margaret", "Ada", "Grace", "Linus"],
+        ),
+        (
+            json!({"field": "Email", "direction": "asc"}),
+            vec!["Ada", "Grace", "Linus", "Margaret"],
+        ),
+        (
+            json!({"field": "Ref", "direction": "desc"}),
+            vec!["Margaret", "Linus", "Grace", "Ada"],
+        ),
+        (
+            json!({"field": "Phone", "direction": "asc"}),
+            vec!["Grace", "Ada", "Linus", "Margaret"],
+        ),
+    ] {
+        let page = call(
+            "record_query",
+            json!({"projectId": "WORK", "collection": "Contacts", "sort": [sort]}),
+        )
+        .await;
+        assert_eq!(titles(&page), expected, "{sort}: {page}");
+    }
+
+    // Groups: a status in category order; several choices put a record in
+    // each of its groups, counted once in the total; dates by month or
+    // week; the maker as a person.
+    for (group, bucket, expected) in [
+        (
+            "Stage",
+            None,
+            json!([{"name": "Lead", "count": 1}, {"name": "Talking", "count": 1}, {"name": "Won", "count": 1}, {"name": "Lost", "count": 1}]),
+        ),
+        (
+            "Tags",
+            None,
+            json!([{"name": "Press", "count": 2}, {"name": "Partner", "count": 2}, {"name": "No value", "count": 1}]),
+        ),
+        (
+            "Met",
+            Some("month"),
+            json!([{"name": "October 2026", "count": 2}, {"name": "November 2026", "count": 1}, {"name": "No date", "count": 1}]),
+        ),
+        (
+            "Met",
+            Some("week"),
+            json!([{"name": "Week of 28 Sep 2026", "count": 1}, {"name": "Week of 26 Oct 2026", "count": 1}, {"name": "Week of 2 Nov 2026", "count": 1}, {"name": "No date", "count": 1}]),
+        ),
+    ] {
+        let mut arguments =
+            json!({"projectId": "WORK", "collection": "Contacts", "groupBy": group});
+        if let Some(bucket) = bucket {
+            arguments["groupBucket"] = json!(bucket);
+        }
+        let page = call("record_query", arguments).await;
+        assert_eq!(page["outcome"], "ok", "{group}: {page}");
+        assert_eq!(page["value"]["groups"], expected, "{group}: {page}");
+        assert_eq!(page["value"]["total"], 4, "{group}: {page}");
+    }
+    let by_maker = call(
+        "record_query",
+        json!({"projectId": "WORK", "collection": "Contacts", "groupBy": "Maker"}),
+    )
+    .await;
+    assert_eq!(
+        by_maker["value"]["groups"].as_array().map(Vec::len),
+        Some(1),
+        "{by_maker}"
+    );
+    assert_eq!(by_maker["value"]["groups"][0]["count"], 4);
+}

@@ -1,4 +1,4 @@
-import { canGroup, isEmpty, type FieldDefinition, type FieldReference, type FieldType, type FieldValue, type FieldValues } from '../fields/fieldModel'
+import { STATUS_CATEGORIES, canGroup, canGroupRecords, isEmpty, isSystemType, type FieldDefinition, type FieldOption, type FieldReference, type FieldType, type FieldValue, type FieldValues } from '../fields/fieldModel'
 import { formatDateLabel } from '../ui/dateModel'
 import type { CollectionRecord, GroupCount, SortRule, ViewConfig } from './api'
 
@@ -20,8 +20,15 @@ const WIDTHS: Record<FieldType, number> = {
   people: 220,
   labels: 220,
   url: 200,
+  email: 220,
+  phone: 160,
   checkbox: 104,
   link: 220,
+  created_time: 170,
+  edited_time: 170,
+  created_by: 180,
+  edited_by: 180,
+  auto_id: 90,
 }
 
 export type ShownColumn = { field: FieldDefinition; width: number }
@@ -64,7 +71,15 @@ export function withColumnHidden(fields: readonly FieldDefinition[], config: Vie
 /** Whether the person changed what a view finds or shows. */
 export function sameConfig(left: ViewConfig, right: ViewConfig) {
   const comparable = (config: ViewConfig) =>
-    JSON.stringify([config.filters.map((clause) => [clause.field, clause.op, clause.values ?? []]), config.sort, config.groupBy, config.columns, config.titleWidth, config.dateField])
+    JSON.stringify([
+      config.filters.map((clause) => [clause.field, clause.op, clause.values ?? []]),
+      config.sort,
+      config.groupBy,
+      config.groupBy ? (config.groupBucket ?? null) : null,
+      config.columns,
+      config.titleWidth,
+      config.dateField,
+    ])
   return comparable(left) === comparable(right)
 }
 
@@ -121,9 +136,29 @@ export function sortText(rule: SortRule, fields: readonly FieldDefinition[], tit
   return `${sortName(rule, fields, titleName)}, ${words}`
 }
 
-/** Fields a view can group by: one choice, a person or a checkbox. */
+/** Fields a table or cards can group by: choices, a status, a person, a checkbox or a date. */
 export function groupableFields(fields: readonly FieldDefinition[]) {
-  return fields.filter((field) => !field.archived && canGroup(field.type))
+  return fields.filter((field) => !field.archived && canGroupRecords(field.type))
+}
+
+/**
+ * Fields a board's columns can be: a value a card takes by moving, so one
+ * choice, a status, a person or a checkbox someone sets.
+ */
+export function boardFields(fields: readonly FieldDefinition[]) {
+  return fields.filter((field) => !field.archived && canGroup(field.type) && !isSystemType(field.type))
+}
+
+/** A status field's options by category, in workflow order, then in the field's order (as the server groups them). */
+export function statusOrder(options: readonly FieldOption[]): FieldOption[] {
+  const rank = (option: FieldOption) => {
+    const index = option.category ? STATUS_CATEGORIES.indexOf(option.category) : -1
+    return index < 0 ? STATUS_CATEGORIES.length : index
+  }
+  return options
+    .map((option, index) => ({ option, index }))
+    .sort((left, right) => rank(left.option) - rank(right.option) || left.index - right.index)
+    .map(({ option }) => option)
 }
 
 export type TableItem =
@@ -228,8 +263,8 @@ export function boardColumns(field: FieldDefinition, groups: readonly GroupCount
   }
   if (field.type === 'checkbox') return [none, { key: 'true', label: 'Checked', color: null, count: count('true') }]
   const columns: BoardColumn[] =
-    field.type === 'single_choice'
-      ? field.options
+    field.type === 'single_choice' || field.type === 'status'
+      ? (field.type === 'status' ? statusOrder(field.options) : field.options)
           .filter((option) => !option.archived || count(option.id) > 0)
           .map((option) => ({ key: option.id, label: option.name, color: option.color, count: count(option.id) }))
       : groups.filter((group) => group.key !== NO_GROUP).map((group) => ({ key: group.key, label: group.label, color: group.color, count: group.count }))
