@@ -124,7 +124,9 @@ async fn old_approvals_and_questions_are_copied_with_their_ids() {
     let asked = question(false).await;
     let answered = question(true).await;
 
-    full.run(&pool).await.expect("migrate to the requests record");
+    full.run(&pool)
+        .await
+        .expect("migrate to the requests record");
 
     let approval_copy = |status: &str, answer: Option<Value>, by: Option<Uuid>| Copied {
         kind: "approval".to_owned(),
@@ -143,7 +145,10 @@ async fn old_approvals_and_questions_are_copied_with_their_ids() {
         answered_by_account_id: by,
         legacy_source: Some("agent_approval".to_owned()),
     };
-    assert_eq!(copied(&pool, pending).await, approval_copy("open", None, None));
+    assert_eq!(
+        copied(&pool, pending).await,
+        approval_copy("open", None, None)
+    );
     assert_eq!(
         copied(&pool, resolved).await,
         approval_copy(
@@ -152,7 +157,10 @@ async fn old_approvals_and_questions_are_copied_with_their_ids() {
             Some(seed.human_actor_id)
         )
     );
-    assert_eq!(copied(&pool, canceled).await, approval_copy("cancelled", None, None));
+    assert_eq!(
+        copied(&pool, canceled).await,
+        approval_copy("cancelled", None, None)
+    );
     let question_copy = |status: &str, answer: Option<Value>, by: Option<Uuid>| Copied {
         kind: "question".to_owned(),
         raised_by_account_id: seed.worker_actor_id,
@@ -170,7 +178,10 @@ async fn old_approvals_and_questions_are_copied_with_their_ids() {
         answered_by_account_id: by,
         legacy_source: Some("person_question".to_owned()),
     };
-    assert_eq!(copied(&pool, asked).await, question_copy("open", None, None));
+    assert_eq!(
+        copied(&pool, asked).await,
+        question_copy("open", None, None)
+    );
     assert_eq!(
         copied(&pool, answered).await,
         question_copy(
@@ -194,8 +205,7 @@ async fn a_question_asked_and_answered_the_old_way_is_on_both_records() {
     let app = &setup.app;
     let project = create_project(&setup, "ASK", "Asking").await;
     let (_mara, mara_browser) = add_person(&setup, &[&project], "mara").await;
-    let (scout, scout_token) =
-        create_agent(app, &setup.browser, &project, "Scout", "scout").await;
+    let (scout, scout_token) = create_agent(app, &setup.browser, &project, "Scout", "scout").await;
     add_member(&setup, &project, scout, "member").await;
     let scout_session = initialize(app, &scout_token).await.expect("Scout MCP");
     let asked = tool(

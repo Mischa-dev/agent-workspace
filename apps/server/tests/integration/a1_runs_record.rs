@@ -161,7 +161,14 @@ async fn existing_runs_usage_and_events_are_carried_across_once() {
         return;
     };
     let seed = seed(&pool, &root).await;
-    let completed = insert_run(&pool, &seed, "completed", None, "Fix the login bug\nDetails").await;
+    let completed = insert_run(
+        &pool,
+        &seed,
+        "completed",
+        None,
+        "Fix the login bug\nDetails",
+    )
+    .await;
     let failed = insert_run(&pool, &seed, "failed", Some("boom"), "Try again").await;
     let canceled = insert_run(&pool, &seed, "canceled", None, "Never mind").await;
     let stopped = insert_run(
@@ -183,9 +190,18 @@ async fn existing_runs_usage_and_events_are_carried_across_once() {
     let working = insert_run(&pool, &seed, "working", None, "Still going").await;
     let mut events = Vec::new();
     for (kind, payload) in [
-        ("run_state_changed", serde_json::json!({"from": "queued", "to": "working"})),
-        ("command_completed", serde_json::json!({"command": "cargo test", "exitCode": 0})),
-        ("agent_note", serde_json::json!({"text": "Looking at the tests."})),
+        (
+            "run_state_changed",
+            serde_json::json!({"from": "queued", "to": "working"}),
+        ),
+        (
+            "command_completed",
+            serde_json::json!({"command": "cargo test", "exitCode": 0}),
+        ),
+        (
+            "agent_note",
+            serde_json::json!({"text": "Looking at the tests."}),
+        ),
         ("run_completed", serde_json::json!({})),
     ] {
         events.push(insert_event(&pool, completed, kind, payload).await);
@@ -351,7 +367,10 @@ async fn the_mirror_keeps_runs_equal_to_built_in_runs() {
         run_state(&pool, run).await.1.as_deref(),
         Some("Recovering after a restart")
     );
-    assert!(version(pool.clone()).await > first, "each change bumps the version");
+    assert!(
+        version(pool.clone()).await > first,
+        "each change bumps the version"
+    );
 
     let event = insert_event(
         &pool,
@@ -443,11 +462,15 @@ async fn a_run_in_a_private_thread_stays_private() {
     let member = seed.human_actor_id;
     let outsider = seed.collaborator_actor_id;
     assert_eq!(
-        runs::store::space_of_visible(&pool, member, run).await.expect("member"),
+        runs::store::space_of_visible(&pool, member, run)
+            .await
+            .expect("member"),
         Some(seed.project_id)
     );
     assert_eq!(
-        runs::store::space_of_visible(&pool, outsider, run).await.expect("outsider"),
+        runs::store::space_of_visible(&pool, outsider, run)
+            .await
+            .expect("outsider"),
         None
     );
     let listed = |viewer: Uuid| {
@@ -462,7 +485,10 @@ async fn a_run_in_a_private_thread_stays_private() {
         }
     };
     assert_eq!(listed(member).await, vec![run]);
-    assert!(listed(outsider).await.is_empty(), "not listed for a non-member");
+    assert!(
+        listed(outsider).await.is_empty(),
+        "not listed for a non-member"
+    );
     assert!(
         runs::store::active_under_space(&pool, seed.project_id)
             .await

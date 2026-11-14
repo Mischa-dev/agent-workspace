@@ -65,21 +65,23 @@ async fn an_agent_reports_its_own_run_and_nobody_else_can() {
     assert_eq!(repeated["value"]["accepted"], 0, "{repeated}");
     assert_eq!(repeated["value"]["duplicates"], 3);
     let run = run_id.parse::<Uuid>().expect("run UUID");
-    let stored = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM run_activities WHERE run_id = $1")
-        .bind(run)
-        .fetch_one(&setup.pool)
-        .await
-        .expect("count");
+    let stored =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM run_activities WHERE run_id = $1")
+            .bind(run)
+            .fetch_one(&setup.pool)
+            .await
+            .expect("count");
     assert_eq!(stored, 4, "run_started and the three reported");
-    let payloads = sqlx::query_scalar::<_, Value>(
-        "SELECT payload FROM run_activities WHERE run_id = $1",
-    )
-    .bind(run)
-    .fetch_all(&setup.pool)
-    .await
-    .expect("payloads");
+    let payloads =
+        sqlx::query_scalar::<_, Value>("SELECT payload FROM run_activities WHERE run_id = $1")
+            .bind(run)
+            .fetch_all(&setup.pool)
+            .await
+            .expect("payloads");
     assert!(
-        !Value::Array(payloads).to_string().contains("abcdef1234567890abcdef"),
+        !Value::Array(payloads)
+            .to_string()
+            .contains("abcdef1234567890abcdef"),
         "secrets are removed before storing"
     );
 
@@ -129,7 +131,11 @@ async fn an_agent_reports_its_own_run_and_nobody_else_can() {
     };
     assert_eq!(
         request_state(setup.pool.clone()).await,
-        ("open".to_owned(), Some(run), "One task or three?".to_owned())
+        (
+            "open".to_owned(),
+            Some(run),
+            "One task or three?".to_owned()
+        )
     );
 
     // Silent for three intervals: not responding; the next report: ok.

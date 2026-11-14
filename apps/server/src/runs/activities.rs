@@ -95,11 +95,18 @@ fn one_line(value: &str, max: usize) -> String {
 /// Redact and cap every string in a JSON value.
 pub fn redact_value(value: Value) -> Value {
     match value {
-        Value::String(text) => Value::String(run_log::cap(&run_log::redact(&text), MAX_STRING_CHARS)),
+        Value::String(text) => {
+            Value::String(run_log::cap(&run_log::redact(&text), MAX_STRING_CHARS))
+        }
         Value::Array(items) => Value::Array(items.into_iter().map(redact_value).collect()),
         Value::Object(map) => Value::Object(
             map.into_iter()
-                .map(|(key, value)| (key.chars().take(MAX_REF_CHARS).collect(), redact_value(value)))
+                .map(|(key, value)| {
+                    (
+                        key.chars().take(MAX_REF_CHARS).collect(),
+                        redact_value(value),
+                    )
+                })
                 .collect(),
         ),
         other => other,
@@ -128,7 +135,9 @@ fn default_summary(kind: &str, payload: &Value) -> String {
             .unwrap_or("Waiting for an answer.")
             .to_owned(),
         "interrupt_resolved" => text("answerSummary").unwrap_or("Answered.").to_owned(),
-        "gap" => text("reason").unwrap_or("Some steps weren't reported.").to_owned(),
+        "gap" => text("reason")
+            .unwrap_or("Some steps weren't reported.")
+            .to_owned(),
         "custom" => text("name").unwrap_or("Custom.").to_owned(),
         other => other.replace('_', " "),
     }
@@ -160,16 +169,17 @@ pub fn clean(activity: NewActivity, still_open: i64) -> Result<CleanActivity, Ru
             "An activity's payload is a JSON object.",
         ));
     }
-    let reference = |value: Option<String>, field: &'static str| -> Result<Option<String>, RunOpError> {
-        match value.map(|value| one_line(&value, usize::MAX)) {
-            Some(value) if value.is_empty() => Ok(None),
-            Some(value) if value.chars().count() > MAX_REF_CHARS => Err(refused(
-                field,
-                "Keep step and parent references to 200 characters.",
-            )),
-            other => Ok(other),
-        }
-    };
+    let reference =
+        |value: Option<String>, field: &'static str| -> Result<Option<String>, RunOpError> {
+            match value.map(|value| one_line(&value, usize::MAX)) {
+                Some(value) if value.is_empty() => Ok(None),
+                Some(value) if value.chars().count() > MAX_REF_CHARS => Err(refused(
+                    field,
+                    "Keep step and parent references to 200 characters.",
+                )),
+                other => Ok(other),
+            }
+        };
     let step_ref = reference(activity.step_ref, "activities.stepRef")?;
     let parent_ref = reference(activity.parent_ref, "activities.parentRef")?;
     let payload = redact_value(activity.payload);
@@ -211,9 +221,7 @@ pub fn clean(activity: NewActivity, still_open: i64) -> Result<CleanActivity, Ru
             ));
         }
         "interrupt"
-            if !payload
-                .get("request")
-                .is_some_and(Value::is_object)
+            if !payload.get("request").is_some_and(Value::is_object)
                 && !payload.get("requestId").is_some_and(Value::is_string) =>
         {
             return Err(refused(
@@ -244,7 +252,14 @@ pub fn clean(activity: NewActivity, still_open: i64) -> Result<CleanActivity, Ru
     {
         // Keep what says what it was; drop the bulk.
         let mut kept = Map::new();
-        for key in ["outcome", "toolCallRef", "tool", "status", "requestId", "name"] {
+        for key in [
+            "outcome",
+            "toolCallRef",
+            "tool",
+            "status",
+            "requestId",
+            "name",
+        ] {
             if let Some(value) = payload.get(key) {
                 kept.insert(key.to_owned(), value.clone());
             }
@@ -265,7 +280,12 @@ pub fn clean(activity: NewActivity, still_open: i64) -> Result<CleanActivity, Ru
         effect,
         always_kept: matches!(
             kind,
-            "run_started" | "run_finished" | "run_error" | "interrupt" | "interrupt_resolved" | "result"
+            "run_started"
+                | "run_finished"
+                | "run_error"
+                | "interrupt"
+                | "interrupt_resolved"
+                | "result"
         ),
     })
 }
@@ -303,7 +323,10 @@ mod tests {
         .expect("clean");
         let text = cleaned.payload.to_string();
         assert!(!text.contains("abcdef1234567890"), "{text}");
-        assert!(!text.contains("ghp_abcdefghijklmnopqrstuvwxyz0123"), "{text}");
+        assert!(
+            !text.contains("ghp_abcdefghijklmnopqrstuvwxyz0123"),
+            "{text}"
+        );
     }
 
     #[test]

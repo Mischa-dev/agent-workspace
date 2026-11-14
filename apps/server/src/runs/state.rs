@@ -363,8 +363,7 @@ pub fn replay(start: RunState, effects: impl IntoIterator<Item = ActivityEffect>
 #[cfg(test)]
 mod tests {
     use super::{
-        ActivityEffect, Liveness, Outcome, RunEvent, RunState, reduce, replay,
-        STOPPED_BY_REQUESTER,
+        ActivityEffect, Liveness, Outcome, RunEvent, RunState, STOPPED_BY_REQUESTER, reduce, replay,
     };
     use crate::domain::RunState as Legacy;
 
@@ -497,8 +496,8 @@ mod tests {
             seed
         };
         for _ in 0..500 {
-            let start = [RunState::Queued, RunState::Accepted, RunState::Working]
-                [(next() % 3) as usize];
+            let start =
+                [RunState::Queued, RunState::Accepted, RunState::Working][(next() % 3) as usize];
             let mut state = start;
             let mut open = 0i64;
             let mut log = Vec::new();

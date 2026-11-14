@@ -453,7 +453,9 @@ async fn queued_runs_are_idempotent_and_create_no_workspace_before_admission() {
     .expect("the approval's request");
     assert_eq!(request_status, "answered");
     assert_eq!(
-        request_answer.as_ref().and_then(|answer| answer.get("answer")),
+        request_answer
+            .as_ref()
+            .and_then(|answer| answer.get("answer")),
         Some(&json!("Aurora"))
     );
     let repeated_question = respond_to_approval(

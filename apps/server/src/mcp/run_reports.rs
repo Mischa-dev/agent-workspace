@@ -23,7 +23,9 @@ use super::{
 use crate::{
     AppState,
     error::AppError,
-    idempotency::{IdempotencyKey, IdempotencyOutcome, RequestHash, complete, reserve, resource_bound_scope},
+    idempotency::{
+        IdempotencyKey, IdempotencyOutcome, RequestHash, complete, reserve, resource_bound_scope,
+    },
     policy::Action,
     runs::{
         RunState,
@@ -195,14 +197,24 @@ pub(super) async fn run_open(
         let conversation_id = match cause.conversation_id.as_deref() {
             Some(value) => match parse_id(value) {
                 Some(id) => Some(id),
-                None => return Ok(ToolResult::invalid("cause.conversationId", "Give a conversation ID or link.")),
+                None => {
+                    return Ok(ToolResult::invalid(
+                        "cause.conversationId",
+                        "Give a conversation ID or link.",
+                    ));
+                }
             },
             None => None,
         };
         let message_id = match cause.message_id.as_deref() {
             Some(value) => match parse_message_id(value) {
                 Some(id) => Some(id),
-                None => return Ok(ToolResult::invalid("cause.messageId", "Give a message ID or link.")),
+                None => {
+                    return Ok(ToolResult::invalid(
+                        "cause.messageId",
+                        "Give a message ID or link.",
+                    ));
+                }
             },
             None => None,
         };
@@ -329,7 +341,16 @@ pub(super) async fn run_update(
         }
         let mut transaction = state.pool.begin().await?;
         mark_via(&mut transaction, principal).await?;
-        let reservation = match reserve_key(&mut transaction, principal, run_id, "update", &key, &arguments).await? {
+        let reservation = match reserve_key(
+            &mut transaction,
+            principal,
+            run_id,
+            "update",
+            &key,
+            &arguments,
+        )
+        .await?
+        {
             Keyed::Replay(value) => {
                 transaction.commit().await?;
                 return Ok(ToolResult::ok(value));
@@ -635,7 +656,10 @@ pub(super) async fn run_usage_report(
         (Ok(Some(start)), Ok(Some(end))) => Some((start, end)),
         (Ok(None), Ok(None)) => None,
         (Err(field), _) | (_, Err(field)) => {
-            return ToolResult::invalid(field, "Give the time as RFC 3339, like 2026-11-14T09:00:00Z.");
+            return ToolResult::invalid(
+                field,
+                "Give the time as RFC 3339, like 2026-11-14T09:00:00Z.",
+            );
         }
         _ => {
             return ToolResult::invalid(
@@ -839,13 +863,15 @@ pub(super) async fn run_cancel(
             )
             .await;
             return Ok(match stopped {
-                ToolResult::Ok { .. } => match crate::runs::store::get(&state.pool, run_id).await? {
-                    Some(run) => ToolResult::ok(RunRecordValue {
-                        run: RunRecord::from(&run),
-                        idempotent_replay: false,
-                    }),
-                    None => ToolResult::not_found(RUN_MESSAGE),
-                },
+                ToolResult::Ok { .. } => {
+                    match crate::runs::store::get(&state.pool, run_id).await? {
+                        Some(run) => ToolResult::ok(RunRecordValue {
+                            run: RunRecord::from(&run),
+                            idempotent_replay: false,
+                        }),
+                        None => ToolResult::not_found(RUN_MESSAGE),
+                    }
+                }
                 ToolResult::NotFound { message } => ToolResult::NotFound { message },
                 ToolResult::InvalidRequest { field, message } => {
                     ToolResult::InvalidRequest { field, message }
@@ -864,7 +890,16 @@ pub(super) async fn run_cancel(
             });
         }
         mark_via(&mut transaction, principal).await?;
-        let reservation = match reserve_key(&mut transaction, principal, run_id, "cancel", &key, &arguments).await? {
+        let reservation = match reserve_key(
+            &mut transaction,
+            principal,
+            run_id,
+            "cancel",
+            &key,
+            &arguments,
+        )
+        .await?
+        {
             Keyed::Replay(value) => {
                 transaction.commit().await?;
                 return Ok(ToolResult::ok(value));
@@ -989,8 +1024,7 @@ async fn reporter_check<T>(
     principal: &McpPrincipal,
     run_id: Uuid,
 ) -> Result<Option<ToolResult<T>>, AppError> {
-    let space =
-        crate::runs::store::space_of_own(&state.pool, principal.actor_id, run_id).await?;
+    let space = crate::runs::store::space_of_own(&state.pool, principal.actor_id, run_id).await?;
     let Some(space) = space.filter(|space| *space == principal.project_id) else {
         return Ok(Some(ToolResult::not_found(RUN_MESSAGE)));
     };
@@ -1044,24 +1078,26 @@ async fn reserve_key<A: Serialize>(
 ) -> Result<Keyed, AppError> {
     let scope = resource_bound_scope("runs", run_id, action)?;
     let hash = RequestHash::for_value(arguments)?;
-    Ok(match reserve(transaction, principal.actor_id, &scope, key, hash).await {
-        Ok(IdempotencyOutcome::Replay(replay)) => {
-            let mut value = replay.decode::<RunRecordValue>()?;
-            value.idempotent_replay = true;
-            Keyed::Replay(value)
-        }
-        Ok(IdempotencyOutcome::Reserved(reservation)) => Keyed::Reserved(reservation),
-        Err(AppError::Conflict("idempotency_key", "payload mismatch")) => {
-            Keyed::Refused(ToolResult::invalid(
-                "clientRequestId",
-                "That clientRequestId was already used for a different change. Use a new one.",
-            ))
-        }
-        Err(AppError::Conflict("idempotency_key", "command in progress")) => Keyed::Refused(
-            ToolResult::conflict("The same change is still being made. Try again in a moment."),
-        ),
-        Err(error) => return Err(error),
-    })
+    Ok(
+        match reserve(transaction, principal.actor_id, &scope, key, hash).await {
+            Ok(IdempotencyOutcome::Replay(replay)) => {
+                let mut value = replay.decode::<RunRecordValue>()?;
+                value.idempotent_replay = true;
+                Keyed::Replay(value)
+            }
+            Ok(IdempotencyOutcome::Reserved(reservation)) => Keyed::Reserved(reservation),
+            Err(AppError::Conflict("idempotency_key", "payload mismatch")) => {
+                Keyed::Refused(ToolResult::invalid(
+                    "clientRequestId",
+                    "That clientRequestId was already used for a different change. Use a new one.",
+                ))
+            }
+            Err(AppError::Conflict("idempotency_key", "command in progress")) => Keyed::Refused(
+                ToolResult::conflict("The same change is still being made. Try again in a moment."),
+            ),
+            Err(error) => return Err(error),
+        },
+    )
 }
 
 async fn finish_key(
