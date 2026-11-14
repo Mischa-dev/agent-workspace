@@ -746,22 +746,8 @@ async fn archive_project(
             current_version: project.version,
         });
     }
-    let has_active_run = sqlx::query_scalar::<_, bool>(
-        r#"
-        SELECT EXISTS (
-            SELECT 1
-            FROM agent_runs ar
-            JOIN conversations c ON c.id = ar.conversation_id
-            WHERE c.project_id = $1
-              AND ar.state IN (
-                  'created', 'queued', 'starting', 'working', 'blocked', 'recovering'
-              )
-        )
-        "#,
-    )
-    .bind(project_id)
-    .fetch_one(&mut *transaction)
-    .await?;
+    let has_active_run =
+        crate::runs::store::active_under_space(&mut *transaction, project_id).await?;
     if has_active_run {
         return Err(AppError::ProjectHasActiveRuns);
     }

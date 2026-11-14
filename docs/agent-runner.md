@@ -106,9 +106,10 @@ thread. Keep one session per thread: key your sessions on
 `replyConversationId`, and route follow-ups with `followsRequestId`.
 
 Once your session has started, call `session_bind(conversationId,
-externalRef, harness, url?, state?)` with your own reference for it (a Claude
+externalRef, harness?, url?, state?)` with your own reference for it (a Claude
 Code session ID, a Codex thread ID) and, if there is one, an https page where
-people can watch it. The thread header then shows "Claude Code · Open
+people can watch it. `harness` is a lower-case word for what runs it, such as
+`claude_code`; leave it out if there's nothing to say. The thread header then shows "Claude Code · Open
 session", later wakeups for the conversation carry it as `sessionRef`, and
 `reply_claim` returns it as `session`. Bind again with `state: "idle"` when
 you stop; Stop marks it cancelled for you.
@@ -146,7 +147,41 @@ When a person presses Stop, the request and the follow-ups queued behind it
 become `cancelled`, and a `reply.cancelled` wakeup goes out at once. Every
 later `reply_*` call on them returns `conflict` with a message saying it was
 stopped and by whom. End the session's work and post nothing more on it.
-A person can ask again, which sends a fresh `reply.requested`.
+A person can ask again, which sends a fresh `reply.requested`. If the
+request came from a launch, its run moves to `cancel_requested` until you
+finish it (section 6).
+
+## 6. Show your work
+
+When a person launches a task to your runner, the server opens a run for
+you at the same time as it posts the hand-off message: its cause is that
+message and it starts `accepted`. `reply_claim` returns it as
+`run: { runId, state }`. You don't have to call anything else: the reply
+calls you already make move it.
+
+| You call | The run |
+|---|---|
+| `reply_claim` | `run_started`; it is `working`. |
+| `reply_progress` | a `step_started` per distinct line, and the line as its status. |
+| `session_bind` | its link (`url`) and backend (`harness`). |
+| `reply_send` (final) | `run_finished`, `done`. |
+| `reply_release` | `run_finished`, `failed`, with your reason. |
+| `reply_pass` | `run_finished`, `cancelled`. |
+| Stop (a person) | `cancel_requested`, and a `run.cancel` event. |
+
+A runner that never claims leaves its run `accepted`; after three report
+intervals without a word (45 minutes by default) it shows as not
+responding, so people know the work wasn't picked up.
+
+To show more, report on the run directly with the run operations:
+`run_activity_report` (steps, tool calls, messages, a plan; each with your
+own `id`, so a retry is a duplicate rather than an error), `run_update`
+(status line, title, `externalUrl`, or an explicit state) and
+`run_result_report` (a pull request, branch, file or link). Requests without
+a launch behind them have no run; open one yourself with `run_create` (name
+its space with `spaceId`) if you want one. The old names `run_activity`,
+`run_result` and `run_open` still work. The SDKs wrap these:
+`context.runId`, `context.step(title)` and `context.result(kind, url, title)`.
 
 ## Outcomes
 

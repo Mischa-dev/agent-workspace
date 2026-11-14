@@ -1116,6 +1116,9 @@ async fn run_notifications(
     let mut notifications = Vec::new();
     let mut approvers = BTreeSet::new();
     if state == RunState::Blocked {
+        // The notification points at the approval's request (A1.7); make
+        // sure it has one, whoever wrote the approval.
+        crate::requests::legacy::run_approvals_written(&mut **transaction, run_id).await?;
         // Everyone who may answer, as respond_to_approval decides it.
         let rows = sqlx::query_as::<_, ApproverRow>(
             r#"

@@ -573,23 +573,9 @@ pub(crate) async fn archive_in(
     // The database refuses to archive a repository with an unfinished run;
     // checked first so the person hears why. Only this project's repository
     // counts, so another project's runs never show through.
-    let has_active_run = sqlx::query_scalar::<_, bool>(
-        r#"
-        SELECT EXISTS (
-            SELECT 1
-            FROM agent_runs run
-            JOIN repositories repository ON repository.id = run.repository_id
-            WHERE repository.id = $1 AND repository.project_id = $2
-              AND run.state IN (
-                  'created', 'queued', 'starting', 'working', 'blocked', 'recovering'
-              )
-        )
-        "#,
-    )
-    .bind(repository_id)
-    .bind(project_id)
-    .fetch_one(&mut **transaction)
-    .await?;
+    let has_active_run =
+        crate::runs::store::active_for_repository(&mut **transaction, project_id, repository_id)
+            .await?;
     if has_active_run {
         return Err(AppError::RepositoryHasActiveRuns);
     }
@@ -782,8 +768,8 @@ fn validate_registration(
     if !request.trust_acknowledged {
         return Err(AppError::Validation("trustAcknowledged"));
     }
-    if !valid_github_component(&request.owner, false)
-        || !valid_github_component(&request.name, true)
+    if !crate::code_host::github::valid_component(&request.owner, false)
+        || !crate::code_host::github::valid_component(&request.name, true)
     {
         return Err(AppError::Validation("repositoryIdentity"));
     }
@@ -793,20 +779,6 @@ fn validate_registration(
     }
     validate_registered_ref(&request.default_branch)?;
     Ok(request)
-}
-
-fn valid_github_component(value: &str, repository_name: bool) -> bool {
-    !value.is_empty()
-        && value.len() <= 100
-        && value != "."
-        && value != ".."
-        && !value.starts_with('-')
-        && !value.ends_with('-')
-        && value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric()
-                || byte == b'-'
-                || (repository_name && matches!(byte, b'.' | b'_'))
-        })
 }
 
 fn repository_view(row: RepositoryRow, manage: bool) -> Result<RepositoryView, AppError> {

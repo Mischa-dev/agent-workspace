@@ -6,7 +6,7 @@
 // same name in two groups (General, Members, Runs and models) shares one. A renamed
 // page's old id redirects in ./route.ts.
 import { lazy, type ComponentType, type LazyExoticComponent } from 'react'
-import { ArrowDownUp, Bell, Blocks, BookOpen, Bug, Cpu, LayoutTemplate, Mail, Package, PanelsTopLeft, Plug, ScrollText, Server, User, UserCog, Webhook, Zap } from 'lucide-react'
+import { ArrowDownUp, Bell, Blocks, BookOpen, Bug, Cpu, HardDrive, LayoutTemplate, Mail, Package, PanelsTopLeft, Plug, ScrollText, Server, User, UserCog, Webhook, Zap } from 'lucide-react'
 import settingsClaims from 'virtual:modules/slots/settings'
 
 import type { PartId } from '../experience/parts'
@@ -64,6 +64,7 @@ export const SETTINGS_PAGES: SettingsPage[] = [
   page('account', 'notifications', 'Notifications', Bell, ['push', 'phone', 'desktop', 'quiet hours', 'mute', 'email', 'digest', 'do not disturb'], () => import('./account/NotificationsPage'), { settings: ['notifications.'] }),
   page('account', 'connected-apps', 'Connected apps', 'link', ['mcp', 'mcp client', 'oauth', 'apps', 'connector'], () => import('./account/ConnectedAppsPage')),
   page('account', 'api-tokens', 'API tokens', 'key', ['token', 'bearer', 'mcp', 'credential', 'scripts'], () => import('./account/ApiTokensPage')),
+  page('account', 'hosts', 'Hosts', HardDrive, ['host', 'hosts', 'machine', 'computer', 'runner', 'link a host', 'enrol', 'agents'], () => import('./account/HostsPage'), { part: 'workspace.hosts' }),
   page('account', 'webhooks', 'Webhooks', Webhook, ['webhook', 'events', 'http', 'callback', 'integration', 'signed'], () => import('./account/WebhooksPage')),
   page('account', 'api-reference', 'API reference', BookOpen, ['rest', 'openapi', 'api', 'scripts', 'curl', 'docs'], () => import('./account/ApiReferencePage')),
   // Workspace
@@ -73,6 +74,7 @@ export const SETTINGS_PAGES: SettingsPage[] = [
   page('workspace', 'keys', 'Keys', 'lock', ['secrets', 'api keys', 'credentials'], () => import('./workspace/KeysPage'), { visible: manager }),
   page('workspace', 'email', 'Email', Mail, ['smtp', 'mail', 'email', 'password reset', 'test email', 'outgoing mail'], () => import('./workspace/EmailPage'), { visible: owner }),
   page('workspace', 'runs', 'Runs and models', Cpu, ['harness', 'model', 'models', 'reasoning', 'speed', 'attempts', 'environment', 'environments', 'defaults', 'run defaults', 'model list', 'hide model', 'provider', 'suggestions', 'summaries', 'api key', 'budget', 'usage', 'spend', 'launch prompt', 'template', 'ai', 'anthropic', 'openai', 'gemini'], () => import('./workspace/RunsPage'), { settings: ['run.', 'ai.', 'launch.'] }),
+  page('workspace', 'hosts', 'Hosts', HardDrive, ['host', 'hosts', 'machine', 'server', 'runner', 'link a host', 'enrol', 'agents', 'unlink'], () => import('./workspace/HostsPage'), { part: 'workspace.hosts' }),
   page('workspace', 'harnesses', 'Harnesses', 'terminal', ['custom harness', 'adapter', 'manifest', 'runner', 'command', 'agents'], () => import('./workspace/HarnessesPage')),
   page('workspace', 'project-templates', 'Project templates', LayoutTemplate, ['templates', 'new project', 'setup', 'starter'], () => import('./workspace/ProjectTemplatesPage')),
   page('workspace', 'layout', 'Layout', PanelsTopLeft, ['layout', 'presets', 'hide', 'show', 'simplify', 'personal', 'words', 'rename', 'sidebar', 'my view', 'hidden parts', 'default layout'], () => import('./workspace/LayoutPage')),

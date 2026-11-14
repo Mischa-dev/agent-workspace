@@ -48,6 +48,11 @@ pub enum Action {
     WorkerInvoke,
     RunInterrupt,
     ApprovalRespond,
+    /// Open runs for yourself and report on them (A1): any account, for its
+    /// own work.
+    RunReport,
+    /// Ask someone for an approval or an answer (A1).
+    RequestRaise,
     ChannelCreate,
     MessageSend,
     /// Remove anyone's message (owners and admins; people only, checked by
@@ -88,10 +93,12 @@ pub enum Action {
     SettingsManage,
     /// Define the workspace's roles (owners and admins; people only).
     RoleManage,
+    /// Link hosts for the workspace and manage them (A1.11; people only).
+    HostManage,
 }
 
 impl Action {
-    pub const ALL: [Self; 44] = [
+    pub const ALL: [Self; 47] = [
         Self::OrganizationProjectCreate,
         Self::ProjectView,
         Self::ProjectManage,
@@ -110,6 +117,8 @@ impl Action {
         Self::WorkerInvoke,
         Self::RunInterrupt,
         Self::ApprovalRespond,
+        Self::RunReport,
+        Self::RequestRaise,
         Self::ChannelCreate,
         Self::MessageSend,
         Self::MessageModerate,
@@ -136,6 +145,7 @@ impl Action {
         Self::PullRequestMerge,
         Self::SettingsManage,
         Self::RoleManage,
+        Self::HostManage,
     ];
 
     /// The permission a role needs for this action.
@@ -159,6 +169,8 @@ impl Action {
             Self::WorkerInvoke => Permission::RunsLaunch,
             Self::RunInterrupt => Permission::RunsInterrupt,
             Self::ApprovalRespond => Permission::RunsApprove,
+            Self::RunReport => Permission::RunsReport,
+            Self::RequestRaise => Permission::RequestsRaise,
             Self::ChannelCreate | Self::ConversationArchive => Permission::ChannelsCreate,
             Self::MessageSend | Self::ThreadCreate | Self::MentionSearch => {
                 Permission::ChannelsPost
@@ -181,6 +193,7 @@ impl Action {
                 Permission::CodePublish
             }
             Self::RoleManage => Permission::RolesManage,
+            Self::HostManage => Permission::HostsManage,
         }
     }
 }
@@ -215,11 +228,14 @@ pub enum Permission {
     RunsApprove,
     RunsInterrupt,
     RunsAccounts,
+    RunsReport,
+    RequestsRaise,
     CodeView,
     CodePublish,
     CodeManage,
     AgentsManage,
     AgentsManageAny,
+    HostsManage,
     MembersView,
     DirectoryView,
     MembersInvite,
@@ -309,7 +325,7 @@ const MANAGERS: [bool; 4] = [true, true, false, false];
 const OWNERS: [bool; 4] = [true, false, false, false];
 
 /// Every permission, in the order the Roles page shows them.
-pub const PERMISSIONS: [PermissionInfo; 31] = [
+pub const PERMISSIONS: [PermissionInfo; 34] = [
     required(permission(
         Permission::ProjectsView,
         "projects.view",
@@ -490,6 +506,25 @@ pub const PERMISSIONS: [PermissionInfo; 31] = [
         PermissionScope::Project,
         WORKERS,
     ),
+    // A1: every account reports its own work the same way, person or agent.
+    permission(
+        Permission::RunsReport,
+        "runs.report",
+        "runs",
+        "Report their own runs",
+        "Open runs for their own work and report its steps, usage and results.",
+        PermissionScope::Project,
+        ALL_ROLES,
+    ),
+    permission(
+        Permission::RequestsRaise,
+        "requests.raise",
+        "runs",
+        "Raise requests",
+        "Ask someone for an approval or an answer from a run.",
+        PermissionScope::Project,
+        ALL_ROLES,
+    ),
     permission(
         Permission::CodeView,
         "code.view",
@@ -536,6 +571,15 @@ pub const PERMISSIONS: [PermissionInfo; 31] = [
         "Manage any agent or app the workspace owns, without being named as its manager.",
         PermissionScope::Workspace,
         OWNERS,
+    )),
+    people_only(permission(
+        Permission::HostsManage,
+        "hosts.manage",
+        "agents",
+        "Manage hosts",
+        "Link machines and services that run agents for the workspace, choose which agents they run, and unlink them.",
+        PermissionScope::Workspace,
+        MANAGERS,
     )),
     permission(
         Permission::MembersView,
@@ -1151,6 +1195,7 @@ pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decis
             Action::OrganizationProjectCreate
             | Action::SettingsManage
             | Action::RoleManage
+            | Action::HostManage
             | Action::InvitationManage
             | Action::MembershipView
             | Action::MembershipManage,
@@ -1173,6 +1218,8 @@ pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decis
             | Action::NavigationWrite
             | Action::WorkerInvoke
             | Action::RunInterrupt
+            | Action::RunReport
+            | Action::RequestRaise
             | Action::ChannelCreate
             | Action::MessageSend
             | Action::MessageModerate
@@ -1318,9 +1365,11 @@ mod tests {
 
     fn project_resource(action: Action, role: MembershipRole) -> Resource {
         match action {
-            Action::OrganizationProjectCreate | Action::RoleManage => Resource::Organization {
-                organization_id: ORGANIZATION_ID,
-            },
+            Action::OrganizationProjectCreate | Action::RoleManage | Action::HostManage => {
+                Resource::Organization {
+                    organization_id: ORGANIZATION_ID,
+                }
+            }
             Action::ApprovalRespond => Resource::Approval {
                 scope: ProjectScope::approval(
                     PROJECT_ID,
@@ -1342,7 +1391,7 @@ mod tests {
 
     fn membership_for(action: Action, role: MembershipRole, enabled: bool) -> Membership {
         match action {
-            Action::OrganizationProjectCreate | Action::RoleManage => {
+            Action::OrganizationProjectCreate | Action::RoleManage | Action::HostManage => {
                 Membership::organization(ORGANIZATION_ID, RoleGrant::built_in(role), enabled)
             }
             _ => Membership::project(PROJECT_ID, RoleGrant::built_in(role), enabled),
@@ -1427,6 +1476,9 @@ mod tests {
                             | Action::CollectionBuild
                             // AWD-54: members edit sheets.
                             | Action::SheetEdit
+                            // A1: every role reports its own runs.
+                            | Action::RunReport
+                            | Action::RequestRaise
                     ),
                     MembershipRole::Viewer => {
                         matches!(
@@ -1439,6 +1491,8 @@ mod tests {
                                 | Action::ReadStateUpdate
                                 | Action::WorkItemView
                                 | Action::RepositoryView
+                                | Action::RunReport
+                                | Action::RequestRaise
                         )
                     }
                     MembershipRole::Worker => matches!(

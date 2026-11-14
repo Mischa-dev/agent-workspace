@@ -1214,6 +1214,10 @@ pub(crate) async fn stop_request_in(
     }
     // The agent's session in that conversation stops too (A5 with A3).
     crate::agent_sessions::cancel_for_request(transaction, request_id).await?;
+    // A1.4: a launched run behind any of them is asked to stop.
+    let stopped_ids = stopped.iter().map(|(id, _, _)| *id).collect::<Vec<_>>();
+    crate::runs::launch_paths::stopped(transaction, actor_id, agent_actor_id, &stopped_ids, None)
+        .await?;
     let mut conversations = BTreeSet::new();
     for (id, request_conversation_id, thread_id) in &stopped {
         wake(
@@ -1238,6 +1242,76 @@ pub(crate) async fn stop_request_in(
         agent_actor_id,
         stopped: ids,
     })
+}
+
+/// A1.4: someone stopped a launched run from the run itself (`run_cancel`).
+/// Its reply request stops the way the request's own Stop does, so a runner
+/// that only knows the reply tools hears `reply.cancelled` and its claim is
+/// revoked. The caller has already checked that `by` may stop the run.
+/// Returns whether the request was still open to stop.
+pub(crate) async fn stop_for_run(
+    transaction: &mut Transaction<'_, Postgres>,
+    by: Uuid,
+    request_id: Uuid,
+    reason: Option<String>,
+) -> Result<bool, AppError> {
+    let Some((project_id, conversation_id)) = sqlx::query_as::<_, (Uuid, Uuid)>(
+        "SELECT project_id, conversation_id FROM reply_requests WHERE id = $1",
+    )
+    .bind(request_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    else {
+        return Ok(false);
+    };
+    // The conversation's lock first, then the request, then the run: the
+    // order the request's own Stop takes.
+    sqlx::query(
+        "SELECT id FROM conversations WHERE id = $1 FOR UPDATE -- visibility: a lock only, on the request's own conversation",
+    )
+        .bind(conversation_id)
+        .execute(&mut **transaction)
+        .await?;
+    let name = sqlx::query_scalar::<_, String>(
+        "SELECT display_name FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project_id)
+    .bind(by)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .unwrap_or_else(|| "someone".to_owned());
+    let Some((agent_actor_id, thread_id)) = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(
+        r#"
+        UPDATE reply_requests
+        SET status = 'cancelled', lease_expires_at = NULL, reason = $2, updated_at = now()
+        WHERE id = $1 AND status IN ('pending', 'claimed')
+        RETURNING agent_actor_id, thread_id
+        "#,
+    )
+    .bind(request_id)
+    .bind(format!("Stopped by {name}."))
+    .fetch_optional(&mut **transaction)
+    .await?
+    else {
+        return Ok(false);
+    };
+    crate::agent_sessions::cancel_for_request(transaction, request_id).await?;
+    crate::runs::launch_paths::stopped(transaction, by, agent_actor_id, &[request_id], reason)
+        .await?;
+    wake(
+        transaction,
+        project_id,
+        conversation_id,
+        agent_actor_id,
+        request_id,
+        Wakeup::Cancelled,
+    )
+    .await?;
+    notify(transaction, project_id, conversation_id).await?;
+    if let Some(thread_id) = thread_id {
+        notify(transaction, project_id, thread_id).await?;
+    }
+    Ok(true)
 }
 
 /// Background loop: expire lapsed claims and deliver webhook wakeups.

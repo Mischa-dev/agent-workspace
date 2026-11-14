@@ -545,6 +545,9 @@ pub(crate) struct LaunchCaller {
     pub mcp: bool,
     pub session_id: Option<Uuid>,
     pub request_id: Option<String>,
+    /// An agent's own credential on this call, so a hand-off it starts can
+    /// post the message as it (A1.4). None for people and queued launches.
+    pub mcp_credential: Option<crate::conversations::MessageMcpCredential>,
 }
 
 impl LaunchCaller {
@@ -563,6 +566,7 @@ impl LaunchCaller {
                 .and_then(|value| value.to_str().ok())
                 .filter(|value| value.len() <= 128)
                 .map(str::to_owned),
+            mcp_credential: None,
         })
     }
 
@@ -764,6 +768,8 @@ pub(crate) struct LaunchView {
     /// Why it waits, or why it was cancelled or failed.
     pub status_reason: Option<String>,
     pub agent_run_id: Option<Uuid>,
+    /// The run it opened: the built-in run, or a connected runner's (A1.4).
+    pub run_id: Option<Uuid>,
     pub run_state: Option<String>,
     pub position: i64,
     pub created_at: DateTime<Utc>,
@@ -789,6 +795,7 @@ struct LaunchViewRow {
     state: String,
     status_reason: Option<String>,
     agent_run_id: Option<Uuid>,
+    run_id: Option<Uuid>,
     run_state: Option<String>,
     position: i64,
     created_at: DateTime<Utc>,
@@ -804,7 +811,8 @@ const LAUNCH_VIEW_SELECT: &str = r#"
            launch.source, launch.environment_id, environment.name AS environment_name,
            COALESCE(launch.overrides ->> 'harness', environment.harness) AS harness,
            launch.start_when, launch.start_at, launch.state, launch.status_reason,
-           launch.agent_run_id, run.state AS run_state, launch.position,
+           launch.agent_run_id, launch.run_id,
+           COALESCE(run.state, reported.state) AS run_state, launch.position,
            launch.created_at, launch.started_at
     FROM launches launch
     JOIN projects project ON project.id = launch.project_id
@@ -816,6 +824,8 @@ const LAUNCH_VIEW_SELECT: &str = r#"
     LEFT JOIN project_environments environment
       ON environment.project_id = launch.project_id AND environment.id = launch.environment_id
     LEFT JOIN agent_runs run ON run.id = launch.agent_run_id
+    -- A runner's run (A1.4) reports for itself: it has no built-in row.
+    LEFT JOIN runs reported ON reported.id = launch.run_id AND launch.agent_run_id IS NULL
 "#;
 
 fn launch_view(
@@ -848,6 +858,7 @@ fn launch_view(
         state: row.state,
         status_reason: row.status_reason,
         agent_run_id: row.agent_run_id,
+        run_id: row.run_id.or(row.agent_run_id),
         run_state: row.run_state,
         position: row.position,
         created_at: row.created_at,
@@ -2161,7 +2172,8 @@ async fn hand_off(
         crate::conversations::MessageCommandActor {
             actor_id: caller.actor_id,
             actor_kind: actor_kind.to_owned(),
-            mcp_credential: None,
+            // An agent posts with its own credential; a person needs none.
+            mcp_credential: caller.mcp_credential,
             via_grant_id: launch.via_oauth_grant_id,
         },
         thread_id,
@@ -2192,17 +2204,71 @@ async fn hand_off(
     .bind(thread_id)
     .execute(&mut *transaction)
     .await?;
+    // A1.4: the runner gets a run for the work, waiting for it to claim the
+    // message. Best effort: the hand-off stands without one.
+    let run_id = hand_off_run(&mut transaction, launch, runner, message_id, prompt).await;
+    if let Some(run_id) = run_id {
+        sqlx::query("UPDATE launches SET run_id = $2 WHERE id = $1")
+            .bind(launch.id)
+            .bind(run_id)
+            .execute(&mut *transaction)
+            .await?;
+    }
     audit(
         &mut *transaction,
         caller,
         launch.project_id,
         "launch.handed_off",
         launch.id,
-        json!({ "runnerActorId": runner, "conversationId": thread_id }),
+        json!({ "runnerActorId": runner, "conversationId": thread_id, "runId": run_id }),
     )
     .await?;
     transaction.commit().await?;
     Ok(message_id)
+}
+
+/// Open the runner's run for a hand-off in a savepoint; `None` when it
+/// can't have one.
+async fn hand_off_run(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    launch: &LaunchRow,
+    runner: Uuid,
+    message_id: Uuid,
+    prompt: &str,
+) -> Option<Uuid> {
+    let mut savepoint = sqlx::Connection::begin(&mut **transaction).await.ok()?;
+    let opened = crate::runs::launch_paths::open_for_hand_off(
+        &mut savepoint,
+        crate::runs::launch_paths::HandOff {
+            space_id: launch.project_id,
+            launch_id: launch.id,
+            runner_account_id: runner,
+            message_id,
+            work_item_id: launch.work_item_id,
+            requested_by: launch.requested_by_actor_id,
+            title: prompt
+                .lines()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or_default()
+                .to_owned(),
+        },
+    )
+    .await;
+    match opened {
+        Ok(Some(run)) => savepoint.commit().await.ok().map(|()| run.id),
+        Ok(None) => {
+            let _ = savepoint.rollback().await;
+            None
+        }
+        Err(error) => {
+            let _ = savepoint.rollback().await;
+            tracing::warn!(
+                category = error.log_category(),
+                "a hand-off's run wasn't opened"
+            );
+            None
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2425,6 +2491,7 @@ pub async fn drain(state: &AppState) -> Result<usize, AppError> {
                 mcp: false,
                 session_id: None,
                 request_id: None,
+                mcp_credential: None,
             };
             if start_or_record(state, &caller, &launch).await?.is_some() {
                 started += 1;
@@ -2477,6 +2544,7 @@ pub async fn drain(state: &AppState) -> Result<usize, AppError> {
             mcp: false,
             session_id: None,
             request_id: None,
+            mcp_credential: None,
         };
         if start_or_record(state, &caller, &launch).await?.is_some() {
             started += 1;
@@ -2500,6 +2568,7 @@ async fn cancel_from_queue(
             mcp: false,
             session_id: None,
             request_id: None,
+            mcp_credential: None,
         };
         audit(
             &mut *transaction,
@@ -2784,6 +2853,7 @@ async fn launch_from_tag(state: &AppState, payload: TagPayload) -> Result<(), Ap
         mcp: false,
         session_id: None,
         request_id: None,
+        mcp_credential: None,
     };
     // The author must still be able to start runs here and see the message.
     let visible = sqlx::query_scalar::<_, bool>("SELECT conversation_visible_to($1, $2)")
