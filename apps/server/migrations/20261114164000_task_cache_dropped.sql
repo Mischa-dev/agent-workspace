@@ -13,6 +13,9 @@
 --   Title trigram search uses collection_records_title_trgm (T1.7).
 -- * The partial indexes that read "not archived" on work_items are made
 --   again without that condition (archive state is the record's now).
+-- * task_rows no longer shows the record's own version (ruling R53: a task
+--   has one public revision, work_items.version, which every change to it
+--   advances once; the record's counter is internal).
 -- * Database functions that read the copies read task_rows instead:
 --   the GitHub key matchers, the definition guard and task references.
 
@@ -60,7 +63,6 @@ SELECT core.id, core.project_id, core.number, record.title, core.description,
        core.milestone_id, core.start_date, core.due_date, core.estimate,
        record.field_values, core.collection_id,
        record.collection_id AS record_collection_id,
-       record.version AS record_version,
        record.updated_at AS record_updated_at,
        record.search_vector AS record_search_vector,
        core.description_vector

@@ -9,8 +9,10 @@
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+use axum::http::StatusCode;
+
 use super::{
-    agent_interface::{connect_app, initialize, tool},
+    agent_interface::{connect_app, initialize, send, tool},
     mcp_admin::{create_project, setup},
 };
 
@@ -201,4 +203,128 @@ async fn the_record_owns_title_values_and_archive_state() {
     assert_eq!(copy.record_title, "Fix the new bridge");
     assert_eq!(copy.task_title, copy.record_title);
     assert!(!copy.record_archived && !copy.task_archived);
+}
+
+/// Ruling R53: a task has one public revision, `work_items.version`, that
+/// every change advances exactly once, whichever side writes it: the task
+/// tools or the task's record. A stale version from either side conflicts,
+/// and the task read and its events show the one revision.
+#[tokio::test]
+async fn a_task_has_one_revision_whichever_side_writes_it() {
+    let Some(setup) = setup("t1_task_revision").await else {
+        return;
+    };
+    let app = &setup.app;
+    let pool = &setup.pool;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let token = connect_app(app, &setup.browser, "Tool", "full").await;
+    let session = initialize(app, &token).await.expect("MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let token = token.clone();
+        let session = session.clone();
+        async move { tool(app, &token, &session, name, arguments).await }
+    };
+    let field = call(
+        "field_write",
+        json!({"projectId": "WORK", "name": "Notes", "type": "text"}),
+    )
+    .await;
+    assert_eq!(field["outcome"], "ok", "{field}");
+    let made = call(
+        "task_create",
+        json!({"projectId": "WORK", "title": "Fix the bridge", "clientRequestId": "bridge"}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "applied", "{made}");
+    let (task, tasks) = sqlx::query_as::<_, (Uuid, Uuid)>(
+        "SELECT task.id, task.record_collection_id FROM task_rows task \
+         WHERE task.project_id = $1::uuid",
+    )
+    .bind(&work)
+    .fetch_one(pool)
+    .await
+    .expect("task");
+    let record = format!("/api/v1/projects/{work}/collections/{tasks}/records/{task}");
+    let edit_record = |key: &'static str, body: Value| {
+        let request = setup.browser.request("PATCH", &record, Some(key), body);
+        async move { send(app, request).await }
+    };
+    let revision = || async {
+        let opened = tool(
+            app,
+            &token,
+            &session,
+            "task_open",
+            json!({"taskId": "WORK-1"}),
+        )
+        .await;
+        let read = opened["value"]["task"]["version"]
+            .as_i64()
+            .expect("version");
+        let event = sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT max((payload ->> 'version')::bigint) FROM outbox_events \
+             WHERE payload ->> 'workItemId' = $1::text",
+        )
+        .bind(task)
+        .fetch_one(pool)
+        .await
+        .expect("events");
+        (read, event)
+    };
+    assert_eq!(revision().await, (1, Some(1)));
+
+    // The record side renames it: revision 2.
+    let (status, body) = edit_record(
+        "rename",
+        json!({"expectedVersion": 1, "title": "Fix the old bridge"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["record"]["version"], 2, "{body}");
+    assert_eq!(revision().await, (2, Some(2)));
+
+    // The task side, still at 1, conflicts; at 2 it moves the status: 3.
+    let stale = call(
+        "task_update",
+        json!({"taskId": "WORK-1", "status": "Ready", "expectedVersion": 1}),
+    )
+    .await;
+    assert_eq!(stale["outcome"], "conflict", "{stale}");
+    let moved = call(
+        "task_update",
+        json!({"taskId": "WORK-1", "status": "Ready", "expectedVersion": 2}),
+    )
+    .await;
+    assert_eq!(moved["outcome"], "applied", "{moved}");
+    assert_eq!(revision().await, (3, Some(3)));
+
+    // The record side, still at 2, conflicts; at 3 it sets a value: 4.
+    let (status, body) = edit_record(
+        "stale-value",
+        json!({"expectedVersion": 2, "values": {"Notes": "steel"}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    let (status, body) = edit_record(
+        "value",
+        json!({"expectedVersion": 3, "values": {"Notes": "steel"}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["record"]["version"], 4, "{body}");
+    assert_eq!(revision().await, (4, Some(4)));
+
+    // The task as a record reads the same revision.
+    let (status, listed) = send(
+        app,
+        setup.browser.request(
+            "GET",
+            &format!("/api/v1/projects/{work}/collections/{tasks}/records"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_eq!(listed["records"][0]["version"], 4, "{listed}");
 }

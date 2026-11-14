@@ -187,11 +187,14 @@ collection_records (the record, every collection)        work_items (the task co
 - **`computed_values`** is a new JSONB column on `collection_records` for formula and rollup
   results (section 3.3). Same shape as `field_values`, so filters, sorts and groups reuse
   the same SQL.
-- **`version`**: the record's version is the one optimistic-concurrency version for
-  record-owned columns; the task core keeps its own `version` for core columns. A task
-  write that touches both bumps both in one transaction (the command layer already locks
-  the project, then the task, `work_item_commands.rs:363`). `expectedVersion` on the task
-  tools keeps meaning the task core's version, so agents see no change.
+- **`version`** (ruling R53): a task has one public optimistic-concurrency revision,
+  `work_items.version`. Every change to the task's visible state, from the task tools, the
+  task page, a write to its record (title, values, archive), forms or automations, goes
+  through the task commands and advances it once; `expectedVersion` on the task tools and
+  `version` on the task read as a record are that revision, and so is the version in its
+  events. The record keeps its own counter for record-owned columns, internal only.
+  (A record write that both archives or restores and edits still advances it twice, once per
+  command; a follow-up.)
 - **One read shape**: a view `task_rows` (SQL) joining `collection_records` and
   `work_items` on `id`, exposing the columns 69 files read today under their old names
   (`title`, `field_values`, `archived_at`, ...). Readers move to it file by file; the old
