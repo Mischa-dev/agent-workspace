@@ -65,6 +65,7 @@ mod mcp_groundwork;
 mod mcp_groups;
 mod mcp_labels;
 mod mcp_planning;
+mod mcp_revisions;
 mod mcp_task_batches;
 mod mcp_task_board;
 mod mcp_task_criteria;

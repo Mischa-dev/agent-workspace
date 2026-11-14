@@ -76,6 +76,8 @@ mod collection_tools;
 mod comment_tools;
 mod common;
 mod criteria;
+#[cfg(test)]
+mod description_words;
 mod environment_tools;
 mod field_tools;
 mod file_tools;
