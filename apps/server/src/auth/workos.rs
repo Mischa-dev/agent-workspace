@@ -131,13 +131,17 @@ fn verifier(config: &WorkOsConfig, state: &str) -> Result<String, AppError> {
     Ok(URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes()))
 }
 /// Rate-limit key for a sign-in ceremony: the linking session when there is
-/// one, otherwise the client address Cloudflare reports. Callers with neither
-/// are bounded by the limiter's global ceiling only.
-fn workos_start_key(headers: &HeaderMap, link_session_id: Option<Uuid>) -> Option<String> {
+/// one, otherwise the client address the configured header reports. Callers
+/// with neither are bounded by the limiter's global ceiling only.
+fn workos_start_key(
+    config: &crate::config::AppConfig,
+    headers: &HeaderMap,
+    link_session_id: Option<Uuid>,
+) -> Option<String> {
     if let Some(session_id) = link_session_id {
         return Some(format!("session:{session_id}"));
     }
-    crate::rate_limit::client_address(headers).map(|address| format!("address:{address}"))
+    crate::rate_limit::client_address(config, headers).map(|address| format!("address:{address}"))
 }
 async fn start(
     State(state): State<AppState>,
@@ -155,9 +159,9 @@ async fn start(
     } else {
         None
     };
-    state
-        .rate_limits
-        .check_workos_start(workos_start_key(&headers, link_session_id).as_deref())?;
+    state.rate_limits.check_workos_start(
+        workos_start_key(&state.config, &headers, link_session_id).as_deref(),
+    )?;
     let username = request
         .username
         .as_deref()

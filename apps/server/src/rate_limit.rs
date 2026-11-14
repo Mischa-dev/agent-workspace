@@ -14,7 +14,12 @@ use crate::error::AppError;
 
 const WINDOW: Duration = Duration::from_secs(60);
 const LOGIN_ATTEMPTS_PER_WINDOW: u32 = 10;
-const GLOBAL_LOGIN_ATTEMPTS_PER_WINDOW: u32 = 60;
+/// Failed sign-ins across every name. While they're spent, only names that
+/// signed in lately on this process get through to their own limits, so
+/// junk names can't lock everyone out.
+const GLOBAL_LOGIN_FAILURES_PER_WINDOW: u32 = 60;
+/// How long a name that signed in counts as known while failures flood in.
+const RECENT_LOGIN_TTL: Duration = Duration::from_secs(7 * 24 * 3_600);
 // The app is reachable from the internet, so cap slow password guessing too.
 const LOGIN_ATTEMPTS_PER_HOUR: u32 = 30;
 /// Sign-in attempts from one sender address, checked before the shared
@@ -27,7 +32,12 @@ const INVITATION_ATTEMPTS_PER_WINDOW: u32 = 20;
 const GLOBAL_INVITATION_ATTEMPTS_PER_WINDOW: u32 = 120;
 const MCP_REQUESTS_PER_WINDOW: u32 = 600;
 const MCP_AUTH_ATTEMPTS_PER_WINDOW: u32 = 600;
-const GLOBAL_MCP_AUTH_ATTEMPTS_PER_WINDOW: u32 = 900;
+/// Tokens that didn't resolve, across every caller. Valid tokens never
+/// spend it; while it's spent, only tokens that authenticated lately are
+/// looked up.
+const GLOBAL_MCP_AUTH_FAILURES_PER_WINDOW: u32 = 900;
+/// Access tokens last twelve hours, so a day covers every app in use.
+const RECENT_MCP_TOKEN_TTL: Duration = Duration::from_secs(24 * 3_600);
 const OAUTH_CEREMONIES_PER_WINDOW: u32 = 30;
 const GLOBAL_OAUTH_CEREMONIES_PER_WINDOW: u32 = 240;
 /// Token refreshes have their own budget: one app running many sessions on a
@@ -77,14 +87,16 @@ pub struct RateLimiters {
     login: FixedWindowLimiter<[u8; 32]>,
     login_hourly: FixedWindowLimiter<[u8; 32]>,
     login_senders: FixedWindowLimiter<[u8; 32]>,
-    global_login: FixedWindowLimiter<()>,
+    global_login_failures: FixedWindowLimiter<()>,
+    recent_logins: RecentKeys,
     authenticated_writes: FixedWindowLimiter<Uuid>,
     expensive_reads: FixedWindowLimiter<Uuid>,
     invitation_attempts: FixedWindowLimiter<[u8; 32]>,
     global_invitation_attempts: FixedWindowLimiter<()>,
     mcp_requests: FixedWindowLimiter<Uuid>,
     mcp_auth_attempts: FixedWindowLimiter<[u8; 32]>,
-    global_mcp_auth_attempts: FixedWindowLimiter<()>,
+    global_mcp_auth_failures: FixedWindowLimiter<()>,
+    recent_mcp_tokens: RecentKeys,
     oauth_ceremonies: FixedWindowLimiter<[u8; 32]>,
     global_oauth_ceremonies: FixedWindowLimiter<()>,
     oauth_refreshes: FixedWindowLimiter<[u8; 32]>,
@@ -106,13 +118,31 @@ pub struct RateLimiters {
 }
 
 impl RateLimiters {
+    /// A sign-in attempt for `normalized_login`, charged to the name. While
+    /// failed sign-ins everywhere have spent the shared budget, only a name
+    /// that signed in lately gets through; everyone else waits.
     pub fn check_login(&self, normalized_login: &str) -> Result<(), AppError> {
-        self.global_login
-            .check(())
-            .map_err(AppError::rate_limited)?;
-        let key: [u8; 32] = Sha256::digest(normalized_login.as_bytes()).into();
+        let key = digest(normalized_login);
+        let now = Instant::now();
+        if let Some(retry_after) = self.global_login_failures.spent_at(&(), now)
+            && !self.recent_logins.contains_at(&key, now)
+        {
+            return Err(AppError::rate_limited(retry_after));
+        }
         self.login.check(key).map_err(AppError::rate_limited)?;
         self.login_hourly.check(key).map_err(AppError::rate_limited)
+    }
+
+    /// A sign-in whose password (or code) didn't check out.
+    pub fn note_login_failure(&self) {
+        // A spent budget refuses unknown names next time; nothing more to do.
+        let _ = self.global_login_failures.check(());
+    }
+
+    /// A name that just signed in.
+    pub fn note_login_success(&self, normalized_login: &str) {
+        self.recent_logins
+            .insert(digest(normalized_login), Instant::now());
     }
 
     /// A sign-in from `address` (the caller's, when known), before
@@ -161,14 +191,30 @@ impl RateLimiters {
             .map_err(AppError::rate_limited)
     }
 
+    /// Before a bearer token is looked up: charged to the token. While
+    /// tokens that didn't resolve have spent the shared budget, only a token
+    /// that authenticated lately is looked up.
     pub fn check_mcp_auth(&self, untrusted_token: &str) -> Result<(), AppError> {
-        self.global_mcp_auth_attempts
-            .check(())
-            .map_err(AppError::rate_limited)?;
-        let key: [u8; 32] = Sha256::digest(untrusted_token.as_bytes()).into();
+        let key = digest(untrusted_token);
+        let now = Instant::now();
+        if let Some(retry_after) = self.global_mcp_auth_failures.spent_at(&(), now)
+            && !self.recent_mcp_tokens.contains_at(&key, now)
+        {
+            return Err(AppError::rate_limited(retry_after));
+        }
         self.mcp_auth_attempts
             .check(key)
             .map_err(AppError::rate_limited)
+    }
+
+    /// A bearer token that didn't resolve.
+    pub fn note_mcp_auth_failure(&self) {
+        let _ = self.global_mcp_auth_failures.check(());
+    }
+
+    /// A bearer token that resolved; only its digest is kept.
+    pub fn note_mcp_auth_success(&self, token: &str) {
+        self.recent_mcp_tokens.insert(digest(token), Instant::now());
     }
 
     pub fn check_oauth_ceremony(&self, untrusted_key: &str) -> Result<(), AppError> {
@@ -308,7 +354,12 @@ impl Default for RateLimiters {
                 WINDOW,
                 MAX_LOGIN_KEYS,
             ),
-            global_login: FixedWindowLimiter::new(GLOBAL_LOGIN_ATTEMPTS_PER_WINDOW, WINDOW, 1),
+            global_login_failures: FixedWindowLimiter::new(
+                GLOBAL_LOGIN_FAILURES_PER_WINDOW,
+                WINDOW,
+                1,
+            ),
+            recent_logins: RecentKeys::new(RECENT_LOGIN_TTL, MAX_LOGIN_KEYS),
             authenticated_writes: FixedWindowLimiter::new(
                 AUTHENTICATED_WRITES_PER_WINDOW,
                 WINDOW,
@@ -339,11 +390,12 @@ impl Default for RateLimiters {
                 WINDOW,
                 MAX_SESSION_KEYS,
             ),
-            global_mcp_auth_attempts: FixedWindowLimiter::new(
-                GLOBAL_MCP_AUTH_ATTEMPTS_PER_WINDOW,
+            global_mcp_auth_failures: FixedWindowLimiter::new(
+                GLOBAL_MCP_AUTH_FAILURES_PER_WINDOW,
                 WINDOW,
                 1,
             ),
+            recent_mcp_tokens: RecentKeys::new(RECENT_MCP_TOKEN_TTL, MAX_SESSION_KEYS),
             oauth_ceremonies: FixedWindowLimiter::new(
                 OAUTH_CEREMONIES_PER_WINDOW,
                 WINDOW,
@@ -414,12 +466,16 @@ impl Default for RateLimiters {
     }
 }
 
-/// The caller's address as Cloudflare reports it, for per-address limits.
-/// `None` where the server isn't behind Cloudflare; those callers are
-/// bounded by the global ceilings only.
-pub fn client_address(headers: &HeaderMap) -> Option<&str> {
+/// The caller's address as the configured header reports it
+/// (`AGENT_WORKSPACE_CLIENT_ADDRESS_HEADER`), for per-address limits.
+/// `None` when no header is configured or the request has none; those
+/// callers are bounded by the shared ceilings only.
+pub fn client_address<'a>(
+    config: &crate::config::AppConfig,
+    headers: &'a HeaderMap,
+) -> Option<&'a str> {
     headers
-        .get("cf-connecting-ip")
+        .get(config.client_address_header.as_deref()?)
         .and_then(|value| value.to_str().ok())
         .filter(|value| !value.is_empty() && value.len() <= 64)
 }
@@ -579,6 +635,7 @@ mod tests {
 
     use super::{
         CONCURRENT_PASSWORD_KDFS, EXPENSIVE_READS_PER_WINDOW, FixedWindowLimiter,
+        GLOBAL_LOGIN_FAILURES_PER_WINDOW, GLOBAL_MCP_AUTH_FAILURES_PER_WINDOW,
         GLOBAL_OAUTH_REFRESH_FAILURES_PER_WINDOW, MCP_AUTH_ATTEMPTS_PER_WINDOW,
         MCP_REQUESTS_PER_WINDOW, OAUTH_CEREMONIES_PER_WINDOW,
         OAUTH_REFRESH_FAILURES_PER_CLIENT_PER_WINDOW, OAUTH_REFRESH_FAILURES_PER_WINDOW,
@@ -648,19 +705,59 @@ mod tests {
         );
     }
 
+    /// P0.13: failed sign-ins for junk names spend the shared budget; a
+    /// name that signed in lately still gets through, a never-seen one
+    /// doesn't.
     #[test]
-    fn global_login_budget_and_kdf_concurrency_are_bounded() {
+    fn junk_sign_ins_dont_lock_out_people_who_signed_in_lately() {
         let limiters = RateLimiters::default();
-        for index in 0..60 {
+        limiters.note_login_success("alex");
+        for index in 0..GLOBAL_LOGIN_FAILURES_PER_WINDOW {
             assert!(
-                limiters.check_login(&format!("login-{index}")).is_ok(),
-                "unique login {index} remains inside the global budget"
+                limiters.check_login(&format!("junk-{index}")).is_ok(),
+                "junk name {index} is inside the failure budget"
             );
+            limiters.note_login_failure();
         }
+        assert!(limiters.check_login("alex").is_ok());
         assert!(matches!(
-            limiters.check_login("login-over-global-budget"),
+            limiters.check_login("never-seen"),
             Err(AppError::RateLimited { .. })
         ));
+        // Successful sign-ins never spend it.
+        let limiters = RateLimiters::default();
+        for index in 0..(GLOBAL_LOGIN_FAILURES_PER_WINDOW * 2) {
+            let name = format!("person-{index}");
+            assert!(limiters.check_login(&name).is_ok());
+            limiters.note_login_success(&name);
+        }
+        assert!(limiters.check_login("someone-new").is_ok());
+    }
+
+    /// P0.13: valid tokens never share a budget; junk tokens spend the
+    /// failure budget without refusing a token that authenticated earlier.
+    #[test]
+    fn valid_mcp_tokens_never_share_a_global_budget() {
+        let limiters = RateLimiters::default();
+        for request in 0..1_000 {
+            let token = format!("token-{}", request % 20);
+            assert!(limiters.check_mcp_auth(&token).is_ok(), "{request}");
+            limiters.note_mcp_auth_success(&token);
+        }
+        for index in 0..GLOBAL_MCP_AUTH_FAILURES_PER_WINDOW {
+            assert!(limiters.check_mcp_auth(&format!("junk-{index}")).is_ok());
+            limiters.note_mcp_auth_failure();
+        }
+        assert!(limiters.check_mcp_auth("token-3").is_ok());
+        assert!(matches!(
+            limiters.check_mcp_auth("never-seen"),
+            Err(AppError::RateLimited { .. })
+        ));
+    }
+
+    #[test]
+    fn kdf_concurrency_is_bounded() {
+        let limiters = RateLimiters::default();
 
         let mut permits = Vec::new();
         for _ in 0..CONCURRENT_PASSWORD_KDFS {

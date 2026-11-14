@@ -251,6 +251,14 @@ doesn't. `AGENT_WORKSPACE_ALLOW_PRIVATE_ADDRESSES=true` lets a workspace point
 its model provider or SMTP server at this machine or a private network (such
 as a local model or mail relay); without it both must be public addresses.
 
+`AGENT_WORKSPACE_CLIENT_ADDRESS_HEADER` names the request header that carries
+the caller's address, as the proxy in front of the server sets it:
+`cf-connecting-ip` behind Cloudflare. Sign-in, password reset and app
+sign-in limits per sender address use it. Unset, the server reads no address
+from requests and has no per-address limits, only per-name, per-token and
+shared ones; set it only when every request reaches the server through that
+proxy, or callers could name any address they like.
+
 GitHub App settings are optional and must be installed as separate owner-only
 files before adding their paths to this environment. Never print those files.
 

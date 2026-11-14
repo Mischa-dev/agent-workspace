@@ -1085,3 +1085,68 @@ async fn schema_pool(database_url: &str, schema: &str) -> PgPool {
         .await
         .expect("connect schema-scoped HTTP pool")
 }
+
+/// P0.13: the caller's address comes from the configured header only.
+/// With it set, one address runs out of sign-ins of its own; without it,
+/// the same header means nothing and there's no per-address limit.
+#[tokio::test]
+async fn the_client_address_header_is_a_setting() {
+    let Ok(database_url) = std::env::var("AGENT_WORKSPACE_DATABASE_URL") else {
+        eprintln!("skipping PostgreSQL integration test: AGENT_WORKSPACE_DATABASE_URL is unset");
+        return;
+    };
+    // A short password is refused before any database read.
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect_lazy(&database_url)
+        .expect("lazy pool");
+    for (header, limited) in [(Some("x-client-address"), true), (None, false)] {
+        let mut values = BTreeMap::from([(
+            "AGENT_WORKSPACE_DATABASE_URL".to_owned(),
+            database_url.clone(),
+        )]);
+        if let Some(header) = header {
+            values.insert(
+                "AGENT_WORKSPACE_CLIENT_ADDRESS_HEADER".to_owned(),
+                header.to_owned(),
+            );
+        }
+        let config = AppConfig::from_values(&values).expect("test configuration");
+        let supervisors = agent_workspace_server::provider::SupervisorRegistry::new(&config)
+            .expect("test supervisor registry");
+        let app = router(AppState {
+            config: Arc::new(config),
+            pool: pool.clone(),
+            rate_limits: RateLimiters::default(),
+            realtime: RealtimeHub::new(32),
+            supervisors,
+        });
+        let mut statuses = Vec::new();
+        for attempt in 0..21 {
+            let response = app
+                .clone()
+                .oneshot(request(
+                    "POST",
+                    "/api/v1/auth/login",
+                    &[
+                        ("origin", "http://127.0.0.1:3100"),
+                        ("x-client-address", "192.0.2.7"),
+                    ],
+                    json!({"loginName": format!("nobody-{attempt}"), "password": "short"}),
+                ))
+                .await
+                .expect("login response");
+            statuses.push(response.status());
+        }
+        let refused = statuses
+            .iter()
+            .filter(|status| **status == StatusCode::TOO_MANY_REQUESTS)
+            .count();
+        if limited {
+            assert_eq!(refused, 1, "{statuses:?}");
+            assert_eq!(statuses[20], StatusCode::TOO_MANY_REQUESTS);
+        } else {
+            assert_eq!(refused, 0, "{statuses:?}");
+        }
+    }
+}

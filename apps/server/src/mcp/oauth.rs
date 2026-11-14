@@ -599,7 +599,7 @@ async fn token(
     Form(request): Form<TokenRequest>,
 ) -> Result<Response, OAuthError> {
     let refreshing = request.grant_type == "refresh_token";
-    let address = crate::rate_limit::client_address(&headers);
+    let address = crate::rate_limit::client_address(&state.config, &headers);
     // A refresh is charged to its app only once its token checks out (in
     // `refresh`), and a refused one to its sender, so junk refreshes can't
     // spend the budget real apps need.

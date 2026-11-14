@@ -568,10 +568,18 @@ async fn login(app: &axum::Router) -> (String, String) {
 }
 
 fn test_app(pool: PgPool, database_url: &str) -> axum::Router {
-    let config = AppConfig::from_values(&BTreeMap::from([(
-        "AGENT_WORKSPACE_DATABASE_URL".to_owned(),
-        database_url.to_owned(),
-    )]))
+    // Senders are told apart by the header a proxy sets, as on the live
+    // server.
+    let config = AppConfig::from_values(&BTreeMap::from([
+        (
+            "AGENT_WORKSPACE_DATABASE_URL".to_owned(),
+            database_url.to_owned(),
+        ),
+        (
+            "AGENT_WORKSPACE_CLIENT_ADDRESS_HEADER".to_owned(),
+            "cf-connecting-ip".to_owned(),
+        ),
+    ]))
     .expect("test configuration");
     let supervisors = SupervisorRegistry::new(&config).expect("supervisors");
     router(AppState {

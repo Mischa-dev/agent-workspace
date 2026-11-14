@@ -77,9 +77,11 @@ async fn call(
 ) -> Result<Response, AppError> {
     let authentication_key = mcp::exact_bearer_token(headers).unwrap_or("invalid");
     state.rate_limits.check_mcp_auth(authentication_key)?;
-    let principal = mcp::resolve_bearer_principal(state, headers)
-        .await?
-        .ok_or(AppError::AuthenticationRequired)?;
+    let Some(principal) = mcp::resolve_bearer_principal(state, headers).await? else {
+        state.rate_limits.note_mcp_auth_failure();
+        return Err(AppError::AuthenticationRequired);
+    };
+    state.rate_limits.note_mcp_auth_success(authentication_key);
     state
         .rate_limits
         .check_mcp_request(principal.credential_id)?;

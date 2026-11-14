@@ -137,6 +137,11 @@ pub struct AppConfig {
     /// from its terminal (`bootstrap-admin`). Only they see Settings ›
     /// Workspace › Server.
     pub operator_logins: Vec<String>,
+    /// The request header that carries the caller's address, as a trusted
+    /// proxy in front of the server sets it (`cf-connecting-ip` behind
+    /// Cloudflare). Unset, nothing is read from the request for the
+    /// caller's address and there are no per-address limits.
+    pub client_address_header: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -416,6 +421,7 @@ impl AppConfig {
         }
         let allow_private_addresses = parse(values, "ALLOW_PRIVATE_ADDRESSES", "false")?;
         let operator_logins = operator_logins(values)?;
+        let client_address_header = client_address_header(values)?;
         Ok(Self {
             environment,
             server_addr,
@@ -451,6 +457,7 @@ impl AppConfig {
             job_concurrency,
             allow_private_addresses,
             operator_logins,
+            client_address_header,
         })
     }
 }
@@ -791,6 +798,27 @@ fn operator_logins(values: &BTreeMap<String, String>) -> Result<Vec<String>, Con
         logins.push(login);
     }
     Ok(logins)
+}
+
+fn client_address_header(values: &BTreeMap<String, String>) -> Result<Option<String>, ConfigError> {
+    let key = format!("{PREFIX}CLIENT_ADDRESS_HEADER");
+    let Some(name) = values
+        .get(&key)
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+    if name.len() > 64
+        || axum::http::HeaderName::from_bytes(name.as_bytes()).is_err()
+        || matches!(name.as_str(), "host" | "cookie" | "authorization")
+    {
+        return Err(ConfigError::Invalid {
+            key,
+            reason: "name one request header, such as cf-connecting-ip".into(),
+        });
+    }
+    Ok(Some(name))
 }
 
 fn webhook_trusted_origins(values: &BTreeMap<String, String>) -> Result<Vec<String>, ConfigError> {
@@ -1427,6 +1455,29 @@ mod tests {
         );
         let error = AppConfig::from_values(&values).expect_err("oversized secret must fail");
         assert!(error.to_string().contains("between 1 and 4096 bytes"));
+    }
+
+    #[test]
+    fn the_client_address_header_is_one_header_name_or_unset() {
+        let mut values = base_values();
+        let config = AppConfig::from_values(&values).expect("config");
+        assert_eq!(config.client_address_header, None);
+        values.insert(
+            "AGENT_WORKSPACE_CLIENT_ADDRESS_HEADER".to_owned(),
+            " CF-Connecting-IP ".to_owned(),
+        );
+        let config = AppConfig::from_values(&values).expect("config");
+        assert_eq!(
+            config.client_address_header.as_deref(),
+            Some("cf-connecting-ip")
+        );
+        for invalid in ["two words", "cookie", "x:y"] {
+            values.insert(
+                "AGENT_WORKSPACE_CLIENT_ADDRESS_HEADER".to_owned(),
+                invalid.to_owned(),
+            );
+            assert!(AppConfig::from_values(&values).is_err(), "{invalid}");
+        }
     }
 
     #[test]

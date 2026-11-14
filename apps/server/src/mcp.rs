@@ -4368,7 +4368,13 @@ async fn authenticate_mcp(
     if let Err(error) = state.rate_limits.check_mcp_auth(authentication_key) {
         return error.into_response();
     }
-    match resolve_bearer_principal(&state, request.headers()).await {
+    let resolved = resolve_bearer_principal(&state, request.headers()).await;
+    match &resolved {
+        Ok(Some(_)) => state.rate_limits.note_mcp_auth_success(authentication_key),
+        Ok(None) => state.rate_limits.note_mcp_auth_failure(),
+        Err(_) => {}
+    }
+    match resolved {
         Ok(Some(mut principal)) => {
             let mut handshake = None;
             if let Err(error) = state.rate_limits.check_mcp_request(principal.credential_id) {
