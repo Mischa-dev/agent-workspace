@@ -29,6 +29,8 @@ use crate::{
 };
 
 pub mod activities;
+#[cfg(test)]
+mod guards;
 pub mod liveness;
 pub mod ops;
 pub mod state;

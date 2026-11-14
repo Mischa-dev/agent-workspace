@@ -411,3 +411,62 @@ async fn the_mirror_keeps_runs_equal_to_built_in_runs() {
     .expect("mirrored usage");
     assert_eq!(tokens, 30);
 }
+
+/// A1.2: a run in a private thread isn't listed or found for a member of
+/// the project who isn't in the conversation; archiving still waits for it.
+#[tokio::test]
+async fn a_run_in_a_private_thread_stays_private() {
+    let Some((pool, full, root)) = schema_before_runs("a1_record_private").await else {
+        return;
+    };
+    full.run(&pool).await.expect("migrate");
+    let seed = seed(&pool, &root).await;
+    sqlx::query("UPDATE conversations SET visibility = 'members' WHERE id = $1")
+        .bind(seed.channel_id)
+        .execute(&pool)
+        .await
+        .expect("make the channel private");
+    sqlx::query(
+        r#"
+        INSERT INTO conversation_members (project_id, conversation_id, actor_id, added_by_actor_id)
+        VALUES ($1, $2, $3, $3)
+        "#,
+    )
+    .bind(seed.project_id)
+    .bind(seed.channel_id)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("add the person");
+    let run = insert_run(&pool, &seed, "working", None, "Private work").await;
+
+    let member = seed.human_actor_id;
+    let outsider = seed.collaborator_actor_id;
+    assert_eq!(
+        runs::store::space_of_visible(&pool, member, run).await.expect("member"),
+        Some(seed.project_id)
+    );
+    assert_eq!(
+        runs::store::space_of_visible(&pool, outsider, run).await.expect("outsider"),
+        None
+    );
+    let listed = |viewer: Uuid| {
+        let pool = pool.clone();
+        async move {
+            runs::store::visible_in_space(&pool, viewer, seed.project_id, 50)
+                .await
+                .expect("list")
+                .into_iter()
+                .map(|row| row.id)
+                .collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(listed(member).await, vec![run]);
+    assert!(listed(outsider).await.is_empty(), "not listed for a non-member");
+    assert!(
+        runs::store::active_under_space(&pool, seed.project_id)
+            .await
+            .expect("active"),
+        "archiving the project still waits for it"
+    );
+}

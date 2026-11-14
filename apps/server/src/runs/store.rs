@@ -103,3 +103,147 @@ pub struct ActivityRow {
     pub reported_by_account_id: Uuid,
     pub in_thread: bool,
 }
+
+/// A1.2: who can see a run, as one SQL condition on `run` for the viewer
+/// bound at `$n`: who can see its conversation (`conversation_visible_to`);
+/// else, for a run in a project, its members; else the account that does it
+/// and who asked for it. Every read of runs for a viewer uses it (through
+/// the `run_visible_to` function, migration 20261114073500).
+pub fn visible(viewer_parameter: usize) -> String {
+    format!("run_visible_to(run.id, ${viewer_parameter})")
+}
+
+/// Whether a conversation, or (for a channel) any of its threads, has a run
+/// that hasn't finished.
+pub async fn active_in_conversation_tree(
+    executor: impl sqlx::PgExecutor<'_>,
+    conversation_id: Uuid,
+    include_threads: bool,
+) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM runs run
+            JOIN conversations owned ON owned.id = run.conversation_id
+            WHERE run.state = ANY($3)
+              AND (owned.id = $1 OR ($2 AND owned.parent_channel_id = $1))
+        )
+        "#,
+    )
+    .bind(conversation_id)
+    .bind(include_threads)
+    .bind(RunState::active_keys())
+    .fetch_one(executor)
+    .await?)
+}
+
+/// Whether a project has a run that hasn't finished, whoever can see it
+/// (archiving waits for every run).
+pub async fn active_under_space(
+    executor: impl sqlx::PgExecutor<'_>,
+    space_id: Uuid,
+) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM runs run WHERE run.space_id = $1 AND run.state = ANY($2))",
+    )
+    .bind(space_id)
+    .bind(RunState::active_keys())
+    .fetch_one(executor)
+    .await?)
+}
+
+/// Whether a project's repository has a run that hasn't finished: a run on
+/// the built-in host working in it.
+pub async fn active_for_repository(
+    executor: impl sqlx::PgExecutor<'_>,
+    space_id: Uuid,
+    repository_id: Uuid,
+) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM runs run
+            JOIN agent_runs detail ON detail.id = run.id
+            JOIN repositories repository ON repository.id = detail.repository_id
+            WHERE repository.id = $1 AND repository.project_id = $2
+              AND run.state = ANY($3)
+        )
+        "#,
+    )
+    .bind(repository_id)
+    .bind(space_id)
+    .bind(RunState::active_keys())
+    .fetch_one(executor)
+    .await?)
+}
+
+/// The project of a run the viewer can see.
+pub async fn space_of_visible(
+    executor: impl sqlx::PgExecutor<'_>,
+    viewer: Uuid,
+    run_id: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(sqlx::query_scalar::<_, Option<Uuid>>(&format!(
+        "SELECT run.space_id FROM runs run WHERE run.id = $2 AND {}",
+        visible(1)
+    ))
+    .bind(viewer)
+    .bind(run_id)
+    .fetch_optional(executor)
+    .await?
+    .flatten())
+}
+
+/// The runs in a project the viewer can see, newest first.
+pub async fn visible_in_space(
+    executor: impl sqlx::PgExecutor<'_>,
+    viewer: Uuid,
+    space_id: Uuid,
+    limit: i64,
+) -> Result<Vec<RunRow>, AppError> {
+    Ok(sqlx::query_as::<_, RunRow>(&format!(
+        r#"
+        SELECT {RUN_COLUMNS} FROM runs run
+        WHERE run.space_id = $2 AND {}
+        ORDER BY run.created_at DESC, run.id DESC
+        LIMIT $3
+        "#,
+        visible(1)
+    ))
+    .bind(viewer)
+    .bind(space_id)
+    .bind(limit.clamp(1, 500))
+    .fetch_all(executor)
+    .await?)
+}
+
+/// A run by id, for a caller that has already checked who may see it.
+pub async fn get(
+    executor: impl sqlx::PgExecutor<'_>,
+    run_id: Uuid,
+) -> Result<Option<RunRow>, AppError> {
+    Ok(sqlx::query_as::<_, RunRow>(&format!(
+        "SELECT {RUN_COLUMNS} FROM runs run WHERE run.id = $1"
+    ))
+    .bind(run_id)
+    .fetch_optional(executor)
+    .await?)
+}
+
+/// The project of a run the account does itself.
+pub async fn space_of_own(
+    executor: impl sqlx::PgExecutor<'_>,
+    account_id: Uuid,
+    run_id: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT run.space_id FROM runs run WHERE run.id = $1 AND run.account_id = $2",
+    )
+    .bind(run_id)
+    .bind(account_id)
+    .fetch_optional(executor)
+    .await?
+    .flatten())
+}

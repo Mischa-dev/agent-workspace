@@ -29,7 +29,6 @@ use crate::{
         RunState,
         activities::NewActivity,
         ops::{self, Cause, Reporter, RunOpError, RunOpen, RunResult, RunUpdate, UsageInput},
-        store::RunRow,
     },
 };
 
@@ -69,8 +68,8 @@ pub(super) struct RunRecord {
     pub finished_at: Option<DateTime<Utc>>,
 }
 
-impl From<&RunRow> for RunRecord {
-    fn from(run: &RunRow) -> Self {
+impl From<&crate::runs::store::RunRow> for RunRecord {
+    fn from(run: &crate::runs::store::RunRow) -> Self {
         Self {
             run_id: run.id.to_string(),
             title: run.title.clone(),
@@ -840,7 +839,7 @@ pub(super) async fn run_cancel(
             )
             .await;
             return Ok(match stopped {
-                ToolResult::Ok { .. } => match load(state, run_id).await? {
+                ToolResult::Ok { .. } => match crate::runs::store::get(&state.pool, run_id).await? {
                     Some(run) => ToolResult::ok(RunRecordValue {
                         run: RunRecord::from(&run),
                         idempotent_replay: false,
@@ -982,16 +981,6 @@ fn op_error<T>(error: RunOpError, operation: &'static str) -> Result<ToolResult<
     })
 }
 
-async fn load(state: &AppState, run_id: Uuid) -> Result<Option<RunRow>, AppError> {
-    Ok(sqlx::query_as::<_, RunRow>(&format!(
-        "SELECT {} FROM runs run WHERE run.id = $1",
-        crate::runs::store::RUN_COLUMNS
-    ))
-    .bind(run_id)
-    .fetch_optional(&state.pool)
-    .await?)
-}
-
 /// The caller may report on this run: it is theirs, in the project the call
 /// is in, and their role there still allows reporting. Missing and not
 /// theirs answer the same.
@@ -1000,14 +989,8 @@ async fn reporter_check<T>(
     principal: &McpPrincipal,
     run_id: Uuid,
 ) -> Result<Option<ToolResult<T>>, AppError> {
-    let space = sqlx::query_scalar::<_, Option<Uuid>>(
-        "SELECT space_id FROM runs WHERE id = $1 AND account_id = $2",
-    )
-    .bind(run_id)
-    .bind(principal.actor_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .flatten();
+    let space =
+        crate::runs::store::space_of_own(&state.pool, principal.actor_id, run_id).await?;
     let Some(space) = space.filter(|space| *space == principal.project_id) else {
         return Ok(Some(ToolResult::not_found(RUN_MESSAGE)));
     };
@@ -1024,14 +1007,8 @@ async fn stopper_check<T>(
     principal: &McpPrincipal,
     run_id: Uuid,
 ) -> Result<Option<ToolResult<T>>, AppError> {
-    let space = sqlx::query_scalar::<_, Option<Uuid>>(
-        "SELECT space_id FROM runs WHERE id = $1 AND run_visible_to(id, $2)",
-    )
-    .bind(run_id)
-    .bind(principal.actor_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .flatten();
+    let space =
+        crate::runs::store::space_of_visible(&state.pool, principal.actor_id, run_id).await?;
     let Some(space) = space.filter(|space| *space == principal.project_id) else {
         return Ok(Some(ToolResult::not_found(RUN_MESSAGE)));
     };
