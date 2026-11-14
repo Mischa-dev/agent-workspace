@@ -3,7 +3,7 @@ import { ArrowUpDown, CalendarDays, Columns3, ListFilter, Rows3 } from 'lucide-r
 import { DATE_BUCKETS, behavesAs, clauseText, type FieldDefinition, type FieldReference } from '../fields/fieldModel'
 import { Button, Icon, Menu, TextField, type MenuEntry } from '../ui'
 import { useNamedActors } from '../work-items/hooks'
-import type { CollectionBody, SortRule, ViewConfig, ViewType } from './api'
+import { hasFilter, type CollectionBody, type FilterGroup, type FilterItem, type SortRule, type ViewConfig, type ViewType } from './api'
 import { boardFields, columnOrder, dateFields, groupableFields, sortName, sortText, withColumnHidden } from './collectionModel'
 
 /** What sorts a view: the title column, the record's number, when it last changed, or a field. */
@@ -181,7 +181,7 @@ export function CollectionToolbar({
           </>
         ) : null}
       </div>
-      {config.filters.length || sorted || groupField ? (
+      {hasFilter(config) || sorted || groupField ? (
         <ul aria-label="What the view shows" className="aw-collection__chips">
           {config.filters.map((clause, index) => {
             const text = clauseText(
@@ -198,6 +198,14 @@ export function CollectionToolbar({
               />
             )
           })}
+          {(config.filterGroups ?? []).map((group, index) => (
+            // A group ("this or that") is kept as saved: it can be removed here, not edited.
+            <Chip
+              key={`group-${index}`}
+              onRemove={() => onChange({ ...config, filterGroups: (config.filterGroups ?? []).filter((_, at) => at !== index) })}
+              text={groupText(group)}
+            />
+          ))}
           {sorted ? (
             <Chip
               onEdit={() => onChange({ ...config, sort: [{ ...sorted, direction: sorted.direction === 'asc' ? 'desc' : 'asc' }] })}
@@ -228,4 +236,11 @@ function Chip({ onEdit, onRemove, text, title }: { onEdit?: (anchor: HTMLElement
       </button>
     </li>
   )
+}
+
+/** A filter group's chip: how many conditions, and how they join. */
+function groupText(group: FilterGroup) {
+  const count = (item: FilterItem): number => ('and' in item ? item.and.reduce((sum, inner) => sum + count(inner), 0) : 'or' in item ? item.or.reduce((sum, inner) => sum + count(inner), 0) : 1)
+  const conditions = count(group)
+  return `${conditions} ${conditions === 1 ? 'condition' : 'conditions'}, ${'or' in group ? 'any' : 'all'} of them`
 }

@@ -73,6 +73,7 @@ export function sameConfig(left: ViewConfig, right: ViewConfig) {
   const comparable = (config: ViewConfig) =>
     JSON.stringify([
       config.filters.map((clause) => [clause.field, clause.op, clause.values ?? []]),
+      config.filterGroups ?? [],
       config.sort,
       config.groupBy,
       config.groupBy ? (config.groupBucket ?? null) : null,

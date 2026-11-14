@@ -31,8 +31,18 @@ export type CollectionSummary = {
 
 export type SortRule = { field: string; direction: 'asc' | 'desc' }
 export type ViewColumn = { field: string; hidden?: boolean; width?: number }
+/** A group of a view's filter: clauses (or further groups) joined by "and" or by "or". */
+export type FilterGroup = { and: FilterItem[] } | { or: FilterItem[] }
+export type FilterItem = FieldClause | FilterGroup
 export type ViewConfig = {
+  /** The clauses that must all hold, which the toolbar shows and edits one by one. */
   filters: FieldClause[]
+  /**
+   * Groups that must hold beside them ("this or that", T1.5), kept as the
+   * server sent them: the toolbar shows them but doesn't edit inside them,
+   * and they go back with every change, so changing a sort never drops them.
+   */
+  filterGroups?: FilterGroup[]
   sort: SortRule[]
   groupBy: string | null
   /** Grouped by a date: by day, week or month (the server's default). */
@@ -120,15 +130,52 @@ export function normalizeCollection(value: unknown): CollectionSummary {
   }
 }
 
+function asClause(value: unknown): FieldClause | null {
+  const clause = asRecord(value)
+  if (typeof clause.field !== 'string' || typeof clause.op !== 'string') return null
+  const values = asArray(clause.values).filter((item): item is string => typeof item === 'string')
+  return { field: clause.field, op: clause.op as FieldClause['op'], ...(Array.isArray(clause.values) ? { values } : {}) }
+}
+
+function asFilterItem(value: unknown): FilterItem | null {
+  const raw = asRecord(value)
+  if (Array.isArray(raw.and)) return { and: raw.and.flatMap((item) => asFilterItem(item) ?? []) }
+  if (Array.isArray(raw.or)) return { or: raw.or.flatMap((item) => asFilterItem(item) ?? []) }
+  return asClause(value)
+}
+
+const isGroup = (item: FilterItem): item is FilterGroup => 'and' in item || 'or' in item
+
+/**
+ * A stored filter (a list of clauses, or a tree of "and" and "or" groups) as
+ * the clauses that all hold and the groups beside them.
+ */
+export function splitFilter(value: unknown): Pick<ViewConfig, 'filters' | 'filterGroups'> {
+  const top = Array.isArray(value) ? { and: value } : asRecord(value)
+  const items = Array.isArray(top.and)
+    ? top.and.flatMap((item) => asFilterItem(item) ?? [])
+    : Array.isArray(top.or)
+      ? [{ or: top.or.flatMap((item) => asFilterItem(item) ?? []) }]
+      : []
+  const groups = items.filter(isGroup)
+  return { filters: items.filter((item): item is FieldClause => !isGroup(item)), ...(groups.length ? { filterGroups: groups } : {}) }
+}
+
+/** A view's filter as the server takes it: a plain list when it's only clauses that all hold. */
+export function filterJson(config: Pick<ViewConfig, 'filters' | 'filterGroups'>): FieldClause[] | FilterGroup {
+  const groups = config.filterGroups ?? []
+  if (groups.length === 0) return config.filters
+  if (config.filters.length === 0 && groups.length === 1) return groups[0]
+  return { and: [...config.filters, ...groups] }
+}
+
+/** Whether a view's filter narrows anything. */
+export const hasFilter = (config: Pick<ViewConfig, 'filters' | 'filterGroups'>) => config.filters.length > 0 || Boolean(config.filterGroups?.length)
+
 export function normalizeConfig(value: unknown): ViewConfig {
   const raw = asRecord(value)
   return {
-    filters: asArray(raw.filters).flatMap((entry) => {
-      const clause = asRecord(entry)
-      if (typeof clause.field !== 'string' || typeof clause.op !== 'string') return []
-      const values = asArray(clause.values).filter((item): item is string => typeof item === 'string')
-      return [{ field: clause.field, op: clause.op as FieldClause['op'], ...(Array.isArray(clause.values) ? { values } : {}) }]
-    }),
+    ...splitFilter(raw.filters),
     sort: asArray(raw.sort).flatMap((entry) => {
       const rule = asRecord(entry)
       return typeof rule.field === 'string' ? [{ field: rule.field, direction: rule.direction === 'desc' ? ('desc' as const) : ('asc' as const) }] : []
@@ -272,7 +319,7 @@ export async function updateCollection(
 /** A view's settings as the server stores them: no empty parts. */
 export function configJson(config: ViewConfig) {
   return {
-    ...(config.filters.length ? { filters: config.filters } : {}),
+    ...(hasFilter(config) ? { filters: filterJson(config) } : {}),
     ...(config.sort.length ? { sort: config.sort } : {}),
     ...(config.groupBy ? { groupBy: config.groupBy } : {}),
     ...(config.groupBy && config.groupBucket ? { groupBucket: config.groupBucket } : {}),
@@ -312,7 +359,7 @@ export async function deleteView(projectId: string, collectionId: string, viewId
 /** What a list of records asks for: a saved view, and whatever the person changed on top of it. */
 export type RecordsQuery = {
   view: string | null
-  filters?: FieldClause[]
+  filters?: FieldClause[] | FilterGroup
   sort?: SortRule[]
   groupBy?: string | null
   groupBucket?: DateBucket | null

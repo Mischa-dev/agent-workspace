@@ -1370,7 +1370,8 @@ async fn delete_view(
 struct RecordsQuery {
     /// A saved view to read through; the parts below replace its own.
     view: Option<Uuid>,
-    /// A JSON array of `{"field", "op", "values"}`, values as stored.
+    /// A view's filter as JSON: an array of `{"field", "op", "values"}`
+    /// (values as stored), or a tree of `{"and": [...]}` and `{"or": [...]}`.
     filters: Option<String>,
     /// A JSON array of `{"field", "direction"}`.
     sort: Option<String>,
@@ -1545,13 +1546,21 @@ async fn list_records(
     )
     .await?;
     let references = records::references(&mut connection, project_id, &definitions, &found).await?;
-    let mut groups_by_id = page.rows.into_iter().collect::<HashMap<_, _>>();
+    // A record grouped by several choices is a row in each of its groups:
+    // one row per (record, group) the page found, in its order.
+    let by_id = found
+        .iter()
+        .map(|record| (record.id, record))
+        .collect::<HashMap<_, _>>();
     Ok(Json(RecordPage {
-        records: found
-            .iter()
-            .map(|record| RecordRow {
-                record: RecordView::of(record, &definitions),
-                group: groups_by_id.remove(&record.id).flatten(),
+        records: page
+            .rows
+            .into_iter()
+            .filter_map(|(id, group)| {
+                by_id.get(&id).map(|record| RecordRow {
+                    record: RecordView::of(record, &definitions),
+                    group,
+                })
             })
             .collect(),
         references,

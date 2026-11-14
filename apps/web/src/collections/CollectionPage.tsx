@@ -21,6 +21,8 @@ import {
   createView,
   deleteView,
   fieldScope,
+  filterJson,
+  hasFilter,
   recordsParams,
   type RecordsQuery,
   updateCollection,
@@ -183,11 +185,11 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
   const readOnly = Boolean(project.archivedAt) || body.collection.archived
   const canBuild = body.canBuild && !readOnly
   const editable = body.canEditRecords && !readOnly && !showArchived
-  const filtered = config.filters.length > 0 || Boolean(searched.trim())
+  const filtered = hasFilter(config) || Boolean(searched.trim())
   const archived = showArchived ? ('only' as const) : undefined
   const recordsQuery: RecordsQuery =
     view && draft && !sameQuery(draft, viewConfig)
-      ? { view: view.id, filters: config.filters, sort: config.sort, groupBy: config.groupBy, groupBucket: config.groupBucket, search: searched, archived }
+      ? { view: view.id, filters: filterJson(config), sort: config.sort, groupBy: config.groupBy, groupBucket: config.groupBucket, search: searched, archived }
       : { view: view?.id ?? null, search: searched, archived }
   const recordQuery = recordsParams(recordsQuery)
   const layout = view?.type ?? 'table'
@@ -282,7 +284,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
     addField: () => setDialog({ kind: 'field', field: null }),
   }
   const clearFilters = () => {
-    setConfig({ ...config, filters: [] })
+    setConfig({ ...config, filters: [], filterGroups: [] })
     setSearch('')
   }
   const newRecord = async () => {
