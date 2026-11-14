@@ -15,11 +15,12 @@ test('everything off but chat: the project opens on its channels, with nothing e
   try {
     await modules.only(['messages', 'projects', 'channels', 'agents', 'inbox'])
     await page.goto(channel)
-    // On a phone the sidebar sits in a closed drawer: it's there, not shown.
+    // On a phone the sidebar sits in a closed drawer: it's there, not shown,
+    // so the links are looked for hidden ones included.
     const sidebar = page.locator('#project-sidebar')
-    await expect(sidebar.getByRole('link', { name: seeded.channelName })).toBeAttached()
+    await expect(sidebar.getByRole('link', { name: seeded.channelName, includeHidden: true })).toBeAttached()
     for (const row of ['Tasks', 'Pages', 'Decisions', 'Collections', 'Sheets', 'Runs']) {
-      await expect(sidebar.getByRole('link', { name: row, exact: true })).toHaveCount(0)
+      await expect(sidebar.getByRole('link', { name: row, exact: true, includeHidden: true })).toHaveCount(0)
     }
   } finally {
     await modules.restore()
