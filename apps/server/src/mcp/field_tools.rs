@@ -559,7 +559,8 @@ pub(super) async fn fill_summary_fields(
         return Ok(());
     }
     // Tasks of a collection that acts like a task follow its fields.
-    let mut by_kind: HashMap<(Uuid, Option<Uuid>), Vec<(Uuid, Value)>> = HashMap::new();
+    type Rows = Vec<(Uuid, Value)>;
+    let mut by_kind: HashMap<(Uuid, Option<Uuid>), Rows> = HashMap::new();
     for (id, project_id, collection_id, values) in rows {
         by_kind
             .entry((project_id, collection_id))
