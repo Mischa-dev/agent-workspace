@@ -1288,8 +1288,8 @@ pub async fn request_cancel(
 }
 
 /// Tell the agent that does a run something about it, on each of its active
-/// connections in the run's project (the agent event feed until A2's
-/// delivery).
+/// connections that can reach the run's project, wherever the connection's
+/// home is (the agent event feed until A2's delivery).
 pub async fn notify_agent(
     transaction: &mut Transaction<'_, Postgres>,
     run: &RunRow,
@@ -1302,12 +1302,8 @@ pub async fn notify_agent(
     let connections = sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT connection.id FROM external_agent_connections connection
-        JOIN project_memberships membership
-          ON membership.project_id = connection.project_id
-         AND membership.actor_id = connection.actor_id
-         AND membership.enabled
-        WHERE connection.project_id = $1 AND connection.actor_id = $2
-          AND connection.status = 'active'
+        WHERE agent_connection_can_access(connection.id, $1)
+          AND connection.actor_id = $2 AND connection.status = 'active'
         ORDER BY connection.id
         "#,
     )
