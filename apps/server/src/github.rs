@@ -376,6 +376,29 @@ struct ClaimedPullRequestSyncJob {
     scope_available: bool,
 }
 
+/// A webhook's pull request the app isn't tracking yet, whose branch, title
+/// or body names one of the project's open tasks (AWD-59).
+#[derive(Debug, FromRow)]
+struct ClaimedPullRequestAdoptionJob {
+    job_id: Uuid,
+    project_id: Uuid,
+    claim_id: Uuid,
+    attempts: i32,
+    max_attempts: i32,
+    webhook_delivery_id: Option<Uuid>,
+    github_installation_row_id: Uuid,
+    integration_actor_id: Uuid,
+    installation_id: i64,
+    repository_id: Uuid,
+    github_repository_id: i64,
+    owner: String,
+    repository_name: String,
+    pull_request_number: i64,
+    node_id: String,
+    known_merge_commit_sha: Option<String>,
+    scope_available: bool,
+}
+
 #[derive(Debug, FromRow)]
 struct PublishCandidate {
     agent_run_id: Uuid,
@@ -708,6 +731,8 @@ struct GitHubPullRequest {
     node_id: String,
     html_url: String,
     title: String,
+    #[serde(default)]
+    body: Option<String>,
     user: GitHubPullRequestUser,
     draft: bool,
     state: String,
@@ -2369,6 +2394,30 @@ async fn drain_jobs(state: &AppState) -> Result<(), AppError> {
             }
             continue;
         }
+        if let Some(job) = claim_pull_request_adoption_job(state).await? {
+            let job_id = job.job_id;
+            match while_leased(
+                state,
+                job.job_id,
+                job.claim_id,
+                process_pull_request_adoption_job(state, &job),
+            )
+            .await
+            {
+                Some(Ok(())) => {}
+                Some(Err(error)) => {
+                    tracing::error!(
+                        %job_id,
+                        error_category = error.log_category(),
+                        "GitHub pull-request pickup job processing failed"
+                    );
+                    fail_pull_request_adoption_job(state, &job, "job_processing_failed", false)
+                        .await?;
+                }
+                None => lost_lease(job_id),
+            }
+            continue;
+        }
         if let Some(job) = claim_pull_request_sync_job(state).await? {
             let job_id = job.job_id;
             match while_leased(
@@ -2706,6 +2755,9 @@ async fn claim_pull_request_sync_job(
               AND job.state IN ('queued', 'failed')
               AND job.next_attempt_at <= now()
               AND job.attempts < job.max_attempts
+              -- A pull request that names one of the project's tasks is
+              -- picked up first (claim_pull_request_adoption_job).
+              AND NOT (job.kind = 'pull_request_sync' AND github_job_names_open_task(job.project_id, job.payload))
               AND NOT EXISTS (
                   SELECT 1
                   FROM github_pull_requests pull_request
@@ -3551,6 +3603,351 @@ async fn fail_pull_request_job(
     Ok(())
 }
 
+/// Claims a webhook's pull request the app doesn't track yet whose branch,
+/// title or body names one of the project's open tasks (AWD-59). Others
+/// stay unresolved, as before.
+async fn claim_pull_request_adoption_job(
+    state: &AppState,
+) -> Result<Option<ClaimedPullRequestAdoptionJob>, AppError> {
+    let mut transaction = state.pool.begin().await?;
+    let claim_id = Uuid::now_v7();
+    let job = sqlx::query_as::<_, ClaimedPullRequestAdoptionJob>(
+        r#"
+        SELECT job.id AS job_id, job.project_id, $1::uuid AS claim_id,
+               job.attempts + 1 AS attempts, job.max_attempts,
+               job.webhook_delivery_id,
+               installation.id AS github_installation_row_id,
+               installation.integration_actor_id,
+               installation.installation_id,
+               repository.id AS repository_id,
+               repository.github_repository_id,
+               repository.owner, repository.name AS repository_name,
+               (job.payload ->> 'number')::bigint AS pull_request_number,
+               job.payload ->> 'node_id' AS node_id,
+               CASE
+                   WHEN COALESCE(
+                       job.payload ->> 'merge_commit_sha',
+                       delivery.redelivery_payload ->> 'merge_commit_sha'
+                   ) ~ '^[0-9a-f]{40}$'
+                   THEN COALESCE(
+                       job.payload ->> 'merge_commit_sha',
+                       delivery.redelivery_payload ->> 'merge_commit_sha'
+                   )
+               END AS known_merge_commit_sha,
+               installation.enabled
+                   AND installation.state = 'available'
+                   AND access.access_state = 'selected'
+                   AND access.github_repository_id = repository.github_repository_id
+                   AND repository.enabled
+                   AND repository.archived_at IS NULL
+                   AS scope_available
+        FROM github_jobs job
+        JOIN github_installations installation
+          ON installation.project_id = job.project_id
+         AND installation.id = job.github_installation_id
+        JOIN repositories repository
+          ON repository.project_id = job.project_id
+         AND repository.id = job.repository_id
+        LEFT JOIN github_installation_repositories access
+          ON access.project_id = job.project_id
+         AND access.github_installation_id = installation.id
+         AND access.repository_id = repository.id
+        LEFT JOIN github_webhook_deliveries delivery
+          ON delivery.project_id = job.project_id
+         AND delivery.id = job.webhook_delivery_id
+        WHERE job.kind = 'pull_request_sync'
+          AND job.github_pull_request_id IS NULL
+          AND job.state IN ('queued', 'failed')
+          AND job.next_attempt_at <= now()
+          AND job.attempts < job.max_attempts
+          AND (job.payload ->> 'number') ~ '^[1-9][0-9]{0,17}$'
+          AND char_length(COALESCE(job.payload ->> 'node_id', '')) BETWEEN 1 AND 256
+          AND github_job_names_open_task(job.project_id, job.payload)
+          AND NOT EXISTS (
+              SELECT 1
+              FROM github_pull_requests pull_request
+              WHERE pull_request.repository_id = job.repository_id
+                AND pull_request.pull_request_number = (job.payload ->> 'number')::bigint
+          )
+        ORDER BY job.next_attempt_at, job.created_at, job.id
+        FOR UPDATE OF job SKIP LOCKED
+        LIMIT 1
+        "#,
+    )
+    .bind(claim_id)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    let Some(job) = job else {
+        transaction.commit().await?;
+        return Ok(None);
+    };
+    let lease_seconds = i64::try_from(GITHUB_JOB_LEASE.as_secs()).unwrap_or(30);
+    let updated = sqlx::query(
+        r#"
+        UPDATE github_jobs
+        SET state = 'running', attempts = attempts + 1,
+            lease_owner = $2,
+            lease_expires_at = now() + make_interval(secs => $3),
+            failure_category = NULL, updated_at = now()
+        WHERE id = $1 AND state IN ('queued', 'failed')
+        "#,
+    )
+    .bind(job.job_id)
+    .bind(claim_id)
+    .bind(lease_seconds as f64)
+    .execute(&mut *transaction)
+    .await?;
+    if updated.rows_affected() != 1 {
+        return Err(AppError::Conflict("github_job", "claim_lost"));
+    }
+    if let Some(delivery_id) = job.webhook_delivery_id {
+        sqlx::query(
+            "UPDATE github_webhook_deliveries SET state = 'processing', failure_category = NULL, processed_at = NULL, updated_at = now() WHERE id = $1",
+        )
+        .bind(delivery_id)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    transaction.commit().await?;
+    Ok(Some(job))
+}
+
+/// Reads the pull request from GitHub, starts tracking it and suggests it on
+/// the tasks it names, then hands the job back to the usual sync, which fills
+/// in its checks and reviews.
+async fn process_pull_request_adoption_job(
+    state: &AppState,
+    job: &ClaimedPullRequestAdoptionJob,
+) -> Result<(), AppError> {
+    if !job.scope_available {
+        return fail_pull_request_adoption_job(state, job, "pull_request_scope_unavailable", true)
+            .await;
+    }
+    let Some(config) = state.config.github.as_ref() else {
+        return fail_pull_request_adoption_job(state, job, "github_not_configured", true).await;
+    };
+    let (Ok(installation_id), Ok(repository_id), Ok(pull_request_number)) = (
+        u64::try_from(job.installation_id),
+        u64::try_from(job.github_repository_id),
+        u64::try_from(job.pull_request_number),
+    ) else {
+        return fail_pull_request_adoption_job(state, job, "pull_request_identity_invalid", true)
+            .await;
+    };
+    let client = GitHubClient::new(config).map_err(map_github_error)?;
+    let token = match client
+        .installation_token(
+            installation_id,
+            &[repository_id],
+            InstallationTokenScope::ChecksRead,
+        )
+        .await
+    {
+        Ok(token) => token,
+        Err(GitHubError::Scope) => {
+            return fail_pull_request_adoption_job(state, job, "github_scope_incompatible", true)
+                .await;
+        }
+        Err(_) => {
+            return fail_pull_request_adoption_job(state, job, "github_token_unavailable", false)
+                .await;
+        }
+    };
+    let fetched = client
+        .pull_request(
+            &token,
+            &job.owner,
+            &job.repository_name,
+            pull_request_number,
+        )
+        .await;
+    drop(token);
+    let Ok(mut pull_request) = fetched else {
+        return fail_pull_request_adoption_job(state, job, "pull_request_fetch_failed", false)
+            .await;
+    };
+    reconcile_merge_commit_identity(
+        &mut pull_request.merge_commit_sha,
+        job.known_merge_commit_sha.as_deref(),
+        pull_request.merged_at.is_some(),
+    )?;
+    let expected_url = format!(
+        "https://github.com/{}/{}/pull/{}",
+        job.owner, job.repository_name, pull_request_number
+    );
+    let one_line = |value: &str, most: usize| {
+        !value.is_empty() && value.chars().count() <= most && !value.chars().any(char::is_control)
+    };
+    let sha = |value: &str| {
+        value.len() == 40
+            && value
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    };
+    let merged = pull_request.merged_at.is_some();
+    if pull_request.number != pull_request_number
+        || pull_request.node_id != job.node_id
+        || pull_request.html_url != expected_url
+        || !sha(&pull_request.head.sha)
+        || !one_line(&pull_request.head.name, 255)
+        || !one_line(&pull_request.base.name, 255)
+        || !one_line(&pull_request.title, 256)
+        || !one_line(&pull_request.user.login, 100)
+        || !matches!(pull_request.state.as_str(), "open" | "closed")
+        || (merged && !pull_request.merge_commit_sha.as_deref().is_some_and(sha))
+        || DateTime::parse_from_rfc3339(&pull_request.created_at).is_err()
+        || DateTime::parse_from_rfc3339(&pull_request.updated_at).is_err()
+    {
+        return fail_pull_request_adoption_job(state, job, "pull_request_identity_invalid", true)
+            .await;
+    }
+    let canonical_state = if merged {
+        "merged"
+    } else {
+        pull_request.state.as_str()
+    };
+
+    let mut transaction = state.pool.begin().await?;
+    // Back to the queue, where the usual sync finds the pull request now
+    // tracked and reads its checks and reviews.
+    let updated = sqlx::query(
+        r#"
+        UPDATE github_jobs
+        SET state = 'queued', lease_owner = NULL, lease_expires_at = NULL,
+            failure_category = NULL, next_attempt_at = now(), updated_at = now()
+        WHERE id = $1 AND state = 'running' AND lease_owner = $2
+        "#,
+    )
+    .bind(job.job_id)
+    .bind(job.claim_id)
+    .execute(&mut *transaction)
+    .await?;
+    if updated.rows_affected() != 1 {
+        return Err(AppError::Conflict("github_job", "lease_lost"));
+    }
+    let inserted = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO github_pull_requests (
+            id, project_id, repository_id, github_installation_id,
+            github_repository_id, pull_request_number, node_id, html_url,
+            head_ref, head_sha, base_ref, title, author_login, draft, state,
+            merged_at, merge_commit_sha, external_created_at,
+            external_updated_at
+        ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+            $16::text::timestamptz, $17, $18::text::timestamptz,
+            $19::text::timestamptz
+        )
+        ON CONFLICT (repository_id, pull_request_number) DO NOTHING
+        RETURNING id
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(job.project_id)
+    .bind(job.repository_id)
+    .bind(job.github_installation_row_id)
+    .bind(job.github_repository_id)
+    .bind(job.pull_request_number)
+    .bind(&pull_request.node_id)
+    .bind(&pull_request.html_url)
+    .bind(&pull_request.head.name)
+    .bind(&pull_request.head.sha)
+    .bind(&pull_request.base.name)
+    .bind(&pull_request.title)
+    .bind(&pull_request.user.login)
+    .bind(pull_request.draft)
+    .bind(canonical_state)
+    .bind(pull_request.merged_at.as_deref())
+    .bind(if merged {
+        pull_request.merge_commit_sha.as_deref()
+    } else {
+        None
+    })
+    .bind(&pull_request.created_at)
+    .bind(&pull_request.updated_at)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    if let Some(pull_request_id) = inserted {
+        let suggested = suggest_task_links(
+            &mut transaction,
+            job.project_id,
+            pull_request_id,
+            &pull_request,
+            job.integration_actor_id,
+        )
+        .await?;
+        sqlx::query(
+            r#"
+            INSERT INTO audit_events (
+                id, actor_id, project_id, authentication_class,
+                action, target_kind, target_id, outcome, metadata
+            ) VALUES (
+                $1, $2, $3, 'github_job', 'github.pull_request_pick_up',
+                'github_pull_request', $4, 'succeeded',
+                jsonb_build_object(
+                    'pull_request_number', $5::bigint,
+                    'suggested_tasks', $6::integer
+                )
+            )
+            "#,
+        )
+        .bind(Uuid::now_v7())
+        .bind(job.integration_actor_id)
+        .bind(job.project_id)
+        .bind(pull_request_id)
+        .bind(job.pull_request_number)
+        .bind(suggested)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    transaction.commit().await?;
+    Ok(())
+}
+
+async fn fail_pull_request_adoption_job(
+    state: &AppState,
+    job: &ClaimedPullRequestAdoptionJob,
+    category: &'static str,
+    terminal: bool,
+) -> Result<(), AppError> {
+    let exhausted = terminal || job.attempts >= job.max_attempts;
+    let next_state = if exhausted { "exhausted" } else { "failed" };
+    let backoff_seconds = i64::from(job.attempts.clamp(1, 6)).pow(2).min(60);
+    let mut transaction = state.pool.begin().await?;
+    let updated = sqlx::query(
+        r#"
+        UPDATE github_jobs
+        SET state = $3, lease_owner = NULL, lease_expires_at = NULL,
+            failure_category = $4,
+            next_attempt_at = now() + make_interval(secs => $5),
+            updated_at = now()
+        WHERE id = $1 AND state = 'running' AND lease_owner = $2
+        "#,
+    )
+    .bind(job.job_id)
+    .bind(job.claim_id)
+    .bind(next_state)
+    .bind(category)
+    .bind(backoff_seconds as f64)
+    .execute(&mut *transaction)
+    .await?;
+    if updated.rows_affected() != 1 {
+        return Err(AppError::Conflict("github_job", "lease_lost"));
+    }
+    if let Some(delivery_id) = job.webhook_delivery_id {
+        sqlx::query(
+            "UPDATE github_webhook_deliveries SET state = $2, failure_category = $3, processed_at = NULL, updated_at = now() WHERE id = $1",
+        )
+        .bind(delivery_id)
+        .bind(next_state)
+        .bind(category)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    transaction.commit().await?;
+    Ok(())
+}
+
 async fn process_pull_request_sync_job(
     state: &AppState,
     job: &ClaimedPullRequestSyncJob,
@@ -3979,6 +4376,14 @@ async fn complete_pull_request_sync_job(
     .bind(requested_reviewers)
     .fetch_one(&mut *transaction)
     .await?;
+    suggest_task_links(
+        &mut transaction,
+        job.project_id,
+        job.pull_request_id,
+        pull_request,
+        job.integration_actor_id,
+    )
+    .await?;
 
     sqlx::query("DELETE FROM github_pull_request_check_runs WHERE github_pull_request_id = $1")
         .bind(job.pull_request_id)
@@ -4400,6 +4805,39 @@ async fn set_pull_request_automation_projection(
     .execute(&mut **transaction)
     .await?;
     Ok(())
+}
+
+/// Suggests the pull request on each of the project's open tasks its branch,
+/// title or body names (AWD-59), unconfirmed, so it never moves a task until
+/// a person confirms it. Links already there, and ones dismissed, stay as
+/// they are.
+async fn suggest_task_links(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    pull_request_id: Uuid,
+    pull_request: &GitHubPullRequest,
+    actor_id: Uuid,
+) -> Result<i32, AppError> {
+    let branch_keys = task_keys_in(&pull_request.head.name);
+    let mut body_keys = task_keys_in(&pull_request.title);
+    for key in task_keys_in(pull_request.body.as_deref().unwrap_or("")) {
+        if body_keys.len() < MAX_TASK_KEYS && !body_keys.contains(&key) {
+            body_keys.push(key);
+        }
+    }
+    if branch_keys.is_empty() && body_keys.is_empty() {
+        return Ok(0);
+    }
+    Ok(
+        sqlx::query_scalar::<_, i32>("SELECT github_suggest_task_links($1, $2, $3, $4, $5)")
+            .bind(project_id)
+            .bind(pull_request_id)
+            .bind(&branch_keys)
+            .bind(&body_keys)
+            .bind(actor_id)
+            .fetch_one(&mut **transaction)
+            .await?,
+    )
 }
 
 async fn enqueue_pull_request_invalidations(
@@ -5279,7 +5717,76 @@ fn bounded_job_payload(
             Value::String(merge_commit_sha.to_owned()),
         );
     }
+    if event == "pull_request" {
+        // Keys the pull request names (AWD-59), so one the app didn't open
+        // can still be picked up for a task it names. Which project's keys
+        // count is checked when the job runs.
+        let text = |pointer: &str| value.pointer(pointer).and_then(Value::as_str).unwrap_or("");
+        let mut keys = task_keys_in(text("/pull_request/head/ref"));
+        for key in task_keys_in(text("/pull_request/title"))
+            .into_iter()
+            .chain(task_keys_in(text("/pull_request/body")))
+        {
+            if keys.len() < MAX_TASK_KEYS && !keys.contains(&key) {
+                keys.push(key);
+            }
+        }
+        if !keys.is_empty() {
+            payload.insert(
+                "task_keys".to_owned(),
+                Value::Array(keys.into_iter().map(Value::String).collect()),
+            );
+        }
+    }
     Ok(Value::Object(payload))
+}
+
+/// The most task keys one pull request's branch, or its title and body, can
+/// suggest.
+const MAX_TASK_KEYS: usize = 20;
+
+/// Task keys named in some text, such as `AWD-59` in a branch
+/// `claude/awd-59-pr-card` or a title "Fix the board (AWD-7)": a letter, one
+/// to nine more letters or digits, a hyphen and a number, standing on its
+/// own. Upper-cased, in order, each once, at most twenty.
+fn task_keys_in(text: &str) -> Vec<String> {
+    let bytes = text.as_bytes();
+    let mut keys = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() && keys.len() < MAX_TASK_KEYS {
+        let starts_word = index == 0 || !bytes[index - 1].is_ascii_alphanumeric();
+        if !(starts_word && bytes[index].is_ascii_alphabetic()) {
+            index += 1;
+            continue;
+        }
+        let prefix_end = index
+            + bytes[index..]
+                .iter()
+                .take_while(|byte| byte.is_ascii_alphanumeric())
+                .count();
+        let prefix_length = prefix_end - index;
+        if (2..=10).contains(&prefix_length) && bytes.get(prefix_end) == Some(&b'-') {
+            let digits_start = prefix_end + 1;
+            let digits = bytes[digits_start..]
+                .iter()
+                .take_while(|byte| byte.is_ascii_digit())
+                .count();
+            let after = digits_start + digits;
+            if (1..=9).contains(&digits)
+                && bytes[digits_start] != b'0'
+                && !bytes.get(after).is_some_and(u8::is_ascii_alphanumeric)
+            {
+                let key = text[index..after].to_ascii_uppercase();
+                if !keys.contains(&key) {
+                    keys.push(key);
+                }
+                index = after;
+                continue;
+            }
+        }
+        index = prefix_end.max(index + 1);
+    }
+    keys
 }
 
 fn map_github_error(error: GitHubError) -> AppError {
@@ -5381,6 +5888,58 @@ mod tests {
 
     // Short, so the tests run in real time.
     const TEST_LEASE: Duration = Duration::from_millis(600);
+
+    #[test]
+    fn task_keys_are_found_where_a_pull_request_names_them() {
+        assert_eq!(task_keys_in("claude/awd-59-pr-card"), vec!["AWD-59"]);
+        assert_eq!(
+            task_keys_in("Fix the board (AWD-7), see AW-12 and awd-7"),
+            vec!["AWD-7", "AW-12"]
+        );
+        assert_eq!(
+            task_keys_in("Closes [OPS2-3](https://x/OPS2-3)"),
+            vec!["OPS2-3"]
+        );
+        // Not keys: a leading zero, a number that runs on into letters, a
+        // one-letter or eleven-letter prefix, or one glued to a word.
+        for text in [
+            "AWD-059",
+            "AWD-7b",
+            "A-7",
+            "ABCDEFGHIJK-7",
+            "9AWD-7",
+            "AWD-",
+            "AWD-1234567890",
+        ] {
+            assert!(task_keys_in(text).is_empty(), "{text}");
+        }
+        let many = (1..=30)
+            .map(|number| format!("AW-{number}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(task_keys_in(&many).len(), MAX_TASK_KEYS);
+    }
+
+    #[test]
+    fn a_pull_request_webhook_keeps_the_task_keys_it_names() {
+        let payload = bounded_job_payload(
+            "pull_request",
+            Some("opened"),
+            &json!({"pull_request": {
+                "number": 9, "head": {"ref": "awd-59-card", "sha": "a"}, "base": {"ref": "main"},
+                "title": "PR card (AWD-59)", "body": "Also AWD-60 and AW-1"
+            }}),
+        )
+        .expect("payload");
+        assert_eq!(payload["task_keys"], json!(["AWD-59", "AWD-60", "AW-1"]));
+        let none = bounded_job_payload(
+            "pull_request",
+            Some("opened"),
+            &json!({"pull_request": {"number": 9, "title": "No key here", "body": null}}),
+        )
+        .expect("payload");
+        assert!(none.get("task_keys").is_none());
+    }
 
     // A publish takes far longer than one lease; the lease must keep being
     // extended for all of it, or another worker reclaims the job and pushes
@@ -5600,6 +6159,7 @@ mod tests {
             node_id: "PR_kwDOExample".to_owned(),
             html_url: "https://github.com/Mischa-dev/agent-workspace-m0-spike/pull/3".to_owned(),
             title: "M5 exact pull request".to_owned(),
+            body: None,
             user: GitHubPullRequestUser {
                 login: "Mischa-dev".to_owned(),
             },
@@ -5641,6 +6201,7 @@ mod tests {
             node_id: "PR_kwDOCanonical".to_owned(),
             html_url: "https://github.com/Mischa-dev/agent-workspace-m0-spike/pull/7".to_owned(),
             title: "Canonical review state".to_owned(),
+            body: None,
             user: GitHubPullRequestUser {
                 login: "Mischa-dev".to_owned(),
             },
