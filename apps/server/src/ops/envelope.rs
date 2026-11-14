@@ -55,8 +55,19 @@ impl<T: Serialize> Envelope<T> {
     }
 }
 
-/// The schema of an operation's envelope, given its output's schema.
-pub fn schema(output: Value) -> Value {
+/// The schema of an operation's envelope, given its output's schema. The
+/// output's definitions move to the envelope's root, where its `$ref`s
+/// point.
+pub fn schema(mut output: Value) -> Value {
+    let mut definitions = Vec::new();
+    if let Some(object) = output.as_object_mut() {
+        object.remove("$schema");
+        for key in ["$defs", "definitions"] {
+            if let Some(found) = object.remove(key) {
+                definitions.push((key, found));
+            }
+        }
+    }
     let mut branches = vec![json!({
         "type": "object",
         "properties": {
@@ -83,7 +94,11 @@ pub fn schema(output: Value) -> Value {
             "required": ["outcome", "message", "retryCategory"],
         }));
     }
-    json!({ "type": "object", "oneOf": branches })
+    let mut schema = json!({ "type": "object", "oneOf": branches });
+    for (key, found) in definitions {
+        schema[key] = found;
+    }
+    schema
 }
 
 #[cfg(test)]

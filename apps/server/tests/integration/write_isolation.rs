@@ -70,6 +70,8 @@ use super::{
 /// as written in the server's `.route(...)` calls.
 const WRITE_ROUTES: &[&str] = &[
     "POST /api/public/v1/{tool}",
+    "POST /api/v2/ops/{name}",
+    "POST /api/v2/w/{workspace}/ops/{name}",
     "POST /api/v1/account/api-tokens",
     "POST /api/v1/account/api-tokens/{credential_id}/revoke",
     "PATCH /api/v1/account/connected-apps/{id}",
@@ -3399,6 +3401,46 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
                     Expect::Refused,
                 ),
             ],
+            last: false,
+        },
+        // The generated operation route (K2): the workspace in the path must
+        // be where the target is, and a target in B is not found. No real
+        // operation is registered until K2.5's decision_record, so A's own
+        // call waits for it; `ops_edges` runs the test operations.
+        HttpCase {
+            route: "POST /api/v2/w/{workspace}/ops/{name}",
+            own: Own::Skip("no operation is registered in the server before K2.5"),
+            foreign: vec![
+                (
+                    Call::new(
+                        "POST",
+                        format!("/api/v2/w/{}/ops/echo_create", b.organization),
+                        Payload::Json(json!({"space": a.project, "text": "Net op"})),
+                    ),
+                    Expect::Refused,
+                ),
+                (
+                    Call::new(
+                        "POST",
+                        format!("/api/v2/w/{}/ops/echo_create", a.organization),
+                        Payload::Json(json!({"space": b.project, "text": "Net op"})),
+                    ),
+                    Expect::Refused,
+                ),
+            ],
+            last: false,
+        },
+        HttpCase {
+            route: "POST /api/v2/ops/{name}",
+            own: Own::Skip("no operation is registered in the server before K2.5"),
+            foreign: vec![(
+                Call::new(
+                    "POST",
+                    "/api/v2/ops/echo_create".to_owned(),
+                    Payload::Json(json!({"space": b.project, "text": "Net op"})),
+                ),
+                Expect::Refused,
+            )],
             last: false,
         },
         // Account

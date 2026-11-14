@@ -79,6 +79,7 @@ mod modules_lists;
 mod modules_targets;
 mod notifications;
 mod oauth_agent;
+mod ops_edges;
 mod ops_kernel;
 mod phase3_takedown;
 mod phase4_groundwork;

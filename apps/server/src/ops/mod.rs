@@ -23,6 +23,8 @@
 //!   access module will have (deleted by K2.17).
 //! - `dispatch`: the pipeline every call goes through.
 //! - `registry`: the list of operations, built once.
+//! - `web` and `mcp`: the generated edges (the v2 route for the web app and
+//!   scripts, and the agent tools).
 
 use std::future::Future;
 
@@ -34,9 +36,11 @@ pub mod context;
 pub mod dispatch;
 pub mod envelope;
 pub mod error;
+pub mod mcp;
 pub mod refs;
 pub mod registry;
 pub mod target;
+pub mod web;
 
 pub use context::{Caller, Edge, OpCall, OpContext};
 pub use dispatch::{Answer, DispatchRequest, dispatch};
@@ -120,6 +124,8 @@ pub trait Operation: Send + Sync + 'static {
     const DESTRUCTIVE: bool = false;
     /// Offered as an automation action. Writes are by default.
     const AUTOMATION: bool = Self::KIND.writes();
+    /// The largest request body the HTTP edge takes for it.
+    const MAX_BODY_BYTES: usize = 1024 * 1024;
     /// "Record a decision".
     const TITLE: &'static str;
     /// For agents and docs. Vendor-free and kind-free (K2.1).

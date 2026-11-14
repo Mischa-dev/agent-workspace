@@ -3,7 +3,8 @@
 //! module's operations exist: a retried request id replays, a reused one
 //! with other input is refused, a caller outside the workspace finds
 //! nothing, a read-only credential can't write, and every answer matches the
-//! operation's envelope schema.
+//! operation's envelope schema. `ops_edges` calls the same test operations
+//! through every edge.
 
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -76,8 +77,62 @@ impl Operation for EchoCreate {
     }
 }
 
-fn add_echo(registry: &mut Registry) {
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct EchoNoteInput {
+    text: String,
+}
+
+impl Targeted for EchoNoteInput {
+    fn target(&self) -> Target {
+        Target::Workspace(None)
+    }
+}
+
+/// A test operation whose target doesn't say which workspace it acts in.
+struct EchoNote;
+
+impl Operation for EchoNote {
+    const NAME: &'static str = "echo_note";
+    const KIND: OpKind = OpKind::Create;
+    const MODULE: &'static str = "pages";
+    const PERMISSION: Option<Permission> = None;
+    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const TITLE: &'static str = "Echo note";
+    const DESCRIPTION: &'static str =
+        "Writes its text to a scratch table in a workspace (tests only).";
+
+    type Input = EchoNoteInput;
+    type Output = EchoOutput;
+
+    async fn run(call: &mut OpCall<'_>, input: EchoNoteInput) -> Result<EchoOutput, OpError> {
+        let id = Uuid::now_v7();
+        let tx = call.tx().await?;
+        sqlx::query("INSERT INTO ops_kernel_echo (id, text) VALUES ($1, $2)")
+            .bind(id)
+            .bind(&input.text)
+            .execute(&mut **tx)
+            .await
+            .map_err(|_| OpError::Unavailable)?;
+        Ok(EchoOutput {
+            id,
+            text: input.text,
+        })
+    }
+}
+
+/// The test operations, for `register_for_tests`.
+pub(super) fn add_echo(registry: &mut Registry) {
     registry.add::<EchoCreate>();
+    registry.add::<EchoNote>();
+}
+
+/// The scratch table the test operations write to.
+pub(super) async fn scratch_table(pool: &sqlx::PgPool) {
+    sqlx::query("CREATE TABLE ops_kernel_echo (id UUID PRIMARY KEY, text TEXT NOT NULL)")
+        .execute(pool)
+        .await
+        .expect("scratch table");
 }
 
 fn state(setup: &Setup) -> AppState {
@@ -131,10 +186,7 @@ async fn the_kernel_replays_refuses_and_hides_what_it_should() {
         return;
     };
     register_for_tests(add_echo);
-    sqlx::query("CREATE TABLE ops_kernel_echo (id UUID PRIMARY KEY, text TEXT NOT NULL)")
-        .execute(&setup.pool)
-        .await
-        .expect("scratch table");
+    scratch_table(&setup.pool).await;
     let state = state(&setup);
     let space = create_project(&setup, "OPS", "Operations").await;
     let owner: Uuid = sqlx::query_scalar(

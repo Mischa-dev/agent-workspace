@@ -173,8 +173,10 @@ async fn pipeline<O: Operation>(
     // caller reaches only one.
     if request.workspace.is_none() && matches!(target, Target::Account | Target::Workspace(None)) {
         let reach = access_shim::reach(&mut connection, &request.caller).await?;
-        if let [only] = reach.as_slice() {
-            request.workspace = Some(*only);
+        match reach.as_slice() {
+            [only] => request.workspace = Some(*only),
+            [] => {}
+            several => return Err(name_the_workspace(&mut connection, several).await),
         }
     }
     let located = target::locate(
@@ -285,6 +287,26 @@ async fn pipeline<O: Operation>(
             .map_err(|error| OpError::logged(O::NAME, &error.into()))?;
     }
     Ok(answer)
+}
+
+/// A caller reaching several workspaces, calling an operation whose target
+/// doesn't say which, must name one; the refusal lists them.
+async fn name_the_workspace(connection: &mut sqlx::PgConnection, reach: &[Uuid]) -> OpError {
+    let slugs = sqlx::query_scalar::<_, String>(
+        "SELECT slug FROM organizations WHERE id = ANY($1) ORDER BY slug LIMIT 20",
+    )
+    .bind(reach)
+    .fetch_all(&mut *connection)
+    .await
+    .unwrap_or_default();
+    OpError::Invalid {
+        field: "workspace".into(),
+        message: format!(
+            "You reach more than one workspace ({}): say which with workspace (its id or slug).",
+            slugs.join(", ")
+        )
+        .into(),
+    }
 }
 
 /// The operation's module must be on where it acts.

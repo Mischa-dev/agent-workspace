@@ -137,6 +137,25 @@ pub async fn locate(
     Ok(located)
 }
 
+/// The workspace a path or `workspace` argument names: its id, or its slug.
+/// A name that matches nothing is `not_found`, the same as one the caller
+/// can't reach (access checks that later).
+pub async fn workspace_named(connection: &mut PgConnection, name: &str) -> Result<Uuid, OpError> {
+    let name = name.trim();
+    if let Ok(id) = Uuid::parse_str(name) {
+        return Ok(id);
+    }
+    if name.is_empty() || name.len() > 100 {
+        return Err(OpError::not_found("That workspace"));
+    }
+    sqlx::query_scalar::<_, Uuid>("SELECT id FROM organizations WHERE slug = $1")
+        .bind(name.to_ascii_lowercase())
+        .fetch_optional(&mut *connection)
+        .await
+        .map_err(|error| OpError::logged("locate", &error.into()))?
+        .ok_or(OpError::not_found("That workspace"))
+}
+
 async fn thing(
     connection: &mut PgConnection,
     kind: &str,

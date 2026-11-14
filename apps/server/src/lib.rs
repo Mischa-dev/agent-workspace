@@ -155,6 +155,7 @@ pub fn router(state: AppState) -> Router {
             pool: state.pool.clone(),
         }))
         .merge(api::router())
+        .merge(ops::web::router())
         .merge(account::router())
         .merge(account_security::router())
         .merge(password_reset::router())
@@ -216,6 +217,7 @@ pub fn router(state: AppState) -> Router {
         .merge(bug_reports::router())
         .route("/api/v1", any(api_not_found))
         .route("/api/v1/{*path}", any(api_not_found))
+        .route("/api/v2/{*path}", any(api_not_found))
         // A module's routes answer "turned off" where it's off (AWD-97).
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),

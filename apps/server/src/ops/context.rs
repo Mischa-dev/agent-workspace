@@ -344,3 +344,16 @@ pub fn actor_kind_key(kind: ActorKind) -> &'static str {
         ActorKind::System => "system",
     }
 }
+
+/// An account kind from its stored key.
+pub fn actor_kind_of(key: &str) -> Option<ActorKind> {
+    [
+        ActorKind::Human,
+        ActorKind::ExternalAgent,
+        ActorKind::ExecutionWorker,
+        ActorKind::Integration,
+        ActorKind::System,
+    ]
+    .into_iter()
+    .find(|kind| actor_kind_key(*kind) == key)
+}

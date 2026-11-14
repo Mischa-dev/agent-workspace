@@ -105,6 +105,8 @@ function defaultAction(kind: RuleActionKind, records = false): RuleAction {
       }
     case 'post_message':
       return { kind, conversationId: '', text: '' }
+    case 'run_operation':
+      return { kind, operation: '', input: {} }
   }
 }
 
@@ -625,6 +627,10 @@ function ActionFields({
           />
         </>
       )
+    case 'run_operation':
+      // Made by an agent or a script (automation_write); the builder for
+      // these comes with the operation catalogue.
+      return <p className="aw-quiet">Runs {action.operation || 'an operation'} with the input it was saved with.</p>
   }
 }
 

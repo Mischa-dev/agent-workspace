@@ -36,7 +36,7 @@
   },
   "notifications": ["automation", "automation_disabled"],
   "search": [],
-  "automations": { "triggers": ["schedule"], "actions": ["notify"] },
+  "automations": { "triggers": ["schedule"], "actions": ["notify", "run_operation"] },
   "things": [
     {
       "kind": "automation",
