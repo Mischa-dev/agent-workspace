@@ -32,6 +32,7 @@
   ],
   "links": [],
   "embeds": [],
+  "web": { "folder": "collections" },
   "slots": {
     "pages": ["/projects/:projectId/collections/*", "/forms/:token"],
     "parts": ["area.collections"],

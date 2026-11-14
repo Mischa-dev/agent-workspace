@@ -110,6 +110,7 @@
       "piece": { "type": "list", "thing": "run", "fields": ["status", "harness", "owner"] }
     }
   ],
+  "web": { "folder": "runs" },
   "slots": {
     "pages": ["/runs", "/runs/:runId", "/projects/:projectId/launches"],
     "parts": ["area.runs", "task.runs", "tech.run_usage", "home.working_now", "home.capacity", "workspace.runs"],

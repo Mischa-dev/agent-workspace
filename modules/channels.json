@@ -54,6 +54,7 @@
       "piece": { "type": "card", "thing": "thread", "fields": ["status", "outcome", "owner"] }
     }
   ],
+  "web": { "folder": "conversations" },
   "slots": {
     "pages": [
       "/projects/:projectId/channels/:channelId",

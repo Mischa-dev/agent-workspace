@@ -1,4 +1,4 @@
-import type { ComponentType } from 'react'
+import { lazy, type ComponentType } from 'react'
 import { Navigate, type RouteObject } from 'react-router-dom'
 
 import { SessionBoundary } from '../auth/SessionBoundary'
@@ -9,52 +9,21 @@ import {
   RootLayout,
   RouteErrorPage,
 } from './boundaries'
+import type { ModuleRoute } from '../modules/define'
+import { WEB_MODULES } from '../modules/registry'
 import {
-  AgentsPage,
-  ChannelPage,
-  CollectionsArea,
-  ConversationArchivePage,
-  CreateProjectPage,
-  DecisionsPage,
   DesignSystemPage,
-  DirectConversationPage,
   ForgotPasswordPage,
-  FormPage,
-  GraphPage,
   HomePage,
-  InboxPage,
   JoinPage,
-  LaterPage,
-  MessagesPage,
-  MilestonesPage,
-  MyWorkPage,
-  NextPage,
   NotFoundPage,
   OnboardingPage,
-  PageDetailPage,
-  PagesPage,
   PieceGallery,
-  PlanImportPage,
-  ProjectOverviewPage,
-  ProjectRunsPage,
-  ProjectsPage,
-  QuickAddPage,
   ResetPasswordPage,
-  RunPage,
-  RunsPage,
   SearchPage,
   SettingsArea,
-  SheetsArea,
   SignInPage,
-  SuggestionsPage,
-  TaskKeyRedirect,
-  ThreadPage,
-  TimelinePage,
   VerifyEmailPage,
-  WhiteboardPage,
-  WhiteboardsPage,
-  WorkItemDetailPage,
-  WorkItemsPage,
 } from './pages'
 
 
@@ -100,6 +69,16 @@ function page(
   }
 }
 
+/** A module's page (M1.4), loaded when first shown. */
+function modulePage(route: ModuleRoute): AppRoute {
+  const Page = lazy(route.page)
+  return route.layout === 'public' ? publicPage(route.path, Page) : page(route.path, Page, route.space, route.layout)
+}
+
+/** Every module's pages, from their registrations (`<folder>/module.ts`). */
+const moduleRoutes = (key: 'routes' | 'publicRoutes'): AppRoute[] =>
+  WEB_MODULES.flatMap((module) => (module[key] ?? []).map(modulePage))
+
 /** Signed out: these pages need no session. */
 const publicRoutes: AppRoute[] = [
   publicPage('/sign-in', SignInPage),
@@ -107,53 +86,25 @@ const publicRoutes: AppRoute[] = [
   publicPage('/reset-password', ResetPasswordPage),
   publicPage('/verify-email', VerifyEmailPage),
   publicPage('/join', JoinPage),
-  publicPage('/forms/:token', FormPage),
+  ...moduleRoutes('publicRoutes'),
 ]
 
-/** Signed in: every page needs the session. Keep paths exactly as they are; `public/sw.js` lists the ones it serves offline. */
+/**
+ * Signed in: every page needs the session. Keep paths exactly as they are;
+ * `public/sw.js` lists the ones it serves offline. The workspace's own pages
+ * are here; each module's come from its registration. The router ranks
+ * routes by how specific they are, so their order doesn't matter.
+ */
 const sessionRoutes: AppRoute[] = [
   page('/settings/*', SettingsArea, 'settings'),
   { path: '/', element: <Navigate replace to="/home" />, handle: { space: 'workspace', layout: 'redirect' } },
   page('/home', HomePage, 'home'),
   page('/welcome', OnboardingPage, 'workspace'),
-  page('/inbox', InboxPage, 'home'),
-  page('/later', LaterPage, 'home'),
-  page('/new-task', QuickAddPage, 'workspace'),
-  page('/share', QuickAddPage, 'workspace'),
-  page('/my-work', MyWorkPage, 'home'),
-  page('/runs', RunsPage, 'home'),
-  page('/runs/:runId', RunPage, 'home'),
-  page('/whiteboards', WhiteboardsPage, 'home'),
-  page('/pages', PagesPage, 'workspace'),
-  page('/whiteboards/:whiteboardId', WhiteboardPage, 'home', 'canvas'),
-  page('/messages', MessagesPage, 'direct'),
-  page('/messages/agents', AgentsPage, 'direct'),
-  page('/messages/:conversationId', DirectConversationPage, 'direct'),
-  page('/projects', ProjectsPage, 'home'),
-  page('/projects/new', CreateProjectPage, 'workspace'),
-  page('/projects/:projectId', ProjectOverviewPage, 'project'),
   { path: '/projects/:projectId/settings', element: <LegacyProjectSettingsRedirect />, handle: { space: 'project', layout: 'redirect' } },
-  page('/projects/:projectId/work-items', WorkItemsPage, 'project'),
-  page('/projects/:projectId/work-items/:workItemId', WorkItemDetailPage, 'project'),
-  page('/projects/:projectId/milestones', MilestonesPage, 'project'),
-  page('/projects/:projectId/next', NextPage, 'project'),
-  page('/projects/:projectId/suggestions', SuggestionsPage, 'project'),
-  page('/projects/:projectId/graph', GraphPage, 'project'),
-  page('/projects/:projectId/plan-import', PlanImportPage, 'project'),
-  page('/projects/:projectId/timeline', TimelinePage, 'project'),
-  page('/projects/:projectId/launches', ProjectRunsPage, 'project'),
-  page('/projects/:projectId/channels/:channelId', ChannelPage, 'project'),
-  page('/projects/:projectId/conversations/archived', ConversationArchivePage, 'project'),
-  page('/projects/:projectId/threads/:threadId', ThreadPage, 'project'),
-  page('/projects/:projectId/pages', PagesPage, 'project'),
-  page('/projects/:projectId/pages/:pageId', PageDetailPage, 'project'),
-  page('/projects/:projectId/decisions', DecisionsPage, 'project'),
-  page('/projects/:projectId/collections/*', CollectionsArea, 'project'),
-  page('/projects/:projectId/sheets/*', SheetsArea, 'project'),
   page('/search', SearchPage, 'workspace'),
   page('/design-system', DesignSystemPage, 'workspace'),
   page('/design-system/pieces', PieceGallery, 'workspace'),
-  page('/:taskKey', TaskKeyRedirect, 'workspace'),
+  ...moduleRoutes('routes'),
   page('*', NotFoundPage, 'workspace'),
 ]
 

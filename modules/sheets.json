@@ -22,6 +22,7 @@
   "things": [],
   "links": [],
   "embeds": [],
+  "web": { "folder": "sheets" },
   "slots": {
     "pages": ["/projects/:projectId/sheets/*"],
     "parts": ["area.sheets"],

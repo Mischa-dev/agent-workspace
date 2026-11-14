@@ -145,6 +145,7 @@
       "piece": { "type": "card", "thing": "task", "fields": ["key", "status", "owner", "dueDate"], "actions": ["open"] }
     }
   ],
+  "web": { "folder": "work-items" },
   "slots": {
     "pages": [
       "/new-task",

@@ -70,6 +70,14 @@ pub struct Slots {
     pub setup: Vec<String>,
 }
 
+/// Where a module's web part lives.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WebDecl {
+    /// A folder under `apps/web/src`, such as `work-items`.
+    pub folder: String,
+}
+
 /// One module.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -123,6 +131,10 @@ pub struct Manifest {
     pub embeds: Vec<EmbedDecl>,
     #[serde(default)]
     pub slots: Slots,
+    /// Its web app part (M1.4): the folder under `apps/web/src` whose
+    /// `module.ts` registers its pages, rows and palette entries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web: Option<WebDecl>,
     /// Setting keys it owns.
     #[serde(default)]
     pub settings: Vec<String>,

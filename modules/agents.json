@@ -31,6 +31,7 @@
   "things": [],
   "links": [],
   "embeds": [],
+  "web": { "folder": "agents" },
   "slots": {
     "pages": ["/messages/agents"],
     "parts": ["area.agents", "talk.agent_mentions"],

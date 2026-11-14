@@ -62,6 +62,7 @@
   ],
   "links": [],
   "embeds": [],
+  "web": { "folder": "projects" },
   "slots": {
     "pages": ["/projects", "/projects/new", "/projects/:projectId", "/projects/:projectId/settings"],
     "parts": [],

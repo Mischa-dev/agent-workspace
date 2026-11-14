@@ -48,6 +48,7 @@
       "piece": { "type": "card", "thing": "whiteboard", "fields": ["owner", "updatedAt"], "actions": ["open"] }
     }
   ],
+  "web": { "folder": "whiteboards" },
   "slots": {
     "pages": ["/whiteboards", "/whiteboards/:whiteboardId"],
     "parts": ["area.whiteboards"],

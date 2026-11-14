@@ -76,6 +76,7 @@
       "piece": { "type": "card", "thing": "page", "fields": ["owner", "updatedAt"], "actions": ["open"] }
     }
   ],
+  "web": { "folder": "memory" },
   "slots": {
     "pages": ["/pages", "/projects/:projectId/pages", "/projects/:projectId/pages/:pageId", "/projects/:projectId/decisions"],
     "parts": ["area.pages", "area.decisions", "page.live_editing", "page.comments", "page.import_export"],

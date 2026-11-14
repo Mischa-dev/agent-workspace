@@ -25,6 +25,7 @@
   "things": [],
   "links": [],
   "embeds": [],
+  "web": { "folder": "inbox" },
   "slots": {
     "pages": ["/inbox", "/later"],
     "parts": ["workspace.later", "workspace.inbox_triage"],
