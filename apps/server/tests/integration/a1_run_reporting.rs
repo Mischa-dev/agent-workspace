@@ -445,3 +445,63 @@ async fn a_retried_open_never_answers_with_a_run_from_elsewhere() {
         "a replay where the account no longer belongs finds nothing"
     );
 }
+
+#[tokio::test]
+async fn a_replay_rechecks_the_conversation_its_run_is_in() {
+    let Some(setup) = setup("a1_run_replay_place").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (_fixer, fixer_token) = create_agent(app, &setup.browser, &work, "Fixer", "fixer").await;
+    let fixer = initialize(app, &fixer_token).await.expect("Fixer MCP");
+    let owner_app = connect_app(app, &setup.browser, "Laptop", "full").await;
+    let owner = initialize(app, &owner_app).await.expect("app MCP");
+    let channel = tool(
+        app,
+        &owner_app,
+        &owner,
+        "channel_create",
+        json!({"projectId": "WORK", "name": "deals"}),
+    )
+    .await;
+    assert_eq!(channel["outcome"], "ok", "{channel}");
+    let channel_id = channel["value"]["id"].as_str().expect("channel").to_owned();
+    let call = |name: &'static str, arguments: Value| {
+        let token = fixer_token.clone();
+        let session = fixer.clone();
+        async move { tool(app, &token, &session, name, arguments).await }
+    };
+    let opened = call(
+        "run_open",
+        json!({"title": "Deal notes", "cause": {"kind": "thread", "conversationId": channel_id}}),
+    )
+    .await;
+    assert_eq!(opened["outcome"], "ok", "{opened}");
+    let run_id = opened["value"]["run"]["runId"]
+        .as_str()
+        .expect("run")
+        .to_owned();
+    let update = json!({"runId": run_id, "statusLine": "Reading the merger terms",
+                        "clientRequestId": "update-1"});
+    let updated = call("run_update", update.clone()).await;
+    assert_eq!(updated["outcome"], "ok", "{updated}");
+
+    // The channel turns members-only without the agent: a replay of the
+    // same update, and any other report, finds nothing.
+    sqlx::query("UPDATE conversations SET visibility = 'members' WHERE id = $1")
+        .bind(channel_id.parse::<Uuid>().expect("channel UUID"))
+        .execute(&setup.pool)
+        .await
+        .expect("make the channel private");
+    let replayed = call("run_update", update).await;
+    assert_eq!(replayed["outcome"], "not_found", "{replayed}");
+    assert!(!replayed.to_string().contains("merger"), "{replayed}");
+    let step = call(
+        "run_activity",
+        json!({"runId": run_id, "activities": [{"id": "s1", "kind": "step_started",
+            "payload": {"title": "More"}}]}),
+    )
+    .await;
+    assert_eq!(step["outcome"], "not_found", "{step}");
+}

@@ -232,14 +232,19 @@ pub async fn get(
     .await?)
 }
 
-/// The project of a run the account does itself.
+/// The project of a run the account does itself, while it still sees the
+/// run's conversation. Every reporting call (and its replay) starts here.
 pub async fn space_of_own(
     executor: impl sqlx::PgExecutor<'_>,
     account_id: Uuid,
     run_id: Uuid,
 ) -> Result<Option<Uuid>, AppError> {
     Ok(sqlx::query_scalar::<_, Option<Uuid>>(
-        "SELECT run.space_id FROM runs run WHERE run.id = $1 AND run.account_id = $2",
+        r#"
+        SELECT run.space_id FROM runs run
+        WHERE run.id = $1 AND run.account_id = $2
+          AND (run.conversation_id IS NULL OR conversation_visible_to(run.conversation_id, $2))
+        "#,
     )
     .bind(run_id)
     .bind(account_id)
