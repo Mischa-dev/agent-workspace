@@ -46,5 +46,5 @@ export const LaterPage = lazy(() => import('../later/LaterPage').then((module) =
 export const QuickAddPage = lazy(() => import('../quick-add/QuickAddPage').then((module) => ({ default: module.QuickAddPage })))
 export const TaskKeyRedirect = lazy(() => import('./TaskKeyRedirect').then((module) => ({ default: module.TaskKeyRedirect })))
 export const DesignSystemPage = lazy(() => import('../design/DesignSystemPage').then((module) => ({ default: module.DesignSystemPage })))
-export const PieceGallery = lazy(() => import('../modules/pieces/PieceGallery').then((module) => ({ default: module.PieceGallery })))
+export const PieceGallery = lazy(() => import('../pieces/PieceGallery').then((module) => ({ default: module.PieceGallery })))
 export const SearchPage = lazy(() => import('../memory/SearchPage').then((module) => ({ default: module.SearchPage })))

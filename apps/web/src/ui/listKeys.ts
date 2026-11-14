@@ -1,11 +1,6 @@
 import { useEffect, useRef, type RefObject } from 'react'
 
-/** A field, menu, dialog, picker or side panel has the key, not the list. */
-function belongsElsewhere(target: EventTarget | null) {
-  if (!(target instanceof HTMLElement)) return false
-  if (target.isContentEditable) return true
-  return Boolean(target.closest('input, textarea, select, [role="dialog"], [role="menu"], [role="listbox"], .aw-popover, #context-region'))
-}
+import { belongsElsewhere, overlayOpen } from './focusRule'
 
 /**
  * Arrow keys through a list of links: Down and Up (or J and K) move focus to
@@ -27,7 +22,7 @@ export function useListKeys(
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.altKey || event.metaKey || event.ctrlKey || event.shiftKey) return
-      if (belongsElsewhere(event.target) || document.querySelector('.aw-dialog-layer, .aw-popover')) return
+      if (belongsElsewhere(event.target) || overlayOpen()) return
       const list = listRef.current
       if (!list) return
       if (event.key === 'Escape') {

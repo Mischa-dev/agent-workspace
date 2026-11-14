@@ -42,7 +42,7 @@ import { Markdown, MarkdownEditor } from '../ui/markdown'
 import type { Embed } from '../ui/markdown/parse'
 import { thingLink } from '../modules/references/thingLinks'
 import type { Piece, Thing, ThingDecl } from '../modules/contract'
-import { PieceView } from '../modules/pieces/Pieces'
+import { PieceView } from '../pieces/Pieces'
 import pagesManifest from '../../../../modules/pages.json'
 import {
   createPage,
