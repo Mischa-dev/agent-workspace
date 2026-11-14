@@ -692,11 +692,7 @@ pub async fn apply(
     }
     // Tasks' fields are the project's task fields; its built-in ones
     // (Status, Assignee, …) don't change here.
-    let kind = if collection.is_tasks() {
-        fields::RecordKind::Task
-    } else {
-        super::kind(collection.id)
-    };
+    let kind = collection.field_kind();
     let mut changes = Changes::new();
     for (index, write) in field_writes.iter().enumerate() {
         let at = format!("fields[{index}]");
@@ -778,7 +774,7 @@ pub async fn apply(
                 ));
             }
         };
-        if collection.is_tasks()
+        if collection.acts_like_task
             && (found
                 .as_ref()
                 .is_some_and(|field| super::tasks::is_builtin_field(field.id))
@@ -787,8 +783,8 @@ pub async fn apply(
             return Ok(stop(
                 ProblemKind::Invalid,
                 format!("{at}.name"),
-                "Status, Assignee, Priority, Start date, Due date and Labels are built into Tasks: \
-                 change them on tasks, and give a new field another name.",
+                "Status, Assignee, Priority, Start date, Due date and Labels are built into records \
+                 that act like tasks: change them with the task tools, and give a new field another name.",
             ));
         }
         let Some(current) = found else {

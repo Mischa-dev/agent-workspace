@@ -848,8 +848,10 @@ async fn check_references(
     } = trigger
     {
         let found = sqlx::query_scalar::<_, bool>(
+            // Records that act like tasks change as tasks: task triggers
+            // fire for them instead.
             "SELECT EXISTS (SELECT 1 FROM collections WHERE project_id = $1 AND id = $2 \
-             AND archived_at IS NULL AND builtin IS NULL)",
+             AND archived_at IS NULL AND NOT acts_like_task)",
         )
         .bind(project_id)
         .bind(id)

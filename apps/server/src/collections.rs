@@ -26,6 +26,7 @@ pub mod definition;
 pub mod http;
 pub mod query;
 pub mod records;
+pub mod task_like;
 pub mod task_writes;
 pub mod tasks;
 pub mod views;
@@ -59,24 +60,36 @@ pub fn kind(collection_id: Uuid) -> RecordKind {
 }
 
 /// A collection's fields: active ones in order, then archived ones when
-/// asked for. The built-in Tasks collection's are the tasks' own
-/// (`tasks::fields`).
+/// asked for. A collection that acts like a task has the built-in task
+/// fields first (`tasks::fields`); the built-in Tasks collection's own are
+/// the project's task fields.
 pub async fn field_definitions(
     connection: &mut PgConnection,
     project_id: Uuid,
     collection_id: Uuid,
     include_archived: bool,
 ) -> Result<Vec<FieldDefinition>, AppError> {
-    let builtin = sqlx::query_scalar::<_, Option<String>>(
-        "SELECT builtin FROM collections WHERE project_id = $1 AND id = $2",
+    let row = sqlx::query_as::<_, (Option<String>, bool)>(
+        "SELECT builtin, acts_like_task FROM collections WHERE project_id = $1 AND id = $2",
     )
     .bind(project_id)
     .bind(collection_id)
     .fetch_optional(&mut *connection)
-    .await?
-    .flatten();
-    if builtin.as_deref() == Some(tasks::BUILTIN) {
-        return tasks::fields(connection, project_id, include_archived).await;
+    .await?;
+    match row {
+        Some((Some(_), _)) => {
+            return tasks::fields(connection, project_id, RecordKind::Task, include_archived).await;
+        }
+        Some((None, true)) => {
+            return tasks::fields(
+                connection,
+                project_id,
+                kind(collection_id),
+                include_archived,
+            )
+            .await;
+        }
+        _ => {}
     }
     fields::list(
         &mut *connection,
@@ -162,6 +175,8 @@ pub struct Collection {
     pub updated_at: String,
     /// "tasks" for the project's built-in Tasks collection.
     pub builtin: Option<String>,
+    /// Its records are tasks (always, for the built-in Tasks collection).
+    pub acts_like_task: bool,
 }
 
 impl Collection {
@@ -169,13 +184,29 @@ impl Collection {
     pub fn is_tasks(&self) -> bool {
         self.builtin.as_deref() == Some(tasks::BUILTIN)
     }
+
+    /// What `work_items.collection_id` holds for its tasks: None for the
+    /// built-in Tasks collection.
+    pub fn task_collection_id(&self) -> Option<Uuid> {
+        (!self.is_tasks()).then_some(self.id)
+    }
+
+    /// The fields that belong to its records: the project's task fields for
+    /// the built-in Tasks collection, else its own.
+    pub fn field_kind(&self) -> RecordKind {
+        if self.is_tasks() {
+            RecordKind::Task
+        } else {
+            kind(self.id)
+        }
+    }
 }
 
 const COLUMNS: &str = "collection.id, collection.project_id, collection.name, \
      collection.description, collection.title_name, collection.next_number, \
      collection.position, collection.archived_at IS NOT NULL AS archived, collection.version, \
      collection.created_at::text AS created_at, collection.updated_at::text AS updated_at, \
-     collection.builtin";
+     collection.builtin, collection.acts_like_task";
 
 /// A collection as the web app and agents see it.
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -199,6 +230,10 @@ pub struct CollectionSummary {
     /// records and fields change on task screens; only its views change here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub builtin: Option<String>,
+    /// Its records are tasks: they have a status, assignee, priority, dates
+    /// and labels, keys like AWD-12, and change with the task tools.
+    #[serde(default)]
+    pub acts_like_task: bool,
 }
 
 impl CollectionSummary {
@@ -215,6 +250,7 @@ impl CollectionSummary {
             created_at: collection.created_at.clone(),
             updated_at: collection.updated_at.clone(),
             builtin: collection.builtin.clone(),
+            acts_like_task: collection.acts_like_task,
         }
     }
 }
@@ -235,11 +271,8 @@ pub async fn list(
 ) -> Result<Vec<CollectionSummary>, AppError> {
     Ok(sqlx::query_as::<_, CountedRow>(&format!(
         "SELECT {COLUMNS}, \
-           CASE WHEN collection.builtin = 'tasks' THEN \
-             (SELECT count(*) FROM work_items task \
-              WHERE task.project_id = collection.project_id AND task.archived_at IS NULL) \
-           ELSE (SELECT count(*) FROM collection_records record \
-            WHERE record.collection_id = collection.id AND record.archived_at IS NULL) END AS records \
+           (SELECT count(*) FROM collection_records record \
+            WHERE record.collection_id = collection.id AND record.archived_at IS NULL) AS records \
          FROM collections collection \
          WHERE collection.project_id = $1 AND ($2 OR collection.archived_at IS NULL) \
          ORDER BY collection.archived_at IS NOT NULL, collection.builtin IS NULL, \
@@ -461,6 +494,8 @@ pub struct CollectionChange {
     /// 1-based place among the project's active collections.
     pub position: Option<i32>,
     pub archived: Option<bool>,
+    /// Whether its records are tasks (see `task_like`).
+    pub acts_like_task: Option<bool>,
     /// Checked only when something would change.
     pub expected_version: Option<i64>,
 }
@@ -472,6 +507,7 @@ impl CollectionChange {
             && self.title_name.is_none()
             && self.position.is_none()
             && self.archived.is_none()
+            && self.acts_like_task.is_none()
     }
 }
 
@@ -480,7 +516,8 @@ pub enum ChangeOutcome {
     Changed {
         collection: Box<Collection>,
         previous: Box<Collection>,
-        /// Any of name, description, titleName, position, archived.
+        /// Any of name, description, titleName, position, archived,
+        /// actsLikeTask.
         changed: Vec<&'static str>,
     },
     Unchanged(Collection),
@@ -490,6 +527,9 @@ pub enum ChangeOutcome {
     NameTaken(String),
     /// Restoring would pass `MAX_ACTIVE_COLLECTIONS`.
     ProjectFull,
+    /// Switching "acts like a task", or archiving a collection whose
+    /// records are tasks, can't happen now; why, and what would work.
+    TaskLike(String),
 }
 
 /// Renames, describes, reorders, archives or restores a collection. The
@@ -515,6 +555,7 @@ pub async fn change(
         .clone()
         .unwrap_or_else(|| current.title_name.clone());
     let archived = change.archived.unwrap_or(current.archived);
+    let acts_like_task = change.acts_like_task.unwrap_or(current.acts_like_task);
     if normalize_name(&name).as_deref() != Some(name.as_str())
         || normalize_description(&description).as_deref() != Some(description.as_str())
         || normalize_title_name(&title_name).as_deref() != Some(title_name.as_str())
@@ -554,6 +595,9 @@ pub async fn change(
     if archived != current.archived {
         changed.push("archived");
     }
+    if acts_like_task != current.acts_like_task {
+        changed.push("actsLikeTask");
+    }
     if changed.is_empty() {
         return Ok(ChangeOutcome::Unchanged(current));
     }
@@ -574,6 +618,11 @@ pub async fn change(
     }
     if restoring && active.len() as i64 >= MAX_ACTIVE_COLLECTIONS {
         return Ok(ChangeOutcome::ProjectFull);
+    }
+    if let Some(refusal) =
+        task_like::refusal(&mut *connection, &current, acts_like_task, archived).await?
+    {
+        return Ok(ChangeOutcome::TaskLike(refusal));
     }
     sqlx::query(
         r#"
@@ -598,6 +647,9 @@ pub async fn change(
         move_to(connection, project_id, collection_id, position).await?;
     } else if restoring {
         move_to(connection, project_id, collection_id, i32::MAX).await?;
+    }
+    if acts_like_task != current.acts_like_task {
+        task_like::switch(&mut *connection, collection_id, actor_id, acts_like_task).await?;
     }
     let collection = get(&mut *connection, project_id, collection_id)
         .await?

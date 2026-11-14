@@ -373,23 +373,13 @@ async fn collection_body(
     let views = views::list(&mut *connection, project_id, collection.id).await?;
     // Each query binds exactly the parameters it names: an extra bind fails
     // on a reused prepared statement.
-    let (records, archived_records) = if collection.is_tasks() {
-        sqlx::query_as::<_, (i64, i64)>(
-            "SELECT count(*) FILTER (WHERE archived_at IS NULL), count(*) FILTER (WHERE archived_at IS NOT NULL) \
-             FROM work_items WHERE project_id = $1",
-        )
-        .bind(project_id)
-        .fetch_one(&mut *connection)
-        .await?
-    } else {
-        sqlx::query_as::<_, (i64, i64)>(
-            "SELECT count(*) FILTER (WHERE archived_at IS NULL), count(*) FILTER (WHERE archived_at IS NOT NULL) \
-             FROM collection_records WHERE collection_id = $1",
-        )
-        .bind(collection.id)
-        .fetch_one(&mut *connection)
-        .await?
-    };
+    let (records, archived_records) = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT count(*) FILTER (WHERE archived_at IS NULL), count(*) FILTER (WHERE archived_at IS NOT NULL) \
+         FROM collection_records WHERE collection_id = $1",
+    )
+    .bind(collection.id)
+    .fetch_one(&mut *connection)
+    .await?;
     Ok(CollectionBody {
         collection: CollectionSummary::of(collection, records),
         fields: definitions.iter().map(FieldView::from).collect(),
@@ -600,6 +590,7 @@ struct UpdateCollectionRequest {
     title_name: Option<String>,
     position: Option<i32>,
     archived: Option<bool>,
+    acts_like_task: Option<bool>,
 }
 
 async fn update_collection(
@@ -661,6 +652,17 @@ async fn update_collection(
     if write.collection(collection_id).await?.is_tasks() {
         return Ok(builtin_collection());
     }
+    // Switching on makes a task for each record.
+    if request.acts_like_task == Some(true)
+        && !super::task_writes::may_create_tasks(&mut write.transaction, &write.actor).await?
+    {
+        return Ok(refusal(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "Records that act like tasks are tasks: only people who can make tasks here can switch it on.",
+            Value::Null,
+        ));
+    }
     let outcome = super::change(
         &mut write.transaction,
         project_id,
@@ -672,6 +674,7 @@ async fn update_collection(
             title_name,
             position: request.position,
             archived: request.archived,
+            acts_like_task: request.acts_like_task,
             expected_version: Some(request.expected_version),
         },
     )
@@ -733,6 +736,14 @@ async fn update_collection(
                     "This project has {} active collections already. Archive one first.",
                     super::MAX_ACTIVE_COLLECTIONS
                 ),
+                Value::Null,
+            ));
+        }
+        ChangeOutcome::TaskLike(message) => {
+            return Ok(refusal(
+                StatusCode::CONFLICT,
+                "acts_like_task",
+                message,
                 Value::Null,
             ));
         }
@@ -817,20 +828,21 @@ async fn create_field(
     }
     // Tasks' fields are the project's task fields, changed by those who may
     // change the workflow; the built-in ones keep their names.
-    let kind = if collection.is_tasks() {
-        if !super::task_writes::may_change_fields(&mut write.transaction, &write.actor).await? {
-            return Ok(task_fields_forbidden());
-        }
-        if super::tasks::is_builtin_name(&name) {
-            return Ok(invalid(
-                "name",
-                format!("Tasks already has a built-in field called \"{name}\"."),
-            ));
-        }
-        fields::RecordKind::Task
-    } else {
-        super::kind(collection_id)
-    };
+    if collection.acts_like_task && super::tasks::is_builtin_name(&name) {
+        return Ok(invalid(
+            "name",
+            format!(
+                "{} already has a built-in field called \"{name}\".",
+                collection.name
+            ),
+        ));
+    }
+    if collection.is_tasks()
+        && !super::task_writes::may_change_fields(&mut write.transaction, &write.actor).await?
+    {
+        return Ok(task_fields_forbidden());
+    }
+    let kind = collection.field_kind();
     let field = match fields::create(
         &mut write.transaction,
         project_id,
@@ -938,25 +950,28 @@ async fn update_field(
     if collection.archived {
         return Ok(archived_collection(&collection));
     }
-    let kind = if collection.is_tasks() {
+    if collection.acts_like_task {
         if super::tasks::is_builtin_field(field_id) {
             return Ok(builtin_collection());
-        }
-        if !super::task_writes::may_change_fields(&mut write.transaction, &write.actor).await? {
-            return Ok(task_fields_forbidden());
         }
         if let Some(name) = &name
             && super::tasks::is_builtin_name(name)
         {
             return Ok(invalid(
                 "name",
-                format!("Tasks already has a built-in field called \"{name}\"."),
+                format!(
+                    "{} already has a built-in field called \"{name}\".",
+                    collection.name
+                ),
             ));
         }
-        fields::RecordKind::Task
-    } else {
-        super::kind(collection_id)
-    };
+    }
+    if collection.is_tasks()
+        && !super::task_writes::may_change_fields(&mut write.transaction, &write.actor).await?
+    {
+        return Ok(task_fields_forbidden());
+    }
+    let kind = collection.field_kind();
     let definitions =
         super::field_definitions(&mut write.transaction, project_id, collection_id, true).await?;
     let Some(current) = definitions.iter().find(|field| field.id == field_id) else {
@@ -1472,7 +1487,7 @@ async fn list_records(
     let mut spec =
         Spec::from_config(&config, &definitions, principal.actor_id).searching(words, &definitions);
     spec.archived = archived;
-    spec.tasks = collection.is_tasks();
+    spec.tasks = collection.acts_like_task;
     if let Some(group) = query.group {
         if spec.group.is_none() {
             return Ok(invalid("group", "A group is read within a grouping."));
@@ -1562,7 +1577,7 @@ async fn get_record(
     let tasks = super::get(&mut *connection, project_id, collection_id)
         .await?
         .ok_or(AppError::NotFound("collection"))?
-        .is_tasks();
+        .acts_like_task;
     let record = records::find(
         &mut *connection,
         project_id,
@@ -1653,8 +1668,8 @@ async fn write_record(
     if collection.archived {
         return Ok(archived_collection(&collection));
     }
-    if collection.is_tasks() {
-        return write_task_record(write, project_id, collection_id, input, status).await;
+    if collection.acts_like_task {
+        return write_task_record(write, project_id, &collection, input, status).await;
     }
     let definitions =
         super::field_definitions(&mut write.transaction, project_id, collection_id, true).await?;
@@ -1705,23 +1720,29 @@ async fn write_record(
     write.finish(status, &body).await
 }
 
-/// A write to the Tasks collection: a task change (`super::task_writes`),
-/// answered with the task as a record.
+/// A write to a collection whose records are tasks: a task change
+/// (`super::task_writes`), answered with the task as a record.
 async fn write_task_record(
     mut write: Write,
     project_id: Uuid,
-    collection_id: Uuid,
+    collection: &super::Collection,
     input: RecordInput,
     status: StatusCode,
 ) -> Result<Response, AppError> {
+    let collection_id = collection.id;
     let project_key = write.project_key.clone();
-    let task_id =
-        match super::task_writes::write(&mut write.transaction, &write.actor, &project_key, &input)
-            .await?
-        {
-            Ok(task_id) => task_id,
-            Err(problem) => return record_problem(problem),
-        };
+    let task_id = match super::task_writes::write(
+        &mut write.transaction,
+        &write.actor,
+        &project_key,
+        collection,
+        &input,
+    )
+    .await?
+    {
+        Ok(task_id) => task_id,
+        Err(problem) => return record_problem(problem),
+    };
     outbox::enqueue_collection_updated(
         &mut write.transaction,
         project_id,
