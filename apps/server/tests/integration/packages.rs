@@ -120,6 +120,43 @@ async fn an_exported_space_carries_its_setup_and_nothing_private() {
     .await;
     assert_eq!(skill["outcome"], "ok", "{skill}");
 
+    // An archived private channel named like a carried open one: a rule
+    // that posts there must not export as posting to the open one.
+    let channel = call(
+        "channel_create",
+        json!({"projectId": "PKG", "name": "releases"}),
+    )
+    .await;
+    assert_eq!(channel["outcome"], "ok", "{channel}");
+    let open_channel = "releases".to_owned();
+    let hidden = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO conversations (id, project_id, kind, name, visibility, archived_at, \
+         archived_by_actor_id) VALUES ($1, $2, 'channel', $3, 'members', now(), $4)",
+    )
+    .bind(hidden)
+    .bind(space_id)
+    .bind(&open_channel)
+    .bind(owner)
+    .execute(pool)
+    .await
+    .expect("archived private channel");
+    sqlx::query(
+        r#"
+        INSERT INTO automation_rules (
+            id, organization_id, project_id, owner_actor_id, name, trigger_kind, actions
+        ) VALUES ($1, $2, $3, $4, 'Hidden post', 'task_created', $5)
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(setup.organization_id)
+    .bind(space_id)
+    .bind(owner)
+    .bind(json!([{"kind": "post_message", "conversationId": hidden, "text": "New task"}]))
+    .execute(pool)
+    .await
+    .expect("rule posting to the hidden channel");
+
     let exported = call("package_export", json!({"spaceId": "PKG"})).await;
     assert_eq!(exported["outcome"], "ok", "{exported}");
     let document = &exported["value"]["package"];
@@ -169,6 +206,17 @@ async fn an_exported_space_carries_its_setup_and_nothing_private() {
         part("automation", "triage")["trigger"]["collectionId"],
         "@feedback"
     );
+    let hidden_post = part("automation", "hidden_post");
+    assert_eq!(
+        hidden_post["actions"][0].get("conversationId"),
+        None,
+        "{hidden_post}"
+    );
+    assert_eq!(
+        hidden_post["needsSetup"],
+        json!(["actions.conversationId"]),
+        "{hidden_post}"
+    );
     assert_eq!(
         part("automation", "builds_out")["webhook"]["host"],
         "hooks.example.org"
@@ -196,6 +244,7 @@ async fn an_exported_space_carries_its_setup_and_nothing_private() {
         &space,
         &collection_id.to_string(),
         &setup.organization_id.to_string(),
+        &hidden.to_string(),
     ] {
         assert!(!whole.contains(private), "{private} leaked: {whole}");
     }

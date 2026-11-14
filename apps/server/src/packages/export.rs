@@ -73,7 +73,7 @@ pub(crate) async fn export(
     for part in &package.contents {
         keys.seed(part.kind, &part.key);
     }
-    let names = Names::read(connection, space_id, &package).await?;
+    let names = Names::read(connection, caller.actor_id, space_id, &package).await?;
     let mut parts = Vec::new();
     for (key, body) in forms(connection, space_id, &names, &mut keys).await? {
         package.needs_admin.push(format!("form:{key}"));
@@ -108,6 +108,7 @@ struct Names {
 impl Names {
     async fn read(
         connection: &mut PgConnection,
+        actor_id: Uuid,
         space_id: Uuid,
         package: &Package,
     ) -> Result<Self, AppError> {
@@ -129,7 +130,9 @@ impl Names {
         .into_iter()
         .filter_map(|(id, name)| Some((id, by_name.get(&name)?.clone())))
         .collect();
-        // Only channels the package carries (everyone in the space sees them).
+        // Only channels the package carries, picked as the snapshot picks
+        // them (open, everyone in the space sees them, and the caller does),
+        // so an archived or private channel of the same name stays an id.
         let carried = package
             .contents
             .iter()
@@ -143,11 +146,16 @@ impl Names {
             .filter_map(|channel| channel["name"].as_str().map(str::to_owned))
             .collect::<Vec<_>>();
         let channels = sqlx::query_as::<_, (Uuid, String)>(
-            "SELECT id, name FROM conversations \
-             WHERE project_id = $1 AND kind = 'channel' AND name = ANY($2)",
+            r#"
+            SELECT id, name FROM conversations
+            WHERE project_id = $1 AND kind = 'channel' AND name = ANY($2)
+              AND archived_at IS NULL AND visibility = 'project'
+              AND conversation_visible_to(id, $3)
+            "#,
         )
         .bind(space_id)
         .bind(&carried)
+        .bind(actor_id)
         .fetch_all(&mut *connection)
         .await?
         .into_iter()
