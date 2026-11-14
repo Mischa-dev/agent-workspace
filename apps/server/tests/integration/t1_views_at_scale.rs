@@ -94,16 +94,35 @@ async fn ten_thousand_tasks_page_by_every_field_on_index_paths() {
     .await
     .expect("milestone");
 
-    // 10,000 more tasks straight into the table (their records come with
-    // them), like a long-lived project.
+    // 10,000 more tasks straight into the tables, like a long-lived project.
     let started = Instant::now();
+    // A task's record comes first (T1.3), in the same transaction.
+    let mut transaction = pool.begin().await.expect("begin");
     sqlx::query(
         r#"
-        INSERT INTO work_items (id, project_id, number, title, description, type_id, status_id,
+        INSERT INTO collection_records (id, project_id, collection_id, number, title,
+                                        created_by_actor_id, updated_by_actor_id,
+                                        created_at, updated_at)
+        SELECT gen_random_uuid(), seed.project_id, seed_record.collection_id, seed.number + n,
+               'Task ' || n || CASE WHEN n % 97 = 0 THEN ' login bug' ELSE '' END,
+               seed.created_by_actor_id, seed.created_by_actor_id,
+               now() - make_interval(secs => n), now() - make_interval(secs => n)
+        FROM work_items seed
+        JOIN collection_records seed_record ON seed_record.id = seed.id,
+             generate_series(1, 10000) n
+        WHERE seed.id = $1
+        "#,
+    )
+    .bind(seed_id)
+    .execute(&mut *transaction)
+    .await
+    .expect("insert 10,000 records");
+    sqlx::query(
+        r#"
+        INSERT INTO work_items (id, project_id, number, description, type_id, status_id,
                                 priority, assignee_actor_id, created_by_actor_id, board_rank,
                                 due_date, start_date, estimate, milestone_id, created_at, updated_at)
-        SELECT gen_random_uuid(), seed.project_id, seed.number + n,
-               'Task ' || n || CASE WHEN n % 97 = 0 THEN ' login bug' ELSE '' END,
+        SELECT record.id, seed.project_id, record.number,
                '', seed.type_id,
                (SELECT id FROM work_item_statuses s WHERE s.project_id = seed.project_id
                  ORDER BY s.position OFFSET (n % 7) LIMIT 1),
@@ -114,16 +133,21 @@ async fn ten_thousand_tasks_page_by_every_field_on_index_paths() {
                CASE WHEN n % 6 = 0 THEN DATE '2026-09-01' + (n % 60) END,
                CASE WHEN n % 5 = 0 THEN (n % 13)::double precision END,
                CASE WHEN n % 8 = 0 THEN $2::uuid END,
-               now() - make_interval(secs => n), now() - make_interval(secs => n)
-        FROM work_items seed, generate_series(1, 10000) n
+               record.created_at, record.updated_at
+        FROM work_items seed
+        JOIN collection_records seed_record ON seed_record.id = seed.id
+        JOIN collection_records record
+          ON record.collection_id = seed_record.collection_id AND record.number > seed.number
+        CROSS JOIN LATERAL (SELECT (record.number - seed.number)::integer AS n) step
         WHERE seed.id = $1
         "#,
     )
     .bind(seed_id)
     .bind(milestone)
-    .execute(pool)
+    .execute(&mut *transaction)
     .await
     .expect("insert 10,000 tasks");
+    transaction.commit().await.expect("commit 10,000 tasks");
     sqlx::query(
         "UPDATE project_counters SET next_work_item_number = next_work_item_number + 10000 \
          WHERE project_id = $1",
@@ -135,7 +159,7 @@ async fn ten_thousand_tasks_page_by_every_field_on_index_paths() {
     sqlx::query(
         "INSERT INTO work_item_labels (project_id, work_item_id, label_id, added_by_actor_id) \
          SELECT item.project_id, item.id, $2, item.created_by_actor_id \
-         FROM work_items item WHERE item.project_id = $1 AND item.number % 5 = 0",
+         FROM task_rows item WHERE item.project_id = $1 AND item.number % 5 = 0",
     )
     .bind(project_id)
     .bind(label_id)
@@ -312,14 +336,14 @@ async fn ten_thousand_tasks_page_by_every_field_on_index_paths() {
             "one status",
             filtered(tasks::STATUS, FieldOp::Is, &[&status_text]),
             Some(format!(
-                "SELECT count(*) FROM work_items WHERE project_id = '{project_id}' AND status_id = '{first_status}' AND archived_at IS NULL"
+                "SELECT count(*) FROM task_rows WHERE project_id = '{project_id}' AND status_id = '{first_status}' AND archived_at IS NULL"
             )),
         ),
         (
             "my tasks",
             filtered(tasks::ASSIGNEE, FieldOp::Is, &["me"]),
             Some(format!(
-                "SELECT count(*) FROM work_items WHERE project_id = '{project_id}' AND assignee_actor_id = '{reader}' AND archived_at IS NULL"
+                "SELECT count(*) FROM task_rows WHERE project_id = '{project_id}' AND assignee_actor_id = '{reader}' AND archived_at IS NULL"
             )),
         ),
         (
@@ -341,7 +365,7 @@ async fn ten_thousand_tasks_page_by_every_field_on_index_paths() {
                 ..ViewConfig::default()
             },
             Some(format!(
-                "SELECT count(*) FROM work_items WHERE project_id = '{project_id}' AND due_date >= DATE '2026-10-01' AND due_date < DATE '2026-11-01' AND archived_at IS NULL"
+                "SELECT count(*) FROM task_rows WHERE project_id = '{project_id}' AND due_date >= DATE '2026-10-01' AND due_date < DATE '2026-11-01' AND archived_at IS NULL"
             )),
         ),
         (
@@ -353,7 +377,7 @@ async fn ten_thousand_tasks_page_by_every_field_on_index_paths() {
             "started",
             filtered(tasks::STATUS, FieldOp::CategoryIs, &["started"]),
             Some(format!(
-                "SELECT count(*) FROM work_items item JOIN work_item_statuses status ON status.id = item.status_id WHERE item.project_id = '{project_id}' AND status.semantic_category = 'started' AND item.archived_at IS NULL"
+                "SELECT count(*) FROM task_rows item JOIN work_item_statuses status ON status.id = item.status_id WHERE item.project_id = '{project_id}' AND status.semantic_category = 'started' AND item.archived_at IS NULL"
             )),
         ),
     ] {

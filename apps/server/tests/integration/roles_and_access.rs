@@ -637,7 +637,7 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
 
     // The limit holds inside tools that check access themselves, too.
     let made_title = sqlx::query_scalar::<_, String>(
-        "SELECT id::text FROM work_items WHERE project_id = $1 AND title = 'Made in the browser'",
+        "SELECT id::text FROM task_rows WHERE project_id = $1 AND title = 'Made in the browser'",
     )
     .bind(work.parse::<Uuid>().expect("project"))
     .fetch_one(&setup.pool)
@@ -679,7 +679,7 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
         "{status}: {refused}"
     );
     let scripted = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM work_items WHERE title IN ('Made by the app', 'Made by a script', 'Renamed by the app')",
+        "SELECT count(*) FROM task_rows WHERE title IN ('Made by the app', 'Made by a script', 'Renamed by the app')",
     )
     .fetch_one(&setup.pool)
     .await
@@ -1063,7 +1063,7 @@ async fn creating_from_a_template_needs_create_tasks_in_that_project() {
     .await;
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
     let in_beta = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM work_items WHERE project_id = $1 AND title = 'From the template'",
+        "SELECT count(*) FROM task_rows WHERE project_id = $1 AND title = 'From the template'",
     )
     .bind(beta.parse::<Uuid>().expect("project"))
     .fetch_one(&setup.pool)
@@ -3007,7 +3007,7 @@ async fn a_write_token_follows_any_write_permission() {
     .await;
     assert_ne!(refused["outcome"], "applied", "{refused}");
     let renamed = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM work_items WHERE title = 'Renamed by the token'",
+        "SELECT count(*) FROM task_rows WHERE title = 'Renamed by the token'",
     )
     .fetch_one(&setup.pool)
     .await
@@ -5289,7 +5289,7 @@ async fn moving_a_task_needs_its_contents_and_code_to_be_seen() {
         async move {
             sqlx::query_scalar::<_, i64>(
                 r#"
-                SELECT count(*) FROM work_items item
+                SELECT count(*) FROM task_rows item
                 LEFT JOIN work_item_comments comment ON comment.work_item_id = item.id
                 WHERE item.project_id = $1
                   AND (strpos(item.description, $2) > 0 OR strpos(comment.content::text, $2) > 0)

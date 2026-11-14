@@ -1155,13 +1155,34 @@ async fn lists_page_every_sort_and_grouping_quickly_at_ten_thousand_tasks() {
         .1;
 
     // 10,000 more tasks straight into the table, like a long-lived project.
+    // A task's record comes first (T1.3), in the same transaction.
+    let seed_id = Uuid::parse_str(first["id"].as_str().expect("test value")).expect("test value");
+    let mut transaction = fixture.pool.begin().await.expect("begin");
     sqlx::query(
         r#"
-        INSERT INTO work_items (id, project_id, number, title, description, type_id, status_id,
+        INSERT INTO collection_records (id, project_id, collection_id, number, title,
+                                        created_by_actor_id, updated_by_actor_id,
+                                        created_at, updated_at)
+        SELECT gen_random_uuid(), seed.project_id, seed_record.collection_id, seed.number + n,
+               'Task ' || n || CASE WHEN n % 97 = 0 THEN ' login bug' ELSE '' END,
+               seed.created_by_actor_id, seed.created_by_actor_id,
+               now() - make_interval(secs => n), now() - make_interval(secs => n)
+        FROM work_items seed
+        JOIN collection_records seed_record ON seed_record.id = seed.id,
+             generate_series(1, 10000) n
+        WHERE seed.id = $1
+        "#,
+    )
+    .bind(seed_id)
+    .execute(&mut *transaction)
+    .await
+    .expect("insert 10,000 records");
+    sqlx::query(
+        r#"
+        INSERT INTO work_items (id, project_id, number, description, type_id, status_id,
                                 priority, assignee_actor_id, created_by_actor_id, board_rank,
                                 due_date, created_at, updated_at)
-        SELECT gen_random_uuid(), seed.project_id, seed.number + n,
-               'Task ' || n || CASE WHEN n % 97 = 0 THEN ' login bug' ELSE '' END,
+        SELECT record.id, seed.project_id, record.number,
                '', seed.type_id,
                (SELECT id FROM work_item_statuses s WHERE s.project_id = seed.project_id
                  ORDER BY s.position OFFSET (n % 7) LIMIT 1),
@@ -1169,20 +1190,25 @@ async fn lists_page_every_sort_and_grouping_quickly_at_ten_thousand_tasks() {
                CASE WHEN n % 3 = 0 THEN seed.created_by_actor_id END,
                seed.created_by_actor_id, 1000 + n,
                CASE WHEN n % 4 = 0 THEN DATE '2026-10-01' + (n % 90) END,
-               now() - make_interval(secs => n), now() - make_interval(secs => n)
-        FROM work_items seed, generate_series(1, 10000) n
+               record.created_at, record.updated_at
+        FROM work_items seed
+        JOIN collection_records seed_record ON seed_record.id = seed.id
+        JOIN collection_records record
+          ON record.collection_id = seed_record.collection_id AND record.number > seed.number
+        CROSS JOIN LATERAL (SELECT (record.number - seed.number)::integer AS n) step
         WHERE seed.id = $1
         "#,
     )
-    .bind(Uuid::parse_str(first["id"].as_str().expect("test value")).expect("test value"))
-    .execute(&fixture.pool)
+    .bind(seed_id)
+    .execute(&mut *transaction)
     .await
     .expect("insert 10,000 tasks");
+    transaction.commit().await.expect("commit 10,000 tasks");
     sqlx::query(
         r#"
         INSERT INTO work_item_labels (project_id, work_item_id, label_id, added_by_actor_id)
         SELECT item.project_id, item.id, $2, item.created_by_actor_id
-        FROM work_items item WHERE item.project_id = $1 AND item.number % 5 = 0
+        FROM task_rows item WHERE item.project_id = $1 AND item.number % 5 = 0
         "#,
     )
     .bind(project)
@@ -1190,7 +1216,7 @@ async fn lists_page_every_sort_and_grouping_quickly_at_ten_thousand_tasks() {
     .execute(&fixture.pool)
     .await
     .expect("label every fifth task");
-    sqlx::query("ANALYZE work_items")
+    sqlx::query("ANALYZE work_items, collection_records")
         .execute(&fixture.pool)
         .await
         .expect("analyze");

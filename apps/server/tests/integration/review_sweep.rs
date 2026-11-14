@@ -208,7 +208,7 @@ async fn historical_aliases_cannot_hide_a_conflicting_task_key() {
     // keys change. Another workspace also has a historical WORK-1. Both
     // aliases must participate, even when the first duplicates a current ID.
     for (source, target) in [(tasks[1], tasks[0]), (tasks[3], tasks[2])] {
-        sqlx::query("INSERT INTO work_item_key_aliases (id, organization_id, project_key, number, source_work_item_id, work_item_id, moved_by_actor_id) SELECT $1, project.organization_id, 'WORK', 1, $2, $3, (SELECT actor_id FROM users WHERE login_name = 'owner') FROM work_items item JOIN projects project ON project.id = item.project_id WHERE item.id = $2")
+        sqlx::query("INSERT INTO work_item_key_aliases (id, organization_id, project_key, number, source_work_item_id, work_item_id, moved_by_actor_id) SELECT $1, project.organization_id, 'WORK', 1, $2, $3, (SELECT actor_id FROM users WHERE login_name = 'owner') FROM task_rows item JOIN projects project ON project.id = item.project_id WHERE item.id = $2")
             .bind(Uuid::now_v7()).bind(source).bind(target)
             .execute(&setup.pool).await.expect("historical alias");
     }

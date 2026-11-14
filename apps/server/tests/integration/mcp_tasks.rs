@@ -1055,7 +1055,7 @@ async fn archiving_through_task_update_releases_claims_and_keeps_moved_originals
         "OLD-3 was moved to another project; this original stays archived as its history."
     );
     let still_archived = sqlx::query_scalar::<_, bool>(
-        "SELECT archived_at IS NOT NULL FROM work_items WHERE id = $1",
+        "SELECT archived_at IS NOT NULL FROM task_rows WHERE id = $1",
     )
     .bind(original)
     .fetch_one(&setup.pool)

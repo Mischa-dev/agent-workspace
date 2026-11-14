@@ -98,8 +98,6 @@ pub mod storage_admission;
 #[cfg(test)]
 mod structure_guards;
 pub mod task_records;
-#[cfg(test)]
-mod task_rows_guard;
 pub mod telemetry;
 pub mod test_support;
 pub mod usage;

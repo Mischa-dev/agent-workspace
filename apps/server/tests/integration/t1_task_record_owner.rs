@@ -1,10 +1,10 @@
-//! T1.3: a task's record owns its title, field values and archive state;
-//! the task keeps a copy for readers that haven't moved yet. The silent,
-//! costly failures: a task write that changes the copy but not the record
-//! (or the other way round), a direct write that makes the two disagree, an
-//! archive (by the task tool or a project move) that never reaches the
-//! record, and versions bumped twice, which would turn an agent's next
-//! `expectedVersion` into a conflict.
+//! T1.3 and T1.4d: a task's record owns its title, field values and archive
+//! state, and since T1.4d it holds the only copy (readers use `task_rows`).
+//! The silent, costly failures: a task write that never reaches the record,
+//! an archive (by the task tool or a project move) that never reaches it, a
+//! copy left behind on `work_items` that could drift, and versions bumped
+//! twice, which would turn an agent's next `expectedVersion` into a
+//! conflict.
 
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -36,7 +36,7 @@ async fn both(pool: &sqlx::PgPool, task: Uuid) -> Both {
                task.archived_at IS NOT NULL AS task_archived,
                record.version AS record_version, task.version AS task_version,
                record.updated_by_actor_id AS record_writer
-        FROM collection_records record JOIN work_items task ON task.id = record.id
+        FROM collection_records record JOIN task_rows task ON task.id = record.id
         WHERE record.id = $1
         "#,
     )
@@ -133,15 +133,16 @@ async fn the_record_owns_title_values_and_archive_state() {
     let after = both(pool, task).await;
     assert_eq!((after.record_version, after.task_version), (3, 4));
 
-    // The cached columns can't be written directly.
-    for write in [
-        "UPDATE work_items SET title = 'Sneaky' WHERE id = $1",
-        "UPDATE work_items SET field_values = '{}'::jsonb WHERE id = $1",
-        "UPDATE work_items SET archived_at = now(), archived_by_actor_id = created_by_actor_id WHERE id = $1",
-    ] {
-        let refused = sqlx::query(write).bind(task).execute(pool).await;
-        assert!(refused.is_err(), "{write}");
-    }
+    // work_items keeps no copy of them (T1.4d).
+    let copies = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM information_schema.columns \
+         WHERE table_schema = current_schema() AND table_name = 'work_items' \
+           AND column_name IN ('title', 'field_values', 'archived_at', 'archived_by_actor_id')",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("columns");
+    assert_eq!(copies, 0);
     assert_eq!(both(pool, task).await, after);
 
     // Archiving through task_update lands on the record; so does restoring.
@@ -200,16 +201,4 @@ async fn the_record_owns_title_values_and_archive_state() {
     assert_eq!(copy.record_title, "Fix the new bridge");
     assert_eq!(copy.task_title, copy.record_title);
     assert!(!copy.record_archived && !copy.task_archived);
-
-    // Every task agrees with its record.
-    let unmatched = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM work_items task JOIN collection_records record ON record.id = task.id \
-         WHERE record.title <> task.title OR record.field_values <> task.field_values \
-            OR record.archived_at IS DISTINCT FROM task.archived_at \
-            OR record.archived_by_actor_id IS DISTINCT FROM task.archived_by_actor_id",
-    )
-    .fetch_one(pool)
-    .await
-    .expect("unmatched");
-    assert_eq!(unmatched, 0);
 }

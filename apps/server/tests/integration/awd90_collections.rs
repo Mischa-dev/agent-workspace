@@ -915,7 +915,7 @@ async fn ids_from_another_project_never_match() {
             "view": described["value"]["views"][0]["id"],
             "record": written["value"]["records"][0]["id"],
             "task": sqlx::query_scalar::<_, Uuid>(
-                "SELECT item.id FROM work_items item JOIN projects project ON project.id = item.project_id WHERE project.project_key = $1",
+                "SELECT item.id FROM task_rows item JOIN projects project ON project.id = item.project_id WHERE project.project_key = $1",
             )
             .bind(key)
             .fetch_one(&setup.pool)

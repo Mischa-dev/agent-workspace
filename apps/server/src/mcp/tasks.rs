@@ -379,7 +379,9 @@ impl ListFilters {
         push_field(builder, "item.assignee_actor_id", true, &self.assignees);
         if !self.query.is_empty() {
             builder
-                .push(" AND (item.search_vector @@ websearch_to_tsquery('english', ")
+                .push(" AND (item.record_search_vector @@ websearch_to_tsquery('english', ")
+                .push_bind(self.query.clone())
+                .push(") OR item.description_vector @@ websearch_to_tsquery('english', ")
                 .push_bind(self.query.clone())
                 .push(") OR item.title ILIKE '%' || ")
                 .push_bind(self.query.clone())

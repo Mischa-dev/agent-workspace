@@ -40,10 +40,13 @@ async fn a_projects_tasks_read_as_its_built_in_collection() {
         .await;
         assert_eq!(made["outcome"], "applied", "{made}");
     }
-    sqlx::query("UPDATE work_items SET priority = 'high' WHERE title = 'Paint the lighthouse'")
-        .execute(&setup.pool)
-        .await
-        .expect("priority");
+    sqlx::query(
+        "UPDATE work_items SET priority = 'high' \
+         WHERE id IN (SELECT id FROM collection_records WHERE title = 'Paint the lighthouse')",
+    )
+    .execute(&setup.pool)
+    .await
+    .expect("priority");
 
     // Opening the list makes the Tasks collection, first, counting only
     // this project's tasks.
@@ -336,7 +339,7 @@ async fn a_tasks_record_changes_as_its_task() {
     assert_eq!(body["record"]["title"], "Fix the old bridge", "{body}");
     let (title, status_id, priority, due, now) =
         sqlx::query_as::<_, (String, uuid::Uuid, String, Option<chrono::NaiveDate>, i64)>(
-            "SELECT title, status_id, priority, due_date, version FROM work_items WHERE id = $1",
+            "SELECT title, status_id, priority, due_date, version FROM task_rows WHERE id = $1",
         )
         .bind(task)
         .fetch_one(pool)
@@ -476,7 +479,7 @@ async fn a_tasks_record_changes_as_its_task() {
     assert_eq!(status, StatusCode::CREATED, "{body}");
     assert_eq!(body["record"]["number"], 2, "{body}");
     let made = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM work_items WHERE project_id = $1::uuid AND title = 'Paint the lighthouse'",
+        "SELECT count(*) FROM task_rows WHERE project_id = $1::uuid AND title = 'Paint the lighthouse'",
     )
     .bind(&work)
     .fetch_one(pool)

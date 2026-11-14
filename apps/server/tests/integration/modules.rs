@@ -696,7 +696,7 @@ async fn conversation_tools_follow_the_module_where_the_conversation_lives() {
         r#"
         INSERT INTO work_item_links (work_item_id, project_id, target_kind, target_id, created_by_actor_id)
         SELECT item.id, item.project_id, 'conversation', $2::uuid, membership.actor_id
-        FROM work_items item
+        FROM task_rows item
         JOIN organization_memberships membership
           ON membership.organization_id = $3 AND membership.role = 'owner'
         WHERE item.id = $1::uuid

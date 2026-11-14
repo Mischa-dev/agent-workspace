@@ -1675,7 +1675,7 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
             pool,
             r#"
             SELECT status.id FROM work_item_statuses status
-            JOIN work_items task ON task.project_id = status.project_id
+            JOIN task_rows task ON task.project_id = status.project_id
             WHERE task.id = $1 AND status.enabled AND status.id <> task.status_id
             ORDER BY status.position LIMIT 1
             "#,
@@ -1683,7 +1683,7 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         )
         .await,
         backlog_task: in_project(
-            "SELECT id FROM work_items WHERE project_id = $1 AND title = 'Net backlog task'",
+            "SELECT id FROM task_rows WHERE project_id = $1 AND title = 'Net backlog task'",
         )
         .await,
         layout_preset: in_organization("SELECT id FROM layout_presets WHERE organization_id = $1")
@@ -1871,7 +1871,7 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
     .await;
     let task = scalar(
         pool,
-        "SELECT id FROM work_items WHERE title = $1",
+        "SELECT id FROM task_rows WHERE title = $1",
         "Net spare task",
     )
     .await;
@@ -1885,7 +1885,7 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
     .await;
     let second_task = scalar(
         pool,
-        "SELECT id FROM work_items WHERE title = $1",
+        "SELECT id FROM task_rows WHERE title = $1",
         "Net second task",
     )
     .await;

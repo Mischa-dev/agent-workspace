@@ -34,7 +34,7 @@ async fn target_rows(setup: &Setup, project: &str) -> String {
         "SELECT row_to_json(event)::text FROM outbox_events event WHERE event.payload::text LIKE '%' || $1 || '%'",
         "SELECT row_to_json(note)::text FROM notifications note WHERE note::text LIKE '%' || $1 || '%'",
         "SELECT row_to_json(receipt)::text FROM work_item_move_receipts receipt",
-        "SELECT row_to_json(item)::text FROM work_items item WHERE project_id = $1::uuid",
+        "SELECT row_to_json(item)::text FROM task_rows item WHERE project_id = $1::uuid",
     ] {
         for row in sqlx::query_scalar::<_, String>(query)
             .bind(project)
@@ -73,7 +73,7 @@ async fn footprint(setup: &Setup) -> Vec<i64> {
     }
     counts.push(
         sqlx::query_scalar::<_, i64>(
-            "SELECT count(*) FROM work_items WHERE archived_at IS NOT NULL",
+            "SELECT count(*) FROM task_rows WHERE archived_at IS NOT NULL",
         )
         .fetch_one(&setup.pool)
         .await
@@ -83,7 +83,7 @@ async fn footprint(setup: &Setup) -> Vec<i64> {
 }
 
 async fn field_values(setup: &Setup, task: &str) -> Value {
-    sqlx::query_scalar::<_, Value>("SELECT field_values FROM work_items WHERE id = $1::uuid")
+    sqlx::query_scalar::<_, Value>("SELECT field_values FROM task_rows WHERE id = $1::uuid")
         .bind(task)
         .fetch_one(&setup.pool)
         .await
@@ -128,7 +128,7 @@ async fn task_id(setup: &Setup, project: &str, number: i64) -> String {
 async fn version_of(setup: &Setup, key: &str) -> i64 {
     let (project, number) = key.rsplit_once('-').expect("key");
     sqlx::query_scalar::<_, i64>(
-        "SELECT item.version FROM work_items item JOIN projects project ON project.id = item.project_id \
+        "SELECT item.version FROM task_rows item JOIN projects project ON project.id = item.project_id \
          WHERE project.project_key = $1 AND item.number = $2",
     )
     .bind(project)
@@ -882,7 +882,7 @@ async fn moves_made(setup: &Setup) -> Vec<i64> {
         "SELECT count(*) FROM work_items",
         "SELECT count(*) FROM work_item_key_aliases",
         "SELECT count(*) FROM work_item_move_receipts",
-        "SELECT count(*) FROM work_items WHERE archived_at IS NOT NULL",
+        "SELECT count(*) FROM task_rows WHERE archived_at IS NOT NULL",
     ] {
         counts.push(
             sqlx::query_scalar::<_, i64>(query)

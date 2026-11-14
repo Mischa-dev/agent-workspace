@@ -293,7 +293,9 @@ const TASKS_SQL: &str = r#"
     JOIN projects project ON project.id = item.project_id
     JOIN work_item_statuses status
       ON status.project_id = item.project_id AND status.id = item.status_id
-    WHERE item.search_vector @@ query.q
+    -- A task's words are its record's and its description's; asking each
+    -- lets each index answer (task_rows.search_vector joins the two).
+    WHERE (item.record_search_vector @@ query.q OR item.description_vector @@ query.q)
       AND item.project_id = ANY($2)
       AND item.archived_at IS NULL
       AND $4::uuid IS NULL

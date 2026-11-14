@@ -1044,7 +1044,7 @@ async fn a_merged_pull_request_moves_its_task_like_a_person_would() {
     let (status, kind, changed) = sqlx::query_as::<_, (Uuid, String, Value)>(
         r#"
         SELECT item.status_id, activity.kind, activity.payload->'changedFields'
-        FROM work_items item
+        FROM task_rows item
         JOIN work_item_activity activity ON activity.work_item_id = item.id
         WHERE item.id = $1 AND activity.actor_id = $2
         "#,

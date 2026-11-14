@@ -784,7 +784,7 @@ async fn defining_fields_follows_the_workflow_permission_and_values_follow_task_
     // Only Alex's value landed, and nothing Bea or the app tried defined a field.
     let (values, count) = sqlx::query_as::<_, (Value, i64)>(
         "SELECT item.field_values, (SELECT count(*) FROM field_definitions WHERE project_id = item.project_id) \
-         FROM work_items item WHERE item.id = $1::uuid",
+         FROM task_rows item WHERE item.id = $1::uuid",
     )
     .bind(&task_id)
     .fetch_one(&setup.pool)
@@ -1133,7 +1133,7 @@ async fn values_too_large_as_stored_are_refused_not_failed() {
     };
     too_large(status, &body);
     let (version, stored) = sqlx::query_as::<_, (i64, Value)>(
-        "SELECT version, field_values FROM work_items WHERE id = $1::uuid",
+        "SELECT version, field_values FROM task_rows WHERE id = $1::uuid",
     )
     .bind(&task_id)
     .fetch_one(&setup.pool)
@@ -1154,7 +1154,7 @@ async fn values_too_large_as_stored_are_refused_not_failed() {
     .await;
     too_large(status, &body);
     let made = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM work_items WHERE project_id = $1::uuid AND title = 'Too big from the start'",
+        "SELECT count(*) FROM task_rows WHERE project_id = $1::uuid AND title = 'Too big from the start'",
     )
     .bind(&work)
     .fetch_one(&setup.pool)
@@ -1299,7 +1299,7 @@ async fn bulk_tools_set_fields_on_every_task_or_none() {
         let work = work.clone();
         async move {
             sqlx::query_as::<_, (i64, i64, Value)>(
-                "SELECT number, version, field_values FROM work_items \
+                "SELECT number, version, field_values FROM task_rows \
                  WHERE project_id = $1::uuid ORDER BY number",
             )
             .bind(&work)
@@ -1592,7 +1592,7 @@ async fn fields_are_renamed_and_reordered() {
 
     // The value stayed with its field, under the new name.
     let stored =
-        sqlx::query_scalar::<_, Value>("SELECT field_values FROM work_items WHERE id = $1::uuid")
+        sqlx::query_scalar::<_, Value>("SELECT field_values FROM task_rows WHERE id = $1::uuid")
             .bind(&task_id)
             .fetch_one(&setup.pool)
             .await
@@ -1693,7 +1693,7 @@ async fn bulk_field_changes_hold_task_by_task() {
         let work = work.clone();
         async move {
             let tasks = sqlx::query_as::<_, (i64, i64, Value)>(
-                "SELECT number, version, field_values FROM work_items \
+                "SELECT number, version, field_values FROM task_rows \
                  WHERE project_id = $1::uuid ORDER BY number",
             )
             .bind(&work)
@@ -1816,7 +1816,7 @@ async fn bulk_field_changes_hold_task_by_task() {
                 "SELECT item.version, item.field_values, \
                         (SELECT count(*) FROM work_item_activity activity \
                          WHERE activity.work_item_id = item.id) \
-                 FROM work_items item WHERE item.project_id = $1::uuid AND item.number = $2",
+                 FROM task_rows item WHERE item.project_id = $1::uuid AND item.number = $2",
             )
             .bind(&work)
             .bind(number)
@@ -1950,7 +1950,7 @@ async fn field_tools_and_bulk_arguments_refuse_without_the_role() {
         let work = work.clone();
         async move {
             sqlx::query_as::<_, (i64, Value)>(
-                "SELECT version, field_values FROM work_items WHERE project_id = $1::uuid ORDER BY number",
+                "SELECT version, field_values FROM task_rows WHERE project_id = $1::uuid ORDER BY number",
             )
             .bind(&work)
             .fetch_all(&pool)

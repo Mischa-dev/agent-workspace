@@ -580,8 +580,8 @@ pub async fn create_work_item_with_id(
     .bind(actor.project_id)
     .fetch_one(&mut **transaction)
     .await?;
-    // The record first: it owns the title and field values, and inserting
-    // the task fills its cached copies from it (crate::task_records).
+    // The record first: it owns the title and field values, and a task is
+    // inserted only after its record (crate::task_records).
     let field_values = command
         .field_values
         .map_or_else(|| serde_json::json!({}), FieldValueChanges::initial);
@@ -1289,7 +1289,9 @@ pub async fn set_archived(
     )
     .await?
     {
-        return Err(AppError::Internal("locked Work Item archive lost its record"));
+        return Err(AppError::Internal(
+            "locked Work Item archive lost its record",
+        ));
     }
     let updated = sqlx::query(
         r#"

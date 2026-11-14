@@ -409,7 +409,7 @@ async fn every_edge_runs_the_same_operation() {
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{refused}");
-    let made: i64 = sqlx::query_scalar("SELECT count(*) FROM work_items WHERE title = 'Elsewhere'")
+    let made: i64 = sqlx::query_scalar("SELECT count(*) FROM task_rows WHERE title = 'Elsewhere'")
         .fetch_one(&setup.pool)
         .await
         .expect("tasks");

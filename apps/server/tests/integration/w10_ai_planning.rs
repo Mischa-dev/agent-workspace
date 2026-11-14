@@ -927,7 +927,7 @@ async fn the_roadmap_imports_as_tasks_and_a_stopped_import_resumes() {
     assert_eq!(finished["plan"]["createdMilestones"], workstreams);
     assert_eq!(finished["plan"]["createdDependencies"], dependencies);
     let tasks = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM work_items WHERE project_id = $1 AND title LIKE 'F1 %'",
+        "SELECT count(*) FROM task_rows WHERE project_id = $1 AND title LIKE 'F1 %'",
     )
     .bind(fixture.project_id)
     .fetch_one(&fixture.pool)
@@ -936,7 +936,7 @@ async fn the_roadmap_imports_as_tasks_and_a_stopped_import_resumes() {
     assert_eq!(tasks, 1, "created once");
     let (milestone, priority) = sqlx::query_as::<_, (String, String)>(
         r#"
-        SELECT milestone.name, item.priority FROM work_items item
+        SELECT milestone.name, item.priority FROM task_rows item
         JOIN project_milestones milestone ON milestone.id = item.milestone_id
         WHERE item.project_id = $1 AND item.title LIKE 'F1 %'
         "#,
@@ -1056,7 +1056,7 @@ impl Fixture {
 
     async fn tasks_titled(&self, title: &str) -> i64 {
         sqlx::query_scalar::<_, i64>(
-            "SELECT count(*) FROM work_items WHERE project_id = $1 AND title = $2",
+            "SELECT count(*) FROM task_rows WHERE project_id = $1 AND title = $2",
         )
         .bind(self.project_id)
         .bind(title)

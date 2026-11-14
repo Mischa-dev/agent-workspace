@@ -1,9 +1,8 @@
 //! A task's record owns what a record and a task share: its title, its field
 //! values and its archive state (T1.3, owner step 3a of moving tasks into
-//! collection records). The task commands write them here, and a database
-//! trigger copies them back onto `work_items`, which keeps them as a read
-//! cache until every reader has moved to `task_rows` (T1.4). `work_items`
-//! refuses a direct write of those columns.
+//! collection records), and since T1.4d it is the only place they are kept.
+//! The task commands write them here; readers read them through the
+//! `task_rows` view (the record joined to the task's core).
 //!
 //! The record's version is its own: a write here bumps the record's, and the
 //! command that calls it bumps the task's, so `expectedVersion` on the task
@@ -14,8 +13,8 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 
-/// A new task's record, written before the task itself (inserting the task
-/// fills its cached columns from the record).
+/// A new task's record, written before the task itself (a task inserted
+/// without its record is refused).
 pub struct NewTaskRecord<'a> {
     pub project_id: Uuid,
     pub task_id: Uuid,

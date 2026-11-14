@@ -124,7 +124,7 @@ async fn a_collection_that_acts_like_a_task_holds_tasks() {
     .expect("severity");
     let rows = sqlx::query_as::<_, (Uuid, String, i64, i64, Value, Option<Uuid>)>(
         "SELECT record.id, task.title, task.number, record.number, task.field_values, task.collection_id \
-         FROM collection_records record JOIN work_items task ON task.id = record.id \
+         FROM collection_records record JOIN task_rows task ON task.id = record.id \
          WHERE record.collection_id = $1 ORDER BY task.number",
     )
     .bind(bugs)
@@ -163,7 +163,7 @@ async fn a_collection_that_acts_like_a_task_holds_tasks() {
     .await;
     assert_eq!(reported["outcome"], "applied", "{reported}");
     let (loops, loops_collection, loops_values) = sqlx::query_as::<_, (Uuid, Option<Uuid>, Value)>(
-        "SELECT id, collection_id, field_values FROM work_items \
+        "SELECT id, collection_id, field_values FROM task_rows \
              WHERE project_id = $1::uuid AND title = 'Login loops'",
     )
     .bind(&work)
@@ -292,7 +292,7 @@ async fn a_collection_that_acts_like_a_task_holds_tasks() {
     // Every task still has exactly one record, and keys stay unique.
     let unmatched = sqlx::query_scalar::<_, i64>(
         r#"
-        SELECT count(*) FROM work_items task
+        SELECT count(*) FROM task_rows task
         LEFT JOIN collection_records record ON record.id = task.id
         LEFT JOIN collections collection
           ON collection.id = record.collection_id AND collection.acts_like_task

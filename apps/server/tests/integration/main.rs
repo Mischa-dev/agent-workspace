@@ -96,6 +96,7 @@ mod server_operators;
 mod settings_accounts;
 mod support;
 mod t1_task_record_owner;
+mod t1_task_records_migration;
 mod t1_views_at_scale;
 mod w10_ai_planning;
 mod w11_views_and_data;

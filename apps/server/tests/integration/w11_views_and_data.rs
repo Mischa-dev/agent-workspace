@@ -420,7 +420,7 @@ async fn a_recurring_task_runs_once_per_occurrence_and_pauses_when_its_owner_lea
 
     let count_made = || async {
         sqlx::query_scalar::<_, i64>(
-            "SELECT count(*) FROM work_items WHERE project_id = $1 AND title = 'Review the week'",
+            "SELECT count(*) FROM task_rows WHERE project_id = $1 AND title = 'Review the week'",
         )
         .bind(fixture.project_id)
         .fetch_one(&fixture.pool)
@@ -443,7 +443,7 @@ async fn a_recurring_task_runs_once_per_occurrence_and_pauses_when_its_owner_lea
     let (next, subtasks) = sqlx::query_as::<_, (Option<chrono::DateTime<chrono::Utc>>, i64)>(
         r#"
         SELECT recurring.next_run_at,
-               (SELECT count(*) FROM work_items child WHERE child.parent_work_item_id = recurring.last_work_item_id)
+               (SELECT count(*) FROM task_rows child WHERE child.parent_work_item_id = recurring.last_work_item_id)
         FROM recurring_tasks recurring WHERE recurring.id = $1
         "#,
     )
@@ -554,8 +554,8 @@ async fn an_import_creates_each_row_once_and_exports_back() {
                child.parent_work_item_id = parent.id,
                (SELECT count(*) FROM work_item_active_labels label
                  WHERE label.project_id = parent.project_id AND label.work_item_id = parent.id)
-        FROM work_items parent
-        JOIN work_items child ON child.project_id = parent.project_id AND child.title = 'Write the parser'
+        FROM task_rows parent
+        JOIN task_rows child ON child.project_id = parent.project_id AND child.title = 'Write the parser'
         JOIN work_item_statuses status ON status.project_id = child.project_id AND status.id = child.status_id
         WHERE parent.project_id = $1 AND parent.title = 'Ship the importer'
         "#,
@@ -739,7 +739,7 @@ async fn a_github_import_stops_when_its_committer_loses_see_code() {
         "{error:?}"
     );
     let made: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM work_items WHERE project_id = $1 AND title = 'Issue seven from GitHub'",
+        "SELECT count(*) FROM task_rows WHERE project_id = $1 AND title = 'Issue seven from GitHub'",
     )
     .bind(project)
     .fetch_one(&fixture.pool)

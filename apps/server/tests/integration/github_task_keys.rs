@@ -17,7 +17,7 @@ use super::{
 
 async fn key_of(pool: &PgPool, task: Uuid) -> String {
     sqlx::query_scalar::<_, String>(
-        "SELECT project.project_key || '-' || item.number FROM work_items item JOIN projects project ON project.id = item.project_id WHERE item.id = $1",
+        "SELECT project.project_key || '-' || item.number FROM task_rows item JOIN projects project ON project.id = item.project_id WHERE item.id = $1",
     )
     .bind(task)
     .fetch_one(pool)

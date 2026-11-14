@@ -338,7 +338,7 @@ async fn dependencies_cross_projects_but_never_workspaces_or_private_projects() 
     // An archived task takes no link changes until it's restored.
     sqlx::query(
         "UPDATE collection_records record SET archived_at = now(), archived_by_actor_id = item.created_by_actor_id \
-         FROM work_items item JOIN projects project ON project.id = item.project_id \
+         FROM task_rows item JOIN projects project ON project.id = item.project_id \
          WHERE record.id = item.id AND project.project_key = 'WORK' AND item.number = 3",
     )
     .execute(&setup.pool)
@@ -471,7 +471,7 @@ async fn workflow_update_is_for_admins_and_retired_statuses_move_their_tasks() {
             WHERE actor.kind = 'external_agent' AND event.kind = 'work_item.changed'
               AND connection.actor_id IN (
                   SELECT actor_id FROM work_item_watchers watcher
-                  JOIN work_items item ON item.id = watcher.work_item_id
+                  JOIN task_rows item ON item.id = watcher.work_item_id
                   WHERE item.project_id = $1 AND item.number = 1
               )
             "#,

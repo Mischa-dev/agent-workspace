@@ -105,14 +105,28 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     .await
     .expect("allocate M6 Work Item number");
     let work_item_id = Uuid::now_v7();
+    // A task's record comes first (T1.3), in the same transaction.
+    let mut transaction = pool.begin().await.expect("begin");
+    sqlx::query(
+        "INSERT INTO collection_records \
+           (id, project_id, collection_id, number, title, created_by_actor_id, updated_by_actor_id) \
+         VALUES ($1, $2, ensure_tasks_collection($2, $3), $4, 'M6 read contract', $3, $3)",
+    )
+    .bind(work_item_id)
+    .bind(seed.project_id)
+    .bind(seed.human_actor_id)
+    .bind(work_item_number)
+    .execute(&mut *transaction)
+    .await
+    .expect("insert M6 record fixture");
     sqlx::query(
         r#"
         INSERT INTO work_items (
-            id, project_id, number, title, description, type_id, status_id,
+            id, project_id, number, description, type_id, status_id,
             priority, created_by_actor_id, board_rank
         )
         SELECT
-            $1, $2, $4, 'M6 read contract', 'Bounded MCP context', type.id,
+            $1, $2, $4, 'Bounded MCP context', type.id,
             status.id, 'high', $3, 1024
         FROM work_item_types type
         CROSS JOIN work_item_statuses status
@@ -124,9 +138,10 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     .bind(seed.project_id)
     .bind(seed.human_actor_id)
     .bind(work_item_number)
-    .execute(&pool)
+    .execute(&mut *transaction)
     .await
     .expect("insert M6 Work Item fixture");
+    transaction.commit().await.expect("commit");
     sqlx::query(
         "INSERT INTO work_item_repository_links (project_id, work_item_id, repository_id, role, created_by_actor_id) VALUES ($1, $2, $3, 'primary', $4)",
     )
@@ -757,14 +772,14 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         )
     );
     let browser_state = sqlx::query_as::<_, (String, String, String, i64, Uuid, Uuid)>(
-        "SELECT title, description, priority, version, type_id, status_id FROM work_items WHERE id = $1",
+        "SELECT title, description, priority, version, type_id, status_id FROM task_rows WHERE id = $1",
     )
     .bind(browser_work_item_id)
     .fetch_one(&pool)
     .await
     .expect("browser parity row");
     let mcp_state = sqlx::query_as::<_, (String, String, String, i64, Uuid, Uuid)>(
-        "SELECT title, description, priority, version, type_id, status_id FROM work_items WHERE id = $1",
+        "SELECT title, description, priority, version, type_id, status_id FROM task_rows WHERE id = $1",
     )
     .bind(mcp_work_item_id)
     .fetch_one(&pool)
@@ -848,7 +863,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     );
     let browser_updated_state =
         sqlx::query_as::<_, (String, String, String, i64, Uuid, Uuid)>(
-            "SELECT title, description, priority, version, type_id, status_id FROM work_items WHERE id = $1",
+            "SELECT title, description, priority, version, type_id, status_id FROM task_rows WHERE id = $1",
         )
         .bind(browser_work_item_id)
         .fetch_one(&pool)
@@ -856,7 +871,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         .expect("browser parity updated row");
     let mcp_updated_state =
         sqlx::query_as::<_, (String, String, String, i64, Uuid, Uuid)>(
-            "SELECT title, description, priority, version, type_id, status_id FROM work_items WHERE id = $1",
+            "SELECT title, description, priority, version, type_id, status_id FROM task_rows WHERE id = $1",
         )
         .bind(mcp_work_item_id)
         .fetch_one(&pool)

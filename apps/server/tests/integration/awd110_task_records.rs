@@ -30,7 +30,7 @@ async fn mirror(pool: &sqlx::PgPool, task: Uuid) -> Option<Mirror> {
                record.title, record.field_values, record.archived_at IS NOT NULL AS archived
         FROM collection_records record
         JOIN collections collection ON collection.id = record.collection_id
-        JOIN work_items task ON task.id = record.id AND task.project_id = record.project_id
+        JOIN task_rows task ON task.id = record.id AND task.project_id = record.project_id
         WHERE record.id = $1
         "#,
     )
@@ -71,7 +71,7 @@ async fn every_task_has_its_record_in_the_tasks_collection() {
     .await;
     assert_eq!(made["outcome"], "applied", "{made}");
     let task = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM work_items WHERE project_id = $1::uuid AND title = 'Fix the bridge'",
+        "SELECT id FROM task_rows WHERE project_id = $1::uuid AND title = 'Fix the bridge'",
     )
     .bind(&work)
     .fetch_one(pool)
@@ -133,7 +133,7 @@ async fn every_task_has_its_record_in_the_tasks_collection() {
     assert_eq!(record.field_values, json!({ field.as_str(): "steel" }));
     assert!(record.archived);
     let cached = sqlx::query_as::<_, (String, Value, bool)>(
-        "SELECT title, field_values, archived_at IS NOT NULL FROM work_items WHERE id = $1",
+        "SELECT title, field_values, archived_at IS NOT NULL FROM task_rows WHERE id = $1",
     )
     .bind(task)
     .fetch_one(pool)
@@ -141,7 +141,11 @@ async fn every_task_has_its_record_in_the_tasks_collection() {
     .expect("cache");
     assert_eq!(
         cached,
-        ("Fix the bridge".to_owned(), json!({ field.as_str(): "steel" }), true)
+        (
+            "Fix the bridge".to_owned(),
+            json!({ field.as_str(): "steel" }),
+            true
+        )
     );
     let direct = sqlx::query("UPDATE work_items SET title = 'Sneaky' WHERE id = $1")
         .bind(task)
@@ -208,7 +212,7 @@ async fn every_task_has_its_record_in_the_tasks_collection() {
     // Every task in the database has exactly one matching record.
     let unmatched = sqlx::query_scalar::<_, i64>(
         r#"
-        SELECT count(*) FROM work_items task
+        SELECT count(*) FROM task_rows task
         LEFT JOIN collection_records record ON record.id = task.id
         LEFT JOIN collections collection
           ON collection.id = record.collection_id AND collection.builtin = 'tasks'
