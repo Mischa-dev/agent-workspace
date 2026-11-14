@@ -16,7 +16,7 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   timeout: 60_000,
   expect: { timeout: 10_000 },
-  reporter: [['list'], ['html', { outputFolder: `${outputRoot}/report`, open: 'never' }]],
+  reporter: [['list'], ['html', { outputFolder: `${outputRoot}/report`, open: 'never' }], ['./e2e/support/owners-reporter.ts']],
   use: {
     baseURL: webOrigin,
     trace: 'retain-on-failure',
@@ -27,7 +27,13 @@ export default defineConfig({
       executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined,
     },
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  projects: [
+    { name: 'chromium', testIgnore: ['tour/**', 'done/**'], use: { ...devices['Desktop Chrome'] } },
+    // W1.35: the test for "done" (e2e/done/), at a desktop and on a phone. Items
+    // not built yet are fixme, with the owning workstreams as an annotation.
+    { name: 'desktop', testMatch: 'done/**/*.spec.ts', use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } } },
+    { name: 'phone', testMatch: 'done/**/*.spec.ts', use: { ...devices['Pixel 7'] } },
+  ],
   webServer: {
     // Vite's dev server, proxying /api to the server the global setup starts.
     command: `node ./node_modules/vite/bin/vite.js --host 127.0.0.1 --port ${ports.web} --strictPort`,
