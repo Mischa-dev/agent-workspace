@@ -1653,7 +1653,7 @@ async fn sync_installation(
     } = sync_installation_as(
         &state,
         principal.actor_id,
-        actor_kind(&principal.actor_kind)?,
+        crate::accounts::actor_kind(&principal.actor_kind)?,
         project_id,
         request.installation_id,
         &request.repository_ids,
@@ -6174,7 +6174,7 @@ async fn merge_pull_request(
     require_authenticated_write(&state, &headers, &principal)?;
     let actor = CommandActor {
         actor_id: principal.actor_id,
-        actor_kind: actor_kind(&principal.actor_kind)?,
+        actor_kind: crate::accounts::actor_kind(&principal.actor_kind)?,
         project_id,
         audit: AuditAttribution::Browser {
             session_id: principal.session_id,
@@ -6239,7 +6239,7 @@ async fn require_project_access(
     require_project_access_as(
         transaction,
         principal.actor_id,
-        actor_kind(&principal.actor_kind)?,
+        crate::accounts::actor_kind(&principal.actor_kind)?,
         project_id,
         action,
     )
@@ -6294,17 +6294,6 @@ pub(crate) async fn require_project_access_as(
         Ok(role)
     } else {
         Err(AppError::Forbidden)
-    }
-}
-
-fn actor_kind(value: &str) -> Result<ActorKind, AppError> {
-    match value {
-        "human" => Ok(ActorKind::Human),
-        "external_agent" => Ok(ActorKind::ExternalAgent),
-        "execution_worker" => Ok(ActorKind::ExecutionWorker),
-        "integration" => Ok(ActorKind::Integration),
-        "system" => Ok(ActorKind::System),
-        _ => Err(AppError::Internal("stored Actor kind")),
     }
 }
 

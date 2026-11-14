@@ -1,5 +1,21 @@
 [
   {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "account.managers.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "agent_managers_set",
+    "permission": "agents.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Set agent managers"
+  },
+  {
     "automation": false,
     "destructive": false,
     "emits": [],

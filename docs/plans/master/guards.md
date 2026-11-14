@@ -14,7 +14,9 @@ the last column are not separate guards: those slices point here and extend this
 
 | Guard id | Rule | Built by | Tightens | Was also proposed as |
 |---|---|---|---|---|
-| `raw_role_checks`, `custom_role_allows`, `workspace_role_enum` | 1 | P0.26 | K1.1 (adds `access_bypasses`: `agent_limit_hides(`, `agent_limit_projects_allowing(`, `Subject::new(`, `policy::authorize(`; reason and removing slice per entry) | K1 guard 1 (`access/guard.rs`, `access/allowlist.rs`) |
+| `raw_role_checks`, `custom_role_allows`, `workspace_role_enum` | 1 | P0.26 | K1.1 (adds `access_bypasses`: `agent_limit_hides(`, `agent_limit_projects_allowing(`, `Subject::new(`, `authorize(`; `rust_role_checks`: role names compared in Rust; reason and removing slice per entry in `structure_guards/removals.json`) | K1 guard 1 (`access/guard.rs`, `access/allowlist.rs`) |
+| `rust_role_checks`, `access_bypasses` | 1 | K1.1 | K1 phase D slices | K1 guard 1 |
+| `account_kind_strings` | 2 | K1.1 (`kind == "human"`, `kind IN ('human'`, `AccountKind` compared) | K1.14b, K1.31 | K1 guard 1 kinds |
 | `account_kind_checks` | 2 | P0.26 | K1.1, then each area slice of K1 | K1 guard 1 kinds; A1 G5; A2 "no rule by account kind"; C1 guard 4; K2 guard 5. A new folder (`runs/`, `delivery/`, `discussion/`, `ops`) has no allowance entry, so it is held at zero automatically |
 | `web_role_name_gates`, `web_account_kind_gates` | 1, 2 | P0.27 (the second added in review: `kind === 'external_agent'`, `kind === 'human'` in a condition) | K1.26, W1.37 | K1's `apps/web/src/access.guard.test.ts` |
 | `agent_runs_sql`, `active_run_states_literal` | 3 | P0.26 | A1.2 (adds the new run tables and `LEGACY_RUN_SQL` reasons) | A1 G1, G4 |
@@ -70,4 +72,5 @@ are gated or exempt with a reason (P0.7).
 | `personal_hosts` (no tailnet address or home path outside docs/history) | `tools/ci/test_personal_hosts.py` | P0.33 |
 | runner SDK tests run in CI | `tools/ci/checks.sh` steps "runner SDK tests" | P0.34 |
 | `notification_detail_text` | `apps/server/src/structure_guards.rs` | P0.36 |
+| `rust_role_checks`, `access_bypasses`, `account_kind_strings`; access allowances name their removing slice | `apps/server/src/structure_guards.rs`, `structure_guards/removals.json` | K1.1 |
 | account routes walked or excused (`ACCOUNT_ROUTES_EXCUSED` only shrinks) | `privacy_inside_workspace.rs` `every_account_route_is_walked_or_excused` | P0.38 |
