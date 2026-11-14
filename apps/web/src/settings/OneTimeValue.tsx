@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 
 import { Button, Icon, type IconName } from '../ui'
+import '../styles/pages.css'
 
 /** A secret shown once, such as a new token or an invitation link: copy it, then it's gone. */
 export function OneTimeValue({

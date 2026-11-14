@@ -1,5 +1,5 @@
 import type { EmbedDecl, ThingDecl } from '../../modules/contract'
-import { DECLARED_EMBEDS, DECLARED_THINGS } from '../../modules/pieces/declared'
+import { DECLARED_EMBEDS, DECLARED_THINGS } from '../../pieces/declared'
 import { listQuery, readListState } from '../../work-items/listModel'
 import type { WorkItemFilters } from '../../work-items/types'
 

@@ -42,6 +42,7 @@ import { ProjectInitials } from './ProjectInitials'
 import { ProjectPageError, ProjectPageLoading } from './ProjectPageStates'
 import type { Project } from './types'
 import { useRememberProjectLocation } from './useRememberProjectLocation'
+import '../styles/pages.css'
 
 // The project's whiteboards and the New channel dialog load in their own small chunks.
 const ProjectWhiteboards = lazy(() => import('./ProjectWhiteboards'))

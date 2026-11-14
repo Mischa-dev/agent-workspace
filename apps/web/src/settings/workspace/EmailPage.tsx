@@ -28,6 +28,7 @@ import {
   saveMailSettings,
   sendTestEmail,
 } from './mailApi'
+import '../../styles/pages.css'
 
 const DEFAULT_PORTS: Record<MailSecurity, number> = { starttls: 587, tls: 465, none: 25 }
 

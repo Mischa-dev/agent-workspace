@@ -9,6 +9,19 @@ The app's MCP server is how agents and connected apps do everything a person
 can. A tool is three pieces: argument and result types, a function that does
 the work, and a method in the tool router. The tests check the rest.
 
+Anything new is an operation, not a hand-written tool: follow
+`add-operation` (`.claude/skills/add-operation/SKILL.md`), which gives the
+MCP tool, the web route and the v2 API at once. This guide is for changing
+the hand-written tools that are still here.
+
+Before you start, read "Rules while the foundations are rebuilt" in
+`AGENTS.md`. A tool is one edge of an operation (rule 4): the work lives in a
+domain function the HTTP handler calls too, a tool that creates something
+takes a `clientRequestId` (rule 9), and its permission comes from the policy,
+never a role name or the caller's kind of account (rules 1 and 2). The
+structure guards in `apps/server/src/structure_guards.rs` fail on a new
+offender.
+
 ## 1. Types and the function
 
 Put them in the module for the area, in `apps/server/src/mcp/` (tasks in
@@ -94,7 +107,9 @@ is new; `/mcp-tools.md` and the OpenAPI document pick it up from there.
   `tests/integration/awd91_agent_parity.rs`.
 - Write an integration test where a bug would be silent: someone outside the
   project reading or writing, a claim or version conflict, a private
-  conversation. See `w22_agent_kit.rs` for a compact one.
+  conversation. See `w22_agent_kit.rs` for a compact one. Build it on
+  `tests/integration/support/` (the app, test databases, a person, an agent
+  and a connected app as `Caller`s, `WorldBuilder`).
 - Don't count tools anywhere; other branches add them too.
 
 ## 5. Check

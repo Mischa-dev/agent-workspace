@@ -307,6 +307,7 @@ async fn respond_inner(
             "approval changed during response",
         ));
     }
+    crate::requests::legacy::approval_written(&mut *transaction, approval_id).await?;
     let event_kind = if context.kind == "question" {
         "question_resolved"
     } else {
@@ -729,7 +730,7 @@ fn may_respond(principal: &McpPrincipal) -> bool {
 /// The approval as a person sees it: in a project they belong to and can
 /// reach, in a thread they can see, addressed to them or their role, and not
 /// on a run they started. Approvals that need a person stay in the web app,
-/// where the step Codex wants to take is shown in full.
+/// where the step the run wants to take is shown in full.
 async fn person_context(
     transaction: &mut Transaction<'_, Postgres>,
     principal: &McpPrincipal,
@@ -798,7 +799,7 @@ pub struct ApprovalListArguments {
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ApprovalListValue {
-    /// Approvals Codex is waiting on that you can answer, oldest first. Answer
+    /// Approvals runs are waiting on that you can answer, oldest first. Answer
     /// one with approval_respond, passing its version as expectedVersion.
     pub approvals: Vec<ApprovalProjection>,
     /// Approvals that need a person in the web app, where the step is shown in

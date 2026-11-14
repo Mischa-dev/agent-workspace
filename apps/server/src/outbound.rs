@@ -15,10 +15,11 @@
 //! - the client connects only to the addresses checked, so a second DNS
 //!   answer can't point it somewhere else;
 //! - it follows no redirects and uses no proxy, so nothing else picks the
-//!   destination;
-//! - a workspace holds at most [`PER_WORKSPACE_CONCURRENCY`] of these
-//!   requests at once in a process ([`permit`]), so one workspace's slow
-//!   receivers can't hold every connection the server has.
+//!   destination.
+//!
+//! A per-workspace cap on requests in flight is H1.23's, on K5.6's permits
+//! shared across processes: a map in this process would be the process-local
+//! state rule 5 refuses.
 //!
 //! Clients for fixed addresses the operator configures (GitHub, the sign-in
 //! provider, push services, a provider's own cloud) are built where they are
@@ -26,15 +27,11 @@
 //! list short.
 
 use std::{
-    collections::HashMap,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    sync::{Arc, LazyLock, Mutex},
     time::Duration,
 };
 
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use url::{Host, Url};
-use uuid::Uuid;
 
 use crate::error::AppError;
 
@@ -43,10 +40,6 @@ const RESOLVE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Ports mail servers take submissions on: SMTP, SMTPS, submission, and the
 /// alternative submission port some providers offer.
 pub const MAIL_PORTS: [u16; 4] = [25, 465, 587, 2525];
-
-/// How many outbound requests one workspace may have open at once in one
-/// process.
-pub const PER_WORKSPACE_CONCURRENCY: usize = 8;
 
 /// Why an address was refused.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -220,41 +213,6 @@ pub async fn client_for(
     pinned_client(url, &addresses, timeouts, user_agent).map_err(|_| Refusal::Unresolved)
 }
 
-/// One workspace's share of outbound requests: hold it for the length of the
-/// request.
-pub struct Permit {
-    _held: OwnedSemaphorePermit,
-}
-
-static PERMITS: LazyLock<Mutex<HashMap<Uuid, Arc<Semaphore>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-/// Waits for one of `workspace_id`'s [`PER_WORKSPACE_CONCURRENCY`] outbound
-/// slots. Workspaces with nothing in flight hold no entry, so nothing here
-/// grows with the number of workspaces on the server.
-pub async fn permit(workspace_id: Uuid) -> Permit {
-    let semaphore = {
-        let mut permits = PERMITS
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Forget workspaces whose requests have all finished.
-        permits.retain(|_, semaphore| {
-            Arc::strong_count(semaphore) > 1
-                || semaphore.available_permits() < PER_WORKSPACE_CONCURRENCY
-        });
-        Arc::clone(
-            permits
-                .entry(workspace_id)
-                .or_insert_with(|| Arc::new(Semaphore::new(PER_WORKSPACE_CONCURRENCY))),
-        )
-    };
-    let held = semaphore
-        .acquire_owned()
-        .await
-        .unwrap_or_else(|_| unreachable!("outbound semaphores are never closed"));
-    Permit { _held: held }
-}
-
 // --- Webhooks and agent wakeups ---------------------------------------------
 
 const WEBHOOK_TIMEOUT: Duration = Duration::from_secs(8);
@@ -331,7 +289,7 @@ pub(crate) async fn webhook_client(
 
 const PAGE_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const PAGE_REQUEST_TIMEOUT: Duration = Duration::from_secs(6);
-const PAGE_USER_AGENT: &str = "AgentWorkspace-LinkPreview/1.0";
+const PAGE_USER_AGENT: &str = concat!("agent-workspace-link-preview/", env!("CARGO_PKG_VERSION"));
 
 /// What may be fetched to preview a link. Outside tests, only public
 /// addresses on the standard web ports.
@@ -430,7 +388,7 @@ mod tests {
             "127.0.0.1",
             "10.1.2.3",
             "192.168.0.10",
-            "100.119.56.3",
+            "100.64.0.10",
             "169.254.169.254",
             "[::1]",
             "::ffff:127.0.0.1",
@@ -553,19 +511,19 @@ mod tests {
 
     #[test]
     fn only_operator_trusted_origins_may_use_http_and_tailnet_addresses() {
-        let trusted = ["http://100.119.56.3:8732".to_owned()];
-        assert!(validate_webhook_url("http://100.119.56.3:8732/wake", &trusted).is_ok());
+        let trusted = ["http://100.64.0.10:8732".to_owned()];
+        assert!(validate_webhook_url("http://100.64.0.10:8732/wake", &trusted).is_ok());
         // Without the operator's say-so the same listener is refused.
-        assert!(validate_webhook_url("http://100.119.56.3:8732/wake", &[]).is_err());
+        assert!(validate_webhook_url("http://100.64.0.10:8732/wake", &[]).is_err());
         for value in [
             // Another port, scheme or host on the same network is not trusted.
-            "http://100.119.56.3:8733/wake",
-            "https://100.119.56.3:8732/wake",
-            "http://100.119.56.4:8732/wake",
+            "http://100.64.0.10:8733/wake",
+            "https://100.64.0.10:8732/wake",
+            "http://100.64.0.11:8732/wake",
             "http://169.254.169.254/latest/meta-data",
             // Credentials and fragments stay refused even for trusted origins.
-            "http://user:secret@100.119.56.3:8732/wake",
-            "http://100.119.56.3:8732/wake#secret",
+            "http://user:secret@100.64.0.10:8732/wake",
+            "http://100.64.0.10:8732/wake#secret",
         ] {
             assert!(
                 validate_webhook_url(value, &trusted).is_err(),
@@ -610,27 +568,6 @@ mod tests {
         ] {
             assert!(checked(allowed).is_ok(), "{allowed} should be allowed");
         }
-    }
-
-    #[tokio::test]
-    async fn a_workspace_holds_a_bounded_share_and_idle_ones_hold_none() {
-        let busy = Uuid::now_v7();
-        let mut held = Vec::new();
-        for _ in 0..PER_WORKSPACE_CONCURRENCY {
-            held.push(permit(busy).await);
-        }
-        // The next request for the busy workspace waits; another workspace
-        // goes straight through.
-        let waiting = tokio::time::timeout(Duration::from_millis(50), permit(busy)).await;
-        assert!(waiting.is_err(), "a ninth request waited for a slot");
-        let other = tokio::time::timeout(Duration::from_millis(50), permit(Uuid::now_v7())).await;
-        assert!(other.is_ok(), "another workspace was not held up");
-        drop(other);
-        drop(held);
-        // Once its requests finish, a workspace leaves nothing behind.
-        drop(permit(Uuid::now_v7()).await);
-        let permits = PERMITS.lock().expect("permits");
-        assert!(!permits.contains_key(&busy));
     }
 
     /// Clients for addresses a workspace can aim are built only here. A

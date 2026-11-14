@@ -177,6 +177,7 @@ const PHRASES: Record<string, string> = {
   'milestone.created': 'created a milestone',
   'milestone.updated': 'changed a milestone',
   'decision.recorded': 'recorded a decision',
+  decision_record: 'recorded a decision',
   'page.created': 'created a page',
   'page.updated': 'changed a page',
   'page.written': 'wrote a page',

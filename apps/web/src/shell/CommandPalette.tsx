@@ -11,8 +11,10 @@ import { conversationTitle, openDm, useDirectOverview } from '../direct/api'
 import { projectLocationHref } from '../projects/locations'
 import { projectSettingsHref } from '../settings/paths'
 import { useProjectSearch, useProjects, useSwitchProject, useUpdateProjectNavigation } from '../projects/hooks'
+import type { PaletteEntry } from '../modules/define'
 import { moduleSwitchable, ownerOf } from '../modules/ownership'
 import { moduleOfPath } from '../modules/pageOwners'
+import { paletteEntries } from '../modules/registry'
 import { ProjectInitials } from '../projects/ProjectInitials'
 import type { Project } from '../projects/types'
 import { THEME_PRESETS } from '../theme/slots'
@@ -33,6 +35,11 @@ import { parseTaskKey } from './shortcuts'
 import { useProjectByKey } from './useProjectByKey'
 import { projectPath, useRouteProject } from './useRouteProject'
 
+
+/** A module's palette entry (M1.4), as the menu lists it. */
+function paletteItem(entry: PaletteEntry) {
+  return { id: entry.id, label: entry.label, icon: entry.icon, shortcut: entry.shortcut, keywords: entry.keywords }
+}
 
 function useSettled(value: string, delay = 150) {
   const [settled, setSettled] = useState(value)
@@ -128,21 +135,7 @@ export function CommandPalette() {
       const id = current.id
       list.push(
         { id: 'p:overview', group: current.name, label: 'Overview', icon: 'home', onSelect: go(projectPath(id)) },
-        { id: 'p:tasks', group: current.name, label: 'Tasks', icon: 'checklist', shortcut: 'G T', keywords: ['list'], onSelect: go(projectPath(id, '/work-items')) },
-        { id: 'p:board', group: current.name, label: 'Board', icon: 'board', shortcut: 'G B', onSelect: go(projectPath(id, '/work-items?view=board')) },
-        { id: 'p:pages', group: current.name, label: 'Pages', icon: 'list', shortcut: 'G P', keywords: ['docs', 'wiki'], onSelect: go(projectPath(id, '/pages')) },
-        { id: 'p:collections', group: current.name, label: 'Collections', icon: 'table', keywords: ['records', 'tables', 'database', 'spreadsheet'], onSelect: go(projectPath(id, '/collections')) },
-        { id: 'p:sheets', group: current.name, label: 'Sheets', icon: 'table', keywords: ['spreadsheet', 'formulas', 'cells', 'budget'], onSelect: go(projectPath(id, '/sheets')) },
-        { id: 'p:milestones', group: current.name, label: 'Milestones', icon: 'checklist', keywords: ['releases', 'goals'], onSelect: go(projectPath(id, '/milestones')) },
-        { id: 'p:timeline', group: current.name, label: 'Timeline', icon: 'clock', keywords: ['gantt', 'roadmap', 'schedule', 'milestones'], onSelect: go(projectPath(id, '/timeline')) },
-        { id: 'p:next', group: current.name, label: 'Planning', icon: 'branch', keywords: ['up next', 'ready', 'what to do', 'ranking', 'priorities'], onSelect: go(projectPath(id, '/next')) },
-        { id: 'p:ready', group: current.name, label: 'Ready for agents', icon: 'bot', keywords: ['view', 'unclaimed'], onSelect: go(projectPath(id, '/work-items?ready=true&claimed=false&sort=priority')) },
-        { id: 'p:runs', group: current.name, label: 'Runs', icon: 'activity', keywords: ['launches', 'launch queue', 'agent runs'], onSelect: go(projectPath(id, '/launches')) },
-        { id: 'p:suggestions', group: current.name, label: 'Suggestions', icon: 'bot', keywords: ['dependencies', 'blockers', 'review', 'triage'], onSelect: go(projectPath(id, '/suggestions')) },
-        { id: 'p:graph', group: current.name, label: 'Dependency graph', icon: 'branch', keywords: ['blocked', 'critical path', 'dependencies'], onSelect: go(projectPath(id, '/graph')) },
-        { id: 'p:plan-import', group: current.name, label: 'Import a plan', icon: 'list', keywords: ['roadmap', 'spec', 'plan to tasks'], onSelect: go(projectPath(id, '/plan-import')) },
-        { id: 'p:decisions', group: current.name, label: 'Decisions', icon: 'circle-check', shortcut: 'G D', onSelect: go(projectPath(id, '/decisions')) },
-        { id: 'p:archived', group: current.name, label: 'Archived conversations', icon: 'archive', onSelect: go(projectPath(id, '/conversations/archived')) },
+        ...paletteEntries('project').map((entry) => ({ ...paletteItem(entry), group: current.name, onSelect: go(projectPath(id, entry.path)) })),
         { id: 'p:settings', group: current.name, label: 'Project settings', icon: 'settings', shortcut: 'G S', keywords: ['members', 'invite', 'repositories', 'github', 'agents', 'automation', 'environments'], onSelect: go(projectSettingsHref(id)) },
       )
       for (const channel of sidebar.data?.channels ?? []) {
@@ -329,14 +322,7 @@ export function CommandPalette() {
 
     list.push(
       { id: 'g:home', group: 'Go to', label: 'Home', icon: 'home', shortcut: 'G H', onSelect: go('/home') },
-      { id: 'g:inbox', group: 'Go to', label: 'Inbox', icon: 'inbox', shortcut: 'G I', keywords: ['notifications', 'mentions', 'needs you'], onSelect: go('/inbox') },
-      { id: 'g:my-work', group: 'Go to', label: 'My work', icon: 'checklist', shortcut: 'G W', keywords: ['assigned', 'tasks', 'review', 'claimed'], onSelect: go('/my-work') },
-      { id: 'g:later', group: 'Go to', label: 'Later', icon: 'bookmark', shortcut: 'G L', keywords: ['saved', 'bookmarks', 'reminders', 'scheduled'], onSelect: go('/later') },
-      { id: 'g:runs', group: 'Go to', label: 'Runs', icon: 'activity', keywords: ['agent runs', 'tokens', 'cost', 'usage', 'diff'], onSelect: go('/runs') },
-      { id: 'g:whiteboards', group: 'Go to', label: 'Whiteboards', icon: 'whiteboard', keywords: ['excalidraw', 'draw', 'diagram', 'sketch', 'canvas'], onSelect: go('/whiteboards') },
-      { id: 'g:messages', group: 'Go to', label: 'Messages', icon: 'message', shortcut: 'G M', keywords: ['dms', 'direct messages', 'groups'], onSelect: go('/messages') },
-      { id: 'g:projects', group: 'Go to', label: 'All projects', icon: 'list', keywords: ['projects', 'archived'], onSelect: go('/projects') },
-      { id: 'g:agents', group: 'Go to', label: 'Agents', icon: 'bot', onSelect: go('/messages/agents') },
+      ...paletteEntries('workspace').map((entry) => ({ ...paletteItem(entry), group: 'Go to', onSelect: go(entry.path) })),
       { id: 'g:search', group: 'Go to', label: 'Search', icon: 'search', shortcut: '/', onSelect: go('/search') },
       { id: 'g:appearance', group: 'Go to', label: 'Appearance', icon: 'palette', shortcut: 'G A', keywords: ['theme', 'dark', 'light', 'density'], onSelect: go('/settings/account/appearance') },
       { id: 'g:settings', group: 'Go to', label: 'Settings', icon: 'settings', keywords: ['account', 'profile', 'workspace', 'security', 'tokens'], onSelect: go('/settings') },

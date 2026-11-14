@@ -20,6 +20,7 @@ import {
 import { updateThread } from './api'
 import { THREAD_STATUSES, isSettled, useThreads } from './threadModel'
 import type { ThreadSummary } from './types'
+import '../styles/conversation.css'
 
 function statusTone(status: string): ChipTone {
   switch (status.toLowerCase()) {

@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { Button, Dots, Icon, StatusChip, describeError } from '../ui'
 import { describeReplyRequest, REPLY_ICONS } from './replyStatusModel'
 import type { ReplyRequest } from './types'
+import '../styles/conversation.css'
 
 const SHOWS_REASON = new Set<ReplyRequest['status']>(['passed', 'released', 'cancelled'])
 const CAN_RETRY = new Set<ReplyRequest['status']>(['expired', 'released', 'cancelled'])

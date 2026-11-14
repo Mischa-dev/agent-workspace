@@ -485,7 +485,8 @@ async fn a_handler_that_crashes_after_its_outside_call_retries_with_the_same_key
     registry.register("test.push", move |context| {
         let (remote, effects) = (remote.clone(), effects.clone());
         async move {
-            let key = context.job.idempotency_key();
+            // The cause's key: the same on every attempt.
+            let key = format!("cause-{}", context.job.id);
             let mut keys = remote.lock().expect("remote");
             if !keys.contains(&key) {
                 effects.fetch_add(1, Ordering::SeqCst);
@@ -518,7 +519,7 @@ async fn a_handler_that_crashes_after_its_outside_call_retries_with_the_same_key
     let keys = seen.lock().expect("remote").clone();
     assert_eq!(keys.len(), 2, "both attempts reached the remote");
     assert_eq!(keys[0], keys[1], "the retry reused the first attempt's key");
-    assert_eq!(keys[0], format!("aw-job-{id}"));
+    assert_eq!(keys[0], format!("cause-{id}"));
     assert_eq!(
         applied.load(Ordering::SeqCst),
         1,

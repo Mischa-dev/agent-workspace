@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest'
 
-import appSource from '../app/App.tsx?raw'
 import paletteSource from '../shell/CommandPalette.tsx?raw'
 import homeSource from '../projects/HomePage.tsx?raw'
 import homeSidebarSource from '../shell/HomeSidebar.tsx?raw'
 import railSource from '../shell/ProjectRail.tsx?raw'
+import { routePaths } from '../app/routes'
 import { SLASH_COMMANDS } from '../later/slashCommands'
 import { SETTINGS_PAGES } from '../settings/registry'
 import { SHORTCUTS } from '../shell/shortcutSheet'
+import { sidebarRows, WEB_MODULES } from './registry'
 import { MODULE_SLOTS, moduleOf, moduleOfPath, patternScore, type SlotKind } from './slots'
 
 // AWD-75's guard: every route, palette entry, shortcut, slash command,
@@ -42,9 +43,9 @@ describe('every entry point names its module', () => {
   })
 
   it('routes', () => {
-    const paths = [...appSource.matchAll(/\bpath="([^"]+)"/g)].map((match) => match[1])
+    const paths = routePaths()
     expect(paths.length).toBeGreaterThan(30)
-    // Pages name routes exactly as App.tsx writes them.
+    // Pages name routes exactly as the route table (app/routes.tsx) writes them.
     const pages = claims('pages')
     expect(paths.filter((path) => !pages.has(path)), 'routes without a module').toEqual([])
     expectNamed('pages', paths)
@@ -53,10 +54,18 @@ describe('every entry point names its module', () => {
     expect(moduleOfPath('/whiteboards/w1')).toBe('whiteboards')
     expect(moduleOfPath('/AWD-12')).toBe('tasks')
     expect(moduleOfPath('/settings/workspace/modules')).toBe('workspace')
+    // A module registers (M1.4) only the pages its manifest claims.
+    for (const module of WEB_MODULES) {
+      for (const route of [...(module.routes ?? []), ...(module.publicRoutes ?? [])]) {
+        expect({ path: route.path, module: pages.get(route.path) }).toEqual({ path: route.path, module: [module.id] })
+      }
+    }
   })
 
   it('palette entries', () => {
-    const fixed = [...paletteSource.matchAll(/\bid: '([^']+)'/g)].map((match) => match[1])
+    // The menu's own entries, and the pages modules register (M1.4).
+    const registered = WEB_MODULES.flatMap((module) => (module.palette ?? []).map((entry) => entry.id))
+    const fixed = [...[...paletteSource.matchAll(/\bid: '([^']+)'/g)].map((match) => match[1]), ...registered]
     // Entries made per project, channel, task and so on: their prefix, with something after it.
     const made = [...paletteSource.matchAll(/\bid: `([a-z-]+:(?:[a-z-]+:)?)\$\{/g)].map((match) => `${match[1]}x`)
     expect(fixed.length).toBeGreaterThan(30)
@@ -85,16 +94,19 @@ describe('every entry point names its module', () => {
   it('rail and Home sidebar rows that are not layout parts', () => {
     expectNamed('sidebar', ['rail.home', 'rail.messages', 'rail.projects', 'rail.search', 'rail.settings', 'home.home', 'home.inbox', 'project.overview'])
     // Rows that a module can turn off check it where they're drawn.
-    expect(homeSidebarSource).toMatch(/moduleOn\('inbox'\) \? <SidebarLink[^\n]*label="Inbox"/)
+    // Home's rows are registrations (M1.4), which show only where their module is on.
+    const inboxOff = { shows: () => true, moduleOn: (module: string) => module !== 'inbox' }
+    expect(sidebarRows('home', { shows: () => true, moduleOn: () => true }).map((row) => row.label)).toContain('Inbox')
+    expect(sidebarRows('home', inboxOff).map((row) => row.label)).not.toContain('Inbox')
     expect(railSource).toMatch(/moduleOn\('messages'\) \? \(\s*<UtilityTile[^/]*label="Messages"/)
     expect(railSource).toContain("experience.moduleOn('projects')")
     // Every other Home sidebar row is a layout part, which follows modules on the server.
-    const lines = homeSidebarSource.split('\n')
-    lines.forEach((line, index) => {
-      if (!line.includes('<SidebarLink')) return
-      // The check sits on the row's line or the one before it.
-      const near = `${lines[index - 1] ?? ''}\n${line}`
-      expect(near.includes('shows(') || near.includes('moduleOn(') || line.includes('label="Home"'), line).toBe(true)
-    })
+    expect(homeSidebarSource).toContain("sidebarRows('home', experience)")
+    expect(homeSidebarSource.match(/<SidebarLink/g)).toHaveLength(2)
+    for (const module of WEB_MODULES) {
+      for (const row of (module.sidebar ?? []).filter((row) => row.space === 'home')) {
+        expect(Boolean(row.part) || row.label === 'Inbox', `${module.id}:${row.id}`).toBe(true)
+      }
+    }
   })
 })

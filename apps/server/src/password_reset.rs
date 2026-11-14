@@ -519,9 +519,10 @@ async fn request_reset_http(
     // The same answer for every well-formed request; who exists is looked
     // up later, in the job.
     if let Some(login) = normalize_reset_key(&request.login) {
-        state
-            .rate_limits
-            .check_password_reset(crate::rate_limit::client_address(&headers), &login)?;
+        state.rate_limits.check_password_reset(
+            crate::rate_limit::client_address(&state.config, &headers),
+            &login,
+        )?;
         jobs::enqueue(
             &state.pool,
             NewJob::new(RESET_KIND)

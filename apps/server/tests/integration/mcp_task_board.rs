@@ -204,7 +204,7 @@ pub(super) async fn seed_pull_request(
             author_login, draft, state, external_created_at, external_updated_at
         ) VALUES (
             $1, $2::uuid, $3, $4, $5, $6, $7, $8, 'feature', repeat('a', 40), 'main',
-            'Offline mode', 'mischa', false, 'open', now(), now()
+            'Offline mode', 'octo', false, 'open', now(), now()
         )
         "#,
     )

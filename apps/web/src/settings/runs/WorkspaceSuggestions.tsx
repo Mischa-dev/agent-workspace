@@ -10,6 +10,8 @@ import { ScopedSettings } from '../ScopedSettings'
 import { putWorkspaceSecret, workspaceKeys } from '../workspace/api'
 import { SUGGESTION_KEYS, SUGGESTION_UNSET_LABELS, here } from './options'
 import './runs.css'
+import '../../styles/pages.css'
+import '../../styles/work.css'
 
 const dollars = (micros: number) => `$${(micros / 1_000_000).toFixed(micros >= 10_000_000 ? 0 : 2)}`
 

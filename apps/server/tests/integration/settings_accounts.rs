@@ -632,6 +632,7 @@ async fn personal_tokens_reach_only_the_person_s_own_projects() {
         browser: other_browser,
         organization_id: other,
         pool: setup.pool.clone(),
+        cleanup: None,
     };
     let foreign = create_project(&other_setup, "ELSE", "Elsewhere").await;
 

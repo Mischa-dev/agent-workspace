@@ -42,6 +42,7 @@ import {
   type AccountSession,
   type TwoFactorSetup,
 } from './api'
+import '../../styles/pages.css'
 
 const SIGN_IN_METHODS: Record<string, string> = {
   password: 'Password',

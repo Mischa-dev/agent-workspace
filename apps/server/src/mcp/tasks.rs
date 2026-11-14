@@ -3543,8 +3543,8 @@ pub(super) struct TaskLinkArguments {
     pub pull_request_id: Option<String>,
     /// A whiteboard: it shows on the task. One board can be on many tasks.
     pub whiteboard_id: Option<String>,
-    /// For repositoryId only: related or primary, the repository Codex runs
-    /// on this task's thread use. Making one primary makes the old primary
+    /// For repositoryId only: related or primary, the repository runs on
+    /// this task's thread use. Making one primary makes the old primary
     /// related. Left out, a new link is related and an existing link keeps
     /// its role.
     pub role: Option<String>,

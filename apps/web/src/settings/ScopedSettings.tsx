@@ -4,6 +4,7 @@ import { useLocation } from 'react-router-dom'
 import { Banner, ErrorState, SettingsSkeleton } from '../ui'
 import { useEffectiveSettings, useSettingsRegistry, type SettingOption, type SettingsTarget } from './api'
 import { SettingField } from './SettingField'
+import '../styles/pages.css'
 
 /**
  * The registry settings whose keys start with one of `prefixes`, as they apply

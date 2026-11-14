@@ -3,10 +3,11 @@ import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as
 import { FieldValueView } from '../fields/FieldValueView'
 import type { FieldDefinition, FieldReference } from '../fields/fieldModel'
 import { Button, EmptyState, IconButton, ListSkeleton, Menu, countLabel, type MenuEntry } from '../ui'
-import { useBoardDrag, type DropTarget } from '../work-items/useBoardDrag'
+import { useBoardDrag, type DropTarget } from '../ui/useBoardDrag'
 import { recordsParams, useRecords, type CollectionBody, type CollectionRecord, type RecordsQuery, type ViewConfig } from './api'
 import { boardColumns, boardKey, boardValue, cardValues, recordName, viewColumns, withValues, type BoardColumn, type ShownColumn } from './collectionModel'
 import type { RecordEdits } from './useRecordEdits'
+import '../styles/work.css'
 
 /** Cards a column loads at a time. */
 const COLUMN_PAGE = 50

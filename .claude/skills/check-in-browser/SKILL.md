@@ -46,6 +46,16 @@ Run it alone with the same variables and
 `corepack pnpm --filter @agent-workspace/web exec playwright test my-check`. Read the PNG to look
 at it. `screenshots.spec.ts` shows light and dark.
 
+## Look at a slice the way the test for "done" does
+
+`apps/web/e2e/support/done.ts` has `look(page, path, name)`: the page at
+1440 and 390 px, light and dark, saved to `e2e-output/screenshots/done/`.
+For a live feature, open a second browser context as another person, and
+drive an agent with `asAgent(request, token).call(operation, input)` to
+watch its change arrive. When your slice finishes an item of the test for
+"done", replace its fixme in `e2e/done/items.spec.ts` with a spec of its
+own (`e2e/done/NN-<name>.spec.ts`); it runs at a desktop and on a phone.
+
 ## What to look for
 
 New pages must pass `docs/frontend/polish-checklist.md`: loading, empty,

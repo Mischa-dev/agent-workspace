@@ -16,6 +16,7 @@ import { useCreateWorkItem } from '../work-items/hooks'
 import { useTaskDraft } from '../work-items/taskDraft'
 import { messageFromShare, taskFromShare, type SharedContent } from './sharedContent'
 import { uploadShared } from './sharedFiles'
+import '../styles/pages.css'
 
 const LAST_PROJECT = 'quick-add:project'
 /** One draft for quick add, whichever project it's going to, so changing the project keeps what's typed. */

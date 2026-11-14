@@ -7,6 +7,7 @@ import { EDIT_HISTORY_HINT } from './composerModel'
 import { MessageContent } from './MessageContent'
 import { formatDateTime, formatFullDate } from '../ui/time'
 import type { ConversationMessage, MessageContentV1, MessageRevision } from './types'
+import '../styles/conversation.css'
 
 function revisionLabel(revision: MessageRevision) {
   return revision.revision === 1 ? 'Original' : `Edit ${revision.revision - 1}`

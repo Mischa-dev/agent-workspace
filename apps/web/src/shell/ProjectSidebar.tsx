@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState, type ReactNode } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
 import { useProjectConversationSidebar } from '../conversations/hooks'
@@ -6,6 +6,7 @@ import type { SidebarThread } from '../conversations/types'
 import { toastError } from '../app/toastError'
 import { useProjectExperience } from '../experience/layout'
 import type { PartId } from '../experience/parts'
+import { rowLabel, sidebarRows } from '../modules/registry'
 import { useProjects, useSetRailOrder, useUpdateProjectNavigation } from '../projects/hooks'
 import type { Project } from '../projects/types'
 import { IconButton, showToast, type MenuEntry } from '../ui'
@@ -92,58 +93,20 @@ export function ProjectSidebar({
   ]
   const section = projectSection(location.pathname, base)
   const listedThread = sidebar.data?.channels.some((channel) => channel.threads.some((candidate) => candidate.id === thread?.id))
-  // Each row is a part of the layout, and the layout's lead parts go first. Pages also holds Decisions.
-  const pages = experience.shows('area.pages')
-  const topLinks: { part: PartId; shown: boolean; link: ReactNode }[] = [
-    {
-      part: 'area.tasks',
-      shown: experience.shows('area.tasks'),
-      link: (
-        <SidebarLink
-          active={section === 'work'}
-          icon="work"
-          key="tasks"
-          label={experience.label('task', 'many')}
-          onNavigate={onNavigate}
-          to={`${base}/work-items`}
-        />
-      ),
-    },
-    {
-      part: 'area.pages',
-      shown: pages || experience.shows('area.decisions'),
-      link: (
-        <SidebarLink
-          active={section === 'pages'}
-          icon="list"
-          key="pages"
-          label={pages ? experience.label('page', 'many') : 'Decisions'}
-          onNavigate={onNavigate}
-          to={`${base}/${pages ? 'pages' : 'decisions'}`}
-        />
-      ),
-    },
-    {
-      part: 'area.collections',
-      shown: experience.shows('area.collections'),
-      link: <SidebarLink icon="table" key="collections" label="Collections" onNavigate={onNavigate} to={`${base}/collections`} />,
-    },
-    {
-      part: 'area.sheets',
-      shown: experience.shows('area.sheets'),
-      link: <SidebarLink icon="table" key="sheets" label="Sheets" onNavigate={onNavigate} to={`${base}/sheets`} />,
-    },
-    {
-      part: 'area.runs',
-      shown: experience.shows('area.runs'),
-      link: <SidebarLink icon="activity" key="runs" label="Runs" onNavigate={onNavigate} to={`${base}/launches`} />,
-    },
-  ]
-  const leading = (part: PartId) => (experience.lead.includes(part) ? 0 : 1)
-  const topRows = topLinks
-    .filter((row) => row.shown)
+  // Each row is a module's registration (M1.4) and a part of the layout; the layout's lead parts go first.
+  const leading = (part: PartId | undefined) => (part && experience.lead.includes(part) ? 0 : 1)
+  const topRows = sidebarRows('project', experience)
     .sort((left, right) => leading(left.part) - leading(right.part))
-    .map((row) => row.link)
+    .map((row) => (
+      <SidebarLink
+        active={row.section ? section === row.section : undefined}
+        icon={row.icon}
+        key={`${row.module}:${row.id}`}
+        label={rowLabel(row, experience)}
+        onNavigate={onNavigate}
+        to={`${base}${row.path}`}
+      />
+    ))
 
   return (
     <SidebarFrame

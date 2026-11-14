@@ -26,14 +26,13 @@ use crate::{
     policy::{Action, ActorKind, Decision},
     work_item_commands::{
         AllocatedNumberMetadata, ArchiveCommand, ArchiveOutcome, AuditAttribution,
-        AuditVersionMetadata, BoardPlacement, ChangeFinalization, ChangePayload, CommandActor,
-        ConflictKind, CreateWorkItemCommand, CreateWorkItemOutcome, LockedWorkItem,
-        MAX_SUBTASK_LEVELS, NewTaskFields, ParentProblem, PlacementProblem, PullRequestLinkChange,
-        TaskFieldChanges, UpdateWorkItemCommand, UpdateWorkItemOutcome, authorize_mutation,
-        change_pull_request_link, conflict_kind, create_work_item as execute_create_work_item,
-        finalize_change, finalize_comment, lock_membership, lock_work_item,
-        normalize_criterion_text, place_in_column, record_audit,
-        set_archived as execute_set_archived, update_work_item_by_id,
+        AuditVersionMetadata, BoardPlacement, CommandActor, ConflictKind, CreateWorkItemCommand,
+        CreateWorkItemOutcome, LockedWorkItem, MAX_SUBTASK_LEVELS, NewTaskFields, ParentProblem,
+        PlacementProblem, PullRequestLinkChange, TaskFieldChanges, UpdateWorkItemCommand,
+        UpdateWorkItemOutcome, authorize_mutation, change_pull_request_link, conflict_kind,
+        create_work_item as execute_create_work_item, finalize_comment, lock_membership,
+        lock_work_item, normalize_criterion_text, record_audit,
+        set_archived as execute_set_archived, update_locked_work_item, update_work_item_by_id,
     },
     work_item_labels::{self, LabelDelta, MAX_LABELS_PER_TASK, echo},
 };
@@ -1291,7 +1290,11 @@ async fn post_update_inner(
     let Some(update) = normalize_comment(arguments.update.clone()) else {
         return Ok(WriteResult::invalid("update", UPDATE_MESSAGE));
     };
-    let validated = match MessageContent::from_plain_text(update.clone()) {
+    // `@handle` and the project's task keys become mentions and references,
+    // as the web composer writes them (P0.4).
+    let content =
+        super::common::comment_content_from_text(state, principal.project_id, &update).await?;
+    let validated = match MessageContent::from_json(content) {
         Ok(content) => content,
         Err(_) => return Ok(WriteResult::invalid("update", UPDATE_MESSAGE)),
     };
@@ -1376,9 +1379,20 @@ async fn post_update_inner(
             return Ok(WriteResult::invalid("replyToCommentId", REPLY_MESSAGE));
         }
     }
+    let resolved = match crate::work_items::comments::resolve_comment_content(
+        &mut transaction,
+        principal.project_id,
+        validated,
+    )
+    .await
+    {
+        Ok(resolved) => resolved,
+        Err(AppError::Validation(_)) => {
+            return Ok(WriteResult::invalid("update", UPDATE_MESSAGE));
+        }
+        Err(error) => return Err(error),
+    };
     let comment_id = Uuid::now_v7();
-    let content = serde_json::to_value(validated.content())
-        .map_err(|_| AppError::Internal("serialize MCP update"))?;
     sqlx::query(
         r#"
         INSERT INTO work_item_comments (
@@ -1391,10 +1405,18 @@ async fn post_update_inner(
     .bind(principal.project_id)
     .bind(work_item_id)
     .bind(principal.actor_id)
-    .bind(content)
-    .bind(update)
+    .bind(&resolved.content_json)
+    .bind(&resolved.plain_text)
     .bind(reply_to)
     .execute(&mut *transaction)
+    .await?;
+    crate::work_items::comments::insert_comment_projections(
+        &mut transaction,
+        principal.project_id,
+        work_item_id,
+        comment_id,
+        &resolved,
+    )
     .await?;
     let (_sequence, result_id) = finalize_comment(
         &mut transaction,
@@ -1624,44 +1646,42 @@ pub async fn mark_blocked(
         {
             return Ok(conflict);
         }
-        if current.blocked_reason.as_deref() == Some(&reason) {
-            return finalize_noop(
-                transaction,
-                state,
-                principal,
-                &reservation,
-                work_item_id,
-                current.version,
-                "work_item.mcp_blocker_unchanged",
-                key.as_str(),
-                false,
-            )
-            .await;
-        }
-        sqlx::query(
-            "UPDATE work_items SET blocked_reason = $3, blocked_at = now(), blocked_by_actor_id = $4, version = version + 1, updated_at = now() WHERE project_id = $1 AND id = $2 AND version = $5",
+        let outcome = update_locked_work_item(
+            &mut transaction,
+            &mcp_actor(principal, key.as_str().to_owned()),
+            current,
+            UpdateWorkItemCommand {
+                field_values: None,
+                expected_version: arguments.expected_version,
+                title: None,
+                description: None,
+                type_id: None,
+                status_id: None,
+                priority: None,
+                assignee_actor_id: None,
+                parent_work_item_id: None,
+                board_placement: None,
+                labels: None,
+                fields: TaskFieldChanges {
+                    blocked_reason: Some(Some(reason)),
+                    ..TaskFieldChanges::default()
+                },
+                summary: "Work Item marked blocked through MCP",
+                audit_action: "work_item.mcp_marked_blocked",
+                audit_version_metadata: AuditVersionMetadata::Include,
+            },
         )
-        .bind(principal.project_id)
-        .bind(work_item_id)
-        .bind(reason)
-        .bind(principal.actor_id)
-        .bind(arguments.expected_version)
-        .execute(&mut *transaction)
         .await?;
-        finalize_work_item_change(
+        finish_update_outcome(
             transaction,
             state,
             principal,
             &reservation,
-            work_item_id,
-            arguments.expected_version + 1,
-            ChangePayload {
-                changed_fields: vec!["blockedReason".to_owned()],
-                ..ChangePayload::default()
-            },
-            "Work Item marked blocked through MCP",
-            "work_item.mcp_marked_blocked",
+            arguments.expected_version,
+            outcome,
+            "work_item.mcp_blocker_unchanged",
             key.as_str(),
+            false,
         )
         .await
     }
@@ -1744,69 +1764,43 @@ pub async fn mark_ready_for_review(
                 review_status_id,
             ));
         }
-        let mut changed = Vec::new();
-        if current.status_id != review_status_id {
-            changed.push("status".to_owned());
-        }
-        if current.blocked_reason.is_some() {
-            changed.push("blockedReason".to_owned());
-        }
-        if changed.is_empty() {
-            return finalize_noop(
-                transaction,
-                state,
-                principal,
-                &reservation,
-                work_item_id,
-                current.version,
-                "work_item.mcp_review_unchanged",
-                key.as_str(),
-                false,
-            )
-            .await;
-        }
         // Like any status change, it goes to the bottom of its new column.
-        let board_rank = if current.status_id == review_status_id {
-            current.board_rank
-        } else {
-            place_in_column(
-                &mut transaction,
-                principal.project_id,
-                review_status_id,
-                work_item_id,
-                Some((current.status_id, current.board_rank)),
-                BoardPlacement::Bottom,
-            )
-            .await?
-            .map_err(|_| AppError::Internal("place a task at the bottom of review"))?
-            .board_rank
-        };
-        sqlx::query(
-            "UPDATE work_items SET status_id = $3, board_rank = $5, blocked_reason = NULL, blocked_at = NULL, blocked_by_actor_id = NULL, version = version + 1, updated_at = now() WHERE project_id = $1 AND id = $2 AND version = $4",
+        let outcome = update_locked_work_item(
+            &mut transaction,
+            &mcp_actor(principal, key.as_str().to_owned()),
+            current,
+            UpdateWorkItemCommand {
+                field_values: None,
+                expected_version: arguments.expected_version,
+                title: None,
+                description: None,
+                type_id: None,
+                status_id: Some(review_status_id),
+                priority: None,
+                assignee_actor_id: None,
+                parent_work_item_id: None,
+                board_placement: None,
+                labels: None,
+                fields: TaskFieldChanges {
+                    blocked_reason: Some(None),
+                    ..TaskFieldChanges::default()
+                },
+                summary: "Work Item marked ready for review through MCP",
+                audit_action: "work_item.mcp_ready_for_review",
+                audit_version_metadata: AuditVersionMetadata::Include,
+            },
         )
-        .bind(principal.project_id)
-        .bind(work_item_id)
-        .bind(review_status_id)
-        .bind(arguments.expected_version)
-        .bind(board_rank)
-        .execute(&mut *transaction)
         .await?;
-        finalize_work_item_change(
+        finish_update_outcome(
             transaction,
             state,
             principal,
             &reservation,
-            work_item_id,
-            arguments.expected_version + 1,
-            ChangePayload {
-                status: (current.status_id != review_status_id)
-                    .then_some((current.status_id, review_status_id)),
-                changed_fields: changed,
-                ..ChangePayload::default()
-            },
-            "Work Item marked ready for review through MCP",
-            "work_item.mcp_ready_for_review",
+            arguments.expected_version,
+            outcome,
+            "work_item.mcp_review_unchanged",
             key.as_str(),
+            false,
         )
         .await
     }
@@ -2135,6 +2129,75 @@ pub(super) fn parse_request_id(value: &str) -> Option<IdempotencyKey> {
         return None;
     }
     IdempotencyKey::parse(value).ok()
+}
+
+/// Where a create that took a `clientRequestId` stands: new (and reserved,
+/// when it took one), or a retry of one that made `id` already.
+pub(super) enum CreateRetry {
+    Fresh(Option<IdempotencyReservation>),
+    /// The thing the first call made, and what else it kept
+    /// (`complete_create_with`).
+    Replay(Uuid, serde_json::Value),
+}
+
+/// Reserves a create's `clientRequestId` in `project_id`, so a retry with
+/// the same id gets the first call's thing and a different call with it is
+/// refused (`idempotency_key` conflict). `kind` names what's created
+/// (`pages`, `decisions`, `whiteboards`).
+pub(super) async fn reserve_create<T: Serialize>(
+    transaction: &mut Transaction<'_, Postgres>,
+    principal: &McpPrincipal,
+    kind: &str,
+    key: Option<&IdempotencyKey>,
+    arguments: &T,
+) -> Result<CreateRetry, AppError> {
+    let Some(key) = key else {
+        return Ok(CreateRetry::Fresh(None));
+    };
+    let scope = resource_bound_scope(&format!("mcp_{kind}"), principal.project_id, "create")?;
+    match reserve(
+        transaction,
+        principal.actor_id,
+        &scope,
+        key,
+        RequestHash::for_value(arguments)?,
+    )
+    .await?
+    {
+        IdempotencyOutcome::Replay(replay) => {
+            let body = replay.response_body();
+            body.get("id")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|id| id.parse().ok())
+                .map(|id| CreateRetry::Replay(id, body.clone()))
+                .ok_or(AppError::Internal("a stored create names no id"))
+        }
+        IdempotencyOutcome::Reserved(reservation) => Ok(CreateRetry::Fresh(Some(reservation))),
+    }
+}
+
+/// Keeps what a reserved create made, for its retries.
+pub(super) async fn complete_create(
+    transaction: &mut Transaction<'_, Postgres>,
+    reservation: Option<&IdempotencyReservation>,
+    id: Uuid,
+) -> Result<(), AppError> {
+    complete_create_with(transaction, reservation, id, serde_json::json!({})).await
+}
+
+/// Keeps what a reserved create made, and `kept` (an object) beside it, for
+/// its retries to answer with.
+pub(super) async fn complete_create_with(
+    transaction: &mut Transaction<'_, Postgres>,
+    reservation: Option<&IdempotencyReservation>,
+    id: Uuid,
+    mut kept: serde_json::Value,
+) -> Result<(), AppError> {
+    if let Some(reservation) = reservation {
+        kept["id"] = serde_json::json!(id);
+        complete(transaction, reservation, StatusCode::OK, &kept).await?;
+    }
+    Ok(())
 }
 
 /// The conflict to return when the caller's version is stale or the task is
@@ -2676,47 +2739,6 @@ pub(super) async fn locate(
             &format!("/projects/{project_id}/work-items/{work_item_id}"),
         ),
     ))
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn finalize_work_item_change(
-    mut transaction: Transaction<'_, Postgres>,
-    state: &AppState,
-    principal: &McpPrincipal,
-    reservation: &IdempotencyReservation,
-    work_item_id: Uuid,
-    version: i64,
-    payload: ChangePayload,
-    summary: &str,
-    action: &str,
-    request_id: &str,
-) -> Result<WriteResult, AppError> {
-    let finalized = finalize_change(
-        &mut transaction,
-        &mcp_actor(principal, request_id.to_owned()),
-        work_item_id,
-        ChangeFinalization {
-            activity_kind: "work_item_updated",
-            summary,
-            audit_action: action,
-            activity_payload: payload.activity(),
-            audit_metadata: payload.audit(version),
-            version,
-        },
-    )
-    .await?;
-    let location = locate(&mut transaction, state, principal.project_id, work_item_id).await?;
-    let result = applied(
-        work_item_id,
-        version,
-        payload.changed_fields,
-        Some(finalized.activity_id),
-        finalized.audit_id,
-        location,
-    );
-    complete(&mut transaction, reservation, StatusCode::OK, &result).await?;
-    transaction.commit().await?;
-    Ok(result)
 }
 
 async fn insert_mcp_audit(

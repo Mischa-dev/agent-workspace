@@ -146,7 +146,7 @@ async fn fixing_a_failed_scheduled_message_keeps_it_until_it_gets_a_new_time() {
 }
 
 #[tokio::test]
-async fn reset_mail_goes_only_through_a_workspace_the_person_chose_or_owns() {
+async fn reset_mail_goes_only_through_a_workspace_the_person_owns_or_only_belongs_to() {
     let Some(fixture) = fixture("sweep_reset_mail").await else {
         return;
     };
@@ -198,15 +198,15 @@ async fn reset_mail_goes_only_through_a_workspace_the_person_chose_or_owns() {
     .await
     .expect("second membership");
     assert_eq!(transport(mara).await, None);
-    // Once she chooses it as her default (or joins it from a workspace
-    // invitation, which sets it), resets for her use it.
+    // Making it her default doesn't change that (P0.37): a stored default
+    // isn't proof of a choice, since joining used to set it.
     sqlx::query("UPDATE users SET default_organization_id = $2 WHERE actor_id = $1")
         .bind(mara)
         .bind(setup.organization_id)
         .execute(pool)
         .await
         .expect("chosen default");
-    assert_eq!(transport(mara).await, Some(setup.organization_id));
+    assert_eq!(transport(mara).await, None);
     // The owner's own workspace sends theirs.
     let owner = sqlx::query_scalar::<_, Uuid>(
         "SELECT actor_id FROM organization_memberships WHERE organization_id = $1 AND role = 'owner' LIMIT 1",
@@ -264,10 +264,10 @@ async fn reset_mail_goes_only_through_a_workspace_the_person_chose_or_owns() {
         .expect("default back");
     assert_eq!(
         transport(mara).await,
-        Some(setup.organization_id),
-        "a chosen default comes first"
+        Some(own),
+        "a default she doesn't own never carries her mail"
     );
-    // Mail turned off in the chosen one: her own still works.
+    // Mail turned off in the other one: hers still works.
     sqlx::query("UPDATE workspace_mail_settings SET enabled = false WHERE organization_id = $1")
         .bind(setup.organization_id)
         .execute(pool)
@@ -275,6 +275,152 @@ async fn reset_mail_goes_only_through_a_workspace_the_person_chose_or_owns() {
         .expect("mail off");
     assert_eq!(transport(mara).await, Some(own));
     assert_eq!(transport(owner).await, None);
+}
+
+/// P0.37: accepting an invitation to someone else's workspace doesn't make
+/// it the person's default, and their reset mail never goes through its
+/// owner's mail server. Ada owns A (no mail); Mallory owns B, which sends
+/// mail through a server Mallory controls.
+#[tokio::test]
+async fn joining_another_workspace_doesnt_route_reset_mail_through_it() {
+    let Some(fixture) = fixture("sweep_join_mail").await else {
+        return;
+    };
+    let setup = &fixture.setup;
+    let pool = &setup.pool;
+    let state = &fixture.state;
+    let transport = |actor: Uuid| async move {
+        mail::transport_for_actor(state, actor)
+            .await
+            .expect("transport")
+            .map(|transport| transport.organization_id)
+    };
+    let mail_through = |organization: Uuid, by: Uuid| async move {
+        sqlx::query(
+            r#"
+            INSERT INTO workspace_mail_settings (
+                organization_id, provider, provider_config, from_address, enabled, updated_by_actor_id
+            ) VALUES ($1, 'smtp',
+                   '{"host":"127.0.0.1","port":2525,"security":"none","username":null}'::jsonb,
+                   'mail@example.com', true, $2)
+            "#,
+        )
+        .bind(organization)
+        .bind(by)
+        .execute(pool)
+        .await
+        .expect("mail settings");
+    };
+    // Ada is the test workspace's owner: A.
+    let (ada, ada_default) = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(
+        "SELECT actor_id, default_organization_id FROM users WHERE login_name = 'owner'",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("Ada");
+    let a = setup.organization_id;
+    // Mallory, a member of A, owns B and has it send mail.
+    let project = create_project(setup, "MAL", "Mallory").await;
+    let (mallory, mallory_browser) = add_person(setup, &[&project], "mallory").await;
+    let b = Uuid::now_v7();
+    sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, 'B', $2)")
+        .bind(b)
+        .bind(format!("b-{}", b.simple()))
+        .execute(pool)
+        .await
+        .expect("B");
+    sqlx::query(
+        "INSERT INTO organization_memberships (organization_id, actor_id, role) VALUES ($1, $2, 'owner')",
+    )
+    .bind(b)
+    .bind(mallory)
+    .execute(pool)
+    .await
+    .expect("Mallory owns B");
+    mail_through(b, mallory).await;
+
+    // Mallory invites Ada to B and Ada accepts.
+    let (status, invitation) = call(
+        setup,
+        &mallory_browser,
+        "POST",
+        &format!("/api/v1/organizations/{b}/invitations"),
+        None,
+        json!({"role": "member", "expiresInHours": 24}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{invitation}");
+    let token = invitation["invitationUrl"]
+        .as_str()
+        .and_then(|url| url.split_once("#token="))
+        .expect("token")
+        .1
+        .to_owned();
+    let (status, accepted) = call(
+        setup,
+        &setup.browser,
+        "POST",
+        "/api/v1/workspace-invitations/accept-existing",
+        None,
+        json!({"token": token, "handle": "ada"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{accepted}");
+    let joined = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM organization_memberships WHERE organization_id = $1 AND actor_id = $2)",
+    )
+    .bind(b)
+    .bind(ada)
+    .fetch_one(pool)
+    .await
+    .expect("membership");
+    assert!(joined, "Ada is in B");
+    let default_now = sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT default_organization_id FROM users WHERE actor_id = $1",
+    )
+    .bind(ada)
+    .fetch_one(pool)
+    .await
+    .expect("default");
+    assert_eq!(
+        default_now, ada_default,
+        "joining B didn't make it her default"
+    );
+
+    // Her reset mail doesn't go through B, even with B as her default.
+    assert_eq!(transport(ada).await, None);
+    sqlx::query("UPDATE users SET default_organization_id = $2 WHERE actor_id = $1")
+        .bind(ada)
+        .bind(b)
+        .execute(pool)
+        .await
+        .expect("B as default");
+    assert_eq!(transport(ada).await, None);
+    // Once A sends mail, hers goes through A.
+    mail_through(a, ada).await;
+    assert_eq!(transport(ada).await, Some(a));
+
+    // Someone whose only workspace is B still gets theirs through B.
+    let (only_b, _) = add_person(setup, &[&project], "onlyb").await;
+    for leave in [
+        "DELETE FROM project_memberships WHERE actor_id = $1",
+        "DELETE FROM organization_memberships WHERE actor_id = $1",
+    ] {
+        sqlx::query(leave)
+            .bind(only_b)
+            .execute(pool)
+            .await
+            .expect("leave A");
+    }
+    sqlx::query(
+        "INSERT INTO organization_memberships (organization_id, actor_id, role) VALUES ($1, $2, 'member')",
+    )
+    .bind(b)
+    .bind(only_b)
+    .execute(pool)
+    .await
+    .expect("join B");
+    assert_eq!(transport(only_b).await, Some(b));
 }
 
 #[tokio::test]

@@ -1,3 +1,5 @@
+> **Superseded where [`docs/plans/master/`](master/README.md) says otherwise.** This plan explains how the existing pieces were built; the master plan decides what changes.
+
 # Modules (AWD-75)
 
 Every feature of Agent Workspace is a module with a manifest. Core modules

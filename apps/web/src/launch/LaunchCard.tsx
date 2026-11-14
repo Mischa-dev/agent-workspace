@@ -9,6 +9,7 @@ import { useCreateLaunches, useLaunchPlan } from './hooks'
 import { LazyLaunchDialog as LaunchDialog } from './LazyLaunchDialog'
 import { launchStatus, launchSummary, launchesHref, threadHref } from './launchModel'
 import './launch.css'
+import '../styles/work.css'
 
 /**
  * Launch on a task: one click starts an agent on the project's defaults, shift-click or the menu opens every choice.

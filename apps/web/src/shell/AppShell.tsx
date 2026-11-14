@@ -13,6 +13,7 @@ import { MenuButton } from './MenuButton'
 import { MOBILE_QUERY, ShellHeaderContext, isMobileWidth, useMobileNavigation } from './mobileNavigation'
 import { ProjectRail } from './ProjectRail'
 import { ProjectSidebar } from './ProjectSidebar'
+import { useShellPresence } from './shellStore'
 import { useKeyboardViewport } from './useKeyboardViewport'
 import { useSwipe } from './useSwipe'
 
@@ -59,24 +60,10 @@ function setInert(element: HTMLElement | null, inert: boolean) {
   }
 }
 
-/**
- * The app frame: the rail of spaces, the space's sidebar, the conversation or page,
- * and an optional details panel. On narrow screens the rail and sidebar become one
- * navigation drawer, and the details panel becomes a drawer on the right.
- */
-export function AppShell({
-  children,
-  context,
-  contextKey,
-  direct = false,
-  home = false,
-  mainClassName,
-  onContextDismiss,
-  project: givenProject = null,
-  selectedChannelId,
-  thread = null,
-  user,
-}: {
+/** What a page tells the shell about itself: everything but its content and the person. */
+export type ShellPresence = Omit<AppShellProps, 'children' | 'user'>
+
+export type AppShellProps = {
   children: ReactNode
   /** The details panel (thread details, group members). */
   context?: ReactNode
@@ -99,7 +86,42 @@ export function AppShell({
   selectedChannelId?: string
   thread?: { id: string; name: string } | null
   user: SessionUser
-}) {
+}
+
+/**
+ * A page's frame. Inside the persistent shell (W1.11, `ShellLayout`) it
+ * passes the page through and tells the shell what to draw beside it, so the
+ * rail and sidebar stay mounted from page to page; on its own (a page
+ * rendered outside the route table) it draws the whole frame.
+ */
+export function AppShell({ children, user, ...presence }: AppShellProps) {
+  const inShell = useShellPresence(presence)
+  if (inShell) return <>{children}</>
+  return (
+    <ShellFrame {...presence} user={user}>
+      {children}
+    </ShellFrame>
+  )
+}
+
+/**
+ * The app frame: the rail of spaces, the space's sidebar, the conversation or page,
+ * and an optional details panel. On narrow screens the rail and sidebar become one
+ * navigation drawer, and the details panel becomes a drawer on the right.
+ */
+export function ShellFrame({
+  children,
+  context,
+  contextKey,
+  direct = false,
+  home = false,
+  mainClassName,
+  onContextDismiss,
+  project: givenProject = null,
+  selectedChannelId,
+  thread = null,
+  user,
+}: AppShellProps) {
   useKeyboardViewport()
   const location = useLocation()
   const addressProject = useAddressProject(!givenProject && !home && !direct)
@@ -120,6 +142,14 @@ export function AppShell({
   // Conversations bring their own header, which carries the menu button on phones.
   const conversationLayout = mainClassName === 'aw-main--conversation'
   const [installedTouchApp] = useState(isInstalledTouchApp)
+
+  // The persistent shell (W1.11) outlives each page: a new page starts with
+  // its details drawer closed, as a freshly drawn frame did.
+  const [framedPath, setFramedPath] = useState(location.pathname)
+  if (framedPath !== location.pathname) {
+    setFramedPath(location.pathname)
+    if (contextOpenState) setContextOpen(false)
+  }
 
   // When the page asks to show something new in the panel (a thread), open
   // the drawer on narrow screens. Adjusting state while rendering, not in an

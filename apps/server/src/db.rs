@@ -11,7 +11,7 @@
 //! counted per directory by the ratchet in `tenancy/ratchet.json` (H1.44),
 //! which may only go down.
 
-use std::{collections::BTreeSet, future::Future, panic::Location, sync::Mutex};
+use std::{future::Future, panic::Location};
 
 use sqlx::{PgConnection, PgPool, Postgres, Transaction};
 
@@ -73,15 +73,10 @@ where
     }
 }
 
-/// Logs a call site that began a transaction with no tenancy scope, once per
-/// call site per process.
+/// Counts a call site that began a transaction with no tenancy scope in the
+/// metrics (`aw_tenancy_unscoped_sites_total`), and logs it the first time.
 fn observe_unscoped(caller: &'static Location<'static>) {
-    static SEEN: Mutex<BTreeSet<(&'static str, u32)>> = Mutex::new(BTreeSet::new());
-    let first = SEEN
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .insert((caller.file(), caller.line()));
-    if first {
+    if crate::metrics::unscoped_call_site(caller.file(), caller.line()) {
         tracing::warn!(
             target: "agent_workspace::tenancy",
             file = caller.file(),

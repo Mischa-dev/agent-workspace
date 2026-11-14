@@ -1213,6 +1213,10 @@ pub(crate) async fn stop_request_in(
     }
     // The agent's session in that conversation stops too (A5 with A3).
     crate::agent_sessions::cancel_for_request(transaction, request_id).await?;
+    // A1.4: a launched run behind any of them is asked to stop.
+    let stopped_ids = stopped.iter().map(|(id, _, _)| *id).collect::<Vec<_>>();
+    crate::runs::launch_paths::stopped(transaction, actor_id, agent_actor_id, &stopped_ids, None)
+        .await?;
     let mut conversations = BTreeSet::new();
     for (id, request_conversation_id, thread_id) in &stopped {
         wake(
@@ -1237,6 +1241,76 @@ pub(crate) async fn stop_request_in(
         agent_actor_id,
         stopped: ids,
     })
+}
+
+/// A1.4: someone stopped a launched run from the run itself (`run_cancel`).
+/// Its reply request stops the way the request's own Stop does, so a runner
+/// that only knows the reply tools hears `reply.cancelled` and its claim is
+/// revoked. The caller has already checked that `by` may stop the run.
+/// Returns whether the request was still open to stop.
+pub(crate) async fn stop_for_run(
+    transaction: &mut Transaction<'_, Postgres>,
+    by: Uuid,
+    request_id: Uuid,
+    reason: Option<String>,
+) -> Result<bool, AppError> {
+    let Some((project_id, conversation_id)) = sqlx::query_as::<_, (Uuid, Uuid)>(
+        "SELECT project_id, conversation_id FROM reply_requests WHERE id = $1",
+    )
+    .bind(request_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    else {
+        return Ok(false);
+    };
+    // The conversation's lock first, then the request, then the run: the
+    // order the request's own Stop takes.
+    sqlx::query(
+        "SELECT id FROM conversations WHERE id = $1 FOR UPDATE -- visibility: a lock only, on the request's own conversation",
+    )
+        .bind(conversation_id)
+        .execute(&mut **transaction)
+        .await?;
+    let name = sqlx::query_scalar::<_, String>(
+        "SELECT display_name FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project_id)
+    .bind(by)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .unwrap_or_else(|| "someone".to_owned());
+    let Some((agent_actor_id, thread_id)) = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(
+        r#"
+        UPDATE reply_requests
+        SET status = 'cancelled', lease_expires_at = NULL, reason = $2, updated_at = now()
+        WHERE id = $1 AND status IN ('pending', 'claimed')
+        RETURNING agent_actor_id, thread_id
+        "#,
+    )
+    .bind(request_id)
+    .bind(format!("Stopped by {name}."))
+    .fetch_optional(&mut **transaction)
+    .await?
+    else {
+        return Ok(false);
+    };
+    crate::agent_sessions::cancel_for_request(transaction, request_id).await?;
+    crate::runs::launch_paths::stopped(transaction, by, agent_actor_id, &[request_id], reason)
+        .await?;
+    wake(
+        transaction,
+        project_id,
+        conversation_id,
+        agent_actor_id,
+        request_id,
+        Wakeup::Cancelled,
+    )
+    .await?;
+    notify(transaction, project_id, conversation_id).await?;
+    if let Some(thread_id) = thread_id {
+        notify(transaction, project_id, thread_id).await?;
+    }
+    Ok(true)
 }
 
 /// Background loop: expire lapsed claims and deliver webhook wakeups.
@@ -1292,9 +1366,6 @@ struct DueDelivery {
     attempts: i32,
     agent_actor_id: Uuid,
     project_id: Uuid,
-    /// The project's workspace, whose share of outbound requests the wakeup
-    /// takes.
-    organization_id: Uuid,
     conversation_id: Uuid,
     thread_id: Option<Uuid>,
     message_id: Uuid,
@@ -1315,15 +1386,53 @@ struct DueDelivery {
 }
 
 async fn deliver_webhooks(state: &AppState) -> Result<(), AppError> {
-    let pool = &state.pool;
+    let claimed = claim_due_wakeups(state).await?;
     let trusted_origins = &state.config.webhook_trusted_origins;
-    let mut transaction = pool.begin().await?;
+    // Posted outside any transaction, side by side, so a slow runner holds
+    // no database connection and the lease sweep never waits behind it.
+    // Each post is bounded by `outbound::WEBHOOK_TIMEOUT` (twice, with the lookup),
+    // well inside the claim.
+    let results = futures_util::future::join_all(claimed.into_iter().map(|wakeup| async move {
+        let error = match wakeup.secret.as_ref() {
+            None => Some("the webhook's signing secret couldn't be read"),
+            Some(secret) => post_wakeup(
+                &wakeup.url,
+                secret.expose(),
+                &wakeup.delivery,
+                trusted_origins,
+            )
+            .await
+            .err(),
+        };
+        record_wakeup(&state.pool, &wakeup.delivery, error).await
+    }))
+    .await;
+    results.into_iter().collect()
+}
+
+/// How long a claimed wakeup is left to its poster before another sweep
+/// may take it up again.
+const WAKEUP_CLAIM: &str = "30 seconds";
+
+/// A due wakeup claimed for posting.
+struct ClaimedWakeup {
+    delivery: DueDelivery,
+    url: String,
+    /// `None` when the stored secret couldn't be opened: a failed attempt,
+    /// retried with backoff, not a wakeup quietly dropped.
+    secret: Option<crate::secrets::SecretValue>,
+}
+
+/// Claims up to ten due wakeups in one short transaction: those with nothing
+/// left to wake are marked delivered, the rest are pushed `WAKEUP_CLAIM` into
+/// the future so no other sweep posts them meanwhile.
+async fn claim_due_wakeups(state: &AppState) -> Result<Vec<ClaimedWakeup>, AppError> {
+    let mut transaction = state.pool.begin().await?;
     let due = sqlx::query_as::<_, DueDelivery>(
         r#"
         SELECT delivery.id, delivery.connection_id, delivery.reply_request_id,
                delivery.event, delivery.attempts, request.agent_actor_id,
-               request.project_id, project.organization_id,
-               request.conversation_id, request.thread_id,
+               request.project_id, request.conversation_id, request.thread_id,
                request.message_id, request.generation, request.follows_request_id,
                (
                    CASE delivery.event
@@ -1338,7 +1447,6 @@ async fn deliver_webhooks(state: &AppState) -> Result<(), AppError> {
                connection.webhook_url, connection.webhook_secret, connection.webhook_secret_id
         FROM agent_webhook_deliveries delivery
         JOIN reply_requests request ON request.id = delivery.reply_request_id
-        JOIN projects project ON project.id = request.project_id
         JOIN external_agent_connections connection ON connection.id = delivery.connection_id
         LEFT JOIN agent_sessions session
           ON session.agent_actor_id = request.agent_actor_id
@@ -1355,86 +1463,99 @@ async fn deliver_webhooks(state: &AppState) -> Result<(), AppError> {
     .bind(WEBHOOK_MAX_ATTEMPTS)
     .fetch_all(&mut *transaction)
     .await?;
+    let mut claimed = Vec::new();
     for delivery in due {
-        // A stored secret that can't be opened is a failed attempt, retried
-        // with backoff, not a wakeup quietly dropped.
-        let mut secret_unreadable = false;
-        let secret = match (&delivery.webhook_secret_id, &delivery.webhook_secret) {
-            (Some(id), _) => {
-                let revealed = match crate::secrets::keyring(&state.config) {
-                    Ok(keys) => crate::secrets::reveal(
-                        &mut *transaction,
-                        keys.as_ref(),
-                        *id,
-                        "agent_webhook.sign",
-                    )
-                    .await
-                    .ok(),
-                    Err(_) => None,
-                };
-                secret_unreadable = revealed.is_none();
-                revealed
-            }
-            (None, Some(plaintext)) => Some(crate::secrets::SecretValue::new(plaintext.clone())),
-            (None, None) => None,
-        };
-        let placeholder = crate::secrets::SecretValue::new(String::new());
+        let (secret, secret_unreadable) =
+            match (&delivery.webhook_secret_id, &delivery.webhook_secret) {
+                (Some(id), _) => {
+                    let revealed = match crate::secrets::keyring(&state.config) {
+                        Ok(keys) => crate::secrets::reveal(
+                            &mut *transaction,
+                            keys.as_ref(),
+                            *id,
+                            "agent_webhook.sign",
+                        )
+                        .await
+                        .ok(),
+                        Err(_) => None,
+                    };
+                    let unreadable = revealed.is_none();
+                    (revealed, unreadable)
+                }
+                (None, Some(plaintext)) => (
+                    Some(crate::secrets::SecretValue::new(plaintext.clone())),
+                    false,
+                ),
+                (None, None) => (None, false),
+            };
         // Bridges on the old format only understand "check your inbox", which
         // a stop doesn't need.
         let legacy_stop = delivery.wakeup_format == "inbox" && delivery.event == "reply.cancelled";
-        let (Some(url), Some(secret), true, false) = (
-            delivery.webhook_url.as_deref(),
-            secret
-                .as_ref()
-                .or(secret_unreadable.then_some(&placeholder))
-                .map(crate::secrets::SecretValue::expose),
-            delivery.still_true,
-            legacy_stop,
-        ) else {
+        let deliverable = delivery.webhook_url.is_some()
+            && (secret.is_some() || secret_unreadable)
+            && delivery.still_true
+            && !legacy_stop;
+        if !deliverable {
             // Answered, superseded, or the webhook was removed: nothing to wake.
             sqlx::query("UPDATE agent_webhook_deliveries SET delivered_at = now() WHERE id = $1")
                 .bind(delivery.id)
                 .execute(&mut *transaction)
                 .await?;
             continue;
-        };
-        let error = if secret_unreadable {
-            Some("the webhook's signing secret couldn't be read")
-        } else {
-            post_wakeup(url, secret, &delivery, trusted_origins)
-                .await
-                .err()
-        };
-        let attempts = delivery.attempts + 1;
-        let backoff_seconds = (5_i64 << attempts.min(6)).min(300);
-        sqlx::query(
-            r#"
-            UPDATE agent_webhook_deliveries
-            SET attempts = $2,
-                next_attempt_at = now() + make_interval(secs => $3),
-                delivered_at = CASE WHEN $4::text IS NULL THEN now() END,
-                last_error = $4
-            WHERE id = $1
-            "#,
-        )
+        }
+        sqlx::query(&format!(
+            "UPDATE agent_webhook_deliveries SET next_attempt_at = now() + interval '{WAKEUP_CLAIM}' \
+             WHERE id = $1"
+        ))
         .bind(delivery.id)
-        .bind(attempts)
-        .bind(backoff_seconds as f64)
-        .bind(error)
         .execute(&mut *transaction)
         .await?;
-        sqlx::query(
-            r#"
-            UPDATE external_agent_connections
-            SET last_wakeup_at = now(), last_wakeup_error = $2
-            WHERE id = $1
-            "#,
-        )
-        .bind(delivery.connection_id)
-        .bind(error)
-        .execute(&mut *transaction)
-        .await?;
+        claimed.push(ClaimedWakeup {
+            url: delivery.webhook_url.clone().unwrap_or_default(),
+            delivery,
+            secret,
+        });
     }
+    transaction.commit().await?;
+    Ok(claimed)
+}
+
+/// Records one posted wakeup's result in its own short transaction.
+async fn record_wakeup(
+    pool: &sqlx::PgPool,
+    delivery: &DueDelivery,
+    error: Option<&str>,
+) -> Result<(), AppError> {
+    let attempts = delivery.attempts + 1;
+    let backoff_seconds = (5_i64 << attempts.min(6)).min(300);
+    let mut transaction = pool.begin().await?;
+    sqlx::query(
+        r#"
+        UPDATE agent_webhook_deliveries
+        SET attempts = $2,
+            next_attempt_at = now() + make_interval(secs => $3),
+            delivered_at = CASE WHEN $4::text IS NULL THEN now() END,
+            last_error = $4
+        WHERE id = $1
+        "#,
+    )
+    .bind(delivery.id)
+    .bind(attempts)
+    .bind(backoff_seconds as f64)
+    .bind(error)
+    .execute(&mut *transaction)
+    .await?;
+    sqlx::query(
+        r#"
+        UPDATE external_agent_connections
+        SET last_wakeup_at = now(), last_wakeup_error = $2
+        WHERE id = $1
+        "#,
+    )
+    .bind(delivery.connection_id)
+    .bind(error)
+    .execute(&mut *transaction)
+    .await?;
     transaction.commit().await?;
     Ok(())
 }
@@ -1478,7 +1599,6 @@ async fn post_wakeup(
     trusted_origins: &[String],
 ) -> Result<(), &'static str> {
     let (url, client) = crate::outbound::webhook_client(url, trusted_origins).await?;
-    let _permit = crate::outbound::permit(delivery.organization_id).await;
     let body = wakeup_body(delivery);
     let event = body["event"].as_str().unwrap_or_default().to_owned();
     let body = body.to_string();

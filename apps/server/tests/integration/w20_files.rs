@@ -12,7 +12,7 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 use super::{
-    agent_interface::{Browser, create_agent, initialize, send, test_app_with, tool},
+    agent_interface::{Browser, create_agent, creates_once, initialize, send, test_app_with, tool},
     mcp_admin::{Setup, create_project, setup},
     mcp_tasks::{add_member, space},
     message_edits::{add_person, create_channel, text},
@@ -142,6 +142,100 @@ async fn timeline_entry(
         .find(|entry| entry["message"]["id"] == message)
         .cloned()
         .unwrap_or_else(|| panic!("message {message} not in {timeline}"))
+}
+
+#[tokio::test]
+async fn uploading_again_stores_one_file() {
+    let Some((setup, _root)) = with_data_root("w20_retry").await else {
+        return;
+    };
+    let work = create_project(&setup, "WORK", "Work").await;
+    let space = space(&setup).await;
+    let (agent, token) = create_agent(&setup.app, &setup.browser, &space, "Rook", "rook").await;
+    add_member(&setup, &work, agent, "member").await;
+    let session = initialize(&setup.app, &token).await.expect("MCP session");
+    let channel = create_channel(&setup, &work, "general").await;
+    creates_once(
+        &setup.app,
+        &setup.pool,
+        &token,
+        &session,
+        "file_upload",
+        json!({"conversationId": channel, "name": "run.log", "text": "all green", "clientRequestId": "upload-retry-1"}),
+        json!({"conversationId": channel, "name": "run.log", "text": "all red", "clientRequestId": "upload-retry-1"}),
+        "SELECT count(*) FROM files",
+    )
+    .await;
+}
+
+/// Keyed creates hold one connection each, never one while taking another:
+/// on a pool of two, six uploads and six scheduled messages side by side,
+/// each sent twice with its key, all finish, and each makes one thing.
+#[tokio::test]
+async fn keyed_creates_side_by_side_fit_a_small_pool() {
+    let Some((setup, root)) = with_data_root("w20_small_pool").await else {
+        return;
+    };
+    let work = create_project(&setup, "WORK", "Work").await;
+    let space = space(&setup).await;
+    let (agent, token) = create_agent(&setup.app, &setup.browser, &space, "Rook", "rook").await;
+    add_member(&setup, &work, agent, "member").await;
+    let channel = create_channel(&setup, &work, "general").await;
+    let small = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(2)
+        .acquire_timeout(std::time::Duration::from_secs(10))
+        .connect_with((*setup.pool.connect_options()).clone())
+        .await
+        .expect("small pool");
+    let database_url = std::env::var("AGENT_WORKSPACE_DATABASE_URL").expect("database URL");
+    let app = test_app_with(
+        small.clone(),
+        &database_url,
+        &[(
+            "AGENT_WORKSPACE_DATA_ROOT",
+            root.path().to_string_lossy().into_owned(),
+        )],
+    );
+    let send_at = (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339();
+    // Six uploads and six schedules, each sent twice at once with the same
+    // key, every call on its own MCP session (the helper reuses one JSON-RPC
+    // id, which one session can't tell apart).
+    let mut calls = vec![];
+    for index in 0..6 {
+        let upload = json!({
+            "conversationId": channel, "name": format!("run-{index}.log"),
+            "text": "all green", "clientRequestId": format!("small-upload-{index}"),
+        });
+        let schedule = json!({
+            "conversationId": channel, "text": format!("Standup {index}"),
+            "sendAt": send_at, "clientRequestId": format!("small-schedule-{index}"),
+        });
+        for (name, arguments) in [
+            ("file_upload", upload.clone()),
+            ("file_upload", upload),
+            ("message_schedule", schedule.clone()),
+            ("message_schedule", schedule),
+        ] {
+            let session = initialize(&app, &token).await.expect("MCP session");
+            calls.push((name, arguments, session));
+        }
+    }
+    let answers =
+        futures_util::future::join_all(calls.iter().map(|(name, arguments, session)| {
+            tool(&app, &token, session, name, arguments.clone())
+        }))
+        .await;
+    for answer in &answers {
+        assert_eq!(answer["outcome"], "ok", "{answer}");
+    }
+    let (files, scheduled) = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT (SELECT count(*) FROM files), (SELECT count(*) FROM scheduled_messages)",
+    )
+    .fetch_one(&setup.pool)
+    .await
+    .expect("counts");
+    assert_eq!((files, scheduled), (6, 6));
+    small.close().await;
 }
 
 #[tokio::test]

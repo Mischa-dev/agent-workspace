@@ -16,6 +16,7 @@ import './home.css'
 import { MoreLink } from './MoreLink'
 import { ProjectInitials } from './ProjectInitials'
 import type { Project } from './types'
+import '../styles/pages.css'
 
 const RECENT_PROJECTS = 6
 

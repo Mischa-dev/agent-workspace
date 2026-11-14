@@ -6,6 +6,7 @@ import { Markdown } from '../ui/markdown/Markdown'
 import { parseMessageContent } from './messageContentModel'
 import type { ConversationActor, ConversationWorkItemChip } from './types'
 import './messageMarkdown.css'
+import '../styles/conversation.css'
 
 type MessageContentProps = {
   actors: ConversationActor[]

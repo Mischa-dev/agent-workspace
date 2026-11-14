@@ -152,6 +152,11 @@ pub struct AppConfig {
     /// exist yet in a safe place: the server creates the keyring there when
     /// it starts (`secrets::ensure_keyring`).
     pub secrets_key_missing: bool,
+    /// The request header that carries the caller's address, as a trusted
+    /// proxy in front of the server sets it (`cf-connecting-ip` behind
+    /// Cloudflare). Unset, nothing is read from the request for the
+    /// caller's address and there are no per-address limits.
+    pub client_address_header: Option<String>,
 }
 
 /// A set of defaults sized for one kind of server (H1.12). A profile only
@@ -561,6 +566,7 @@ impl AppConfig {
                 }
             }
         }
+        let client_address_header = client_address_header(values)?;
         Ok(Self {
             environment,
             server_addr,
@@ -600,6 +606,7 @@ impl AppConfig {
             profile,
             link_previews,
             secrets_key_missing,
+            client_address_header,
         })
     }
 }
@@ -985,6 +992,27 @@ fn operator_logins(values: &BTreeMap<String, String>) -> Result<Vec<String>, Con
         logins.push(login);
     }
     Ok(logins)
+}
+
+fn client_address_header(values: &BTreeMap<String, String>) -> Result<Option<String>, ConfigError> {
+    let key = format!("{PREFIX}CLIENT_ADDRESS_HEADER");
+    let Some(name) = values
+        .get(&key)
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+    if name.len() > 64
+        || axum::http::HeaderName::from_bytes(name.as_bytes()).is_err()
+        || matches!(name.as_str(), "host" | "cookie" | "authorization")
+    {
+        return Err(ConfigError::Invalid {
+            key,
+            reason: "name one request header, such as cf-connecting-ip".into(),
+        });
+    }
+    Ok(Some(name))
 }
 
 fn webhook_trusted_origins(values: &BTreeMap<String, String>) -> Result<Vec<String>, ConfigError> {
@@ -1832,22 +1860,45 @@ mod tests {
     }
 
     #[test]
+    fn the_client_address_header_is_one_header_name_or_unset() {
+        let mut values = base_values();
+        let config = AppConfig::from_values(&values).expect("config");
+        assert_eq!(config.client_address_header, None);
+        values.insert(
+            "AGENT_WORKSPACE_CLIENT_ADDRESS_HEADER".to_owned(),
+            " CF-Connecting-IP ".to_owned(),
+        );
+        let config = AppConfig::from_values(&values).expect("config");
+        assert_eq!(
+            config.client_address_header.as_deref(),
+            Some("cf-connecting-ip")
+        );
+        for invalid in ["two words", "cookie", "x:y"] {
+            values.insert(
+                "AGENT_WORKSPACE_CLIENT_ADDRESS_HEADER".to_owned(),
+                invalid.to_owned(),
+            );
+            assert!(AppConfig::from_values(&values).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
     fn webhook_trusted_origins_are_exact_origins() {
         let mut values = base_values();
         values.insert(
             "AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS".to_owned(),
-            " http://100.119.56.3:8732 , https://hooks.internal:443/ ".to_owned(),
+            " http://100.64.0.10:8732 , https://hooks.internal:443/ ".to_owned(),
         );
         let config = AppConfig::from_values(&values).expect("config");
         assert_eq!(
             config.webhook_trusted_origins,
-            ["http://100.119.56.3:8732", "https://hooks.internal"]
+            ["http://100.64.0.10:8732", "https://hooks.internal"]
         );
         for invalid in [
-            "ftp://100.119.56.3",
-            "http://user:secret@100.119.56.3:8732",
-            "http://100.119.56.3:8732/wake",
-            "100.119.56.3:8732",
+            "ftp://100.64.0.10",
+            "http://user:secret@100.64.0.10:8732",
+            "http://100.64.0.10:8732/wake",
+            "100.64.0.10:8732",
         ] {
             values.insert(
                 "AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS".to_owned(),

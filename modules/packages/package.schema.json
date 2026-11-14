@@ -1,0 +1,224 @@
+{
+  "$defs": {
+    "Content": {
+      "additionalProperties": false,
+      "description": "One part of a package.",
+      "properties": {
+        "body": {
+          "additionalProperties": true,
+          "description": "In the inline form: the part itself, in its portable form.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "key": {
+          "description": "Unique among the package's parts of this kind; `@<key>` refers to it.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ContentKind"
+        },
+        "path": {
+          "description": "In the zip form: the file that holds the part.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "key"
+      ],
+      "type": "object"
+    },
+    "ContentKind": {
+      "oneOf": [
+        {
+          "const": "switches",
+          "description": "Core modules to turn off: `{\"off\": [...]}`.",
+          "type": "string"
+        },
+        {
+          "const": "layout",
+          "description": "The default layout: `{\"preset\", \"changes\", \"words\"}`.",
+          "type": "string"
+        },
+        {
+          "const": "role",
+          "description": "A role: name, base role, permissions, modules off, defaults.",
+          "type": "string"
+        },
+        {
+          "const": "space",
+          "description": "A starter space: `{\"name\", \"key\"}`.",
+          "type": "string"
+        },
+        {
+          "const": "channels",
+          "description": "Channel names: `{\"channels\": [{\"name\"}]}`.",
+          "type": "string"
+        },
+        {
+          "const": "module",
+          "description": "A built module's definition.",
+          "type": "string"
+        },
+        {
+          "const": "collection",
+          "description": "`collection_describe`'s definition.",
+          "type": "string"
+        },
+        {
+          "const": "form",
+          "description": "A form on a collection, without its link.",
+          "type": "string"
+        },
+        {
+          "const": "automation",
+          "description": "An automation rule, or an outbound webhook (flagged `outbound`).",
+          "type": "string"
+        },
+        {
+          "const": "page",
+          "description": "A page or page template.",
+          "type": "string"
+        },
+        {
+          "const": "skill",
+          "description": "An Agent Skill, installed as a skill page.",
+          "type": "string"
+        },
+        {
+          "const": "agent",
+          "description": "An agent template (never an account).",
+          "type": "string"
+        }
+      ]
+    },
+    "PackageTarget": {
+      "oneOf": [
+        {
+          "const": "space",
+          "description": "Installs into one space, creating it if asked.",
+          "type": "string"
+        },
+        {
+          "const": "workspace",
+          "description": "Also sets switches, roles, the default role and the default layout.",
+          "type": "string"
+        }
+      ]
+    },
+    "Publisher": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "Requires": {
+      "additionalProperties": false,
+      "properties": {
+        "contract": {
+          "description": "The module contract it was written for, such as \">=2\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "modules": {
+          "description": "Core modules it needs on.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A package: a setup in one file. It never holds secrets, credentials,\ntokens, member lists or content beyond what its author put in.",
+  "properties": {
+    "contents": {
+      "description": "The parts, each by kind and key.",
+      "items": {
+        "$ref": "#/$defs/Content"
+      },
+      "type": "array"
+    },
+    "description": {
+      "type": "string"
+    },
+    "digest": {
+      "description": "\"sha256:<hex>\" over the canonical document without this field.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "format": {
+      "description": "Always \"agent-workspace-package/1\".",
+      "type": "string"
+    },
+    "id": {
+      "description": "\"publisher.key\" or \"key\": lower case letters, digits and underscores.",
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "needsAdmin": {
+      "description": "Parts that need an admin to install, as \"kind:key\".",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "publisher": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Publisher"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "requires": {
+      "$ref": "#/$defs/Requires"
+    },
+    "target": {
+      "$ref": "#/$defs/PackageTarget",
+      "description": "What it installs into."
+    },
+    "version": {
+      "description": "A semantic version, such as \"1.2.0\".",
+      "type": "string"
+    }
+  },
+  "required": [
+    "format",
+    "id",
+    "version",
+    "name",
+    "target",
+    "contents"
+  ],
+  "title": "Package",
+  "type": "object"
+}

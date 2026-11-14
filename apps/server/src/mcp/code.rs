@@ -96,13 +96,13 @@ pub(super) struct RepositoryItem {
     pub enabled: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub archived: bool,
-    /// Whether Codex can run on it now.
+    /// Whether a run can start on it now.
     pub ready_for_runs: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub not_ready_because: Option<String>,
     /// Open pull requests on it that you can see.
     pub open_pull_requests: i64,
-    /// Codex runs on it that haven't finished, in threads you can see.
+    /// Runs on it that haven't finished, in threads you can see.
     pub active_runs: i64,
     pub version: i64,
     /// Where an owner or admin changes it: project settings, Repositories.

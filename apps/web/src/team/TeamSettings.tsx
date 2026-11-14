@@ -40,6 +40,7 @@ import {
   type TeamRole,
 } from './api'
 import { listRoles, roleKeys, type WorkspaceRoleView } from '../settings/workspace/roles'
+import '../styles/pages.css'
 
 /** A role picked from a list: a built-in role's key, or a custom role's ID (AWD-74). */
 type RoleChoice = { role?: TeamRole; roleId?: string }

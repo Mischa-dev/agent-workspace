@@ -463,6 +463,7 @@ pub(crate) async fn follow_recovered_run(
             r#"
             SELECT c.project_id, ar.conversation_id, ps.provider_thread_id,
                    ar.execution_profile_id, ar.provider_turn_id
+            -- visibility: the run worker reads its own run's conversation
             FROM agent_runs ar
             JOIN conversations c ON c.id = ar.conversation_id
             JOIN provider_sessions ps ON ps.id = ar.provider_session_id
@@ -705,6 +706,7 @@ pub(crate) async fn complete_recovered_run(
     let (project_id, conversation_id) = sqlx::query_as::<_, (Uuid, Uuid)>(
         r#"
             SELECT c.project_id, ar.conversation_id
+            -- visibility: the run worker reads its own run's conversation
             FROM agent_runs ar
             JOIN conversations c ON c.id = ar.conversation_id
             WHERE ar.id = $1
@@ -946,6 +948,7 @@ async fn handle_provider_request(
     .await?;
     let approval_id = match inserted_approval_id {
         Some(approval_id) => {
+            crate::requests::legacy::approval_written(&mut *transaction, approval_id).await?;
             crate::external_events::enqueue_external_approval_requested(
                 &mut transaction,
                 approval_id,
@@ -1067,12 +1070,15 @@ async fn handle_provider_request(
             .answer(request, answer)
             .await
             .map_err(|error| provider_error(run_id, "answer provider request", error))?;
+        let mut transaction = state.pool.begin().await?;
         sqlx::query(
             "UPDATE agent_approvals SET provider_response_delivered_at = now() WHERE id = $1",
         )
         .bind(approval_id)
-        .execute(&state.pool)
+        .execute(&mut *transaction)
         .await?;
+        crate::requests::legacy::approval_written(&mut *transaction, approval_id).await?;
+        transaction.commit().await?;
         return Ok(());
     }
 }
@@ -1158,11 +1164,12 @@ async fn complete_run(
         .bind(run_id)
         .execute(&mut *transaction)
         .await?;
-        let persisted_message_id =
-            sqlx::query_scalar::<_, Uuid>("SELECT id FROM messages WHERE agent_run_id = $1")
-                .bind(run_id)
-                .fetch_one(&mut *transaction)
-                .await?;
+        let persisted_message_id = sqlx::query_scalar::<_, Uuid>(
+            "SELECT id FROM messages WHERE agent_run_id = $1 -- visibility: the run's own reply",
+        )
+        .bind(run_id)
+        .fetch_one(&mut *transaction)
+        .await?;
         let existing_entry = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS (SELECT 1 FROM conversation_entries WHERE message_id = $1)",
         )
@@ -1229,6 +1236,7 @@ async fn complete_run(
         .bind(run_id)
         .execute(&mut *transaction)
         .await?;
+        crate::requests::legacy::run_approvals_written(&mut *transaction, run_id).await?;
         let recovery_event = insert_event(
             &mut transaction,
             run_id,

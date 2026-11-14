@@ -50,6 +50,9 @@ runner.poll(interval_seconds=30)
 | `pass_(reason=None)` | Nothing to add (optional requests only). |
 | `release(reason)` | You can't do it; people see the reason. |
 | `bind_session(ref, url=None, state=None)` | Names your session so the thread links to it and later wakeups carry it. |
+| `run_id` | The run a launch opened for this request, or `None`. The reply calls already move it. |
+| `step(title)` | One step of the work on the run (nothing without one). |
+| `result(kind, url, title=None)` | Something the run produced, such as a `pull_request` (nothing without a run). |
 | `on_followup(listener)` | Follow-ups in this thread while you work. Each is a request of its own. |
 
 If `on_request` raises, the runner releases the request with a short reason.

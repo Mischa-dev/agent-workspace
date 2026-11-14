@@ -384,6 +384,82 @@ impl Fixture {
     }
 }
 
+/// P0.14: the registration cap counts only clients nobody has used, so
+/// many apps people authorized (even ones since revoked) never close
+/// registration; a pile of fresh unclaimed ones still does.
+#[tokio::test]
+async fn registration_stays_open_with_many_authorized_clients() {
+    let Ok(database_url) = std::env::var("AGENT_WORKSPACE_DATABASE_URL") else {
+        eprintln!("skipping PostgreSQL integration test: AGENT_WORKSPACE_DATABASE_URL is unset");
+        return;
+    };
+    let fixture = Fixture::new(&database_url, "oauth_registration_cap").await;
+    let pool = schema_pool(&database_url, &fixture.schema).await;
+    // One real grant, copied onto 1,100 clients, each grant revoked.
+    fixture.sign_in_as_agent().await;
+    sqlx::query(
+        r#"
+        WITH template AS (SELECT project_id, actor_id FROM mcp_oauth_grants LIMIT 1),
+        clients AS (
+            INSERT INTO mcp_oauth_clients (id, client_name, redirect_uris)
+            SELECT gen_random_uuid(), 'Authorized ' || n, ARRAY['http://127.0.0.1:9/callback']
+            FROM generate_series(1, 1100) AS n
+            RETURNING id
+        )
+        INSERT INTO mcp_oauth_grants (id, client_id, project_id, actor_id, scopes, revoked_at)
+        SELECT gen_random_uuid(), clients.id, template.project_id, template.actor_id,
+               ARRAY['read'], now()
+        FROM clients, template
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("authorized clients");
+    let register = || async {
+        send(
+            &fixture.app,
+            Request::builder()
+                .method("POST")
+                .uri("/oauth/register")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "client_name": "Newcomer",
+                        "redirect_uris": [REDIRECT],
+                        "token_endpoint_auth_method": "none",
+                        "grant_types": ["authorization_code", "refresh_token"],
+                        "response_types": ["code"]
+                    }))
+                    .expect("registration"),
+                ))
+                .expect("request"),
+        )
+        .await
+    };
+    let (status, body) = register().await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    sqlx::query(
+        r#"
+        INSERT INTO mcp_oauth_clients (id, client_name, redirect_uris)
+        SELECT gen_random_uuid(), 'Unclaimed ' || n, ARRAY['http://127.0.0.1:9/callback']
+        FROM generate_series(1, 1024) AS n
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("unclaimed clients");
+    let (status, body) = register().await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body.to_string()
+            .contains("the local client registration limit has been reached"),
+        "{body}"
+    );
+    pool.close().await;
+    fixture.cleanup().await;
+}
+
 fn refresh_form(refresh_token: &str, client_id: &str) -> String {
     serde_urlencoded::to_string([
         ("grant_type", "refresh_token"),
@@ -568,10 +644,18 @@ async fn login(app: &axum::Router) -> (String, String) {
 }
 
 fn test_app(pool: PgPool, database_url: &str) -> axum::Router {
-    let config = AppConfig::from_values(&BTreeMap::from([(
-        "AGENT_WORKSPACE_DATABASE_URL".to_owned(),
-        database_url.to_owned(),
-    )]))
+    // Senders are told apart by the header a proxy sets, as on the live
+    // server.
+    let config = AppConfig::from_values(&BTreeMap::from([
+        (
+            "AGENT_WORKSPACE_DATABASE_URL".to_owned(),
+            database_url.to_owned(),
+        ),
+        (
+            "AGENT_WORKSPACE_CLIENT_ADDRESS_HEADER".to_owned(),
+            "cf-connecting-ip".to_owned(),
+        ),
+    ]))
     .expect("test configuration");
     let supervisors = SupervisorRegistry::new(&config).expect("supervisors");
     router(AppState {
@@ -600,4 +684,292 @@ async fn schema_pool(database_url: &str, schema: &str) -> PgPool {
         .connect(database_url)
         .await
         .expect("connect schema pool")
+}
+
+/// Registers a client, opens the consent page as the signed-in person and
+/// asks to connect as the agent. Returns the consent page, the answer to
+/// the consent (status, body) and the client's ID; the code verifier is
+/// `CONSENT_VERIFIER`.
+async fn consent_as_agent(
+    app: &axum::Router,
+    cookie: &str,
+    csrf: &str,
+    connection_id: &str,
+) -> (String, StatusCode, String, String) {
+    let (status, registration) = send(
+        app,
+        Request::builder()
+            .method("POST")
+            .uri("/oauth/register")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&json!({
+                    "client_name": "Helper",
+                    "redirect_uris": [REDIRECT],
+                    "token_endpoint_auth_method": "none",
+                    "grant_types": ["authorization_code", "refresh_token"],
+                    "response_types": ["code"]
+                }))
+                .expect("registration"),
+            ))
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{registration}");
+    let client_id = registration["client_id"]
+        .as_str()
+        .expect("client")
+        .to_owned();
+    let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(CONSENT_VERIFIER.as_bytes()));
+    let parameters = [
+        ("response_type", "code"),
+        ("client_id", client_id.as_str()),
+        ("redirect_uri", REDIRECT),
+        ("scope", "read write"),
+        ("state", "helper-state"),
+        ("code_challenge", challenge.as_str()),
+        ("code_challenge_method", "S256"),
+    ];
+    let page = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/oauth/authorize?{}",
+                    serde_urlencoded::to_string(parameters).expect("query")
+                ))
+                .header(header::COOKIE, cookie)
+                .body(Body::empty())
+                .expect("authorize"),
+        )
+        .await
+        .expect("authorize response");
+    assert_eq!(page.status(), StatusCode::OK);
+    let html = body_text(page).await;
+    let selection = format!("agent:{connection_id}");
+    let mut form = parameters.to_vec();
+    form.extend([
+        ("connect_as", selection.as_str()),
+        ("csrf_token", csrf),
+        ("decision", "approve"),
+    ]);
+    let answer = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/connect/confirm")
+                .header(header::COOKIE, cookie)
+                .header(header::ORIGIN, "http://127.0.0.1:3100")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(
+                    serde_urlencoded::to_string(form).expect("consent form"),
+                ))
+                .expect("consent request"),
+        )
+        .await
+        .expect("consent response");
+    let status = answer.status();
+    (html, status, body_text(answer).await, client_id)
+}
+
+const CONSENT_VERIFIER: &str = "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh";
+
+/// P0.6: managing an agent, and so acting as it through OAuth, follows one
+/// rule everywhere: an owner or admin of the agent's workspace whose role in
+/// its home project allows managing agents. A plain workspace member who is
+/// an explicit project admin can do none of it.
+#[tokio::test]
+async fn only_people_who_manage_an_agent_in_its_workspace_can_act_as_it() {
+    use super::{
+        agent_interface::{Browser, connect_app, initialize as mcp_initialize, tool as mcp_tool},
+        mcp_admin::{create_project, setup},
+        message_edits::add_person,
+    };
+
+    let Some(setup) = setup("oauth_manage_rule").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (status, created) = send(
+        app,
+        browser(
+            &setup.browser.cookie,
+            &setup.browser.csrf,
+            "POST",
+            &format!("/api/v1/projects/{work}/external-agents"),
+            json!({
+                "connectionName": "Muse",
+                "displayName": "Muse",
+                "handle": "muse",
+                "role": "member",
+                "scopes": ["read", "write", "events"]
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let connection_id = created["connection"]["id"]
+        .as_str()
+        .expect("connection")
+        .to_owned();
+
+    // The owner connects an app as Muse; that grant is what Pat must not see.
+    let (_, status, continue_page, client_id) = consent_as_agent(
+        app,
+        &setup.browser.cookie,
+        &setup.browser.csrf,
+        &connection_id,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let code = continue_page
+        .split("code=")
+        .nth(1)
+        .and_then(|rest| rest.split(['&', '"']).next())
+        .expect("code in continue page")
+        .to_owned();
+    let (status, tokens) = send(
+        app,
+        token_request(
+            serde_urlencoded::to_string([
+                ("grant_type", "authorization_code"),
+                ("client_id", client_id.as_str()),
+                ("code", code.as_str()),
+                ("redirect_uri", REDIRECT),
+                ("code_verifier", CONSENT_VERIFIER),
+            ])
+            .expect("token form"),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{tokens}");
+    let grant_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM mcp_oauth_grants WHERE external_agent_connection_id = $1::uuid",
+    )
+    .bind(&connection_id)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("the owner's grant");
+
+    // Pat: a workspace member, made an explicit admin of the agent's project.
+    let (pat, pat_browser) = add_person(&setup, &[&work], "pat").await;
+    // Pat's workspace role is set by hand, so a project role can't move it.
+    sqlx::query(
+        "UPDATE organization_memberships SET role_explicit = true WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(setup.organization_id)
+    .bind(pat)
+    .execute(&setup.pool)
+    .await
+    .expect("pin Pat's workspace role");
+    sqlx::query(
+        "UPDATE project_memberships SET role = 'admin' WHERE project_id = $1::uuid AND actor_id = $2",
+    )
+    .bind(&work)
+    .bind(pat)
+    .execute(&setup.pool)
+    .await
+    .expect("make Pat a project admin");
+    let workspace_role = sqlx::query_scalar::<_, String>(
+        "SELECT role FROM organization_memberships WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(setup.organization_id)
+    .bind(pat)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("Pat's workspace role");
+    assert_eq!(workspace_role, "member");
+    let pat_token = connect_app(app, &pat_browser, "Pat's app", "full").await;
+    let pat_session = mcp_initialize(app, &pat_token).await.expect("Pat's MCP");
+
+    let check = |browser: &Browser, expect_manage: bool| {
+        let browser = Browser {
+            cookie: browser.cookie.clone(),
+            csrf: browser.csrf.clone(),
+        };
+        let connection_id = connection_id.clone();
+        let pat_token = pat_token.clone();
+        let pat_session = pat_session.clone();
+        async move {
+            let (page, status, _, _) =
+                consent_as_agent(app, &browser.cookie, &browser.csrf, &connection_id).await;
+            assert_eq!(
+                page.contains(&format!("value=\"agent:{connection_id}\"")),
+                expect_manage,
+                "the consent screen's agent list"
+            );
+            assert_eq!(
+                status == StatusCode::OK,
+                expect_manage,
+                "posting the consent as the agent"
+            );
+            let (status, apps) = send(
+                app,
+                browser.request("GET", "/api/v1/account/connected-apps", None, Value::Null),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{apps}");
+            assert_eq!(
+                apps.to_string().contains(&grant_id.to_string()),
+                expect_manage,
+                "the connected-apps list: {apps}"
+            );
+            let listed = mcp_tool(app, &pat_token, &pat_session, "agent_list", json!({})).await;
+            assert_eq!(listed["outcome"], "ok", "{listed}");
+            let muse = listed["value"]["agents"]
+                .as_array()
+                .expect("agents")
+                .iter()
+                .find(|agent| agent["handle"] == "muse")
+                .cloned()
+                .unwrap_or(Value::Null);
+            assert!(muse.is_object(), "{listed}");
+            assert_eq!(
+                !muse["connection"].is_null(),
+                expect_manage,
+                "agent_list's manage view agrees: {muse}"
+            );
+        }
+    };
+    check(&pat_browser, false).await;
+    let (status, _) = send(
+        app,
+        pat_browser.request(
+            "POST",
+            &format!("/api/v1/account/connected-apps/{grant_id}/revoke"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "Pat can't revoke the owner's agent app"
+    );
+
+    // Made a workspace admin as well, Pat may do all of it.
+    sqlx::query(
+        "UPDATE organization_memberships SET role = 'admin' WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(setup.organization_id)
+    .bind(pat)
+    .execute(&setup.pool)
+    .await
+    .expect("make Pat a workspace admin");
+    check(&pat_browser, true).await;
+    let (status, _) = send(
+        app,
+        pat_browser.request(
+            "POST",
+            &format!("/api/v1/account/connected-apps/{grant_id}/revoke"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
 }

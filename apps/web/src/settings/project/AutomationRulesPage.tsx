@@ -124,6 +124,8 @@ function describeAction(action: RuleAction): string {
       }[action.recipients]
     case 'post_message':
       return 'post a message'
+    case 'run_operation':
+      return `run ${action.operation}`
   }
 }
 

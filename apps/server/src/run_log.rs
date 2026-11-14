@@ -52,6 +52,46 @@ const SECRET_KEYS: [&str; 9] = [
     "private_key",
 ];
 
+/// Object keys whose value is a secret, compared lower-cased with `_`,
+/// `-` and other separators removed, by how the key ends: `password`,
+/// `client_secret`, `X-Api-Key`, `accessToken`, `Set-Cookie`. Counts such
+/// as `inputTokens` don't end in one and are kept.
+const SECRET_FIELD_ENDINGS: [&str; 16] = [
+    "password",
+    "passwords",
+    "passwd",
+    "secret",
+    "secrets",
+    "token",
+    "apikey",
+    "accesskey",
+    "privatekey",
+    "authorization",
+    "cookie",
+    "cookies",
+    "credential",
+    "credentials",
+    "sessionkey",
+    "signingkey",
+];
+
+/// Whether a JSON object key names a secret, so its whole value goes.
+pub fn secret_field(key: &str) -> bool {
+    let compact = key
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .map(|character| character.to_ascii_lowercase())
+        .collect::<String>();
+    SECRET_FIELD_ENDINGS
+        .iter()
+        .any(|ending| compact.ends_with(ending))
+}
+
+/// What a redacted value is stored as.
+pub fn redacted() -> Value {
+    Value::String(REDACTED.to_owned())
+}
+
 /// Prefixes of well-known credential formats; the rest of the word goes.
 const SECRET_PREFIXES: [(&str, usize); 12] = [
     ("sk-", 16),

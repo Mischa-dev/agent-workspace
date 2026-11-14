@@ -22,6 +22,7 @@ import type {
   MessageContentV1,
   ReplyTarget,
 } from './types'
+import '../styles/conversation.css'
 
 const GROUP_WINDOW_MS = 5 * 60 * 1000
 /** Within this many pixels of the bottom counts as reading the newest message. */

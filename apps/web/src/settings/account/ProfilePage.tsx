@@ -9,6 +9,7 @@ import { startWorkOs, workOsStatus } from '../../auth/workos'
 import { Avatar, Banner, Button, PageHeader, Section, SettingsSkeleton, TextField, describeLoadError, showToast } from '../../ui'
 import type { SettingsPageProps } from '../types'
 import { EmailSection } from './EmailSection'
+import '../../styles/pages.css'
 
 /** Why a single sign-on link that came back here (`?workosError=`) didn't go through. */
 function linkFailure(reason: string | null) {

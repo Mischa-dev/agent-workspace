@@ -15,7 +15,7 @@ import { usePageTitle } from '../shell/documentTitleModel'
 import { Banner, Button, ButtonLink, ConfirmDialog, ErrorState, IconButton, ListSkeleton, Menu, PageHeader, PageTabs, describeError, showToast, type MenuEntry } from '../ui'
 import { FieldFilterEditor } from '../work-items/FieldFilters'
 import { useDebouncedValue } from '../work-items/pickerModel'
-import { usePhoneWidth } from '../work-items/useCoarsePointer'
+import { usePhoneWidth } from '../ui/useCoarsePointer'
 import {
   collectionKeys,
   createView,

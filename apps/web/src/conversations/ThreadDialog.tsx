@@ -2,6 +2,7 @@ import { useRef, useState, type FormEvent } from 'react'
 
 import { Button, Dialog, TextField, describeError } from '../ui'
 import { createThread } from './api'
+import '../styles/conversation.css'
 
 function suggestedName(text: string) {
   const firstLine = text.trim().split('\n')[0] ?? ''

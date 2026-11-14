@@ -39,6 +39,7 @@ import {
   type RunSettings,
 } from './api'
 import { RunSettingsFields } from './RunSettingsFields'
+import '../styles/pages.css'
 
 /** Your accounts for runs: the sign-ins your runs use. An account is yours
  * alone and works in every project you choose to use it in, so you sign in

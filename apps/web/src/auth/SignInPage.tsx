@@ -14,6 +14,7 @@ import {
   useSession,
 } from './session'
 import { isTwoFactorChallenge, login, loginTwoFactor } from './login'
+import './auth.css'
 
 function safeReturnTo(search: string) {
   const candidate = new URLSearchParams(search).get('returnTo')

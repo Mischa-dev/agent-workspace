@@ -23,6 +23,7 @@ import {
   withEllipses,
 } from '../ui'
 import { useListKeys } from '../ui/listKeys'
+import '../styles/pages.css'
 
 type SearchHit = {
   kind: 'message' | 'thread' | 'task' | 'page' | 'decision' | 'record' | 'file'

@@ -458,14 +458,7 @@ pub fn push_publishable_commit(request: PublishPush<'_>) -> Result<(), AppError>
             "workspace HEAD changed after publication was queued",
         ));
     }
-    if !request.remote_url.starts_with("https://github.com/")
-        || !request.remote_url.ends_with(".git")
-        || request.remote_url.contains('@')
-        || request
-            .remote_url
-            .bytes()
-            .any(|byte| byte.is_ascii_control())
-    {
+    if !crate::code_host::is_safe_remote(request.remote_url) {
         return Err(AppError::Invalid("unsafe GitHub remote"));
     }
     let askpass = TemporaryAskpass::create(request.data_root)?;

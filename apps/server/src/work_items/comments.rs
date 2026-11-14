@@ -187,13 +187,32 @@ async fn insert_projections(
     locked: &LockedComment,
     resolved: &ResolvedComment,
 ) -> Result<(), AppError> {
+    insert_comment_projections(
+        transaction,
+        locked.project_id,
+        locked.work_item_id,
+        locked.id,
+        resolved,
+    )
+    .await
+}
+
+/// Write a comment's mention and task-reference rows, which notifications
+/// and "Referenced in" read.
+pub(crate) async fn insert_comment_projections(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    work_item_id: Uuid,
+    comment_id: Uuid,
+    resolved: &ResolvedComment,
+) -> Result<(), AppError> {
     for (node_index, actor_id) in &resolved.mention_nodes {
         sqlx::query(
             "INSERT INTO work_item_comment_mentions (project_id, work_item_id, comment_id, actor_id, node_index) VALUES ($1, $2, $3, $4, $5)",
         )
-        .bind(locked.project_id)
-        .bind(locked.work_item_id)
-        .bind(locked.id)
+        .bind(project_id)
+        .bind(work_item_id)
+        .bind(comment_id)
         .bind(actor_id)
         .bind(i32::try_from(*node_index).map_err(|_| AppError::Validation("comment content"))?)
         .execute(&mut **transaction)
@@ -203,9 +222,9 @@ async fn insert_projections(
         sqlx::query(
             "INSERT INTO work_item_comment_references (project_id, source_work_item_id, comment_id, referenced_work_item_id, node_index) VALUES ($1, $2, $3, $4, $5)",
         )
-        .bind(locked.project_id)
-        .bind(locked.work_item_id)
-        .bind(locked.id)
+        .bind(project_id)
+        .bind(work_item_id)
+        .bind(comment_id)
         .bind(referenced_id)
         .bind(i32::try_from(*node_index).map_err(|_| AppError::Validation("comment content"))?)
         .execute(&mut **transaction)

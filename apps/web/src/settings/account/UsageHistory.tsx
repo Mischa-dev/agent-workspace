@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 
 import { Banner, Button, ListSkeleton, countLabel, describeLoadError, formatDateTime, formatFullDate, formatShortDate } from '../../ui'
 import { getHistory, usageKeys, type AccountHistory, type WindowHistory } from './usageApi'
+import '../../styles/conversation.css'
 
 /**
  * The usage page's history (U5): each window over the last two weeks, how

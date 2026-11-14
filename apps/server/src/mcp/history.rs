@@ -668,8 +668,8 @@ fn describe(row: &WorkItemTimelineRow, lookups: &Lookups) -> HistoryEntry {
         "worker_invoked" => Some(
             match uuid_at(&payload, "conversationId").and_then(|id| lookups.conversations.get(&id))
             {
-                Some(Some(name)) => format!("Started Codex in thread {name}"),
-                _ => "Started Codex in a thread you can't see".to_owned(),
+                Some(Some(name)) => format!("Started a run in thread {name}"),
+                _ => "Started a run in a thread you can't see".to_owned(),
             },
         ),
         "github_automation_transition" => {
@@ -1352,7 +1352,7 @@ mod tests {
             ),
             &lookups,
         );
-        assert_eq!(worker.text, "Started Codex in a thread you can't see");
+        assert_eq!(worker.text, "Started a run in a thread you can't see");
         let pull_request = Uuid::now_v7();
         lookups
             .pull_requests

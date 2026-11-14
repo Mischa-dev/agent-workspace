@@ -1,5 +1,6 @@
 import { Icon } from '../ui'
 import { chosenOptions, displayText, isEmpty, type FieldDefinition, type FieldReference, type FieldValue } from './fieldModel'
+import '../styles/work.css'
 
 /**
  * A field's value as list cells, board cards and read-only pages show it:

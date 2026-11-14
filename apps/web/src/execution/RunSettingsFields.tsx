@@ -1,6 +1,7 @@
 import { SelectField } from '../ui'
 import { pickableModels, type CatalogModel, type Harness, type RunSettings } from './api'
 import { reasoningLabel } from './labels'
+import '../styles/pages.css'
 
 /** Keeps a harness and a model apart in one option value; identifiers never hold a space. */
 const SEPARATOR = ' '

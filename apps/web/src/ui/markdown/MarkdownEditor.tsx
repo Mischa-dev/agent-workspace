@@ -5,6 +5,8 @@ import { SegmentedControl, TextArea } from '../controls'
 import { Tooltip } from '../overlays'
 import { Markdown } from './Markdown'
 import { applyEdit, formatEdit, type FormatAction, type TextEdit } from './editing'
+import '../../styles/conversation.css'
+import '../../styles/markdown.css'
 
 export type MarkdownEditorProps = {
   value: string

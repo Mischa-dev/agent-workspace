@@ -42,7 +42,7 @@ import { Markdown, MarkdownEditor } from '../ui/markdown'
 import type { Embed } from '../ui/markdown/parse'
 import { thingLink } from '../modules/references/thingLinks'
 import type { Piece, Thing, ThingDecl } from '../modules/contract'
-import { PieceView } from '../modules/pieces/Pieces'
+import { PieceView } from '../pieces/Pieces'
 import pagesManifest from '../../../../modules/pages.json'
 import {
   createPage,
@@ -64,6 +64,7 @@ import { PageEmbed } from './embeds/PageEmbed'
 import { PageDownloadMenu, PageImportButton } from './PageTransfer'
 import type { LiveDiscussion } from './live/LivePage'
 import './memory.css'
+import '../styles/pages.css'
 
 /** A collection's view, or whatever else a page embeds, live where the page is read. */
 const renderEmbed = (embed: Embed) => <PageEmbed href={embed.href} label={embed.label} />

@@ -1,4 +1,5 @@
 import { Banner, Button } from '../ui'
+import '../styles/conversation.css'
 
 /** Shown when the app couldn't remember where you were in a project. Nothing else is affected. */
 export function NavigationSyncAlert({ error, retry }: { error: string | null; retry: () => void }) {

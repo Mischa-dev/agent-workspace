@@ -16,6 +16,7 @@ import {
 } from '../../execution/api'
 import { Banner, Button, EmptyState, ErrorState, ListSkeleton, Row, RowList, StatusChip, formatShortDate, showToast } from '../../ui'
 import { accountSettingsHref, workspaceSettingsHref } from '../paths'
+import '../../styles/pages.css'
 
 /**
  * The workspace's model lists, one per harness. Owners and admins hide models

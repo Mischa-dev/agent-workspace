@@ -11,6 +11,7 @@ import { useProjects } from '../projects/hooks'
 import { Banner, Button, Dialog, SelectField, TextArea, TextField, describeError, plainPreview, showToast } from '../ui'
 import { createWorkItem } from '../work-items/api'
 import { forwardMessage } from './api'
+import '../styles/conversation.css'
 
 type Destination = { id: string; label: string; group: string }
 

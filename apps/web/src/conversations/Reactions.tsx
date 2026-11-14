@@ -4,6 +4,7 @@ import { Icon, IconButton, Tooltip } from '../ui'
 import { Popover } from '../ui/Popover'
 import { REACTION_CHOICES, reactionNames, type ReactionChoice } from './reactions'
 import type { MessageReaction } from './types'
+import '../styles/conversation.css'
 
 /** Columns in the emoji grid, for arrow keys. */
 const COLUMNS = 6

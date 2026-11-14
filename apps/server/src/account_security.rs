@@ -808,8 +808,12 @@ async fn login_two_factor(
         .await?;
         transaction.commit().await?;
         let _ = challenge.failed_attempts;
+        state.rate_limits.note_login_failure();
         return Err(AppError::InvalidCredentials);
     }
+    state
+        .rate_limits
+        .note_login_success(&challenge.login_name.to_ascii_lowercase());
     sqlx::query("UPDATE login_challenges SET consumed_at = now() WHERE id = $1")
         .bind(challenge.id)
         .execute(&mut *transaction)

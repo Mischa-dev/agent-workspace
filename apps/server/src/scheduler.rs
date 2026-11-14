@@ -82,7 +82,16 @@ pub async fn run(state: AppState, mut shutdown: watch::Receiver<bool>) -> Result
     let mut interval = tokio::time::interval(Duration::from_secs(1));
     loop {
         tokio::select! {
-            _ = interval.tick() => drain(&state).await?,
+            // A database blip must not stop the server: log and try again
+            // on the next tick, as the outbox publisher does.
+            _ = interval.tick() => {
+                if let Err(error) = drain(&state).await {
+                    tracing::error!(
+                        error_category = error.log_category(),
+                        "Agent Run scheduler pass failed"
+                    );
+                }
+            }
             changed = shutdown.changed() => {
                 if changed.is_err() || *shutdown.borrow() {
                     return Ok(());

@@ -1,9 +1,9 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider, QueryObserver } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { RealtimeProvider } from './RealtimeProvider'
-import { useConversationRealtime } from './realtimeContext'
+import { useConversationRealtime, useOptionalRealtime } from './realtimeContext'
 
 const projectId = '019fb600-0000-7000-8000-000000000001'
 const conversationId = '019fb600-0000-7000-8000-000000000002'
@@ -36,6 +36,14 @@ function Probe() {
       {realtime.connection}:{Object.values(realtime.streaming).join('|')}
     </output>
   )
+}
+
+const connectionRendered = vi.fn()
+
+/** Reads only the connection, as the shell's "Reconnecting" banner does. */
+function ConnectionProbe() {
+  connectionRendered()
+  return <span>{useOptionalRealtime()?.connection}</span>
 }
 
 describe('authenticated realtime provider', () => {
@@ -191,6 +199,40 @@ describe('authenticated realtime provider', () => {
     })
     expect(await screen.findByText('connecting:hello')).toBeVisible()
     expect(WebSocketStub.instances).toHaveLength(1)
+  })
+
+  it('renders a component reading only the connection once while a stream arrives', async () => {
+    const queryClient = new QueryClient()
+    const frames: FrameRequestCallback[] = []
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+      frames.push(callback)
+      return frames.length
+    })
+    connectionRendered.mockClear()
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RealtimeProvider>
+          <ConnectionProbe />
+          <Probe />
+        </RealtimeProvider>
+      </QueryClientProvider>,
+    )
+    const socket = WebSocketStub.instances[0]
+    const rendersBefore = connectionRendered.mock.calls.length
+    for (let index = 0; index < 100; index += 1) {
+      act(() => {
+        socket.message({
+          event_id: `019fb600-0000-7000-8001-${String(index).padStart(12, '0')}`,
+          project_id: projectId,
+          conversation_id: conversationId,
+          kind: 'message.delta',
+          payload: { message_id: messageStreamId, agent_run_id: runId, delta: 'x' },
+        })
+        frames.shift()?.(index)
+      })
+    }
+    expect(await screen.findByText(`connecting:${'x'.repeat(100)}`)).toBeVisible()
+    expect(connectionRendered).toHaveBeenCalledTimes(rendersBefore)
   })
 
   it('converges an ephemeral delta to its durable outbox Message', async () => {

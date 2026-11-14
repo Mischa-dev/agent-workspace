@@ -25,14 +25,14 @@ const authenticatedSession = {
   organizations: [
     {
       id: '019fb700-0000-7000-8000-000000000003',
-      name: 'Mischa Personal',
+      name: 'Demo Workspace',
       slug: 'mischa-personal',
       role: 'member',
     },
   ],
 }
 const resolvedInvitation = {
-  organizationName: 'Mischa Personal',
+  organizationName: 'Demo Workspace',
   projectName: '<img src=x onerror=alert(1)>',
   role: 'member',
   expiresAt: '2026-08-02T12:00:00Z',
@@ -188,7 +188,7 @@ describe('invitation acceptance', () => {
         requests.push({ path, init })
         if (path.endsWith('/api/v1/auth/session')) return jsonResponse(signedOutSession)
         if (path.endsWith('/api/v1/workspace-invitations/resolve')) {
-          return jsonResponse({ organizationName: 'Mischa Personal', role: 'member', expiresAt: '2026-08-02T12:00:00Z' })
+          return jsonResponse({ organizationName: 'Demo Workspace', role: 'member', expiresAt: '2026-08-02T12:00:00Z' })
         }
         if (path.endsWith('/api/v1/workspace-invitations/accept-new')) return jsonResponse(authenticatedSession)
         throw new Error(`Unexpected request: ${path}`)
@@ -197,7 +197,7 @@ describe('invitation acceptance', () => {
 
     renderJoin()
     expect(await screen.findByRole('heading', { name: 'Join a workspace' })).toBeVisible()
-    expect(screen.getByText('Mischa Personal')).toBeVisible()
+    expect(screen.getByText('Demo Workspace')).toBeVisible()
     fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'New Human' } })
     fireEvent.change(screen.getByLabelText('Username'), { target: { value: 'new.human' } })
     fireEvent.change(screen.getByLabelText('Handle'), { target: { value: 'new_human' } })

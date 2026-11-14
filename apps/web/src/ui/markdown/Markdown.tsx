@@ -3,6 +3,8 @@ import { Link, useInRouterContext } from 'react-router-dom'
 
 import { CodeBlock } from './CodeBlock'
 import { parseMarkdown, safeHref, type Block, type Embed, type Inline } from './parse'
+import '../../styles/conversation.css'
+import '../../styles/markdown.css'
 
 export type MarkdownProps = {
   /** The Markdown source. Raw HTML in it is shown as text. */

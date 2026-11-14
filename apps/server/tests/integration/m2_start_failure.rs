@@ -342,7 +342,7 @@ fn create_test_mirror(runtime_root: &Path, mirror_path: &Path) {
         "remote",
         "set-url",
         "origin",
-        "https://github.com/Mischa-dev/agent-workspace-m0-spike.git",
+        agent_workspace_server::seed::DEMO_CLONE_URL,
     ]);
 }
 

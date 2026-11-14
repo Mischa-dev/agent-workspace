@@ -23,6 +23,7 @@ import {
 } from './api'
 import { commandsFor, type SlashCommand, type SlashOutcome } from './slashCommands'
 import { atPhrase, parseReminder, parseSchedule, whenPhrase } from './when'
+import '../styles/conversation.css'
 
 const LEVELS: { level: NotificationLevel; label: string }[] = [
   { level: 'all', label: 'Every new message' },

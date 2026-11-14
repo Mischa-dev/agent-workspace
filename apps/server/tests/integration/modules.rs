@@ -1642,3 +1642,135 @@ async fn an_off_module_s_routes_answer_turned_off_until_it_comes_back() {
     .await;
     assert_ne!(status, StatusCode::FORBIDDEN);
 }
+
+/// P0.7: pages and whiteboards named by id answer `module_off` where their
+/// module is off, for the workspace and (a role's modules off being a
+/// permission) for a role that turns it off; the board list leaves out
+/// boards where Whiteboards is off.
+#[tokio::test]
+async fn the_gate_covers_pages_and_boards_named_by_id() {
+    let Some(setup) = setup("p07_id_gate").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
+    let (status, page) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/pages"),
+            None,
+            json!({"title": "Plan", "body": "Steps"}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{page}");
+    let page = page["id"].as_str().expect("page").to_owned();
+    let (status, board) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            "/api/v1/whiteboards",
+            None,
+            json!({"title": "Sketch", "projectId": work}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{board}");
+    let board = board["whiteboard"]["id"]
+        .as_str()
+        .expect("board")
+        .to_owned();
+    let get = |browser: &Browser, uri: String| {
+        let request = browser.request("GET", &uri, None, Value::Null);
+        async move { send(app, request).await }
+    };
+    let off = |(status, body): (StatusCode, Value)| {
+        status == StatusCode::FORBIDDEN && body["error"]["code"] == "module_off"
+    };
+    let listed_boards = |browser: &Browser| {
+        let request = browser.request("GET", "/api/v1/whiteboards", None, Value::Null);
+        async move {
+            let (status, body) = send(app, request).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            body["whiteboards"]
+                .as_array()
+                .expect("whiteboards")
+                .iter()
+                .filter_map(|board| board["id"].as_str().map(str::to_owned))
+                .collect::<Vec<_>>()
+        }
+    };
+
+    // Both on: nothing changes.
+    assert_eq!(
+        get(&bea_browser, format!("/api/v1/pages/{page}")).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        get(&bea_browser, format!("/api/v1/whiteboards/{board}"))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        listed_boards(&bea_browser).await,
+        std::slice::from_ref(&board)
+    );
+
+    // Off in the workspace.
+    let (status, body) = switch(
+        &setup,
+        &setup.browser,
+        json!({"switches": {"pages": false, "whiteboards": false}}),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {body}");
+    assert!(off(get(&bea_browser, format!("/api/v1/pages/{page}")).await));
+    assert!(off(get(
+        &bea_browser,
+        format!("/api/v1/pages/{page}/document")
+    )
+    .await));
+    let (status, body) = send(
+        app,
+        bea_browser.request(
+            "PATCH",
+            &format!("/api/v1/pages/{page}"),
+            None,
+            json!({"title": "Renamed"}),
+        ),
+    )
+    .await;
+    assert!(off((status, body)));
+    assert!(off(get(
+        &bea_browser,
+        format!("/api/v1/whiteboards/{board}")
+    )
+    .await));
+    assert!(listed_boards(&bea_browser).await.is_empty());
+
+    // Back on, then off only in Bea's role in the project.
+    let (status, body) = switch(
+        &setup,
+        &setup.browser,
+        json!({"switches": {"pages": true, "whiteboards": true}}),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {body}");
+    narrow_in_project(&setup, &work, bea, &["pages", "whiteboards"], "p07-narrow").await;
+    assert!(off(get(&bea_browser, format!("/api/v1/pages/{page}")).await));
+    assert!(off(get(
+        &bea_browser,
+        format!("/api/v1/whiteboards/{board}")
+    )
+    .await));
+    assert!(listed_boards(&bea_browser).await.is_empty());
+    // The owner's role leaves both on.
+    assert_eq!(
+        get(&setup.browser, format!("/api/v1/pages/{page}")).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(listed_boards(&setup.browser).await, [board]);
+}

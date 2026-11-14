@@ -46,20 +46,13 @@ use crate::{
         Action, ActorKind, Membership, Permission, ProjectScope, Resource, RoleGrant, Subject,
         authorize,
     },
-    work_item_commands::{AuditAttribution, CommandActor, record_audit_for},
-    work_items,
+    work_item_commands::{self, AuditAttribution, CommandActor, record_audit_for},
 };
 
 const MAX_WEBHOOK_BODY_BYTES: usize = 1024 * 1024;
 const MAX_GITHUB_RESPONSE_BYTES: usize = 1024 * 1024;
 const GITHUB_JOB_LEASE: Duration = Duration::from_secs(30);
 
-const APPLY_AUTOMATION_STATUS_SQL: &str = r#"
-    UPDATE work_items
-    SET status_id = $3, version = version + 1, updated_at = now()
-    WHERE project_id = $1 AND id = $2 AND version = $4
-    RETURNING version
-"#;
 const REQUIRED_EVENTS: [&str; 5] = [
     "push",
     "pull_request",
@@ -151,7 +144,16 @@ pub async fn run_jobs(
     let mut interval = tokio::time::interval(Duration::from_secs(1));
     loop {
         tokio::select! {
-            _ = interval.tick() => drain_jobs(&state).await?,
+            // A database blip must not stop the server: log and try again
+            // on the next tick.
+            _ = interval.tick() => {
+                if let Err(error) = drain_jobs(&state).await {
+                    tracing::error!(
+                        error_category = error.log_category(),
+                        "GitHub job worker pass failed"
+                    );
+                }
+            }
             changed = shutdown.changed() => {
                 if changed.is_err() || *shutdown.borrow() {
                     return Ok(());
@@ -4499,7 +4501,7 @@ async fn complete_pull_request_sync_job(
     }
     apply_pull_request_work_item_automation(
         &mut transaction,
-        job,
+        &AutomationJob::from(job),
         pull_request_version,
         canonical_state,
         pull_request.draft,
@@ -4550,16 +4552,64 @@ struct AutomationWorkItemRow {
     id: Uuid,
     version: i64,
     status_id: Uuid,
-    status_name: String,
     semantic_category: String,
     archived: bool,
+}
+
+/// What the pull request automation needs from its sync job.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug)]
+pub struct AutomationJob {
+    pub job_id: Uuid,
+    pub project_id: Uuid,
+    pub pull_request_id: Uuid,
+    pub integration_actor_id: Uuid,
+}
+
+impl From<&ClaimedPullRequestSyncJob> for AutomationJob {
+    fn from(job: &ClaimedPullRequestSyncJob) -> Self {
+        Self {
+            job_id: job.job_id,
+            project_id: job.project_id,
+            pull_request_id: job.pull_request_id,
+            integration_actor_id: job.integration_actor_id,
+        }
+    }
+}
+
+/// What a pull request sync does to its linked tasks once GitHub has
+/// answered, in its own transaction with the project row locked first as
+/// the sync does. For tests, which can't reach GitHub.
+#[doc(hidden)]
+pub async fn apply_pull_request_automation(
+    pool: &sqlx::PgPool,
+    job: AutomationJob,
+    pull_request_version: i64,
+    pull_request_state: &str,
+    draft: bool,
+) -> Result<(), AppError> {
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SELECT 1 FROM projects WHERE id = $1 FOR NO KEY UPDATE")
+        .bind(job.project_id)
+        .fetch_optional(&mut *transaction)
+        .await?;
+    apply_pull_request_work_item_automation(
+        &mut transaction,
+        &job,
+        pull_request_version,
+        pull_request_state,
+        draft,
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(())
 }
 
 /// Moves the pull request's explicitly linked tasks on. The caller holds the
 /// project row lock (see `complete_pull_request_sync_job`).
 async fn apply_pull_request_work_item_automation(
     transaction: &mut Transaction<'_, Postgres>,
-    job: &ClaimedPullRequestSyncJob,
+    job: &AutomationJob,
     pull_request_version: i64,
     pull_request_state: &str,
     draft: bool,
@@ -4602,7 +4652,7 @@ async fn apply_pull_request_work_item_automation(
     let work_items = sqlx::query_as::<_, AutomationWorkItemRow>(
         r#"
         SELECT item.id, item.version, item.status_id,
-               status.name AS status_name, status.semantic_category,
+               status.semantic_category,
                (item.archived_at IS NOT NULL) AS archived
         FROM github_pull_request_work_item_links link
         JOIN work_items item
@@ -4674,7 +4724,7 @@ async fn apply_pull_request_work_item_automation(
             reasons.insert("terminal_or_archived");
             continue;
         }
-        let Some((target_status_id, target_status_name)) = target_status.as_ref() else {
+        let Some((target_status_id, _)) = target_status.as_ref() else {
             insert_automation_skip(
                 transaction,
                 job,
@@ -4726,33 +4776,47 @@ async fn apply_pull_request_work_item_automation(
             reasons.insert("transition_not_allowed");
             continue;
         }
-        let new_version = sqlx::query_scalar::<_, i64>(APPLY_AUTOMATION_STATUS_SQL)
-            .bind(job.project_id)
-            .bind(item.id)
-            .bind(target_status_id)
-            .bind(item.version)
-            .fetch_optional(&mut **transaction)
+        // The move goes through the task command, as a person's would: one
+        // version bump, an activity with what changed, the assigned agent's
+        // event, watching agents' notes, one audit row and one outbox event.
+        let actor = CommandActor {
+            actor_id: job.integration_actor_id,
+            actor_kind: crate::policy::ActorKind::Integration,
+            project_id: job.project_id,
+            audit: AuditAttribution::Job {
+                job_id: job.job_id,
+                source: "github_automation",
+            },
+        };
+        let current = work_item_commands::lock_work_item(transaction, job.project_id, item.id)
             .await?
             .ok_or(AppError::Conflict("work_item", "version"))?;
-        let payload = json!({
-            "githubPullRequestId": job.pull_request_id,
-            "pullRequestNumber": job.pull_request_number,
-            "previousStatusId": item.status_id,
-            "previousStatus": item.status_name,
-            "newStatusId": target_status_id,
-            "newStatus": target_status_name,
-            "rule": rule
-        });
-        let activity_id = work_items::insert_work_item_activity(
+        let outcome = work_item_commands::update_locked_work_item(
             transaction,
-            job.project_id,
-            item.id,
-            job.integration_actor_id,
-            "github_automation_transition",
-            "GitHub pull request automation changed status",
-            &payload,
+            &actor,
+            current,
+            work_item_commands::UpdateWorkItemCommand {
+                expected_version: item.version,
+                title: None,
+                description: None,
+                type_id: None,
+                status_id: Some(*target_status_id),
+                priority: None,
+                assignee_actor_id: None,
+                parent_work_item_id: None,
+                board_placement: Some(work_item_commands::BoardPlacement::Bottom),
+                labels: None,
+                fields: work_item_commands::TaskFieldChanges::default(),
+                field_values: None,
+                summary: "GitHub pull request automation changed status",
+                audit_action: "github.work_item_automation_transition",
+                audit_version_metadata: work_item_commands::AuditVersionMetadata::Include,
+            },
         )
         .await?;
+        let work_item_commands::UpdateWorkItemOutcome::Applied { finalized, .. } = outcome else {
+            return Err(AppError::Conflict("work_item", "version"));
+        };
         sqlx::query(
             r#"
             INSERT INTO github_pull_request_automation_results (
@@ -4772,30 +4836,9 @@ async fn apply_pull_request_work_item_automation(
         .bind(item.status_id)
         .bind(target_status_id)
         .bind(job.integration_actor_id)
-        .bind(activity_id)
+        .bind(finalized.activity_id)
         .execute(&mut **transaction)
         .await?;
-        sqlx::query(
-            r#"
-            INSERT INTO audit_events (
-                id, actor_id, project_id, authentication_class,
-                action, target_kind, target_id, outcome, metadata
-            ) VALUES (
-                $1, $2, $3, 'github_job',
-                'github.work_item_automation_transition',
-                'work_item', $4, 'succeeded', $5
-            )
-            "#,
-        )
-        .bind(Uuid::now_v7())
-        .bind(job.integration_actor_id)
-        .bind(job.project_id)
-        .bind(item.id)
-        .bind(&payload)
-        .execute(&mut **transaction)
-        .await?;
-        outbox::enqueue_work_item_updated(transaction, job.project_id, item.id, new_version)
-            .await?;
         applied += 1;
     }
     if applied > 0 {
@@ -4813,7 +4856,7 @@ async fn apply_pull_request_work_item_automation(
 
 async fn insert_automation_skip(
     transaction: &mut Transaction<'_, Postgres>,
-    job: &ClaimedPullRequestSyncJob,
+    job: &AutomationJob,
     pull_request_version: i64,
     item: &AutomationWorkItemRow,
     rule: &str,
@@ -4845,7 +4888,7 @@ async fn insert_automation_skip(
 
 async fn set_pull_request_automation_projection(
     transaction: &mut Transaction<'_, Postgres>,
-    job: &ClaimedPullRequestSyncJob,
+    job: &AutomationJob,
     state: &str,
     reason: Option<&str>,
 ) -> Result<(), AppError> {
@@ -6396,7 +6439,7 @@ mod tests {
     #[test]
     fn signed_or_canonical_merge_commit_recovers_a_missing_rest_projection() {
         let fixture: Value = serde_json::from_str(include_str!(
-            "../../../tools/github-spike/fixtures/merged-close-rest-null-sha.json"
+            "../tests/fixtures/merged-close-rest-null-sha.json"
         ))
         .expect("merged close compatibility fixture");
         let signed_webhook = &fixture["signed_webhook"];
@@ -6442,13 +6485,6 @@ mod tests {
             reconcile_merge_commit_identity(&mut conflicting_provider_sha, Some(merge_sha), true,)
                 .is_err()
         );
-    }
-
-    #[test]
-    fn automation_status_update_uses_the_m4_work_item_schema() {
-        assert!(APPLY_AUTOMATION_STATUS_SQL.contains("SET status_id = $3"));
-        assert!(APPLY_AUTOMATION_STATUS_SQL.contains("version = version + 1"));
-        assert!(!APPLY_AUTOMATION_STATUS_SQL.contains("updated_by_actor_id"));
     }
 
     #[test]

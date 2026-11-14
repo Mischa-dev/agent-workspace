@@ -1,8 +1,4 @@
-/* Conversations: header, timeline, messages, agent activity and the composer. */
 
-.aw-main--conversation {
-  overflow: hidden;
-}
 
 .aw-conv__banner {
   flex: none;
@@ -1549,9 +1545,4 @@ a.aw-forward__meta:hover .aw-forward__author {
 .aw-forward__removed {
   color: var(--content-fg-muted);
   font-style: italic;
-}
-
-/* Messages sidebar while it loads */
-.aw-sidebar__skeleton {
-  padding: 0 var(--space-2);
 }

@@ -38,6 +38,9 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
+use agent_workspace_server::test_support::source::{
+    routes as shared_routes, rust_files, server_src, strip_tests,
+};
 use agent_workspace_server::{
     domain::allocate_conversation_sequence,
     policy_inventory::{MUTATING_ENTRY_POINTS, MutationMethod},
@@ -60,9 +63,9 @@ use super::{
     agent_interface::{Browser, connect_app, initialize, send},
     message_edits::text,
     workspace_isolation::{
-        MARKER, ORIGIN, TINY_PNG, TwoWorkspaces, World, call_tool, collect_sources,
-        first_string_literal, has_call, json_body as rpc_reply, leaked, login_as, route_blocks,
-        string_at, structured, succeeded, sweep_ids, tiny_png, two_workspaces_with, upload,
+        MARKER, ORIGIN, TINY_PNG, TwoWorkspaces, World, call_tool, json_body as rpc_reply, leaked,
+        login_as, string_at, structured, succeeded, sweep_ids, tiny_png, two_workspaces_with,
+        upload,
     },
 };
 
@@ -70,6 +73,8 @@ use super::{
 /// as written in the server's `.route(...)` calls.
 const WRITE_ROUTES: &[&str] = &[
     "POST /api/public/v1/{tool}",
+    "POST /api/v2/ops/{name}",
+    "POST /api/v2/w/{workspace}/ops/{name}",
     "POST /api/v1/account/api-tokens",
     "POST /api/v1/account/api-tokens/{credential_id}/revoke",
     "PATCH /api/v1/account/connected-apps/{id}",
@@ -373,6 +378,26 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
          workspace ID",
     ),
     ("POST /api/v1/auth/login", SIGN_IN),
+    (
+        "POST /api/v1/host/describe",
+        "a host's own call with its own token, about itself; no session and no workspace ID \
+         (tests/integration/a1_host_protocol.rs)",
+    ),
+    (
+        "POST /api/v1/host/heartbeat",
+        "a host's own call with its own token, about itself and its own runs \
+         (tests/integration/a1_host_protocol.rs)",
+    ),
+    (
+        "POST /api/v1/host/notices",
+        "a host's own call with its own token, about agents bound to it \
+         (tests/integration/a1_host_protocol.rs)",
+    ),
+    (
+        "POST /api/v1/hosts/enrol",
+        "a host trading a one-time code for its token; no session and no workspace ID \
+         (tests/integration/a1_host_protocol.rs)",
+    ),
     ("POST /api/v1/auth/login/two-factor", SIGN_IN),
     ("POST /api/v1/auth/logout", SIGN_IN),
     ("POST /api/v1/auth/password-reset", SIGN_IN),
@@ -441,6 +466,10 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "file_delete",
     "file_upload",
     "github_integration_write",
+    "host_agent_bind",
+    "host_agent_unbind",
+    "host_enrolment_create",
+    "host_unlink",
     "invitation_write",
     "label_write",
     "layout_preset_write",
@@ -489,12 +518,19 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "repository_write",
     "role_assign",
     "role_write",
+    "run_activity_report",
+    "run_cancel",
     "run_dismiss_failure",
+    "run_mark_not_started",
+    "run_create",
     "run_publish",
     "run_request",
+    "run_result_report",
     "run_retry",
     "run_start",
     "run_stop",
+    "run_update",
+    "run_usage_report",
     "scheduled_message_update",
     "session_bind",
     "settings_set",
@@ -552,19 +588,21 @@ const MCP_WRITE_EXCLUSIONS: &[(&str, &str)] = &[(
 
 #[test]
 fn every_write_route_and_write_tool_has_an_isolation_case() {
-    let source_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut sources = Vec::new();
-    collect_sources(&source_root, &mut sources);
-    assert!(
-        !sources.is_empty(),
-        "no server sources under {source_root:?}"
-    );
+    let sources = rust_files(&server_src());
+    assert!(!sources.is_empty(), "no server sources");
 
     // Every mutating route the server registers (test-only fakes at the end
     // of a file aside), and every one the policy inventory lists.
     let mut routes = sources
         .iter()
-        .flat_map(|(_, source)| mutating_routes(without_tests(source)))
+        .flat_map(|(_, source)| shared_routes(strip_tests(source)))
+        .flat_map(|route| {
+            route
+                .methods
+                .into_iter()
+                .filter(|method| *method != "GET")
+                .map(move |method| format!("{method} {}", route.path))
+        })
         .collect::<BTreeSet<_>>();
     routes.extend(MUTATING_ENTRY_POINTS.iter().map(|entry| {
         let method = match entry.method {
@@ -615,10 +653,21 @@ fn every_write_route_and_write_tool_has_an_isolation_case() {
 
     let mcp_source = sources
         .iter()
-        .find(|(path, _)| path.ends_with("src/mcp.rs"))
+        .find(|(path, _)| path == "mcp.rs")
         .map(|(_, source)| source.as_str())
         .expect("src/mcp.rs");
-    let write_tools = write_tools(mcp_source);
+    // Hand-written tools by their annotation, and operations by their kind.
+    let write_tools = write_tools(mcp_source)
+        .into_iter()
+        .chain(
+            agent_workspace_server::ops::registry()
+                .entries()
+                .filter(|entry| entry.meta.kind.writes())
+                .map(|entry| entry.meta.name.to_owned())
+                // ops_kernel's test operations, registered by other tests.
+                .filter(|name| !name.starts_with("echo_")),
+        )
+        .collect::<BTreeSet<_>>();
     assert!(
         write_tools.len() > 10,
         "parsed write tools: {write_tools:?}"
@@ -654,34 +703,6 @@ fn every_write_route_and_write_tool_has_an_isolation_case() {
         stale.is_empty(),
         "write-isolation cases for tools that aren't write tools: {stale:#?}"
     );
-}
-
-/// The source before a trailing `#[cfg(test)] mod`, so test-only routers
-/// (a provider's fake server) don't count as the app's routes.
-fn without_tests(source: &str) -> &str {
-    source
-        .find("\n#[cfg(test)]\nmod ")
-        .map_or(source, |end| &source[..end])
-}
-
-/// `"METHOD /path"` for each `.route("...", ...)` call that registers a
-/// POST, PUT, PATCH or DELETE handler.
-fn mutating_routes(source: &str) -> Vec<String> {
-    route_blocks(source)
-        .into_iter()
-        .filter_map(|block| first_string_literal(block).map(|path| (block, path)))
-        .flat_map(|(block, path)| {
-            [
-                ("POST", "post("),
-                ("PUT", "put("),
-                ("PATCH", "patch("),
-                ("DELETE", "delete("),
-            ]
-            .into_iter()
-            .filter(move |(_, token)| has_call(block, token))
-            .map(move |(method, _)| format!("{method} {path}"))
-        })
-        .collect()
 }
 
 /// Names of `#[tool(...)]` methods not annotated `read_only_hint = true`.
@@ -1169,6 +1190,9 @@ struct Targets {
     /// More sessions for A's owner: writes are limited per session per
     /// minute, so A's requests rotate through them. Empty for B.
     sessions: Vec<Browser>,
+    /// The workspace's hosts (A1.11): the agent is bound to the first two
+    /// as "net-agent" (HTTP, MCP); the last two are for unlinking.
+    hosts: [Uuid; 4],
     owner: Uuid,
     /// The agent, as an actor.
     agent: Uuid,
@@ -1251,6 +1275,9 @@ struct Targets {
     /// Questions the agent asked the owner (AWD-62): one to answer over
     /// HTTP, one through MCP.
     questions: [Uuid; 2],
+    /// Runs the owner reports on themselves (A1.3): one to report on, one
+    /// to stop, and one whose start is uncertain.
+    reported_runs: [Uuid; 3],
 }
 
 async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targets {
@@ -1589,7 +1616,7 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
                 ARRAY['projects.view', 'tasks.view', 'tasks.create', 'tasks.edit', 'tasks.delete',
                       'channels.post', 'channels.create', 'pages.edit', 'whiteboards.edit',
                       'collections.edit', 'collections.build', 'runs.launch', 'runs.approve', 'runs.interrupt', 'runs.accounts',
-                      'code.view', 'code.publish'])
+                      'runs.report', 'requests.raise', 'code.view', 'code.publish'])
         RETURNING id
         "#,
     )
@@ -1611,10 +1638,74 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
     .fetch_one(pool)
     .await
     .expect("workspace template");
+    let mut reported_runs = [Uuid::nil(); 3];
+    for (index, state) in ["working", "working", "start_uncertain"]
+        .into_iter()
+        .enumerate()
+    {
+        reported_runs[index] = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            INSERT INTO runs (id, workspace_id, space_id, account_id, title, cause_kind, state,
+                              last_report_at, started_at)
+            VALUES (gen_random_uuid(), $1, $2, $3, $4, 'manual', $5, now(), now())
+            RETURNING id
+            "#,
+        )
+        .bind(organization)
+        .bind(project)
+        .bind(owner)
+        .bind(format!("Net reported run {tag} {index}"))
+        .bind(state)
+        .fetch_one(pool)
+        .await
+        .expect("reported run");
+    }
+    let mut hosts = [Uuid::nil(); 4];
+    for (index, host) in hosts.iter_mut().enumerate() {
+        let account = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO actors (id, kind, status) VALUES (gen_random_uuid(), 'integration', 'active') RETURNING id",
+        )
+        .fetch_one(pool)
+        .await
+        .expect("host account");
+        *host = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            INSERT INTO hosts (id, account_id, owner_workspace_id, name, protocol_version,
+                               described_agents, enrolled_by_account_id)
+            VALUES (gen_random_uuid(), $1, $2, $3, '2026-11',
+                    '[{"hostAgentRef": "net-agent", "name": "Net", "backends": [], "actions": []}]',
+                    $4)
+            RETURNING id
+            "#,
+        )
+        .bind(account)
+        .bind(organization)
+        .bind(format!("Net host {tag} {index}"))
+        .bind(owner)
+        .fetch_one(pool)
+        .await
+        .expect("host");
+        if index < 2 {
+            sqlx::query(
+                r#"
+                INSERT INTO host_agents (host_id, account_id, host_agent_ref, bound_by_account_id)
+                VALUES ($1, $2, 'net-agent', $3)
+                "#,
+            )
+            .bind(*host)
+            .bind(agent)
+            .bind(owner)
+            .execute(pool)
+            .await
+            .expect("host agent");
+        }
+    }
     let in_project = |sql: &'static str| scalar(pool, sql, project);
     let in_organization = |sql: &'static str| scalar(pool, sql, organization);
     Targets {
+        hosts,
         questions,
+        reported_runs,
         custom_role,
         workspace_template,
         sessions,
@@ -2599,6 +2690,16 @@ async fn reply_request(
 /// Every row, in any table, whose JSON form mentions one of B's IDs, by
 /// table. A new row that points at B shows up as well as a change.
 async fn digest(pool: &PgPool, pattern: &str) -> BTreeMap<String, BTreeSet<String>> {
+    digest_ignoring(pool, pattern, &[]).await
+}
+
+/// [`digest`], leaving out the `ignored` columns of every row (ones a read
+/// may legitimately touch, such as a credential's `last_used_at`).
+pub(super) async fn digest_ignoring(
+    pool: &PgPool,
+    pattern: &str,
+    ignored: &[&str],
+) -> BTreeMap<String, BTreeSet<String>> {
     let tables = sqlx::query_scalar::<_, String>(
         r#"
         SELECT table_name::text FROM information_schema.tables
@@ -2612,9 +2713,10 @@ async fn digest(pool: &PgPool, pattern: &str) -> BTreeMap<String, BTreeSet<Strin
     let mut rows = BTreeMap::new();
     for table in tables {
         let found = sqlx::query_scalar::<_, String>(&format!(
-            r#"SELECT listed.row_text FROM (SELECT row_to_json(row_value)::text AS row_text FROM "{table}" row_value) listed WHERE listed.row_text ~ $1"#
+            r#"SELECT listed.row_text FROM (SELECT (to_jsonb(row_value) - $2::text[])::text AS row_text FROM "{table}" row_value) listed WHERE listed.row_text ~ $1"#
         ))
         .bind(pattern)
+        .bind(ignored)
         .fetch_all(pool)
         .await
         .unwrap_or_else(|error| panic!("digest {table}: {error}"));
@@ -2626,7 +2728,7 @@ async fn digest(pool: &PgPool, pattern: &str) -> BTreeMap<String, BTreeSet<Strin
 }
 
 /// What changed between two digests, one line per row.
-fn digest_changes(
+pub(super) fn digest_changes(
     before: &BTreeMap<String, BTreeSet<String>>,
     after: &BTreeMap<String, BTreeSet<String>>,
 ) -> Vec<String> {
@@ -3017,8 +3119,13 @@ impl<'a> Sender<'a> {
         first: &'a Browser,
         more: &'a [Browser],
     ) -> Self {
-        let mut browsers = vec![first];
-        browsers.extend(more.iter());
+        // The first session made the fixture's own writes in this same
+        // minute, so it only sends when there are no others.
+        let browsers = if more.is_empty() {
+            vec![first]
+        } else {
+            more.iter().collect()
+        };
         Self {
             app,
             pool,
@@ -3399,6 +3506,53 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
                     Expect::Refused,
                 ),
             ],
+            last: false,
+        },
+        // The generated operation route (K2): the workspace in the path must
+        // be where the target is, and a target in B is not found. Run with
+        // K2.5's decision_record; `ops_edges` runs the test operations.
+        HttpCase {
+            route: "POST /api/v2/w/{workspace}/ops/{name}",
+            own: Own::Run(Call::new(
+                "POST",
+                format!("/api/v2/w/{}/ops/decision_record", a.organization),
+                Payload::Json(json!({"spaceId": a.project, "title": "Net op"})),
+            )),
+            foreign: vec![
+                (
+                    Call::new(
+                        "POST",
+                        format!("/api/v2/w/{}/ops/decision_record", b.organization),
+                        Payload::Json(json!({"spaceId": a.project, "title": "Net op"})),
+                    ),
+                    Expect::Refused,
+                ),
+                (
+                    Call::new(
+                        "POST",
+                        format!("/api/v2/w/{}/ops/decision_record", a.organization),
+                        Payload::Json(json!({"spaceId": b.project, "title": "Net op"})),
+                    ),
+                    Expect::Refused,
+                ),
+            ],
+            last: false,
+        },
+        HttpCase {
+            route: "POST /api/v2/ops/{name}",
+            own: Own::Run(Call::new(
+                "POST",
+                "/api/v2/ops/decision_record".to_owned(),
+                Payload::Json(json!({"spaceId": a.project, "title": "Net op"})),
+            )),
+            foreign: vec![(
+                Call::new(
+                    "POST",
+                    "/api/v2/ops/decision_record".to_owned(),
+                    Payload::Json(json!({"spaceId": b.project, "title": "Net op"})),
+                ),
+                Expect::Refused,
+            )],
             last: false,
         },
         // Account
@@ -6695,6 +6849,31 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "importId": b.import}),
             json!({"projectId": a.project, "source": "github", "repositoryId": b.repository}),
         ]),
+        // Hosts (A1.11)
+        mcp_case(
+            "host_enrolment_create",
+            json!({"owner": "workspace", "workspace": a.organization, "label": "Net mcp host"}),
+            vec![json!({"owner": "workspace", "workspace": b.organization, "label": "Net mcp host"})],
+        ),
+        mcp_case(
+            "host_agent_bind",
+            json!({"hostId": ax.hosts[1], "accountId": ax.agent, "hostAgentRef": "net-agent"}),
+            vec![json!({"hostId": bx.hosts[1], "accountId": bx.agent, "hostAgentRef": "net-agent"})],
+        )
+        .rejecting(vec![json!({"hostId": ax.hosts[1], "accountId": bx.agent, "hostAgentRef": "net-agent"})]),
+        mcp_case(
+            "host_agent_unbind",
+            json!({"hostId": ax.hosts[1], "accountId": ax.agent}),
+            vec![json!({"hostId": bx.hosts[1], "accountId": bx.agent})],
+        )
+        .no_effect(vec![json!({"hostId": ax.hosts[1], "accountId": bx.agent})])
+        .last(),
+        mcp_case(
+            "host_unlink",
+            json!({"hostId": ax.hosts[3]}),
+            vec![json!({"hostId": bx.hosts[3]})],
+        )
+        .last(),
         mcp_case(
             "webhook_write",
             json!({
@@ -6914,6 +7093,50 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "run_stop",
             json!({"runId": sp.run_stop, "clientRequestId": "net-stop-own"}),
             vec![json!({"runId": b.run, "clientRequestId": "net-stop-b"})],
+        ),
+        mcp_case(
+            "run_create",
+            json!({"projectId": a.project, "title": "Net run", "cause": {"kind": "manual"}, "clientRunId": "net-open-own"}),
+            vec![json!({"projectId": b.project, "title": "Net run", "cause": {"kind": "manual"}, "clientRunId": "net-open-b"})],
+        )
+        .rejecting(vec![
+            json!({"projectId": a.project, "title": "Net run", "cause": {"kind": "thread", "conversationId": b.channel}, "clientRunId": "net-open-m1"}),
+            json!({"projectId": a.project, "title": "Net run", "cause": {"kind": "task", "taskId": b.task}, "clientRunId": "net-open-m2"}),
+            json!({"projectId": a.project, "title": "Net run", "cause": {"kind": "manual"}, "parentRunId": bx.reported_runs[0], "clientRunId": "net-open-m3"}),
+        ]),
+        mcp_case(
+            "run_update",
+            json!({"runId": ax.reported_runs[0], "statusLine": "Net", "clientRequestId": "net-run-update-own"}),
+            vec![json!({"runId": bx.reported_runs[0], "statusLine": "Net", "clientRequestId": "net-run-update-b"})],
+        ),
+        mcp_case(
+            "run_activity_report",
+            json!({"runId": ax.reported_runs[0], "activities": [{"id": "net-own", "kind": "text_message", "payload": {"text": "Net"}}]}),
+            vec![json!({"runId": bx.reported_runs[0], "activities": [{"id": "net-b", "kind": "text_message", "payload": {"text": "Net"}}]})],
+        ),
+        mcp_case(
+            "run_usage_report",
+            json!({"runId": ax.reported_runs[0], "reportKey": "net-usage-own", "model": "model-a", "inputTokens": 10}),
+            vec![
+                json!({"runId": bx.reported_runs[0], "reportKey": "net-usage-b", "model": "model-a", "inputTokens": 10}),
+                json!({"projectId": b.project, "reportKey": "net-usage-window-b", "model": "model-a", "inputTokens": 10,
+                       "windowStart": "2026-11-14T09:00:00Z", "windowEnd": "2026-11-14T09:15:00Z"}),
+            ],
+        ),
+        mcp_case(
+            "run_result_report",
+            json!({"runId": ax.reported_runs[0], "results": [{"kind": "link", "url": "https://example.com/net-own"}]}),
+            vec![json!({"runId": bx.reported_runs[0], "results": [{"kind": "link", "url": "https://example.com/net-b"}]})],
+        ),
+        mcp_case(
+            "run_cancel",
+            json!({"runId": ax.reported_runs[1], "reason": "Net", "clientRequestId": "net-run-cancel-own"}),
+            vec![json!({"runId": bx.reported_runs[1], "reason": "Net", "clientRequestId": "net-run-cancel-b"})],
+        ),
+        mcp_case(
+            "run_mark_not_started",
+            json!({"runId": ax.reported_runs[2]}),
+            vec![json!({"runId": bx.reported_runs[2]})],
         ),
         mcp_case(
             "run_retry",

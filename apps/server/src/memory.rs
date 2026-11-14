@@ -12,8 +12,10 @@ use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, State},
     http::HeaderMap,
+    response::IntoResponse,
     routing::{delete, get, patch, post},
 };
+use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use uuid::Uuid;
@@ -29,6 +31,8 @@ use crate::{
         authorize,
     },
 };
+
+pub mod ops;
 
 pub const MAX_PAGE_TITLE: usize = 200;
 pub const MAX_PAGE_BODY: usize = 200_000;
@@ -241,21 +245,34 @@ fn writer_session(column: &str, page: &str, actor: &str) -> String {
     )
 }
 
-#[derive(Clone, Debug, FromRow, Serialize)]
+/// A decision, as the web app, agents and scripts read it.
+#[derive(Clone, Debug, FromRow, JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DecisionView {
+    #[schemars(with = "String")]
     pub id: Uuid,
+    /// The space (project) it belongs to.
+    #[schemars(with = "String")]
     pub project_id: Uuid,
     pub title: String,
     pub detail: String,
+    /// active, or superseded once a later decision replaces it.
     pub status: String,
+    /// The decision that replaced this one, if it was superseded.
+    #[schemars(with = "Option<String>")]
     pub superseded_by_decision_id: Option<Uuid>,
+    /// The conversation where it was decided.
+    #[schemars(with = "Option<String>")]
     pub source_conversation_id: Option<Uuid>,
     pub source_conversation_name: Option<String>,
     /// channel, thread, dm or group: how the app links to the source.
     pub source_conversation_kind: Option<String>,
+    /// The message where it was decided.
+    #[schemars(with = "Option<String>")]
     pub source_message_id: Option<Uuid>,
+    /// Who recorded it.
     pub decided_by: String,
+    /// The app it was recorded through, when it shows one.
     pub via: Option<String>,
     pub created_at: String,
 }
@@ -943,7 +960,7 @@ pub async fn list_decisions(
 }
 
 pub async fn get_decision(
-    pool: &PgPool,
+    executor: impl sqlx::PgExecutor<'_>,
     decision_id: Uuid,
     viewer: Uuid,
 ) -> Result<Option<DecisionView>, AppError> {
@@ -956,8 +973,27 @@ pub async fn get_decision(
     ))
     .bind(decision_id)
     .bind(viewer)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?)
+}
+
+/// The conversation a decision came from: the one named, or its message's.
+pub async fn decision_conversation(
+    transaction: &mut Transaction<'_, Postgres>,
+    input: &DecisionInput,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(
+        match (input.source_conversation_id, input.source_message_id) {
+            (Some(id), _) => Some(id),
+            (None, Some(message_id)) => {
+                sqlx::query_scalar::<_, Uuid>("SELECT conversation_id FROM messages WHERE id = $1")
+                    .bind(message_id)
+                    .fetch_optional(&mut **transaction)
+                    .await?
+            }
+            _ => None,
+        },
+    )
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -1435,83 +1471,76 @@ struct DecisionListQuery {
     include_superseded: Option<bool>,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DecisionsResponse {
-    decisions: Vec<DecisionView>,
-    can_record: bool,
-}
-
+/// A wrapper over `decision_list` (K2.5), plus whether the reader may record.
 async fn list_decisions_http(
     State(state): State<AppState>,
+    headers: HeaderMap,
     principal: AuthenticatedActor,
     ApiPath(project_id): ApiPath<Uuid>,
     ApiQuery(query): ApiQuery<DecisionListQuery>,
-) -> Result<Json<DecisionsResponse>, AppError> {
-    let kind = parse_actor_kind(&principal.actor_kind)?;
-    project_access(
-        &state.pool,
-        principal.actor_id,
-        kind,
-        project_id,
-        Action::ProjectView,
-    )
-    .await?;
-    let can_record = project_access(
-        &state.pool,
-        principal.actor_id,
-        kind,
-        project_id,
-        Action::PageEdit,
+) -> axum::response::Response {
+    let input = serde_json::json!({
+        "spaceId": project_id,
+        "includeSuperseded": query.include_superseded.unwrap_or(false),
+        "limit": 200,
+    });
+    let listed = match crate::ops::web::run_for_session(
+        &state,
+        &headers,
+        &principal,
+        "decision_list",
+        input,
     )
     .await
-    .is_ok();
-    Ok(Json(DecisionsResponse {
-        decisions: list_decisions(
+    {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let can_record = match parse_actor_kind(&principal.actor_kind) {
+        Ok(kind) => project_access(
             &state.pool,
-            project_id,
             principal.actor_id,
-            query.include_superseded.unwrap_or(false),
-            200,
+            kind,
+            project_id,
+            Action::PageEdit,
         )
-        .await?,
-        can_record,
+        .await
+        .is_ok(),
+        Err(_) => false,
+    };
+    Json(serde_json::json!({
+        "decisions": listed["decisions"],
+        "canRecord": can_record,
     }))
+    .into_response()
 }
 
+/// A wrapper over `decision_record` (K2.5): the same body as before; a
+/// refusal answers with the operation's envelope.
 async fn record_decision_http(
     State(state): State<AppState>,
     headers: HeaderMap,
     principal: AuthenticatedActor,
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(input): ApiJson<DecisionInput>,
-) -> Result<Json<DecisionView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
-    let writer = browser_writer(&principal)?;
-    let mut transaction = state.pool.begin().await?;
-    project_access(
-        &mut *transaction,
-        writer.actor_id,
-        writer.actor_kind,
-        project_id,
-        Action::PageEdit,
-    )
-    .await?;
-    let decision_id = record_decision(&mut transaction, writer, project_id, &input).await?;
-    audit(
-        &mut transaction,
-        &principal,
-        project_id,
-        "decision.recorded",
-        "decision",
-        decision_id,
-    )
-    .await?;
-    transaction.commit().await?;
-    get_decision(&state.pool, decision_id, principal.actor_id)
-        .await?
-        .map(Json)
-        .ok_or(AppError::NotFound("decision"))
+) -> axum::response::Response {
+    if let Err(error) = require_authenticated_write(&state, &headers, &principal) {
+        return error.into_response();
+    }
+    let input = serde_json::json!({
+        "spaceId": project_id,
+        "title": input.title,
+        "detail": input.detail,
+        "sourceMessageId": input.source_message_id,
+        "sourceConversationId": input.source_conversation_id,
+        "supersedes": input.supersedes,
+    });
+    match crate::ops::web::run_for_session(&state, &headers, &principal, "decision_record", input)
+        .await
+    {
+        Ok(value) => Json(value).into_response(),
+        Err(response) => response,
+    }
 }
 
 #[derive(Debug, Serialize)]

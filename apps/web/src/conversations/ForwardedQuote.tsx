@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 import { Markdown } from '../ui/markdown/Markdown'
 import { readForwarded } from './quotedMessage'
 import { formatDateTime, formatFullDate } from '../ui/time'
+import '../styles/conversation.css'
 
 /**
  * The message a forward quotes, read live for you: its author, where it was

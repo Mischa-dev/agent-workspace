@@ -52,6 +52,7 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("notification_channel_preferences", ORGANIZATION_ID),
     ("notification_email_digests", ORGANIZATION_ID),
     ("onboarding_progress", ORGANIZATION_ID),
+    ("operation_alias_usage", WORKSPACE_ID),
     ("organization_actor_profiles", ORGANIZATION_ID),
     ("organization_memberships", ORGANIZATION_ID),
     ("project_environments", ORGANIZATION_ID),
@@ -61,11 +62,16 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("projects", ORGANIZATION_ID),
     ("provider_accounts", ORGANIZATION_ID),
     ("push_subscriptions", ORGANIZATION_ID),
+    ("requests", WORKSPACE_ID),
+    ("run_activities", WORKSPACE_ID),
+    ("run_usage", WORKSPACE_ID),
+    ("runs", WORKSPACE_ID),
     ("saved_items", ORGANIZATION_ID),
     ("scheduled_messages", ORGANIZATION_ID),
     ("secrets", ORGANIZATION_ID),
     ("settings", ORGANIZATION_ID),
     ("usage_accounts", ORGANIZATION_ID),
+    ("usage_reports", WORKSPACE_ID),
     ("usage_schedules", ORGANIZATION_ID),
     ("usage_window_cycles", ORGANIZATION_ID),
     ("usage_window_samples", ORGANIZATION_ID),
@@ -90,6 +96,22 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
     (
         "actors",
         "every account, of any kind: accounts are server-wide (R19), each with its owner",
+    ),
+    (
+        "host_agents",
+        "which accounts a host runs: hosts are server-wide (A1 3.9)",
+    ),
+    (
+        "host_enrolments",
+        "one-time codes that enrol a host, kept as digests: hosts are server-wide",
+    ),
+    (
+        "host_notices",
+        "what a host is told about its agents: hosts are server-wide",
+    ),
+    (
+        "hosts",
+        "machines that run agents, owned by an account or a workspace (A1 3.9)",
     ),
     (
         "login_challenges",
@@ -163,6 +185,7 @@ pub const MUST_BE_GLOBAL: &[&str] = &[
     "hosts",
     "host_agents",
     "host_enrolments",
+    "host_notices",
 ];
 
 /// Workspace-owned tables still without a workspace column, and the slice

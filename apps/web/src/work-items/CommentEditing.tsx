@@ -13,6 +13,7 @@ import { formatDateTime, formatFullDate } from '../ui/time'
 import { getWorkItemCommentRevisions, searchWorkItemReferences } from './api'
 import { useDeleteWorkItemComment, useEditWorkItemComment } from './hooks'
 import type { WorkItemTimelineEntry } from './types'
+import '../styles/conversation.css'
 
 export type PostedComment = NonNullable<WorkItemTimelineEntry['comment']>
 

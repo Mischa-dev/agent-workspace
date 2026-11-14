@@ -9,6 +9,7 @@ import { useAssignableActors } from '../work-items/hooks'
 import { useDebouncedValue } from '../work-items/pickerModel'
 import { TaskSearchPicker } from '../work-items/TaskSearchPicker'
 import { displayText, isEmpty, type FieldDefinition, type FieldReference, type FieldValue } from './fieldModel'
+import '../styles/work.css'
 
 /**
  * The popover that changes one field's value, shaped by its type: a task's

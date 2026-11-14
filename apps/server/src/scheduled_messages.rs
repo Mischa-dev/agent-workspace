@@ -320,13 +320,36 @@ pub(crate) async fn schedule(
     send_at: &str,
     through_app: bool,
 ) -> Result<ScheduledMessageView, AppError> {
-    let send_at = parse_send_at(send_at)?;
     let mut transaction = state.pool.begin().await?;
+    let id = schedule_in(
+        &mut transaction,
+        actor,
+        conversation_id,
+        content,
+        send_at,
+        through_app,
+    )
+    .await?;
+    transaction.commit().await?;
+    get_scheduled(&state.pool, actor.actor_id, id).await
+}
+
+/// [`schedule`] in the caller's transaction, which commits it (with a
+/// retry key, say). Returns the scheduled message's id.
+pub(crate) async fn schedule_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &MessageCommandActor,
+    conversation_id: Uuid,
+    content: serde_json::Value,
+    send_at: &str,
+    through_app: bool,
+) -> Result<Uuid, AppError> {
+    let send_at = parse_send_at(send_at)?;
     let waiting = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM scheduled_messages WHERE author_actor_id = $1 AND status = 'scheduled'",
     )
     .bind(actor.actor_id)
-    .fetch_one(&mut *transaction)
+    .fetch_one(&mut **transaction)
     .await?;
     if waiting >= MAX_SCHEDULED {
         return Err(AppError::Conflict(
@@ -334,7 +357,7 @@ pub(crate) async fn schedule(
             "you have too many messages waiting to send",
         ));
     }
-    let checked = check(&mut transaction, actor, conversation_id, content).await?;
+    let checked = check(transaction, actor, conversation_id, content).await?;
     let id = Uuid::now_v7();
     sqlx::query(
         r#"
@@ -361,11 +384,10 @@ pub(crate) async fn schedule(
     .bind(&checked.referenced_work_items)
     .bind(send_at)
     .bind(through_app)
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
-    enqueue(&mut *transaction, checked.organization_id, id, send_at).await?;
-    transaction.commit().await?;
-    get_scheduled(&state.pool, actor.actor_id, id).await
+    enqueue(&mut **transaction, checked.organization_id, id, send_at).await?;
+    Ok(id)
 }
 
 #[derive(FromRow)]

@@ -9,15 +9,16 @@ use uuid::Uuid;
 use super::{
     McpPrincipal,
     common::{
-        ToolResult, insert_audit, parse_id, parse_message_id, parse_time, project_is_chosen,
-        public_url, scope_projects, string_or_number, truncate_text,
+        ToolResult, insert_audit, parse_id, parse_time, project_is_chosen, public_url,
+        scope_projects, string_or_number, truncate_text,
     },
     talk::can_write_in,
+    writes::{CreateRetry, REQUEST_ID_MESSAGE, complete_create, parse_request_id, reserve_create},
 };
 use crate::{
     AppState,
     error::AppError,
-    memory::{self, DecisionInput, PageInput, Writer},
+    memory::{self, PageInput, Writer},
     page_docs::{
         edits::{self, Edit, EditError, EditOp, Target},
         store, suggestions,
@@ -330,6 +331,9 @@ pub(super) struct PageValue {
     /// (the page is someone else's); the page above doesn't have it yet.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suggestion: Option<SuggestionMade>,
+    /// True when this answers a retry: the page the first call created.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub idempotent_replay: bool,
 }
 
 fn is_zero(value: &i64) -> bool {
@@ -408,6 +412,7 @@ pub(super) async fn page_get(
             open_comments,
             pending_suggestions,
             suggestion: None,
+            idempotent_replay: false,
             url: public_url(
                 state,
                 &format!("/projects/{}/pages/{}", page.project_id, page.id),
@@ -441,7 +446,7 @@ pub(super) async fn page_get(
     result.unwrap_or_else(|error| ToolResult::from_error(error, "page_get"))
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct PageWriteArguments {
     /// The page to change. Leave it out to create a page (then projectId and
@@ -471,6 +476,10 @@ pub(super) struct PageWriteArguments {
     pub note: Option<String>,
     /// Also pin the page to this conversation.
     pub pin_to_conversation_id: Option<String>,
+    /// Makes creating a page safe to retry: send the same one again and you
+    /// get the page the first call made, not a second one. Used only when
+    /// creating.
+    pub client_request_id: Option<String>,
 }
 
 pub(super) async fn page_write(
@@ -501,6 +510,14 @@ pub(super) async fn page_write(
         },
         None => None,
     };
+    let retry_key = match arguments.client_request_id.as_deref() {
+        Some(value) if page_id.is_none() => match parse_request_id(value) {
+            Some(key) => Some(key),
+            None => return ToolResult::invalid("clientRequestId", REQUEST_ID_MESSAGE),
+        },
+        _ => None,
+    };
+    let retried = arguments.clone();
     let mut input = PageInput {
         title: arguments.title,
         body: arguments.body,
@@ -531,6 +548,37 @@ pub(super) async fn page_write(
                 "Pages live in projects, not in Messages. Pick a project.",
             ));
         }
+        let reservation = if page_id.is_none() {
+            match reserve_create(
+                &mut transaction,
+                principal,
+                "pages",
+                retry_key.as_ref(),
+                &retried,
+            )
+            .await?
+            {
+                CreateRetry::Fresh(reservation) => reservation,
+                CreateRetry::Replay(page_id, _) => {
+                    transaction.commit().await?;
+                    let mut value = page_get(
+                        state,
+                        principal,
+                        PageGetArguments {
+                            page_id: page_id.to_string(),
+                            version: None,
+                        },
+                    )
+                    .await;
+                    if let ToolResult::Ok { value: page } = &mut value {
+                        page.idempotent_replay = true;
+                    }
+                    return Ok(value);
+                }
+            }
+        } else {
+            None
+        };
         let mut suggestion = None;
         let page_id = match page_id {
             Some(page_id) => {
@@ -572,7 +620,11 @@ pub(super) async fn page_write(
                 page_id
             }
             None => {
-                memory::create_page(&mut transaction, writer(principal), project_id, &input).await?
+                let created =
+                    memory::create_page(&mut transaction, writer(principal), project_id, &input)
+                        .await?;
+                complete_create(&mut transaction, reservation.as_ref(), created).await?;
+                created
             }
         };
         if let Some(conversation_id) = pin_to {
@@ -1462,7 +1514,7 @@ pub(super) struct SkillValue {
     pub stale: bool,
     /// The same skill as a SKILL.md file, to save as
     /// `<skills folder>/<name>/SKILL.md` for a harness that loads skills from
-    /// disk (Claude Code reads .claude/skills).
+    /// disk.
     pub skill_md: String,
     pub url: String,
 }
@@ -1555,219 +1607,4 @@ pub(super) async fn skill_get(
     }
     .await;
     result.unwrap_or_else(|error| ToolResult::from_error(error, "skill_get"))
-}
-
-// ---------------------------------------------------------------------------
-// Decisions
-
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct DecisionRecordArguments {
-    // Read by the MCP middleware, which scopes the call to this project.
-    #[allow(dead_code)]
-    /// The project. Not needed when you pass fromMessageId or conversationId.
-    pub project_id: Option<String>,
-    /// What was decided, in one line.
-    pub title: String,
-    /// Why, the options considered, and anything a newcomer should know.
-    pub detail: Option<String>,
-    /// The message where it was decided: its ID, or a link to it.
-    pub from_message_id: Option<String>,
-    /// The conversation or thread where it was decided.
-    pub conversation_id: Option<String>,
-    /// An earlier decision this one replaces.
-    pub supersedes: Option<String>,
-    /// Also pin the decision to its conversation.
-    pub pin: Option<bool>,
-}
-
-#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct DecisionValue {
-    pub id: String,
-    pub project_id: String,
-    pub title: String,
-    pub detail: String,
-    pub status: String,
-    /// The decision that replaced this one, if it was superseded.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub superseded_by: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_conversation: Option<String>,
-    pub decided_by: String,
-    pub decided_at: String,
-}
-
-impl From<memory::DecisionView> for DecisionValue {
-    fn from(decision: memory::DecisionView) -> Self {
-        Self {
-            id: decision.id.to_string(),
-            project_id: decision.project_id.to_string(),
-            title: decision.title,
-            detail: decision.detail,
-            status: decision.status,
-            superseded_by: decision.superseded_by_decision_id.map(|id| id.to_string()),
-            source_conversation: decision.source_conversation_name,
-            decided_by: decision.decided_by,
-            decided_at: decision.created_at,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct DecisionListArguments {
-    /// The project's ID, link or key (such as "AWD").
-    pub project_id: String,
-    /// Include decisions that were later replaced.
-    pub include_superseded: Option<bool>,
-    /// How many, newest first (default 50, at most 200).
-    pub limit: Option<u16>,
-}
-
-#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct DecisionListValue {
-    pub decisions: Vec<DecisionValue>,
-}
-
-pub(super) async fn decision_list(
-    state: &AppState,
-    principal: &McpPrincipal,
-    arguments: DecisionListArguments,
-) -> ToolResult<DecisionListValue> {
-    if !principal.can_read() {
-        return ToolResult::denied("This connection can't read.");
-    }
-    if parse_id(&arguments.project_id) != Some(principal.project_id) {
-        return ToolResult::not_found("That project");
-    }
-    let result = async {
-        memory::project_access(
-            &state.pool,
-            principal.actor_id,
-            principal.actor_kind,
-            principal.project_id,
-            Action::McpRead,
-        )
-        .await?;
-        let decisions = memory::list_decisions(
-            &state.pool,
-            principal.project_id,
-            principal.actor_id,
-            arguments.include_superseded.unwrap_or(false),
-            i64::from(arguments.limit.unwrap_or(50).clamp(1, 200)),
-        )
-        .await?;
-        Ok::<_, AppError>(ToolResult::ok(DecisionListValue {
-            decisions: decisions.into_iter().map(DecisionValue::from).collect(),
-        }))
-    }
-    .await;
-    result.unwrap_or_else(|error| ToolResult::from_error(error, "decision_list"))
-}
-
-pub(super) async fn decision_record(
-    state: &AppState,
-    principal: &McpPrincipal,
-    arguments: DecisionRecordArguments,
-) -> ToolResult<DecisionValue> {
-    if !principal.can_write() {
-        return ToolResult::read_only();
-    }
-    let parse = |value: Option<&str>| -> Result<Option<Uuid>, ()> {
-        match value {
-            Some(value) => parse_id(value).map(Some).ok_or(()),
-            None => Ok(None),
-        }
-    };
-    let Ok(source_message_id) = arguments
-        .from_message_id
-        .as_deref()
-        .map(|value| parse_message_id(value).ok_or(()))
-        .transpose()
-    else {
-        return ToolResult::invalid("fromMessageId", "Pass a message ID or link.");
-    };
-    let Ok(source_conversation_id) = parse(arguments.conversation_id.as_deref()) else {
-        return ToolResult::invalid("conversationId", "Pass a conversation ID or link.");
-    };
-    let Ok(supersedes) = parse(arguments.supersedes.as_deref()) else {
-        return ToolResult::invalid("supersedes", "Pass the earlier decision's ID.");
-    };
-    if !project_is_chosen(principal) {
-        return ToolResult::invalid(
-            "projectId",
-            "Say which project (projectId), or pass the message or conversation it came from.",
-        );
-    }
-    let input = DecisionInput {
-        title: arguments.title,
-        detail: arguments.detail,
-        source_message_id,
-        source_conversation_id,
-        supersedes,
-    };
-    let result = async {
-        let project_id = principal.project_id;
-        if !can_write_in(state, principal, project_id, Action::PageEdit).await? {
-            return Ok(ToolResult::denied(
-                "You can't record decisions in that project.",
-            ));
-        }
-        let mut transaction = state.pool.begin().await?;
-        memory::project_access(
-            &mut *transaction,
-            principal.actor_id,
-            principal.actor_kind,
-            project_id,
-            Action::PageEdit,
-        )
-        .await?;
-        let decision_id =
-            memory::record_decision(&mut transaction, writer(principal), project_id, &input)
-                .await?;
-        if arguments.pin.unwrap_or(false) {
-            let conversation = match (input.source_conversation_id, input.source_message_id) {
-                (Some(id), _) => Some(id),
-                (None, Some(message_id)) => {
-                    sqlx::query_scalar::<_, Uuid>(
-                        "SELECT conversation_id FROM messages WHERE id = $1",
-                    )
-                    .bind(message_id)
-                    .fetch_optional(&mut *transaction)
-                    .await?
-                }
-                _ => None,
-            };
-            if let Some(conversation_id) = conversation {
-                memory::set_pin(
-                    &mut transaction,
-                    writer(principal),
-                    conversation_id,
-                    "decision",
-                    decision_id,
-                    true,
-                )
-                .await?;
-            }
-        }
-        insert_audit(
-            &mut transaction,
-            principal,
-            project_id,
-            "decision.mcp_recorded",
-            "decision",
-            decision_id,
-            serde_json::json!({}),
-        )
-        .await?;
-        transaction.commit().await?;
-        let decision = memory::get_decision(&state.pool, decision_id, principal.actor_id)
-            .await?
-            .ok_or(AppError::NotFound("decision"))?;
-        Ok::<_, AppError>(ToolResult::ok(DecisionValue::from(decision)))
-    }
-    .await;
-    result.unwrap_or_else(|error| ToolResult::from_error(error, "decision_record"))
 }

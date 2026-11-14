@@ -3,6 +3,7 @@
   "name": "Automations",
   "description": "Rules that act on their own when something happens or on a schedule, and webhooks that tell other apps.",
   "version": 1,
+  "order": 140,
   "kind": "core",
   "switchable": true,
   "needs": ["projects"],
@@ -35,7 +36,7 @@
   },
   "notifications": ["automation", "automation_disabled"],
   "search": [],
-  "automations": { "triggers": ["schedule"], "actions": ["notify"] },
+  "automations": { "triggers": ["schedule"], "actions": ["notify", "run_operation"] },
   "things": [
     {
       "kind": "automation",

@@ -10,7 +10,7 @@ import { formatCountdown, useNow, windowTone } from '../settings/account/usageMo
 import { Button, ButtonLink, ErrorState, ListSkeleton, Row, RowList, Section, countLabel, formatFullDate, formatRelative } from '../ui'
 import { getMyWork, viewKeys, type MyWork } from '../views/api'
 import type { Piece, Thing, ThingDecl } from '../modules/contract'
-import { PieceView } from '../modules/pieces/Pieces'
+import { PieceView } from '../pieces/Pieces'
 import { things as runThings } from '../../../../modules/runs.json'
 import { things as taskThings } from '../../../../modules/tasks.json'
 import { getHome, homeKeys, type WorkingRun } from './homeApi'

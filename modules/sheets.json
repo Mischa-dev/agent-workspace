@@ -3,6 +3,7 @@
   "name": "Sheets",
   "description": "Spreadsheets in a project: tabs of cells with formulas, worked out on the server, that people and agents edit together.",
   "version": 1,
+  "order": 90,
   "kind": "core",
   "switchable": true,
   "needs": ["projects"],
@@ -21,6 +22,7 @@
   "things": [],
   "links": [],
   "embeds": [],
+  "web": { "folder": "sheets" },
   "slots": {
     "pages": ["/projects/:projectId/sheets/*"],
     "parts": ["area.sheets"],

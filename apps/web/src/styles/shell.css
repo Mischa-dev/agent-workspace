@@ -812,3 +812,539 @@ button.aw-sidebar__title[aria-expanded="true"] {
   place-items: start center;
   padding-top: 12vh;
 }
+
+/* Page frames every route draws in (moved from pages.css so the first paint has them). */
+
+/* Pages: settings-style layouts, Home, Project overview and settings, New message, Agents, Appearance and sign-in. */
+
+.aw-main--page {
+  overflow-y: auto;
+}
+
+/* Three page widths (DESIGN.md, Layout). Wide is the default; tabs of one area share theirs. */
+.aw-page {
+  width: 100%;
+  max-width: var(--size-page-wide);
+  margin: 0 auto;
+  padding: var(--space-8) var(--space-6) var(--space-12);
+}
+
+/* One column to read or fill in: forms, search results, pages and decisions. */
+.aw-page--reading {
+  max-width: var(--size-page-reading);
+}
+
+/* Lists, boards and timelines use the whole window. */
+.aw-page--full {
+  max-width: none;
+}
+
+.aw-page--settings {
+  max-width: 880px;
+}
+
+.aw-page__banner {
+  margin-bottom: var(--space-5);
+}
+
+/* Focusable banners (errors after a submit) show focus through their own ring. */
+.aw-banner[tabindex='-1']:focus {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.aw-pagehead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+
+/* A settings page's sentence under its title keeps the actions at the top. */
+.aw-pagehead:has(.aw-pagehead__lede) {
+  align-items: flex-start;
+}
+
+.aw-pagehead__text {
+  min-width: 0;
+}
+
+.aw-pagehead__title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0;
+  font: var(--t-headline);
+  letter-spacing: var(--tracking-tight);
+  overflow-wrap: anywhere;
+}
+
+.aw-pagehead__icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-lg);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.aw-pagehead__lede {
+  max-width: 62ch;
+  margin: var(--space-2) 0 0;
+  font: var(--t-body);
+  color: var(--content-fg-muted);
+}
+
+.aw-pagehead__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  flex: none;
+  max-width: 100%;
+}
+
+.aw-pagesection {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-6) 0;
+  border-top: 1px solid var(--content-border);
+}
+
+.aw-pagesection__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+/* A lone title lines up with the middle of its buttons, which are taller on phones. */
+.aw-pagesection__head:not(:has(.aw-pagesection__desc)) {
+  align-items: center;
+}
+
+.aw-pagesection__title {
+  margin: 0;
+  font: var(--t-title);
+}
+
+.aw-pagesection__actions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-1);
+}
+
+.aw-pagesection__desc {
+  max-width: 62ch;
+  margin: var(--space-1) 0 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+/* On a phone, buttons that don't fit beside the title go under it. */
+@media (max-width: 640px) {
+  .aw-pagesection__head {
+    flex-wrap: wrap;
+    row-gap: var(--space-2);
+  }
+}
+
+.aw-form {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.aw-form__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.aw-logo {
+  position: relative;
+  display: inline-block;
+  flex: none;
+}
+
+.aw-logo__person,
+.aw-logo__agent {
+  position: absolute;
+  width: 58%;
+  height: 58%;
+}
+
+.aw-logo__person {
+  top: 0;
+  left: 0;
+  border-radius: var(--radius-full);
+  background: var(--brand);
+}
+
+.aw-logo__agent {
+  right: 0;
+  bottom: 0;
+  border-radius: 28%; /* design-exception: scales with the logo */
+  background: var(--agent-working);
+  box-shadow: 0 0 0 3px var(--brand-deep);
+}
+
+.aw-boot {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: var(--space-3);
+  height: 100dvh;
+  padding: var(--space-6);
+  text-align: center;
+  color: var(--content-fg-muted);
+  --brand-deep: var(--content-bg);
+}
+
+.aw-boot h1 {
+  margin: var(--space-2) 0 0;
+  font: var(--t-title);
+  color: var(--content-fg);
+}
+
+.aw-boot p {
+  max-width: 44ch;
+  margin: 0;
+}
+
+.aw-boot__actions,
+.aw-empty-choices {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2);
+}
+
+@media (max-width: 860px) {
+
+  .aw-page {
+    padding: var(--space-5) var(--space-4) var(--space-10);
+  }
+
+  /* Title and actions share a row while they fit, so the content starts higher. */
+  .aw-pagehead {
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
+    margin-bottom: var(--space-4);
+  }
+}
+
+/* Tabs between the parts of a page */
+.aw-tabs {
+  display: flex;
+  gap: var(--space-1);
+  margin: calc(var(--space-2) * -1) 0 var(--space-2);
+  overflow-x: auto;
+  border-bottom: 1px solid var(--content-border);
+  scrollbar-width: none;
+}
+
+.aw-tabs__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  flex: none;
+  height: 40px;
+  margin-bottom: -1px;
+  padding: 0 var(--space-3);
+  border-bottom: 2px solid transparent;
+  color: var(--content-fg-muted);
+  font: var(--t-ui);
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out);
+}
+
+.aw-tabs__tab:hover {
+  color: var(--content-fg);
+}
+
+.aw-tabs__tab[aria-current='page'] {
+  border-bottom-color: var(--accent);
+  color: var(--content-fg);
+  font-weight: var(--weight-bold);
+}
+
+.aw-tabs__tab:focus-visible {
+  outline-offset: calc(-1 * var(--focus-width));
+}
+
+/* On a phone the words alone fit across, so no tab hides off the edge. */
+@media (max-width: 640px) {
+  .aw-tabs__tab {
+    padding: 0 var(--space-2);
+  }
+
+  .aw-tabs__tab > .aw-icon {
+    display: none;
+  }
+}
+
+.aw-page--settings .aw-pagesection {
+  padding: var(--space-6) 0 var(--space-2);
+  border-top: 0;
+}
+
+.aw-page--settings .aw-pagesection + .aw-pagesection,
+.aw-page--settings .aw-settings-stack > .aw-pagesection + .aw-pagesection,
+.aw-page--settings .aw-agents > .aw-pagesection + .aw-pagesection {
+  margin-top: var(--space-4);
+  border-top: 1px solid var(--content-border);
+}
+
+/* Label and value pairs */
+.aw-dl {
+  display: grid;
+  margin: 0;
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-card);
+}
+
+.aw-dl__row {
+  display: grid;
+  grid-template-columns: minmax(120px, 200px) minmax(0, 1fr);
+  gap: var(--space-4);
+  padding: var(--space-2-5) var(--space-4);
+}
+
+@media (max-width: 640px) {
+  .aw-dl__row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-1);
+  }
+}
+
+.aw-dl__row + .aw-dl__row {
+  border-top: 1px solid var(--content-border);
+}
+
+.aw-dl dt {
+  font: var(--t-ui);
+  color: var(--content-fg-muted);
+}
+
+.aw-dl dd {
+  margin: 0;
+  font: var(--t-ui);
+  color: var(--content-fg);
+  overflow-wrap: anywhere;
+}
+
+/* Row lists: Projects, members, repositories, links */
+.aw-rows {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  list-style: none;
+  box-shadow: var(--shadow-card);
+}
+
+.aw-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 56px;
+  padding: var(--space-2-5) var(--space-4);
+}
+
+.aw-row + .aw-row {
+  border-top: 1px solid var(--content-border);
+}
+
+.aw-row__lead {
+  display: grid;
+  place-items: center;
+  flex: none;
+  min-width: 32px;
+}
+
+.aw-row__main {
+  display: grid;
+  gap: var(--space-half);
+  flex: 1;
+  min-width: 0;
+}
+
+.aw-row__title {
+  margin: 0;
+  font: var(--t-ui-strong);
+  color: var(--content-fg);
+  overflow-wrap: anywhere;
+}
+
+.aw-row__title a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.aw-row__title a:hover {
+  text-decoration: underline;
+}
+
+.aw-row__titleline {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.aw-row__meta {
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+  overflow-wrap: anywhere;
+}
+
+.aw-row__metaline {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font: var(--t-code);
+  font-size: calc(12px * var(--text-scale));
+}
+
+.aw-row__note {
+  margin: var(--space-1) 0 0;
+  font: var(--t-small);
+  color: var(--danger);
+}
+
+.aw-row__actions {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.aw-row__tile {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  color: var(--content-fg-muted);
+}
+
+.aw-row__tile--response_required {
+  background: var(--badge-bg);
+  color: var(--badge-fg);
+}
+
+.aw-row__tile--failed {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.aw-row__tile--active {
+  background: var(--agent-soft);
+}
+
+.aw-row__glyph,
+.aw-row__chev {
+  color: var(--content-fg-muted);
+}
+
+.aw-row--link {
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease-out);
+}
+
+.aw-row--link:hover {
+  background: var(--content-hover);
+}
+
+.aw-row--link .aw-row__link::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+}
+
+.aw-row--link .aw-row__link:hover {
+  text-decoration: none;
+}
+
+.aw-row--link .aw-row__link:focus-visible {
+  outline: none;
+}
+
+.aw-row--link:has(.aw-row__link:focus-visible) {
+  outline: var(--focus-width) solid var(--r-focus);
+  outline-offset: calc(-1 * var(--focus-width));
+}
+
+.aw-row--link:not(.is-unread) .aw-row__title {
+  font-weight: var(--weight-semibold);
+}
+
+.aw-row.is-unread .aw-row__meta {
+  color: var(--content-fg);
+  font-weight: var(--weight-semibold);
+}
+
+.aw-row.is-disabled .aw-row__lead,
+.aw-row.is-disabled .aw-row__main {
+  opacity: 0.6;
+}
+
+@media (max-width: 640px) {
+  .aw-row:not(.aw-row--link) {
+    flex-wrap: wrap;
+  }
+
+  .aw-row:not(.aw-row--link) .aw-row__actions {
+    justify-content: flex-start;
+    width: 100%;
+    padding-left: 44px;
+  }
+}
+
+.aw-form__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
+  align-items: start;
+  gap: var(--space-4);
+}
+
+.aw-row__text {
+  margin: var(--space-1) 0 0;
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+  white-space: pre-wrap;
+}
+
+/* The conversation frame and the sidebar skeleton (moved from conversation.css). */
+
+/* Conversations: header, timeline, messages, agent activity and the composer. */
+
+.aw-main--conversation {
+  overflow: hidden;
+}
+
+/* Messages sidebar while it loads */
+.aw-sidebar__skeleton {
+  padding: 0 var(--space-2);
+}

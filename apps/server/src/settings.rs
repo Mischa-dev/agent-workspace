@@ -1,6 +1,7 @@
 //! S2: settings that inherit.
 //!
-//! Every setting is declared once in [`REGISTRY`] with its type, the scopes
+//! Every setting is declared once in [`REGISTRY`] (or, for a module's
+//! switch, generated from its manifest; [`all`] has both) with its type, the scopes
 //! it may be set at, and its built-in default. A stored value belongs to a
 //! workspace, a project or a person (within a workspace). Reading resolves
 //! each key from, most specific first:
@@ -205,7 +206,8 @@ const RUN_SCOPES: &[Scope] = &[Scope::Workspace, Scope::User, Scope::Project];
 const TEAM_SCOPES: &[Scope] = &[Scope::Workspace, Scope::Project];
 const PERSONAL_SCOPES: &[Scope] = &[Scope::Workspace, Scope::User];
 
-/// Every setting. Add lines; don't reorder.
+/// Every declared setting. Add lines; don't reorder. Module switches aren't
+/// here: [`all`] adds one per module that can be turned off (M1.3).
 pub const REGISTRY: &[SettingDef] = &[
     SettingDef {
         key: "notifications.quiet_hours",
@@ -482,23 +484,29 @@ pub const REGISTRY: &[SettingDef] = &[
         launch_override: false,
         default: "false",
     },
-    // AWD-75: one switch per module that can be turned off, written through
-    // the Modules routes (crate::modules), which apply presets and audit.
-    module_switch("modules.messages", "Messages"),
-    module_switch("modules.projects", "Projects"),
-    module_switch("modules.channels", "Channels"),
-    module_switch("modules.tasks", "Tasks"),
-    module_switch("modules.pages", "Pages"),
-    module_switch("modules.whiteboards", "Whiteboards"),
-    module_switch("modules.collections", "Collections"),
-    module_switch("modules.sheets", "Sheets"),
-    module_switch("modules.runs", "Runs"),
-    module_switch("modules.code", "Code"),
-    module_switch("modules.agents", "Agents"),
-    module_switch("modules.inbox", "Inbox"),
-    module_switch("modules.automations", "Automations"),
-    module_switch("modules.suggestions", "Suggestions"),
 ];
+
+/// Every setting: the declared ones, then (AWD-75) one switch per module
+/// that can be turned off, in module order, generated from the registered
+/// modules. Switches are written through the Modules routes
+/// (crate::modules), which apply presets and audit.
+pub fn all() -> &'static [SettingDef] {
+    static ALL: std::sync::OnceLock<Vec<SettingDef>> = std::sync::OnceLock::new();
+    ALL.get_or_init(|| {
+        let mut all = REGISTRY.to_vec();
+        for module in crate::modules::registry::Registry::global().descriptions() {
+            if module.switchable {
+                // Built once per process, from the compiled-in manifests.
+                let key = crate::modules::state::setting_key(&module.id);
+                all.push(module_switch(
+                    Box::leak(key.into_boxed_str()),
+                    module.name.as_str(),
+                ));
+            }
+        }
+        all
+    })
+}
 
 /// A module's switch: on unless the workspace turns it off.
 const fn module_switch(key: &'static str, label: &'static str) -> SettingDef {
@@ -519,7 +527,7 @@ pub(crate) fn has_own_routes(key: &str) -> bool {
 }
 
 pub fn definition(key: &str) -> Option<&'static SettingDef> {
-    REGISTRY.iter().find(|definition| definition.key == key)
+    all().iter().find(|definition| definition.key == key)
 }
 
 // ---------------------------------------------------------------------------
@@ -668,7 +676,7 @@ pub async fn resolve(
             updated_by_actor_id: row.updated_by_actor_id,
         });
     }
-    let settings = REGISTRY
+    let settings = all()
         .iter()
         .map(|definition| {
             let mut layers = stored.remove(definition.key).unwrap_or_default();
@@ -1201,7 +1209,7 @@ struct RegistryResponse {
 
 async fn registry(_principal: AuthenticatedActor) -> Json<RegistryResponse> {
     Json(RegistryResponse {
-        settings: REGISTRY
+        settings: all()
             .iter()
             .map(|definition| RegistryEntry {
                 definition,
@@ -1562,7 +1570,7 @@ mod tests {
     #[test]
     fn the_registry_is_well_formed() {
         let mut keys = std::collections::HashSet::new();
-        for definition in REGISTRY {
+        for definition in all() {
             assert!(keys.insert(definition.key), "{} twice", definition.key);
             assert!(!definition.scopes.is_empty(), "{}", definition.key);
             assert!(

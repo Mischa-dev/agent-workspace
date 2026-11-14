@@ -1,0 +1,26 @@
+{
+  "ceiling": 61,
+  "files": {
+    "apps/server/src/config.rs": 7,
+    "apps/server/src/link_previews/guard.rs": 1,
+    "apps/server/src/outbound.rs": 1,
+    "apps/server/src/replies.rs": 8,
+    "deploy/redhat/deploy-dev-checkout.sh": 3,
+    "deploy/redhat/deploy-release.sh": 1,
+    "docs/compatibility/hermes-agent.md": 4,
+    "docs/operations/alpha-deploy.md": 1,
+    "docs/operations/performance.md": 4,
+    "docs/plans/master/plans/A2-connecting-agents.md": 3,
+    "docs/plans/master/plans/C1-discussion-and-documents.md": 1,
+    "docs/plans/master/plans/H1-hosting-and-release.md": 1,
+    "docs/plans/master/plans/K1-accounts-and-access.md": 1,
+    "docs/plans/master/plans/K2-operation-layer.md": 1,
+    "docs/plans/master/plans/K3-things-links-events.md": 1,
+    "docs/plans/master/plans/K4-spaces.md": 1,
+    "docs/plans/master/plans/K5-any-number-of-servers.md": 2,
+    "docs/plans/master/plans/M1-modules.md": 2,
+    "docs/plans/master/plans/P0-steady-ground.md": 1,
+    "docs/self-hosted-red-hat.md": 16,
+    "tools/hermes-connector/verify-fixtures.py": 1
+  }
+}

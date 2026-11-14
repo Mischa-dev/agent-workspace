@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 
 use rmcp::schemars;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
@@ -20,7 +20,7 @@ pub const MAX_OPERATIONS: usize = 500;
 /// Removing more live elements than this in one call needs `confirmDelete`.
 pub const CONFIRM_DELETE_OVER: usize = 25;
 
-#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EditOutcome {
     /// The board's change counter after the edit. Pass it as

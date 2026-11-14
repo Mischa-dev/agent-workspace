@@ -266,6 +266,7 @@ pub(super) async fn usage_batch_launch(
             mcp: true,
             session_id: None,
             request_id: Some(request_id.clone()),
+            mcp_credential: None,
         };
         let launched = batch::launch_batch(
             state,

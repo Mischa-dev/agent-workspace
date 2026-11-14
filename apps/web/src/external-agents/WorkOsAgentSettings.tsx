@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { requestJson } from '../api/client'
 import { Banner, Button, ListSkeleton, Row, RowList, TextField, describeError, describeLoadError } from '../ui'
 import type { ExternalAgentConnection } from './api'
+import '../styles/pages.css'
 
 type Binding = { id: string; kind: 'blueprint' | 'registration'; subjectId: string; revokedAt: string | null }
 

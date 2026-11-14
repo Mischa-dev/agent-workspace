@@ -24,6 +24,12 @@ pub struct DevSeed {
     pub repository_id: Uuid,
 }
 
+/// The demo repository the development seed adds: nobody's real repository
+/// (the GitHub ids are placeholders too).
+pub const DEMO_REPOSITORY_OWNER: &str = "example-org";
+pub const DEMO_REPOSITORY_NAME: &str = "demo-repository";
+pub const DEMO_CLONE_URL: &str = "https://github.com/example-org/demo-repository.git";
+
 pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppError> {
     if !config.environment.is_development() || !config.server_addr.ip().is_loopback() {
         return Err(AppError::DevelopmentAuthUnavailable);
@@ -40,7 +46,7 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
     let organization_id = sqlx::query_scalar::<_, Uuid>(
         r#"
         INSERT INTO organizations (id, name, slug)
-        VALUES ($1, 'Mischa Personal', 'mischa-personal')
+        VALUES ($1, 'Demo Workspace', 'demo-workspace')
         ON CONFLICT (slug) DO UPDATE SET updated_at = now()
         RETURNING id
         "#,
@@ -68,7 +74,7 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
         SELECT pm.actor_id
           FROM project_memberships pm
          WHERE pm.project_id = $1
-           AND lower(pm.handle) = 'mischa'
+           AND lower(pm.handle) = 'owner'
         "#,
     )
     .bind(project_id)
@@ -167,7 +173,7 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
         INSERT INTO project_memberships (
             id, project_id, actor_id, role, display_name, handle
         )
-        VALUES ($1, $2, $3, 'owner', 'Mischa Nelson', 'mischa')
+        VALUES ($1, $2, $3, 'owner', 'Workspace Owner', 'owner')
         ON CONFLICT (project_id, actor_id)
         DO UPDATE SET enabled = true, updated_at = now()
         "#,
@@ -179,9 +185,11 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
     .await?;
 
     let repository_id = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM repositories WHERE project_id = $1 AND lower(owner) = 'mischa-dev' AND lower(name) = 'agent-workspace-m0-spike'",
+        "SELECT id FROM repositories WHERE project_id = $1 AND lower(owner) = lower($2) AND lower(name) = lower($3)",
     )
     .bind(project_id)
+    .bind(DEMO_REPOSITORY_OWNER)
+    .bind(DEMO_REPOSITORY_NAME)
     .fetch_optional(&mut *transaction)
     .await?
     .unwrap_or_else(Uuid::now_v7);
@@ -193,9 +201,7 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
             default_branch, github_app_installation_id, mirror_path, trusted
         )
         VALUES (
-            $1, $2, 1317905810, 'Mischa-dev', 'agent-workspace-m0-spike',
-            'https://github.com/Mischa-dev/agent-workspace-m0-spike.git',
-            'main', 150232852, $3, true
+            $1, $2, 1001, $4, $5, $6, 'main', 2001, $3, true
         )
         ON CONFLICT (project_id, owner, name)
         DO UPDATE SET id = repositories.id
@@ -205,6 +211,9 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
     .bind(repository_id)
     .bind(project_id)
     .bind(runtime_path_text(&mirror_path)?)
+    .bind(DEMO_REPOSITORY_OWNER)
+    .bind(DEMO_REPOSITORY_NAME)
+    .bind(DEMO_CLONE_URL)
     .fetch_one(&mut *transaction)
     .await?;
 

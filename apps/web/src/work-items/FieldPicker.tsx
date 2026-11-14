@@ -9,6 +9,7 @@ import { TaskGlyph } from './TaskGlyph'
 import type { AssignableActor, MilestoneRef, WorkItemPriority, WorkItemStatus, WorkItemWorkflow } from './types'
 import { PriorityIcon, StatusIcon } from './WorkItemIcons'
 import { NONE, PICKER_LABELS, allowedStatuses, useDebouncedValue } from './pickerModel'
+import '../styles/work.css'
 
 export type PickerField = 'status' | 'priority' | 'assignee' | 'labels' | 'milestone' | 'type'
 

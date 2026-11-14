@@ -112,8 +112,12 @@ impl Tenancy {
     }
 }
 
+/// One task's scope: task-local (each request or job has its own), so it is
+/// not process state; the lock lets authentication narrow it mid-request.
+type TaskScope = Arc<Mutex<Tenancy>>;
+
 tokio::task_local! {
-    static TENANCY: Arc<Mutex<Tenancy>>;
+    static TENANCY: TaskScope;
 }
 
 /// Runs `future` in `tenancy`'s scope.

@@ -23,6 +23,7 @@ import {
 } from './api'
 import { AuthLayout } from '../auth/AuthLayout'
 import { Banner, Button, ButtonLink, TextField } from '../ui'
+import '../auth/auth.css'
 
 type JoinMode = 'new' | 'existing'
 

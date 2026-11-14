@@ -6,6 +6,7 @@ import type { NounId, PartId } from './parts'
 import { presetChoices, type PresetChoice } from './presetChoices'
 import { REGISTRY, everything, layoutFrom, layoutShape, presetShape, shapeWord, type Layout, type SavedPreset, type Shape } from './registry'
 import './layout.css'
+import '../styles/pages.css'
 
 // The pieces both Layout settings pages use: preset cards with a small
 // picture of the sidebar each gives, switches by group, words, a live

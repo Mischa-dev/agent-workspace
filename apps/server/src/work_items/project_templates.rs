@@ -1088,7 +1088,7 @@ mod tests {
     #[test]
     fn named_settings_stay_behind() {
         assert!(!copyable_setting("no.such.setting", &json!(true)));
-        let identifier = settings::REGISTRY.iter().find(|definition| {
+        let identifier = settings::all().iter().find(|definition| {
             matches!(definition.kind, SettingType::Identifier { .. })
                 && definition.scopes.contains(&settings::Scope::Project)
         });

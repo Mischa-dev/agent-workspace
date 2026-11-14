@@ -239,6 +239,10 @@
   --size-header: 52px;
   --size-row: 30px;
   --size-row-compact: 26px;
+  /* Dense data (tables, lists, boards): a piece's rowHeight picks one. */
+  --row-compact: 28px;
+  --row-default: 36px;
+  --row-roomy: 44px;
   --size-control-sm: 28px;
   --size-control: 32px;
   --size-control-lg: 40px;
@@ -303,6 +307,11 @@
 :root[data-text-size="small"] { --text-scale: 0.933; }
 :root[data-text-size="large"] { --text-scale: 1.067; }
 :root[data-density="compact"] { --size-row: var(--size-row-compact); --msg-pad-y: 3px; }
+
+/* A finger needs room: on a coarse pointer, roomy is the floor for data rows. */
+@media (pointer: coarse) {
+  :root { --row-compact: var(--row-roomy); --row-default: var(--row-roomy); }
+}
 
 /* Regions: components read --r-* so one control works on the rail, the sidebar and in content. */
 :root,

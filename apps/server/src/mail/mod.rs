@@ -295,13 +295,14 @@ pub(crate) async fn load(state: &AppState, row: SettingsRow) -> Result<Transport
 }
 
 /// The transport for mail to a person outside any one workspace (password
-/// resets, address confirmations): the workspace they chose as their default
-/// (Settings, or joining it from a workspace invitation), else the first
-/// workspace they own that sends mail. Never another owner's workspace they
-/// merely joined: that owner controls its mail server and would receive the
-/// person's reset link. So the computed default (the earliest workspace
-/// joined, when none was chosen) doesn't count, only a stored choice, or the
-/// one workspace a person belongs to, where nothing else could send it.
+/// resets, address confirmations): a workspace they own that sends mail
+/// (their default first, if they own it), else the one workspace they
+/// belong to. Never a workspace they merely joined alongside others: its
+/// owner controls its mail server and would receive the person's reset
+/// link. A stored default doesn't count on its own (P0.37), because before
+/// P0.37 accepting an invitation set it, so it isn't proof of a choice. A
+/// person whose only mail-sending workspaces are someone else's gets no
+/// account mail until server-wide mail (H1.17) replaces this.
 pub async fn transport_for_actor(
     state: &AppState,
     actor_id: Uuid,
@@ -315,7 +316,6 @@ pub async fn transport_for_actor(
         LEFT JOIN users user_account ON user_account.actor_id = membership.actor_id
         WHERE membership.actor_id = $1 AND membership.enabled
           AND (membership.role = 'owner'
-               OR membership.organization_id = user_account.default_organization_id
                OR NOT EXISTS (
                    SELECT 1 FROM organization_memberships other
                    WHERE other.actor_id = membership.actor_id AND other.enabled

@@ -301,7 +301,6 @@ async fn fetch_job(context: JobContext) -> Result<(), JobError> {
         return Ok(());
     }
     let policy = crate::outbound::PagePolicy::public();
-    let permit = crate::outbound::permit(organization_id).await;
     let outcome = match page::fetch(&policy, &url).await {
         Ok(found) => {
             let picture = match &found.image_url {
@@ -312,18 +311,21 @@ async fn fetch_job(context: JobContext) -> Result<(), JobError> {
         }
         Err(reason) => Err(reason),
     };
-    drop(permit);
     let store = FileStore::from_config(&state.config);
     let result = match outcome {
         Ok((found, picture)) => {
             let room = match &picture {
-                Some((bytes, _, _, _)) => crate::files::require_room(
-                    state,
-                    organization_id,
-                    u64::try_from(bytes.len()).unwrap_or(u64::MAX),
-                )
-                .await
-                .is_ok(),
+                Some((bytes, _, _, _)) => match state.pool.acquire().await {
+                    Ok(mut connection) => crate::files::require_room(
+                        state,
+                        &mut connection,
+                        organization_id,
+                        u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+                    )
+                    .await
+                    .is_ok(),
+                    Err(_) => false,
+                },
                 None => false,
             };
             // A full workspace or disk keeps the preview's words, not its picture.

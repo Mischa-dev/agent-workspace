@@ -3,15 +3,23 @@
   "name": "Runs",
   "description": "Handing tasks to agents on harnesses (Codex, Claude Code and others), following their runs, approvals and usage.",
   "version": 1,
+  "order": 110,
   "kind": "core",
   "switchable": true,
   "needs": ["tasks", "channels", "code"],
   "worksWith": ["agents", "automations"],
-  "permissions": ["runs.launch", "runs.approve", "runs.interrupt", "runs.accounts"],
+  "permissions": ["runs.launch", "runs.approve", "runs.interrupt", "runs.accounts", "runs.report", "requests.raise"],
   "tools": {
     "run_start": "create",
     "task_launch": "create",
     "run_get": "describe",
+    "run_create": "create",
+    "run_update": "change",
+    "run_activity_report": "create",
+    "run_usage_report": "create",
+    "run_result_report": "create",
+    "run_cancel": "change",
+    "run_mark_not_started": "change",
     "run_stop": "change",
     "run_retry": "create",
     "run_dismiss_failure": "change",
@@ -109,6 +117,7 @@
       "piece": { "type": "list", "thing": "run", "fields": ["status", "harness", "owner"] }
     }
   ],
+  "web": { "folder": "runs" },
   "slots": {
     "pages": ["/runs", "/runs/:runId", "/projects/:projectId/launches"],
     "parts": ["area.runs", "task.runs", "tech.run_usage", "home.working_now", "home.capacity", "workspace.runs"],

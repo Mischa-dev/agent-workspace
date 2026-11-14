@@ -1,3 +1,5 @@
+> **Superseded where [`docs/plans/master/`](master/README.md) says otherwise.** This plan explains how the existing pieces were built; the master plan decides what changes.
+
 # Sheets (AWD-54)
 
 Spreadsheets in a project, computed on the server, that people and agents

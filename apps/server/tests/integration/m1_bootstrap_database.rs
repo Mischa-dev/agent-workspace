@@ -67,7 +67,7 @@ async fn bootstrap_adopts_m0_owner_and_has_exactly_one_concurrent_winner() {
         INSERT INTO project_memberships (
             id, project_id, actor_id, role, display_name, handle
         )
-        VALUES ($1, $2, $3, 'owner', 'Mischa', 'mischa')
+        VALUES ($1, $2, $3, 'owner', 'Ada', 'ada')
         "#,
     )
     .bind(Uuid::now_v7())
@@ -84,8 +84,8 @@ async fn bootstrap_adopts_m0_owner_and_has_exactly_one_concurrent_winner() {
     .expect("apply M1 migration");
 
     let command = BootstrapCommand {
-        login_name: "mischa".to_owned(),
-        display_name: "Mischa".to_owned(),
+        login_name: "ada".to_owned(),
+        display_name: "Ada".to_owned(),
         organization_name: None,
         organization_slug: None,
         adopt_actor_id: None,
@@ -183,7 +183,7 @@ async fn bootstrap_adopts_m0_owner_and_has_exactly_one_concurrent_winner() {
         SELECT u.id, u.authentication_epoch
         FROM users u
         JOIN user_password_credentials credential ON credential.user_id = u.id
-        WHERE u.login_name = 'mischa'
+        WHERE u.login_name = 'ada'
         "#,
     )
     .fetch_one(&pool)
@@ -212,7 +212,7 @@ async fn bootstrap_adopts_m0_owner_and_has_exactly_one_concurrent_winner() {
     let rotation = rotate_password(
         &pool,
         PasswordRotationCommand {
-            login_name: "mischa".to_owned(),
+            login_name: "ada".to_owned(),
         },
         replacement.to_owned(),
     )

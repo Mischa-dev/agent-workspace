@@ -13,6 +13,7 @@ import type { Project } from '../../projects/types'
 import { Banner, Button, DetailList, PageHeader, Section, TextField, showToast } from '../../ui'
 import { markArchiving } from '../archiving'
 import type { SettingsPageProps } from '../types'
+import '../../styles/pages.css'
 
 const renameProject = (projectId: string, name: string, expectedVersion: number) =>
   requestJson<Project>(`/api/v1/projects/${encodeURIComponent(projectId)}`, {

@@ -1311,7 +1311,6 @@ async fn send_post(
     let (url, client) = crate::outbound::webhook_client(url, trusted_origins)
         .await
         .map_err(|error| (None, error))?;
-    let _permit = crate::outbound::permit(due.organization_id).await;
     let body = body.to_string();
     let timestamp = Utc::now().timestamp().to_string();
     let signature = crate::replies::sign(secret, &timestamp, &body)

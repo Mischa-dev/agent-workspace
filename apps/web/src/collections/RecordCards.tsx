@@ -9,6 +9,7 @@ import { cardValues, tableItems, viewColumns } from './collectionModel'
 import { NewRecordInput } from './RecordCells'
 import { RecordsEmpty } from './RecordTable'
 import type { RecordEdits } from './useRecordEdits'
+import '../styles/work.css'
 
 /**
  * A collection's records on a phone, where a wide table doesn't fit: a card

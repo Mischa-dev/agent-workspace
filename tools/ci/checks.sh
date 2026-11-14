@@ -291,6 +291,8 @@ if has rust; then
   step "self-hosted guide" ./tools/verify-self-hosted-guide.sh
   step "hermes fixtures" python3 tools/hermes-connector/verify-fixtures.py
   step "agentos-nyx tests" python3 -m unittest discover -s integrations/agentos-nyx -p 'test_*.py'
+  step "runner SDK tests (Python)" python3 -m unittest discover -s sdks/runner-python/tests -t sdks/runner-python
+  step "master plan" python3 docs/plans/master/tools/plan.py
 fi
 if has web; then
   step "Node toolchain" fetch_pinned_node
@@ -311,6 +313,7 @@ if has web; then
   step "pnpm install" pnpm install --frozen-lockfile --reporter=silent
   step "web lint" pnpm lint
   step "web typecheck" pnpm typecheck
+  step "runner SDK tests (TypeScript)" node --test 'sdks/runner-typescript/test/*.test.ts'
 fi
 
 # 2. Web tests and build: in the background next to the Rust checks on a big
@@ -319,9 +322,28 @@ fi
 run_web_checks() {
   step "web tests" pnpm test &&
     step "web build" pnpm build &&
+    web_budget_base &&
     step "web asset budgets" pnpm check:assets &&
     step "performance tools" pnpm check:performance-tools &&
     step "web browser smoke" run_browser_smoke
+}
+# The base commit's asset sizes, so the budget step can print what this change
+# adds (pull requests, where CI sets BUDGET_BASE_SHA). Best effort: a base that
+# won't build only drops the change column.
+web_budget_base() {
+  [ -n "${BUDGET_BASE_SHA:-}" ] || return 0
+  local base_dir
+  base_dir="$(mktemp -d)"
+  if git worktree add --detach "${base_dir}/tree" "${BUDGET_BASE_SHA}" > /dev/null 2>&1 &&
+    (cd "${base_dir}/tree" && pnpm install --frozen-lockfile --reporter=silent > /dev/null 2>&1 &&
+      pnpm build > /dev/null 2>&1); then
+    node scripts/check-web-budgets.mjs "${base_dir}/tree/apps/web/dist" > "${base_dir}/base.json" 2> /dev/null || true
+    export WEB_BUDGET_BASE="${base_dir}/base.json"
+  else
+    echo "web asset budgets: the base commit didn't build; no change column" >&2
+  fi
+  git worktree remove --force "${base_dir}/tree" > /dev/null 2>&1 || true
+  return 0
 }
 # Playwright smoke tests (apps/web/e2e): sign in and the task board in a real
 # browser, against the server built from this tree and a throwaway database.
@@ -419,6 +441,21 @@ if has rust; then
     while read -r stale; do
       dropdb --force --if-exists --maintenance-db="${CI_DATABASE_BASE}/postgres" "${stale}" || true
     done
+  # Test databases (aw_t_<uuid v7>) a killed run left, older than any test
+  # still running; and test templates (aw_tpl_<migrations>), unless one is
+  # being copied, since the first test of a run makes the one it needs.
+  psql -d "${CI_DATABASE_BASE}/postgres" -Atc \
+    "SELECT datname FROM pg_database WHERE datname ~ '^aw_t_[0-9a-f]{32}$'
+       AND to_timestamp(('x' || substr(datname, 6, 12))::bit(48)::bigint / 1000.0)
+           < now() - interval '6 hours'" 2>/dev/null |
+    while read -r stale; do
+      dropdb --force --if-exists --maintenance-db="${CI_DATABASE_BASE}/postgres" "${stale}" || true
+    done
+  psql -d "${CI_DATABASE_BASE}/postgres" -Atc \
+    "SELECT datname FROM pg_database WHERE datname ~ '^aw_tpl_'" 2>/dev/null |
+    while read -r stale; do
+      dropdb --if-exists --maintenance-db="${CI_DATABASE_BASE}/postgres" "${stale}" 2>/dev/null || true
+    done
   database="aw_ci_run_$(printf '%s' "${CI_RUN_ID:-$$}" | tr -c 'a-zA-Z0-9' '_')"
   createdb --maintenance-db="${CI_DATABASE_BASE}/postgres" "${database}"
   export AGENT_WORKSPACE_DATABASE_URL="${CI_DATABASE_BASE}/${database}"
@@ -431,6 +468,7 @@ if has rust; then
   fi
   step "rust tests" cargo nextest run --workspace --profile ci
   step "doc tests" cargo test --workspace --doc --quiet
+  step "schema snapshot" tools/db/schema-snapshot.sh
   if web_failed; then report_web; fi
   step "install cargo-deny" cargo install cargo-deny --version 0.20.2 --locked --quiet
   step "cargo deny" cargo deny check

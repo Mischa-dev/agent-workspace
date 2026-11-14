@@ -1,0 +1,52 @@
+{
+  "mcpRevisions": ["2025-06-18", "2025-11-25"],
+  "urls": [
+    "/api/v1/mcp",
+    "/.well-known/oauth-protected-resource/api/v1/mcp",
+    "/.well-known/oauth-authorization-server",
+    "/agent-runner.md",
+    "/connect.md",
+    "/api/public/v1/openapi.json"
+  ],
+  "clients": {
+    "always-on-runtime": {
+      "wake": "inbox.available",
+      "tools": {
+        "briefing": [],
+        "inbox_list": [],
+        "conversation_open": ["conversationId"],
+        "message_send": ["conversationId", "text"],
+        "reply_claim": ["requestId"],
+        "reply_progress": ["requestId", "generation", "status"],
+        "reply_send": ["requestId", "generation", "text", "final"],
+        "reply_pass": ["requestId", "generation"],
+        "reply_release": ["requestId", "generation", "reason"],
+        "session_bind": ["conversationId", "externalRef", "harness", "url", "state"]
+      }
+    },
+    "hermes-0.20": {
+      "wake": "poll",
+      "tools": {
+        "approval_get": ["approvalId"],
+        "approval_respond": ["approvalId"],
+        "conversation_list": [],
+        "conversation_read": ["conversationId"],
+        "external_event_poll": [],
+        "message_send": ["conversationId", "text"],
+        "people_search": [],
+        "project_open": [],
+        "pull_request_get": [],
+        "repository_get": [],
+        "run_request": [],
+        "task_comment": ["taskId"],
+        "task_create": ["title"],
+        "task_list": [],
+        "task_mark_blocked": ["taskId"],
+        "task_mark_ready_for_review": ["taskId"],
+        "task_open": ["taskId"],
+        "task_update": ["taskId", "expectedVersion"]
+      }
+    }
+  },
+  "retireWhen": "docs/compatibility/connected-clients.md"
+}

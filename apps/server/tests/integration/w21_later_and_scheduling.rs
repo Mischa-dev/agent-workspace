@@ -20,8 +20,9 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::{
-    agent_interface::{Browser, send},
-    mcp_admin::{Setup, create_project},
+    agent_interface::{Browser, create_agent, creates_once, initialize, send},
+    mcp_admin::{Setup, create_project, setup},
+    mcp_tasks::{add_member, space},
     message_edits::{add_person, create_channel, direct_space, get, owner_id, say, text},
     notifications::drain,
     w9_capacity_and_push::{Fixture, call, fixture},
@@ -156,6 +157,37 @@ async fn remind_at(pool: &PgPool, item: &str) -> Option<DateTime<Utc>> {
     .fetch_one(pool)
     .await
     .expect("item")
+}
+
+#[tokio::test]
+async fn scheduling_again_schedules_once() {
+    let Some(setup) = setup("w21_retry").await else {
+        return;
+    };
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (agent, token) = create_agent(
+        &setup.app,
+        &setup.browser,
+        &space(&setup).await,
+        "Rook",
+        "rook",
+    )
+    .await;
+    add_member(&setup, &work, agent, "member").await;
+    let session = initialize(&setup.app, &token).await.expect("MCP session");
+    let channel = create_channel(&setup, &work, "general").await;
+    let send_at = (Utc::now() + Duration::hours(2)).to_rfc3339();
+    creates_once(
+        &setup.app,
+        &setup.pool,
+        &token,
+        &session,
+        "message_schedule",
+        json!({"conversationId": channel, "text": "Standup soon", "sendAt": send_at, "clientRequestId": "schedule-retry-1"}),
+        json!({"conversationId": channel, "text": "Standup later", "sendAt": send_at, "clientRequestId": "schedule-retry-1"}),
+        "SELECT count(*) FROM scheduled_messages",
+    )
+    .await;
 }
 
 #[tokio::test]

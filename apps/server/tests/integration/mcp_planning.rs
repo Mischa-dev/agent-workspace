@@ -8,8 +8,9 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::{
-    agent_interface::{connect_app, create_agent, initialize, send, tool},
+    agent_interface::{connect_app, create_agent, creates_once, initialize, send, tool},
     mcp_admin::{Setup, create_project, setup},
+    mcp_tasks::{add_member, space},
 };
 
 fn keys(rows: &Value) -> Vec<String> {
@@ -70,6 +71,35 @@ async fn create_task(
     let created = tool(&setup.app, token, session, "task_create", arguments).await;
     assert_eq!(created["outcome"], "applied", "{created}");
     created["key"].as_str().expect("key").to_owned()
+}
+
+#[tokio::test]
+async fn creating_a_milestone_again_creates_it_once() {
+    let Some(setup) = setup("planning_retry").await else {
+        return;
+    };
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (agent, token) = create_agent(
+        &setup.app,
+        &setup.browser,
+        &space(&setup).await,
+        "Rook",
+        "rook",
+    )
+    .await;
+    add_member(&setup, &work, agent, "member").await;
+    let session = initialize(&setup.app, &token).await.expect("MCP session");
+    creates_once(
+        &setup.app,
+        &setup.pool,
+        &token,
+        &session,
+        "milestone_write",
+        json!({"projectId": work, "name": "Beta", "clientRequestId": "milestone-retry-1"}),
+        json!({"projectId": work, "name": "Launch", "clientRequestId": "milestone-retry-1"}),
+        "SELECT count(*) FROM project_milestones",
+    )
+    .await;
 }
 
 #[tokio::test]

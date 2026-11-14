@@ -1,14 +1,38 @@
-# Interface changes
+# Interface change log
 
-One row per change to a name, shape or behaviour that another plan relies on
-(definition of done, item 14). Newest last.
+A slice that changes a name, shape or behaviour another plan relies on (a
+function, table, column, event, operation, error or wire format) adds a row
+here, updates the owning plan's text, and says so under "Interfaces changed"
+in its pull request. A rename keeps the old name working until the relying
+slices move.
 
 | Date | Slice | Interface | Old → new | Plans that rely on it |
-|---|---|---|---|---|
-| 2026-11-14 | H1.2 | Outbound HTTP: `outbound::client_for`, `pinned_client`, `webhook_client`, `PagePolicy`, `permit(workspace)` | `replies::validate_webhook_url` and `link_previews::guard` → `outbound` (one guard; every address pinned, no redirects, no proxy, 8 at once per workspace) | A2 (webhooks), C1 (link previews), K5 (the `work` role) |
+| --- | --- | --- | --- | --- |
+| 2026-11-14 | P0.8 | `roles::role_allows_sql`, `search::projects_allowing` | a custom role's permission alone → the permission and a base role that holds it | K1 |
+| 2026-11-14 | P0.9 | MCP refusal body | always `retryCategory` → spelled as the tool's output schema spells it (`retry_category` where the schema says so) | K2 |
+| 2026-11-14 | P0.9 | Public API status per outcome | unknown outcomes 200 → `rejected` 422, `busy` 429, `cursor_expired` 410, unknown 500; `ok`, `applied`, `found`, `events`, `requested` 200 | K2 |
+| 2026-11-14 | P0.10 | Reply wake-up delivery | posted inside the claim transaction → claimed in a short transaction, posted outside, each result recorded in its own | A2 |
+| 2026-11-14 | P0.11 | GitHub pull request automation | its own status SQL → `update_locked_work_item` as an integration actor; audit action `github.work_item_automation_transition` | T1, K3 |
+| 2026-11-14 | P0.12 | Board drag (`move_work_item`), `task_mark_blocked`, `task_mark_ready_for_review` | own update paths → `update_locked_work_item`; a drag that changes nothing no longer bumps the version | T1 |
+| 2026-11-14 | P0.13 | Rate limits | global login and MCP auth budgets count every attempt → only failures; client address from `AGENT_WORKSPACE_CLIENT_ADDRESS_HEADER` (set `cf-connecting-ip` behind Cloudflare) | K5, H1 |
+| 2026-11-14 | P0.14 | OAuth client registration | all clients count toward the cap → only unclaimed ones (1,024), and 20 registrations a minute per address | A2 |
+| 2026-11-14 | P0.15, P0.16 | `page_write` (create), `decision_record`, `whiteboard_create`, `whiteboard_duplicate`, `project_create`, `file_upload`, `message_schedule`, `task_from_template`, `milestone_write` (create) | no retry key → optional `clientRequestId`; a retry answers the first result with `idempotentReplay: true`; another call with the same id is a conflict | K2 |
+| 2026-11-14 | P0.17 | `agent_workspace_server::mcp::tool_catalog` | crate-private → public (doc hidden) for the contract tests | K2 |
+| 2026-11-14 | P0.18 | `POST /api/v1/projects/{id}/external-agents/{id}/webhook` | saving switched to typed wake-ups → keeps the format unless `wakeupFormat: "typed"` | A2 |
+| 2026-11-14 | P0.20 | Integration test helpers | spread over `agent_interface.rs`, `mcp_admin.rs`, `workspace_isolation.rs` → `tests/integration/support/` (old paths re-export) | every workstream's tests |
+| 2026-11-14 | P0.21 | `support::world::setup` | a migrated schema per test, never dropped → a copy of the run's template database, dropped when the test ends | every workstream's tests |
+| 2026-11-14 | P0.22 | `workspace_isolation::{http_cases, mcp_cases, get_text}` | private to the file → `pub(super)`, walked again by `privacy_inside_workspace.rs` | C2, K1 (each new read adds its case once, both nets walk it) |
+| 2026-11-14 | P0.24 | `agent_workspace_server::test_support::source` | each guard's own scanner → one scanner (`rust_files`, `strip_tests`, `routes`) for the policy inventory, the module test, both isolation nets and the structure guards | K1, K2, K4 guards |
+| 2026-11-14 | P0.26 | `apps/server/src/structure_guards/allowances.json` | one rule → fourteen rules with per-file allowances and ceilings | every workstream (lower a number when you remove an offender) |
+| 2026-11-14 | P0.28 | SQL `conversation_readable_by(conversation_id, actor_id)` | new: one call to `conversation_visible_to` (ruling R32) | C2.1, K1, K4.4 |
+| 2026-11-14 | P0.35 | `tools/db/schema-snapshot.sh` → `target/schema.sql` | new: today's schema as `pg_dump --schema-only` prints it; CI keeps it in the `ci-reports` artifact | every workstream that adds a migration |
+| 2026-11-14 | P0.36 | `page_comment`, `page_suggestion` notification `detail` | `title` and `preview` copied in → ids only (`pageCommentId`, `threadId`, `pageSuggestionId`, `href`); the inbox reads the page title and the comment live, an archived page shows "(archived)" and no preview, a page moved out of the project hides its notifications | C1, K3 |
+| 2026-11-14 | P0.28, P0.36 | migration names | P0.28's migration is `20261114070500_conversation_readable_by.sql` (main took `20261114070000`); the scrub is `20261114071000_notifications_page_text.sql` | none |
+| 2026-11-14 | P0.37 | `mail::transport_for_actor`; `POST /api/v1/workspace-invitations/accept-existing` | a stored default workspace carried account mail → only a workspace the person owns, or their only one; accepting an invitation set the default → sets it only when the person had none and belongs nowhere else | H1 (H1.17 replaces the transport), K1 |
+| 2026-11-14 | H1.2 | Outbound HTTP: `outbound::client_for`, `pinned_client`, `webhook_client`, `PagePolicy` | `replies::validate_webhook_url` and `link_previews::guard` → `outbound` (one guard; every address pinned, no redirects, no proxy). The per-workspace cap on requests in flight is H1.23's, on K5.6's shared permits (rule 5 refuses a map in the process) | A2 (webhooks), C1 (link previews), K5 (the `work` role, K5.6 permits), H1.23 |
 | 2026-11-14 | H1.12 | Configuration: `AGENT_WORKSPACE_<NAME>_FILE`, `AGENT_WORKSPACE_PROFILE` (`small`, `standard`, `hosted`), `AGENT_WORKSPACE_LINK_PREVIEWS`; `ALLOWED_ORIGINS` defaults to the public origin outside development | new | H1.13 (image, compose), H1.19, K5 |
 | 2026-11-14 | H1.3 | `tenancy::tables`: `TENANT_TABLES`, `GLOBAL_TABLES`, `MISSING_WORKSPACE_COLUMN`, `MUST_BE_GLOBAL`, `tenant_column`, `is_global` | new | H1.4 to H1.7, H1.9, H1.21, H1.22, K4; every slice adding a table |
-| 2026-11-14 | H1.20 | `tenancy::{Tenancy, scoped, system, signed_in, current}`, `SYSTEM_REASONS`; `db::{scoped_tx, scoped_one}`; `app.tenancy` = `m:<account>\|<ws>,…`, `w:<account>\|<ws>`, `s:<reason>`, `a`, set with `BEGIN` | new | K2.3 (the runner sets the scope; stopgap until then: `run_tool` and `jobs::execute`), H1.21, H1.22, H1.45 to H1.63, K5 |
+| 2026-11-14 | H1.20 | `tenancy::{Tenancy, scoped, system, signed_in, current}`, `SYSTEM_REASONS`; `db::{scoped_tx, scoped_one}`; `app.tenancy` = `m:<account>\|<ws>,…`, `w:<account>\|<ws>`, `s:<reason>`, `a`, set with `BEGIN` | new | K2.3 (operation dispatch now begins with `scoped_tx` under `Tenancy::Workspace`; hand-written routes and tools keep the stopgap scopes in the request middleware, `run_tool` and `jobs::execute`), H1.21, H1.22, H1.45 to H1.63, K5 |
 | 2026-11-14 | H1.16 | CLI: `backup create\|schedule\|key`, `restore`, `restore drill` | new (same set format as `deploy/redhat`) | H1.13, H1.19 |
 | 2026-11-14 | H1.41 | `GET /client-config` `{apiOrigin, liveOrigin, signIn: {methods}, signup, features, version}`; `GET /api/v1/auth/csrf`; `AGENT_WORKSPACE_LIVE_ORIGIN`; CORS for `ALLOWED_ORIGINS` only; web `apiUrl`, `liveUrl`, `setApiOrigins` | W1's text said `/api/v1/client-config` → `/client-config` (R30) | W1.38, K5.19 |
 | 2026-11-14 | H1.44 | `tenancy/ratchet.json`: unscoped pool call sites per directory, keys `<dir>/` and `src a-c`, `src d-l`, `src m-r`, `src s-z` | new; may only go down | H1.45 to H1.63; every slice adding a query |

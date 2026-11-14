@@ -136,6 +136,7 @@ pub(super) async fn fixture_with(
             browser,
             organization_id: owner.organization_id,
             pool,
+            cleanup: None,
         },
         state,
         _keys: (keys, roots),

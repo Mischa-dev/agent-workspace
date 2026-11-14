@@ -9,6 +9,7 @@ import { requestJson } from '../api/client'
 import { isApiError } from '../api/errors'
 import { Banner, Button, ButtonLink, Checkbox, TextField, describeError, describeLoadError } from '../ui'
 import { AuthLayout } from './AuthLayout'
+import './auth.css'
 
 type ResetInspection = { loginName: string; twoFactorRequired: boolean }
 

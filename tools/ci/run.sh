@@ -8,7 +8,7 @@
 # the working tree as it is, uncommitted changes included).
 #
 # Machines, best first:
-#   nixos   Mischa's laptop (16 threads). Used when tools/ci/probe.sh says it's
+#   nixos   A NixOS laptop (16 threads). Used when tools/ci/probe.sh says it's
 #           on mains power with the GPU quiet; each step then waits its turn on
 #           the build admission lock and checks CPU and memory once it has it
 #           (see checks.sh). Jobs run as the unprivileged aw-ci user
@@ -60,11 +60,39 @@ run_id="${GITHUB_RUN_ID:+gh${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT:-1}}"
 run_id="${run_id:-local$(date +%s)_$$}"
 ssh_opts=(-o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=30 -o StrictHostKeyChecking=accept-new)
 
+# The machines' addresses aren't in the repository. They come from
+# AW_CI_NIXOS_TARGET and AW_CI_REDHAT_TARGET in the environment, or from the
+# untracked file ${AW_CI_HOSTS:-~/.config/aw-ci/hosts}, whose lines set the
+# same names (AW_CI_REDHAT_TARGET=<user>@<address>).
+hosts_file="${AW_CI_HOSTS:-${HOME}/.config/aw-ci/hosts}"
+read_hosts() {
+  local key value
+  [ -f "${hosts_file}" ] || return 0
+  while IFS='=' read -r key value; do
+    case "${key}" in
+      AW_CI_NIXOS_TARGET|AW_CI_REDHAT_TARGET)
+        [ -n "${!key:-}" ] || printf -v "${key}" '%s' "${value}" ;;
+    esac
+  done < "${hosts_file}"
+}
+read_hosts
+
+# `host_target <host> <variable>`: the ssh target for a host, or a clear error.
+host_target() {
+  local value="${!2:-}"
+  if [ -z "${value}" ]; then
+    echo "ci: no address for $1: set $2 in ${hosts_file} (not committed) or in the environment" >&2
+    return 1
+  fi
+  printf '%s' "${value}"
+}
+
 # Host settings: transport, ssh target, work directory, test database, limits.
 load_host() {
   case "$1" in
     nixos)
-      transport=ssh target=aw-ci@100.84.251.51 work=/var/lib/aw-ci/agent-workspace
+      transport=ssh work=/var/lib/aw-ci/agent-workspace
+      target="$(host_target nixos AW_CI_NIXOS_TARGET)" || return 1
       database_base=postgres://aw_test@127.0.0.1:55433
       # Compiling the server's library or its unit tests takes about 5 GB
       # (checks.sh builds them one after the other under a cap). Agents build
@@ -90,7 +118,8 @@ load_host() {
       if [ "$(id -un)" = aw-runner ]; then
         transport=local target=""
       else
-        transport=sudo target=cloud-user@100.94.141.127
+        transport=sudo
+        target="$(host_target redhat AW_CI_REDHAT_TARGET)" || return 1
       fi
       work=/opt/aw-runner/ci
       database_base=postgres://aw_test:aw_test@127.0.0.1:55433
@@ -245,6 +274,16 @@ trap 'release; exit 130' INT TERM
 
 hosts=(nixos redhat)
 [ -n "${only_host}" ] && hosts=("${only_host}")
+# Only the machines this checkout knows the address of.
+known=()
+for host in "${hosts[@]}"; do
+  (load_host "${host}") && known+=("${host}")
+done
+if [ "${#known[@]}" -eq 0 ]; then
+  echo "ci: no CI machine has an address; see ${hosts_file}" >&2
+  exit 1
+fi
+hosts=("${known[@]}")
 # A build-run job holds the laptop's admission lock until it ends, and CI on
 # the laptop waits for that lock: started from inside one, it would wait on
 # itself. Red Hat has no lock, so --host redhat still works from there.

@@ -27,6 +27,7 @@ import type { Draft, DraftTask, PlanImport, PlanSource } from './api'
 import { PlanningFrame, PlanningIntro } from './frame'
 import { useCommitPlan, useCreatePlan, usePlan, usePlans, useProjectAi, useSavePlan } from './hooks'
 import { aiErrorMessage, planningHref } from './links'
+import '../styles/work.css'
 
 type SourceKind = PlanSource['kind']
 

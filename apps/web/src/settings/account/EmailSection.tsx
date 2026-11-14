@@ -7,6 +7,7 @@ import { describeError, toastError } from '../../app/mutations'
 import { Banner, Button, ConfirmDialog, Section, SettingsSkeleton, StatusChip, TextField, describeLoadError, formatFullDate, formatRelative, showToast } from '../../ui'
 import { workspaceSettingsHref } from '../paths'
 import { notificationKeys } from './usageApi'
+import '../../styles/pages.css'
 
 export type AccountEmail = {
   address: string | null

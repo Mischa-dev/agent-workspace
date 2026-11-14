@@ -1,3 +1,5 @@
+> **Superseded where [`docs/plans/master/`](master/README.md) says otherwise.** This plan explains how the existing pieces were built; the master plan decides what changes.
+
 # Roadmap: from today to the platform
 
 October 16, 2026. For Mischa, and for the agents that will build it.
@@ -15,7 +17,7 @@ This is the plan to take Agent Workspace from what it is today to the
 platform you want: a polished workspace that holds a whole project, where
 agents of any make do the work in the right place, and where your own
 harness ideas plug in. It takes over from the "Phase 4: after cutover" list
-in `docs/plans/workspace-merge-plan.md` and folds in `docs/plans/agent-tag.md`.
+in `docs/history/plans/workspace-merge-plan.md` and folds in `docs/plans/agent-tag.md`.
 `docs/plans/agent-interface.md` and `docs/plans/mcp-tools.md` still describe
 the MCP surface; the items below add to it.
 
@@ -1488,7 +1490,7 @@ across a restart.
 
 ### V. Task views: seeing a whole project
 
-`docs/task-platform/product-spec.md` has more ideas for views and imports;
+`docs/history/task-platform/product-spec.md` has more ideas for views and imports;
 the ones worth building are folded in here.
 
 #### V1. List view
@@ -2010,7 +2012,7 @@ models and options.
 
 A versioned REST API with an OpenAPI document generated from the Rust types,
 personal tokens with scopes (S7), and a docs page.
-`docs/task-platform/api-contract.md` is a starting point.
+`docs/history/task-platform/api-contract.md` is a starting point.
 
 **Done when:** A script with a personal token can do what the web app does.
 

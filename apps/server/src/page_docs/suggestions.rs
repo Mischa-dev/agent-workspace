@@ -432,7 +432,7 @@ pub async fn create(
         );
         notification.actor_id = Some(author.actor_id);
         notification.detail = serde_json::json!({
-            "title": format!("Suggested edits to {}", page.title),
+            "pageSuggestionId": id,
             "href": format!("/projects/{}/pages/{page_id}#suggestion-{id}", page.project_id),
         });
         notify(transaction, &notification).await?;

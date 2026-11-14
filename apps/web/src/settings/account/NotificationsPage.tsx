@@ -53,6 +53,7 @@ import {
 } from './usageApi'
 import { browserTimeZone, minuteToTime, timeToMinute } from './usageModel'
 import './usage.css'
+import '../../styles/pages.css'
 
 const CHANNELS: { channel: NotificationChannel; field: 'inApp' | 'push' | 'email'; label: string }[] = [
   { channel: 'in_app', field: 'inApp', label: 'Inbox' },

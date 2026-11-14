@@ -318,7 +318,11 @@ async fn github_status_and_webhook_receipt_are_scoped_signed_and_idempotent() {
         "installation": { "id": INSTALLATION_ID },
         "repository": {
             "id": github_repository_id,
-            "full_name": "Mischa-dev/agent-workspace-m0-spike"
+            "full_name": format!(
+                "{}/{}",
+                agent_workspace_server::seed::DEMO_REPOSITORY_OWNER,
+                agent_workspace_server::seed::DEMO_REPOSITORY_NAME
+            )
         },
         "after": "0123456789012345678901234567890123456789",
         "before": "1111111111111111111111111111111111111111",
@@ -384,7 +388,11 @@ async fn github_status_and_webhook_receipt_are_scoped_signed_and_idempotent() {
         "installation": { "id": INSTALLATION_ID },
         "repository": {
             "id": github_repository_id,
-            "full_name": "Mischa-dev/agent-workspace-m0-spike"
+            "full_name": format!(
+                "{}/{}",
+                agent_workspace_server::seed::DEMO_REPOSITORY_OWNER,
+                agent_workspace_server::seed::DEMO_REPOSITORY_NAME
+            )
         },
         "after": "2222222222222222222222222222222222222222"
     }))
@@ -840,4 +848,254 @@ async fn schema_pool(database_url: &str, schema: &str) -> PgPool {
         .connect(database_url)
         .await
         .expect("connect schema-scoped M5 GitHub pool")
+}
+
+/// P0.2: a database error in a pass doesn't end the GitHub job worker.
+#[tokio::test]
+async fn github_jobs_keep_running_through_a_database_error() {
+    use super::m3_scheduler_http::{background_state, survives_a_missing_table};
+
+    let Some((state, admin, schema)) = background_state("github_jobs_blip").await else {
+        return;
+    };
+    survives_a_missing_table(state.clone(), "github_jobs", |state, shutdown| {
+        agent_workspace_server::github::run_jobs(state, shutdown)
+    })
+    .await;
+    state.pool.close().await;
+    agent_workspace_server::test_support::drop_schema(&admin, &schema)
+        .await
+        .expect("drop schema");
+}
+
+/// P0.11: a merged pull request moves its linked task through the task
+/// command, as a person's move would: an activity that says what changed,
+/// the assigned agent's event, a watching agent's note, the card at the
+/// bottom of its new column, and `changedFields` on the webhook.
+#[tokio::test]
+async fn a_merged_pull_request_moves_its_task_like_a_person_would() {
+    use super::{
+        agent_interface::{connect_app, create_agent, initialize, tool},
+        mcp_code::seeded,
+        mcp_task_board::seed_pull_request,
+        mcp_tasks::{add_member, space},
+        message_edits::owner_id,
+    };
+    use agent_workspace_server::{
+        github::{AutomationJob, apply_pull_request_automation},
+        realtime::publish_ready_outbox_batch,
+    };
+    let Some((setup, seed, _temporary)) = seeded("p11_github_moves").await else {
+        return;
+    };
+    let app = &setup.app;
+    let pool = &setup.pool;
+    let project = seed.project_id;
+    let aw = project.to_string();
+    let workspace = space(&setup).await;
+    let (mara, _) = create_agent(app, &setup.browser, &workspace, "Mara", "mara").await;
+    let (wes, _) = create_agent(app, &setup.browser, &workspace, "Wes", "wes").await;
+    add_member(&setup, &aw, mara, "member").await;
+    add_member(&setup, &aw, wes, "member").await;
+    let owner = connect_app(app, &setup.browser, "Owner's app", "full").await;
+    let session = initialize(app, &owner).await.expect("owner's app");
+    let mut tasks = Vec::new();
+    for title in ["Ship offline mode", "Already in verification"] {
+        let created = tool(
+            app,
+            &owner,
+            &session,
+            "task_create",
+            json!({"projectId": aw, "title": title}),
+        )
+        .await;
+        tasks.push(
+            created["workItemId"]
+                .as_str()
+                .unwrap_or_else(|| panic!("task: {created}"))
+                .parse::<Uuid>()
+                .expect("task id"),
+        );
+    }
+    let (task, settled) = (tasks[0], tasks[1]);
+    // A status with a transition into the one verification status.
+    let (from, to) = sqlx::query_as::<_, (Uuid, Uuid)>(
+        r#"
+        SELECT transition.from_status_id, transition.to_status_id
+        FROM work_item_status_transitions transition
+        JOIN work_item_statuses target
+          ON target.project_id = transition.project_id AND target.id = transition.to_status_id
+        WHERE transition.project_id = $1 AND target.semantic_category = 'verification'
+          AND target.enabled
+        ORDER BY transition.from_status_id
+        LIMIT 1
+        "#,
+    )
+    .bind(project)
+    .fetch_one(pool)
+    .await
+    .expect("a transition into verification");
+    for (id, status, assignee) in [(task, from, Some(mara)), (settled, to, None)] {
+        sqlx::query("UPDATE work_items SET status_id = $2, assignee_actor_id = $3 WHERE id = $1")
+            .bind(id)
+            .bind(status)
+            .bind(assignee)
+            .execute(pool)
+            .await
+            .expect("set the task up");
+    }
+    sqlx::query(
+        "INSERT INTO work_item_watchers (project_id, work_item_id, actor_id) VALUES ($1, $2, $3)",
+    )
+    .bind(project)
+    .bind(task)
+    .bind(wes)
+    .execute(pool)
+    .await
+    .expect("Wes watches");
+    let owner_actor = owner_id(pool).await;
+    sqlx::query(
+        r#"
+        INSERT INTO webhook_subscriptions (
+            id, organization_id, project_id, owner_actor_id, name, url, event_types
+        ) VALUES ($1, $2, $3, $4, 'Moves', 'https://127.0.0.1/hook', '{task.updated}')
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(setup.organization_id)
+    .bind(project)
+    .bind(owner_actor)
+    .execute(pool)
+    .await
+    .expect("webhook");
+    let (pull_request, _) = seed_pull_request(&setup, &aw, seed.repository_id, 11).await;
+    let (integration, version) = sqlx::query_as::<_, (Uuid, i64)>(
+        "SELECT installation.integration_actor_id, pr.version FROM github_pull_requests pr JOIN github_installations installation ON installation.id = pr.github_installation_id WHERE pr.id = $1",
+    )
+    .bind(pull_request)
+    .fetch_one(pool)
+    .await
+    .expect("integration actor");
+    sqlx::query(
+        "INSERT INTO github_pull_request_work_item_links (project_id, github_pull_request_id, work_item_id, source, confirmed, created_by_actor_id) VALUES ($1, $2, $3, 'explicit', true, $4)",
+    )
+    .bind(project)
+    .bind(pull_request)
+    .bind(task)
+    .bind(owner_actor)
+    .execute(pool)
+    .await
+    .expect("link");
+    // Leave earlier events behind.
+    let database_url = std::env::var("AGENT_WORKSPACE_DATABASE_URL").expect("database URL");
+    let config = AppConfig::from_values(&BTreeMap::from([(
+        "AGENT_WORKSPACE_DATABASE_URL".to_owned(),
+        database_url,
+    )]))
+    .expect("configuration");
+    let state = AppState {
+        supervisors: SupervisorRegistry::new(&config).expect("supervisors"),
+        config: Arc::new(config),
+        pool: pool.clone(),
+        rate_limits: RateLimiters::default(),
+        realtime: RealtimeHub::new(64),
+    };
+    let pump = || async {
+        let registry = agent_workspace_server::jobs::default_registry();
+        let options = agent_workspace_server::jobs::WorkerOptions {
+            concurrency: 1,
+            poll_interval: Duration::from_millis(20),
+            lease: Duration::from_secs(30),
+            worker_id: "p11-test".to_owned(),
+        };
+        for _ in 0..10 {
+            let published = publish_ready_outbox_batch(pool, &state.realtime, "p11-test")
+                .await
+                .expect("publish outbox");
+            let ran = agent_workspace_server::jobs::run_due(&state, &registry, &options)
+                .await
+                .expect("run jobs");
+            if published == 0 && ran == 0 {
+                return;
+            }
+        }
+    };
+    pump().await;
+    sqlx::query("DELETE FROM webhook_deliveries")
+        .execute(pool)
+        .await
+        .expect("clear");
+
+    apply_pull_request_automation(
+        pool,
+        AutomationJob {
+            job_id: Uuid::now_v7(),
+            project_id: project,
+            pull_request_id: pull_request,
+            integration_actor_id: integration,
+        },
+        version,
+        "merged",
+        false,
+    )
+    .await
+    .expect("automation");
+
+    let (status, kind, changed) = sqlx::query_as::<_, (Uuid, String, Value)>(
+        r#"
+        SELECT item.status_id, activity.kind, activity.payload->'changedFields'
+        FROM work_items item
+        JOIN work_item_activity activity ON activity.work_item_id = item.id
+        WHERE item.id = $1 AND activity.actor_id = $2
+        "#,
+    )
+    .bind(task)
+    .bind(integration)
+    .fetch_one(pool)
+    .await
+    .expect("the move's activity");
+    assert_eq!(status, to);
+    assert_eq!(kind, "work_item_updated");
+    assert_eq!(changed, json!(["status", "position"]));
+    let ranks = sqlx::query_scalar::<_, i64>(
+        "SELECT board_rank FROM work_items WHERE id = ANY($1) ORDER BY array_position($1, id)",
+    )
+    .bind(vec![settled, task])
+    .fetch_all(pool)
+    .await
+    .expect("ranks");
+    assert!(ranks[1] > ranks[0], "the card is at the bottom: {ranks:?}");
+    let event_count = |agent: Uuid| async move {
+        sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT count(*) FROM external_agent_events event
+            JOIN external_agent_connections connection ON connection.id = event.connection_id
+            WHERE connection.actor_id = $1 AND event.kind = 'work_item.changed'
+              AND event.created_at > now() - interval '1 minute'
+              AND event.summary IN ('An assigned Work Item changed', 'A Work Item you watch changed')
+            "#,
+        )
+        .bind(agent)
+        .fetch_one(pool)
+        .await
+        .expect("events")
+    };
+    assert!(
+        event_count(mara).await >= 1,
+        "the assigned agent hears of it"
+    );
+    assert!(
+        event_count(wes).await >= 1,
+        "the watching agent hears of it"
+    );
+    pump().await;
+    let subjects = sqlx::query_scalar::<_, Value>(
+        "SELECT subject FROM webhook_deliveries WHERE event_type = 'task.updated'",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("deliveries");
+    assert_eq!(subjects.len(), 1, "{subjects:?}");
+    // Routing lists what changed in name order.
+    assert_eq!(subjects[0]["changedFields"], json!(["position", "status"]));
 }

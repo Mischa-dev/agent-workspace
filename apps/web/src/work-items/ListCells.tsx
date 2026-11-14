@@ -10,6 +10,7 @@ import { PriorityIcon, StatusIcon } from './WorkItemIcons'
 import { WorkItemLabels } from './WorkItemLabels'
 import { isOverdue } from './taskDisplay'
 import { ALL_FIELDS, type CardFields } from './cardFields'
+import '../styles/work.css'
 
 /** Small marks for what else is true of a task: blocked, subtasks, milestone, labels. */
 export function TaskBadges({ card, compact = false, fields = ALL_FIELDS }: { card: WorkItemCard; compact?: boolean; fields?: CardFields }) {

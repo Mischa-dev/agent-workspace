@@ -37,6 +37,15 @@ be a test matrix. Unit and component tests stay in `src/` with Vitest.
   of CI. `tools/ui-tour/run.sh` makes 15 key screens at 1440 and 390 px in
   light and dark against a busy seeded workspace; see
   `docs/plans/ui-hill-climb/round-0.md`.
+- `done/`: the test for "done" (END-STATE section 1), one spec per item,
+  run by the `desktop` (1440×900) and `phone` (Pixel 7) projects. Items whose
+  parts don't exist yet are `test.fixme` with an `owner` annotation naming
+  the workstreams that build them; `support/owners-reporter.ts` lists them
+  after each run. Helpers in `support/done.ts`: `setModules` (switch modules,
+  then `restore()`), `look` (four screenshots: 1440 and 390 px, light and
+  dark), `asAgent` (call a v2 operation with an agent's token) and `writer`
+  (the signed-in context's write headers). The workstream that builds an
+  item replaces its fixme in `done/items.spec.ts` with `done/NN-<name>.spec.ts`.
 
 ## Running locally
 

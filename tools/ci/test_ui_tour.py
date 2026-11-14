@@ -114,8 +114,10 @@ class RunnerTests(Harness):
         subprocess.run(["/usr/bin/env", "git", "init", "-q"], cwd=repo, check=True,
                        env={**os.environ}, capture_output=True)
         script += '\nload_host redhat\nchecks_command\n'
+        # The hosts file is untracked; a placeholder address stands in for it.
+        env = {**os.environ, "AW_CI_REDHAT_TARGET": "ci@redhat.invalid", "AW_CI_HOSTS": "/nonexistent"}
         result = subprocess.run(["bash", "-s", "--", *args], input=script, text=True, cwd=repo,
-                                env={**os.environ}, capture_output=True, timeout=10)
+                                env=env, capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return result.stdout
 

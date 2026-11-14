@@ -481,12 +481,13 @@ pub async fn projects_allowing(
         r#"
         SELECT project_id FROM project_memberships
         WHERE actor_id = $1 AND project_id = ANY($2) AND enabled
-          AND custom_role_allows(role_id, $3)
+          AND role = ANY($4) AND custom_role_allows(role_id, $3)
         "#,
     )
     .bind(viewer)
     .bind(projects)
     .bind(permission.info().key)
+    .bind(crate::roles::base_roles_with(permission))
     .fetch_all(pool)
     .await?
     .into_iter()

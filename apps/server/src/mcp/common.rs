@@ -537,6 +537,117 @@ pub(super) async fn content_from_text(
     Ok(serde_json::json!({ "version": 1, "nodes": text_nodes(text, &handles) }))
 }
 
+/// Like [`content_from_text`], for a task comment: `@handle` becomes a
+/// mention and the project's own task keys (`KEY-12`) become task
+/// references, the nodes the web composer writes, so an agent's comment
+/// notifies the people it names and shows up in "Referenced in" (P0.4).
+pub(super) async fn comment_content_from_text(
+    state: &AppState,
+    project_id: Uuid,
+    text: &str,
+) -> Result<serde_json::Value, AppError> {
+    let content = content_from_text(state, project_id, text).await?;
+    let project_key =
+        sqlx::query_scalar::<_, String>("SELECT project_key FROM projects WHERE id = $1")
+            .bind(project_id)
+            .fetch_optional(&state.pool)
+            .await?;
+    let Some(project_key) = project_key else {
+        return Ok(content);
+    };
+    let numbers = task_key_numbers(text, &project_key);
+    if numbers.is_empty() {
+        return Ok(content);
+    }
+    let tasks = sqlx::query_as::<_, (i64, Uuid)>(
+        "SELECT number, id FROM work_items WHERE project_id = $1 AND number = ANY($2)",
+    )
+    .bind(project_id)
+    .bind(&numbers)
+    .fetch_all(&state.pool)
+    .await?
+    .into_iter()
+    .collect::<HashMap<_, _>>();
+    let nodes = content["nodes"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .flat_map(|node| match node["text"].as_str() {
+            Some(text) if node["type"] == "text" => reference_nodes(text, &project_key, &tasks),
+            _ => vec![node],
+        })
+        .collect::<Vec<_>>();
+    Ok(serde_json::json!({ "version": 1, "nodes": nodes }))
+}
+
+/// At most this many task references are made from one comment's text.
+const MAX_TEXT_REFERENCES: usize = 32;
+
+/// The numbers of `KEY-<n>` tokens in `text` that stand alone as words.
+fn task_key_numbers(text: &str, project_key: &str) -> Vec<i64> {
+    task_key_tokens(text, project_key)
+        .into_iter()
+        .map(|(_, _, number)| number)
+        .take(MAX_TEXT_REFERENCES)
+        .collect()
+}
+
+/// (start, end, number) of each standalone `KEY-<n>` in `text`.
+fn task_key_tokens(text: &str, project_key: &str) -> Vec<(usize, usize, i64)> {
+    let prefix = format!("{project_key}-");
+    let mut tokens = Vec::new();
+    for (start, _) in text.match_indices(&prefix) {
+        let before = text[..start].chars().next_back();
+        if before.is_some_and(|character| character.is_alphanumeric() || character == '_') {
+            continue;
+        }
+        let digits_start = start + prefix.len();
+        let digits = text[digits_start..]
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect::<String>();
+        let end = digits_start + digits.len();
+        let after = text[end..].chars().next();
+        if digits.is_empty()
+            || after.is_some_and(|character| character.is_alphanumeric() || character == '_')
+        {
+            continue;
+        }
+        if let Ok(number) = digits.parse::<i64>() {
+            tokens.push((start, end, number));
+        }
+    }
+    tokens
+}
+
+/// One text node split around the task keys it names.
+fn reference_nodes(
+    text: &str,
+    project_key: &str,
+    tasks: &HashMap<i64, Uuid>,
+) -> Vec<serde_json::Value> {
+    let mut nodes = Vec::new();
+    let mut cursor = 0;
+    for (start, end, number) in task_key_tokens(text, project_key)
+        .into_iter()
+        .take(MAX_TEXT_REFERENCES)
+    {
+        let Some(task_id) = tasks.get(&number) else {
+            continue;
+        };
+        if start > cursor {
+            nodes.push(serde_json::json!({ "type": "text", "text": &text[cursor..start] }));
+        }
+        nodes.push(serde_json::json!({ "type": "work_item_ref", "workItemId": task_id }));
+        cursor = end;
+    }
+    if cursor < text.len() || nodes.is_empty() {
+        nodes.push(serde_json::json!({ "type": "text", "text": &text[cursor..] }));
+    }
+    nodes
+}
+
 fn text_nodes(text: &str, handles: &HashMap<String, Uuid>) -> Vec<serde_json::Value> {
     let mut nodes = Vec::new();
     let mut pending = String::new();

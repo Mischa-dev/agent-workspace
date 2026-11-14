@@ -19,6 +19,7 @@ import { getTimeline, viewKeys, type Timeline, type TimelineTask } from './api'
 import { addDays, dayFromNumber, dayLabel, dayNumber, today } from './dates'
 import { slips, spansWith, targetWith, type PendingChange } from './timelineModel'
 import './views.css'
+import '../styles/conversation.css'
 
 type Zoom = 'weeks' | 'months' | 'quarters'
 

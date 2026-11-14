@@ -26,7 +26,7 @@ import { useFirstUnread } from '../conversations/useFirstUnread'
 import { useLiveOlderEntries } from '../conversations/useLiveOlderEntries'
 import { useMessageSender } from '../conversations/useMessageSender'
 import { useConversationTools } from '../later/useConversationTools'
-import { useOptionalRealtime } from '../realtime/realtimeContext'
+import { useStream } from '../realtime/realtimeContext'
 import { Banner, ErrorState, Icon, IconButton, MessageSkeleton } from '../ui'
 import { uploadFile } from '../files/api'
 import { ApprovalCard, RunBadge } from './ThreadPresentation'
@@ -34,6 +34,7 @@ import { runAgent } from './runAgent'
 import { normalizeTimeline, useThread } from './threadTimeline'
 import { useThreadRunActions } from './useThreadRunActions'
 import { useRevealInThread } from './useRevealInThread'
+import '../styles/conversation.css'
 
 const NO_ENTRIES: ConversationTimelineEntry[] = []
 
@@ -73,7 +74,7 @@ export function ThreadPanel({
   const location = useLocation()
   const thread = useThread(projectId, threadId, false)
   const refreshThreads = useRefreshThreads()
-  const realtime = useOptionalRealtime()
+  const stream = useStream(threadId)
   const page = thread.timeline.data
   // The id comes from the URL: show only a thread that belongs to this parent.
   const valid = Boolean(thread.routeMatches && page?.conversation.parentChannelId === parentId)
@@ -183,7 +184,7 @@ export function ThreadPanel({
   )
 
   const conversation = timeline?.conversation ?? null
-  const streaming = Object.entries(realtime?.streams[threadId] ?? {})
+  const streaming = Object.entries(stream)
   return (
     <aside aria-label="Thread" className="context-drawer aw-threadpanel">
       <div className="aw-threadpanel__head">

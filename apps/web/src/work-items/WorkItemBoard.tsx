@@ -24,9 +24,10 @@ import { useDoneCount } from './useDoneWork'
 import { TaskGlyph } from './TaskGlyph'
 import { editErrorMessage, useApplyPick } from './taskEdits'
 import type { BoardColumn, WorkItem, WorkItemBoardResponse, WorkItemCard, WorkItemPriority, WorkItemWorkflow } from './types'
-import { useBoardDrag, type DropTarget } from './useBoardDrag'
+import { useBoardDrag, type DropTarget } from '../ui/useBoardDrag'
 import { PriorityIcon, StatusIcon } from './WorkItemIcons'
 import './board.css'
+import '../styles/work.css'
 
 const PICKER_KEYS: Record<string, PickerField> = { s: 'status', a: 'assignee', l: 'labels', p: 'priority', m: 'milestone' }
 const PAGE = 50

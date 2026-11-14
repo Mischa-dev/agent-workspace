@@ -8,6 +8,7 @@ import {
   respondToSponsoredExecution,
   type SponsoredExecutionRequest,
 } from './sponsoredExecutionApi'
+import '../styles/pages.css'
 
 type DecisionInput = {
   request: SponsoredExecutionRequest

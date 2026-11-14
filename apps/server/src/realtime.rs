@@ -721,8 +721,27 @@ pub async fn publish_ready_outbox_batch(
                 continue;
             }
         };
-        notify_people(&mut transaction, &claim).await;
-        queue_event_route(&mut transaction, &claim).await;
+        let side_effects = match notify_people(&mut transaction, &claim).await {
+            Ok(()) => queue_event_route(&mut transaction, &claim).await,
+            Err(error) => Err(error),
+        };
+        if let Err(error) = side_effects {
+            tracing::error!(
+                event_id = %claim.event_id(),
+                event_cursor = claim.event_cursor(),
+                error_category = error.log_category(),
+                "outbox event side effects failed; it will be retried"
+            );
+            let _ = transaction.rollback().await;
+            record_outbox_failure(
+                pool,
+                &claim,
+                worker_id,
+                OutboxFailureKind::SideEffectsUnavailable,
+            )
+            .await;
+            continue;
+        }
         match outbox::mark_published(&mut transaction, claim.event_id(), worker_id).await {
             Ok(()) => {
                 if let Err(error) = transaction.commit().await {
@@ -764,83 +783,33 @@ pub async fn publish_ready_outbox_batch(
 }
 
 /// Writes the notifications an event causes, in the transaction that marks
-/// it published. A savepoint keeps a failure here from undoing the
-/// acknowledgement: the event was already broadcast, and notifications are
-/// best effort next to it.
+/// it published. A failure here fails the acknowledgement too, so the event
+/// is retried with the outbox's backoff instead of losing its inbox rows,
+/// pushes and emails for good. Retrying is safe: notifications dedupe on
+/// their key, and browsers on the event id.
 async fn notify_people(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     claim: &outbox::ClaimedOutboxEvent,
-) {
+) -> Result<(), AppError> {
     let Ok(payload) = claim.decode() else {
-        return;
+        return Ok(());
     };
-    let mut savepoint = match sqlx::Connection::begin(&mut **transaction).await {
-        Ok(savepoint) => savepoint,
-        Err(error) => {
-            tracing::error!(
-                event_id = %claim.event_id(),
-                error_category = AppError::from(error).log_category(),
-                "notification fan-out could not start"
-            );
-            return;
-        }
-    };
-    let outcome = crate::notifications::fan_out(
-        &mut savepoint,
-        claim.event_id(),
-        claim.project_id(),
-        &payload,
-    )
-    .await;
-    let finished = match outcome {
-        Ok(_) => savepoint.commit().await.map_err(AppError::from),
-        Err(error) => {
-            let _ = savepoint.rollback().await;
-            Err(error)
-        }
-    };
-    if let Err(error) = finished {
-        tracing::error!(
-            event_id = %claim.event_id(),
-            event_cursor = claim.event_cursor(),
-            error_category = error.log_category(),
-            "notification fan-out failed"
-        );
-    }
+    crate::notifications::fan_out(transaction, claim.event_id(), claim.project_id(), &payload)
+        .await
+        .map(|_| ())
 }
 
 /// Queues the job that hands an event to outgoing webhooks and automation
-/// rules. Like notifications, it rides a savepoint so it can't undo the
-/// acknowledgement.
+/// rules, in the acknowledging transaction. Like notifications, a failure
+/// keeps the event unpublished so it is retried; the route job dedupes on
+/// its unique key.
 async fn queue_event_route(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     claim: &outbox::ClaimedOutboxEvent,
-) {
-    let mut savepoint = match sqlx::Connection::begin(&mut **transaction).await {
-        Ok(savepoint) => savepoint,
-        Err(error) => {
-            tracing::error!(
-                event_id = %claim.event_id(),
-                error_category = AppError::from(error).log_category(),
-                "event routing could not start"
-            );
-            return;
-        }
-    };
-    let finished = match crate::events::queue_route(&mut savepoint, claim).await {
-        Ok(_) => savepoint.commit().await.map_err(AppError::from),
-        Err(error) => {
-            let _ = savepoint.rollback().await;
-            Err(error)
-        }
-    };
-    if let Err(error) = finished {
-        tracing::error!(
-            event_id = %claim.event_id(),
-            error_category = error.log_category(),
-            "event routing failed"
-        );
-    }
+) -> Result<(), AppError> {
+    crate::events::queue_route(transaction, claim)
+        .await
+        .map(|_| ())
 }
 
 async fn record_outbox_failure(

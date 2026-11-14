@@ -10,6 +10,7 @@ import { getConversationTimeline } from './api'
 import { useProjectConversationSidebar } from './hooks'
 import { useRestoreConversation } from './useArchiveConversation'
 import './chat.css'
+import '../styles/pages.css'
 
 /** "Archived Oct 12", with the full date on hover. */
 function ArchivedOn({ at }: { at: string | null }) {
