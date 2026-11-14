@@ -335,10 +335,10 @@ impl Spec {
 
     /// The FROM clause: the source's records, and the group's join when
     /// grouped (each record joins at most one row of it).
-    fn from_sql(&self, source: &dyn RecordSource) -> String {
+    fn tables(&self, source: &dyn RecordSource) -> String {
         match self.group_sql(source) {
-            Some(group) => format!("{} {}", source.from_sql(), group.join),
-            None => source.from_sql(),
+            Some(group) => format!("{} {}", source.tables(), group.join),
+            None => source.tables(),
         }
     }
 
@@ -619,7 +619,7 @@ pub async fn page(
     let mut builder = QueryBuilder::<Postgres>::new(format!(
         "SELECT record.id, {group_key} AS group_key, {group_label} AS group_label, \
          ARRAY[{key_array}] AS keys FROM {from}",
-        from = spec.from_sql(source),
+        from = spec.tables(source),
     ));
     spec.push_where(&mut builder, source);
     if let Some(after) = after {
@@ -675,7 +675,7 @@ pub async fn explain_first_page(
     let keys = spec.keys(source);
     let mut builder = QueryBuilder::<Postgres>::new(format!(
         "EXPLAIN (FORMAT JSON) SELECT record.id FROM {}",
-        spec.from_sql(source)
+        spec.tables(source)
     ));
     spec.push_where(&mut builder, source);
     builder.push(" ORDER BY ");
@@ -711,7 +711,7 @@ pub async fn total(
         "count(*)"
     };
     let mut builder =
-        QueryBuilder::<Postgres>::new(format!("SELECT {count} FROM {}", spec.from_sql(source)));
+        QueryBuilder::<Postgres>::new(format!("SELECT {count} FROM {}", spec.tables(source)));
     spec.push_where(&mut builder, source);
     Ok(builder
         .build_query_scalar::<i64>()
@@ -749,7 +749,7 @@ pub async fn group_counts(
     let mut builder = QueryBuilder::<Postgres>::new(format!(
         "SELECT {key} AS key, min({label}) AS label, count(*) AS count, min({color}) AS color \
          FROM {from}",
-        from = spec.from_sql(source),
+        from = spec.tables(source),
         key = group.key,
         label = group.label,
         color = group.color,

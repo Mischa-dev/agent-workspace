@@ -18,7 +18,7 @@ use crate::fields::{FieldDefinition, GroupSql, SortKey};
 pub trait RecordSource: Send + Sync {
     /// The FROM clause: the records aliased `record` (and their tasks
     /// `core`, for a source whose records are tasks).
-    fn from_sql(&self) -> String;
+    fn tables(&self) -> String;
 
     /// Narrows to the source's records: appends ` WHERE ...`.
     fn scope(&self, builder: &mut QueryBuilder<'_, Postgres>);
@@ -52,7 +52,7 @@ pub struct CollectionSource {
 }
 
 impl RecordSource for CollectionSource {
-    fn from_sql(&self) -> String {
+    fn tables(&self) -> String {
         "collection_records record".to_owned()
     }
 

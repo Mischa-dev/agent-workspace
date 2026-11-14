@@ -690,6 +690,8 @@ enum Carry {
 }
 
 #[derive(Clone, Debug)]
+// A few per move's plan, read once: boxing the large variant buys nothing.
+#[allow(clippy::large_enum_variant)]
 enum ValuePlan {
     Carry {
         target_field: FieldDefinition,

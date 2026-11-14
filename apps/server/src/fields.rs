@@ -2782,6 +2782,9 @@ pub struct FieldChange {
 }
 
 #[derive(Clone, Debug)]
+// Made once per call and matched at once: boxing the large variant
+// buys nothing.
+#[allow(clippy::large_enum_variant)]
 pub enum ChangeFieldOutcome {
     Changed {
         field: FieldDefinition,
@@ -2986,7 +2989,7 @@ mod tests {
         let phone = field(FieldType::Phone);
         assert!(
             normalize_value(&phone, &json!("ring ring"))
-                .unwrap_err()
+                .expect_err("not a phone number")
                 .contains("only digits")
         );
         let long = field(FieldType::LongText);

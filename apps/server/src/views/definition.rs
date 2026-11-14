@@ -767,6 +767,9 @@ pub async fn change(
 }
 
 #[derive(Clone, Debug)]
+// Made once per call and matched at once: boxing the large variant
+// buys nothing.
+#[allow(clippy::large_enum_variant)]
 pub enum RemoveViewOutcome {
     Removed(View),
     NotFound,

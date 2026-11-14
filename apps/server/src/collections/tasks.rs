@@ -162,7 +162,7 @@ fn has_open_blocker() -> String {
 }
 
 /// SQL for the task's status category: its status is joined beside it
-/// (`core_status`, in `TasksSource::from_sql`).
+/// (`core_status`, in `TasksSource::tables`).
 const STATUS_CATEGORY: &str = "core_status.semantic_category";
 
 /// Where each built-in field's value is read from, by ID: the task's own
@@ -447,7 +447,7 @@ pub struct TasksSource {
 }
 
 impl RecordSource for TasksSource {
-    fn from_sql(&self) -> String {
+    fn tables(&self) -> String {
         "collection_records record JOIN work_items core ON core.id = record.id \
          JOIN work_item_statuses core_status \
            ON core_status.project_id = core.project_id AND core_status.id = core.status_id"
