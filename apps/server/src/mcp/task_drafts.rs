@@ -757,6 +757,7 @@ pub(super) async fn create(
             transaction,
             actor,
             CreateWorkItemCommand {
+                collection_id: None,
                 field_values: task.field_values.as_ref(),
                 title: &task.title,
                 description: &task.description,

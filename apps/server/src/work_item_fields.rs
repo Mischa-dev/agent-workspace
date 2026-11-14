@@ -58,6 +58,100 @@ pub async fn definitions(
     fields::list(executor, project_id, KIND, include_archived).await
 }
 
+/// Whose fields a task's values follow: the project's task fields, or the
+/// fields of the collection that acts like a task it was made in
+/// (`work_items.collection_id`, AWD-110).
+pub fn kind_of(collection_id: Option<Uuid>) -> RecordKind {
+    collection_id.map_or(KIND, RecordKind::Collection)
+}
+
+/// The collection that acts like a task a task was made in (None for the
+/// project's Tasks collection, or when there's no such task).
+pub async fn task_collection(
+    executor: impl sqlx::PgExecutor<'_>,
+    project_id: Uuid,
+    task_id: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT collection_id FROM work_items WHERE project_id = $1 AND id = $2",
+    )
+    .bind(project_id)
+    .bind(task_id)
+    .fetch_optional(executor)
+    .await?
+    .flatten())
+}
+
+/// The fields one task's values follow, with `plain` (the project's task
+/// fields, already read) for a plain task, so a bulk change reads each
+/// collection's only for its own tasks.
+pub async fn definitions_for_task_or(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    task_id: Uuid,
+    plain: &[FieldDefinition],
+) -> Result<Vec<FieldDefinition>, AppError> {
+    match task_collection(&mut *connection, project_id, task_id).await? {
+        Some(collection) => {
+            fields::list(
+                &mut *connection,
+                project_id,
+                RecordKind::Collection(collection),
+                true,
+            )
+            .await
+        }
+        None => Ok(plain.to_vec()),
+    }
+}
+
+/// The fields one task's values follow (see `kind_of`).
+pub async fn definitions_for_task(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    task_id: Uuid,
+    include_archived: bool,
+) -> Result<Vec<FieldDefinition>, AppError> {
+    let collection = task_collection(&mut *connection, project_id, task_id).await?;
+    fields::list(
+        &mut *connection,
+        project_id,
+        kind_of(collection),
+        include_archived,
+    )
+    .await
+}
+
+/// Every field a task of the project may have values for: the task fields,
+/// then those of each collection that acts like a task. Field IDs are
+/// unique, so a task's values read against these whatever its collection.
+pub async fn all_task_definitions(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    include_archived: bool,
+) -> Result<Vec<FieldDefinition>, AppError> {
+    let mut found = definitions(&mut *connection, project_id, include_archived).await?;
+    let collections = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM collections \
+         WHERE project_id = $1 AND acts_like_task AND builtin IS NULL ORDER BY position, id",
+    )
+    .bind(project_id)
+    .fetch_all(&mut *connection)
+    .await?;
+    for collection in collections {
+        found.extend(
+            fields::list(
+                &mut *connection,
+                project_id,
+                RecordKind::Collection(collection),
+                include_archived,
+            )
+            .await?,
+        );
+    }
+    Ok(found)
+}
+
 /// One field's new value, checked and resolved.
 #[derive(Clone, Debug)]
 pub struct FieldValueChange {

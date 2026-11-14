@@ -940,8 +940,10 @@ async fn plan(
         });
     }
 
+    // A task of a collection that acts like a task has that collection's
+    // fields; they carry over by name like the rest.
     let source_definitions =
-        work_item_fields::definitions(&mut **transaction, source_project_id, true).await?;
+        work_item_fields::all_task_definitions(transaction, source_project_id, true).await?;
     let target_definitions = if access.sees_target {
         work_item_fields::definitions(&mut **transaction, target_project_id, true).await?
     } else {
@@ -2052,6 +2054,7 @@ async fn carry_over(
             &mover.target,
             new_id,
             CreateWorkItemCommand {
+                collection_id: None,
                 field_values: Some(&field_values),
                 title: &task.title,
                 description: &task.description,

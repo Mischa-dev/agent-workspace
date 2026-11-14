@@ -1637,6 +1637,14 @@ async fn update_many(
             }
         }
         if !change.fields.is_empty() {
+            // A task of a collection that acts like a task has its fields.
+            let own = crate::work_item_fields::definitions_for_task_or(
+                &mut transaction,
+                project_id,
+                *task_id,
+                &definitions,
+            )
+            .await?;
             let resolved = crate::work_item_fields::resolve_for(
                 &mut transaction,
                 project_id,
@@ -1644,7 +1652,7 @@ async fn update_many(
                     actor_id: principal.actor_id,
                     project_key: &project_key,
                 },
-                &definitions,
+                &own,
                 "fields",
                 &change.fields,
                 Some(&current.field_values),
