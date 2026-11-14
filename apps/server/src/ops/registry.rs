@@ -131,9 +131,12 @@ impl Registry {
 
 static CURRENT: RwLock<Option<Arc<Registry>>> = RwLock::new(None);
 
+/// Adds operations to a registry.
+type AddOps = fn(&mut Registry);
+
 /// Operations added by tests outside the crate.
-fn extras_cell() -> &'static RwLock<Vec<fn(&mut Registry)>> {
-    static EXTRAS: OnceLock<RwLock<Vec<fn(&mut Registry)>>> = OnceLock::new();
+fn extras_cell() -> &'static RwLock<Vec<AddOps>> {
+    static EXTRAS: OnceLock<RwLock<Vec<AddOps>>> = OnceLock::new();
     EXTRAS.get_or_init(|| RwLock::new(Vec::new()))
 }
 
