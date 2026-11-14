@@ -575,6 +575,19 @@ async fn merging_checks_the_pull_request_before_it_asks_github() {
     assert_eq!(status, 400, "{read}");
     assert!(read.to_string().contains("isn't open"), "{read}");
 
+    // Merged already (say an earlier try's answer was lost): asking again at
+    // that head answers with the recorded merge, and nothing new is audited.
+    set("UPDATE github_pull_requests SET state = 'merged', merged_at = now(), merge_commit_sha = repeat('d', 40) WHERE id = $1").await;
+    let (status, read) = merge(json!({"expectedHeadSha": "a".repeat(40)})).await;
+    assert_eq!(status, 200, "{read}");
+    assert_eq!(read["alreadyMerged"], true, "{read}");
+    assert_eq!(read["mergeCommitSha"], "d".repeat(40), "{read}");
+    let (status, read) = merge(json!({"expectedHeadSha": "b".repeat(40)})).await;
+    assert_eq!(status, 400, "{read}");
+    assert!(read.to_string().contains("head moved"), "{read}");
+    set("UPDATE github_pull_requests SET state = 'closed', merged_at = NULL, merge_commit_sha = NULL WHERE id = $1")
+        .await;
+
     // Everything checks out, so the next step is GitHub, which this server
     // doesn't reach.
     set("UPDATE github_pull_requests SET state = 'open' WHERE id = $1").await;
