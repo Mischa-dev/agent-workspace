@@ -170,6 +170,9 @@ pub struct ChangeFinalization<'a> {
 }
 
 pub struct CreateWorkItemCommand<'a> {
+    /// The collection that acts like a task the task's record goes in;
+    /// None for the project's Tasks collection.
+    pub collection_id: Option<Uuid>,
     pub title: &'a str,
     pub description: &'a str,
     pub type_id: Option<Uuid>,
@@ -567,8 +570,8 @@ pub async fn create_work_item_with_id(
             id, project_id, number, title, description, type_id, status_id,
             priority, assignee_actor_id, created_by_actor_id, board_rank,
             parent_work_item_id, milestone_id, start_date, due_date, estimate,
-            field_values
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+            field_values, collection_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
         "#,
     )
     .bind(work_item_id)
@@ -596,6 +599,7 @@ pub async fn create_work_item_with_id(
         }
         values
     })
+    .bind(command.collection_id)
     .execute(&mut **transaction)
     .await?;
     add_watcher(transaction, actor.project_id, work_item_id, actor.actor_id).await?;

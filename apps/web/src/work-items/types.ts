@@ -74,6 +74,8 @@ export type WorkItem = {
   fieldValues: FieldValues
   /** The people, tasks and pages those values name. */
   fieldReferences: FieldReference[]
+  /** The collection that acts like a task it's a record of (AWD-110), whose fields it has; null for a plain task. */
+  collectionId?: string | null
 }
 
 export type EstimateUnit = 'points' | 'hours'

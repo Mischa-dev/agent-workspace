@@ -1,10 +1,11 @@
-//! Writes to the built-in Tasks collection's records (AWD-110): each one is
-//! a task change, made by the same commands as the task page and the task
+//! Writes to the records of a collection that acts like a task, such as
+//! the built-in Tasks collection (AWD-110): each one is a task change, made by the same commands as the task page and the task
 //! tools, so it gets the same checks, history, activity and events.
 //!
 //! A record's title is the task's title; the built-in fields (Status,
 //! Assignee, Priority, Start date, Due date, Labels) are the task's own
-//! columns; every other value is a task field value. Archiving a record
+//! columns; every other value is one of the collection's own fields (the
+//! project's task fields, for Tasks). Archiving a record
 //! archives the task. The task's triggers keep its record in step
 //! (migration 20261114010000).
 
@@ -16,6 +17,7 @@ use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
 use super::{
+    Collection,
     records::{ProblemKind, RecordInput, RecordRef, WriteProblem},
     tasks,
 };
@@ -158,14 +160,20 @@ async fn custom_values(
     transaction: &mut Transaction<'_, Postgres>,
     actor: &CommandActor,
     project_key: &str,
+    collection: &Collection,
     written: &[(String, Value)],
     task: Option<Uuid>,
 ) -> Result<Result<Option<FieldValueChanges>, WriteProblem>, AppError> {
     if written.is_empty() {
         return Ok(Ok(None));
     }
-    let definitions =
-        work_item_fields::definitions(&mut **transaction, actor.project_id, true).await?;
+    let definitions = crate::fields::list(
+        &mut **transaction,
+        actor.project_id,
+        collection.field_kind(),
+        true,
+    )
+    .await?;
     let current = match task {
         Some(task) => work_item_fields::current_values(transaction, actor.project_id, task).await?,
         None => None,
@@ -283,13 +291,14 @@ fn update_problem(outcome: UpdateWorkItemOutcome, expected: i64) -> Option<Write
     })
 }
 
-/// Makes or changes one task from a record write, and answers with the
-/// task's ID. The caller holds the project lock and has checked the
-/// collection may take record writes.
+/// Makes or changes one task of `collection` from a record write, and
+/// answers with the task's ID. The caller holds the project lock and has
+/// checked the collection may take record writes.
 pub async fn write(
     transaction: &mut Transaction<'_, Postgres>,
     actor: &CommandActor,
     project_key: &str,
+    collection: &Collection,
     input: &RecordInput,
 ) -> Result<Result<Uuid, WriteProblem>, AppError> {
     let change = match sort_values(&input.values) {
@@ -313,12 +322,24 @@ pub async fn write(
         }
     };
     match input.record {
-        None => create(transaction, actor, project_key, input, change, title).await,
+        None => {
+            create(
+                transaction,
+                actor,
+                project_key,
+                collection,
+                input,
+                change,
+                title,
+            )
+            .await
+        }
         Some(reference) => {
             update(
                 transaction,
                 actor,
                 project_key,
+                collection,
                 input,
                 reference,
                 change,
@@ -329,10 +350,12 @@ pub async fn write(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn create(
     transaction: &mut Transaction<'_, Postgres>,
     actor: &CommandActor,
     project_key: &str,
+    collection: &Collection,
     input: &RecordInput,
     change: TaskChange,
     title: Option<String>,
@@ -347,11 +370,19 @@ async fn create(
         )));
     }
     let title = title.unwrap_or_else(|| UNTITLED.to_owned());
-    let field_values =
-        match custom_values(transaction, actor, project_key, &change.custom, None).await? {
-            Ok(values) => values,
-            Err(problem) => return Ok(Err(problem)),
-        };
+    let field_values = match custom_values(
+        transaction,
+        actor,
+        project_key,
+        collection,
+        &change.custom,
+        None,
+    )
+    .await?
+    {
+        Ok(values) => values,
+        Err(problem) => return Ok(Err(problem)),
+    };
     let labels = change.labels.unwrap_or_default();
     if !labels_active(transaction, actor.project_id, &labels).await? {
         return Ok(Err(labels_problem()));
@@ -360,6 +391,7 @@ async fn create(
         transaction,
         actor,
         CreateWorkItemCommand {
+            collection_id: collection.task_collection_id(),
             field_values: field_values.as_ref(),
             title: &title,
             description: "",
@@ -403,23 +435,28 @@ async fn update(
     transaction: &mut Transaction<'_, Postgres>,
     actor: &CommandActor,
     project_key: &str,
+    collection: &Collection,
     input: &RecordInput,
     reference: RecordRef,
     change: TaskChange,
     title: Option<String>,
 ) -> Result<Result<Uuid, WriteProblem>, AppError> {
-    let task_id = match reference {
-        RecordRef::Id(id) => Some(id),
-        RecordRef::Number(number) => {
-            sqlx::query_scalar::<_, Uuid>(
-                "SELECT id FROM work_items WHERE project_id = $1 AND number = $2",
-            )
-            .bind(actor.project_id)
-            .bind(number)
-            .fetch_optional(&mut **transaction)
-            .await?
-        }
+    let (id, number) = match reference {
+        RecordRef::Id(id) => (Some(id), None),
+        RecordRef::Number(number) => (None, Some(number)),
     };
+    // Only the collection's own tasks.
+    let task_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM work_items WHERE project_id = $1 \
+           AND (id = $2 OR ($2 IS NULL AND number = $3)) \
+           AND collection_id IS NOT DISTINCT FROM $4",
+    )
+    .bind(actor.project_id)
+    .bind(id)
+    .bind(number)
+    .bind(collection.task_collection_id())
+    .fetch_optional(&mut **transaction)
+    .await?;
     let current = match task_id {
         Some(id) => lock_work_item(transaction, actor.project_id, id).await?,
         None => None,
@@ -429,7 +466,7 @@ async fn update(
             index: 0,
             kind: ProblemKind::NotFound,
             field: "record".to_owned(),
-            message: format!("Tasks has no record {}.", reference.shown()),
+            message: format!("{} has no record {}.", collection.name, reference.shown()),
             current_version: None,
         }));
     };
@@ -469,6 +506,7 @@ async fn update(
             transaction,
             actor,
             project_key,
+            collection,
             &change.custom,
             Some(task_id),
         )

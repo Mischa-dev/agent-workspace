@@ -208,6 +208,9 @@ pub struct NewTaskDetails {
     /// Custom field values by field name or ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fields: Option<serde_json::Map<String, serde_json::Value>>,
+    /// The collection that acts like a task to make it in, by name or ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collection: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -633,6 +636,41 @@ async fn create_task(
         }
         None => None,
     };
+    // Made in the project's Tasks collection, or in another collection that
+    // acts like a task, whose fields its values then follow.
+    let collection_id = match details.collection.as_deref() {
+        Some(reference) => {
+            match crate::collections::task_like::find(
+                &mut transaction,
+                principal.project_id,
+                reference,
+            )
+            .await?
+            {
+                Some(collection) => collection.task_collection_id(),
+                None => {
+                    let names = crate::collections::task_like::names(
+                        &mut *transaction,
+                        principal.project_id,
+                    )
+                    .await?;
+                    return Ok(WriteResult::invalid(
+                        "collection",
+                        format!(
+                            "The project has no collection called \"{}\" that acts like a task. Ones that do: {}.",
+                            crate::work_item_labels::echo(reference),
+                            if names.is_empty() {
+                                "none yet".to_owned()
+                            } else {
+                                names.join(", ")
+                            }
+                        ),
+                    ));
+                }
+            }
+        }
+        None => None,
+    };
     let field_values = match details.fields.as_ref().filter(|fields| !fields.is_empty()) {
         Some(written) => {
             match super::field_tools::written_values(
@@ -640,7 +678,7 @@ async fn create_task(
                 principal,
                 principal.project_id,
                 written,
-                None,
+                super::field_tools::FieldsOf::NewIn(collection_id),
             )
             .await?
             {
@@ -670,6 +708,7 @@ async fn create_task(
         &mut transaction,
         &mcp_actor(principal, key.as_str().to_owned()),
         CreateWorkItemCommand {
+            collection_id,
             field_values: field_values.as_ref(),
             title: &title,
             description: &description,
@@ -1143,7 +1182,7 @@ async fn update_work_item_inner(
                 principal,
                 principal.project_id,
                 written,
-                Some(work_item_id),
+                super::field_tools::FieldsOf::Task(work_item_id),
             )
             .await?
             {

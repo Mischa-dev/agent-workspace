@@ -193,6 +193,7 @@ export function normalizeWorkItem(value: unknown): WorkItem {
     estimateUnit: estimateUnit(item.estimateUnit),
     fieldValues: normalizeValues(item.fieldValues),
     fieldReferences: normalizeReferences(item.fieldReferences),
+    collectionId: nullableString(item.collectionId),
   }
 }
 

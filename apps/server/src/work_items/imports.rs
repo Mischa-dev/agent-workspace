@@ -1839,6 +1839,7 @@ async fn create_chunk(
                 transaction,
                 actor,
                 CreateWorkItemCommand {
+                    collection_id: None,
                     field_values: field_values.as_ref(),
                     title: &title,
                     description: &description,

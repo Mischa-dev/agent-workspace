@@ -383,6 +383,7 @@ struct WorkItemRow {
     ready: bool,
     field_values: serde_json::Value,
     field_references: serde_json::Value,
+    collection_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -505,6 +506,10 @@ pub struct WorkItemView {
     /// The people, tasks and pages those values name.
     #[serde(default)]
     field_references: Vec<serde_json::Value>,
+    /// The collection that acts like a task it's a record of (AWD-110),
+    /// whose fields its values follow; none for a plain task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    collection_id: Option<Uuid>,
 }
 
 /// A task's place in the plan: parent, milestone, dates, estimate,
@@ -2401,6 +2406,7 @@ async fn create_work_item(
                 &mut transaction,
                 &browser_actor(&headers, &principal, project_id)?,
                 CreateWorkItemCommand {
+                    collection_id: None,
                     field_values: field_values.as_ref(),
                     title: &request.title,
                     description: &request.description,
@@ -4199,6 +4205,7 @@ const WORK_ITEM_SELECT: &str = concat!(
 "#,
     field_values_columns!(),
     r#",
+        item.collection_id,
         item.blocked_reason IS NULL AND item.archived_at IS NULL
           AND status.semantic_category NOT IN ('completed', 'canceled')
           AND NOT EXISTS (
@@ -4321,6 +4328,7 @@ fn work_item_view(
         },
         field_values: row.field_values,
         field_references: json_list(row.field_references)?,
+        collection_id: row.collection_id,
     };
     // Someone who may change a task but not see it (a role with "archive
     // tasks" only, say) gets the outcome, not the task's contents.

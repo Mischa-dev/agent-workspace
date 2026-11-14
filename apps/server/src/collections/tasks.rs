@@ -141,11 +141,14 @@ struct OptionRow {
     archived: bool,
 }
 
-/// The Tasks collection's fields: the built-in ones, then the project's
-/// task fields (archived ones too when asked for).
+/// The fields of a collection whose records are tasks: the built-in ones,
+/// then `kind`'s own (archived ones too when asked for). `kind` is
+/// `RecordKind::Task` for the Tasks collection, whose own fields are the
+/// project's task fields.
 pub async fn fields(
     connection: &mut PgConnection,
     project_id: Uuid,
+    kind: RecordKind,
     include_archived: bool,
 ) -> Result<Vec<FieldDefinition>, AppError> {
     let statuses = sqlx::query_as::<_, (Uuid, String, String, bool)>(
@@ -197,31 +200,16 @@ pub async fn fields(
     ];
     let count = found.len() as i32;
     found.extend(
-        fields::list(
-            &mut *connection,
-            project_id,
-            RecordKind::Task,
-            include_archived,
-        )
-        .await?
-        .into_iter()
-        // A task field named like a built-in one keeps its own name
-        // only where it can't be confused: built-in names win.
-        .filter(|field| {
-            ![
-                "status",
-                "assignee",
-                "priority",
-                "start date",
-                "due date",
-                "labels",
-            ]
-            .contains(&field.name.to_lowercase().as_str())
-        })
-        .map(|mut field| {
-            field.position += count;
-            field
-        }),
+        fields::list(&mut *connection, project_id, kind, include_archived)
+            .await?
+            .into_iter()
+            // A task field named like a built-in one keeps its own name
+            // only where it can't be confused: built-in names win.
+            .filter(|field| !is_builtin_name(&field.name))
+            .map(|mut field| {
+                field.position += count;
+                field
+            }),
     );
     Ok(found)
 }
@@ -237,9 +225,11 @@ fn priority_value() -> String {
 
 /// The project's tasks as records, aliased by the caller: the columns
 /// `collection_records` has, built-in fields folded into `field_values`.
+/// Each is in its own collection: the Tasks collection, or the one that
+/// acts like a task it was made in (`work_items.collection_id`).
 pub fn source() -> String {
     format!(
-        "(SELECT task.id, task.project_id, tasks.id AS collection_id, task.number, task.title, \
+        "(SELECT task.id, task.project_id, COALESCE(task.collection_id, tasks.id) AS collection_id, task.number, task.title, \
            task.field_values || jsonb_strip_nulls(jsonb_build_object( \
              '{STATUS}', task.status_id::text, \
              '{ASSIGNEE}', task.assignee_actor_id::text, \
@@ -350,3 +340,12 @@ pub async fn ensure(
 pub const READ_ONLY_MESSAGE: &str = "Tasks is the built-in collection of this project's tasks: \
      its name and settings don't change. Change its records with the task tools (task_create, \
      task_update), and its fields with collection_write.";
+
+/// What to say when `record_write` names a collection whose records are
+/// tasks.
+pub fn task_like_message(name: &str) -> String {
+    format!(
+        "{name}'s records act like tasks: add them with task_create (collection: \"{name}\") and \
+         change them with task_update, by key or ID."
+    )
+}
