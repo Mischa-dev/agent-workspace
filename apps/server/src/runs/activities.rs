@@ -152,7 +152,8 @@ fn default_summary(kind: &str, payload: &Value) -> String {
 /// requests the run has open once this one is applied, for
 /// `interrupt_resolved`.
 pub fn clean(activity: NewActivity, still_open: i64) -> Result<CleanActivity, RunOpError> {
-    let client_id = activity.client_id.trim().to_owned();
+    // Ids and references are the caller's text too: secrets in them go.
+    let client_id = run_log::redact(activity.client_id.trim());
     if client_id.is_empty()
         || client_id.chars().count() > MAX_REF_CHARS
         || client_id.chars().any(char::is_control)
@@ -176,7 +177,7 @@ pub fn clean(activity: NewActivity, still_open: i64) -> Result<CleanActivity, Ru
     }
     let reference =
         |value: Option<String>, field: &'static str| -> Result<Option<String>, RunOpError> {
-            match value.map(|value| one_line(&value, usize::MAX)) {
+            match value.map(|value| one_line(&run_log::redact(&value), usize::MAX)) {
                 Some(value) if value.is_empty() => Ok(None),
                 Some(value) if value.chars().count() > MAX_REF_CHARS => Err(refused(
                     field,

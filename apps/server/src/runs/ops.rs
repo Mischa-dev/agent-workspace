@@ -181,16 +181,24 @@ pub fn one_line(value: &str) -> String {
         .join(" ")
 }
 
+/// Caller-typed text as it is kept: secrets removed (`run_log::redact`),
+/// one line, at most `max` characters.
 fn line(value: &str, max: usize, field: &'static str, message: &str) -> Result<String, RunOpError> {
-    let value = one_line(value);
+    let value = one_line(&crate::run_log::redact(value));
     if value.chars().count() > max {
         return Err(refused(field, message));
     }
     Ok(value)
 }
 
+fn redacted_line(value: &str) -> String {
+    one_line(&crate::run_log::redact(value))
+}
+
 fn https_url(value: &str, field: &'static str) -> Result<String, RunOpError> {
-    let value = value.trim();
+    // A token in a link's query is removed like any other secret.
+    let value = crate::run_log::redact(value.trim());
+    let value = value.as_str();
     let valid = value.len() <= 2_000
         && value.starts_with("https://")
         && value.len() > "https://".len()
@@ -293,7 +301,8 @@ pub async fn open(
                 "Keep clientRunId to 200 characters on one line.",
             ));
         }
-        Some(value) => Some(value.to_owned()),
+        // An id is the caller's text too: secrets in it go.
+        Some(value) => Some(crate::run_log::redact(value)),
     };
     if let Some(client_run_id) = &client_run_id
         && let Some(run) = existing_by_client_id(transaction, account_id, client_run_id).await?
@@ -303,7 +312,7 @@ pub async fn open(
     // A title is shown wherever the run is: secrets in it are removed, as
     // in status lines and activities.
     let title = line(
-        &crate::run_log::redact(&input.title),
+        &input.title,
         MAX_TITLE_CHARS,
         "title",
         "Keep the title to 200 characters.",
@@ -318,7 +327,11 @@ pub async fn open(
             format!("Use one of: {}.", CAUSE_KINDS.join(", ")),
         ));
     };
-    let cause_ref = match cause.reference.as_deref().map(one_line) {
+    let cause_ref = match cause
+        .reference
+        .as_deref()
+        .map(|reference| one_line(&crate::run_log::redact(reference)))
+    {
         Some(value) if value.chars().count() > 200 => {
             return Err(refused("cause.ref", "Keep cause.ref to 200 characters."));
         }
@@ -684,7 +697,7 @@ pub async fn update(
     let title = match change.title {
         Some(title) => {
             let title = line(
-                &crate::run_log::redact(&title),
+                &title,
                 MAX_TITLE_CHARS,
                 "title",
                 "Keep the title to 200 characters.",
@@ -988,8 +1001,8 @@ pub async fn add_results(
             ("url", url),
             ("id", id),
             ("branch", branch),
-            ("title", result.title.as_deref().map(one_line)),
-            ("thingKind", result.thing_kind.as_deref().map(one_line)),
+            ("title", result.title.as_deref().map(redacted_line)),
+            ("thingKind", result.thing_kind.as_deref().map(redacted_line)),
         ] {
             if let Some(value) = value {
                 payload.insert(name.to_owned(), Value::String(value));
@@ -1011,7 +1024,7 @@ pub async fn add_results(
             summary: Some(format!(
                 "{}: {}",
                 kind.replace('_', " "),
-                result.title.as_deref().map(one_line).unwrap_or(key)
+                result.title.as_deref().map(redacted_line).unwrap_or(key)
             )),
             payload: Value::Object(payload),
         });
@@ -1383,7 +1396,10 @@ pub async fn end_by_service(
         .filter(|state| state.is_terminal())
         .unwrap_or(RunState::Interrupted);
     let saved = save_state(transaction, &run, target, false).await?;
-    let reason: String = one_line(reason).chars().take(MAX_LINE_CHARS).collect();
+    let reason: String = one_line(&crate::run_log::redact(reason))
+        .chars()
+        .take(MAX_LINE_CHARS)
+        .collect();
     let saved = sqlx::query_as::<_, RunRow>(&format!(
         r#"
         UPDATE runs run

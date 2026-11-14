@@ -532,10 +532,13 @@ pub async fn list(
 // ---------------------------------------------------------------------------
 // People's operations
 
+/// A label someone typed, secrets removed (`run_log::redact`).
 fn label(value: Option<&str>) -> Result<Option<String>, AppError> {
     let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(None);
     };
+    let value = crate::run_log::redact(value);
+    let value = value.as_str();
     if value.chars().count() > MAX_LABEL_CHARS || value.chars().any(char::is_control) {
         return Err(AppError::Refused {
             field: "label",
@@ -653,8 +656,11 @@ async fn managed_host(
     Ok(host)
 }
 
+/// The host's name for an agent, as the protocol keeps it: secrets
+/// removed, so it matches what the host described.
 fn host_agent_ref(value: &str) -> Result<String, AppError> {
-    let value = value.trim();
+    let value = crate::run_log::redact(value.trim());
+    let value = value.as_str();
     if value.is_empty() || value.chars().count() > 200 || value.chars().any(char::is_control) {
         return Err(AppError::Refused {
             field: "hostAgentRef",

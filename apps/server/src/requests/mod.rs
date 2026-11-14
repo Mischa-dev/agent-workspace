@@ -118,6 +118,14 @@ fn text(value: Option<&Value>) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// Text a caller typed (a title, a detail, an option, an id): secrets in
+/// it are removed, as in run titles and activities.
+fn prose(value: Option<&Value>) -> Option<String> {
+    text(value)
+        .map(|value| crate::run_log::redact(&value))
+        .filter(|value| !value.trim().is_empty())
+}
+
 /// Open the request an `interrupt` activity's `payload.request` describes,
 /// raised by the run's account in the run's space. `activity_ref` is the
 /// activity's id: a repeat of the same activity, or of the same
@@ -129,7 +137,7 @@ pub async fn open_for_run(
     request: &Value,
 ) -> Result<Raised, OpenError> {
     const FIELD: &str = "activities.payload.request";
-    let client_request_id = text(request.get("clientRequestId"));
+    let client_request_id = prose(request.get("clientRequestId"));
     if client_request_id
         .as_deref()
         .is_some_and(|value| value.chars().count() > 200 || value.chars().any(char::is_control))
@@ -170,12 +178,12 @@ pub async fn open_for_run(
             ));
         }
     };
-    let title = text(request.get("title"))
+    let title = prose(request.get("title"))
         .ok_or_else(|| refused(FIELD, "Say what you need in request.title."))?;
     if title.chars().count() > MAX_TITLE_CHARS {
         return Err(refused(FIELD, "Keep request.title to 2,000 characters."));
     }
-    let detail = text(request.get("detail"));
+    let detail = prose(request.get("detail"));
     if detail
         .as_deref()
         .is_some_and(|detail| detail.chars().count() > MAX_DETAIL_CHARS)
@@ -187,8 +195,8 @@ pub async fn open_for_run(
         Some(Value::Array(options)) if options.len() <= MAX_OPTIONS => {
             let mut clean = Vec::with_capacity(options.len());
             for option in options {
-                let id = text(option.get("id"));
-                let label = text(option.get("label"));
+                let id = prose(option.get("id"));
+                let label = prose(option.get("label"));
                 let style = text(option.get("style"));
                 let (Some(id), Some(label)) = (id, label) else {
                     return Err(refused(FIELD, "Each option has an id and a label."));
@@ -474,12 +482,13 @@ pub async fn open_for_host_agent(
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
     let clip = |value: &str, max: usize| value.chars().take(max).collect::<String>();
-    let title = format!(
+    // The names come from the host: secrets in them are removed.
+    let title = crate::run_log::redact(&format!(
         "{} says the agent it knew as \"{}\" is now \"{}\", from a different line. Is it the same agent?",
         clip(host_name, 80),
         clip(old_reference, 200),
         clip(new_reference, 200),
-    );
+    ));
     Ok(sqlx::query_scalar::<_, Uuid>(
         r#"
         WITH workspaces AS (

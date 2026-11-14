@@ -15,6 +15,7 @@ use super::{
     digest, new_token, normalize_code, owner_view,
 };
 use crate::error::AppError;
+use crate::runs::activities::redact_value;
 
 const MAX_DESCRIBED_AGENTS: usize = 200;
 const MAX_LIST_ITEMS: usize = 50;
@@ -100,8 +101,11 @@ pub fn check_protocol(header: Option<&str>) -> Result<(), HostError> {
     }
 }
 
+/// A host's own text (a name, a reference, a reason) as it is kept:
+/// secrets removed (`run_log::redact`), one line.
 fn one_line(value: &str, max: usize, field: &'static str) -> Result<String, HostError> {
-    let value = value.trim();
+    let value = crate::run_log::redact(value.trim());
+    let value = value.as_str();
     if value.is_empty() || value.chars().count() > max || value.chars().any(char::is_control) {
         return Err(invalid(
             field,
@@ -127,6 +131,8 @@ fn https(value: Option<&str>, field: &'static str) -> Result<Option<String>, Hos
     let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(None);
     };
+    let value = crate::run_log::redact(value);
+    let value = value.as_str();
     let ok = value.len() <= 1000
         && value.starts_with("https://")
         && value.len() > "https://".len()
@@ -378,7 +384,7 @@ fn listed(items: &[Value], field: &'static str, label_key: &str) -> Result<Value
     }
     let value = Value::Array(items.to_vec());
     bounded(&value, 32 * 1024, field)?;
-    Ok(value)
+    Ok(redact_value(value))
 }
 
 /// One described agent, cut to what the server keeps.
@@ -430,11 +436,12 @@ fn described_agent(agent: &Value) -> Result<Value, HostError> {
     } else {
         Value::Null
     };
+    // Names and references are the host's text: secrets in them go.
     Ok(json!({
         "hostAgentRef": reference,
         "name": name,
-        "ref": outside_ref,
-        "backends": backends,
+        "ref": redact_value(outside_ref),
+        "backends": redact_value(Value::Array(backends)),
         "actions": actions,
     }))
 }
@@ -466,6 +473,7 @@ pub async fn describe(
     )?;
     let capabilities = Value::Object(request.capabilities);
     bounded(&capabilities, 32 * 1024, "capabilities")?;
+    let capabilities = redact_value(capabilities);
     let interval = request
         .report_interval_seconds
         .unwrap_or(host.report_interval_seconds);
@@ -613,7 +621,7 @@ pub async fn heartbeat(
         None | Some(Value::Null) => None,
         Some(value @ Value::Object(_)) => {
             bounded(&value, 4096, "capacity")?;
-            Some(value)
+            Some(redact_value(value))
         }
         Some(_) => return Err(invalid("capacity", "Give capacity as an object.")),
     };
@@ -648,7 +656,8 @@ pub async fn heartbeat(
             "#,
         )
         .bind(host.id)
-        .bind(&agent.host_agent_ref)
+        // Kept references have their secrets removed (`one_line`).
+        .bind(crate::run_log::redact(agent.host_agent_ref.trim()))
         .bind(status)
         .execute(&mut *transaction)
         .await?;
@@ -752,7 +761,7 @@ pub async fn notice(
             .execute(&mut *transaction)
             .await?;
             bounded(profile, 8 * 1024, "profile")?;
-            ("applied", json!({"profile": profile}))
+            ("applied", json!({"profile": redact_value(profile.clone())}))
         }
         "agent_ref_changed" => {
             let new_reference = one_line(
@@ -760,14 +769,12 @@ pub async fn notice(
                 200,
                 "newHostAgentRef",
             )?;
-            let new_lineage = request
-                .reference
-                .as_ref()
-                .and_then(|reference| reference["lineage"].as_str())
-                .map(str::to_owned);
+            // As described agents' references are kept: secrets removed.
+            let outside_ref = redact_value(request.reference.clone().unwrap_or(Value::Null));
+            let new_lineage = outside_ref["lineage"].as_str().map(str::to_owned);
             let body = json!({
                 "newHostAgentRef": new_reference,
-                "ref": request.reference.clone().unwrap_or(Value::Null),
+                "ref": outside_ref,
             });
             bounded(&body, 8 * 1024, "ref")?;
             if lineage.is_some() && lineage == new_lineage {

@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::{
-    agent_interface::{Browser, create_agent, send},
+    agent_interface::{Browser, connect_app, create_agent, initialize, send, tool},
     mcp_admin::{create_project, setup},
     message_edits::add_person,
 };
@@ -556,4 +556,236 @@ async fn hosts_enrol_once_act_only_for_their_agents_and_stop_when_unlinked() {
     assert!(ids.contains(&mara_host_id.to_string()));
     assert!(ids.contains(&builtin.to_string()));
     assert!(!ids.contains(&team_host.to_string()));
+}
+
+/// Every text a caller or host types into runs, requests and hosts is kept
+/// and returned with its secrets removed: one secret, put into each field,
+/// is found in no stored row and no answer.
+#[tokio::test]
+async fn secrets_typed_into_runs_requests_and_hosts_are_never_kept() {
+    const SECRET: &str = "s3cr3tVALUE9876543210";
+    let Some(setup) = setup("a1_text_redaction").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (fixer, fixer_token) = create_agent(app, &setup.browser, &work, "Fixer", "fixer").await;
+    let fixer_mcp = initialize(app, &fixer_token).await.expect("Fixer MCP");
+    let person = connect_app(app, &setup.browser, "Desk", "full").await;
+    let desk = initialize(app, &person).await.expect("Desk MCP");
+    let typed = |what: &str| format!("{what} token={SECRET}");
+    let mut answers = Vec::new();
+
+    // Runs: every text a run's reporter types.
+    let opened = tool(
+        app,
+        &fixer_token,
+        &fixer_mcp,
+        "run_create",
+        json!({"spaceId": "WORK", "title": typed("Deploy"), "clientRunId": typed("r"),
+               "cause": {"kind": "manual", "ref": typed("ref")},
+               "settings": {"note": typed("note")}}),
+    )
+    .await;
+    assert_eq!(opened["outcome"], "ok", "{opened}");
+    let run_id = opened["value"]["run"]["runId"]
+        .as_str()
+        .expect("run")
+        .to_owned();
+    for (name, arguments) in [
+        (
+            "run_update",
+            json!({"runId": run_id, "title": typed("Retitled"), "statusLine": typed("Status"),
+                   "backend": typed("b"), "externalUrl": format!("https://example.com/r?token={SECRET}"),
+                   "failureReason": typed("Why"), "outcomeSummary": typed("Summary")}),
+        ),
+        (
+            "run_usage_report",
+            json!({"runId": run_id, "reportKey": typed("k"), "model": typed("m"), "inputTokens": 1}),
+        ),
+        (
+            "run_result_report",
+            json!({"runId": run_id, "results": [{"kind": "link", "title": typed("Report"),
+                   "url": format!("https://example.com/x?token={SECRET}")}]}),
+        ),
+        (
+            "run_activity_report",
+            json!({"runId": run_id, "activities": [{"id": typed("q"), "kind": "interrupt",
+                   "stepRef": typed("step"), "parentRef": typed("parent"), "summary": typed("Asking"),
+                   "payload": {"request": {"kind": "approval", "clientRequestId": typed("c"),
+                       "title": typed("Ship"), "detail": typed("Detail"),
+                       "options": [{"id": typed("y"), "label": typed("Yes"), "style": "approve"},
+                                   {"id": "no", "label": "No", "style": "deny"}]}}}]}),
+        ),
+    ] {
+        let answer = tool(app, &fixer_token, &fixer_mcp, name, arguments).await;
+        assert_eq!(answer["outcome"], "ok", "{name}: {answer}");
+        answers.push(answer);
+    }
+    assert_eq!(answers[3]["value"]["state"], "waiting", "{}", answers[3]);
+    let cancelled = tool(
+        app,
+        &person,
+        &desk,
+        "run_cancel",
+        json!({"runId": run_id, "reason": format!("Leaked API_KEY={SECRET}")}),
+    )
+    .await;
+    assert_eq!(cancelled["outcome"], "ok", "{cancelled}");
+    answers.push(opened);
+    answers.push(cancelled);
+
+    // Hosts: what a person labels and what a host says of itself.
+    let (status, made) = host_op(
+        app,
+        &setup.browser,
+        setup.organization_id,
+        "host_enrolment_create",
+        json!({"owner": "workspace", "label": typed("Lab")}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{made}");
+    let code = made["code"].as_str().expect("code").to_owned();
+    let (status, enrolled) = send(
+        app,
+        host_call(
+            "POST",
+            "/api/v1/hosts/enrol",
+            None,
+            json!({"code": code, "host": {"name": typed("Lab"), "software": typed("sw"),
+                   "version": typed("v")},
+                   "protocolVersions": ["2026-11"], "connection": "dial_out"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{enrolled}");
+    let host_id = enrolled["hostId"]
+        .as_str()
+        .expect("host")
+        .parse::<Uuid>()
+        .expect("uuid");
+    let token = enrolled["credential"]["token"]
+        .as_str()
+        .expect("token")
+        .to_owned();
+    let agent_ref = typed("fixer");
+    let mut host_answers = vec![made];
+    for (uri, body) in [
+        (
+            "/api/v1/host/describe",
+            json!({
+                "software": {"name": typed("sw"), "version": typed("v")},
+                "issuer": format!("https://host.example/?token={SECRET}"),
+                "module": {"manifestUrl": format!("https://host.example/m?token={SECRET}")},
+                "capabilities": {"note": typed("cap")},
+                "offers": [{"id": "new", "title": typed("New"), "summary": typed("Sum"),
+                            "start": {"panel": typed("p")}}],
+                "actions": [{"id": "act", "label": typed("Act"), "needs": "panel"}],
+                "agents": [{"hostAgentRef": agent_ref, "name": typed("Fixer"),
+                            "ref": {"issuer": format!("https://host.example/?token={SECRET}"),
+                                    "id": typed("id"), "lineage": "l-01"},
+                            "backends": [{"id": "b1", "name": typed("B")}],
+                            "actions": [{"id": "pause", "label": typed("Pause"), "needs": "confirm"}]}]
+            }),
+        ),
+        ("bind", Value::Null),
+        (
+            "/api/v1/host/heartbeat",
+            json!({"capacity": {"note": typed("cap")},
+                   "agents": [{"hostAgentRef": agent_ref, "status": "paused"}]}),
+        ),
+        (
+            "/api/v1/host/notices",
+            json!({"kind": "agent_profile_changed", "hostAgentRef": agent_ref,
+                   "profile": {"name": typed("Fixer"), "bio": typed("Bio")}}),
+        ),
+        (
+            "/api/v1/host/notices",
+            json!({"kind": "agent_ref_changed", "hostAgentRef": agent_ref,
+                   "newHostAgentRef": typed("fixer-2"),
+                   "ref": {"id": typed("id"), "lineage": typed("l-02")}}),
+        ),
+        (
+            "/api/v1/host/notices",
+            json!({"kind": "agent_retired", "hostAgentRef": agent_ref, "reason": typed("Gone")}),
+        ),
+    ] {
+        let (status, answer) = if uri == "bind" {
+            // The person binds the agent by the name the host gave it.
+            host_op(
+                app,
+                &setup.browser,
+                setup.organization_id,
+                "host_agent_bind",
+                json!({"hostId": host_id, "accountId": fixer, "hostAgentRef": agent_ref}),
+            )
+            .await
+        } else {
+            send(app, host_call("POST", uri, Some(&token), body)).await
+        };
+        assert_eq!(status, StatusCode::OK, "{uri}: {answer}");
+        host_answers.push(answer);
+    }
+    // The host's name for the agent still matches, secrets removed alike.
+    assert_eq!(
+        host_answers[1]["unboundAgents"][0],
+        "fixer token=[redacted]"
+    );
+    assert_eq!(
+        host_answers[2]["agents"][0]["hostAgentRef"],
+        "fixer token=[redacted]"
+    );
+    assert_eq!(
+        host_answers[5]["outcome"], "request_opened",
+        "{}",
+        host_answers[5]
+    );
+    let notices =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM host_notices WHERE host_id = $1")
+            .bind(host_id)
+            .fetch_one(&setup.pool)
+            .await
+            .expect("notices");
+    assert_eq!(notices, 3, "each notice found the agent by its kept name");
+    let (status, listed) = host_op(
+        app,
+        &setup.browser,
+        setup.organization_id,
+        "host_list",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    answers.extend(host_answers);
+    answers.push(listed);
+    answers.push(enrolled);
+
+    for answer in &answers {
+        assert!(!answer.to_string().contains(SECRET), "returned: {answer}");
+    }
+    for table in [
+        "runs",
+        "run_activities",
+        "run_usage",
+        "usage_reports",
+        "requests",
+        "hosts",
+        "host_agents",
+        "host_enrolments",
+        "host_notices",
+        "project_memberships",
+        "outbox_events",
+        "external_agent_events",
+        "audit_events",
+        "idempotency_keys",
+    ] {
+        let kept = sqlx::query_scalar::<_, i64>(&format!(
+            "SELECT count(*) FROM {table} row WHERE to_jsonb(row)::text LIKE '%' || $1 || '%'"
+        ))
+        .bind(SECRET)
+        .fetch_one(&setup.pool)
+        .await
+        .unwrap_or_else(|error| panic!("{table}: {error}"));
+        assert_eq!(kept, 0, "{table} keeps a secret");
+    }
 }
