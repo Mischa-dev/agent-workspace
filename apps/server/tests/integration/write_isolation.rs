@@ -70,6 +70,8 @@ use super::{
 /// as written in the server's `.route(...)` calls.
 const WRITE_ROUTES: &[&str] = &[
     "POST /api/public/v1/{tool}",
+    "POST /api/v2/ops/{name}",
+    "POST /api/v2/w/{workspace}/ops/{name}",
     "POST /api/v1/account/api-tokens",
     "POST /api/v1/account/api-tokens/{credential_id}/revoke",
     "PATCH /api/v1/account/connected-apps/{id}",
@@ -653,7 +655,18 @@ fn every_write_route_and_write_tool_has_an_isolation_case() {
         .find(|(path, _)| path.ends_with("src/mcp.rs"))
         .map(|(_, source)| source.as_str())
         .expect("src/mcp.rs");
-    let write_tools = write_tools(mcp_source);
+    // Hand-written tools by their annotation, and operations by their kind.
+    let write_tools = write_tools(mcp_source)
+        .into_iter()
+        .chain(
+            agent_workspace_server::ops::registry()
+                .entries()
+                .filter(|entry| entry.meta.kind.writes())
+                .map(|entry| entry.meta.name.to_owned())
+                // ops_kernel's test operations, registered by other tests.
+                .filter(|name| !name.starts_with("echo_")),
+        )
+        .collect::<BTreeSet<_>>();
     assert!(
         write_tools.len() > 10,
         "parsed write tools: {write_tools:?}"
@@ -3509,6 +3522,53 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
                     Expect::Refused,
                 ),
             ],
+            last: false,
+        },
+        // The generated operation route (K2): the workspace in the path must
+        // be where the target is, and a target in B is not found. Run with
+        // K2.5's decision_record; `ops_edges` runs the test operations.
+        HttpCase {
+            route: "POST /api/v2/w/{workspace}/ops/{name}",
+            own: Own::Run(Call::new(
+                "POST",
+                format!("/api/v2/w/{}/ops/decision_record", a.organization),
+                Payload::Json(json!({"spaceId": a.project, "title": "Net op"})),
+            )),
+            foreign: vec![
+                (
+                    Call::new(
+                        "POST",
+                        format!("/api/v2/w/{}/ops/decision_record", b.organization),
+                        Payload::Json(json!({"spaceId": a.project, "title": "Net op"})),
+                    ),
+                    Expect::Refused,
+                ),
+                (
+                    Call::new(
+                        "POST",
+                        format!("/api/v2/w/{}/ops/decision_record", a.organization),
+                        Payload::Json(json!({"spaceId": b.project, "title": "Net op"})),
+                    ),
+                    Expect::Refused,
+                ),
+            ],
+            last: false,
+        },
+        HttpCase {
+            route: "POST /api/v2/ops/{name}",
+            own: Own::Run(Call::new(
+                "POST",
+                "/api/v2/ops/decision_record".to_owned(),
+                Payload::Json(json!({"spaceId": a.project, "title": "Net op"})),
+            )),
+            foreign: vec![(
+                Call::new(
+                    "POST",
+                    "/api/v2/ops/decision_record".to_owned(),
+                    Payload::Json(json!({"spaceId": b.project, "title": "Net op"})),
+                ),
+                Expect::Refused,
+            )],
             last: false,
         },
         // Account

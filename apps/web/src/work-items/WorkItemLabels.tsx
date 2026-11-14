@@ -3,6 +3,7 @@ import { useLayoutEffect, useRef, useState, type RefObject } from 'react'
 import { Tooltip } from '../ui'
 import { chipsThatFit } from './labelFit'
 import type { WorkItemLabel } from './types'
+import '../styles/work.css'
 
 /**
  * Measures how many whole chips fit beside their siblings in the parent row,

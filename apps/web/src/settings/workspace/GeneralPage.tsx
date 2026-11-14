@@ -40,6 +40,7 @@ import {
   workspaceKeys,
   type Workspace,
 } from './api'
+import '../../styles/pages.css'
 
 /** Workspace › General: its name, which workspace is your default, and leaving or handing it over. */
 export default function GeneralPage({ session, workspace: summary }: SettingsPageProps) {

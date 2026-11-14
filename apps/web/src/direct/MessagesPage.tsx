@@ -29,6 +29,7 @@ import {
   describeError,
 } from '../ui'
 import { createGroup, directQueryKey, openDm, useDirectOverview } from './api'
+import '../styles/pages.css'
 
 function listNames(names: string[]) {
   if (names.length <= 1) return names.join('')

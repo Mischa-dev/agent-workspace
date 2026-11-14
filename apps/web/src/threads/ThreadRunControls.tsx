@@ -6,6 +6,7 @@ import { runAgent } from './runAgent'
 import { automationNote, publishFailure, pullRequestFailure, pullRequestProgress, syncFailure } from './runNotes'
 import type { Run } from './threadTypes'
 import type { ThreadRunActions } from './useThreadRunActions'
+import '../styles/conversation.css'
 
 /** The buttons under the run card: stop the active run, or follow up on the last one. */
 export function RunCardActions({

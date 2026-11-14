@@ -15,6 +15,7 @@ import { useCreateMilestone, useMilestoneList, useUpdateMilestone } from './plan
 import { TaskGlyph } from './TaskGlyph'
 import type { Milestone } from './types'
 import './work.css'
+import '../styles/work.css'
 
 type Shown = 'open' | 'archived'
 

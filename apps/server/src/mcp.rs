@@ -76,6 +76,8 @@ mod collection_tools;
 mod comment_tools;
 mod common;
 mod criteria;
+#[cfg(test)]
+mod description_words;
 mod environment_tools;
 mod field_tools;
 mod file_tools;
@@ -124,6 +126,9 @@ mod workflow;
 mod writes;
 
 pub const MCP_PATH: &str = "/api/v1/mcp";
+/// The per-workspace alias of the endpoint (rulings R4, R19): the same
+/// server, with the workspace a call acts in named by the address.
+pub const MCP_WORKSPACE_PATH: &str = "/api/v1/w/{workspace}/mcp";
 pub const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 const TOKEN_BYTES: usize = 32;
 const TOKEN_PREFIX_LENGTH: usize = 16;
@@ -2610,42 +2615,6 @@ impl McpServer {
         Json(whiteboard_tools::whiteboard_link(&self.state, principal, arguments).await)
     }
 
-    #[tool(
-        description = "Record a decision: what was chosen and why, linked to the message or conversation where it happened. Pass supersedes to replace an older decision. A decision from a private conversation stays as private as it.",
-        annotations(
-            title = "Record decision",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn decision_record(
-        &self,
-        Parameters(arguments): Parameters<memory_tools::DecisionRecordArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<memory_tools::DecisionValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(memory_tools::decision_record(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "List a project's decisions, newest first: what was chosen, why, and where. Superseded ones are left out unless includeSuperseded.",
-        annotations(
-            title = "List decisions",
-            read_only_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn decision_list(
-        &self,
-        Parameters(arguments): Parameters<memory_tools::DecisionListArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<memory_tools::DecisionListValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(memory_tools::decision_list(&self.state, principal, arguments).await)
-    }
-
     // -- Code, runs and approvals --------------------------------------------
 
     #[tool(
@@ -4017,8 +3986,9 @@ impl ServerHandler for McpServer {
         _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        let tools = Self::tools().list_all();
+        let mut tools = Self::tools().list_all();
         let Some(principal) = context_principal(&context) else {
+            tools.extend(crate::ops::mcp::tools());
             return Ok(ListToolsResult::with_all_items(tools)
                 .with_ttl_ms(LIST_TTL_MS)
                 .with_cache_scope(CacheScope::Private));
@@ -4041,10 +4011,17 @@ impl ServerHandler for McpServer {
                 crate::modules::ModuleSet::always_on()
             }
         };
+        // K2: operations list by their own permission and module.
+        let operations = crate::ops::registry();
+        let listed = operations
+            .entries()
+            .filter(|entry| crate::ops::mcp::listed(&entry.meta, &principal, reach, modules))
+            .map(|entry| crate::ops::mcp::tool_of(&entry.meta));
         Ok(ListToolsResult::with_all_items(
             tools
                 .into_iter()
                 .filter(|tool| tool_listed(&tool.name, reach) && modules.allows_tool(&tool.name))
+                .chain(listed)
                 .collect(),
         )
         .with_ttl_ms(LIST_TTL_MS)
@@ -4099,7 +4076,7 @@ fn context_principal(context: &RequestContext<RoleServer>) -> Option<McpPrincipa
 
 /// What the caller may use anywhere, and for a person's app the limits each
 /// of their checks runs under (AWD-74).
-async fn caller_reach(
+pub(crate) async fn caller_reach(
     state: &AppState,
     principal: &McpPrincipal,
 ) -> Result<(PermissionSet, Option<AgentLimits>), AppError> {
@@ -4168,29 +4145,25 @@ async fn module_off_here(
         // Only for a project the call names (or a conversation, message or
         // request it names): a connection's own project isn't where an
         // unscoped list acts, and those lists leave out what's off themselves.
-        if principal.project_explicit && matches!(module.id.as_str(), "messages" | "channels") {
+        let registry = crate::modules::registry::Registry::global();
+        if principal.project_explicit && registry.governs_conversations(&module.id) {
             let direct =
                 sqlx::query_scalar::<_, bool>("SELECT kind = 'direct' FROM projects WHERE id = $1")
                     .bind(principal.project_id)
                     .fetch_one(&mut *connection)
                     .await?;
-            let on = modules.allows_conversations_in(if direct { "direct" } else { "standard" });
-            let name = if direct { "Messages" } else { "Channels" };
-            return Ok((!on).then(|| name.to_owned()));
+            let governing = registry
+                .conversation_module(direct)
+                .and_then(|id| registry.describe(id));
+            return Ok(governing
+                .filter(|governing| !modules.contains(&governing.id))
+                .map(|governing| governing.name.clone()));
         }
         return Ok((!modules.contains(&module.id)).then(|| module.name.clone()));
     }
     let modules = crate::modules::state::anywhere(&mut connection, principal.actor_id).await?;
     Ok((!modules.contains(&module.id)).then(|| module.name.clone()))
 }
-
-/// Tools a second module also serves: forms (Collections) are bug report
-/// links too, so these work where Collections is on and Tasks is off, and
-/// then leave task links alone.
-const ALSO_SERVED_BY: &[(&str, &str)] = &[
-    ("bug_report_link_list", "collections"),
-    ("bug_report_link_write", "collections"),
-];
 
 /// A call to a tool of a module that's off, in the shape `refusal` uses.
 fn module_refusal(tool: &str, module: &str) -> rmcp::model::CallToolResponse {
@@ -4251,6 +4224,43 @@ async fn run_tool(
     request: rmcp::model::CallToolRequestParams,
     context: RequestContext<RoleServer>,
 ) -> Result<rmcp::model::CallToolResponse, ErrorData> {
+    // K2: an operation runs through the dispatcher, which checks access,
+    // modules and request ids itself.
+    if crate::ops::mcp::is_operation(&request.name) {
+        let Some(principal) = context_principal(&context) else {
+            return Ok(rmcp::model::CallToolResponse::Complete(
+                rmcp::model::CallToolResult::structured(
+                    crate::ops::OpError::Unauthenticated.to_json(),
+                ),
+            ));
+        };
+        let parts = context.extensions.get::<http::request::Parts>();
+        let alias = parts.and_then(|parts| {
+            parts
+                .extensions
+                .get::<crate::ops::mcp::AliasWorkspace>()
+                .copied()
+        });
+        let edge = parts
+            .and_then(|parts| parts.extensions.get::<crate::ops::Edge>().cloned())
+            .unwrap_or_else(|| crate::ops::Edge::of_mcp(&principal));
+        let trace_id = parts
+            .and_then(|parts| parts.headers.get(crate::REQUEST_ID_HEADER))
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        return Ok(rmcp::model::CallToolResponse::Complete(
+            crate::ops::mcp::call(
+                &server.state,
+                &principal,
+                alias,
+                edge,
+                trace_id,
+                &request.name,
+                request.arguments,
+            )
+            .await,
+        ));
+    }
     let Some(principal) = context_principal(&context) else {
         return McpServer::tools()
             .call(rmcp::handler::server::tool::ToolCallContext::new(
@@ -4295,14 +4305,15 @@ async fn run_tool(
         match module_off_here(&server.state, &principal, &request.name, module).await {
             Ok(None) => {}
             Ok(Some(name)) => {
-                // A tool another module also serves is on wherever that
-                // module is; its handler keeps to that module's part.
+                // A tool another module also serves (`ModuleFilter::AlsoServes`)
+                // is on wherever that module is; its handler keeps to that
+                // module's part.
                 let mut also_on = false;
-                for also in ALSO_SERVED_BY
-                    .iter()
-                    .filter(|(tool, _)| *tool == request.name.as_ref())
-                    .filter_map(|(_, module)| crate::modules::manifest::get(module))
-                {
+                let also_serving = crate::modules::registry::Registry::global()
+                    .also_serving(&request.name)
+                    .filter_map(crate::modules::manifest::get)
+                    .collect::<Vec<_>>();
+                for also in also_serving {
                     if matches!(
                         module_off_here(&server.state, &principal, &request.name, also).await,
                         Ok(None)
@@ -4466,6 +4477,7 @@ pub fn router(state: AppState) -> Router<AppState> {
         StreamableHttpService::new(move || Ok(handler.clone()), Default::default(), config);
 
     Router::new()
+        .route_service(MCP_WORKSPACE_PATH, service.clone())
         .nest_service(MCP_PATH, service)
         .layer(middleware::from_fn_with_state(state, authenticate_mcp))
 }
@@ -4477,7 +4489,15 @@ pub fn oauth_router() -> Router<AppState> {
 /// Every tool's name, description, schemas and hints, for the public API's
 /// OpenAPI document (X3). Generated from the same Rust types the tools take.
 pub(crate) fn tool_catalog() -> Vec<rmcp::model::Tool> {
-    McpServer::tools().list_all()
+    let mut tools = McpServer::tools().list_all();
+    tools.extend(crate::ops::mcp::tools());
+    tools
+}
+
+/// Whether a hand-written tool has this name (an operation must not).
+#[cfg(test)]
+pub(crate) fn has_legacy_tool(name: &str) -> bool {
+    McpServer::tools().has_route(name)
 }
 
 /// Why a direct tool call didn't produce a result.
@@ -4502,6 +4522,21 @@ pub(crate) async fn call_tool_direct(
     tool: &str,
     mut arguments: serde_json::Value,
 ) -> Result<serde_json::Value, DirectCallError> {
+    // K2: an operation runs through the dispatcher as a public API call.
+    if crate::ops::mcp::is_operation(tool) {
+        keys_to_ids(state, &principal, tool, &mut arguments)
+            .await
+            .map_err(DirectCallError::Refused)?;
+        let serde_json::Value::Object(arguments) = arguments else {
+            return Err(DirectCallError::InvalidArguments(
+                "The body must be a JSON object of the tool's arguments.".to_owned(),
+            ));
+        };
+        let edge = crate::ops::Edge::of_public_api(&principal);
+        let result =
+            crate::ops::mcp::call(state, &principal, None, edge, None, tool, Some(arguments)).await;
+        return Ok(result.structured_content.unwrap_or_default());
+    }
     let router = McpServer::tools();
     if !router.has_route(tool) {
         return Err(DirectCallError::UnknownTool);
@@ -4591,6 +4626,24 @@ async fn authenticate_mcp(
             if let Err(error) = state.rate_limits.check_mcp_request(principal.credential_id) {
                 return error.into_response();
             }
+            // The alias path names a workspace the credential must reach.
+            if let Some(named) = request
+                .uri()
+                .path()
+                .strip_prefix("/api/v1/w/")
+                .and_then(|rest| rest.strip_suffix("/mcp"))
+                .filter(|named| !named.contains('/'))
+            {
+                match alias_workspace(&state, &principal, named).await {
+                    Ok(workspace) => {
+                        request.extensions_mut().insert(workspace);
+                    }
+                    Err(error) => {
+                        let error = crate::ops::dispatch::Answer::error(&error);
+                        return (error.status, axum::Json(error.body)).into_response();
+                    }
+                }
+            }
             if request.method() == http::Method::POST {
                 let (parts, body) = request.into_parts();
                 let bytes = match axum::body::to_bytes(body, MAX_MCP_BODY_BYTES).await {
@@ -4622,10 +4675,32 @@ async fn authenticate_mcp(
                         Err(error) => return error.into_response(),
                     }
                     let tool = body["params"]["name"].as_str().unwrap_or_default();
-                    match scoped_project(&state, &principal, tool, &body["params"]["arguments"])
-                        .await
-                    {
+                    // Operations locate their own targets (K2).
+                    let scoped = if crate::ops::mcp::is_operation(tool) {
+                        Ok(None)
+                    } else {
+                        scoped_project(&state, &principal, tool, &body["params"]["arguments"]).await
+                    };
+                    match scoped {
                         Ok(Some(project_id)) => {
+                            // Through a workspace's alias path a hand-written
+                            // tool acts only on that workspace's spaces;
+                            // operations check this in the dispatcher.
+                            if let Some(crate::ops::mcp::AliasWorkspace(workspace)) =
+                                parts.extensions.get().copied()
+                            {
+                                match project_in_workspace(&state, project_id, workspace).await {
+                                    Ok(true) => {}
+                                    Ok(false) => {
+                                        let error = crate::ops::dispatch::Answer::error(
+                                            &crate::ops::OpError::not_found("That space"),
+                                        );
+                                        return (error.status, axum::Json(error.body))
+                                            .into_response();
+                                    }
+                                    Err(error) => return error.into_response(),
+                                }
+                            }
                             principal.project_id = project_id;
                             principal.project_explicit = true;
                         }
@@ -4651,6 +4726,42 @@ async fn authenticate_mcp(
             StatusCode::SERVICE_UNAVAILABLE.into_response()
         }
     }
+}
+
+/// Whether a space belongs to a workspace.
+async fn project_in_workspace(
+    state: &AppState,
+    project_id: Uuid,
+    workspace: Uuid,
+) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM projects WHERE id = $1 AND organization_id = $2)",
+    )
+    .bind(project_id)
+    .bind(workspace)
+    .fetch_one(&state.pool)
+    .await?)
+}
+
+/// The workspace an alias path names, if the credential reaches it; one it
+/// doesn't is not found.
+async fn alias_workspace(
+    state: &AppState,
+    principal: &McpPrincipal,
+    named: &str,
+) -> Result<crate::ops::mcp::AliasWorkspace, crate::ops::OpError> {
+    let mut connection = state
+        .pool
+        .acquire()
+        .await
+        .map_err(|error| crate::ops::OpError::logged("workspace", &error.into()))?;
+    let workspace = crate::ops::target::workspace_named(&mut connection, named).await?;
+    let caller = crate::ops::Caller::of_principal(principal, None);
+    let reach = crate::ops::access_shim::reach(&mut connection, &caller).await?;
+    if !reach.contains(&workspace) {
+        return Err(crate::ops::OpError::not_found("That workspace"));
+    }
+    Ok(crate::ops::mcp::AliasWorkspace(workspace))
 }
 
 /// The steps a client takes to load the tools, logged with how long they
@@ -5651,7 +5762,7 @@ async fn keys_to_ids(
         arguments["projectId"] = serde_json::Value::String(project_id.to_string());
         changed = true;
     }
-    for field in ["projectId", "toProjectId"] {
+    for field in ["projectId", "toProjectId", "spaceId"] {
         if let Some(key) = unresolved(arguments, field)
             && is_project_key(&key)
             && let Some(project_id) = project_by_key(state, principal, &key).await?

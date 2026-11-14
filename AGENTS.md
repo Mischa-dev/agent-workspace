@@ -16,7 +16,9 @@ how existing code behaves; don't add to it for ordinary changes.
 
 Step-by-step guides for the jobs that keep coming up are in
 `.claude/skills/<name>/SKILL.md`; read the one that fits before you start:
-`add-mcp-tool` (a tool on the app's MCP server), `add-migration` (any
+`add-operation` (anything new the app can do: a write, or a read agents
+and the web share), `add-mcp-tool` (changing a hand-written tool on the
+app's MCP server), `add-migration` (any
 database change), `check-in-browser` (looking at a web change in a real
 browser) and `steward` (the checks before pushing, and driving a pull
 request to green). Claude Code loads them by itself.
@@ -94,6 +96,8 @@ Several agents build at once, so changes must merge in either order.
 
 ## Architecture rules
 
+- A new write is an operation in `apps/server/src/<module>/ops.rs`; never
+  a hand-written route or tool (the `add-operation` skill).
 - Keep one Rust server crate until module boundaries are proven.
 - Keep provider-specific JSON inside provider modules.
 - Resolve Actor identity server-side; clients cannot choose authorship.

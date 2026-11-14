@@ -24,6 +24,7 @@ import {
 } from '../ui'
 import type { WorkItemStatus } from '../work-items/types'
 import { getGitHubAutomationSettings, getGitHubStatus, syncGitHubInstallation, updateGitHubAutomationSettings } from './api'
+import '../styles/pages.css'
 
 type GitHubStatus = Awaited<ReturnType<typeof getGitHubStatus>>
 

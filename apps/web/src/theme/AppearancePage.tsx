@@ -32,6 +32,8 @@ import {
 } from './slotEditing'
 import type { AppearancePreferences, ThemeChoice } from './preferences'
 import { useTheme } from './themeContext'
+import '../styles/conversation.css'
+import '../styles/pages.css'
 
 /** Read what every slot resolves to on <html>, as sRGB, for swatches and contrast. */
 function useResolvedColors(revision: string) {

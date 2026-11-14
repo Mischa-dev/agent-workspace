@@ -1,5 +1,5 @@
-import { formatRelative } from '../../ui'
-import { SHARED_FIELDS, type FieldDecl, type FieldValue, type LinkValue, type Thing, type ThingDecl } from '../contract'
+import { formatRelative } from '../ui'
+import { SHARED_FIELDS, type FieldDecl, type FieldValue, type LinkValue, type Thing, type ThingDecl } from '../modules/contract'
 
 // Reading a thing's fields for the pieces: the shared ones (title, status,
 // owner) and the ones its kind declares, in words.

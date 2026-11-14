@@ -13,6 +13,7 @@ import {
   type WhiteboardDetail,
   type WhiteboardLink,
 } from './api'
+import '../styles/pages.css'
 
 const ReferencedIn = lazy(() => import('../modules/references/ReferencedIn'))
 

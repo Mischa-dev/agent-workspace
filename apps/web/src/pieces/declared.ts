@@ -1,14 +1,14 @@
-import type { EmbedDecl, PieceType, ThingDecl } from '../contract'
+import type { EmbedDecl, PieceType, ThingDecl } from '../modules/contract'
 
 // What the manifests in `modules/` declare for the pieces: every kind of
 // thing and every embed, with the module that declares it. Loaded with the
 // pieces gallery only.
 
-const THINGS = import.meta.glob<ThingDecl[]>(['../../../../../modules/*.json', '!../../../../../modules/presets.json'], {
+const THINGS = import.meta.glob<ThingDecl[]>(['../../../../modules/*.json', '!../../../../modules/presets.json'], {
   eager: true,
   import: 'things',
 })
-const EMBEDS = import.meta.glob<EmbedDecl[]>(['../../../../../modules/*.json', '!../../../../../modules/presets.json'], {
+const EMBEDS = import.meta.glob<EmbedDecl[]>(['../../../../modules/*.json', '!../../../../modules/presets.json'], {
   eager: true,
   import: 'embeds',
 })

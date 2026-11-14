@@ -8,14 +8,13 @@ import {
   dropRemovedConversation,
   dropRemovedMessage,
   invalidateConversation,
-  NO_MESSAGE_UPDATES,
-  NO_REACTION_UPDATES,
   refreshMemoryCaches,
   rememberMessageUpdate,
   rememberReactionUpdate,
   type MessageUpdates,
   type ReactionUpdates,
 } from '../conversations/liveMessages'
+import { createLiveStore, NO_STREAMS, type Streams } from './liveStore'
 import type { ConnectionStatus, RealtimeContextValue } from './realtimeContext'
 import {
   durableMessageId,
@@ -51,17 +50,30 @@ export function useRealtimeConnection(): RealtimeContextValue {
   const queryClient = useQueryClient()
   const [connection, setConnection] =
     useState<ConnectionStatus>('connecting')
-  const [streams, setStreams] = useState<
-    Record<string, Record<string, string>>
-  >({})
-  const [messageUpdates, setMessageUpdates] =
-    useState<MessageUpdates>(NO_MESSAGE_UPDATES)
-  const [reactionUpdates, setReactionUpdates] =
-    useState<ReactionUpdates>(NO_REACTION_UPDATES)
+  // Streams, edits and reactions change many times a second: they go to
+  // an external store so only the components reading them render.
+  const [live] = useState(() => createLiveStore())
   const [resyncGeneration, setResyncGeneration] = useState(0)
   const reconnectAttempt = useRef(0)
 
   useEffect(() => {
+    const setStreams = (change: Streams | ((current: Streams) => Streams)) =>
+      live.update((current) => {
+        const streams = typeof change === 'function' ? change(current.streams) : change
+        return streams === current.streams ? current : { ...current, streams }
+      })
+    const setMessageUpdates = (change: (current: MessageUpdates) => MessageUpdates) =>
+      live.update((current) => {
+        const messageUpdates = change(current.messageUpdates)
+        return messageUpdates === current.messageUpdates ? current : { ...current, messageUpdates }
+      })
+    const setReactionUpdates = (change: (current: ReactionUpdates) => ReactionUpdates) =>
+      live.update((current) => {
+        const reactionUpdates = change(current.reactionUpdates)
+        return reactionUpdates === current.reactionUpdates
+          ? current
+          : { ...current, reactionUpdates }
+      })
     let disposed = false
     let socket: WebSocket | undefined
     let reconnectTimer: number | undefined
@@ -261,7 +273,7 @@ export function useRealtimeConnection(): RealtimeContextValue {
       }
       for (const key of Object.keys(pendingDeltas)) delete pendingDeltas[key]
       for (const key of Object.keys(streamRunIds)) delete streamRunIds[key]
-      setStreams({})
+      setStreams(NO_STREAMS)
     }
 
     const connect = () => {
@@ -422,10 +434,10 @@ export function useRealtimeConnection(): RealtimeContextValue {
       for (const timer of invalidationTimers.values()) window.clearTimeout(timer)
       socket?.close()
     }
-  }, [queryClient])
+  }, [queryClient, live])
 
   return useMemo(
-    () => ({ connection, streams, messageUpdates, reactionUpdates, resyncGeneration }),
-    [connection, streams, messageUpdates, reactionUpdates, resyncGeneration],
+    () => ({ connection, resyncGeneration, live }),
+    [connection, resyncGeneration, live],
   )
 }

@@ -33,6 +33,7 @@ import {
   type SuggestedEdit,
 } from './api'
 import './discussion.css'
+import '../../styles/pages.css'
 
 // A page's discussion (AWD-53): edits agents suggested, waiting for someone
 // to accept or reject them, and comment threads, each about words in the

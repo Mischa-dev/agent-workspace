@@ -54,6 +54,7 @@ import {
 import { UsageBatch } from './UsageBatch'
 import { UsageHistory } from './UsageHistory'
 import './usage.css'
+import '../../styles/pages.css'
 
 const RULE_LABELS: Record<AlertRule['rule'], string> = {
   reset_soon: 'Capacity left before a reset',

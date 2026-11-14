@@ -36,6 +36,7 @@ import {
 } from '../ui'
 import type { CollectionBody } from './api'
 import { askableFields, formDraft, formFromDraft, type FormDraft } from './formSettings'
+import '../styles/pages.css'
 
 type Step = { kind: 'list' } | { kind: 'edit'; link: BugReportLink | null } | { kind: 'shared'; name: string; url: string; replaced: boolean }
 

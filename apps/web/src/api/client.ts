@@ -42,6 +42,27 @@ function dispatchAuthenticationRequired() {
   }
 }
 
+/**
+ * An operation's refusal (the v2 envelope): its outcome is the error's code,
+ * and its details carry the field or reason it names.
+ */
+function envelopeError(payload: unknown): ApiErrorBody | undefined {
+  if (!payload || typeof payload !== 'object' || !('outcome' in payload)) return undefined
+  const envelope = payload as {
+    outcome?: unknown
+    message?: unknown
+    field?: unknown
+    code?: unknown
+    details?: Record<string, unknown>
+  }
+  if (typeof envelope.outcome !== 'string' || envelope.outcome === 'ok') return undefined
+  return {
+    code: envelope.outcome,
+    message: typeof envelope.message === 'string' ? envelope.message : undefined,
+    details: { ...envelope.details, field: envelope.field, reason: envelope.code },
+  }
+}
+
 export async function requestJson<T>(
   path: string,
   options: ApiRequestOptions = {},
@@ -84,7 +105,7 @@ export async function requestJson<T>(
     const bodyError =
       payload && typeof payload === 'object' && 'error' in payload
         ? payload.error
-        : undefined
+        : envelopeError(payload)
     const code = bodyError?.code ?? 'request_failed'
     if (response.status === 401 && code === 'authentication_required') {
       dispatchAuthenticationRequired()

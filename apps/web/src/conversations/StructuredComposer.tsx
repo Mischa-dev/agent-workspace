@@ -59,6 +59,7 @@ import type {
 import { ReplyingTo } from './ReplyQuote'
 import { Bold, Code, Italic, Paperclip, SquareCode, TextQuote, Type } from '../files/icons'
 import { useToastOffset } from './toastOffset'
+import '../styles/conversation.css'
 
 type StructuredComposerProps = {
   disabled?: boolean

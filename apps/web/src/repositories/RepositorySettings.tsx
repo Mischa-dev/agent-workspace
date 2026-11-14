@@ -6,6 +6,7 @@ import { describeError } from '../app/mutations'
 import { humanize } from '../projects/format'
 import { Banner, Button, Checkbox, ConfirmDialog, ErrorState, Icon, ListSkeleton, Row, RowList, StatusChip, TextField, showToast } from '../ui'
 import { archiveRepository, listRepositories, prepareRepository, registerRepository, type Repository } from './api'
+import '../styles/pages.css'
 
 function RepositoryState({ repository }: { repository: Repository }) {
   if (repository.archivedAt) return <StatusChip icon="archive">Archived</StatusChip>

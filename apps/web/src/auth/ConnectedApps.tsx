@@ -21,6 +21,7 @@ import {
   formatShortDate,
   showToast,
 } from '../ui'
+import '../styles/pages.css'
 
 type ConnectedApp = {
   id: string
