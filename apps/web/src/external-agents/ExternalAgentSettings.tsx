@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { WorkOsAgentSettings } from './WorkOsAgentSettings'
 import { toastError } from '../app/mutations'
+import { apiUrl } from '../api/client'
 import { queryKeys } from '../api/queryKeys'
 import { OneTimeValue } from '../settings/OneTimeValue'
 import {
@@ -790,7 +791,7 @@ function OneTimeToken({
   const [settingsCopied, copySettings] = useCopy()
   const settings = setup
     ? runnerSettings({
-        origin: window.location.origin,
+        origin: new URL(apiUrl('/'), window.location.href).origin,
         token: credential.token,
         webhookSecret: setup.webhookSecret,
         handle: setup.handle,
@@ -825,8 +826,8 @@ function OneTimeToken({
         </>
       ) : null}
       <p className="aw-token__help" hidden={runner}>
-        Point the agent’s MCP client at <code>{`${window.location.origin}/api/v1/mcp`}</code> with this token, or send it the{' '}
-        <a href="/connect.md" rel="noreferrer" target="_blank">
+        Point the agent’s MCP client at <code>{new URL(apiUrl('/api/v1/mcp'), window.location.href).href}</code> with this token, or send it the{' '}
+        <a href={apiUrl('/connect.md')} rel="noreferrer" target="_blank">
           setup guide
         </a>{' '}
         for step-by-step instructions.

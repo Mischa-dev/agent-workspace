@@ -85,6 +85,10 @@ pub struct AppConfig {
     /// OAuth metadata and MCP resource URLs are built from it. Defaults to the
     /// loopback server address.
     pub public_origin: Option<String>,
+    /// Where browsers open the live connection, when it isn't the API's own
+    /// origin (`AGENT_WORKSPACE_LIVE_ORIGIN`, H1.41): a live service in
+    /// front of this one. The web app reads it from `/client-config`.
+    pub live_origin: Option<String>,
     pub database_url: SecretString,
     pub database_max_connections: u32,
     pub data_root: PathBuf,
@@ -137,6 +141,118 @@ pub struct AppConfig {
     /// from its terminal (`bootstrap-admin`). Only they see Settings ›
     /// Workspace › Server.
     pub operator_logins: Vec<String>,
+    /// Which set of defaults this server started from
+    /// (`AGENT_WORKSPACE_PROFILE`); any variable set still wins.
+    pub profile: Profile,
+    /// Whether this server fetches previews of links people post
+    /// (`AGENT_WORKSPACE_LINK_PREVIEWS`). Off, no workspace gets them,
+    /// whatever its own setting says.
+    pub link_previews: bool,
+    /// Set when `AGENT_WORKSPACE_SECRETS_KEY_PATH` names a file that doesn't
+    /// exist yet in a safe place: the server creates the keyring there when
+    /// it starts (`secrets::ensure_keyring`).
+    pub secrets_key_missing: bool,
+}
+
+/// A set of defaults sized for one kind of server (H1.12). A profile only
+/// sets defaults; a variable that is set still wins, except that `hosted`
+/// refuses the switches a shared server must never have.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Profile {
+    /// One small machine (about 1 vCPU and 1 GB): a small pool, one job at
+    /// a time, no link previews. The numbers are a guess until measured.
+    Small,
+    /// Today's defaults.
+    Standard,
+    /// A server many workspaces share: no private addresses, no trusted
+    /// webhook origins, no development helpers.
+    Hosted,
+}
+
+impl Profile {
+    fn defaults(self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            Self::Small => &[
+                ("DATABASE_MAX_CONNECTIONS", "4"),
+                ("JOB_CONCURRENCY", "1"),
+                ("LINK_PREVIEWS", "false"),
+            ],
+            Self::Standard => &[],
+            Self::Hosted => &[("DATABASE_MAX_CONNECTIONS", "20"), ("JOB_CONCURRENCY", "8")],
+        }
+    }
+}
+
+impl FromStr for Profile {
+    type Err = ConfigError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "small" => Ok(Self::Small),
+            "standard" => Ok(Self::Standard),
+            "hosted" => Ok(Self::Hosted),
+            _ => Err(ConfigError::Invalid {
+                key: format!("{PREFIX}PROFILE"),
+                reason: "expected small, standard, or hosted".into(),
+            }),
+        }
+    }
+}
+
+impl fmt::Display for Profile {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Small => "small",
+            Self::Standard => "standard",
+            Self::Hosted => "hosted",
+        })
+    }
+}
+
+/// Reads every `AGENT_WORKSPACE_<NAME>_FILE` into `AGENT_WORKSPACE_<NAME>`,
+/// so a container can pass secrets as files (`DATABASE_URL_FILE`). Setting
+/// both is refused; the file's trailing newline is dropped.
+fn with_file_values(
+    values: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>, ConfigError> {
+    const MAX_FILE_VALUE_BYTES: u64 = 64 * 1024;
+    let mut resolved = values.clone();
+    for (key, path) in values {
+        let Some(name) = key
+            .strip_suffix("_FILE")
+            .filter(|name| name.len() > PREFIX.len())
+        else {
+            continue;
+        };
+        let path = path.trim();
+        if path.is_empty() {
+            resolved.remove(key);
+            continue;
+        }
+        let invalid = |reason: &str| ConfigError::Invalid {
+            key: key.clone(),
+            reason: reason.to_owned(),
+        };
+        if values
+            .get(name)
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            return Err(invalid(&format!("set {name} or {key}, not both")));
+        }
+        let metadata = std::fs::metadata(path).map_err(|_| invalid("the file can't be read"))?;
+        if !metadata.is_file() || metadata.len() > MAX_FILE_VALUE_BYTES {
+            return Err(invalid("must name a file of at most 64 KiB"));
+        }
+        let contents =
+            std::fs::read_to_string(path).map_err(|_| invalid("the file can't be read"))?;
+        let value = contents.trim_end_matches(['\n', '\r']).to_owned();
+        if value.is_empty() {
+            return Err(invalid("the file is empty"));
+        }
+        resolved.remove(key);
+        resolved.insert(name.to_owned(), value);
+    }
+    Ok(resolved)
 }
 
 #[derive(Clone, Debug)]
@@ -224,6 +340,15 @@ impl AppConfig {
     }
 
     pub fn from_values(values: &BTreeMap<String, String>) -> Result<Self, ConfigError> {
+        let mut values = with_file_values(values)?;
+        let profile = optional(&values, "PROFILE", "standard").parse::<Profile>()?;
+        for (suffix, default) in profile.defaults() {
+            let key = format!("{PREFIX}{suffix}");
+            if values.get(&key).is_none_or(|value| value.trim().is_empty()) {
+                values.insert(key, (*default).to_owned());
+            }
+        }
+        let values = &values;
         let environment = optional(values, "ENV", "development").parse::<Environment>()?;
         let server_addr = parse(values, "SERVER_ADDR", "127.0.0.1:3100")?;
         let webhook_addr = parse(values, "WEBHOOK_ADDR", "127.0.0.1:3101")?;
@@ -279,9 +404,10 @@ impl AppConfig {
         let demo_executor = parse(values, "DEMO_EXECUTOR", "false")?;
         let github = github_config(values, &data_root, &web_root)?;
         let log_filter = optional(values, "LOG_FILTER", "agent_workspace=info,tower_http=info");
-        let allowed_origins = allowed_origins(values, environment)?;
         let webhook_trusted_origins = webhook_trusted_origins(values)?;
-        let public_origin = public_origin(values, environment)?;
+        let public_origin = public_origin(values)?;
+        let live_origin = origin_setting(values, "LIVE_ORIGIN")?;
+        let allowed_origins = allowed_origins(values, environment, public_origin.as_deref())?;
 
         validate_loopback("SERVER_ADDR", server_addr, environment)?;
         validate_loopback("WEBHOOK_ADDR", webhook_addr, environment)?;
@@ -377,8 +503,8 @@ impl AppConfig {
         }
 
         let workos = workos_config(values, environment, &data_root, &web_root)?;
-        let secrets_key_path =
-            optional_secret_path(values, "SECRETS_KEY_PATH", &data_root, &web_root, 64 * 1024)?;
+        let (secrets_key_path, secrets_key_missing) =
+            secrets_key_path(values, &data_root, &web_root)?;
         // The master key opens every stored credential; a checkout (or an
         // etckeeper `/etc`) could commit it.
         if let Some(work_tree) = secrets_key_path
@@ -416,6 +542,25 @@ impl AppConfig {
         }
         let allow_private_addresses = parse(values, "ALLOW_PRIVATE_ADDRESSES", "false")?;
         let operator_logins = operator_logins(values)?;
+        let link_previews = parse(values, "LINK_PREVIEWS", "true")?;
+        if profile == Profile::Hosted {
+            // A shared server's network is not any one workspace's to reach.
+            for (refused, set) in [
+                ("ALLOW_PRIVATE_ADDRESSES", allow_private_addresses),
+                (
+                    "WEBHOOK_TRUSTED_ORIGINS",
+                    !webhook_trusted_origins.is_empty(),
+                ),
+                ("DEMO_EXECUTOR", demo_executor),
+            ] {
+                if set {
+                    return Err(ConfigError::Invalid {
+                        key: format!("{PREFIX}{refused}"),
+                        reason: "a hosted server can't turn this on".into(),
+                    });
+                }
+            }
+        }
         Ok(Self {
             environment,
             server_addr,
@@ -423,6 +568,7 @@ impl AppConfig {
             allowed_origins,
             webhook_trusted_origins,
             public_origin,
+            live_origin,
             database_url: SecretString::new(database_url),
             database_max_connections,
             data_root,
@@ -451,8 +597,44 @@ impl AppConfig {
             job_concurrency,
             allow_private_addresses,
             operator_logins,
+            profile,
+            link_previews,
+            secrets_key_missing,
         })
     }
+}
+
+/// The keyring's path, and whether it still has to be created: a path to a
+/// file that doesn't exist yet is accepted when it is somewhere a new
+/// keyring may go (outside the data and web roots and any Git work tree, in
+/// an existing directory), and the server creates it when it starts.
+fn secrets_key_path(
+    values: &BTreeMap<String, String>,
+    data_root: &Path,
+    web_root: &Path,
+) -> Result<(Option<PathBuf>, bool), ConfigError> {
+    let key = "SECRETS_KEY_PATH";
+    let Some(value) = values
+        .get(&format!("{PREFIX}{key}"))
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok((None, false));
+    };
+    let path = PathBuf::from(value);
+    let missing = matches!(
+        std::fs::symlink_metadata(&path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    );
+    if missing {
+        new_secret_location(&path, data_root, web_root).map_err(|reason| ConfigError::Invalid {
+            key: format!("{PREFIX}{key}"),
+            reason: format!("the keyring doesn't exist and can't be created there: {reason}"),
+        })?;
+        return Ok((Some(path), true));
+    }
+    validate_secret_file(key, &path, data_root, web_root, 64 * 1024)?;
+    Ok((Some(path), false))
 }
 
 fn github_config(
@@ -671,7 +853,11 @@ fn secret_path_outside_roots(path: &Path, data_root: &Path, web_root: &Path) -> 
 /// secret file may live, and not inside a Git work tree (a checkout, or an
 /// `/etc` kept by etckeeper), where the key could be committed.
 pub fn validate_new_secret_location(path: &Path, config: &AppConfig) -> Result<(), String> {
-    if !secret_path_outside_roots(path, &config.data_root, &config.web_root) {
+    new_secret_location(path, &config.data_root, &config.web_root)
+}
+
+fn new_secret_location(path: &Path, data_root: &Path, web_root: &Path) -> Result<(), String> {
+    if !secret_path_outside_roots(path, data_root, web_root) {
         return Err(
             "the path must be absolute, in an existing directory, and outside the data and web roots"
                 .into(),
@@ -730,29 +916,37 @@ fn validate_secret_file(
     Ok(())
 }
 
-fn public_origin(
+fn public_origin(values: &BTreeMap<String, String>) -> Result<Option<String>, ConfigError> {
+    origin_setting(values, "PUBLIC_ORIGIN")
+}
+
+/// An origin setting such as `PUBLIC_ORIGIN` or `LIVE_ORIGIN`: https, or
+/// http on localhost or a loopback address, with nothing after the host.
+fn origin_setting(
     values: &BTreeMap<String, String>,
-    environment: Environment,
+    name: &str,
 ) -> Result<Option<String>, ConfigError> {
     let Some(value) = values
-        .get(&format!("{PREFIX}PUBLIC_ORIGIN"))
+        .get(&format!("{PREFIX}{name}"))
         .map(|value| value.trim().trim_end_matches('/'))
         .filter(|value| !value.is_empty())
     else {
         return Ok(None);
     };
     let parsed = url::Url::parse(value).map_err(|error| ConfigError::Invalid {
-        key: format!("{PREFIX}PUBLIC_ORIGIN"),
+        key: format!("{PREFIX}{name}"),
         reason: error.to_string(),
     })?;
-    let development_loopback = environment.is_development()
-        && parsed.scheme() == "http"
+    // Browsers treat localhost as a secure origin, so `__Host-` cookies work
+    // there over http: a trial of a production build on a laptop needs no
+    // certificate. Any other host must be https.
+    let loopback = parsed.scheme() == "http"
         && parsed.host().is_some_and(|host| match host {
             url::Host::Domain(name) => name.eq_ignore_ascii_case("localhost"),
             url::Host::Ipv4(ip) => ip.is_loopback(),
             url::Host::Ipv6(ip) => ip.is_loopback(),
         });
-    if (parsed.scheme() != "https" && !development_loopback)
+    if (parsed.scheme() != "https" && !loopback)
         || parsed.host().is_none()
         || !parsed.username().is_empty()
         || parsed.password().is_some()
@@ -761,8 +955,8 @@ fn public_origin(
         || parsed.path() != "/"
     {
         return Err(ConfigError::Invalid {
-            key: format!("{PREFIX}PUBLIC_ORIGIN"),
-            reason: "must be an HTTPS origin without credentials, query, or fragment (development may use HTTP loopback)".into(),
+            key: format!("{PREFIX}{name}"),
+            reason: "must be an HTTPS origin without credentials, query, or fragment (or http on localhost or a loopback address)".into(),
         });
     }
     Ok(Some(parsed.origin().ascii_serialization()))
@@ -825,6 +1019,7 @@ fn webhook_trusted_origins(values: &BTreeMap<String, String>) -> Result<Vec<Stri
 fn allowed_origins(
     values: &BTreeMap<String, String>,
     environment: Environment,
+    public_origin: Option<&str>,
 ) -> Result<Vec<String>, ConfigError> {
     let configured = values
         .get(&format!("{PREFIX}ALLOWED_ORIGINS"))
@@ -839,7 +1034,12 @@ fn allowed_origins(
             "http://localhost:5173",
         ]
     } else if configured.is_empty() {
-        return Err(ConfigError::Missing(format!("{PREFIX}ALLOWED_ORIGINS")));
+        // Outside development the browser app is served from the public
+        // origin unless the operator lists others.
+        match public_origin {
+            Some(origin) => vec![origin],
+            None => return Err(ConfigError::Missing(format!("{PREFIX}ALLOWED_ORIGINS"))),
+        }
     } else {
         configured.split(',').map(str::trim).collect()
     };
@@ -1226,6 +1426,208 @@ mod tests {
             "http://127.0.0.1:3100".to_owned(),
         );
         assert!(AppConfig::from_values(&development).is_ok());
+    }
+
+    #[test]
+    fn production_on_loopback_may_use_http_and_takes_its_origins_from_the_public_one() {
+        let mut values = base_values();
+        values.insert("AGENT_WORKSPACE_ENV".to_owned(), "production".to_owned());
+        values.insert(
+            "AGENT_WORKSPACE_PUBLIC_ORIGIN".to_owned(),
+            "http://localhost:3100".to_owned(),
+        );
+        let config = AppConfig::from_values(&values).expect("laptop trial");
+        assert_eq!(config.allowed_origins, ["http://localhost:3100"]);
+        values.insert(
+            "AGENT_WORKSPACE_PUBLIC_ORIGIN".to_owned(),
+            "http://127.0.0.1:3100".to_owned(),
+        );
+        assert!(AppConfig::from_values(&values).is_ok());
+        // Any other host still needs https.
+        values.insert(
+            "AGENT_WORKSPACE_PUBLIC_ORIGIN".to_owned(),
+            "http://workspace.example.com".to_owned(),
+        );
+        assert!(AppConfig::from_values(&values).is_err());
+        // An https public origin is the allowed origin unless others are listed.
+        values.insert(
+            "AGENT_WORKSPACE_PUBLIC_ORIGIN".to_owned(),
+            "https://workspace.example.com".to_owned(),
+        );
+        let config = AppConfig::from_values(&values).expect("public origin");
+        assert_eq!(config.allowed_origins, ["https://workspace.example.com"]);
+        values.insert(
+            "AGENT_WORKSPACE_ALLOWED_ORIGINS".to_owned(),
+            "https://app.example.com".to_owned(),
+        );
+        let config = AppConfig::from_values(&values).expect("listed origins");
+        assert_eq!(config.allowed_origins, ["https://app.example.com"]);
+    }
+
+    #[test]
+    fn any_variable_may_come_from_a_file_but_not_from_both() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let file = directory.path().join("database_url");
+        std::fs::write(&file, "postgres://from-a-file.invalid/database\n").expect("write");
+        let values = BTreeMap::from([(
+            "AGENT_WORKSPACE_DATABASE_URL_FILE".to_owned(),
+            file.to_string_lossy().into_owned(),
+        )]);
+        let config = AppConfig::from_values(&values).expect("file value");
+        assert_eq!(
+            config.database_url.expose(),
+            "postgres://from-a-file.invalid/database"
+        );
+
+        let mut both = values.clone();
+        both.extend(base_values());
+        let error = AppConfig::from_values(&both).expect_err("both set");
+        assert!(error.to_string().contains("not both"));
+
+        let missing = BTreeMap::from([(
+            "AGENT_WORKSPACE_DATABASE_URL_FILE".to_owned(),
+            directory
+                .path()
+                .join("absent")
+                .to_string_lossy()
+                .into_owned(),
+        )]);
+        assert!(AppConfig::from_values(&missing).is_err());
+        std::fs::write(&file, "\n").expect("write");
+        assert!(AppConfig::from_values(&values).is_err(), "an empty file");
+    }
+
+    #[test]
+    fn a_profile_sets_defaults_that_variables_still_override() {
+        let mut values = base_values();
+        let standard = AppConfig::from_values(&values).expect("standard");
+        assert_eq!(standard.profile, Profile::Standard);
+        assert_eq!(standard.database_max_connections, 5);
+        assert_eq!(standard.job_concurrency, 4);
+        assert!(standard.link_previews);
+
+        values.insert("AGENT_WORKSPACE_PROFILE".to_owned(), "small".to_owned());
+        let small = AppConfig::from_values(&values).expect("small");
+        assert_eq!(small.database_max_connections, 4);
+        assert_eq!(small.job_concurrency, 1);
+        assert!(!small.link_previews);
+        values.insert("AGENT_WORKSPACE_JOB_CONCURRENCY".to_owned(), "3".to_owned());
+        assert_eq!(
+            AppConfig::from_values(&values)
+                .expect("override")
+                .job_concurrency,
+            3
+        );
+
+        values.insert("AGENT_WORKSPACE_PROFILE".to_owned(), "roomy".to_owned());
+        assert!(AppConfig::from_values(&values).is_err());
+    }
+
+    #[test]
+    fn a_hosted_server_refuses_switches_that_reach_its_own_network() {
+        let mut values = base_values();
+        values.insert("AGENT_WORKSPACE_PROFILE".to_owned(), "hosted".to_owned());
+        let hosted = AppConfig::from_values(&values).expect("hosted");
+        assert_eq!(hosted.database_max_connections, 20);
+        for (key, value) in [
+            ("AGENT_WORKSPACE_ALLOW_PRIVATE_ADDRESSES", "true"),
+            (
+                "AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS",
+                "http://100.64.0.1:8732",
+            ),
+            ("AGENT_WORKSPACE_DEMO_EXECUTOR", "true"),
+        ] {
+            let mut refused = values.clone();
+            refused.insert(key.to_owned(), value.to_owned());
+            let error = AppConfig::from_values(&refused).expect_err(key);
+            assert!(error.to_string().contains("hosted"), "{key}: {error}");
+        }
+    }
+
+    #[test]
+    fn a_missing_keyring_in_a_safe_place_is_created_on_first_start() {
+        let keys = tempfile::tempdir().expect("keys directory");
+        let path = keys.path().join("keyring");
+        let mut values = base_values();
+        values.insert(
+            "AGENT_WORKSPACE_SECRETS_KEY_PATH".to_owned(),
+            path.to_string_lossy().into_owned(),
+        );
+        let config = AppConfig::from_values(&values).expect("missing keyring");
+        assert!(config.secrets_key_missing);
+        let created = crate::secrets::ensure_keyring(&config).expect("create");
+        assert_eq!(created.as_deref(), Some(path.as_path()));
+        assert_eq!(
+            std::fs::metadata(&path)
+                .expect("keyring")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        // Once it exists it is read, never replaced.
+        let before = std::fs::read(&path).expect("read");
+        assert_eq!(
+            crate::secrets::ensure_keyring(&config).expect("again"),
+            None
+        );
+        assert_eq!(std::fs::read(&path).expect("read"), before);
+        let config = AppConfig::from_values(&values).expect("existing keyring");
+        assert!(!config.secrets_key_missing);
+
+        // A missing file in a directory that doesn't exist is refused.
+        values.insert(
+            "AGENT_WORKSPACE_SECRETS_KEY_PATH".to_owned(),
+            keys.path()
+                .join("absent/keyring")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        assert!(AppConfig::from_values(&values).is_err());
+    }
+
+    /// `docs/self-host/configuration.md` names every variable the server
+    /// reads.
+    #[test]
+    fn every_variable_is_documented() {
+        let source = include_str!("config.rs");
+        let source = &source[..source
+            .find("\n#[cfg(test)]\nmod tests")
+            .unwrap_or(source.len())];
+        let documented = include_str!("../../../docs/self-host/configuration.md");
+        let mut names = std::collections::BTreeSet::new();
+        for (index, _) in source.match_indices('"') {
+            let rest = &source[index + 1..];
+            let Some(end) = rest.find('"') else { continue };
+            let literal = &rest[..end];
+            let name = literal.strip_prefix(PREFIX).unwrap_or(literal);
+            if name.len() > 2
+                && name.starts_with(|c: char| c.is_ascii_uppercase())
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+            {
+                names.insert(name.to_owned());
+            }
+        }
+        for (index, _) in source.match_indices("{PREFIX}") {
+            let name = source[index + "{PREFIX}".len()..]
+                .chars()
+                .take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_')
+                .collect::<String>();
+            if !name.is_empty() {
+                names.insert(name);
+            }
+        }
+        assert!(names.contains("DATABASE_URL") && names.contains("METRICS_TOKEN_PATH"));
+        let missing = names
+            .iter()
+            .filter(|name| !documented.contains(&format!("`{PREFIX}{name}`")))
+            .collect::<Vec<_>>();
+        assert!(
+            missing.is_empty(),
+            "document these in docs/self-host/configuration.md: {missing:?}"
+        );
     }
 
     #[test]

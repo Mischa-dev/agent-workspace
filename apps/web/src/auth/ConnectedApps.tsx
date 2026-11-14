@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { requestJson } from '../api/client'
+import { apiUrl, requestJson } from '../api/client'
 import {
   Banner,
   Button,
@@ -86,8 +86,8 @@ export function ConnectedAppsSection() {
       void refresh()
     },
   })
-  const mcpUrl = apps.data?.mcpUrl ?? `${window.location.origin}/api/v1/mcp`
-  const guideUrl = apps.data?.guideUrl ?? `${window.location.origin}/connect.md`
+  const mcpUrl = apps.data?.mcpUrl ?? new URL(apiUrl('/api/v1/mcp'), window.location.href).href
+  const guideUrl = apps.data?.guideUrl ?? new URL(apiUrl('/connect.md'), window.location.href).href
   return (
     <>
       <Section

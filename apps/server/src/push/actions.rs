@@ -120,11 +120,14 @@ pub async fn mint(
         return Ok(None);
     }
     if let Some(approval) = &notification.approval {
-        let sponsored = sqlx::query_scalar::<_, bool>(
-            "SELECT external_execution_request_id IS NOT NULL FROM agent_approvals WHERE id = $1",
-        )
-        .bind(approval.id)
-        .fetch_optional(pool)
+        let sponsored = crate::db::scoped_one(pool, async |connection| {
+            sqlx::query_scalar::<_, bool>(
+                "SELECT external_execution_request_id IS NOT NULL FROM agent_approvals WHERE id = $1",
+            )
+            .bind(approval.id)
+            .fetch_optional(connection)
+            .await
+        })
         .await?
         .unwrap_or(true);
         if sponsored {
@@ -133,28 +136,31 @@ pub async fn mint(
     }
     let token = random_token();
     let expires_at = Utc::now() + Duration::hours(TOKEN_LIFETIME_HOURS);
-    sqlx::query(
-        r#"
+    crate::db::scoped_one(pool, async |connection| {
+        sqlx::query(
+            r#"
         INSERT INTO notification_action_tokens (
             id, organization_id, actor_id, notification_id, token_hash, actions, expires_at,
             approval_id
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(organization_id)
-    .bind(recipient)
-    .bind(notification.id)
-    .bind(token_hash(&token))
-    .bind(
-        actions
-            .iter()
-            .map(|action| action.as_str().to_owned())
-            .collect::<Vec<_>>(),
-    )
-    .bind(expires_at)
-    .bind(notification.approval.as_ref().map(|approval| approval.id))
-    .execute(pool)
+        )
+        .bind(Uuid::now_v7())
+        .bind(organization_id)
+        .bind(recipient)
+        .bind(notification.id)
+        .bind(token_hash(&token))
+        .bind(
+            actions
+                .iter()
+                .map(|action| action.as_str().to_owned())
+                .collect::<Vec<_>>(),
+        )
+        .bind(expires_at)
+        .bind(notification.approval.as_ref().map(|approval| approval.id))
+        .execute(connection)
+        .await
+    })
     .await?;
     Ok(Some(MintedActions {
         token,
@@ -194,10 +200,13 @@ pub fn payload_actions(notification: &NotificationView, minted: &MintedActions) 
 
 /// Remove tokens a day after they expire.
 pub async fn prune(pool: &PgPool) -> Result<u64, AppError> {
-    Ok(sqlx::query(
-        "DELETE FROM notification_action_tokens WHERE expires_at < now() - interval '1 day'",
-    )
-    .execute(pool)
+    Ok(crate::db::scoped_one(pool, async |connection| {
+        sqlx::query(
+            "DELETE FROM notification_action_tokens WHERE expires_at < now() - interval '1 day'",
+        )
+        .execute(connection)
+        .await
+    })
     .await?
     .rows_affected())
 }
@@ -267,8 +276,9 @@ async fn act(state: &AppState, request: ActRequest) -> Result<ActResponse, AppEr
     }
     // A token belongs to a person whose account is still active; a removed
     // or disabled person's tokens act as nobody.
-    let token = sqlx::query_as::<_, TokenRow>(
-        r#"
+    let token = crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query_as::<_, TokenRow>(
+            r#"
         SELECT t.id, t.actor_id, t.notification_id, t.approval_id, t.actions, t.used_action
         FROM notification_action_tokens t
         JOIN actors a ON a.id = t.actor_id AND a.status = 'active' AND a.kind = 'human'
@@ -277,9 +287,11 @@ async fn act(state: &AppState, request: ActRequest) -> Result<ActResponse, AppEr
           ON om.organization_id = t.organization_id AND om.actor_id = t.actor_id AND om.enabled
         WHERE t.token_hash = $1 AND t.expires_at > now()
         "#,
-    )
-    .bind(token_hash(&request.token))
-    .fetch_optional(&state.pool)
+        )
+        .bind(token_hash(&request.token))
+        .fetch_optional(connection)
+        .await
+    })
     .await?
     .ok_or(AppError::NotFound("notification_action"))?;
     state.rate_limits.check_authenticated_write(token.id)?;
@@ -438,16 +450,19 @@ async fn act(state: &AppState, request: ActRequest) -> Result<ActResponse, AppEr
             }
         }
     };
-    sqlx::query(
-        r#"
+    crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query(
+            r#"
         UPDATE notification_action_tokens
         SET used_action = $2, used_at = COALESCE(used_at, now())
         WHERE id = $1
         "#,
-    )
-    .bind(token.id)
-    .bind(action.as_str())
-    .execute(&state.pool)
+        )
+        .bind(token.id)
+        .bind(action.as_str())
+        .execute(connection)
+        .await
+    })
     .await?;
     // Acting on it is reading it.
     notifications::update(

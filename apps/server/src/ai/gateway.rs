@@ -380,9 +380,7 @@ async fn provider_client(
     let Some(address) = resolved.base_url.as_deref() else {
         return Ok(client().clone());
     };
-    if state.config.allow_private_addresses {
-        return Ok(client().clone());
-    }
+    let allow_private = state.config.allow_private_addresses;
     let not_public = || {
         AiError::NotConfigured(
             "The provider address must be a public address. A model on a private network needs this server's operator to allow private addresses.".to_owned(),
@@ -391,30 +389,27 @@ async fn provider_client(
     let url = url::Url::parse(address.trim()).map_err(|_| {
         AiError::NotConfigured("The provider address isn't a web address.".to_owned())
     })?;
-    let (Some(host), Some(port)) = (url.host_str(), url.port_or_known_default()) else {
+    if url.host_str().is_none() || url.port_or_known_default().is_none() {
         return Err(AiError::NotConfigured(
             "The provider address isn't a web address.".to_owned(),
         ));
-    };
-    let pinned =
-        crate::outbound::resolve(host, port, false)
-            .await
-            .map_err(|refusal| match refusal {
-                crate::outbound::Refusal::Private => not_public(),
-                crate::outbound::Refusal::Unresolved => AiError::Provider(
-                    ProviderError::Unavailable("couldn't find the provider address".to_owned()),
-                ),
-            })?;
-    let mut builder = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(Duration::from_secs(15))
-        .no_proxy();
-    if matches!(url.host(), Some(url::Host::Domain(_))) {
-        builder = builder.resolve_to_addrs(host, &pinned);
     }
-    builder
-        .build()
-        .map_err(|_| AiError::App(AppError::Internal("provider client")))
+    crate::outbound::client_for(
+        &url,
+        allow_private,
+        crate::outbound::Timeouts {
+            connect: Duration::from_secs(15),
+            total: None,
+        },
+        None,
+    )
+    .await
+    .map_err(|refusal| match refusal {
+        crate::outbound::Refusal::Private => not_public(),
+        crate::outbound::Refusal::Unresolved => AiError::Provider(ProviderError::Unavailable(
+            "couldn't find the provider address".to_owned(),
+        )),
+    })
 }
 
 /// A checked answer and what made it.

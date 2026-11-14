@@ -1,6 +1,6 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 
-import { requestJson } from '../api/client'
+import { apiUrl, requestJson } from '../api/client'
 
 /**
  * Sheets (AWD-54) on the web side: a project's spreadsheets. The server's
@@ -277,7 +277,7 @@ export async function importSheet(projectId: string, file: File) {
 /** Where a sheet downloads: every tab as Excel, or one tab's values as CSV. */
 export function sheetExportHref(projectId: string, sheetId: string, format: 'xlsx' | 'csv', tab?: string) {
   const query = format === 'csv' && tab ? `&tab=${encodeURIComponent(tab)}` : ''
-  return `${sheetPath(projectId, sheetId)}/export?format=${format}${query}`
+  return apiUrl(`${sheetPath(projectId, sheetId)}/export?format=${format}${query}`)
 }
 
 export function useSheets(projectId: string) {

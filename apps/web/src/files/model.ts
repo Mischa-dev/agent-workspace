@@ -1,6 +1,8 @@
 // Files and link previews as the server sends them (W20): types, checks and
 // URLs, small enough for the initial load. Uploading lives in ./api.
 
+import { apiUrl } from '../api/client'
+
 /** A file on a message, task or comment. Its URLs are built from the id and checked against the session. */
 export type FileAttachment = {
   id: string
@@ -82,9 +84,9 @@ export function normalizeLinkPreviews(value: unknown): LinkPreview[] {
 }
 
 export const fileContentUrl = (id: string, download = false) =>
-  `/api/v1/files/${encodeURIComponent(id)}/content${download ? '?download=1' : ''}`
-export const fileThumbnailUrl = (id: string) => `/api/v1/files/${encodeURIComponent(id)}/thumbnail`
-export const linkPreviewImageUrl = (id: string) => `/api/v1/link-previews/${encodeURIComponent(id)}/image`
+  apiUrl(`/api/v1/files/${encodeURIComponent(id)}/content${download ? '?download=1' : ''}`)
+export const fileThumbnailUrl = (id: string) => apiUrl(`/api/v1/files/${encodeURIComponent(id)}/thumbnail`)
+export const linkPreviewImageUrl = (id: string) => apiUrl(`/api/v1/link-previews/${encodeURIComponent(id)}/image`)
 
 /** Shown inline as a picture (the server sets width and height only for those). */
 export const isInlineImage = (file: FileAttachment) => file.width !== null && file.height !== null

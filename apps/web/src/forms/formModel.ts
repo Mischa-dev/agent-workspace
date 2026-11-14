@@ -5,6 +5,8 @@
  * record, made as the person who shared the form.
  */
 
+import { apiUrl } from '../api/client'
+
 export type PublicFieldType = 'text' | 'number' | 'date' | 'single_choice' | 'multiple_choice' | 'url' | 'checkbox'
 
 export type PublicField = {
@@ -95,7 +97,7 @@ export function answerBody(form: PublicForm, answers: Answers): Record<string, s
 
 /** Reads the form; a closed or missing one says so. */
 export async function fetchForm(token: string): Promise<PublicForm> {
-  const response = await fetch(`/api/v1/forms/${encodeURIComponent(token)}`, { credentials: 'omit' })
+  const response = await fetch(apiUrl(`/api/v1/forms/${encodeURIComponent(token)}`), { credentials: 'omit' })
   const body: unknown = await response.json().catch(() => null)
   if (!response.ok) throw new FormProblem(response.status, asString(asRecord(body).error) || 'This form didn’t load.')
   return normalizeForm(body)
@@ -103,7 +105,7 @@ export async function fetchForm(token: string): Promise<PublicForm> {
 
 /** Sends the answers; resolves with the thank-you note. */
 export async function sendAnswers(token: string, form: PublicForm, answers: Answers): Promise<string> {
-  const response = await fetch(`/api/v1/bug-reports/${encodeURIComponent(token)}`, {
+  const response = await fetch(apiUrl(`/api/v1/bug-reports/${encodeURIComponent(token)}`), {
     method: 'POST',
     credentials: 'omit',
     headers: { 'Content-Type': 'application/json' },

@@ -1,4 +1,4 @@
-import { requestJson } from '../api/client'
+import { apiUrl, requestJson } from '../api/client'
 
 /**
  * Saved views, My work, the timeline, templates, imports and export. The
@@ -423,5 +423,5 @@ export function commitImport(projectId: string, taskImport: Pick<TaskImport, 'id
 }
 
 export function exportHref(projectId: string, format: 'json' | 'csv', includeArchived = false) {
-  return projectPath(projectId, `export?format=${format}${includeArchived ? '&includeArchived=true' : ''}`)
+  return apiUrl(projectPath(projectId, `export?format=${format}${includeArchived ? '&includeArchived=true' : ''}`))
 }

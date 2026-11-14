@@ -36,6 +36,18 @@ export function readCsrfToken(): string | null {
   return null
 }
 
+// Where the API and the live connection answer, when not the origin the app
+// was loaded from, and how a page on another origin gets the API's request
+// token: set at start by app/clientConfig (H1.41).
+export const origins: {
+  api?: string
+  live?: string
+  csrf?: () => Promise<string | null>
+} = {}
+
+/** An API path as the browser should ask for it. */
+export const apiUrl = (path: string) => (origins.api ?? '') + path
+
 function dispatchAuthenticationRequired() {
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event('agent-workspace:authentication-required'))
@@ -58,16 +70,16 @@ export async function requestJson<T>(
   }
 
   if (unsafeMethods.has(method)) {
-    const csrfToken = readCsrfToken()
+    const csrfToken = await (origins.csrf ?? readCsrfToken)()
     if (csrfToken) headers.set('x-csrf-token', csrfToken)
   }
   if (idempotencyKey) headers.set('idempotency-key', idempotencyKey)
 
-  const response = await fetch(path, {
+  const response = await fetch(apiUrl(path), {
     ...requestOptions,
     method,
     body,
-    credentials: 'same-origin',
+    credentials: origins.api ? 'include' : 'same-origin',
     headers,
   })
   const requestId = response.headers.get('x-request-id')

@@ -47,7 +47,8 @@ test('sends a picture and a file with formatted text, and opens the picture', as
   await expect(page.getByRole('toolbar', { name: 'Formatting' })).toBeVisible()
   await box.press('Enter')
 
-  const message = page.locator('.aw-msg', { hasText: 'Release plan' }).last()
+  // The sent message, not its "Sending…" stand-in, which is replaced once the server answers.
+  const message = page.locator('.aw-msg:not(.is-pending)', { hasText: 'Release plan' }).last()
   await expect(message.locator('li')).toHaveCount(2)
   await expect(message.locator('strong')).toHaveText('files')
   await expect(message.getByRole('link', { name: 'Download notes.md' })).toBeVisible()
@@ -87,7 +88,7 @@ test.describe('on a phone', () => {
     await page.screenshot({ path: path.join(screenshotDir, 'files-composer-phone.png') })
     // On a touch screen Enter makes a new line; the button sends.
     await page.getByRole('button', { name: 'Send message' }).click()
-    const message = page.locator('.aw-msg', { hasText: 'From my phone' }).last()
+    const message = page.locator('.aw-msg:not(.is-pending)', { hasText: 'From my phone' }).last()
     await expect(message.getByRole('button', { name: 'Open phone.png' })).toBeVisible()
     await message.scrollIntoViewIfNeeded()
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)

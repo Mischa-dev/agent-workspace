@@ -4097,9 +4097,15 @@ async fn run_tool(
     let call = McpServer::tools().call(rmcp::handler::server::tool::ToolCallContext::new(
         server, request, context,
     ));
+    // The tool runs in the caller's tenancy scope (H1.20): every workspace
+    // it belongs to now, looked up when the tool first needs them.
+    let tenancy = crate::tenancy::Tenancy::Member {
+        account: principal.actor_id,
+        workspaces: None,
+    };
     match limits {
-        Some(limits) => with_agent_limits(limits, call).await,
-        None => call.await,
+        Some(limits) => crate::tenancy::scoped(tenancy, with_agent_limits(limits, call)).await,
+        None => crate::tenancy::scoped(tenancy, call).await,
     }
 }
 
