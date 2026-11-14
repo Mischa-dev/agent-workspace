@@ -7,15 +7,17 @@
 //!
 //! The workspace comes from the route's decoded parameter: `/api/v1/projects/{id}/…` is the
 //! project's workspace, `/api/v1/organizations/{id}/…` the workspace
-//! itself, and a page or whiteboard named by id (`ID_FAMILIES`, P0.7) is
-//! looked up to its project or workspace. Routes that name none of these (a
+//! itself, and content named by id (a page or whiteboard: the families
+//! modules register with `Registrar::id_route`, M1.2 after P0.7) is looked
+//! up to its project or workspace. Routes that name none of these (a
 //! person's inbox across workspaces, a link by code, a conversation by id)
 //! aren't checked here (`ID_EXEMPT` says why for each id-routed family):
 //! their handlers already leave out what is off where it lives.
 //!
 //! A role's modules off are a permission (P0 question 1, assumed): when any
-//! role in the workspace turns a module off, the gate also narrows by the
-//! caller's own role there, as MCP does.
+//! role in the workspace turns a module off, or any of its spaces narrows
+//! its modules (M1.2), the gate also narrows by the caller's own role and
+//! the space they act in, as MCP does.
 //!
 //! Only a signed-in caller who can see the project or workspace learns
 //! that a module is off there; anyone else gets the handler's own answer.
@@ -43,6 +45,7 @@ use uuid::Uuid;
 
 use super::{
     manifest::{self, Manifest},
+    registry::Registry,
     state::{self, ModuleSet},
 };
 use crate::{AppState, auth, error::AppError};
@@ -95,26 +98,9 @@ fn scope(template: &str, param: impl Fn(&str) -> Option<String>) -> Option<Scope
     }
 }
 
-/// Families of routes that name content by id rather than by project:
-/// (path prefix, the id's parameter, the lookup returning its project and
-/// workspace). An id that resolves to nothing passes to the handler, as an
-/// unknown project does.
-pub(crate) const ID_FAMILIES: &[(&str, &str, &str)] = &[
-    (
-        "/api/v1/pages/",
-        "id",
-        "SELECT page.project_id, project.organization_id FROM project_pages page \
-         JOIN projects project ON project.id = page.project_id WHERE page.id = $1",
-    ),
-    (
-        "/api/v1/whiteboards/",
-        "id",
-        "SELECT project_id, organization_id FROM whiteboards WHERE id = $1",
-    ),
-];
-
 /// Id-routed families the gate doesn't look up, and why. Every switchable
-/// route named by id is in `ID_FAMILIES` or here (a test in `modules`).
+/// route named by id is registered by its module (`Registrar::id_route`)
+/// or here (a test in `modules`).
 #[cfg(test)]
 pub(crate) const ID_EXEMPT: &[(&str, &str)] = &[
     (
@@ -189,17 +175,17 @@ async fn id_scope(
     template: &str,
     param: impl Fn(&str) -> Option<String>,
 ) -> Result<Option<Scope>, AppError> {
-    let Some((_, name, lookup)) = ID_FAMILIES.iter().find(|(prefix, name, _)| {
+    let Some((_, route)) = Registry::global().id_routes().find(|(_, route)| {
         template
-            .strip_prefix(prefix)
-            .is_some_and(|rest| rest.starts_with(&format!("{{{name}}}")))
+            .strip_prefix(route.prefix)
+            .is_some_and(|rest| rest.starts_with(&format!("{{{}}}", route.param)))
     }) else {
         return Ok(None);
     };
-    let Some(id) = param(name).and_then(|raw| Uuid::parse_str(&raw).ok()) else {
+    let Some(id) = param(route.param).and_then(|raw| Uuid::parse_str(&raw).ok()) else {
         return Ok(None);
     };
-    let found = sqlx::query_as::<_, (Option<Uuid>, Uuid)>(lookup)
+    let found = sqlx::query_as::<_, (Option<Uuid>, Uuid)>(route.lookup)
         .bind(id)
         .fetch_optional(&state.pool)
         .await?;
@@ -300,8 +286,11 @@ async fn off_module(
         None => {
             let mut connection = state.pool.acquire().await?;
             let set = state::workspace(&mut connection, organization_id).await?;
+            // Narrowed for some: a role turns modules off, or a space
+            // keeps switches of its own.
             let narrowing = sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS (SELECT 1 FROM workspace_roles WHERE organization_id = $1 AND cardinality(modules_off) > 0)",
+                "SELECT EXISTS (SELECT 1 FROM workspace_roles WHERE organization_id = $1 AND cardinality(modules_off) > 0) \
+                 OR EXISTS (SELECT 1 FROM module_installs WHERE workspace_id = $1 AND space_id IS NOT NULL AND state = 'off')",
             )
             .bind(organization_id)
             .fetch_one(&mut *connection)

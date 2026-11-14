@@ -318,6 +318,9 @@ mod tests {
         each_named("settings", &keys, |module| &module.settings);
     }
 
+    /// The `modules.<id>` settings stay defined until M1.11's contract step
+    /// (an older server may still write them; a trigger mirrors those
+    /// writes into `module_installs`), but nothing here reads them.
     #[test]
     fn every_module_switch_is_a_setting() {
         for module in core() {
@@ -417,12 +420,14 @@ mod tests {
         });
     }
 
-    /// P0.7: every route a switchable module owns that names its content by
-    /// id is looked up by the gate (`ID_FAMILIES`) or exempt with a reason
-    /// (`ID_EXEMPT`), so a new family can't step around the gate.
+    /// P0.7, M1.2: every route a switchable module owns that names its
+    /// content by id is registered for the gate by its module
+    /// (`Registrar::id_route`) or exempt with a reason (`ID_EXEMPT`), so a
+    /// new family can't step around the gate.
     #[test]
     fn every_id_routed_family_is_gated_or_exempt() {
-        use super::gate::{ID_EXEMPT, ID_FAMILIES};
+        use super::gate::ID_EXEMPT;
+        let registry = super::registry::Registry::global();
         let mut missing = BTreeSet::new();
         for path in route_paths() {
             let Some(module) = manifest::of_route(&path) else {
@@ -441,7 +446,9 @@ mod tests {
                 continue;
             }
             let prefix = format!("/api/v1/{family}/");
-            let known = ID_FAMILIES.iter().any(|(gated, _, _)| *gated == prefix)
+            let known = registry
+                .id_routes()
+                .any(|(owner, route)| route.prefix == prefix && owner == module.id)
                 || ID_EXEMPT.iter().any(|(exempt, _)| *exempt == prefix);
             if !known {
                 missing.insert(format!("{prefix} ({path}, module {})", module.id));
@@ -450,7 +457,8 @@ mod tests {
         assert!(
             missing.is_empty(),
             "id-routed families of switchable modules the module gate neither looks up \
-             (modules/gate.rs ID_FAMILIES) nor exempts with a reason (ID_EXEMPT): {missing:#?}"
+             (the owning module's Registrar::id_route) nor exempts with a reason \
+             (modules/gate.rs ID_EXEMPT): {missing:#?}"
         );
         for (prefix, reason) in ID_EXEMPT {
             assert!(!reason.is_empty(), "{prefix} needs a reason");

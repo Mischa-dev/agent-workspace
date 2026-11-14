@@ -1774,3 +1774,277 @@ async fn the_gate_covers_pages_and_boards_named_by_id() {
     );
     assert_eq!(listed_boards(&setup.browser).await, [board]);
 }
+
+/// M1.2: the first migration of `module_installs`.
+const MODULE_INSTALLS_MIGRATION: i64 = 20261114231000;
+
+/// M1.2: a switch written before the migration reads as off after it, with
+/// its version; a write through the old settings path (an older server
+/// during the deploy) is mirrored into the table, and so is an unset; a
+/// role can name a dotted module key.
+#[tokio::test]
+async fn module_switches_carry_across_to_their_table() {
+    use super::a1_runs_record::{schema_before, seed};
+    let Some((pool, full, root)) = schema_before("m12_installs", MODULE_INSTALLS_MIGRATION).await
+    else {
+        return;
+    };
+    let seeded = seed(&pool, &root).await;
+    let organization = seeded.organization_id;
+    let owner = seeded.human_actor_id;
+    let write_setting = |key: &'static str, value: Value, version: i64| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query(
+                r#"
+                INSERT INTO settings (id, organization_id, scope, key, value, version, updated_by_actor_id)
+                VALUES ($1, $2, 'workspace', $3, $4, $5, $6)
+                ON CONFLICT (organization_id, key) WHERE scope = 'workspace'
+                DO UPDATE SET value = EXCLUDED.value, version = settings.version + 1
+                "#,
+            )
+            .bind(Uuid::now_v7())
+            .bind(organization)
+            .bind(key)
+            .bind(value)
+            .bind(version)
+            .bind(owner)
+            .execute(&pool)
+            .await
+            .expect("setting");
+        }
+    };
+    write_setting("modules.whiteboards", json!(false), 3).await;
+    write_setting("modules.sheets", json!(true), 1).await;
+    full.run(&pool).await.expect("migrate");
+
+    let installs = || {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_as::<_, (String, String, i64)>(
+                "SELECT module_key, state, version FROM module_installs \
+                 WHERE workspace_id = $1 AND space_id IS NULL ORDER BY module_key",
+            )
+            .bind(organization)
+            .fetch_all(&pool)
+            .await
+            .expect("installs")
+        }
+    };
+    assert_eq!(
+        installs().await,
+        [
+            ("sheets".to_owned(), "on".to_owned(), 1),
+            ("whiteboards".to_owned(), "off".to_owned(), 3)
+        ]
+    );
+    let mut connection = pool.acquire().await.expect("connection");
+    let switches = agent_workspace_server::modules::state::switches(&mut connection, organization)
+        .await
+        .expect("switches");
+    assert!(switches.is_off("whiteboards") && !switches.is_off("sheets"));
+    drop(connection);
+
+    // The old path, after the migration: mirrored, and an unset is on.
+    write_setting("modules.pages", json!(false), 1).await;
+    write_setting("modules.whiteboards", json!(true), 1).await;
+    let found = installs().await;
+    assert!(
+        found.contains(&("pages".to_owned(), "off".to_owned(), 1)),
+        "{found:?}"
+    );
+    assert!(
+        found.contains(&("whiteboards".to_owned(), "on".to_owned(), 4)),
+        "{found:?}"
+    );
+    sqlx::query("DELETE FROM settings WHERE organization_id = $1 AND key = 'modules.pages'")
+        .bind(organization)
+        .execute(&pool)
+        .await
+        .expect("unset");
+    assert!(
+        installs()
+            .await
+            .contains(&("pages".to_owned(), "on".to_owned(), 2))
+    );
+
+    // Roles name module keys, a built one's included.
+    let named = sqlx::query(
+        "UPDATE workspace_roles SET modules_off = ARRAY['pages', 'local.playtest'] \
+         WHERE organization_id = $1 AND key = 'member'",
+    )
+    .bind(organization)
+    .execute(&pool)
+    .await
+    .expect("dotted keys");
+    assert_eq!(named.rows_affected(), 1);
+    assert!(
+        sqlx::query(
+            "UPDATE workspace_roles SET modules_off = ARRAY['Not A Key'] \
+             WHERE organization_id = $1 AND key = 'member'",
+        )
+        .bind(organization)
+        .execute(&pool)
+        .await
+        .is_err()
+    );
+}
+
+/// M1.2: a space narrows its own modules and nobody else's; it can't turn
+/// on what the workspace has off; only the workspace's managers narrow it,
+/// on the web or through the agent tool; and another workspace's space is
+/// refused.
+#[tokio::test]
+async fn a_space_narrows_its_own_modules_only() {
+    let Some(setup) = setup("m12_space_switch").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let other = create_project(&setup, "OTHER", "Other").await;
+    let (_, bea_browser) = add_person(&setup, &[&work, &other], "bea").await;
+    let mut boards = Vec::new();
+    for project in [&work, &other] {
+        let (status, board) = send(
+            app,
+            setup.browser.request(
+                "POST",
+                "/api/v1/whiteboards",
+                None,
+                json!({"title": "Sketch", "projectId": project}),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{board}");
+        boards.push(
+            board["whiteboard"]["id"]
+                .as_str()
+                .expect("board")
+                .to_owned(),
+        );
+    }
+    let listed_boards = |browser: &Browser| {
+        let request = browser.request("GET", "/api/v1/whiteboards", None, Value::Null);
+        async move {
+            let (status, body) = send(app, request).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            let mut found = body["whiteboards"]
+                .as_array()
+                .expect("whiteboards")
+                .iter()
+                .filter_map(|board| board["id"].as_str().map(str::to_owned))
+                .collect::<Vec<_>>();
+            found.sort();
+            found
+        }
+    };
+    let off = |(status, body): (StatusCode, Value)| {
+        status == StatusCode::FORBIDDEN && body["error"]["code"] == "module_off"
+    };
+    let open_board = |browser: &Browser, board: &str| {
+        let request = browser.request(
+            "GET",
+            &format!("/api/v1/whiteboards/{board}"),
+            None,
+            Value::Null,
+        );
+        async move { send(app, request).await }
+    };
+    let mut both = boards.clone();
+    both.sort();
+    assert_eq!(listed_boards(&bea_browser).await, both);
+
+    // A member can't narrow a space.
+    let (status, body) = switch(
+        &setup,
+        &bea_browser,
+        json!({"switches": {"whiteboards": false}, "space": work}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+
+    // The owner turns boards off in Work only.
+    let (status, body) = switch(
+        &setup,
+        &setup.browser,
+        json!({"switches": {"whiteboards": false}, "space": work}),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {body}");
+    assert!(off(open_board(&bea_browser, &boards[0]).await));
+    assert_eq!(open_board(&bea_browser, &boards[1]).await.0, StatusCode::OK);
+    assert_eq!(listed_boards(&bea_browser).await, [boards[1].clone()]);
+    // The workspace's own switch is still on.
+    let listed = modules(&setup, &setup.browser).await;
+    assert_eq!(
+        module(&listed, "whiteboards")["switchedOn"],
+        true,
+        "{listed}"
+    );
+
+    // A preset is for the whole workspace; the hidden DM space and another
+    // workspace's space can't be narrowed.
+    let (status, body) = switch(
+        &setup,
+        &setup.browser,
+        json!({"preset": "everything", "space": work}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let direct = direct_space(&setup).await;
+    let (status, body) = switch(
+        &setup,
+        &setup.browser,
+        json!({"switches": {"whiteboards": false}, "space": direct}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let (status, body) = switch(
+        &setup,
+        &setup.browser,
+        json!({"switches": {"whiteboards": false}, "space": Uuid::now_v7()}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    // Back on in Work, through the agent tool of an app the owner connected.
+    let token = connect_app(app, &setup.browser, "Owner's app", "full").await;
+    let session = initialize(app, &token).await.expect("owner MCP");
+    let back = tool(
+        app,
+        &token,
+        &session,
+        "workspace_update",
+        json!({"projectId": work, "modules": {"whiteboards": true}, "inProjectOnly": true}),
+    )
+    .await;
+    assert_eq!(back["outcome"], "ok", "{back}");
+    assert_eq!(back["value"]["switched"]["whiteboards"], true, "{back}");
+    assert_eq!(listed_boards(&bea_browser).await, both);
+
+    // Off in the workspace: a space can't turn it on.
+    let (status, body) = switch(
+        &setup,
+        &setup.browser,
+        json!({"switches": {"whiteboards": false}}),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {body}");
+    let (status, body) = switch(
+        &setup,
+        &setup.browser,
+        json!({"switches": {"whiteboards": true}, "space": work}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let refused = tool(
+        app,
+        &token,
+        &session,
+        "workspace_update",
+        json!({"projectId": work, "modules": {"whiteboards": true}, "inProjectOnly": true}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "invalid_request", "{refused}");
+    assert!(listed_boards(&bea_browser).await.is_empty());
+}

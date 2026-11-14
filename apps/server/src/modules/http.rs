@@ -20,7 +20,7 @@ use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, AppError},
-    settings::{self, Target},
+    settings,
 };
 
 pub fn router() -> Router<AppState> {
@@ -181,6 +181,10 @@ struct ChangeRequest {
     /// Then switch these, by module id.
     #[serde(default)]
     switches: BTreeMap<String, bool>,
+    /// Switch them in this space only (M1.2): a space can turn a module off
+    /// there, or back on, but never on while the workspace has it off.
+    #[serde(default)]
+    space: Option<Uuid>,
 }
 
 /// `PUT /api/v1/organizations/{organization_id}/modules`: owners and admins.
@@ -199,6 +203,7 @@ async fn change_modules(
         organization_id,
         request.preset.as_deref(),
         &request.switches,
+        request.space,
     )
     .await?;
     if let Some(metadata) = metadata {
@@ -220,16 +225,22 @@ async fn change_modules(
 }
 
 /// Switch a workspace's modules, from a preset and then single switches
-/// (module id to on), for an owner or admin who may manage its settings.
-/// Returns the audit metadata when something changed; the caller records
-/// the row.
+/// (module id to on), for an owner or admin who may manage its settings;
+/// with `space`, only there (single switches, no preset). Returns the audit
+/// metadata when something changed; the caller records the row.
 pub(crate) async fn change_modules_in(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     actor_id: Uuid,
     organization_id: Uuid,
     preset: Option<&str>,
     switches: &BTreeMap<String, bool>,
+    space: Option<Uuid>,
 ) -> Result<Option<serde_json::Value>, AppError> {
+    if space.is_some() && preset.is_some() {
+        return Err(AppError::Validation(
+            "a preset applies to the whole workspace",
+        ));
+    }
     let mut wanted = BTreeMap::new();
     if let Some(name) = preset {
         let found = manifest::preset(name).ok_or(AppError::Validation("preset"))?;
@@ -254,6 +265,10 @@ pub(crate) async fn change_modules_in(
         organization_id,
     )
     .await?;
+    if let Some(space_id) = space {
+        return change_space_switches(transaction, actor_id, organization_id, space_id, &wanted)
+            .await;
+    }
     let before = state::switches(transaction, organization_id).await?;
     let changed = write_switches(transaction, organization_id, actor_id, &wanted).await?;
     if changed.is_empty() {
@@ -263,6 +278,60 @@ pub(crate) async fn change_modules_in(
     Ok(Some(json!({
         "organizationId": organization_id,
         "preset": preset,
+        "changed": changed,
+        "before": { "off": switched_off(&before) },
+        "after": { "off": switched_off(&after) },
+    })))
+}
+
+/// Narrow one space's modules. The space must be one of the workspace's
+/// own (not the hidden one direct messages live in), and a module the
+/// workspace has off stays off: a space only ever narrows.
+async fn change_space_switches(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    actor_id: Uuid,
+    organization_id: Uuid,
+    space_id: Uuid,
+    wanted: &BTreeMap<String, bool>,
+) -> Result<Option<serde_json::Value>, AppError> {
+    let found = sqlx::query_scalar::<_, bool>(
+        "SELECT kind NOT IN ('direct', 'workspace') FROM projects \
+         WHERE id = $1 AND organization_id = $2",
+    )
+    .bind(space_id)
+    .bind(organization_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    match found {
+        None => return Err(AppError::NotFound("space")),
+        Some(false) => return Err(AppError::Validation("space")),
+        Some(true) => {}
+    }
+    let workspace = state::switches(transaction, organization_id).await?;
+    if wanted
+        .iter()
+        .any(|(module, on)| *on && workspace.is_off(module))
+    {
+        return Err(AppError::Validation("module is off in the workspace"));
+    }
+    let before = state::space_switches(transaction, organization_id, space_id).await?;
+    let mut changed = BTreeMap::new();
+    for (module, on) in wanted {
+        if before.is_off(module) == !on {
+            continue;
+        }
+        let scope = state::SwitchScope::Space(space_id);
+        if state::write_switch(transaction, organization_id, scope, module, *on, actor_id).await? {
+            changed.insert(module.clone(), *on);
+        }
+    }
+    if changed.is_empty() {
+        return Ok(None);
+    }
+    let after = state::space_switches(transaction, organization_id, space_id).await?;
+    Ok(Some(json!({
+        "organizationId": organization_id,
+        "spaceId": space_id,
         "changed": changed,
         "before": { "off": switched_off(&before) },
         "after": { "off": switched_off(&after) },
@@ -280,7 +349,7 @@ pub(crate) fn switched_off(switches: &state::Switches) -> Vec<String> {
 
 /// Sets a workspace's module switches to `wanted` (module id to on), and
 /// returns the ones that changed. The caller has checked who may, and
-/// audits. On is the default, so switching one on clears its setting.
+/// audits.
 pub(crate) async fn write_switches(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     organization_id: Uuid,
@@ -293,14 +362,10 @@ pub(crate) async fn write_switches(
         if before.is_off(module) == !on {
             continue;
         }
-        let target = Target::Workspace { organization_id };
-        let key = state::setting_key(module);
-        if *on {
-            settings::reset(transaction, target, &key, None).await?;
-        } else {
-            settings::set(transaction, target, &key, json!(false), None, actor_id).await?;
+        let scope = state::SwitchScope::Workspace;
+        if state::write_switch(transaction, organization_id, scope, module, *on, actor_id).await? {
+            changed.insert(module.clone(), *on);
         }
-        changed.insert(module.clone(), *on);
     }
     Ok(changed)
 }
