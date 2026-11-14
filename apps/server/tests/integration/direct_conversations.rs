@@ -734,3 +734,236 @@ async fn schema_pool(database_url: &str, schema: &str) -> PgPool {
         .await
         .expect("connect schema pool")
 }
+
+/// P0.0: everyone who has opened Messages is a member of the workspace's
+/// hidden direct project, so the project sidebar and channel list for that
+/// project must still filter every row by `conversation_visible_to`. Threads
+/// under a DM or group take their visibility from it and are named from a
+/// message's text, so a listing that skips the rule leaks private words.
+#[tokio::test]
+async fn sidebar_never_lists_other_peoples_direct_threads() {
+    use super::{
+        agent_interface::send,
+        mcp_admin::{create_project, setup},
+        message_edits::{add_person, create_channel, direct_space, say, text},
+    };
+
+    let Some(setup) = setup("sidebar_privacy").await else {
+        return;
+    };
+    let work = create_project(&setup, "WORK", "Work").await;
+    let space = direct_space(&setup).await;
+    let space_id = space.parse::<Uuid>().expect("space");
+    let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
+    let (_cleo, cleo_browser) = add_person(&setup, &[&work], "cleo").await;
+    // Both open Messages, which makes each a member of the direct project.
+    for browser in [&bea_browser, &cleo_browser] {
+        let (status, overview) = send(
+            &setup.app,
+            browser.request("GET", "/api/v1/direct", None, Value::Null),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{overview}");
+        assert_eq!(overview["projectId"], space.as_str());
+    }
+    let agent = add_agent(&setup.pool, space_id, "Mara", "mara").await;
+
+    // The owner and Bea talk in a DM and start a thread from a message.
+    let (status, dm) = send(
+        &setup.app,
+        setup.browser.request(
+            "POST",
+            "/api/v1/direct/dms",
+            None,
+            json!({ "actorId": bea }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{dm}");
+    let dm_id = dm["conversation"]["id"].as_str().expect("dm").to_owned();
+    let secret = say(
+        &setup,
+        &setup.browser,
+        &dm_id,
+        "dm-secret",
+        text("Quarterly layoffs list draft"),
+    )
+    .await;
+    let (status, dm_thread) = send(
+        &setup.app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/conversations/{dm_id}/threads"),
+            Some("dm-thread"),
+            json!({ "originMessageId": secret }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{dm_thread}");
+    let dm_thread_id = dm_thread["conversation"]["id"]
+        .as_str()
+        .or_else(|| dm_thread["id"].as_str())
+        .expect("dm thread")
+        .to_owned();
+
+    // A group of the owner, Bea and an agent, with a thread too.
+    let (status, group) = send(
+        &setup.app,
+        setup.browser.request(
+            "POST",
+            "/api/v1/direct/groups",
+            Some("group"),
+            json!({ "memberIds": [bea, agent] }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{group}");
+    let group_id = group["conversation"]["id"].as_str().expect("group").to_owned();
+    let plan = say(
+        &setup,
+        &setup.browser,
+        &group_id,
+        "group-secret",
+        text("Acquisition codename Bluebird"),
+    )
+    .await;
+    let (status, group_thread) = send(
+        &setup.app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/conversations/{group_id}/threads"),
+            Some("group-thread"),
+            json!({ "originMessageId": plan }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{group_thread}");
+    let group_thread_id = group_thread["conversation"]["id"]
+        .as_str()
+        .or_else(|| group_thread["id"].as_str())
+        .expect("group thread")
+        .to_owned();
+
+    // A project-wide channel thread in the work project, which everyone in
+    // it may see: the filter must not hide too much.
+    let general = create_channel(&setup, &work, "general").await;
+    let public = say(
+        &setup,
+        &setup.browser,
+        &general,
+        "public-hello",
+        text("Standup notes"),
+    )
+    .await;
+    let (status, public_thread) = send(
+        &setup.app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/channels/{general}/threads"),
+            Some("public-thread"),
+            json!({ "originMessageId": public }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{public_thread}");
+    let public_thread_id = public_thread["conversation"]["id"]
+        .as_str()
+        .or_else(|| public_thread["id"].as_str())
+        .expect("public thread")
+        .to_owned();
+
+    let private_markers = [
+        dm_id.as_str(),
+        dm_thread_id.as_str(),
+        group_id.as_str(),
+        group_thread_id.as_str(),
+        "layoffs",
+        "Bluebird",
+    ];
+    for uri in [
+        format!("/api/v1/projects/{space}/conversation-sidebar?includeArchived=true"),
+        format!(
+            "/api/v1/projects/{space}/conversation-sidebar?includeArchived=true&selectedChannelId={dm_id}&expandedChannelId={dm_id}"
+        ),
+        format!(
+            "/api/v1/projects/{space}/conversation-sidebar?selectedChannelId={group_id}&expandedChannelId={group_id}"
+        ),
+        format!("/api/v1/projects/{space}/channels"),
+    ] {
+        let (status, body) = send(
+            &setup.app,
+            cleo_browser.request("GET", &uri, None, Value::Null),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{uri}: {body}");
+        let raw = body.to_string();
+        for marker in private_markers {
+            assert!(
+                !raw.contains(marker),
+                "{uri} showed Cleo {marker}, from a conversation she is not in: {raw}"
+            );
+        }
+    }
+
+    // Sanity: the rule itself hides every one of them from Cleo.
+    let leaked = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT count(*)
+        FROM conversations conversation
+        WHERE conversation.project_id = $1
+          AND conversation_visible_to(conversation.id, $2)
+        "#,
+    )
+    .bind(space_id)
+    .bind(
+        sqlx::query_scalar::<_, Uuid>("SELECT actor_id FROM users WHERE login_name = 'cleo'")
+            .fetch_one(&setup.pool)
+            .await
+            .expect("cleo"),
+    )
+    .fetch_one(&setup.pool)
+    .await
+    .expect("visible count");
+    assert_eq!(leaked, 0, "Cleo can see nothing in the direct project");
+
+    // A member of the work project still sees its channel and thread.
+    let (status, sidebar) = send(
+        &setup.app,
+        cleo_browser.request(
+            "GET",
+            &format!("/api/v1/projects/{work}/conversation-sidebar?selectedChannelId={general}"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{sidebar}");
+    let raw = sidebar.to_string();
+    assert!(raw.contains(&general), "{raw}");
+    assert!(raw.contains(&public_thread_id), "{raw}");
+    let (status, channels) = send(
+        &setup.app,
+        cleo_browser.request(
+            "GET",
+            &format!("/api/v1/projects/{work}/channels"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{channels}");
+    assert!(channels.to_string().contains(&general), "{channels}");
+
+    // Bea, who is in both, can read the DM thread by id.
+    let (status, _) = send(
+        &setup.app,
+        bea_browser.request(
+            "GET",
+            &format!("/api/v1/conversations/{dm_thread_id}/timeline"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+}

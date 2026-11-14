@@ -813,6 +813,7 @@ async fn list_channels(
         WHERE conversation.project_id = $1
           AND conversation.kind = 'channel'
           AND conversation.archived_at IS NULL
+          AND conversation_visible_to(conversation.id, $2)
         ORDER BY lower(conversation.name), conversation.id
         LIMIT $3
         "#,
@@ -3433,6 +3434,7 @@ async fn project_conversation_sidebar(
         WHERE channel.project_id = $1
           AND channel.kind = 'channel'
           AND ($3 OR channel.archived_at IS NULL)
+          AND conversation_visible_to(channel.id, $2)
         ORDER BY channel.archived_at NULLS FIRST, lower(channel.name), channel.id
         LIMIT $4
         "#,
@@ -3511,6 +3513,7 @@ async fn project_conversation_sidebar(
         WHERE thread.project_id = $1
           AND thread.kind = 'thread'
           AND ($5 OR (thread.archived_at IS NULL AND parent.archived_at IS NULL))
+          AND conversation_visible_to(thread.id, $2)
         ORDER BY latest_activity_sequence DESC, thread.id DESC
         LIMIT $6
         "#,
