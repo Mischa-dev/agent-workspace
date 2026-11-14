@@ -148,8 +148,12 @@ says to keep (`G` F6).
 
 ```sql
 -- migrations/<ts>_thing_registry.sql
+-- Ruling R54: every kind name has one grammar, the `thing_kind_name` domain
+-- ('^[a-z][a-z0-9_]{1,39}(\.[a-z][a-z0-9_]{1,39})?$', and
+-- `things::kind::valid_name` in Rust). Unqualified names are core;
+-- `install.kind` belongs to the connected install that registered it.
 CREATE TABLE thing_kinds (
-    kind TEXT PRIMARY KEY CHECK (kind ~ '^[a-z][a-z0-9_]{1,39}$'),
+    kind thing_kind_name PRIMARY KEY CHECK (position('.' IN kind) = 0),
     module TEXT NOT NULL,             -- the manifest id that makes it
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

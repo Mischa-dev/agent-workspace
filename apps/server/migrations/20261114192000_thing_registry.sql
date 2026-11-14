@@ -25,7 +25,10 @@
 -- another kind.
 
 CREATE TABLE thing_kinds (
-    kind TEXT PRIMARY KEY CHECK (kind ~ '^[a-z][a-z0-9_]{1,39}$'),
+    -- Core kinds only, so unqualified (ruling R54): a qualified kind
+    -- (`install.name`) arrives with the install that owns it, which adds
+    -- its owner and workspace here.
+    kind thing_kind_name PRIMARY KEY CHECK (position('.' IN kind) = 0),
     module TEXT NOT NULL CHECK (module ~ '^[a-z][a-z0-9_-]{0,39}$'),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -44,7 +47,7 @@ INSERT INTO thing_kinds (kind, module) VALUES
 
 CREATE TABLE things (
     id UUID PRIMARY KEY,
-    kind TEXT NOT NULL REFERENCES thing_kinds(kind),
+    kind thing_kind_name NOT NULL REFERENCES thing_kinds(kind),
     workspace_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
     -- Today's project id; NULL for a thing across a workspace (a workspace
     -- board). A project's own row names itself.

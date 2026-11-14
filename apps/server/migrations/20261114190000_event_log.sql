@@ -20,6 +20,12 @@
 -- workspace_id / space_id are plain columns, not foreign keys, so a deleted
 -- workspace's history can still be read by the retention and export jobs.
 
+-- A thing kind's name (ruling R54), the one grammar every table that holds
+-- a kind uses: `name` for core kinds, `install.name` for a kind a connected
+-- install owns. `things::kind::NAME_PATTERN` is the same pattern in Rust.
+CREATE DOMAIN thing_kind_name AS TEXT
+    CHECK (VALUE ~ '^[a-z][a-z0-9_]{1,39}(\.[a-z][a-z0-9_]{1,39})?$');
+
 CREATE SEQUENCE event_staging_ordinal AS BIGINT;
 
 CREATE TABLE event_staging (
@@ -31,7 +37,7 @@ CREATE TABLE event_staging (
     workspace_id UUID NOT NULL,
     space_id UUID,
     thing_id UUID,
-    thing_kind TEXT CHECK (thing_kind IS NULL OR thing_kind ~ '^[a-z][a-z0-9_]{1,39}$'),
+    thing_kind thing_kind_name,
     access_thing_id UUID,
     thing_version BIGINT,
     type TEXT NOT NULL CHECK (type ~ '^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$' AND char_length(type) <= 80),
@@ -68,7 +74,7 @@ CREATE TABLE events (
     workspace_id UUID NOT NULL,
     space_id UUID,
     thing_id UUID,
-    thing_kind TEXT,
+    thing_kind thing_kind_name,
     access_thing_id UUID,
     thing_version BIGINT,
     type TEXT NOT NULL CHECK (type ~ '^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$'),
