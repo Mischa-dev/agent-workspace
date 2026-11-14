@@ -1123,7 +1123,7 @@ pub(super) async fn record_query(
             }
         }
         let Ok(page) = query::page(
-            &mut *connection,
+            &mut connection,
             source.as_ref(),
             &spec,
             arguments.cursor.as_deref(),
@@ -1133,8 +1133,8 @@ pub(super) async fn record_query(
         else {
             return Ok(ToolResult::invalid("cursor", query::CURSOR_MESSAGE));
         };
-        let total = query::total(&mut *connection, source.as_ref(), &spec).await?;
-        let groups = query::group_counts(&mut *connection, source.as_ref(), &spec).await?;
+        let total = query::total(&mut connection, source.as_ref(), &spec).await?;
+        let groups = query::group_counts(&mut connection, source.as_ref(), &spec).await?;
         let ids = page.rows.iter().map(|(id, _)| *id).collect::<Vec<_>>();
         let found = records::by_ids(
             &mut *connection,

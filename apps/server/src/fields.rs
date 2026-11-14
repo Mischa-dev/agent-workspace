@@ -13,7 +13,7 @@
 //!   values keyed by field ID, so every record kind filters the same way.
 //!
 //! A record kind stores its values as a JSONB object keyed by field ID
-//! (`work_items.field_values` for tasks). A field with no value has no key.
+//! (`collection_records.field_values`, tasks included). A field with no value has no key.
 //! Values that name something hold its ID: an option ID, an actor ID, or a
 //! task's or page's ID. People and links are looked up by the record's own
 //! module (`Normalized::Person` and `Normalized::Link`), since who and what

@@ -248,7 +248,7 @@ async fn ten_thousand_tasks_page_by_every_field_on_index_paths() {
         let mut case_time = std::time::Duration::ZERO;
         for _ in 0..3 {
             let started = Instant::now();
-            let page = query::page(&mut *connection, &source, &spec, cursor.as_deref(), 200)
+            let page = query::page(&mut connection, &source, &spec, cursor.as_deref(), 200)
                 .await
                 .expect("page")
                 .unwrap_or_else(|()| panic!("{name}: cursor refused"));
@@ -389,7 +389,7 @@ async fn ten_thousand_tasks_page_by_every_field_on_index_paths() {
                 .fetch_one(pool)
                 .await
                 .expect("expected count");
-            let total = query::total(&mut *connection, &source, &spec)
+            let total = query::total(&mut connection, &source, &spec)
                 .await
                 .expect("total");
             assert_eq!(total, expected, "{name}");
@@ -416,12 +416,12 @@ async fn ten_thousand_tasks_page_by_every_field_on_index_paths() {
         reader,
     );
     assert_eq!(
-        query::total(&mut *connection, &source, &by_label)
+        query::total(&mut connection, &source, &by_label)
             .await
             .expect("total"),
         10_001
     );
-    let groups = query::group_counts(&mut *connection, &source, &by_label)
+    let groups = query::group_counts(&mut connection, &source, &by_label)
         .await
         .expect("groups");
     assert_eq!(groups[0].label, "Ops");

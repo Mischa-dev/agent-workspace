@@ -2,7 +2,7 @@
 //!
 //! The field types, their checks, filters and sorts live in `crate::fields`
 //! and know nothing about tasks. This module adds what does: a task's values
-//! live in `work_items.field_values`; a person must be someone in the
+//! live on its record (`task_rows.field_values`); a person must be someone in the
 //! task's project who can hold tasks (the assignee rule); a link names a
 //! task or page in the same project. The web app, MCP, imports, templates,
 //! automations and `task_move` all go through `resolve`, and every change

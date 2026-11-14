@@ -1523,7 +1523,7 @@ async fn list_records(
     }
     let limit = query.limit.unwrap_or(query::DEFAULT_LIMIT);
     let Ok(page) = query::page(
-        &mut *connection,
+        &mut connection,
         source.as_ref(),
         &spec,
         query.cursor.as_deref(),
@@ -1533,8 +1533,8 @@ async fn list_records(
     else {
         return Ok(invalid("cursor", query::CURSOR_MESSAGE));
     };
-    let total = query::total(&mut *connection, source.as_ref(), &spec).await?;
-    let groups = query::group_counts(&mut *connection, source.as_ref(), &spec).await?;
+    let total = query::total(&mut connection, source.as_ref(), &spec).await?;
+    let groups = query::group_counts(&mut connection, source.as_ref(), &spec).await?;
     let ids = page.rows.iter().map(|(id, _)| *id).collect::<Vec<_>>();
     let found = records::by_ids(
         &mut *connection,
