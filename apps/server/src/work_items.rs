@@ -1088,7 +1088,7 @@ async fn get_work_item_by_key(
     let work_item_id = sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT item.id
-        FROM work_items item
+        FROM task_rows item
         JOIN projects project ON project.id = item.project_id
         WHERE item.project_id = $1
           AND project.project_key || '-' || item.number::text = $2
@@ -1541,7 +1541,7 @@ async fn work_with_worker(
             return Ok((StatusCode::ACCEPTED, Json(response)).into_response());
         }
         let key = sqlx::query_scalar::<_, String>(
-            "SELECT project.project_key || '-' || item.number::text FROM work_items item JOIN projects project ON project.id = item.project_id WHERE item.project_id = $1 AND item.id = $2",
+            "SELECT project.project_key || '-' || item.number::text FROM task_rows item JOIN projects project ON project.id = item.project_id WHERE item.project_id = $1 AND item.id = $2",
         )
         .bind(project_id)
         .bind(work_item_id)
@@ -2324,7 +2324,7 @@ async fn search_work_item_references(
         SELECT item.id, project.project_key || '-' || item.number::text AS key,
                item.title, status.semantic_category AS status_category,
                item.archived_at::text AS archived_at
-        FROM work_items item
+        FROM task_rows item
         JOIN projects project ON project.id = item.project_id
         JOIN work_item_statuses status
           ON status.project_id = item.project_id AND status.id = item.status_id
@@ -3517,7 +3517,7 @@ async fn fetch_work_item_reference_rows(
         SELECT item.id, project.project_key || '-' || item.number::text AS key,
                item.title, status.semantic_category AS status_category,
                item.archived_at::text AS archived_at
-        FROM work_items item
+        FROM task_rows item
         JOIN projects project ON project.id = item.project_id
         JOIN work_item_statuses status
           ON status.project_id = item.project_id AND status.id = item.status_id
@@ -3634,7 +3634,7 @@ async fn timeline_entry_view(
                        item.title, status.semantic_category AS status_category,
                        item.archived_at::text AS archived_at
                 FROM work_item_comment_references reference
-                JOIN work_items item
+                JOIN task_rows item
                   ON item.project_id = reference.project_id
                  AND item.id = reference.referenced_work_item_id
                 JOIN projects project ON project.id = item.project_id
@@ -3861,7 +3861,7 @@ pub(crate) async fn authorize_task_change(
         return Err(AppError::ProjectArchived);
     }
     let active = sqlx::query_scalar::<_, bool>(
-        "SELECT archived_at IS NULL FROM work_items WHERE project_id = $1 AND id = $2",
+        "SELECT archived_at IS NULL FROM task_rows WHERE project_id = $1 AND id = $2",
     )
     .bind(project_id)
     .bind(work_item_id)
@@ -4011,7 +4011,7 @@ macro_rules! field_values_columns {
                   ON definition.project_id = item.project_id
                  AND definition.id::text = stored.field_id AND definition.field_type = 'link'
                  AND definition.config ->> 'target' = 'task'
-                JOIN work_items linked
+                JOIN task_rows linked
                   ON linked.project_id = item.project_id AND linked.id::text = stored.target
                 UNION ALL
                 SELECT jsonb_build_object('id', page.id, 'kind', 'page', 'label', page.title)
@@ -4267,7 +4267,7 @@ const WORK_ITEM_SELECT: &str = concat!(
         (SELECT "#,
     task_ref_json!("parent", "parent_status", "project"),
     r#"
-           FROM work_items parent
+           FROM task_rows parent
            JOIN work_item_statuses parent_status
              ON parent_status.project_id = parent.project_id AND parent_status.id = parent.status_id
           WHERE parent.project_id = item.project_id AND parent.id = item.parent_work_item_id
@@ -4295,7 +4295,7 @@ const WORK_ITEM_SELECT: &str = concat!(
     r#" ORDER BY linked_status.semantic_category IN ('completed', 'canceled'),
                          linked_project.project_key, linked.number)
             FROM work_item_dependencies dependency
-            JOIN work_items linked
+            JOIN task_rows linked
               ON linked.project_id = dependency.blocking_project_id
              AND linked.id = dependency.blocking_work_item_id
             JOIN projects linked_project ON linked_project.id = linked.project_id
@@ -4317,7 +4317,7 @@ const WORK_ITEM_SELECT: &str = concat!(
     r#" ORDER BY linked_status.semantic_category IN ('completed', 'canceled'),
                          linked_project.project_key, linked.number)
             FROM work_item_dependencies dependency
-            JOIN work_items linked
+            JOIN task_rows linked
               ON linked.project_id = dependency.project_id
              AND linked.id = dependency.blocked_work_item_id
             JOIN projects linked_project ON linked_project.id = linked.project_id
@@ -4343,7 +4343,7 @@ const WORK_ITEM_SELECT: &str = concat!(
     task_ref_json!("linked", "linked_status", "linked_project"),
     r#") ORDER BY relation.created_at, linked.id)
             FROM work_item_relations relation
-            JOIN work_items linked
+            JOIN task_rows linked
               ON linked.id = CASE WHEN relation.work_item_id = item.id
                                   THEN relation.other_work_item_id ELSE relation.work_item_id END
             JOIN projects linked_project ON linked_project.id = linked.project_id
@@ -4363,7 +4363,7 @@ const WORK_ITEM_SELECT: &str = concat!(
     r#" || jsonb_build_object('assignee', CASE WHEN child_assignee.actor_id IS NULL THEN NULL ELSE "#,
     actor_json!("child_assignee_actor", "child_assignee"),
     r#" END) ORDER BY child_status.position, child.board_rank, child.id)
-            FROM work_items child
+            FROM task_rows child
             JOIN work_item_statuses child_status
               ON child_status.project_id = child.project_id AND child_status.id = child.status_id
             LEFT JOIN project_memberships child_assignee
@@ -4424,7 +4424,7 @@ const WORK_ITEM_SELECT: &str = concat!(
           AND NOT EXISTS (
               SELECT 1
                 FROM work_item_dependencies dependency
-                JOIN work_items blocker
+                JOIN task_rows blocker
                   ON blocker.project_id = dependency.blocking_project_id
                  AND blocker.id = dependency.blocking_work_item_id
                 JOIN work_item_statuses blocker_status
@@ -4435,7 +4435,7 @@ const WORK_ITEM_SELECT: &str = concat!(
                  AND blocker.archived_at IS NULL
                  AND blocker_status.semantic_category NOT IN ('completed', 'canceled')
           ) AS ready
-    FROM work_items item
+    FROM task_rows item
     JOIN projects project ON project.id = item.project_id
     JOIN work_item_types item_type
       ON item_type.project_id = item.project_id AND item_type.id = item.type_id

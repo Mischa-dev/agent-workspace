@@ -464,7 +464,7 @@ impl Grouping {
                    ON group_milestone.project_id = item.project_id AND group_milestone.id = item.milestone_id"
             }
             Self::Parent => {
-                " LEFT JOIN work_items group_parent \
+                " LEFT JOIN task_rows group_parent \
                    ON group_parent.project_id = item.project_id AND group_parent.id = item.parent_work_item_id"
             }
             _ => "",
@@ -1349,7 +1349,7 @@ fn search_number(search: &str) -> Option<(Option<&str>, i64)> {
 }
 
 const BASE_FROM: &str = r#"
-    FROM work_items item
+    FROM task_rows item
     JOIN projects project ON project.id = item.project_id
     JOIN work_item_types item_type
       ON item_type.project_id = item.project_id AND item_type.id = item.type_id
@@ -1851,11 +1851,11 @@ pub(super) async fn cards(
             item.estimate, item.blocked_reason,
             {FIELD_VALUES_COLUMNS},
             {OPEN_BLOCKER_COUNT} AS open_blocker_count,
-            (SELECT count(*) FROM work_items child
+            (SELECT count(*) FROM task_rows child
               WHERE child.project_id = item.project_id
                 AND child.parent_work_item_id = item.id AND child.archived_at IS NULL
             ) AS subtask_count,
-            (SELECT count(*) FROM work_items child
+            (SELECT count(*) FROM task_rows child
                JOIN work_item_statuses child_status
                  ON child_status.project_id = child.project_id AND child_status.id = child.status_id
               WHERE child.project_id = item.project_id

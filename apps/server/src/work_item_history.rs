@@ -430,7 +430,7 @@ pub async fn label_changes(
                 "SELECT id, name FROM project_milestones WHERE project_id = $1 AND id = ANY($2)"
             }
             IdKind::Task => {
-                "SELECT item.id, project.project_key || '-' || item.number FROM work_items item JOIN projects project ON project.id = item.project_id WHERE item.project_id = $1 AND item.id = ANY($2)"
+                "SELECT item.id, project.project_key || '-' || item.number FROM task_rows item JOIN projects project ON project.id = item.project_id WHERE item.project_id = $1 AND item.id = ANY($2)"
             }
         };
         let rows = sqlx::query_as::<_, (Uuid, String)>(query)

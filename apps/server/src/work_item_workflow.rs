@@ -334,10 +334,10 @@ async fn definitions(
     let query = format!(
         r#"
         SELECT definition.id, definition.name, definition.enabled,
-               (SELECT count(*) FROM work_items item
+               (SELECT count(*) FROM task_rows item
                  WHERE item.project_id = definition.project_id
                    AND item.{column} = definition.id AND item.archived_at IS NULL) AS open_tasks,
-               (SELECT count(*) FROM work_items item
+               (SELECT count(*) FROM task_rows item
                  WHERE item.project_id = definition.project_id
                    AND item.{column} = definition.id) AS all_tasks
         FROM {table} definition

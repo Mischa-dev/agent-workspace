@@ -137,7 +137,7 @@ pub async fn task_links(
     let blocked_by = sqlx::query_as::<_, TaskRef>(&format!(
         r#"SELECT {TASK_REF_COLUMNS}
         FROM work_item_dependencies dependency
-        JOIN work_items item
+        JOIN task_rows item
           ON item.project_id = dependency.blocking_project_id
          AND item.id = dependency.blocking_work_item_id
         {TASK_REF_JOINS}
@@ -156,7 +156,7 @@ pub async fn task_links(
     let blocks = sqlx::query_as::<_, TaskRef>(&format!(
         r#"SELECT {TASK_REF_COLUMNS}
         FROM work_item_dependencies dependency
-        JOIN work_items item
+        JOIN task_rows item
           ON item.project_id = dependency.project_id
          AND item.id = dependency.blocked_work_item_id
         {TASK_REF_JOINS}
@@ -179,7 +179,7 @@ pub async fn task_links(
                   ELSE 'relates_to' END AS relation_kind,
                {TASK_REF_COLUMNS}
         FROM work_item_relations relation
-        JOIN work_items item
+        JOIN task_rows item
           ON item.id = CASE WHEN relation.work_item_id = $2
                             THEN relation.other_work_item_id ELSE relation.work_item_id END
         {TASK_REF_JOINS}
@@ -203,7 +203,7 @@ pub async fn task_links(
                item.blocked_reason IS NOT NULL,
                (SELECT count(*)
                   FROM work_item_dependencies dependency
-                  JOIN work_items blocker
+                  JOIN task_rows blocker
                     ON blocker.project_id = dependency.blocking_project_id
                    AND blocker.id = dependency.blocking_work_item_id
                   JOIN work_item_statuses blocker_status
@@ -213,7 +213,7 @@ pub async fn task_links(
                    AND dependency.blocked_work_item_id = item.id
                    AND blocker.archived_at IS NULL
                    AND blocker_status.semantic_category NOT IN ('completed', 'canceled'))
-        FROM work_items item
+        FROM task_rows item
         JOIN work_item_statuses status
           ON status.project_id = item.project_id AND status.id = item.status_id
         WHERE item.project_id = $1 AND item.id = $2
@@ -272,7 +272,7 @@ struct RelationRow {
 pub const OPEN_BLOCKER_COUNT: &str = r#"
     (SELECT count(*)
        FROM work_item_dependencies dependency
-       JOIN work_items blocker
+       JOIN task_rows blocker
          ON blocker.project_id = dependency.blocking_project_id
         AND blocker.id = dependency.blocking_work_item_id
        JOIN work_item_statuses blocker_status
@@ -288,7 +288,7 @@ pub const OPEN_BLOCKER_COUNT: &str = r#"
 pub const HAS_OPEN_BLOCKER: &str = r#"
     EXISTS (SELECT 1
        FROM work_item_dependencies dependency
-       JOIN work_items blocker
+       JOIN task_rows blocker
          ON blocker.project_id = dependency.blocking_project_id
         AND blocker.id = dependency.blocking_work_item_id
        JOIN work_item_statuses blocker_status
@@ -331,7 +331,7 @@ pub async fn resolve_reference(
     Ok(sqlx::query_as::<_, (Uuid, Uuid)>(
         r#"
         SELECT item.id, item.project_id
-        FROM work_items item
+        FROM task_rows item
         JOIN projects project ON project.id = item.project_id
         JOIN projects home ON home.id = $1
         WHERE project.organization_id = home.organization_id
@@ -453,7 +453,7 @@ async fn lock_ends(
         r#"
         SELECT item.id, item.project_id, project.project_key || '-' || item.number AS key,
                item.version, item.archived_at IS NOT NULL AS archived
-        FROM work_items item
+        FROM task_rows item
         JOIN projects project ON project.id = item.project_id
         WHERE item.id = ANY($1)
         ORDER BY item.id
@@ -785,7 +785,7 @@ async fn keys_for(
                    THEN project.project_key || '-' || item.number
                    ELSE 'a task in another project'
                END
-        FROM work_items item JOIN projects project ON project.id = item.project_id
+        FROM task_rows item JOIN projects project ON project.id = item.project_id
         WHERE item.id = ANY($1)
         "#,
     )
@@ -888,7 +888,7 @@ pub async fn change_relation(
                     ELSE 'a task in another project'
                 END
                 FROM work_item_relations relation
-                JOIN work_items item ON item.id = relation.other_work_item_id
+                JOIN task_rows item ON item.id = relation.other_work_item_id
                 JOIN projects project ON project.id = item.project_id
                 WHERE relation.kind = 'duplicates' AND relation.work_item_id = $1
                   AND relation.other_work_item_id <> $2
@@ -1087,7 +1087,7 @@ pub async fn set_watching(
         sqlx::query(
             r#"
             INSERT INTO work_item_watchers (project_id, work_item_id, actor_id)
-            SELECT $1, item.id, $3 FROM work_items item WHERE item.project_id = $1 AND item.id = $2
+            SELECT $1, item.id, $3 FROM task_rows item WHERE item.project_id = $1 AND item.id = $2
             ON CONFLICT DO NOTHING
             "#,
         )
@@ -1183,7 +1183,7 @@ pub const MILESTONE_SELECT: &str = r#"
                false) AS overdue,
            milestone.version
     FROM project_milestones milestone
-    LEFT JOIN work_items item
+    LEFT JOIN task_rows item
       ON item.project_id = milestone.project_id AND item.milestone_id = milestone.id
      AND item.archived_at IS NULL
     LEFT JOIN work_item_statuses status

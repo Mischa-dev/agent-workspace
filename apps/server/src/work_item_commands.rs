@@ -443,7 +443,7 @@ pub async fn lock_work_item(
     Ok(sqlx::query_as::<_, LockedWorkItem>(&format!(
         r#"
         SELECT {LOCKED_WORK_ITEM_COLUMNS}
-        FROM work_items
+        FROM task_rows
         WHERE project_id = $1 AND id = $2
         FOR UPDATE
         "#,
@@ -464,7 +464,7 @@ pub async fn lock_work_items(
     Ok(sqlx::query_as::<_, LockedWorkItem>(&format!(
         r#"
         SELECT {LOCKED_WORK_ITEM_COLUMNS}
-        FROM work_items
+        FROM task_rows
         WHERE project_id = $1 AND id = ANY($2)
         ORDER BY id
         FOR UPDATE
@@ -1131,7 +1131,7 @@ async fn ancestor_chain(
             WHERE project_id = $1 AND id = $2
             UNION ALL
             SELECT item.id, item.parent_work_item_id, chain.depth + 1
-            FROM work_items item JOIN chain ON item.id = chain.parent_id
+            FROM task_rows item JOIN chain ON item.id = chain.parent_id
             WHERE item.project_id = $1 AND chain.depth < 64
         )
         SELECT id FROM chain ORDER BY depth
@@ -1168,7 +1168,7 @@ async fn levels_below(
             SELECT id, 0 FROM work_items WHERE project_id = $1 AND id = $2
             UNION ALL
             SELECT child.id, tree.depth + 1
-            FROM work_items child JOIN tree ON child.parent_work_item_id = tree.id
+            FROM task_rows child JOIN tree ON child.parent_work_item_id = tree.id
             WHERE child.project_id = $1 AND tree.depth < 64
         )
         SELECT COALESCE(max(depth), 0) FROM tree
@@ -1193,7 +1193,7 @@ async fn parent_problem(
         return Ok(Some(ParentProblem::IsSelf));
     }
     let archived = sqlx::query_scalar::<_, bool>(
-        "SELECT archived_at IS NOT NULL FROM work_items WHERE project_id = $1 AND id = $2",
+        "SELECT archived_at IS NOT NULL FROM task_rows WHERE project_id = $1 AND id = $2",
     )
     .bind(project_id)
     .bind(parent_id)
@@ -1315,7 +1315,7 @@ pub async fn set_archived(
             .await?;
         sqlx::query_scalar::<_, Uuid>(
             r#"
-            SELECT id FROM work_items
+            SELECT id FROM task_rows
             WHERE project_id = $1 AND parent_work_item_id = $2 AND archived_at IS NULL
             ORDER BY number
             LIMIT 20
@@ -1519,7 +1519,7 @@ pub async fn place_in_column(
 ) -> Result<Result<Placed, PlacementProblem>, AppError> {
     let mut others = sqlx::query_as::<_, (Uuid, i64)>(
         r#"
-        SELECT id, board_rank FROM work_items
+        SELECT id, board_rank FROM task_rows
         WHERE project_id = $1 AND status_id = $2 AND id <> $3 AND archived_at IS NULL
         ORDER BY board_rank, id
         FOR UPDATE
@@ -2718,7 +2718,7 @@ pub async fn notify_watching_agents(
         SELECT watcher.actor_id
         FROM work_item_watchers watcher
         JOIN actors actor ON actor.id = watcher.actor_id AND actor.kind = 'external_agent'
-        JOIN work_items item ON item.id = watcher.work_item_id
+        JOIN task_rows item ON item.id = watcher.work_item_id
         WHERE watcher.work_item_id = $1 AND watcher.actor_id <> $2
           AND item.assignee_actor_id IS DISTINCT FROM watcher.actor_id
         ORDER BY watcher.actor_id

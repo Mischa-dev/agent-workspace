@@ -252,7 +252,7 @@ pub async fn current_values(
     task: Uuid,
 ) -> Result<Option<Value>, AppError> {
     Ok(sqlx::query_scalar::<_, Value>(
-        "SELECT field_values FROM work_items WHERE project_id = $1 AND id = $2",
+        "SELECT field_values FROM task_rows WHERE project_id = $1 AND id = $2",
     )
     .bind(project_id)
     .bind(task)
@@ -519,7 +519,7 @@ pub async fn find_link(
             Ok(sqlx::query_as::<_, (Uuid, String)>(
                 r#"
                 SELECT item.id, project.project_key || '-' || item.number
-                FROM work_items item JOIN projects project ON project.id = item.project_id
+                FROM task_rows item JOIN projects project ON project.id = item.project_id
                 WHERE item.project_id = $1 AND (item.id = $2 OR item.number = $3)
                 LIMIT 1
                 "#,
@@ -624,7 +624,7 @@ pub async fn references<'a>(
         for (id, label, key) in sqlx::query_as::<_, (Uuid, String, String)>(
             r#"
             SELECT item.id, item.title, project.project_key || '-' || item.number
-            FROM work_items item JOIN projects project ON project.id = item.project_id
+            FROM task_rows item JOIN projects project ON project.id = item.project_id
             WHERE item.project_id = $1 AND item.id = ANY($2)
             "#,
         )

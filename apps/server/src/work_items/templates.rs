@@ -1098,7 +1098,7 @@ const RECURRING_SELECT: &str = r#"
            recurring.due_in_days, recurring.enabled, recurring.paused_reason,
            recurring.next_run_at, recurring.last_run_at, recurring.last_work_item_id,
            (SELECT project.project_key || '-' || item.number::text
-              FROM work_items item JOIN projects project ON project.id = item.project_id
+              FROM task_rows item JOIN projects project ON project.id = item.project_id
              WHERE item.project_id = recurring.project_id AND item.id = recurring.last_work_item_id
            ) AS last_work_item_key,
            recurring.version

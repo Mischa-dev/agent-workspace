@@ -1008,7 +1008,7 @@ const MY_WORK_SELECT: &str = r#"
                AS claimed_by_name,
            claimer_actor.kind AS claimed_by_kind,
            item.updated_at::text AS updated_at
-    FROM work_items item
+    FROM task_rows item
     JOIN projects project ON project.id = item.project_id
     JOIN work_item_statuses status
       ON status.project_id = item.project_id AND status.id = item.status_id
@@ -1087,7 +1087,7 @@ async fn my_work_section(
             .fetch_all(pool)
             .await?;
     let total = sqlx::query_scalar::<_, i64>(&format!(
-        r#"SELECT count(*) FROM work_items item
+        r#"SELECT count(*) FROM task_rows item
            JOIN work_item_statuses status
              ON status.project_id = item.project_id AND status.id = item.status_id
            LEFT JOIN work_item_claims claim
@@ -1251,7 +1251,7 @@ pub(super) async fn get_timeline(
                assignee.display_name AS assignee_name,
                (item.blocked_reason IS NOT NULL OR {HAS_OPEN_BLOCKER}) AS blocked,
                item.version
-        FROM work_items item
+        FROM task_rows item
         JOIN projects project ON project.id = item.project_id
         JOIN work_item_statuses status
           ON status.project_id = item.project_id AND status.id = item.status_id
@@ -1310,7 +1310,7 @@ pub(super) async fn get_timeline(
     .collect();
     let undated = sqlx::query_scalar::<_, i64>(
         r#"
-        SELECT count(*) FROM work_items item
+        SELECT count(*) FROM task_rows item
         JOIN work_item_statuses status
           ON status.project_id = item.project_id AND status.id = item.status_id
         WHERE item.project_id = $1 AND item.archived_at IS NULL

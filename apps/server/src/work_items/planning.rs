@@ -161,7 +161,7 @@ impl Write {
         expected: i64,
     ) -> Result<Option<Response>, AppError> {
         let version = sqlx::query_scalar::<_, i64>(
-            "SELECT version FROM work_items WHERE project_id = $1 AND id = $2 AND archived_at IS NULL",
+            "SELECT version FROM task_rows WHERE project_id = $1 AND id = $2 AND archived_at IS NULL",
         )
         .bind(self.actor.project_id)
         .bind(task_id)
@@ -1018,7 +1018,7 @@ async fn workflow_view(
     let types = sqlx::query_as::<_, WorkflowTypeView>(
         r#"
         SELECT definition.id, definition.name, definition.position, definition.is_default,
-               (SELECT count(*) FROM work_items item
+               (SELECT count(*) FROM task_rows item
                  WHERE item.project_id = definition.project_id AND item.type_id = definition.id
                    AND item.archived_at IS NULL) AS task_count
         FROM work_item_types definition
@@ -1033,7 +1033,7 @@ async fn workflow_view(
         r#"
         SELECT definition.id, definition.name, definition.semantic_category,
                definition.position, definition.is_default,
-               (SELECT count(*) FROM work_items item
+               (SELECT count(*) FROM task_rows item
                  WHERE item.project_id = definition.project_id AND item.status_id = definition.id
                    AND item.archived_at IS NULL) AS task_count
         FROM work_item_statuses definition
@@ -1277,7 +1277,7 @@ pub(super) async fn bulk_update(
     let keys = sqlx::query_as::<_, (Uuid, String)>(
         r#"
         SELECT item.id, project.project_key || '-' || item.number
-        FROM work_items item JOIN projects project ON project.id = item.project_id
+        FROM task_rows item JOIN projects project ON project.id = item.project_id
         WHERE item.project_id = $1 AND item.id = ANY($2)
         "#,
     )

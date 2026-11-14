@@ -633,7 +633,7 @@ async fn load_tree(
             WHERE project_id = $1 AND id = $2
             UNION ALL
             SELECT child.id, tree.depth + 1
-            FROM work_items child
+            FROM task_rows child
             JOIN tree ON child.parent_work_item_id = tree.id
             WHERE child.project_id = $1 AND child.archived_at IS NULL AND tree.depth < $3
         )
@@ -647,7 +647,7 @@ async fn load_tree(
                item.blocked_reason, item.version, item.start_date, item.due_date,
                item.estimate, milestone.name AS milestone_name, item.field_values
         FROM tree
-        JOIN work_items item ON item.id = tree.id
+        JOIN task_rows item ON item.id = tree.id
         LEFT JOIN project_milestones milestone
           ON milestone.project_id = item.project_id AND milestone.id = item.milestone_id
         JOIN projects project ON project.id = item.project_id
@@ -1198,7 +1198,7 @@ pub async fn preview(
         ))));
     }
     let archived = sqlx::query_scalar::<_, bool>(
-        "SELECT archived_at IS NOT NULL FROM work_items WHERE project_id = $1 AND id = $2",
+        "SELECT archived_at IS NOT NULL FROM task_rows WHERE project_id = $1 AND id = $2",
     )
     .bind(source_project_id)
     .bind(task_id)
@@ -1280,7 +1280,7 @@ pub async fn destinations(
         return Ok(Err(Refusal::NotFound("That task")));
     }
     let open = sqlx::query_scalar::<_, bool>(
-        "SELECT archived_at IS NULL FROM work_items WHERE project_id = $1 AND id = $2",
+        "SELECT archived_at IS NULL FROM task_rows WHERE project_id = $1 AND id = $2",
     )
     .bind(source_project_id)
     .bind(task_id)
@@ -1601,7 +1601,7 @@ pub async fn execute(
     // The task row's lock orders identical requests: the second waits here,
     // then finds the first one's receipt.
     let archived = sqlx::query_scalar::<_, bool>(
-        "SELECT archived_at IS NOT NULL FROM work_items WHERE project_id = $1 AND id = $2 FOR UPDATE",
+        "SELECT archived_at IS NOT NULL FROM task_rows WHERE project_id = $1 AND id = $2 FOR UPDATE",
     )
     .bind(source_project_id)
     .bind(request.task_id)
@@ -2331,7 +2331,7 @@ async fn replayed(
     .is_empty();
     let titles = if showing {
         sqlx::query_as::<_, (Uuid, String)>(
-            "SELECT id, title FROM work_items WHERE project_id = $1 AND id = ANY($2)",
+            "SELECT id, title FROM task_rows WHERE project_id = $1 AND id = ANY($2)",
         )
         .bind(receipt.target_project_id)
         .bind(&ids)
@@ -2674,7 +2674,7 @@ async fn already_moved(
             SELECT $1::uuid, 0
             UNION ALL
             SELECT child.id, source_tree.depth + 1
-            FROM work_items child
+            FROM task_rows child
             JOIN source_tree ON child.parent_work_item_id = source_tree.id
             WHERE source_tree.depth < 50
         )
@@ -2683,7 +2683,7 @@ async fn already_moved(
                item.id, item.project_id, item.title
         FROM source_tree
         JOIN work_item_key_aliases alias ON alias.source_work_item_id = source_tree.id
-        JOIN work_items item ON item.id = alias.work_item_id
+        JOIN task_rows item ON item.id = alias.work_item_id
         JOIN projects project ON project.id = item.project_id
         WHERE actor_can_access_project($2, $3, item.project_id)
           AND ($4::uuid IS NULL OR item.project_id = $4)
