@@ -429,6 +429,7 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
 
 /// Every MCP tool that isn't read-only, which `mcp_cases` covers.
 const MCP_WRITE_TOOLS: &[&str] = &[
+    "agent_managers_set",
     "agent_profile_write",
     "ai_analyze",
     "ai_suggestion_decide",
@@ -5866,6 +5867,16 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         .rejecting(vec![
             json!({"projectId": a.project, "installationId": 990_003, "repositories": [b.repository]}),
         ]),
+        // K1.4: naming an agent's managers. B's agent isn't in A, and B's
+        // accounts can't be named in A.
+        mcp_case(
+            "agent_managers_set",
+            json!({"agent": a.agent, "remove": [a.rook]}),
+            vec![
+                json!({"agent": b.agent, "remove": [a.rook]}),
+                json!({"agent": a.agent, "add": [b.rook]}),
+            ],
+        ),
         mcp_case(
             "agent_profile_write",
             json!({"projectId": a.project, "template": "reviewer", "name": "Net mcp reviewer"}),

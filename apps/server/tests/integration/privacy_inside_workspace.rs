@@ -1156,3 +1156,75 @@ fn handler_return(sources: &BTreeMap<&str, &str>, path: &str, handler: &str) -> 
         Some(source[after..body].to_owned())
     })
 }
+
+/// K1.4: holding `agents.manage` doesn't make an agent yours. A member
+/// can't name managers at all; an admin who isn't named can't name
+/// themselves; an owner can (`agents.manage_any`).
+#[tokio::test]
+async fn naming_an_agents_managers_follows_the_one_rule() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .person("ada", "admin")
+        .agent("rook", "member")
+        .build("privacy_agent_managers")
+        .await
+    else {
+        return;
+    };
+    let route = format!("/api/v2/w/{}/ops/agent_managers_set", world.organization);
+    let rook = world.agents["rook"].actor;
+    let attempt = |person: &str, key: &str, manager: Uuid| {
+        let browser = if person == "owner" {
+            &world.owner.browser
+        } else {
+            &world.people[person].browser
+        };
+        browser.request(
+            "POST",
+            &route,
+            Some(key),
+            json!({ "agent": rook, "add": [manager] }),
+        )
+    };
+    let lena = world.people["lena"].actor;
+    let ada = world.people["ada"].actor;
+    // Ada is a workspace admin: she holds `agents.manage` there.
+    sqlx::query(
+        "UPDATE organization_memberships SET role = 'admin', role_explicit = true \
+         WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(world.organization)
+    .bind(ada)
+    .execute(world.pool())
+    .await
+    .expect("ada is a workspace admin");
+    sqlx::query("DELETE FROM account_managers WHERE account_id = $1 AND manager_account_id = $2")
+        .bind(rook)
+        .bind(ada)
+        .execute(world.pool())
+        .await
+        .expect("ada isn't named");
+    let (status, body) = send(&world.app, attempt("lena", "lena-1", lena)).await;
+    assert_ne!(
+        body["outcome"], "ok",
+        "a member names herself: {status} {body}"
+    );
+    let (status, body) = send(&world.app, attempt("ada", "ada-1", ada)).await;
+    assert_ne!(
+        body["outcome"], "ok",
+        "an un-named admin names herself: {status} {body}"
+    );
+    let named = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM account_managers WHERE account_id = $1 AND manager_account_id = ANY($2)",
+    )
+    .bind(rook)
+    .bind(vec![lena, ada])
+    .fetch_one(world.pool())
+    .await
+    .expect("count");
+    assert_eq!(named, 0);
+    let (status, body) = send(&world.app, attempt("owner", "owner-1", ada)).await;
+    assert_eq!(body["outcome"], "ok", "{status} {body}");
+    world.finish().await;
+}

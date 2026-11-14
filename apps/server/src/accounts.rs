@@ -8,6 +8,8 @@
 //! trigger while old code still writes `kind`), the owner columns, and the
 //! one parser that replaces the copies each module had.
 
+pub mod ops;
+
 use serde::{Deserialize, Serialize};
 use sqlx::PgConnection;
 use uuid::Uuid;

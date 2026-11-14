@@ -96,6 +96,21 @@ async fn make_admin(setup: &Setup, actor: Uuid) {
     .expect("make admin");
 }
 
+/// K1.4: an admin manages an agent only when named as its manager (the
+/// owner holds `agents.manage_any`).
+async fn name_manager(setup: &Setup, agent: Uuid, manager: Uuid) {
+    sqlx::query(
+        "INSERT INTO account_managers (account_id, manager_account_id, workspace_id) \
+         VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+    )
+    .bind(agent)
+    .bind(manager)
+    .bind(setup.organization_id)
+    .execute(&setup.pool)
+    .await
+    .expect("name a manager");
+}
+
 fn keys(value: &Value) -> Vec<String> {
     value
         .as_array()
@@ -2634,6 +2649,7 @@ async fn connecting_an_app_as_an_agent_stays_within_the_project_role() {
         }
     };
     let (mara, _) = create_agent(&setup.app, &setup.browser, &work, "Mara", "mara").await;
+    name_manager(&setup, mara, alex).await;
     let (connection, _, _) = agent_connection(&setup, mara).await;
 
     set_alex(Some(
@@ -3659,6 +3675,8 @@ async fn rotating_an_agent_checks_the_role_it_holds() {
     // Mara holds a custom role without "edit tasks"; Rook holds Member.
     let (mara, _) = create_agent(app, &setup.browser, &work, "Mara", "mara").await;
     let (rook, _) = create_agent(app, &setup.browser, &work, "Rook", "rook").await;
+    name_manager(&setup, mara, alex).await;
+    name_manager(&setup, rook, alex).await;
     let (status, quiet) = create_role(
         &setup,
         &setup.browser,
@@ -3763,6 +3781,8 @@ async fn agents_are_given_only_what_the_giver_holds_in_the_project() {
     // The owner's agents: Rook holds Member, Mara a role within Alex's.
     let (rook, _) = create_agent(app, &setup.browser, &work, "Rook", "rook").await;
     let (mara, _) = create_agent(app, &setup.browser, &work, "Mara", "mara").await;
+    name_manager(&setup, rook, alex).await;
+    name_manager(&setup, mara, alex).await;
     let (status, readers) = create_role(
         &setup,
         &setup.browser,

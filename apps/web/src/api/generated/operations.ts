@@ -32,6 +32,10 @@ export type Publisher = { name: string; url?: string | null }
 
 export type Requires = { contract?: string | null; modules?: string[] }
 
+export type AgentManagersSetInput = { add?: string[]; agent: string; remove?: string[] }
+
+export type AgentManagersSetOutput = { agent: string; managers: string[] }
+
 export type DecisionListInput = { includeSuperseded?: boolean; limit?: number | null; spaceId: string }
 
 export type DecisionListOutput = { decisions: DecisionView[] }
@@ -45,6 +49,7 @@ export type PackageExportInput = { includePages?: boolean; includeSkills?: boole
 export type PackageExportOutput = { digest: string; package: Package }
 
 export type Operations = {
+  agent_managers_set: { input: AgentManagersSetInput; output: AgentManagersSetOutput }
   decision_list: { input: DecisionListInput; output: DecisionListOutput }
   decision_record: { input: DecisionRecordInput; output: DecisionRecordOutput }
   package_export: { input: PackageExportInput; output: PackageExportOutput }

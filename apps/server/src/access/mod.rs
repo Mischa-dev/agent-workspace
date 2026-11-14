@@ -8,6 +8,8 @@
 //! - `holding`: what a caller holds in one scope.
 //! - `compare`: old and new checks side by side while areas move (K1 §4.3).
 //! - `http`: the operators' view of recorded disagreements.
+//! - `manage`: the one rule for managing an agent or app account, and
+//!   `may_grant` (nobody grants more than they hold).
 //!
 //! How the functions relate: `decide` is the pure core, called only here.
 //! `check` and `check_locked` answer allow or deny for a need on a target.
@@ -20,12 +22,14 @@ pub mod compare;
 pub mod decide;
 pub mod holding;
 pub mod http;
+pub mod manage;
 
 use sqlx::{PgConnection, Postgres, Transaction};
 use uuid::Uuid;
 
 pub use caller::{Caller, Reach, Via};
 pub use decide::{Credential, decide};
+pub use manage::{may_grant, may_manage_account};
 
 use crate::{
     error::AppError,

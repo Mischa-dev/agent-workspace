@@ -8,9 +8,10 @@
   "switchable": true,
   "needs": [],
   "worksWith": ["messages", "runs"],
-  "permissions": ["agents.manage"],
+  "permissions": ["agents.manage", "agents.manage_any"],
   "tools": {
     "agent_list": "query",
+    "agent_managers_set": "change",
     "agent_profile_list": "query",
     "agent_profile_write": "change",
     "session_bind": "change",

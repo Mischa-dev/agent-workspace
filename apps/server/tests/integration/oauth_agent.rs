@@ -775,10 +775,12 @@ async fn consent_as_agent(
 
 const CONSENT_VERIFIER: &str = "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh";
 
-/// P0.6: managing an agent, and so acting as it through OAuth, follows one
-/// rule everywhere: an owner or admin of the agent's workspace whose role in
-/// its home project allows managing agents. A plain workspace member who is
-/// an explicit project admin can do none of it.
+/// K1.4: managing an agent, and so acting as it through OAuth, follows one
+/// rule everywhere (`access::may_manage_account`): the workspace's owners
+/// (`agents.manage_any`), and people named as its managers who hold
+/// `agents.manage`. A plain workspace member who is an explicit project
+/// admin can do none of it, nor can a workspace admin until named; a
+/// manager who is un-named loses it again.
 #[tokio::test]
 async fn only_people_who_manage_an_agent_in_its_workspace_can_act_as_it() {
     use super::{
@@ -951,7 +953,29 @@ async fn only_people_who_manage_an_agent_in_its_workspace_can_act_as_it() {
         "Pat can't revoke the owner's agent app"
     );
 
-    // Made a workspace admin as well, Pat may do all of it.
+    // Named as a manager while only a member, Pat still can't: a manager
+    // needs `agents.manage` in the agent's workspace.
+    let agent = sqlx::query_scalar::<_, Uuid>(
+        "SELECT actor_id FROM external_agent_connections WHERE id = $1::uuid",
+    )
+    .bind(&connection_id)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("Muse's account");
+    let managers_route = format!("/api/v2/w/{}/ops/agent_managers_set", setup.organization_id);
+    let (status, refused) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &managers_route,
+            Some("name-pat-as-member"),
+            json!({ "agent": agent, "add": [pat] }),
+        ),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "invalid_request", "{status} {refused}");
+
+    // Made a workspace admin, Pat holds `agents.manage` but isn't named.
     sqlx::query(
         "UPDATE organization_memberships SET role = 'admin' WHERE organization_id = $1 AND actor_id = $2",
     )
@@ -960,7 +984,69 @@ async fn only_people_who_manage_an_agent_in_its_workspace_can_act_as_it() {
     .execute(&setup.pool)
     .await
     .expect("make Pat a workspace admin");
+    check(&pat_browser, false).await;
+
+    // The owner names Pat; now Pat may do all of it.
+    let (status, named) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &managers_route,
+            Some("name-pat"),
+            json!({ "agent": agent, "add": [pat] }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{named}");
+    assert_eq!(named["outcome"], "ok", "{named}");
+    assert!(
+        named["value"]["managers"]
+            .to_string()
+            .contains(&pat.to_string())
+    );
     check(&pat_browser, true).await;
+
+    // Un-named, Pat loses the connected-apps listing and the rest.
+    let (status, removed) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &managers_route,
+            Some("unname-pat"),
+            json!({ "agent": agent, "remove": [pat] }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{removed}");
+    check(&pat_browser, false).await;
+
+    // An owner who isn't named still manages it (`agents.manage_any`).
+    sqlx::query("DELETE FROM account_managers WHERE account_id = $1")
+        .bind(agent)
+        .execute(&setup.pool)
+        .await
+        .expect("un-name everyone");
+    let (_, status, _, _) = consent_as_agent(
+        app,
+        &setup.browser.cookie,
+        &setup.browser.csrf,
+        &connection_id,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "the owner connects as Muse");
+
+    // Named again, Pat revokes the owner's agent app.
+    let (status, _) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &managers_route,
+            Some("name-pat-again"),
+            json!({ "agent": agent, "add": [pat] }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
     let (status, _) = send(
         app,
         pat_browser.request(

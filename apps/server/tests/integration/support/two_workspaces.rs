@@ -50,6 +50,8 @@ pub(crate) struct World {
     pub(crate) slug: String,
     pub(crate) rook: Uuid,
     pub(crate) agent_token: String,
+    /// The agent account behind `agent_token` (Mara).
+    pub(crate) agent: Uuid,
     pub(crate) agent_connection: Uuid,
     pub(crate) app_token: String,
     pub(crate) space: String,
@@ -1602,6 +1604,7 @@ async fn build_workspace(
         slug,
         rook,
         agent_token,
+        agent,
         agent_connection,
         app_token,
         space,

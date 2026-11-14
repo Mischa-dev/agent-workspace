@@ -667,6 +667,7 @@ async fn set_webhook(
         .await?
         .ok_or(AppError::NotFound("project"))?;
     authorize_management(&principal, &access, project_id)?;
+    authorize_agent(&mut transaction, &principal, project_id, connection_id).await?;
     let exists = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS (SELECT 1 FROM external_agent_connections WHERE project_id = $1 AND id = $2 AND status <> 'removed')",
     )
@@ -749,6 +750,7 @@ async fn test_webhook(
         .await?
         .ok_or(AppError::NotFound("project"))?;
     authorize_management(&principal, &access, project_id)?;
+    authorize_agent(&mut transaction, &principal, project_id, connection_id).await?;
     let (agent_id, url, plaintext, secret_id) =
         sqlx::query_as::<_, (Uuid, Option<String>, Option<String>, Option<Uuid>)>(
             r#"
@@ -916,6 +918,7 @@ async fn mutate_connection(
     if access.project_archived {
         return Err(AppError::ProjectArchived);
     }
+    authorize_agent(&mut transaction, principal, project_id, connection_id).await?;
     let current = load_connection_tx(&mut transaction, project_id, connection_id).await?;
     if current.status == "removed" {
         return Err(AppError::Conflict("external_agent_connection", "removed"));
@@ -1289,6 +1292,33 @@ async fn require_grantable(
     Ok(())
 }
 
+/// The one rule for this connection's agent (K1.4): the web's project check
+/// says the caller manages agents here; this says they may manage this one
+/// (its owner, `agents.manage_any` in its workspace, or a named manager).
+async fn authorize_agent(
+    connection: &mut sqlx::PgConnection,
+    principal: &AuthenticatedActor,
+    project_id: Uuid,
+    connection_id: Uuid,
+) -> Result<(), AppError> {
+    let Some(agent) = sqlx::query_scalar::<_, Uuid>(
+        "SELECT actor_id FROM external_agent_connections WHERE project_id = $1 AND id = $2",
+    )
+    .bind(project_id)
+    .bind(connection_id)
+    .fetch_optional(&mut *connection)
+    .await?
+    else {
+        return Err(AppError::NotFound("external agent connection"));
+    };
+    // The caller sees the connection through the project already, so a
+    // refusal here is a refusal, never "not found".
+    match crate::access::may_manage_account(connection, &principal.caller()?, agent).await? {
+        Ok(_) => Ok(()),
+        Err(_) => Err(AppError::Forbidden),
+    }
+}
+
 fn authorize_management(
     principal: &AuthenticatedActor,
     access: &AccessRow,
@@ -1356,49 +1386,10 @@ pub(crate) struct ManagedAgent {
     pub(crate) organization_id: Uuid,
 }
 
-/// Whether `manager` may manage agents whose home is `project_id`: the web
-/// rule ([`management_allowed`]) read from the rows, for callers that don't
-/// hold the project's access row already.
-pub(crate) async fn may_manage_in(
-    connection: &mut sqlx::PgConnection,
-    manager: Uuid,
-    project_id: Uuid,
-) -> Result<bool, AppError> {
-    let Some(access) = sqlx::query_as::<_, AccessRow>(access_sql(false))
-        .bind(manager)
-        .bind(project_id)
-        .fetch_optional(&mut *connection)
-        .await?
-    else {
-        return Ok(false);
-    };
-    if access.project_archived {
-        return Ok(false);
-    }
-    let Some((kind, status)) =
-        sqlx::query_as::<_, (String, String)>("SELECT kind, status FROM actors WHERE id = $1")
-            .bind(manager)
-            .fetch_optional(&mut *connection)
-            .await?
-    else {
-        return Ok(false);
-    };
-    let Ok(kind) = crate::api::parse_actor_kind(&kind) else {
-        return Ok(false);
-    };
-    Ok(management_allowed(
-        manager,
-        kind,
-        status == "active",
-        &access,
-        project_id,
-    ))
-}
-
 /// The active agent connection `connection_id` and its home project, when
-/// `manager` may manage it. The consent screen, the connected-apps list and
-/// revocation, and the web all decide by this rule; K1 later replaces its
-/// body with the access module.
+/// `manager` may manage its agent (`access::may_manage_account`, K1.4). The
+/// consent screen, the connected-apps list and revocation, and the web all
+/// decide by this rule.
 pub(crate) async fn may_manage(
     connection: &mut sqlx::PgConnection,
     manager: Uuid,
@@ -1425,7 +1416,22 @@ pub(crate) async fn may_manage(
     else {
         return Ok(None);
     };
-    if !may_manage_in(connection, manager, project_id).await? {
+    // The one rule (K1.4): the agent's owner, `agents.manage_any` in its
+    // owning workspace, or a named manager holding `agents.manage`.
+    let Some(kind) = sqlx::query_scalar::<_, String>(
+        "SELECT kind FROM actors WHERE id = $1 AND status = 'active'",
+    )
+    .bind(manager)
+    .fetch_optional(&mut *connection)
+    .await?
+    else {
+        return Ok(None);
+    };
+    let caller = crate::access::Caller::person(manager, crate::accounts::actor_kind(&kind)?);
+    if crate::access::may_manage_account(connection, &caller, agent_actor_id)
+        .await?
+        .is_err()
+    {
         return Ok(None);
     }
     Ok(Some(ManagedAgent {
@@ -1782,6 +1788,7 @@ pub(crate) async fn authorize_identity_binding(
     if access.project_archived {
         return Err(AppError::ProjectArchived);
     }
+    authorize_agent(transaction, principal, project_id, connection_id).await?;
     let connection = load_connection_tx(transaction, project_id, connection_id).await?;
     if connection.status != "active" {
         return Err(AppError::Forbidden);

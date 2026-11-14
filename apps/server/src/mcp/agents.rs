@@ -394,9 +394,23 @@ pub(super) async fn agent_list(
         .collect::<HashMap<_, _>>();
 
         let managed = managed_projects(state, principal, &agents).await?;
-        let managed_connections = agents
+        // And the one rule for each agent (K1.4): its owner, `agents.manage_any`
+        // in its workspace, or a named manager.
+        let candidates = agents
             .iter()
             .filter(|agent| managed.contains(&agent.home_project_id))
+            .map(|agent| agent.actor_id)
+            .collect::<Vec<_>>();
+        let managed = {
+            let mut connection = state.pool.acquire().await?;
+            crate::access::manage::manageable(&mut connection, &principal.caller(), &candidates)
+                .await?
+                .into_iter()
+                .collect::<HashSet<_>>()
+        };
+        let managed_connections = agents
+            .iter()
+            .filter(|agent| managed.contains(&agent.actor_id))
             .map(|agent| agent.connection_id)
             .collect::<Vec<_>>();
         let mut methods = connection_methods(state, &managed_connections).await?;
@@ -404,7 +418,7 @@ pub(super) async fn agent_list(
         let agents = agents
             .into_iter()
             .map(|agent| {
-                let connection = managed.contains(&agent.home_project_id).then(|| {
+                let connection = managed.contains(&agent.actor_id).then(|| {
                     let has = |scope: &str| agent.scopes.iter().any(|value| value == scope);
                     AgentConnection {
                         runtime: bounded_text(&agent.runtime_kind, 60),

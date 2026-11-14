@@ -2401,7 +2401,10 @@ mod tests {
     #[test]
     fn the_built_in_table_matches_the_old_roles() {
         let table = built_in_table();
-        assert_eq!(table["owner"], table["admin"]);
+        // Owners also hold `agents.manage_any` (K1.4); otherwise the same.
+        assert!(table["admin"].is_subset_of(table["owner"]));
+        assert!(table["owner"].contains(Permission::AgentsManageAny));
+        assert!(!table["admin"].contains(Permission::AgentsManageAny));
         assert!(table["member"].is_subset_of(table["admin"]));
         assert!(table["viewer"].is_subset_of(table["member"]));
     }
