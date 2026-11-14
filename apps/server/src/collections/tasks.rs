@@ -13,6 +13,11 @@
 //! Only the collection's views are stored and changed here. Tasks, their
 //! fields and the collection itself change on task screens and with the
 //! task tools.
+//!
+//! Every task also has a record in this collection, with the same ID
+//! (migration 20261114010000): database triggers copy each task write onto
+//! it and refuse any other write to it. Reads still come from `work_items`
+//! until the record owns the shared columns.
 
 use sqlx::{FromRow, PgConnection};
 use uuid::{Uuid, uuid};
@@ -29,6 +34,8 @@ pub const BUILTIN: &str = "tasks";
 pub const NAME: &str = "Tasks";
 pub const TITLE_NAME: &str = "Title";
 pub const FIRST_VIEW_NAME: &str = "All tasks";
+// NAME, TITLE_NAME and FIRST_VIEW_NAME are also written in
+// `ensure_tasks_collection` (migration 20261114010000).
 
 pub const STATUS: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000001");
 pub const ASSIGNEE: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000002");
@@ -291,82 +298,30 @@ pub fn group_sql(field: &FieldDefinition, column: &str, project: &str) -> Option
 }
 
 /// Makes the project's Tasks collection, with its first view, if it has
-/// none yet, as `actor_id` when they're in the project. Idempotent.
+/// none yet, as `actor_id` when they're in the project. Idempotent. A
+/// project's first task makes it too, through the same SQL function
+/// (`ensure_tasks_collection`, migration 20261114010000), which gives it the
+/// first free name of "Tasks", "Tasks (built in)", "Tasks (built in 2)" and
+/// so on, so a collection already called Tasks keeps its name.
 pub async fn ensure(
     connection: &mut PgConnection,
     project_id: Uuid,
     actor_id: Uuid,
 ) -> Result<(), AppError> {
-    let exists = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (SELECT 1 FROM collections WHERE project_id = $1 AND builtin = $2)",
-    )
-    .bind(project_id)
-    .bind(BUILTIN)
-    .fetch_one(&mut *connection)
-    .await?;
-    if exists {
-        return Ok(());
-    }
-    let collection_id = Uuid::now_v7();
-    // A collection already called Tasks keeps its name: the built-in one
-    // takes the first free name of "Tasks", "Tasks (built in)", "Tasks
-    // (built in 2)" and so on.
-    let taken = sqlx::query_scalar::<_, String>(
-        "SELECT lower(name) FROM collections WHERE project_id = $1 AND archived_at IS NULL",
-    )
-    .bind(project_id)
-    .fetch_all(&mut *connection)
-    .await?
-    .into_iter()
-    .collect::<std::collections::HashSet<_>>();
-    let name = free_name(&taken);
-    // Only another request making the built-in collection first is a
-    // conflict to skip; anything else is an error.
-    let made = sqlx::query_scalar::<_, Uuid>(
+    sqlx::query(
         r#"
-        INSERT INTO collections (id, project_id, name, title_name, created_by_actor_id, builtin)
-        SELECT $1, project.id, $3, $4, $5, $6
+        SELECT ensure_tasks_collection(project.id, member.actor_id)
         FROM projects project
         JOIN project_memberships member
-          ON member.project_id = project.id AND member.actor_id = $5
-        WHERE project.id = $2 AND project.kind <> 'direct'
-        ON CONFLICT (project_id, builtin) WHERE builtin IS NOT NULL DO NOTHING
-        RETURNING id
+          ON member.project_id = project.id AND member.actor_id = $2
+        WHERE project.id = $1 AND project.kind <> 'direct'
         "#,
     )
-    .bind(collection_id)
     .bind(project_id)
-    .bind(&name)
-    .bind(TITLE_NAME)
     .bind(actor_id)
-    .bind(BUILTIN)
-    .fetch_optional(&mut *connection)
+    .execute(&mut *connection)
     .await?;
-    if made.is_some() {
-        sqlx::query(
-            "INSERT INTO collection_views \
-               (id, project_id, collection_id, name, view_type, created_by_actor_id) \
-             VALUES ($1, $2, $3, $4, 'table', $5)",
-        )
-        .bind(Uuid::now_v7())
-        .bind(project_id)
-        .bind(collection_id)
-        .bind(FIRST_VIEW_NAME)
-        .bind(actor_id)
-        .execute(&mut *connection)
-        .await?;
-    }
     Ok(())
-}
-
-/// The first of "Tasks", "Tasks (built in)", "Tasks (built in 2)", … that
-/// no active collection has (names compared lowercased).
-fn free_name(taken: &std::collections::HashSet<String>) -> String {
-    std::iter::once(NAME.to_owned())
-        .chain(std::iter::once(format!("{NAME} (built in)")))
-        .chain((2..).map(|n| format!("{NAME} (built in {n})")))
-        .find(|name| !taken.contains(&name.to_lowercase()))
-        .unwrap_or_else(|| NAME.to_owned())
 }
 
 /// What to say when a write asks to change the Tasks collection's records,
@@ -374,26 +329,3 @@ fn free_name(taken: &std::collections::HashSet<String>) -> String {
 pub const READ_ONLY_MESSAGE: &str = "Tasks is the built-in collection of this project's tasks: \
      change tasks and their fields with the task tools or on the tasks page. Only its views \
      change here.";
-
-#[cfg(test)]
-mod tests {
-    use std::collections::HashSet;
-
-    use super::free_name;
-
-    #[test]
-    fn the_built_in_collection_takes_the_first_free_name() {
-        let taken = |names: &[&str]| {
-            names
-                .iter()
-                .map(|name| name.to_lowercase())
-                .collect::<HashSet<_>>()
-        };
-        assert_eq!(free_name(&taken(&[])), "Tasks");
-        assert_eq!(free_name(&taken(&["tasks"])), "Tasks (built in)");
-        assert_eq!(
-            free_name(&taken(&["Tasks", "Tasks (built in)"])),
-            "Tasks (built in 2)"
-        );
-    }
-}
