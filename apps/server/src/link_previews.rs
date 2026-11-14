@@ -189,7 +189,8 @@ pub(crate) async fn add_for_message(
     )
     .await?;
     if !SERVER_SWITCH.load(std::sync::atomic::Ordering::Relaxed)
-        || !effective.bool("messages.link_previews").unwrap_or(true) {
+        || !effective.bool("messages.link_previews").unwrap_or(true)
+    {
         return Ok(());
     }
     for (position, url) in links.iter().enumerate() {

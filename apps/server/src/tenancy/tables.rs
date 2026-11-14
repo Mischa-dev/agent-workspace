@@ -87,20 +87,56 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
 /// Server-wide tables, each with the reason it belongs to no workspace.
 pub const GLOBAL_TABLES: &[(&str, &str)] = &[
     ("_sqlx_migrations", "the schema's migration ledger"),
-    ("actors", "every account, of any kind: accounts are server-wide (R19), each with its owner"),
-    ("login_challenges", "two-factor sign-in challenges, before any workspace is known"),
-    ("mcp_oauth_clients", "dynamic client registration happens before anyone signs in"),
-    ("organizations", "the workspaces themselves: a row is its own tenant (its id)"),
+    (
+        "actors",
+        "every account, of any kind: accounts are server-wide (R19), each with its owner",
+    ),
+    (
+        "login_challenges",
+        "two-factor sign-in challenges, before any workspace is known",
+    ),
+    (
+        "mcp_oauth_clients",
+        "dynamic client registration happens before anyone signs in",
+    ),
+    (
+        "organizations",
+        "the workspaces themselves: a row is its own tenant (its id)",
+    ),
     ("password_reset_tokens", "account mail tokens, server-wide"),
-    ("secret_master_keys_retired", "the server's own key history, not any workspace's"),
-    ("sessions", "browser sign-in sessions, before any workspace is chosen"),
-    ("user_email_addresses", "a person's own addresses, server-wide"),
-    ("user_password_credentials", "a credential: server-wide and never exported"),
-    ("user_recovery_codes", "a credential: server-wide and never exported"),
-    ("user_totp_factors", "a credential: server-wide and never exported"),
+    (
+        "secret_master_keys_retired",
+        "the server's own key history, not any workspace's",
+    ),
+    (
+        "sessions",
+        "browser sign-in sessions, before any workspace is chosen",
+    ),
+    (
+        "user_email_addresses",
+        "a person's own addresses, server-wide",
+    ),
+    (
+        "user_password_credentials",
+        "a credential: server-wide and never exported",
+    ),
+    (
+        "user_recovery_codes",
+        "a credential: server-wide and never exported",
+    ),
+    (
+        "user_totp_factors",
+        "a credential: server-wide and never exported",
+    ),
     ("users", "a person's sign-in account, server-wide"),
-    ("workos_identities", "sign-in provider identities, server-wide"),
-    ("workos_login_attempts", "sign-in ceremonies, before any account is known"),
+    (
+        "workos_identities",
+        "sign-in provider identities, server-wide",
+    ),
+    (
+        "workos_login_attempts",
+        "sign-in ceremonies, before any account is known",
+    ),
 ];
 
 /// Tables that must stay global whenever they exist: accounts, their

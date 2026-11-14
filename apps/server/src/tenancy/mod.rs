@@ -90,7 +90,9 @@ impl Tenancy {
             }
             Self::Workspace { account, workspace } => format!(
                 "w:{}|{workspace}",
-                account.map(|account| account.to_string()).unwrap_or_default()
+                account
+                    .map(|account| account.to_string())
+                    .unwrap_or_default()
             ),
             Self::System(reason) => format!("s:{reason}"),
             Self::Anonymous => "a".to_owned(),
@@ -348,8 +350,9 @@ mod tests {
                         let reason = &rest[..rest.find('"').unwrap_or(0)];
                         match SYSTEM_REASONS.iter().find(|(known, _)| *known == reason) {
                             None => problems.push(format!("{relative}: unregistered {reason}")),
-                            Some((_, files)) if !files.contains(&relative.as_str()) => problems
-                                .push(format!("{relative}: {reason} isn't allowed here")),
+                            Some((_, files)) if !files.contains(&relative.as_str()) => {
+                                problems.push(format!("{relative}: {reason} isn't allowed here"))
+                            }
                             Some(_) => {}
                         }
                     }

@@ -239,7 +239,8 @@ fn with_file_values(
         if !metadata.is_file() || metadata.len() > MAX_FILE_VALUE_BYTES {
             return Err(invalid("must name a file of at most 64 KiB"));
         }
-        let contents = std::fs::read_to_string(path).map_err(|_| invalid("the file can't be read"))?;
+        let contents =
+            std::fs::read_to_string(path).map_err(|_| invalid("the file can't be read"))?;
         let value = contents.trim_end_matches(['\n', '\r']).to_owned();
         if value.is_empty() {
             return Err(invalid("the file is empty"));
@@ -541,7 +542,10 @@ impl AppConfig {
             // A shared server's network is not any one workspace's to reach.
             for (refused, set) in [
                 ("ALLOW_PRIVATE_ADDRESSES", allow_private_addresses),
-                ("WEBHOOK_TRUSTED_ORIGINS", !webhook_trusted_origins.is_empty()),
+                (
+                    "WEBHOOK_TRUSTED_ORIGINS",
+                    !webhook_trusted_origins.is_empty(),
+                ),
                 ("DEMO_EXECUTOR", demo_executor),
             ] {
                 if set {
@@ -617,11 +621,9 @@ fn secrets_key_path(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound
     );
     if missing {
-        new_secret_location(&path, data_root, web_root).map_err(|reason| {
-            ConfigError::Invalid {
-                key: format!("{PREFIX}{key}"),
-                reason: format!("the keyring doesn't exist and can't be created there: {reason}"),
-            }
+        new_secret_location(&path, data_root, web_root).map_err(|reason| ConfigError::Invalid {
+            key: format!("{PREFIX}{key}"),
+            reason: format!("the keyring doesn't exist and can't be created there: {reason}"),
         })?;
         return Ok((Some(path), true));
     }
@@ -1469,7 +1471,11 @@ mod tests {
 
         let missing = BTreeMap::from([(
             "AGENT_WORKSPACE_DATABASE_URL_FILE".to_owned(),
-            directory.path().join("absent").to_string_lossy().into_owned(),
+            directory
+                .path()
+                .join("absent")
+                .to_string_lossy()
+                .into_owned(),
         )]);
         assert!(AppConfig::from_values(&missing).is_err());
         std::fs::write(&file, "\n").expect("write");
@@ -1510,7 +1516,10 @@ mod tests {
         assert_eq!(hosted.database_max_connections, 20);
         for (key, value) in [
             ("AGENT_WORKSPACE_ALLOW_PRIVATE_ADDRESSES", "true"),
-            ("AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS", "http://100.64.0.1:8732"),
+            (
+                "AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS",
+                "http://100.64.0.1:8732",
+            ),
             ("AGENT_WORKSPACE_DEMO_EXECUTOR", "true"),
         ] {
             let mut refused = values.clone();
@@ -1534,12 +1543,19 @@ mod tests {
         let created = crate::secrets::ensure_keyring(&config).expect("create");
         assert_eq!(created.as_deref(), Some(path.as_path()));
         assert_eq!(
-            std::fs::metadata(&path).expect("keyring").permissions().mode() & 0o777,
+            std::fs::metadata(&path)
+                .expect("keyring")
+                .permissions()
+                .mode()
+                & 0o777,
             0o600
         );
         // Once it exists it is read, never replaced.
         let before = std::fs::read(&path).expect("read");
-        assert_eq!(crate::secrets::ensure_keyring(&config).expect("again"), None);
+        assert_eq!(
+            crate::secrets::ensure_keyring(&config).expect("again"),
+            None
+        );
         assert_eq!(std::fs::read(&path).expect("read"), before);
         let config = AppConfig::from_values(&values).expect("existing keyring");
         assert!(!config.secrets_key_missing);
@@ -1547,7 +1563,10 @@ mod tests {
         // A missing file in a directory that doesn't exist is refused.
         values.insert(
             "AGENT_WORKSPACE_SECRETS_KEY_PATH".to_owned(),
-            keys.path().join("absent/keyring").to_string_lossy().into_owned(),
+            keys.path()
+                .join("absent/keyring")
+                .to_string_lossy()
+                .into_owned(),
         );
         assert!(AppConfig::from_values(&values).is_err());
     }
@@ -1557,7 +1576,9 @@ mod tests {
     #[test]
     fn every_variable_is_documented() {
         let source = include_str!("config.rs");
-        let source = &source[..source.find("\n#[cfg(test)]\nmod tests").unwrap_or(source.len())];
+        let source = &source[..source
+            .find("\n#[cfg(test)]\nmod tests")
+            .unwrap_or(source.len())];
         let documented = include_str!("../../../docs/self-host/configuration.md");
         let mut names = std::collections::BTreeSet::new();
         for (index, _) in source.match_indices('"') {

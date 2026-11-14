@@ -516,7 +516,9 @@ mod tests {
             Some("the webhook host resolved to an unsafe address")
         );
         assert_eq!(
-            webhook_client("https://printer.local/hook", &[]).await.err(),
+            webhook_client("https://printer.local/hook", &[])
+                .await
+                .err(),
             Some("the webhook host resolved to an unsafe address")
         );
         let url = Url::parse("https://box.internal/").expect("url");
@@ -641,7 +643,10 @@ mod tests {
             ("auth/workos.rs", "the sign-in provider's API"),
             ("github.rs", "the configured GitHub API"),
             ("provider/claude_cloud.rs", "the provider's own cloud API"),
-            ("push.rs", "known push services only (push::allowed_endpoint)"),
+            (
+                "push.rs",
+                "known push services only (push::allowed_endpoint)",
+            ),
         ];
         const BUILDERS: &[&str] = &[
             "Client::builder(",
