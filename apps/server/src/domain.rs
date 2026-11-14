@@ -190,35 +190,39 @@ pub fn refuse_unadmitted_run(error: AppError) -> AppError {
     }
 }
 
+/// What the admission trigger (`validate_agent_run_scope_and_admission`)
+/// raises, and what to tell people instead. The raised texts are pinned to
+/// the trigger's latest body by a test.
+const ADMISSION_REASONS: &[(&str, &str)] = &[
+    (
+        "Agent Run requires an active Project and Thread",
+        "This run's project or thread is archived, so it can't carry on. Deny the approval or stop the run.",
+    ),
+    (
+        "Agent Run requester is unavailable",
+        "Whoever started this run is no longer an active member of the project, so it can't carry on. Deny the approval or stop the run.",
+    ),
+    (
+        "Agent Run sponsor is unavailable",
+        "The person who sponsored this run can no longer sponsor it, so it can't carry on. Deny the approval or stop the run.",
+    ),
+    (
+        "personal Execution Profile must be owned by the requester or sponsor",
+        "This run uses a provider account that isn't its requester's, so it can't carry on. Deny the approval or stop the run, then start a new one.",
+    ),
+    (
+        "Agent Run Worker or Profile is unavailable",
+        "This run's provider account is signed out or its worker is unavailable, so it can't carry on. Sign in again, or deny the approval.",
+    ),
+    (
+        "Agent Run Repository is not prepared and available",
+        "This run's repository is archived, switched off or not ready, so it can't carry on. Deny the approval or stop the run.",
+    ),
+];
+
 /// The reason to show for each refusal the admission check raises.
 fn admission_refusal_reason(message: &str) -> Option<&'static str> {
-    const REASONS: &[(&str, &str)] = &[
-        (
-            "Agent Run requires an active Project and Thread",
-            "This run's project or thread is archived, so it can't carry on. Deny the approval or stop the run.",
-        ),
-        (
-            "Agent Run requester is unavailable",
-            "Whoever started this run is no longer an active member of the project, so it can't carry on. Deny the approval or stop the run.",
-        ),
-        (
-            "Agent Run sponsor is unavailable",
-            "The person who sponsored this run can no longer sponsor it, so it can't carry on. Deny the approval or stop the run.",
-        ),
-        (
-            "personal Execution Profile must be owned by the requester or sponsor",
-            "This run uses a provider account that isn't its requester's, so it can't carry on. Deny the approval or stop the run, then start a new one.",
-        ),
-        (
-            "Agent Run Worker or Profile is unavailable",
-            "This run's provider account is signed out or its worker is unavailable, so it can't carry on. Sign in again, or deny the approval.",
-        ),
-        (
-            "Agent Run Repository is not prepared and available",
-            "This run's repository is archived, switched off or not ready, so it can't carry on. Deny the approval or stop the run.",
-        ),
-    ];
-    REASONS
+    ADMISSION_REASONS
         .iter()
         .find(|(raised, _)| message == *raised)
         .map(|(_, reason)| *reason)
@@ -354,7 +358,43 @@ async fn enqueue_external_terminal_run_event(
 
 #[cfg(test)]
 mod tests {
-    use super::RunState;
+    use super::{ADMISSION_REASONS, RunState};
+
+    /// Each refusal the run admission trigger raises still reads as the
+    /// table above expects, in the trigger's latest definition: a migration
+    /// that rewords one would otherwise turn a clear reason into a raw error.
+    #[test]
+    fn admission_refusal_texts_match_the_trigger() {
+        let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
+        let mut migrations = std::fs::read_dir(&folder)
+            .expect("migrations")
+            .map(|entry| entry.expect("migration").path())
+            .filter(|path| path.extension().is_some_and(|extension| extension == "sql"))
+            .filter_map(|path| {
+                let name = path.file_name()?.to_str()?.to_owned();
+                let version = name.split('_').next()?.parse::<i64>().ok()?;
+                Some((version, path))
+            })
+            .collect::<Vec<_>>();
+        migrations.sort();
+        let body = migrations
+            .iter()
+            .rev()
+            .find_map(|(_, path)| {
+                let text = std::fs::read_to_string(path).expect("read migration");
+                let start = text.find("FUNCTION validate_agent_run_scope_and_admission")?;
+                let rest = &text[start..];
+                let end = rest.find("$$;").map_or(rest.len(), |end| end);
+                Some(rest[..end].to_owned())
+            })
+            .expect("a migration defines validate_agent_run_scope_and_admission");
+        for (raised, _) in ADMISSION_REASONS {
+            assert!(
+                body.contains(raised),
+                "the admission trigger no longer raises {raised:?}"
+            );
+        }
+    }
 
     #[test]
     fn terminal_states_never_transition() {
