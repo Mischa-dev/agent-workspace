@@ -156,6 +156,7 @@ pub fn router(state: AppState) -> Router {
     let web_origins = client_config::WebOrigins(state.config.allowed_origins.clone().into());
     // A web app served from another origin of the same site loads the API's
     // files (H1.41); otherwise only the server's own pages may.
+    let content_security_policy = client_config::content_security_policy(&state.config);
     let resource_policy = if client_config::split_origins(&state.config) {
         "same-site"
     } else {
@@ -269,15 +270,10 @@ pub fn router(state: AppState) -> Router {
         )
         .layer(PropagateRequestIdLayer::new(request_id.clone()))
         .layer(SetRequestIdLayer::new(request_id, MakeRequestUuid))
-        // worker-src allows only the app's own service worker (/sw.js), which
-        // makes it installable and caches the built app shell, never API data.
-        // img-src allows blob: for images the page makes itself: a whiteboard
-        // shrinks a dropped photo through one before saving it.
+        // What each source may load: client_config::content_security_policy.
         .layer(SetResponseHeaderLayer::overriding(
             HeaderName::from_static("content-security-policy"),
-            HeaderValue::from_static(
-                "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; worker-src 'self'",
-            ),
+            content_security_policy,
         ))
         // Browsers only honor this over HTTPS, so it is harmless on loopback.
         .layer(SetResponseHeaderLayer::overriding(

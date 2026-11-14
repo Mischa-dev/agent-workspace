@@ -136,12 +136,25 @@ fn pg_command(program: &str, database_url: &str) -> anyhow::Result<Command> {
     Ok(command)
 }
 
+/// How a producer's exit status is read.
+#[derive(Clone, Copy, PartialEq)]
+enum Producer {
+    /// Anything but success fails.
+    Strict,
+    /// GNU tar over live folders: status 1 means a file changed while it
+    /// was read. The app keeps writing while a backup runs, and the file is
+    /// still archived, so that is a warning (as in deploy/redhat), not a
+    /// lost set.
+    LiveFiles,
+}
+
 /// Runs `producer`, writing its output to `path`, encrypted to the
 /// recipients in `recipients` when given.
 fn write_stream(
     mut producer: Command,
     path: &Path,
     recipients: Option<&Path>,
+    kind: Producer,
 ) -> anyhow::Result<()> {
     let file = std::fs::OpenOptions::new()
         .write(true)
@@ -154,7 +167,7 @@ fn write_stream(
                 .stdout(Stdio::from(file))
                 .status()
                 .with_context(|| format!("run {:?}", producer.get_program()))?;
-            check_status(&producer, status)
+            check_producer(&producer, status, kind)
         }
         Some(recipients) => {
             let mut child = producer
@@ -170,10 +183,22 @@ fn write_stream(
                 .stdout(Stdio::from(file));
             let age_status = age.status().context("run age (is it installed?)")?;
             let status = child.wait()?;
-            check_status(&producer, status)?;
+            check_producer(&producer, status, kind)?;
             check_status(&age, age_status)
         }
     }
+}
+
+fn check_producer(
+    command: &Command,
+    status: std::process::ExitStatus,
+    kind: Producer,
+) -> anyhow::Result<()> {
+    if kind == Producer::LiveFiles && status.code() == Some(1) {
+        tracing::warn!("a data file changed while it was archived; the set keeps the copy read");
+        return Ok(());
+    }
+    check_status(command, status)
 }
 
 fn check_status(command: &Command, status: std::process::ExitStatus) -> anyhow::Result<()> {
@@ -334,7 +359,7 @@ async fn create_set(
         let recipients = options.recipients.clone();
         let dumped = {
             let dump = dump.clone();
-            tokio::task::spawn_blocking(move || write_stream(pg_dump, &dump, recipients.as_deref()))
+            tokio::task::spawn_blocking(move || write_stream(pg_dump, &dump, recipients.as_deref(), Producer::Strict))
                 .await
                 .context("the dump stopped")?
         };
@@ -361,7 +386,9 @@ async fn create_set(
         let recipients = options.recipients.clone();
         {
             let archive = archive.clone();
-            tokio::task::spawn_blocking(move || write_stream(tar, &archive, recipients.as_deref()))
+            tokio::task::spawn_blocking(move || {
+                write_stream(tar, &archive, recipients.as_deref(), Producer::LiveFiles)
+            })
                 .await
                 .context("the archive stopped")?
                 .context("archive the data folders")?;
@@ -522,7 +549,12 @@ pub fn key(
     let outcome = (|| {
         let mut cat = Command::new("cat");
         cat.arg("--").arg(keyring);
-        write_stream(cat, &work.join("secrets-key.age"), Some(recipients))?;
+        write_stream(
+            cat,
+            &work.join("secrets-key.age"),
+            Some(recipients),
+            Producer::Strict,
+        )?;
         let sums = format!(
             "{}  secrets-key.age\n",
             sha256_file(&work.join("secrets-key.age"))?
@@ -939,6 +971,53 @@ pub fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_file_changing_under_tar_keeps_the_set_and_other_failures_do_not() {
+        let folder = tempfile::tempdir().expect("folder");
+        let run = |script: &str, kind: Producer, name: &str| {
+            let mut command = Command::new("sh");
+            command.arg("-c").arg(script);
+            write_stream(command, &folder.path().join(name), None, kind)
+        };
+        // tar's status 1 ("file changed as we read it") passes for live files only.
+        assert!(run("exit 1", Producer::LiveFiles, "a").is_ok());
+        assert!(run("exit 1", Producer::Strict, "b").is_err());
+        assert!(run("exit 2", Producer::LiveFiles, "c").is_err());
+        assert!(run("kill -9 $$", Producer::LiveFiles, "d").is_err());
+
+        // A file that grows while tar reads it.
+        let root = tempfile::tempdir().expect("data root");
+        std::fs::create_dir_all(root.path().join("attachments")).expect("folder");
+        let growing = root.path().join("attachments/growing.log");
+        std::fs::write(&growing, vec![b'x'; 8 * 1024 * 1024]).expect("file");
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let writer = {
+            let stop = stop.clone();
+            let growing = growing.clone();
+            std::thread::spawn(move || {
+                use std::io::Write;
+                let mut file = std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(&growing)
+                    .expect("append");
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    let _ = file.write_all(&[b'y'; 4096]);
+                }
+            })
+        };
+        let archive = folder.path().join("data.tar.gz");
+        let written = write_stream(
+            tar_command(root.path(), &["attachments".to_owned()]),
+            &archive,
+            None,
+            Producer::LiveFiles,
+        );
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        writer.join().expect("writer");
+        written.expect("a growing file doesn't fail the archive");
+        assert!(std::fs::metadata(&archive).expect("archive").len() > 0);
+    }
 
     #[test]
     fn the_database_url_reaches_client_programs_in_their_environment() {

@@ -202,6 +202,42 @@ pub fn split_origins(config: &AppConfig) -> bool {
         .is_some_and(|public| config.allowed_origins.iter().any(|origin| origin != public))
 }
 
+/// The Content-Security-Policy on every response. `connect-src` adds the
+/// live origin (H1.41), in its https and wss forms, so a page this server
+/// served can open the live connection there.
+pub fn content_security_policy(config: &AppConfig) -> HeaderValue {
+    let mut connect = "'self'".to_owned();
+    if let Some(live) = &config.live_origin {
+        let socket = live
+            .strip_prefix("https://")
+            .map(|host| format!("wss://{host}"))
+            .or_else(|| {
+                live.strip_prefix("http://")
+                    .map(|host| format!("ws://{host}"))
+            });
+        connect.push(' ');
+        connect.push_str(live);
+        if let Some(socket) = socket {
+            connect.push(' ');
+            connect.push_str(&socket);
+        }
+    }
+    // worker-src allows only the app's own service worker (/sw.js), which
+    // makes it installable and caches the built app shell, never API data.
+    // img-src allows blob: for images the page makes itself: a whiteboard
+    // shrinks a dropped photo through one before saving it.
+    let policy = format!(
+        "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; \
+         form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; \
+         connect-src {connect}; font-src 'self'; worker-src 'self'"
+    );
+    // The live origin is a validated, serialized origin (config.rs), so the
+    // policy is plain ASCII.
+    HeaderValue::from_str(&policy).unwrap_or(HeaderValue::from_static(
+        "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; worker-src 'self'",
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -245,6 +281,23 @@ mod tests {
         assert_eq!(
             split.live_origin.as_deref(),
             Some("https://live.example.com")
+        );
+        // The server's own pages may open the live connection there.
+        let policy = content_security_policy(&split_config);
+        let policy = policy.to_str().expect("ascii");
+        assert!(
+            policy.contains("connect-src 'self' https://live.example.com wss://live.example.com;"),
+            "{policy}"
+        );
+        let plain_policy = content_security_policy(&config(&[(
+            "DATABASE_URL",
+            "postgres://aw:pw@127.0.0.1/aw",
+        )]));
+        assert!(
+            plain_policy
+                .to_str()
+                .expect("ascii")
+                .contains("connect-src 'self';")
         );
         assert!(
             AppConfig::from_values(&BTreeMap::from([
