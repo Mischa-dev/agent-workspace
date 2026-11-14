@@ -326,7 +326,7 @@ pub async fn bootstrap_admin(
             let organization_slug = match command.organization_slug.clone() {
                 Some(slug) => slug,
                 None => {
-                    crate::workspace::slug::readable_for_new(&mut *transaction, organization_name)
+                    crate::workspace::slug::readable_for_new(&mut transaction, organization_name)
                         .await?
                 }
             };

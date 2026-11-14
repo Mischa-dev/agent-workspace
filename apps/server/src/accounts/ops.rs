@@ -96,7 +96,7 @@ impl Operation for AgentManagersSet {
         if !member {
             return Err(OpError::not_found("That agent"));
         }
-        match access::may_manage_account(&mut **tx, &caller, agent).await? {
+        match access::may_manage_account(tx, &caller, agent).await? {
             Ok(_) => {}
             Err(access::Denied::NotFound) => return Err(OpError::not_found("That agent")),
             Err(_) => {
@@ -123,7 +123,7 @@ impl Operation for AgentManagersSet {
             };
             let as_manager = Caller::person(manager, crate::accounts::actor_kind(&kind)?);
             let held = access::check(
-                &mut **tx,
+                tx,
                 &as_manager,
                 Need::permission(Permission::AgentsManage),
                 AccessTarget::Workspace(workspace_id),

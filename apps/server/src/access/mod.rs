@@ -257,7 +257,7 @@ pub async fn check_locked(
     need: Need,
     target: Target,
 ) -> Result<Result<Grant, Denied>, AppError> {
-    check_with(&mut **tx, caller, need, target, true).await
+    check_with(tx, caller, need, target, true).await
 }
 
 async fn check_with(
