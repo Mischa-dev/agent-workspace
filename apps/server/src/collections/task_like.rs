@@ -44,6 +44,26 @@ pub async fn refusal(
         .await?
         .into_iter()
         .find(|name| tasks::is_builtin_name(name));
+        // Its records would change as tasks, which record triggers don't
+        // follow.
+        let rules = sqlx::query_scalar::<_, String>(
+            "SELECT name FROM automation_rules \
+             WHERE project_id = $1 AND enabled \
+               AND trigger_kind IN ('record_created', 'record_changed') \
+               AND trigger ->> 'collectionId' = $2::text \
+             ORDER BY name LIMIT 3",
+        )
+        .bind(current.project_id)
+        .bind(current.id)
+        .fetch_all(&mut *connection)
+        .await?;
+        if !rules.is_empty() {
+            return Ok(Some(format!(
+                "Automations watch {}'s records ({}). Records that act like tasks change as tasks, so turn those off or point them at task triggers first.",
+                current.name,
+                rules.join(", ")
+            )));
+        }
         if let Some(name) = taken {
             return Ok(Some(format!(
                 "Records that act like tasks have a built-in \"{name}\" field. Rename {}'s own \"{name}\" field first.",
