@@ -1,7 +1,7 @@
 //! A workspace to test in: one owner signed in on a fresh schema
 //! (`setup`), and worlds of every kind of caller built on it.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use agent_workspace_server::{
     AppState,
@@ -9,13 +9,13 @@ use agent_workspace_server::{
 };
 use axum::http::StatusCode;
 use serde_json::{Value, json};
-use sqlx::{Executor, PgPool, postgres::PgPoolOptions};
+use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::{
     app::{Browser, PASSWORD, app, connect_app, create_agent, initialize, login, send, test_app},
     callers::{Agent, Call, Caller, ConnectedApp, Person, assert_absent, drain_outbox},
-    db::{Db, db, schema_pool},
+    db::{Db, DropWhenDone, db},
 };
 use crate::{
     mcp_tasks::{add_member, space},
@@ -26,30 +26,17 @@ pub(crate) struct Setup {
     pub(crate) app: axum::Router,
     pub(crate) browser: Browser,
     pub(crate) organization_id: Uuid,
-    /// The test's own schema, for checking rows directly.
+    /// The test's own database, for checking rows directly.
     pub(crate) pool: PgPool,
+    /// Drops that database when the test is done with it. None where the
+    /// fixture shares another's database.
+    pub(crate) cleanup: Option<Arc<DropWhenDone>>,
 }
 
+/// One owner signed in on a fresh database of their own (a copy of the
+/// run's migrated template), dropped when the test is done.
 pub(crate) async fn setup(prefix: &str) -> Option<Setup> {
-    let Ok(database_url) = std::env::var("AGENT_WORKSPACE_DATABASE_URL") else {
-        eprintln!("skipping PostgreSQL integration test: AGENT_WORKSPACE_DATABASE_URL is unset");
-        return None;
-    };
-    let admin = PgPoolOptions::new()
-        .max_connections(2)
-        .connect(&database_url)
-        .await
-        .expect("connect to PostgreSQL");
-    let schema = format!("{prefix}_{}", Uuid::now_v7().simple());
-    admin
-        .execute(format!("CREATE SCHEMA {schema}").as_str())
-        .await
-        .expect("create schema");
-    let pool = schema_pool(&database_url, &schema).await;
-    sqlx::migrate!("./migrations")
-        .run(&pool)
-        .await
-        .expect("apply migrations");
+    let (pool, url, cleanup) = db(prefix).await?.until_dropped();
     let owner = bootstrap_admin(
         &pool,
         BootstrapCommand {
@@ -64,13 +51,14 @@ pub(crate) async fn setup(prefix: &str) -> Option<Setup> {
     )
     .await
     .expect("bootstrap owner");
-    let app = test_app(pool.clone(), &database_url);
+    let app = test_app(pool.clone(), &url);
     let browser = login(&app).await;
     Some(Setup {
         app,
         browser,
         organization_id: owner.organization_id,
         pool,
+        cleanup: Some(cleanup),
     })
 }
 
@@ -205,6 +193,7 @@ impl WorldBuilder {
             browser: login(&app).await,
             organization_id: owner.organization_id,
             pool: db.pool.clone(),
+            cleanup: None,
         };
         let mut projects = BTreeMap::new();
         for key in &self.projects {

@@ -115,6 +115,7 @@ async fn seeded_through(prefix: &str, version: i64) -> Option<(Setup, DevSeed, t
             browser,
             organization_id: seed.organization_id,
             pool,
+            cleanup: None,
         },
         seed,
         temporary,

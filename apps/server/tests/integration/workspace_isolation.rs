@@ -2867,6 +2867,7 @@ async fn check_realtime(
         },
         organization_id: b.organization,
         pool: pool.clone(),
+        cleanup: None,
     };
     say(
         &b_setup,
@@ -2915,6 +2916,7 @@ async fn check_realtime(
         },
         organization_id: a.organization,
         pool: pool.clone(),
+        cleanup: None,
     };
     let sentinel = say(
         &a_setup,

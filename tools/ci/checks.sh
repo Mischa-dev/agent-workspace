@@ -419,6 +419,21 @@ if has rust; then
     while read -r stale; do
       dropdb --force --if-exists --maintenance-db="${CI_DATABASE_BASE}/postgres" "${stale}" || true
     done
+  # Test databases (aw_t_<uuid v7>) a killed run left, older than any test
+  # still running; and test templates (aw_tpl_<migrations>), unless one is
+  # being copied, since the first test of a run makes the one it needs.
+  psql -d "${CI_DATABASE_BASE}/postgres" -Atc \
+    "SELECT datname FROM pg_database WHERE datname ~ '^aw_t_[0-9a-f]{32}$'
+       AND to_timestamp(('x' || substr(datname, 6, 12))::bit(48)::bigint / 1000.0)
+           < now() - interval '6 hours'" 2>/dev/null |
+    while read -r stale; do
+      dropdb --force --if-exists --maintenance-db="${CI_DATABASE_BASE}/postgres" "${stale}" || true
+    done
+  psql -d "${CI_DATABASE_BASE}/postgres" -Atc \
+    "SELECT datname FROM pg_database WHERE datname ~ '^aw_tpl_'" 2>/dev/null |
+    while read -r stale; do
+      dropdb --if-exists --maintenance-db="${CI_DATABASE_BASE}/postgres" "${stale}" 2>/dev/null || true
+    done
   database="aw_ci_run_$(printf '%s' "${CI_RUN_ID:-$$}" | tr -c 'a-zA-Z0-9' '_')"
   createdb --maintenance-db="${CI_DATABASE_BASE}/postgres" "${database}"
   export AGENT_WORKSPACE_DATABASE_URL="${CI_DATABASE_BASE}/${database}"

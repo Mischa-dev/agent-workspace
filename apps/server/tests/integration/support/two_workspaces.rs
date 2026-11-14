@@ -512,6 +512,7 @@ async fn build_workspace(
         },
         organization_id: organization,
         pool: pool.clone(),
+        cleanup: None,
     };
     let space = space(&setup).await;
     let project = create_project(&setup, "WORK", &format!("Work{m}")).await;
