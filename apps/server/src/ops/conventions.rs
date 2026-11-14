@@ -23,6 +23,7 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "schedule",
             "duplicate",
             "forward",
+            "report",
         ],
     ),
     (
@@ -46,6 +47,7 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "react",
             "pin",
             "mark_read",
+            "mark_not_started",
             "decide",
             "respond",
             "assign",

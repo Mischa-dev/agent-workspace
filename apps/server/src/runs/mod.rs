@@ -33,6 +33,7 @@ pub mod activities;
 mod guards;
 pub mod launch_paths;
 pub mod liveness;
+pub mod operations;
 pub mod ops;
 pub mod state;
 pub mod store;

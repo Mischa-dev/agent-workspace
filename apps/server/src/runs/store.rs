@@ -109,6 +109,12 @@ pub struct ActivityRow {
 /// else, for a run in a project, its members; else the account that does it
 /// and who asked for it. Every read of runs for a viewer uses it (through
 /// the `run_visible_to` function, migration 20261114073500).
+/// Where a run lives, for a viewer who may see it (`ops::target`'s
+/// locator for kind `run`): `$1` the run, `$2` the viewer.
+pub const LOCATE_SQL: &str = "SELECT project.organization_id, project.id FROM runs run \
+     JOIN projects project ON project.id = run.space_id \
+     WHERE run.id = $1 AND run_visible_to(run.id, $2)";
+
 pub fn visible(viewer_parameter: usize) -> String {
     format!("run_visible_to(run.id, ${viewer_parameter})")
 }

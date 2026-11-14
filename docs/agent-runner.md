@@ -172,12 +172,14 @@ A runner that never claims leaves its run `accepted`; after three report
 intervals without a word (45 minutes by default) it shows as not
 responding, so people know the work wasn't picked up.
 
-To show more, report on the run directly with the run tools: `run_activity`
-(steps, tool calls, messages, a plan; each with your own `id`, so a retry is
-a duplicate rather than an error), `run_update` (status line, title,
-`externalUrl`, or an explicit state) and `run_result` (a pull request,
-branch, file or link). Requests without a launch behind them have no run;
-open one yourself with `run_open` if you want one. The SDKs wrap these:
+To show more, report on the run directly with the run operations:
+`run_activity_report` (steps, tool calls, messages, a plan; each with your
+own `id`, so a retry is a duplicate rather than an error), `run_update`
+(status line, title, `externalUrl`, or an explicit state) and
+`run_result_report` (a pull request, branch, file or link). Requests without
+a launch behind them have no run; open one yourself with `run_create` (name
+its space with `spaceId`) if you want one. The old names `run_activity`,
+`run_result` and `run_open` still work. The SDKs wrap these:
 `context.runId`, `context.step(title)` and `context.result(kind, url, title)`.
 
 ## Outcomes

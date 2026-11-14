@@ -120,5 +120,117 @@
     "preview": false,
     "proposable": false,
     "title": "Export package"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "run.activity"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "runs",
+    "name": "run_activity_report",
+    "permission": "runs.report",
+    "preview": false,
+    "proposable": false,
+    "title": "Report run activity"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "run.cancel_requested"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "runs",
+    "name": "run_cancel",
+    "permission": "runs.interrupt",
+    "preview": false,
+    "proposable": false,
+    "title": "Stop a run"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "run.opened"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "runs",
+    "name": "run_create",
+    "permission": "runs.report",
+    "preview": false,
+    "proposable": false,
+    "title": "Open a run"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "run.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "runs",
+    "name": "run_mark_not_started",
+    "permission": "runs.interrupt",
+    "preview": false,
+    "proposable": false,
+    "title": "Mark a run not started"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "run.result_added"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "runs",
+    "name": "run_result_report",
+    "permission": "runs.report",
+    "preview": false,
+    "proposable": false,
+    "title": "Report run results"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "run.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "runs",
+    "name": "run_update",
+    "permission": "runs.report",
+    "preview": false,
+    "proposable": false,
+    "title": "Update a run"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "run.usage_reported"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "runs",
+    "name": "run_usage_report",
+    "permission": "runs.report",
+    "preview": false,
+    "proposable": false,
+    "title": "Report usage"
   }
 ]

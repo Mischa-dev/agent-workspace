@@ -31,6 +31,7 @@ async fn an_agent_reports_its_own_run_and_nobody_else_can() {
 
     // Open, then open again with the same clientRunId: one run.
     let open = json!({
+        "projectId": "WORK",
         "clientRunId": "triage-2026-11-14",
         "title": "Triage new feedback",
         "cause": {"kind": "schedule", "ref": "weekday 09:00"},
@@ -225,7 +226,7 @@ async fn an_agent_reports_its_own_run_and_nobody_else_can() {
     // Settings carry a password under its name: it is not stored.
     let asking = call(
         "run_open",
-        json!({"title": "Big ask", "cause": {"kind": "manual"},
+        json!({"projectId": "WORK", "title": "Big ask", "cause": {"kind": "manual"},
                "settings": {"password": "correct-horse-battery-staple",
                             "endpoints": [{"apiKey": "plain-words-key"}]}}),
     )
@@ -303,7 +304,7 @@ async fn a_person_stops_an_agents_run_and_the_agent_hears_it() {
         &fixer_token,
         &fixer,
         "run_open",
-        json!({"title": "Long job", "cause": {"kind": "manual"}}),
+        json!({"projectId": "WORK", "title": "Long job", "cause": {"kind": "manual"}}),
     )
     .await;
     assert_eq!(opened["outcome"], "ok", "{opened}");
@@ -474,7 +475,7 @@ async fn a_replay_rechecks_the_conversation_its_run_is_in() {
     };
     let opened = call(
         "run_open",
-        json!({"title": "Deal notes", "cause": {"kind": "thread", "conversationId": channel_id}}),
+        json!({"projectId": "WORK", "title": "Deal notes", "cause": {"kind": "thread", "conversationId": channel_id}}),
     )
     .await;
     assert_eq!(opened["outcome"], "ok", "{opened}");

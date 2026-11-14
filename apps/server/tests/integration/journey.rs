@@ -48,6 +48,7 @@ async fn the_journey() {
         async move { tool(app, &token, &session, name, arguments).await }
     };
     let open = json!({
+        "projectId": "WORK",
         "clientRunId": "journey-1",
         "title": "Survey the open issues",
         "cause": {"kind": "manual"}

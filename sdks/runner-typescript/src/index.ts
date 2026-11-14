@@ -369,7 +369,7 @@ export class ReplyTools {
 
   /** Steps, tool calls, messages or a plan on a run (`claim.run`). */
   async runActivity(runId: string, activities: RunActivity[]) {
-    return unwrap<Record<string, unknown>>(await this.mcp.callTool('run_activity', { runId, activities }))
+    return unwrap<Record<string, unknown>>(await this.mcp.callTool('run_activity_report', { runId, activities }))
   }
 
   /** Change a run's status line, title, link (`externalUrl`) or state. */
@@ -379,7 +379,7 @@ export class ReplyTools {
 
   /** What a run produced: a pull request, branch, file or link. */
   async runResult(runId: string, results: RunResult[]) {
-    return unwrap<Record<string, unknown>>(await this.mcp.callTool('run_result', { runId, results }))
+    return unwrap<Record<string, unknown>>(await this.mcp.callTool('run_result_report', { runId, results }))
   }
 }
 

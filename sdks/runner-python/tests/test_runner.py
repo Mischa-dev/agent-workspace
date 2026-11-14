@@ -252,7 +252,7 @@ if __name__ == "__main__":
         runner.dispatch({"event": "reply.requested", "replyRequestId": "r2"})
         self.assertEqual(seen, {"r1": "run-1", "r2": None})
         run_calls = [(name, args) for name, args in fake.calls if name.startswith("run_")]
-        self.assertEqual([name for name, _ in run_calls], ["run_activity", "run_result"], "a request without a run reports nothing")
+        self.assertEqual([name for name, _ in run_calls], ["run_activity_report", "run_result_report"], "a request without a run reports nothing")
         activity = run_calls[0][1]["activities"][0]
         self.assertEqual((activity["kind"], activity["summary"]), ("step_started", "Reading the code"))
         self.assertEqual(run_calls[1][1], {"runId": "run-1", "results": [{"kind": "pull_request", "url": "https://example.test/pr/1", "title": "Fix it"}]})

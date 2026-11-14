@@ -200,8 +200,8 @@ test('a launched request reports steps and results on its run; one without a run
   const ok = () => ({ outcome: 'ok', value: {} })
   const { fetchImpl, calls } = fakeMcp({
     reply_claim: (args) => (args.requestId === 'r1' ? launched : claimFor('r2', 'go')),
-    run_activity: ok,
-    run_result: ok,
+    run_activity_report: ok,
+    run_result_report: ok,
     reply_send: ok,
   })
   const seen: Record<string, string | null> = {}
@@ -223,7 +223,7 @@ test('a launched request reports steps and results on its run; one without a run
   const runCalls = calls.filter((call) => call.name.startsWith('run_'))
   assert.deepEqual(
     runCalls.map((call) => call.name),
-    ['run_activity', 'run_result'],
+    ['run_activity_report', 'run_result_report'],
   )
   const [activity] = (runCalls[0].arguments as { activities: { kind: string; summary: string }[] }).activities
   assert.deepEqual([activity.kind, activity.summary], ['step_started', 'Reading the code'])

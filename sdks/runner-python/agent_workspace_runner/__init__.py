@@ -366,7 +366,7 @@ class ReplyTools:
     def run_activity(self, run_id: str, activities: list[dict[str, Any]]) -> dict[str, Any]:
         """Report steps, tool calls, messages or a plan. Each activity needs
         its own ``id``; sending one again is a duplicate, never an error."""
-        return _unwrap(self.mcp.call_tool("run_activity", {"runId": run_id, "activities": activities}))
+        return _unwrap(self.mcp.call_tool("run_activity_report", {"runId": run_id, "activities": activities}))
 
     def run_update(self, run_id: str, **change: Any) -> dict[str, Any]:
         """Change the status line, title, link (``externalUrl``) or state."""
@@ -374,7 +374,7 @@ class ReplyTools:
 
     def run_result(self, run_id: str, results: list[dict[str, Any]]) -> dict[str, Any]:
         """What the run produced: a pull request, branch, file or link."""
-        return _unwrap(self.mcp.call_tool("run_result", {"runId": run_id, "results": results}))
+        return _unwrap(self.mcp.call_tool("run_result_report", {"runId": run_id, "results": results}))
 
 
 # ---------------------------------------------------------------------------
