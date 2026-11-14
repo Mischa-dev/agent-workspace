@@ -214,8 +214,8 @@ async fn queued_runs_are_idempotent_and_create_no_workspace_before_admission() {
             prepared_at
         )
         VALUES (
-            $1, $2, 9000000099, 'Mischa-dev', 'alternate-scheduler-repository',
-            'https://github.com/Mischa-dev/alternate-scheduler-repository.git',
+            $1, $2, 9000000099, 'example-org', 'alternate-scheduler-repository',
+            'https://github.com/example-org/alternate-scheduler-repository.git',
             'main', $3, true, true, 'ready', now()
         )
         "#,
