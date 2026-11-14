@@ -86,7 +86,7 @@ export function normalizeLinkPreviews(value: unknown): LinkPreview[] {
 export const fileContentUrl = (id: string, download = false) =>
   apiUrl(`/api/v1/files/${encodeURIComponent(id)}/content${download ? '?download=1' : ''}`)
 export const fileThumbnailUrl = (id: string) => apiUrl(`/api/v1/files/${encodeURIComponent(id)}/thumbnail`)
-export const linkPreviewImageUrl = (id: string) => `/api/v1/link-previews/${encodeURIComponent(id)}/image`
+export const linkPreviewImageUrl = (id: string) => apiUrl(`/api/v1/link-previews/${encodeURIComponent(id)}/image`)
 
 /** Shown inline as a picture (the server sets width and height only for those). */
 export const isInlineImage = (file: FileAttachment) => file.width !== null && file.height !== null

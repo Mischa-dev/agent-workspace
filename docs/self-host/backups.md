@@ -85,7 +85,8 @@ agent-workspace-server restore drill --from /backups/20261114T033000Z \
 
 The drill restores into a spare, empty database, reads the data archive end
 to end, and checks the counts, the migration version, and that the keyring
-opens every restored secret. Drop the spare database afterwards. Run it
+opens every restored secret and every person's two-factor seed. It fails
+when either is there and no keyring is given. Drop the spare database afterwards. Run it
 after any change to how backups are made, and now and then besides.
 
 ## With Docker Compose

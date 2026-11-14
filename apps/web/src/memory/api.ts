@@ -1,4 +1,4 @@
-import { requestJson } from '../api/client'
+import { apiUrl, requestJson } from '../api/client'
 
 export type PageSummary = {
   id: string
@@ -122,7 +122,7 @@ export function importPage(projectId: string, file: File) {
 
 /** Where a page downloads as Markdown or a Word document. */
 export function pageExportHref(pageId: string, format: 'markdown' | 'docx') {
-  return `/api/v1/pages/${encodeURIComponent(pageId)}/export?format=${format}`
+  return apiUrl(`/api/v1/pages/${encodeURIComponent(pageId)}/export?format=${format}`)
 }
 
 export function getPage(pageId: string) {

@@ -5,7 +5,12 @@
 
 use std::{collections::BTreeMap, path::Path, process::Command};
 
-use agent_workspace_server::{backup, config::AppConfig, seed};
+use agent_workspace_server::{
+    backup,
+    config::AppConfig,
+    secrets::{self, FileKeyring},
+    seed,
+};
 use sqlx::{Executor, PgPool, postgres::PgPoolOptions};
 use uuid::Uuid;
 
@@ -33,6 +38,24 @@ async fn connect(url: &str) -> PgPool {
         .connect(url)
         .await
         .expect("connect")
+}
+
+/// Drops a test database. An autovacuum worker on a just-restored database
+/// can't be terminated by a plain role, so this waits it out.
+async fn drop_database(admin: &PgPool, name: &str) {
+    for attempt in 0.. {
+        match admin
+            .execute(format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)").as_str())
+            .await
+        {
+            Ok(_) => return,
+            Err(error) if attempt < 30 => {
+                eprintln!("dropping {name}: {error}; trying again");
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+            Err(error) => panic!("drop {name}: {error}"),
+        }
+    }
 }
 
 async fn messages(pool: &PgPool) -> Vec<String> {
@@ -125,6 +148,38 @@ async fn a_set_restores_into_an_empty_target_and_refuses_a_full_one() {
     std::fs::write(data_root.path().join("files/page.bin"), [0_u8, 1, 2, 255]).expect("file");
     let seeded_messages = messages(&source).await;
     assert_eq!(seeded_messages.len(), 2);
+    // A person's two-factor seed, sealed with the keyring: the drill must
+    // prove the keyring opens it even when no workspace holds a secret.
+    let keyring = FileKeyring::generate();
+    sqlx::query(
+        "INSERT INTO users (id, actor_id, login_name, display_name) VALUES ($1, $2, 'backup-person', 'Backup person') \
+         ON CONFLICT (actor_id) DO NOTHING",
+    )
+    .bind(Uuid::now_v7())
+    .bind(seeded.human_actor_id)
+    .execute(&source)
+    .await
+    .expect("a person");
+    let user_id = sqlx::query_scalar::<_, Uuid>("SELECT id FROM users WHERE actor_id = $1")
+        .bind(seeded.human_actor_id)
+        .fetch_one(&source)
+        .await
+        .expect("the person");
+    let sealed = secrets::seal_detached(&keyring, &secrets::totp_aad(user_id), b"two-factor seed")
+        .expect("seal");
+    sqlx::query(
+        "INSERT INTO user_totp_factors (user_id, ciphertext, nonce, wrapped_key, wrap_nonce, master_key_id) \
+         VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind(user_id)
+    .bind(&sealed.ciphertext)
+    .bind(sealed.nonce.as_slice())
+    .bind(&sealed.wrapped.ciphertext)
+    .bind(sealed.wrapped.nonce.as_ref().map(|nonce| nonce.as_slice()))
+    .bind(&sealed.wrapped.master_key_id)
+    .execute(&source)
+    .await
+    .expect("a two-factor seed");
     source.close().await;
 
     let sets = tempfile::tempdir().expect("backup folder");
@@ -227,19 +282,41 @@ async fn a_set_restores_into_an_empty_target_and_refuses_a_full_one() {
                 .is_err(),
             "an encrypted set needs its identity"
         );
-        backup::drill(&set.path, &drill_url, Some(&identity), None).await
+        backup::drill(&set.path, &drill_url, Some(&identity), Some(&keyring)).await
     } else {
-        backup::drill(&set.path, &drill_url, None, None).await
+        backup::drill(&set.path, &drill_url, None, Some(&keyring)).await
     };
     let drilled = drilled.expect("drill");
     assert_eq!(drilled.messages, 2);
     assert!(drilled.data_entries > 0);
+    let two_factor = drilled.two_factor.expect("two-factor seeds checked");
+    assert_eq!((two_factor.checked, two_factor.opened), (1, 1));
+
+    // Without the keyring, or with another one, the seed can't be read, and
+    // the drill says so instead of passing.
+    let fresh_drill = async || {
+        drop_database(&admin, &names[2]).await;
+        admin
+            .execute(format!("CREATE DATABASE {}", names[2]).as_str())
+            .await
+            .expect("create the drill database");
+    };
+    fresh_drill().await;
+    let refused = backup::drill(&set.path, &drill_url, None, None)
+        .await
+        .expect_err("a seed needs the keyring");
+    assert!(refused.to_string().contains("keyring"), "{refused}");
+    fresh_drill().await;
+    let refused = backup::drill(&set.path, &drill_url, None, Some(&FileKeyring::generate()))
+        .await
+        .expect_err("another keyring doesn't open the seed");
+    assert!(
+        refused.to_string().contains("two-factor seeds don't open"),
+        "{refused}"
+    );
 
     for name in &names {
-        admin
-            .execute(format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)").as_str())
-            .await
-            .expect("drop a test database");
+        drop_database(&admin, name).await;
     }
     admin.close().await;
 }

@@ -654,6 +654,8 @@ pub struct RestoreReport {
     pub failed_migrations: i64,
     pub data_entries: usize,
     pub secrets: Option<crate::secrets::ExportedRowsReport>,
+    /// People's two-factor seeds, sealed with the same keyring.
+    pub two_factor: Option<crate::secrets::ExportedRowsReport>,
 }
 
 /// `restore`: the set's database into an empty database and its folders
@@ -692,7 +694,7 @@ pub async fn restore(
 
 /// `restore drill`: restores the set into a spare (empty) database, reads
 /// the data archive end to end, and checks counts, the migration version
-/// and that `keyring` opens every restored secret.
+/// and that `keyring` opens every restored secret and two-factor seed.
 pub async fn drill(
     from: &Path,
     database_url: &str,
@@ -707,19 +709,33 @@ pub async fn drill(
     restore_database(&set, database_url, identity).await?;
     let mut report = report(&pool, &set).await?;
     report.data_entries = list_archive(&set, identity).await?;
+    // The spare database belongs to no workspace: one plain connection.
+    let mut connection = pool.acquire().await?;
     let rows = sqlx::query_as::<_, (String, String, String, String, String, String, String)>(
         "SELECT id::text, organization_id::text, master_key_id, encode(ciphertext, 'hex'), \
          encode(nonce, 'hex'), encode(wrapped_key, 'hex'), coalesce(encode(wrap_nonce, 'hex'), '') \
          FROM secrets ORDER BY id",
     )
-    .fetch_all(&pool)
+    .fetch_all(&mut *connection)
     .await
     .context("read the restored secrets")?;
+    let factors = sqlx::query_as::<_, TotpFactorRow>(
+        "SELECT user_id, ciphertext, nonce, wrapped_key, wrap_nonce, master_key_id \
+         FROM user_totp_factors ORDER BY user_id",
+    )
+    .fetch_all(&mut *connection)
+    .await
+    .context("read the restored two-factor seeds")?;
+    drop(connection);
     pool.close().await;
+    if rows.is_empty() && factors.is_empty() {
+        return check_migrations(report);
+    }
+    let keyring = keyring.context(
+        "secrets or two-factor seeds were restored: configure the keyring (or pass --keyring) \
+         to prove it opens them",
+    )?;
     if !rows.is_empty() {
-        let keyring = keyring.context(
-            "secrets were restored: configure the keyring (or pass --keyring) to prove it opens them",
-        )?;
         let lines = rows
             .iter()
             .map(|row| {
@@ -737,6 +753,80 @@ pub async fn drill(
             bail!("{failed} restored secrets don't open with the keyring");
         }
     }
+    if !factors.is_empty() {
+        let opened = verify_totp_factors(keyring, &factors);
+        let failed = opened.failed;
+        report.two_factor = Some(opened);
+        if failed > 0 {
+            bail!("{failed} restored two-factor seeds don't open with the keyring");
+        }
+    }
+    check_migrations(report)
+}
+
+#[derive(sqlx::FromRow)]
+struct TotpFactorRow {
+    user_id: uuid::Uuid,
+    ciphertext: Vec<u8>,
+    nonce: Vec<u8>,
+    wrapped_key: Vec<u8>,
+    wrap_nonce: Option<Vec<u8>>,
+    master_key_id: String,
+}
+
+impl TotpFactorRow {
+    fn sealed(&self) -> Option<crate::secrets::DetachedSeal> {
+        Some(crate::secrets::DetachedSeal {
+            ciphertext: self.ciphertext.clone(),
+            nonce: self.nonce.as_slice().try_into().ok()?,
+            wrapped: crate::secrets::WrappedKey {
+                master_key_id: self.master_key_id.clone(),
+                nonce: match self.wrap_nonce.as_deref() {
+                    Some(nonce) => Some(nonce.try_into().ok()?),
+                    None => None,
+                },
+                ciphertext: self.wrapped_key.clone(),
+            },
+        })
+    }
+}
+
+/// Opens each two-factor seed with `keyring` and its owner's associated
+/// data, keeping only the counts.
+fn verify_totp_factors(
+    keyring: &crate::secrets::FileKeyring,
+    factors: &[TotpFactorRow],
+) -> crate::secrets::ExportedRowsReport {
+    use crate::secrets::KeyEncryption;
+    let mut report = crate::secrets::ExportedRowsReport::default();
+    for factor in factors {
+        report.checked += 1;
+        if !keyring.has_key(&factor.master_key_id) {
+            report.failed += 1;
+            if !report.missing_key_ids.contains(&factor.master_key_id) {
+                report.missing_key_ids.push(factor.master_key_id.clone());
+            }
+            continue;
+        }
+        let sealed = factor.sealed();
+        let opened = sealed.is_some_and(|sealed| {
+            crate::secrets::open_detached(
+                keyring,
+                &crate::secrets::totp_aad(factor.user_id),
+                &sealed,
+            )
+            .is_ok()
+        });
+        if opened {
+            report.opened += 1;
+        } else {
+            report.failed += 1;
+        }
+    }
+    report
+}
+
+fn check_migrations(report: RestoreReport) -> anyhow::Result<RestoreReport> {
     if report.migration_version < report.recorded_migration_version {
         bail!("the restored migration version is older than the set recorded");
     }
@@ -830,6 +920,7 @@ async fn report(pool: &PgPool, set: &CheckedSet) -> anyhow::Result<RestoreReport
         .await?,
         data_entries: 0,
         secrets: None,
+        two_factor: None,
     })
 }
 

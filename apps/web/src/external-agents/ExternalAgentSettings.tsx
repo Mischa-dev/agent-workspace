@@ -827,7 +827,7 @@ function OneTimeToken({
       ) : null}
       <p className="aw-token__help" hidden={runner}>
         Point the agent’s MCP client at <code>{new URL(apiUrl('/api/v1/mcp'), window.location.href).href}</code> with this token, or send it the{' '}
-        <a href="/connect.md" rel="noreferrer" target="_blank">
+        <a href={apiUrl('/connect.md')} rel="noreferrer" target="_blank">
           setup guide
         </a>{' '}
         for step-by-step instructions.

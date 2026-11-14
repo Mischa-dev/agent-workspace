@@ -1,4 +1,4 @@
-import { requestJson } from '../api/client'
+import { apiUrl, requestJson } from '../api/client'
 import { THEME_PRESETS, type ThemePreset } from '../theme/slots'
 
 export type Whiteboard = {
@@ -166,7 +166,7 @@ export function linkedWhiteboards(targetKind: LinkTargetKind, targetId: string) 
 }
 
 export function previewUrl(id: string, version: number, dark: boolean) {
-  return `${board(id)}/preview.svg?dark=${dark ? 'true' : 'false'}&v=${version}`
+  return apiUrl(`${board(id)}/preview.svg?dark=${dark ? 'true' : 'false'}&v=${version}`)
 }
 
 /** Whether whiteboards draw dark: Midnight and every classic dark theme. */
