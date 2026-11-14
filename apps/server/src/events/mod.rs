@@ -14,10 +14,14 @@
 //! writer is in the log without touching its call site.
 
 pub mod catalog;
+pub mod consumer;
 pub mod legacy;
 mod route;
+pub mod sequencer;
+pub mod upkeep;
 
 pub use catalog::{EventClass, EventType};
+pub use consumer::{Consumer, ConsumerError, EventFilter, read, run_consumer};
 pub use route::*;
 
 use serde::Serialize;

@@ -63,6 +63,7 @@ pub fn register_jobs(registry: &mut JobRegistry) {
             .map_err(|error| JobError::retry(error.log_category()))?;
         Ok(())
     });
+    super::upkeep::register_jobs(registry);
 }
 
 /// What one event is about. IDs only.

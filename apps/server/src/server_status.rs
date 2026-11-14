@@ -212,6 +212,17 @@ struct ServerView {
     backup: BackupView,
     mail: MailView,
     jobs: JobsView,
+    event_log: EventLogView,
+}
+
+/// The event log (K3.3): events waiting for a position, and parked events
+/// a consumer moved past.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EventLogView {
+    waiting: i64,
+    oldest_waiting_seconds: f64,
+    parked: i64,
 }
 
 async fn read_http(
@@ -263,6 +274,13 @@ async fn read_http(
         },
     };
     let queue = jobs::queue_stats(&state.pool).await?;
+    let (waiting, oldest_waiting_seconds, parked) = sqlx::query_as::<_, (i64, f64, i64)>(
+        "SELECT (SELECT count(*) FROM event_staging), \
+                COALESCE((SELECT EXTRACT(EPOCH FROM now() - min(staged_at)) FROM event_staging), 0)::float8, \
+                (SELECT count(*) FROM event_consumer_failures WHERE resolved_at IS NULL)",
+    )
+    .fetch_one(&state.pool)
+    .await?;
     Ok(Json(ServerView {
         version: env!("CARGO_PKG_VERSION"),
         commit: BUILD_COMMIT,
@@ -277,6 +295,11 @@ async fn read_http(
             running: queue.running,
             failed_last_day: queue.dead_last_day,
             oldest_waiting_seconds: queue.oldest_due_seconds,
+        },
+        event_log: EventLogView {
+            waiting,
+            oldest_waiting_seconds,
+            parked,
         },
     }))
 }

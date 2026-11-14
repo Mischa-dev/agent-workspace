@@ -369,6 +369,43 @@ async fn render(state: &AppState) -> Result<String, AppError> {
         queue.oldest_due_seconds
     );
 
+    // The event log (K3.3): events waiting for a position, and how far
+    // behind each consumer is.
+    let (staged, oldest_staged) = sqlx::query_as::<_, (i64, f64)>(
+        "SELECT count(*), COALESCE(EXTRACT(EPOCH FROM now() - min(staged_at)), 0)::float8 \
+         FROM event_staging",
+    )
+    .fetch_one(&state.pool)
+    .await?;
+    out.push_str("# HELP aw_event_staging Events waiting for a position in the log.\n");
+    out.push_str("# TYPE aw_event_staging gauge\n");
+    let _ = writeln!(out, "aw_event_staging {staged}");
+    out.push_str("# TYPE aw_event_staging_oldest_seconds gauge\n");
+    let _ = writeln!(out, "aw_event_staging_oldest_seconds {oldest_staged:.3}");
+    let consumers = sqlx::query_as::<_, (String, i64, i64)>(
+        r#"
+        SELECT consumer.name,
+               GREATEST((SELECT next_position - 1 FROM event_position_counter) - consumer.position, 0),
+               (SELECT count(*) FROM event_consumer_failures failure
+                WHERE failure.consumer = consumer.name AND failure.resolved_at IS NULL)
+        FROM event_consumers consumer ORDER BY consumer.name
+        "#,
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    out.push_str("# HELP aw_event_consumer_lag Events a consumer has yet to handle.\n");
+    out.push_str("# TYPE aw_event_consumer_lag gauge\n");
+    for (name, lag, _) in &consumers {
+        let _ = writeln!(out, "aw_event_consumer_lag{{consumer=\"{name}\"}} {lag}");
+    }
+    out.push_str("# TYPE aw_event_consumer_parked gauge\n");
+    for (name, _, parked) in &consumers {
+        let _ = writeln!(
+            out,
+            "aw_event_consumer_parked{{consumer=\"{name}\"}} {parked}"
+        );
+    }
+
     let runs = sqlx::query_as::<_, (String, i64)>(
         r#"
         SELECT state, count(*) FROM agent_runs

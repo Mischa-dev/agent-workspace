@@ -53,6 +53,8 @@ export type ServerStatus = {
   }
   mail: { configured: boolean; enabled: boolean; lastTestAt: string | null; lastTestOk: boolean | null }
   jobs: { waiting: number; running: number; failedLastDay: number; oldestWaitingSeconds: number }
+  /** The event log: events waiting for a position, and events a consumer parked. Older servers leave it out. */
+  eventLog?: { waiting: number; oldestWaitingSeconds: number; parked: number }
 }
 
 export const mailKeys = {

@@ -99,6 +99,8 @@ impl Server {
         let Self { state, jobs } = self;
         let address = listener.local_addr().ok();
         let (shutdown, receiver) = watch::channel(false);
+        // Wakes the sequencer; K5.4's listener notifies it.
+        let wake = Arc::new(tokio::sync::Notify::new());
         crate::harnesses::spawn_reloader(state.clone());
         let scheduler = tokio::spawn(crate::scheduler::run(state.clone(), receiver.clone()));
         let github = tokio::spawn(github::run_jobs(state.clone(), receiver.clone()));
@@ -111,7 +113,19 @@ impl Server {
         // Not supervised like the loops above: a failure here delays
         // wakeups and lease expiry but never loses data, so it must not
         // stop the server.
-        let replies = tokio::spawn(crate::replies::run(state.clone(), receiver.clone()));
+        // The log's sequencer runs beside it on the same task, for the same
+        // reason: a failed step is retried on the next round.
+        let replies = tokio::spawn({
+            let replies = crate::replies::run(state.clone(), receiver.clone());
+            let sequencer = crate::events::sequencer::run(
+                state.pool.clone(),
+                Arc::clone(&wake),
+                receiver.clone(),
+            );
+            async move {
+                tokio::join!(replies, sequencer);
+            }
+        });
         // Background jobs (F9). A job lost to a crash is retried once its
         // lease runs out, so like the reply worker this doesn't stop the
         // server.
