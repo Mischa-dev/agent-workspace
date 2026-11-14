@@ -27,11 +27,16 @@ use crate::{
 /// What went wrong, in words the caller can act on.
 #[derive(Debug)]
 pub enum RunOpError {
-    Refused { field: &'static str, message: String },
+    Refused {
+        field: &'static str,
+        message: String,
+    },
     /// Missing, or not the caller's to see: the same answer for both.
     NotFound,
     Conflict(String),
-    VersionConflict { current_version: i64 },
+    VersionConflict {
+        current_version: i64,
+    },
     App(AppError),
 }
 
@@ -176,12 +181,7 @@ pub fn one_line(value: &str) -> String {
         .join(" ")
 }
 
-fn line(
-    value: &str,
-    max: usize,
-    field: &'static str,
-    message: &str,
-) -> Result<String, RunOpError> {
+fn line(value: &str, max: usize, field: &'static str, message: &str) -> Result<String, RunOpError> {
     let value = one_line(value);
     if value.chars().count() > max {
         return Err(refused(field, message));
@@ -248,7 +248,9 @@ async fn load_for_report(
     reporter: Reporter,
     run_id: Uuid,
 ) -> Result<RunRow, RunOpError> {
-    let run = load(transaction, run_id).await?.ok_or(RunOpError::NotFound)?;
+    let run = load(transaction, run_id)
+        .await?
+        .ok_or(RunOpError::NotFound)?;
     if run.account_id != reporter.account_id() {
         return Err(RunOpError::NotFound);
     }
@@ -365,7 +367,12 @@ pub async fn open(
         .bind(account_id)
         .fetch_optional(&mut **transaction)
         .await?
-        .ok_or_else(|| refused("cause.messageId", "That message wasn't found, or you can't see it."))?;
+        .ok_or_else(|| {
+            refused(
+                "cause.messageId",
+                "That message wasn't found, or you can't see it.",
+            )
+        })?;
         if conversation_id.is_some_and(|id| id != found) {
             return Err(refused(
                 "cause.messageId",
@@ -417,7 +424,10 @@ pub async fn open(
             ));
         }
         "message" if cause.message_id.is_none() => {
-            return Err(refused("cause.messageId", "A message cause names the message."));
+            return Err(refused(
+                "cause.messageId",
+                "A message cause names the message.",
+            ));
         }
         "schedule" | "host_trigger" if cause_ref.is_none() => {
             return Err(refused(
@@ -769,7 +779,10 @@ pub async fn append(
             insert_activity_row(transaction, &run, seq + 1, &activity, reporter.account_id())
                 .await?;
         if activity.effect == ActivityEffect::Interrupt
-            && let Some(request) = activity.payload.get("request").filter(|request| request.is_object())
+            && let Some(request) = activity
+                .payload
+                .get("request")
+                .filter(|request| request.is_object())
         {
             // A repeated interrupt finds the request it opened the first time.
             let opened = requests::open_for_run(transaction, &run, &activity.client_id, request)
@@ -891,13 +904,27 @@ pub async fn add_results(
         let id = result
             .id
             .as_deref()
-            .map(|id| line(id, 200, "results.id", "Keep a result's id to 200 characters."))
+            .map(|id| {
+                line(
+                    id,
+                    200,
+                    "results.id",
+                    "Keep a result's id to 200 characters.",
+                )
+            })
             .transpose()?
             .filter(|id| !id.is_empty());
         let branch = result
             .branch
             .as_deref()
-            .map(|branch| line(branch, 200, "results.branch", "Keep a branch name to 200 characters."))
+            .map(|branch| {
+                line(
+                    branch,
+                    200,
+                    "results.branch",
+                    "Keep a branch name to 200 characters.",
+                )
+            })
             .transpose()?
             .filter(|branch| !branch.is_empty());
         let key = match kind {
@@ -1000,14 +1027,22 @@ pub async fn record_usage(
             "Give each report a reportKey, the same on a retry.",
         ));
     }
-    let model = line(&input.model, 200, "model", "Keep the model name to 200 characters.")?;
+    let model = line(
+        &input.model,
+        200,
+        "model",
+        "Keep the model name to 200 characters.",
+    )?;
     if model.is_empty() {
         return Err(refused("model", "Name the model the usage was on."));
     }
     if input.input_tokens < 0 || input.output_tokens < 0 || input.cached_input_tokens < 0 {
         return Err(refused("inputTokens", "Token counts can't be negative."));
     }
-    if input.cost.is_some_and(|cost| !cost.is_finite() || cost < 0.0) {
+    if input
+        .cost
+        .is_some_and(|cost| !cost.is_finite() || cost < 0.0)
+    {
         return Err(refused("cost", "Cost is a number of at least 0."));
     }
     let currency = match input.currency.as_deref().map(str::trim) {
@@ -1016,7 +1051,12 @@ pub async fn record_usage(
         {
             Some(code.to_owned())
         }
-        Some(_) => return Err(refused("currency", "Give the currency as a code, like USD.")),
+        Some(_) => {
+            return Err(refused(
+                "currency",
+                "Give the currency as a code, like USD.",
+            ));
+        }
         None => input.cost.map(|_| "USD".to_owned()),
     };
     if let Some(existing) = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(
@@ -1043,13 +1083,12 @@ pub async fn record_usage(
             if end <= start {
                 return Err(refused("windowEnd", "windowEnd comes after windowStart."));
             }
-            let workspace = sqlx::query_scalar::<_, Uuid>(
-                "SELECT organization_id FROM projects WHERE id = $1",
-            )
-            .bind(input.space_id)
-            .fetch_optional(&mut **transaction)
-            .await?
-            .ok_or(RunOpError::NotFound)?;
+            let workspace =
+                sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
+                    .bind(input.space_id)
+                    .fetch_optional(&mut **transaction)
+                    .await?
+                    .ok_or(RunOpError::NotFound)?;
             (None, workspace)
         }
         _ => {
@@ -1146,14 +1185,23 @@ pub async fn request_cancel(
     run_id: Uuid,
     reason: Option<String>,
 ) -> Result<RunRow, RunOpError> {
-    let run = load(transaction, run_id).await?.ok_or(RunOpError::NotFound)?;
+    let run = load(transaction, run_id)
+        .await?
+        .ok_or(RunOpError::NotFound)?;
     let current = run.run_state()?;
     if current.is_terminal() || current == RunState::CancelRequested {
         return Ok(run);
     }
     let reason = reason
         .as_deref()
-        .map(|reason| line(reason, MAX_LINE_CHARS, "reason", "Keep the reason to 200 characters."))
+        .map(|reason| {
+            line(
+                reason,
+                MAX_LINE_CHARS,
+                "reason",
+                "Keep the reason to 200 characters.",
+            )
+        })
         .transpose()?
         .filter(|reason| !reason.is_empty());
     let next = reduce(current, RunEvent::CancelRequested { has_runner: true })
@@ -1176,11 +1224,21 @@ pub async fn request_cancel(
     emit(
         transaction,
         &saved,
-        if next.is_terminal() { "finished" } else { "cancel" },
+        if next.is_terminal() {
+            "finished"
+        } else {
+            "cancel"
+        },
     )
     .await?;
     if !next.is_terminal() {
-        notify_agent(transaction, &saved, "run.cancel", "You were asked to stop this run.").await?;
+        notify_agent(
+            transaction,
+            &saved,
+            "run.cancel",
+            "You were asked to stop this run.",
+        )
+        .await?;
     }
     Ok(saved)
 }
@@ -1234,7 +1292,9 @@ pub async fn mark_not_started(
     transaction: &mut Transaction<'_, Postgres>,
     run_id: Uuid,
 ) -> Result<RunRow, RunOpError> {
-    let run = load(transaction, run_id).await?.ok_or(RunOpError::NotFound)?;
+    let run = load(transaction, run_id)
+        .await?
+        .ok_or(RunOpError::NotFound)?;
     let current = run.run_state()?;
     if current != RunState::StartUncertain {
         return Err(RunOpError::Conflict(format!(
@@ -1250,4 +1310,61 @@ pub async fn mark_not_started(
     .await?;
     emit(transaction, &saved, "finished").await?;
     Ok(saved)
+}
+
+/// A host can no longer report these runs: it was unlinked, retired the
+/// agent, or the agent was unbound from it (A1.11). Every active run on the
+/// host (for one agent, when named) without a built-in detail row becomes
+/// `interrupted` with `reason`. Returns the runs it changed.
+pub async fn host_lost(
+    transaction: &mut Transaction<'_, Postgres>,
+    host_id: Uuid,
+    account_id: Option<Uuid>,
+    reason: &str,
+) -> Result<Vec<Uuid>, AppError> {
+    let active = RunState::ALL
+        .into_iter()
+        .filter(|state| state.is_active())
+        .map(RunState::as_str)
+        .collect::<Vec<_>>();
+    let runs = sqlx::query_as::<_, RunRow>(&format!(
+        r#"
+        SELECT {RUN_COLUMNS} FROM runs run
+        WHERE run.host_id = $1 AND ($2::uuid IS NULL OR run.account_id = $2)
+          AND run.state = ANY($3)
+          AND NOT EXISTS (SELECT 1 FROM agent_runs builtin WHERE builtin.id = run.id)
+        ORDER BY run.id
+        FOR UPDATE
+        "#
+    ))
+    .bind(host_id)
+    .bind(account_id)
+    .bind(&active)
+    .fetch_all(&mut **transaction)
+    .await?;
+    let mut changed = Vec::with_capacity(runs.len());
+    for run in runs {
+        let Ok(current) = run.run_state() else {
+            continue;
+        };
+        let next = reduce(current, RunEvent::HostLost).unwrap_or(current);
+        if next == current {
+            continue;
+        }
+        let saved = save_state(transaction, &run, next, false).await?;
+        let saved = sqlx::query_as::<_, RunRow>(&format!(
+            r#"
+            UPDATE runs run SET failure_reason = $2, status_line = $2
+             WHERE run.id = $1
+            RETURNING {RUN_COLUMNS}
+            "#
+        ))
+        .bind(saved.id)
+        .bind(reason)
+        .fetch_one(&mut **transaction)
+        .await?;
+        emit(transaction, &saved, "finished").await?;
+        changed.push(saved.id);
+    }
+    Ok(changed)
 }

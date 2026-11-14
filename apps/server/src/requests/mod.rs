@@ -76,7 +76,10 @@ pub struct RequestRow {
 /// Why a request couldn't be opened: the field and what to do.
 #[derive(Debug)]
 pub enum OpenError {
-    Refused { field: &'static str, message: String },
+    Refused {
+        field: &'static str,
+        message: String,
+    },
     App(AppError),
 }
 
@@ -131,7 +134,10 @@ pub async fn open_for_run(
         .as_deref()
         .is_some_and(|value| value.chars().count() > 200 || value.chars().any(char::is_control))
     {
-        return Err(refused(FIELD, "Keep clientRequestId to 200 characters on one line."));
+        return Err(refused(
+            FIELD,
+            "Keep clientRequestId to 200 characters on one line.",
+        ));
     }
     if let Some(existing) = sqlx::query_as::<_, (Uuid, Option<String>)>(
         r#"
@@ -225,10 +231,19 @@ pub async fn open_for_run(
         None | Some(Value::Null) => Vec::new(),
         Some(Value::Array(accounts)) if accounts.len() <= 20 => accounts
             .iter()
-            .map(|account| account.as_str().and_then(|id| id.trim().parse::<Uuid>().ok()))
+            .map(|account| {
+                account
+                    .as_str()
+                    .and_then(|id| id.trim().parse::<Uuid>().ok())
+            })
             .collect::<Option<Vec<_>>>()
             .ok_or_else(|| refused(FIELD, "Name people and agents in audience.accounts by ID."))?,
-        Some(_) => return Err(refused(FIELD, "Name at most 20 accounts in audience.accounts.")),
+        Some(_) => {
+            return Err(refused(
+                FIELD,
+                "Name at most 20 accounts in audience.accounts.",
+            ));
+        }
     };
     let roles = match audience.and_then(|audience| audience.get("roles")) {
         None | Some(Value::Null) => Vec::new(),
@@ -251,7 +266,10 @@ pub async fn open_for_run(
         Some(_) => return Err(refused(FIELD, "Name at most 10 roles in audience.roles.")),
     };
     let Some(space_id) = run.space_id else {
-        return Err(refused(FIELD, "This run isn't in a project, so it can't ask anyone yet."));
+        return Err(refused(
+            FIELD,
+            "This run isn't in a project, so it can't ask anyone yet.",
+        ));
     };
     if !accounts.is_empty() {
         let members = sqlx::query_scalar::<_, i64>(
@@ -434,4 +452,89 @@ pub async fn get(
     .bind(request_id)
     .fetch_optional(&mut **transaction)
     .await?)
+}
+
+/// A host says one of its agents now has a reference from a different
+/// lineage (A1.11): it may be a different agent, so the account's managers
+/// decide, in each workspace where it is a member. A repeat of the same
+/// notice returns the requests already open. Returns their ids.
+pub async fn open_for_host_agent(
+    transaction: &mut Transaction<'_, Postgres>,
+    host_id: Uuid,
+    host_account_id: Uuid,
+    account_id: Uuid,
+    host_name: &str,
+    old_reference: &str,
+    new_reference: &str,
+) -> Result<Vec<Uuid>, AppError> {
+    use sha2::{Digest, Sha256};
+    let fingerprint = Sha256::digest(new_reference.as_bytes())
+        .iter()
+        .take(12)
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let clip = |value: &str, max: usize| value.chars().take(max).collect::<String>();
+    let title = format!(
+        "{} says the agent it knew as \"{}\" is now \"{}\", from a different line. Is it the same agent?",
+        clip(host_name, 80),
+        clip(old_reference, 200),
+        clip(new_reference, 200),
+    );
+    Ok(sqlx::query_scalar::<_, Uuid>(
+        r#"
+        WITH workspaces AS (
+            SELECT membership.organization_id
+            FROM organization_memberships membership
+            WHERE membership.actor_id = $3 AND membership.enabled
+        ),
+        inserted AS (
+            INSERT INTO requests (
+                id, workspace_id, kind, raised_by_account_id, raised_via_host_id,
+                client_request_id, subject_kind, subject_id, title, options,
+                answer_permission, addressed_role_keys
+            )
+            SELECT gen_random_uuid(), workspace.organization_id, 'approval', $2, $1,
+                   'agent_ref_changed:' || workspace.organization_id || ':' || $3 || ':' || $4,
+                   'host_agent', $3, $5,
+                   '[{"id": "same", "label": "Same agent", "style": "approve"},
+                     {"id": "different", "label": "A different agent", "style": "deny"}]'::jsonb,
+                   'agents.manage', ARRAY['owner', 'admin']
+            FROM workspaces workspace
+            ON CONFLICT (raised_by_account_id, client_request_id) DO NOTHING
+            RETURNING id
+        )
+        SELECT id FROM inserted
+        UNION
+        SELECT request.id FROM requests request
+        JOIN workspaces workspace ON workspace.organization_id = request.workspace_id
+        WHERE request.raised_by_account_id = $2 AND request.status = 'open'
+          AND request.client_request_id
+              = 'agent_ref_changed:' || workspace.organization_id || ':' || $3 || ':' || $4
+        "#,
+    )
+    .bind(host_id)
+    .bind(host_account_id)
+    .bind(account_id)
+    .bind(fingerprint)
+    .bind(clip(&title, MAX_TITLE_CHARS))
+    .fetch_all(&mut **transaction)
+    .await?)
+}
+
+/// A host was unlinked: the open requests raised through it are cancelled.
+pub async fn cancel_raised_via_host(
+    transaction: &mut Transaction<'_, Postgres>,
+    host_id: Uuid,
+) -> Result<u64, AppError> {
+    Ok(sqlx::query(
+        r#"
+        UPDATE requests
+           SET status = 'cancelled', version = version + 1, updated_at = now()
+         WHERE raised_via_host_id = $1 AND status = 'open' AND legacy_source IS NULL
+        "#,
+    )
+    .bind(host_id)
+    .execute(&mut **transaction)
+    .await?
+    .rows_affected())
 }

@@ -40,6 +40,10 @@ pub enum MutationAction {
     /// provider. No person's session is involved; the credential decides
     /// which agent it is.
     AgentCredentialExchange,
+    /// A host's own call (A1.11): enrolling with a one-time code a person
+    /// made, or describing itself, sending a heartbeat or a notice with the
+    /// token it got then. It acts only for the agents people bound to it.
+    HostCredential,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1305,6 +1309,39 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/agents/token",
         AgentCredentialExchange
     ),
+    policy_route!("hosts/routes", Post, "/api/v1/hosts/enrolments", HostManage),
+    policy_route!(
+        "hosts/routes",
+        Post,
+        "/api/v1/hosts/{host_id}/agents",
+        HostManage
+    ),
+    policy_route!(
+        "hosts/routes",
+        Delete,
+        "/api/v1/hosts/{host_id}/agents/{account_id}",
+        HostManage
+    ),
+    policy_route!(
+        "hosts/routes",
+        Post,
+        "/api/v1/hosts/{host_id}/unlink",
+        HostManage
+    ),
+    boundary_route!("hosts/routes", Post, "/api/v1/hosts/enrol", HostCredential),
+    boundary_route!(
+        "hosts/routes",
+        Post,
+        "/api/v1/host/describe",
+        HostCredential
+    ),
+    boundary_route!(
+        "hosts/routes",
+        Post,
+        "/api/v1/host/heartbeat",
+        HostCredential
+    ),
+    boundary_route!("hosts/routes", Post, "/api/v1/host/notices", HostCredential),
     boundary_route!("mcp/oauth", Post, "/oauth/register", OAuthProtocol),
     boundary_route!("mcp/oauth", Post, "/oauth/authorize", OAuthProtocol),
     boundary_route!("mcp/oauth", Post, "/connect/confirm", OAuthProtocol),

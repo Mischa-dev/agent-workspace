@@ -17,8 +17,9 @@
 use crate::policy::Permission::{
     self, ChannelsCreate, ChannelsPost, CodeManage, CodePublish, CodeView, CollectionsBuild,
     CollectionsEdit, MembersInvite, MembersManage, MembersView, PagesEdit, ProjectsCreate,
-    ProjectsManage, RolesManage, RunsApprove, RunsInterrupt, RunsLaunch, RunsReport, SettingsManage,
-    SheetsEdit, TasksCreate, TasksDelete, TasksEdit, TasksView, TasksWorkflow, WhiteboardsEdit,
+    ProjectsManage, RolesManage, RunsApprove, RunsInterrupt, RunsLaunch, RunsReport,
+    SettingsManage, SheetsEdit, TasksCreate, TasksDelete, TasksEdit, TasksView, TasksWorkflow,
+    WhiteboardsEdit,
 };
 
 pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
@@ -92,6 +93,11 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("inbox_list", None),
     ("reply_claim", Some(ChannelsPost)),
     ("session_bind", None),
+    ("host_list", None),
+    ("host_enrolment_create", None),
+    ("host_agent_bind", None),
+    ("host_agent_unbind", None),
+    ("host_unlink", None),
     ("reply_send", Some(ChannelsPost)),
     ("reply_progress", Some(ChannelsPost)),
     ("reply_pass", Some(ChannelsPost)),

@@ -110,6 +110,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/files/{id}/content",
     "/api/v1/files/{id}/thumbnail",
     "/api/v1/home",
+    "/api/v1/hosts",
     "/api/v1/inbox",
     "/api/v1/inbox/summary",
     "/api/v1/link-previews/{id}/image",
@@ -3056,6 +3057,16 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             vec![],
             vec![],
         ),
+        // A1.11: someone else's workspace adds none of its hosts.
+        case(
+            "/api/v1/hosts",
+            vec![
+                "/api/v1/hosts".to_owned(),
+                format!("/api/v1/hosts?workspaceId={}", a.organization),
+            ],
+            vec![],
+            vec![format!("/api/v1/hosts?workspaceId={}", b.organization)],
+        ),
         case(
             "/api/v1/webhooks/{webhook_id}/deliveries",
             vec![format!("/api/v1/webhooks/{}/deliveries", a.webhook)],
@@ -3667,6 +3678,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "record_query",
     "sheet_list",
     "sheet_read",
+    "host_list",
     "inbox_list",
     "invitation_list",
     "label_list",
@@ -3904,6 +3916,12 @@ fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         case("webhook_list", vec![json!({})], vec![], vec![]),
+        case(
+            "host_list",
+            vec![json!({}), json!({"workspaceId": a.organization})],
+            vec![],
+            vec![json!({"workspaceId": b.organization})],
+        ),
         case(
             "whiteboard_list",
             vec![

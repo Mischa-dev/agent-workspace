@@ -23,12 +23,16 @@ pub const SWEEP_KIND: &str = "runs.liveness_sweep";
 const SWEEP_BATCH: i64 = 500;
 
 pub fn register_jobs(registry: &mut JobRegistry) {
-    registry.register_with_timeout(SWEEP_KIND, Duration::from_secs(120), |context: JobContext| async move {
-        sweep(&context.state.pool)
-            .await
-            .map_err(|error| JobError::retry(error.log_category()))?;
-        Ok(())
-    });
+    registry.register_with_timeout(
+        SWEEP_KIND,
+        Duration::from_secs(120),
+        |context: JobContext| async move {
+            sweep(&context.state.pool)
+                .await
+                .map_err(|error| JobError::retry(error.log_category()))?;
+            Ok(())
+        },
+    );
     registry.every(SWEEP_KIND, Duration::from_secs(60));
 }
 
@@ -81,4 +85,57 @@ pub async fn sweep(pool: &PgPool) -> Result<usize, AppError> {
     }
     transaction.commit().await?;
     Ok(changed.len())
+}
+
+/// A host's heartbeat listed these runs: those that are the host's own and
+/// still expect reports are heard from now (A1.11). Returns how many.
+pub async fn renew_for_host(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    host_id: uuid::Uuid,
+    run_ids: &[uuid::Uuid],
+) -> Result<u64, AppError> {
+    if run_ids.is_empty() {
+        return Ok(0);
+    }
+    #[derive(sqlx::FromRow)]
+    struct Renewed {
+        #[sqlx(flatten)]
+        run: RunRow,
+        was: String,
+    }
+    let renewed = sqlx::query_as::<_, Renewed>(&format!(
+        r#"
+        WITH listed AS (
+            SELECT candidate.id, candidate.liveness AS was
+            FROM runs candidate
+            WHERE candidate.id = ANY($1) AND candidate.host_id = $2 AND candidate.state = ANY($3)
+            FOR UPDATE
+        )
+        UPDATE runs run
+           SET last_report_at = now(),
+               liveness = 'ok',
+               version = CASE WHEN listed.was <> 'ok' THEN run.version + 1 ELSE run.version END,
+               updated_at = now()
+          FROM listed
+         WHERE run.id = listed.id
+        RETURNING {RUN_COLUMNS}, listed.was
+        "#
+    ))
+    .bind(run_ids)
+    .bind(host_id)
+    .bind(
+        RunState::ALL
+            .into_iter()
+            .filter(|state| state.expects_reports())
+            .map(RunState::as_str)
+            .collect::<Vec<_>>(),
+    )
+    .fetch_all(&mut **transaction)
+    .await?;
+    for renewed in &renewed {
+        if renewed.was != "ok" {
+            emit(transaction, &renewed.run, "liveness_changed").await?;
+        }
+    }
+    Ok(renewed.len() as u64)
 }

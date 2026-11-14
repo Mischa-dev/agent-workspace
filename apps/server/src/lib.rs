@@ -39,6 +39,7 @@ pub mod harness_host;
 pub mod harnesses;
 pub mod health;
 pub mod home;
+pub mod hosts;
 pub mod idempotency;
 pub mod invitations;
 pub mod jobs;
@@ -184,6 +185,7 @@ pub fn router(state: AppState) -> Router {
         .merge(run_views::router())
         .merge(agent_profiles::router())
         .merge(agent_sessions::router())
+        .merge(hosts::routes::router())
         .merge(github::router())
         .merge(invitations::router())
         .merge(memberships::router())

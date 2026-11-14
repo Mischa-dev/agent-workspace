@@ -93,10 +93,12 @@ pub enum Action {
     SettingsManage,
     /// Define the workspace's roles (owners and admins; people only).
     RoleManage,
+    /// Link hosts for the workspace and manage them (A1.11; people only).
+    HostManage,
 }
 
 impl Action {
-    pub const ALL: [Self; 46] = [
+    pub const ALL: [Self; 47] = [
         Self::OrganizationProjectCreate,
         Self::ProjectView,
         Self::ProjectManage,
@@ -143,6 +145,7 @@ impl Action {
         Self::PullRequestMerge,
         Self::SettingsManage,
         Self::RoleManage,
+        Self::HostManage,
     ];
 
     /// The permission a role needs for this action.
@@ -190,6 +193,7 @@ impl Action {
                 Permission::CodePublish
             }
             Self::RoleManage => Permission::RolesManage,
+            Self::HostManage => Permission::HostsManage,
         }
     }
 }
@@ -230,6 +234,7 @@ pub enum Permission {
     CodePublish,
     CodeManage,
     AgentsManage,
+    HostsManage,
     MembersView,
     DirectoryView,
     MembersInvite,
@@ -318,7 +323,7 @@ const WORKERS: [bool; 4] = [true, true, true, false];
 const MANAGERS: [bool; 4] = [true, true, false, false];
 
 /// Every permission, in the order the Roles page shows them.
-pub const PERMISSIONS: [PermissionInfo; 32] = [
+pub const PERMISSIONS: [PermissionInfo; 33] = [
     required(permission(
         Permission::ProjectsView,
         "projects.view",
@@ -552,6 +557,15 @@ pub const PERMISSIONS: [PermissionInfo; 32] = [
         "Manage agents",
         "Connect agents to a project and change or remove them.",
         PermissionScope::Project,
+        MANAGERS,
+    )),
+    people_only(permission(
+        Permission::HostsManage,
+        "hosts.manage",
+        "agents",
+        "Manage hosts",
+        "Link machines and services that run agents for the workspace, choose which agents they run, and unlink them.",
+        PermissionScope::Workspace,
         MANAGERS,
     )),
     permission(
@@ -1168,6 +1182,7 @@ pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decis
             Action::OrganizationProjectCreate
             | Action::SettingsManage
             | Action::RoleManage
+            | Action::HostManage
             | Action::InvitationManage
             | Action::MembershipView
             | Action::MembershipManage,
@@ -1337,9 +1352,11 @@ mod tests {
 
     fn project_resource(action: Action, role: MembershipRole) -> Resource {
         match action {
-            Action::OrganizationProjectCreate | Action::RoleManage => Resource::Organization {
-                organization_id: ORGANIZATION_ID,
-            },
+            Action::OrganizationProjectCreate | Action::RoleManage | Action::HostManage => {
+                Resource::Organization {
+                    organization_id: ORGANIZATION_ID,
+                }
+            }
             Action::ApprovalRespond => Resource::Approval {
                 scope: ProjectScope::approval(
                     PROJECT_ID,
@@ -1361,7 +1378,7 @@ mod tests {
 
     fn membership_for(action: Action, role: MembershipRole, enabled: bool) -> Membership {
         match action {
-            Action::OrganizationProjectCreate | Action::RoleManage => {
+            Action::OrganizationProjectCreate | Action::RoleManage | Action::HostManage => {
                 Membership::organization(ORGANIZATION_ID, RoleGrant::built_in(role), enabled)
             }
             _ => Membership::project(PROJECT_ID, RoleGrant::built_in(role), enabled),

@@ -108,6 +108,10 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/direct/dms",
     "POST /api/v1/direct/groups",
     "DELETE /api/v1/files/{id}",
+    "POST /api/v1/hosts/enrolments",
+    "POST /api/v1/hosts/{host_id}/agents",
+    "DELETE /api/v1/hosts/{host_id}/agents/{account_id}",
+    "POST /api/v1/hosts/{host_id}/unlink",
     "POST /api/v1/inbox/update",
     "POST /api/v1/later",
     "DELETE /api/v1/later/{id}",
@@ -373,6 +377,26 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
          workspace ID",
     ),
     ("POST /api/v1/auth/login", SIGN_IN),
+    (
+        "POST /api/v1/host/describe",
+        "a host's own call with its own token, about itself; no session and no workspace ID \
+         (tests/integration/a1_host_protocol.rs)",
+    ),
+    (
+        "POST /api/v1/host/heartbeat",
+        "a host's own call with its own token, about itself and its own runs \
+         (tests/integration/a1_host_protocol.rs)",
+    ),
+    (
+        "POST /api/v1/host/notices",
+        "a host's own call with its own token, about agents bound to it \
+         (tests/integration/a1_host_protocol.rs)",
+    ),
+    (
+        "POST /api/v1/hosts/enrol",
+        "a host trading a one-time code for its token; no session and no workspace ID \
+         (tests/integration/a1_host_protocol.rs)",
+    ),
     ("POST /api/v1/auth/login/two-factor", SIGN_IN),
     ("POST /api/v1/auth/logout", SIGN_IN),
     ("POST /api/v1/auth/password-reset", SIGN_IN),
@@ -441,6 +465,10 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "file_delete",
     "file_upload",
     "github_integration_write",
+    "host_agent_bind",
+    "host_agent_unbind",
+    "host_enrolment_create",
+    "host_unlink",
     "invitation_write",
     "label_write",
     "layout_preset_write",
@@ -1176,6 +1204,9 @@ struct Targets {
     /// More sessions for A's owner: writes are limited per session per
     /// minute, so A's requests rotate through them. Empty for B.
     sessions: Vec<Browser>,
+    /// The workspace's hosts (A1.11): the agent is bound to the first two
+    /// as "net-agent" (HTTP, MCP); the last two are for unlinking.
+    hosts: [Uuid; 4],
     owner: Uuid,
     /// The agent, as an actor.
     agent: Uuid,
@@ -1622,7 +1653,10 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
     .await
     .expect("workspace template");
     let mut reported_runs = [Uuid::nil(); 3];
-    for (index, state) in ["working", "working", "start_uncertain"].into_iter().enumerate() {
+    for (index, state) in ["working", "working", "start_uncertain"]
+        .into_iter()
+        .enumerate()
+    {
         reported_runs[index] = sqlx::query_scalar::<_, Uuid>(
             r#"
             INSERT INTO runs (id, workspace_id, space_id, account_id, title, cause_kind, state,
@@ -1640,9 +1674,50 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         .await
         .expect("reported run");
     }
+    let mut hosts = [Uuid::nil(); 4];
+    for (index, host) in hosts.iter_mut().enumerate() {
+        let account = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO actors (id, kind, status) VALUES (gen_random_uuid(), 'integration', 'active') RETURNING id",
+        )
+        .fetch_one(pool)
+        .await
+        .expect("host account");
+        *host = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            INSERT INTO hosts (id, account_id, owner_workspace_id, name, protocol_version,
+                               described_agents, enrolled_by_account_id)
+            VALUES (gen_random_uuid(), $1, $2, $3, '2026-11',
+                    '[{"hostAgentRef": "net-agent", "name": "Net", "backends": [], "actions": []}]',
+                    $4)
+            RETURNING id
+            "#,
+        )
+        .bind(account)
+        .bind(organization)
+        .bind(format!("Net host {tag} {index}"))
+        .bind(owner)
+        .fetch_one(pool)
+        .await
+        .expect("host");
+        if index < 2 {
+            sqlx::query(
+                r#"
+                INSERT INTO host_agents (host_id, account_id, host_agent_ref, bound_by_account_id)
+                VALUES ($1, $2, 'net-agent', $3)
+                "#,
+            )
+            .bind(*host)
+            .bind(agent)
+            .bind(owner)
+            .execute(pool)
+            .await
+            .expect("host agent");
+        }
+    }
     let in_project = |sql: &'static str| scalar(pool, sql, project);
     let in_organization = |sql: &'static str| scalar(pool, sql, organization);
     Targets {
+        hosts,
         questions,
         reported_runs,
         custom_role,
@@ -5457,6 +5532,31 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             empty(),
         )
         .last(),
+        // Hosts (A1.11)
+        body_case(
+            "POST /api/v1/hosts/enrolments",
+            &[],
+            json!({"workspaceId": a.organization, "label": "Net host"}),
+            vec![json!({"workspaceId": b.organization, "label": "Net host"})],
+        ),
+        path_case(
+            "POST /api/v1/hosts/{host_id}/agents",
+            &[id(ax.hosts[0], bx.hosts[0])],
+            json_body(json!({"accountId": ax.agent, "hostAgentRef": "net-agent"})),
+        )
+        .rejecting(vec![json!({"accountId": bx.agent, "hostAgentRef": "net-agent"})]),
+        path_case(
+            "DELETE /api/v1/hosts/{host_id}/agents/{account_id}",
+            &[id(ax.hosts[0], bx.hosts[0]), removed(ax.agent, bx.agent)],
+            empty(),
+        )
+        .last(),
+        path_case(
+            "POST /api/v1/hosts/{host_id}/unlink",
+            &[id(ax.hosts[2], bx.hosts[2])],
+            empty(),
+        )
+        .last(),
         // Webhooks
         body_case(
             "POST /api/v1/webhooks",
@@ -6725,6 +6825,31 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "importId": b.import}),
             json!({"projectId": a.project, "source": "github", "repositoryId": b.repository}),
         ]),
+        // Hosts (A1.11)
+        mcp_case(
+            "host_enrolment_create",
+            json!({"owner": "workspace", "workspaceId": a.organization, "label": "Net mcp host"}),
+            vec![json!({"owner": "workspace", "workspaceId": b.organization, "label": "Net mcp host"})],
+        ),
+        mcp_case(
+            "host_agent_bind",
+            json!({"hostId": ax.hosts[1], "accountId": ax.agent, "hostAgentRef": "net-agent"}),
+            vec![json!({"hostId": bx.hosts[1], "accountId": bx.agent, "hostAgentRef": "net-agent"})],
+        )
+        .rejecting(vec![json!({"hostId": ax.hosts[1], "accountId": bx.agent, "hostAgentRef": "net-agent"})]),
+        mcp_case(
+            "host_agent_unbind",
+            json!({"hostId": ax.hosts[1], "accountId": ax.agent}),
+            vec![json!({"hostId": bx.hosts[1], "accountId": bx.agent})],
+        )
+        .no_effect(vec![json!({"hostId": ax.hosts[1], "accountId": bx.agent})])
+        .last(),
+        mcp_case(
+            "host_unlink",
+            json!({"hostId": ax.hosts[3]}),
+            vec![json!({"hostId": bx.hosts[3]})],
+        )
+        .last(),
         mcp_case(
             "webhook_write",
             json!({
