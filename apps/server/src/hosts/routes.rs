@@ -43,7 +43,8 @@ pub fn router() -> Router<AppState> {
 }
 
 fn kind_of(principal: &AuthenticatedActor) -> ActorKind {
-    if principal.actor_kind == "human" {
+    let person = principal.actor_kind == "human"; // kind-check: mechanical (maps the principal onto the policy kind)
+    if person {
         ActorKind::Human
     } else {
         ActorKind::ExternalAgent

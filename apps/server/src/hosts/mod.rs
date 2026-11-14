@@ -302,7 +302,7 @@ async fn may_manage_agent(
         FROM organization_memberships membership
         JOIN actors account ON account.id = membership.actor_id
         WHERE membership.actor_id = $1 AND membership.enabled
-          AND account.kind = 'external_agent' AND account.status = 'active'
+          AND account.kind = 'external_agent' AND account.status = 'active' -- // kind-check: mechanical (only an agent account is bound to a host)
           AND ($2::uuid IS NULL OR membership.organization_id = $2)
         ORDER BY membership.organization_id
         "#,
@@ -556,7 +556,9 @@ pub async fn create_enrolment(
     let label_text = label(label_text)?;
     match owner {
         Owner::Account(account) => {
-            if account != caller || caller_kind != ActorKind::Human {
+            // A host's owner is a person or a workspace (R19).
+            let person = caller_kind == ActorKind::Human; // kind-check: mechanical (R19)
+            if account != caller || !person {
                 return Err(AppError::Refused {
                     field: "owner",
                     message: "Only a person links a host of their own.",
