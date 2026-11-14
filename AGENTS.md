@@ -1,16 +1,21 @@
 # Repository guidance
 
-The work is tracked as tasks in the app's AWD project (Agent Workspace), and
-the current direction is on its pages "Plan: the build-out phase (scope creep
-on purpose)" and, after that, "Path to public". Read the project's guide page
-first; each task is one agent session and one pull request.
-`docs/plans/roadmap.md` is the plan that got the app here (workstreams W0 to
-W23, all merged but W15 "Open up"): use it as the reference for what each
-piece is, and follow its "How an agent runs a workstream" section. It built on
-`docs/plans/workspace-merge-plan.md`, which made this app the one workspace
-(DMs, groups, agents answering on their own, plus projects, work items, Codex
-runs and GitHub). `PROJECT_SOURCE_OF_TRUTH.md` is history and a reference for
-how existing code behaves; don't add to it for ordinary changes.
+The plan is in `docs/plans/master/`. Before you start a slice, read, in this
+order: `docs/plans/master/END-STATE.md` (what the product is becoming; its
+words are used the same way everywhere), `docs/plans/master/LEAD-RULINGS.md`
+(binding where a plan disagrees), your workstream's plan in
+`docs/plans/master/plans/` (at least its goal, target design, guard rails and
+touch points), and your slice's section in it, which is the specification.
+`docs/plans/master/BUILD-ORDER.md` says which build the slice is in, what must
+have merged first and how a build runs (its section 3); if a slice it depends
+on hasn't merged, stop and say so in the task. Work is tracked as tasks in the
+app's AWD project; a task's title and the pull request's title start with the
+slice id (`K1.3: …`). The definition of done is section 7 of
+`docs/plans/master/plans/P0-steady-ground.md`. If your slice changes something
+another plan relies on, record it in `docs/plans/master/interfaces.md`. Older
+plans in `docs/plans/` are references for how existing pieces were built;
+where they disagree with `docs/plans/master/`, the master plan wins.
+First-build documents are in `docs/history/`; don't follow them.
 
 ## Skills for working here
 

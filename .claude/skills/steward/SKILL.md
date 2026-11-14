@@ -68,9 +68,11 @@ a proposal. Every change still passes the checks above before it's pushed.
 
 ## The pull request
 
-- Title `W<n>: <name>` for a workstream; one branch and one PR each.
+- Title `<slice id>: <name>` (`K1.3: …`), or `Build <n>: <name>` for a
+  whole build; one branch and one PR each.
 - The description lists deploy requirements: new migrations, environment
   variables, permissions, anything to install or set after deploying. The
   deploy checklist in `docs/operations/alpha-deploy.md` collects them.
-- If the workstream has an entry in `docs/plans/roadmap.md`, tick its
-  checklist and put the PR number after its heading, in the same PR.
+- Say in the description which slices of the workstream plan's slice table
+  (`docs/plans/master/plans/`, and `SLICES.md`) the PR builds, and record any
+  interface it changes in `docs/plans/master/interfaces.md`, in the same PR.
