@@ -23,6 +23,13 @@
   "automations": { "triggers": ["record_created", "record_changed"], "actions": [] },
   "things": [
     {
+      "kind": "collection",
+      "one": "Collection",
+      "many": "Collections",
+      "href": "/projects/{projectId}/collections/{id}",
+      "fields": [{ "id": "updatedAt", "label": "Edited", "type": "date" }]
+    },
+    {
       "kind": "record",
       "one": "Record",
       "many": "Records",

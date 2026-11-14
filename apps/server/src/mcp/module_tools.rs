@@ -152,10 +152,11 @@ pub(super) async fn module_list(
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct ThingOpenArguments {
-    /// What kind of thing: task, page, decision, whiteboard, thread,
-    /// channel, conversation, project or record (a collection's).
-    pub kind: String,
-    /// Its ID or link.
+    /// What kind of thing: task, page, decision, whiteboard, sheet, thread,
+    /// channel, conversation, project, collection or record (a
+    /// collection's). Leave it out to open any thing by its ID.
+    pub kind: Option<String>,
+    /// Its ID, link, or thing:<id>.
     pub id: String,
 }
 
@@ -186,23 +187,38 @@ pub(super) async fn thing_open(
     if !principal.can_read() {
         return ToolResult::denied("This connection can't read.");
     }
-    let kind = arguments.kind.trim().to_ascii_lowercase();
-    if !modules::things::KINDS.contains(&kind.as_str()) {
+    let kind = arguments
+        .kind
+        .as_deref()
+        .map(|kind| kind.trim().to_ascii_lowercase())
+        .filter(|kind| !kind.is_empty());
+    if let Some(kind) = &kind
+        && !modules::things::KINDS.contains(&kind.as_str())
+    {
         return ToolResult::invalid(
             "kind",
             format!("Use one of {}.", modules::things::KINDS.join(", ")),
         );
     }
+    let raw = arguments.id.trim();
+    let raw = raw.strip_prefix("thing:").unwrap_or(raw);
     // A record's link is its collection's, with ?record=<id> (AWD-110).
-    let id = if kind == "record" {
-        record_in_link(&arguments.id).or_else(|| parse_id(&arguments.id))
-    } else {
-        parse_id(&arguments.id)
-    };
+    let id = record_in_link(raw).or_else(|| parse_id(raw));
     let Some(id) = id else {
         return ToolResult::invalid("id", "Pass the thing's ID or link.");
     };
     let result = async {
+        // Without a kind, the registry says what it is.
+        let kind = match kind {
+            Some(kind) => kind,
+            None => {
+                let mut connection = state.pool.acquire().await?;
+                match crate::things::locate(&mut connection, id).await? {
+                    Some(located) if !located.deleted => located.kind.to_string(),
+                    _ => return Ok(ToolResult::not_found("That thing")),
+                }
+            }
+        };
         let projects = accessible_project_ids(state, principal).await?;
         let task_projects =
             crate::search::projects_showing_tasks(&state.pool, principal.actor_id, &projects)

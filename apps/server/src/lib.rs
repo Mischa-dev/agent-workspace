@@ -99,6 +99,7 @@ pub mod storage_admission;
 mod structure_guards;
 pub mod telemetry;
 pub mod test_support;
+pub mod things;
 pub mod usage;
 pub mod webhooks;
 pub mod whiteboards;

@@ -300,6 +300,26 @@ pub struct Thing {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<String>")]
     pub project_id: Option<Uuid>,
+    /// The space it's in (today its project); none for a thing across a
+    /// workspace. From the thing registry (K3.10).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
+    pub space_id: Option<Uuid>,
+    /// What holds it: a thread's channel, a record's collection, a
+    /// subtask's task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
+    pub parent_id: Option<Uuid>,
+    /// Its own version or revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    /// Values of the thing's own fields, by field id. Kinds fill it as
+    /// their providers land.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    #[schemars(with = "std::collections::BTreeMap<String, serde_json::Value>")]
+    pub fields: serde_json::Map<String, serde_json::Value>,
     /// Where it opens in the app.
     pub href: String,
 }

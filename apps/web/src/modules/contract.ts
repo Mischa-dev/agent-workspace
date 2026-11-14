@@ -69,6 +69,13 @@ export type Thing = {
   status?: string
   owner?: { id: string; name: string }
   projectId?: string
+  /** The space it's in (today its project); none for a thing across a workspace. */
+  spaceId?: string
+  /** What holds it: a thread's channel, a record's collection, a subtask's task. */
+  parentId?: string
+  /** Its own version or revision. */
+  version?: number
+  updatedAt?: string
   href: string
   /** Values of the thing's own fields, by field id. */
   fields?: Record<string, FieldValue>

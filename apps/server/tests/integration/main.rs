@@ -97,6 +97,7 @@ mod search_kinds;
 mod server_operators;
 mod settings_accounts;
 mod support;
+mod thing_registry;
 mod w10_ai_planning;
 mod w11_views_and_data;
 mod w12_harnesses;

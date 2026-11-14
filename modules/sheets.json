@@ -19,7 +19,15 @@
   "notifications": [],
   "search": ["sheets"],
   "automations": { "triggers": [], "actions": [] },
-  "things": [],
+  "things": [
+    {
+      "kind": "sheet",
+      "one": "Sheet",
+      "many": "Sheets",
+      "href": "/projects/{projectId}/sheets/{id}",
+      "fields": [{ "id": "updatedAt", "label": "Edited", "type": "date" }]
+    }
+  ],
   "links": [],
   "embeds": [],
   "web": { "folder": "sheets" },

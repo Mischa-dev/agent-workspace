@@ -2127,7 +2127,7 @@ impl McpServer {
     // -- Search and memory ---------------------------------------------------
 
     #[tool(
-        description = "Open any thing (a task, page, decision, whiteboard, thread, channel, conversation or project) with its title, status, owner and link, and its links read both ways: part of, blocks and blocked by, about and referenced in, related to, duplicates. Only things you can see, from modules that are on.",
+        description = "Open any thing (a task, page, decision, whiteboard, sheet, thread, channel, conversation, project, collection or record) by its ID alone, with its title, status, owner, version and link, and its links read both ways: part of, blocks and blocked by, about and referenced in, related to, duplicates. Only things you can see, from modules that are on.",
         annotations(title = "Open a thing", read_only_hint = true, open_world_hint = false)
     )]
     async fn thing_open(
