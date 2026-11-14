@@ -168,11 +168,6 @@ async fn ten_thousand_tasks_page_by_every_field_on_index_paths() {
         collection_id,
     };
     let mut connection = pool.acquire().await.expect("connection");
-    // As the server connects (`main.rs`): no JIT.
-    sqlx::query("SET jit = off")
-        .execute(&mut *connection)
-        .await
-        .expect("no jit");
     let definitions = tasks::system_fields(&mut connection, project_id)
         .await
         .expect("fields");
@@ -265,6 +260,15 @@ async fn ten_thousand_tasks_page_by_every_field_on_index_paths() {
         let cost = top["Total Cost"].as_f64().expect("cost");
         let scans = seq_scans(top);
         eprintln!("cost {cost:>10.0}  {case_time:>12?}  {name}");
+        // Grouped by whether a task is blocked, a page once took two
+        // seconds, all of it compiling the query (JIT); the list queries
+        // turn that off.
+        if name.as_str() == "group Blocked" {
+            assert!(
+                case_time < std::time::Duration::from_millis(1000),
+                "{name}: a page took {case_time:?}"
+            );
+        }
         if cost >= COST_CEILING || !scans.is_empty() {
             costly.push(format!(
                 "{name}: first page costs {cost}, reads every row of {scans:?}"

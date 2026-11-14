@@ -14,7 +14,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use sqlx::{FromRow, Postgres, QueryBuilder};
+use sqlx::{Acquire, FromRow, PgConnection, Postgres, QueryBuilder};
 use uuid::Uuid;
 
 use super::{
@@ -590,7 +590,7 @@ pub const CURSOR_MESSAGE: &str = "That cursor was made for another query. Start 
 /// One page of the records `spec` finds. Err(()) when the cursor isn't one
 /// made for this query.
 pub async fn page(
-    executor: impl sqlx::PgExecutor<'_>,
+    connection: &mut PgConnection,
     source: &dyn RecordSource,
     spec: &Spec,
     cursor: Option<&str>,
@@ -638,10 +638,12 @@ pub async fn page(
     }
     builder.push(" LIMIT ");
     builder.push_bind(limit + 1);
+    let mut transaction = without_jit(connection).await?;
     let mut rows = builder
         .build_query_as::<PageRow>()
-        .fetch_all(executor)
+        .fetch_all(&mut *transaction)
         .await?;
+    transaction.commit().await?;
     let has_more = rows.len() > limit as usize;
     rows.truncate(limit as usize);
     let next_cursor = match (has_more, rows.last()) {
@@ -661,6 +663,22 @@ pub async fn page(
             .collect(),
         next_cursor,
     }))
+}
+
+/// A transaction (a savepoint, inside one) for a list query, with JIT
+/// compilation off. A list sorted or grouped by a value looked up per
+/// record (whether a task is blocked, its labels) is estimated dear enough
+/// to be compiled, which took two seconds for a query that runs in
+/// milliseconds. `SET LOCAL`, so it ends with the transaction and is safe
+/// behind a pooler (AGENTS.md rule 14).
+async fn without_jit(
+    connection: &mut PgConnection,
+) -> Result<sqlx::Transaction<'_, Postgres>, AppError> {
+    let mut transaction = connection.begin().await?;
+    sqlx::query("SET LOCAL jit = off")
+        .execute(&mut *transaction)
+        .await?;
+    Ok(transaction)
 }
 
 /// The plan PostgreSQL makes for the first page `spec` finds, as
@@ -699,7 +717,7 @@ pub async fn explain_first_page(
 
 /// How many records `spec` finds, across every page.
 pub async fn total(
-    executor: impl sqlx::PgExecutor<'_>,
+    connection: &mut PgConnection,
     source: &dyn RecordSource,
     spec: &Spec,
 ) -> Result<i64, AppError> {
@@ -713,10 +731,13 @@ pub async fn total(
     let mut builder =
         QueryBuilder::<Postgres>::new(format!("SELECT {count} FROM {}", spec.tables(source)));
     spec.push_where(&mut builder, source);
-    Ok(builder
+    let mut transaction = without_jit(connection).await?;
+    let total = builder
         .build_query_scalar::<i64>()
-        .fetch_one(executor)
-        .await?)
+        .fetch_one(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
+    Ok(total)
 }
 
 /// A group with records under the filters, and how many.
@@ -733,7 +754,7 @@ pub struct GroupCount {
 /// Every group with records under `spec`'s filters, in the list's order.
 /// Empty when it doesn't group.
 pub async fn group_counts(
-    executor: impl sqlx::PgExecutor<'_>,
+    connection: &mut PgConnection,
     source: &dyn RecordSource,
     spec: &Spec,
 ) -> Result<Vec<GroupCount>, AppError> {
@@ -759,10 +780,13 @@ pub async fn group_counts(
         " GROUP BY {} ORDER BY {order}, {}",
         group.key, group.key
     ));
-    Ok(builder
+    let mut transaction = without_jit(connection).await?;
+    let groups = builder
         .build_query_as::<GroupCount>()
-        .fetch_all(executor)
-        .await?)
+        .fetch_all(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
+    Ok(groups)
 }
 
 #[cfg(test)]
