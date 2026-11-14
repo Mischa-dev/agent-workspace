@@ -213,8 +213,9 @@ setup.
 - Keep one Rust server crate until module boundaries are proven.
 - Keep provider-specific JSON inside provider modules.
 - Resolve Actor identity server-side; clients cannot choose authorship.
-- Conversation access goes through `conversation_visible_to` (migration 0037).
-  Never add a conversation query that skips it.
+- Conversation access follows rule 7 above: `conversation_visible_to` paired
+  with a membership check, or `conversation_readable_by`, its one-call
+  wrapper (ruling R32), which adds nothing to it.
 - MCP calls are checked against the caller's current memberships every time
   (`actor_can_access_project`, migration 0042). Apps connected by a person act
   as that person; agents act as themselves. See

@@ -970,3 +970,102 @@ async fn sidebar_never_lists_other_peoples_direct_threads() {
     .await;
     assert_eq!(status, StatusCode::OK);
 }
+
+/// `conversation_visible_to` alone only says whether a conversation is
+/// project-wide or the viewer is on its member list, so a member of another
+/// workspace passes it for a project-wide channel; paired with
+/// `actor_can_access_project` the answer is right. `conversation_readable_by`
+/// answers exactly as `conversation_visible_to` does (ruling R32). When K4
+/// makes the rule whole, the stranger's line flips.
+#[tokio::test]
+async fn conversation_visible_to_alone_does_not_check_membership() {
+    use super::{
+        mcp_tasks::space,
+        message_edits::create_channel,
+        support::{
+            app::send,
+            two_workspaces::add_person,
+            world::{create_project, setup},
+        },
+    };
+
+    let Some(setup) = setup("readable_by").await else {
+        return;
+    };
+    let pool = &setup.pool;
+    let project = create_project(&setup, "WORK", "Work").await;
+    let channel = create_channel(&setup, &project, "general").await;
+    let space = space(&setup).await;
+    let member = add_person(&setup, &[&project, &space], "lena", "lena", "Lena").await;
+    let owner = owner_actor(pool).await;
+    let (status, dm) = send(
+        &setup.app,
+        setup.browser.request(
+            "POST",
+            "/api/v1/direct/dms",
+            None,
+            json!({"actorId": member}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "DM: {status} {dm}");
+    let dm = uuid(&dm["conversation"], "id");
+    let bystander = add_person(&setup, &[&project, &space], "mara", "mara", "Mara").await;
+
+    // A person in another workspace only.
+    let stranger = Uuid::now_v7();
+    let elsewhere = Uuid::now_v7();
+    sqlx::query("INSERT INTO actors (id, kind) VALUES ($1, 'human')")
+        .bind(stranger)
+        .execute(pool)
+        .await
+        .expect("stranger");
+    sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, 'Elsewhere', $2)")
+        .bind(elsewhere)
+        .bind(format!("elsewhere-{}", elsewhere.simple()))
+        .execute(pool)
+        .await
+        .expect("other workspace");
+    sqlx::query(
+        "INSERT INTO organization_memberships (organization_id, actor_id, role, enabled) VALUES ($1, $2, 'owner', true)",
+    )
+    .bind(elsewhere)
+    .bind(stranger)
+    .execute(pool)
+    .await
+    .expect("stranger membership");
+
+    let channel = channel.parse::<Uuid>().expect("channel");
+    let answers = |conversation: Uuid, viewer: Uuid| async move {
+        sqlx::query_as::<_, (bool, bool, bool)>(
+            r#"
+            SELECT conversation_visible_to(conversation.id, $2),
+                   conversation_visible_to(conversation.id, $2)
+                       AND actor_can_access_project($2, NULL, conversation.project_id),
+                   conversation_readable_by(conversation.id, $2)
+            FROM conversations conversation -- visibility: the test asks the rule itself
+            WHERE conversation.id = $1
+            "#,
+        )
+        .bind(conversation)
+        .bind(viewer)
+        .fetch_one(pool)
+        .await
+        .expect("visibility")
+    };
+    for (what, conversation, viewer, alone, paired) in [
+        ("a stranger, the channel", channel, stranger, true, false),
+        ("a member, the channel", channel, member, true, true),
+        ("the owner, the channel", channel, owner, true, true),
+        ("a member outside the DM", dm, bystander, false, false),
+        ("a member in the DM", dm, member, true, true),
+    ] {
+        let (visible, with_membership, readable) = answers(conversation, viewer).await;
+        assert_eq!(visible, alone, "{what}: conversation_visible_to");
+        assert_eq!(
+            with_membership, paired,
+            "{what}: paired with actor_can_access_project"
+        );
+        assert_eq!(readable, visible, "{what}: conversation_readable_by");
+    }
+}

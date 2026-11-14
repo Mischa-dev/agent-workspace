@@ -432,6 +432,62 @@ pub(crate) fn new_table_offences() -> Vec<String> {
     offences
 }
 
+/// The latest migration that defines `conversation_readable_by`, and its
+/// definition.
+pub(crate) fn latest_readable_by() -> Option<(String, String)> {
+    let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
+    let mut found: Option<(u64, String, String)> = None;
+    for entry in std::fs::read_dir(&folder).expect("migrations folder") {
+        let path = entry.expect("migration").path();
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_owned();
+        let Some(version) = name
+            .split('_')
+            .next()
+            .and_then(|version| version.parse::<u64>().ok())
+        else {
+            continue;
+        };
+        let sql = std::fs::read_to_string(&path).expect("read migration");
+        if normalise(&sql).contains("FUNCTION conversation_readable_by(")
+            && found
+                .as_ref()
+                .is_none_or(|(latest, _, _)| version > *latest)
+        {
+            found = Some((version, name, sql));
+        }
+    }
+    found.map(|(_, name, sql)| (name, sql))
+}
+
+/// Why a definition of `conversation_readable_by` is more than one call to
+/// `conversation_visible_to` with its own two arguments, or None when it is
+/// exactly that (ruling R32).
+pub(crate) fn readable_by_problem(sql: &str) -> Option<String> {
+    let normal = normalise(sql);
+    let start = normal.find("FUNCTION conversation_readable_by(")?
+        + "FUNCTION conversation_readable_by(".len();
+    let close = normal[start..].find(')')? + start;
+    let arguments = normal[start..close]
+        .split(',')
+        .filter_map(|argument| argument.split_whitespace().next())
+        .collect::<Vec<_>>();
+    let [first, second] = arguments.as_slice() else {
+        return Some(format!("it takes {} arguments, not two", arguments.len()));
+    };
+    let body_start = normal[close..].find("$$")? + close + 2;
+    let body_end = normal[body_start..].find("$$")? + body_start;
+    let body = normal[body_start..body_end]
+        .trim()
+        .trim_end_matches(';')
+        .trim();
+    let expected = format!("SELECT conversation_visible_to({first}, {second})");
+    (body != expected).then(|| format!("its body is `{body}`, not `{expected}`"))
+}
+
 fn allowances() -> BTreeMap<String, BTreeMap<String, usize>> {
     serde_json::from_str(include_str!("structure_guards/allowances.json"))
         .expect("structure_guards/allowances.json is a map of rule to file to count")
@@ -540,6 +596,32 @@ mod tests {
     fn no_new_link_or_comment_tables() {
         let offences = new_table_offences();
         assert!(offences.is_empty(), "{}", offences.join("\n"));
+    }
+
+    /// `conversation_readable_by` adds no rule of its own (ruling R32).
+    #[test]
+    fn conversation_readable_by_is_one_call() {
+        let (name, sql) =
+            latest_readable_by().expect("a migration defines conversation_readable_by");
+        if let Some(problem) = readable_by_problem(&sql) {
+            panic!(
+                "conversation_readable_by in {name}: {problem}. It stays one call to \
+                 conversation_visible_to; change the rule there (AGENTS.md, \"{AGENTS_HEADING}\", rule 7)"
+            );
+        }
+        let wrapper = "CREATE FUNCTION conversation_readable_by(c UUID, a UUID) RETURNS BOOLEAN \
+                       LANGUAGE sql STABLE AS $$ SELECT conversation_visible_to(c, a) $$;";
+        assert_eq!(readable_by_problem(wrapper), None);
+        let drifted = wrapper.replace(
+            "conversation_visible_to(c, a)",
+            "conversation_visible_to(c, a) AND actor_is_admin(a)",
+        );
+        assert!(readable_by_problem(&drifted).is_some());
+        let swapped = wrapper.replace(
+            "conversation_visible_to(c, a)",
+            "conversation_visible_to(a, c)",
+        );
+        assert!(readable_by_problem(&swapped).is_some());
     }
 
     #[test]
