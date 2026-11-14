@@ -71,7 +71,10 @@ async fn seen(pool: &PgPool) -> String {
 
 fn sorted(mut ids: Vec<Uuid>) -> String {
     ids.sort_unstable();
-    ids.iter().map(Uuid::to_string).collect::<Vec<_>>().join(",")
+    ids.iter()
+        .map(Uuid::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 #[tokio::test]

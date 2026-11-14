@@ -4,6 +4,11 @@ The daily backup makes an encrypted copy of everything that cannot be rebuilt,
 copies it off the host, and prunes old copies. A restore drill proves that the
 off-host copy can be restored.
 
+This page is the Red Hat host's setup. The server binary has the same
+commands built in (`backup create|schedule|key`, `restore`, `restore
+drill`), writing the same set format, for any other host: see
+`docs/self-host/backups.md`.
+
 ## What is backed up
 
 Each run writes one **set**: a directory named by its UTC start time, such as

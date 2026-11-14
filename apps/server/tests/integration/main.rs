@@ -25,6 +25,7 @@ mod awd91_agent_parity;
 mod awd95_comment_replies;
 mod awd96_workspace_pages;
 mod backbone;
+mod backup_restore;
 mod bug_report_links;
 mod bug_sweep;
 mod direct_conversations;

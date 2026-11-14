@@ -19,9 +19,18 @@ async fn main() -> anyhow::Result<()> {
     if std::env::args().nth(1).as_deref() == Some("secrets-verify-export") {
         return verify_secret_export();
     }
+    // Restoring runs without the service configuration too: it names its
+    // own (empty) target database and data root.
+    if std::env::args().nth(1).as_deref() == Some("restore") {
+        return restore_command().await;
+    }
     let config = Arc::new(AppConfig::load().context("load application configuration")?);
     init_tracing(&config.log_filter)?;
     agent_workspace_server::link_previews::set_server_switch(config.link_previews);
+    // Backups read the database as it is, before migrations change it.
+    if std::env::args().nth(1).as_deref() == Some("backup") {
+        return backup_command(&config).await;
+    }
 
     let pool = PgPoolOptions::new()
         .max_connections(config.database_max_connections)
@@ -539,6 +548,128 @@ async fn main() -> anyhow::Result<()> {
     }
     supervisors.shutdown_all().await;
     result
+}
+
+/// `backup create|schedule|key`.
+async fn backup_command(config: &AppConfig) -> anyhow::Result<()> {
+    use agent_workspace_server::backup;
+    const USAGE: &str = "usage: backup create --to DIR [--recipient-file PATH] [--data-paths a,b] \
+        | backup schedule --to DIR --at HH:MM [--keep-days N] [--recipient-file PATH] [--data-paths a,b] \
+        | backup key --to DIR --recipient-file PATH [--database-recipient-file PATH]";
+    let mut arguments = std::env::args().skip(2);
+    let action = arguments.next().context(USAGE)?;
+    let options = parse_options(arguments)?;
+    let create_options =
+        |options: &BTreeMap<String, String>| -> anyhow::Result<backup::CreateOptions> {
+            Ok(backup::CreateOptions {
+                to: required_option(options, "to")?.into(),
+                recipients: options.get("recipient-file").map(Into::into),
+                data_paths: options.get("data-paths").map_or_else(
+                    || {
+                        backup::DEFAULT_DATA_PATHS
+                            .iter()
+                            .map(|path| (*path).to_owned())
+                            .collect()
+                    },
+                    |paths| {
+                        paths
+                            .split(',')
+                            .map(str::trim)
+                            .filter(|path| !path.is_empty())
+                            .map(ToOwned::to_owned)
+                            .collect()
+                    },
+                ),
+            })
+        };
+    match action.as_str() {
+        "create" => {
+            reject_unknown_options(&options, &["to", "recipient-file", "data-paths"])?;
+            let set = backup::create(config, &create_options(&options)?).await?;
+            println!("{}", serde_json::to_string_pretty(&set)?);
+        }
+        "schedule" => {
+            reject_unknown_options(
+                &options,
+                &["to", "at", "keep-days", "recipient-file", "data-paths"],
+            )?;
+            let at = chrono::NaiveTime::parse_from_str(required_option(&options, "at")?, "%H:%M")
+                .context("--at must be HH:MM (UTC)")?;
+            let keep_days = options.get("keep-days").map_or(Ok(14), |value| {
+                value.parse::<u32>().context("invalid --keep-days")
+            })?;
+            backup::schedule(config, &create_options(&options)?, at, keep_days).await?;
+        }
+        "key" => {
+            reject_unknown_options(
+                &options,
+                &["to", "recipient-file", "database-recipient-file"],
+            )?;
+            let path = backup::key(
+                config,
+                std::path::Path::new(required_option(&options, "to")?),
+                std::path::Path::new(required_option(&options, "recipient-file")?),
+                options
+                    .get("database-recipient-file")
+                    .map(std::path::Path::new),
+            )?;
+            println!("{}", path.display());
+        }
+        _ => bail!(USAGE),
+    }
+    Ok(())
+}
+
+/// `restore` and `restore drill`. The target database comes from a file
+/// (`--database-url-file`), so its password never shows in a process list.
+async fn restore_command() -> anyhow::Result<()> {
+    use agent_workspace_server::backup;
+    const USAGE: &str = "usage: restore --from SET --database-url-file PATH --data-root DIR [--identity-file PATH] \
+        | restore drill --from SET --database-url-file PATH [--identity-file PATH] [--keyring PATH]";
+    let mut arguments = std::env::args().skip(2).peekable();
+    let drill = arguments.peek().is_some_and(|argument| argument == "drill");
+    if drill {
+        arguments.next();
+    }
+    let options = parse_options(arguments).context(USAGE)?;
+    let database_url = std::fs::read_to_string(required_option(&options, "database-url-file")?)
+        .context("read --database-url-file")?;
+    let database_url = database_url.trim();
+    let from = std::path::Path::new(required_option(&options, "from")?);
+    let identity = options.get("identity-file").map(std::path::Path::new);
+    let report = if drill {
+        reject_unknown_options(
+            &options,
+            &["from", "database-url-file", "identity-file", "keyring"],
+        )?;
+        let keyring_path = options
+            .get("keyring")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                AppConfig::load()
+                    .ok()
+                    .and_then(|config| config.secrets_key_path.clone())
+            });
+        let keyring = keyring_path
+            .map(|path| agent_workspace_server::secrets::read_keyring(&path))
+            .transpose()
+            .map_err(|_| anyhow::anyhow!("the keyring can't be read"))?;
+        backup::drill(from, database_url, identity, keyring.as_ref()).await?
+    } else {
+        reject_unknown_options(
+            &options,
+            &["from", "database-url-file", "data-root", "identity-file"],
+        )?;
+        backup::restore(
+            from,
+            database_url,
+            std::path::Path::new(required_option(&options, "data-root")?),
+            identity,
+        )
+        .await?
+    };
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
 }
 
 fn parse_options(
