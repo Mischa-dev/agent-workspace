@@ -343,6 +343,14 @@ impl FieldDefinition {
         ops
     }
 
+    /// Whether a list can be grouped by the field: its type can, or it's a
+    /// labels or parent field its source groups (a task's).
+    pub fn can_group(&self) -> bool {
+        self.field_type.can_group()
+            || (self.accessor != Accessor::Stored
+                && matches!(self.field_type, FieldType::MultipleChoice | FieldType::Link))
+    }
+
     /// The option with this ID, archived or not.
     pub fn option(&self, id: &str) -> Option<&ChoiceOption> {
         self.config
@@ -1374,6 +1382,24 @@ pub fn push_condition(
                     values: ids,
                 };
                 push_stored_condition(builder, column, &by_option, today);
+            } else if clause.op == FieldOp::Is
+                && clause.values.len() == 1
+                && matches!(
+                    field.field_type,
+                    FieldType::SingleChoice | FieldType::Person | FieldType::MultipleChoice
+                )
+            {
+                // Containment, so the values' GIN index can find it.
+                let value = Value::String(clause.values[0].trim().to_owned());
+                let held = if field.field_type == FieldType::MultipleChoice {
+                    Value::Array(vec![value])
+                } else {
+                    value
+                };
+                let mut wanted = serde_json::Map::new();
+                wanted.insert(clause.field.to_string(), held);
+                builder.push(format!("{column} @> "));
+                builder.push_bind(Value::Object(wanted));
             } else {
                 push_stored_condition(builder, column, clause, today);
             }
@@ -1746,7 +1772,13 @@ pub fn sort_keys(field: &FieldDefinition, column: &str, project: &str) -> Vec<So
         number,
         checked,
         elements,
+        uuid,
     } = &reading;
+    // `column = value`: in the value's own type where it has one.
+    let matches = |column: &str| match uuid {
+        Some(uuid) => format!("{column} = {uuid}"),
+        None => format!("{column}::text = {text}"),
+    };
     let empty_last = SortKey {
         expr: format!("({is_null})::integer"),
         ty: "integer",
@@ -1794,8 +1826,9 @@ pub fn sort_keys(field: &FieldDefinition, column: &str, project: &str) -> Vec<So
         FieldType::Person => key(
             format!(
                 "left(lower(COALESCE((SELECT sort_person.display_name FROM project_memberships sort_person \
-                 WHERE sort_person.project_id = {project} AND sort_person.actor_id::text = {text}), '')), \
-                 {SORT_PREFIX_CHARACTERS})"
+                 WHERE sort_person.project_id = {project} AND {}), '')), \
+                 {SORT_PREFIX_CHARACTERS})",
+                matches("sort_person.actor_id")
             ),
             "text",
         ),
@@ -1803,23 +1836,26 @@ pub fn sort_keys(field: &FieldDefinition, column: &str, project: &str) -> Vec<So
             Some(LinkTarget::Record) => key(
                 format!(
                     "left(lower(COALESCE((SELECT sort_record.title FROM collection_records sort_record \
-                     WHERE sort_record.project_id = {project} AND sort_record.id::text = {text}), '')), \
-                     {SORT_PREFIX_CHARACTERS})"
+                     WHERE sort_record.project_id = {project} AND {}), '')), \
+                     {SORT_PREFIX_CHARACTERS})",
+                    matches("sort_record.id")
                 ),
                 "text",
             ),
             Some(LinkTarget::Page) => key(
                 format!(
                     "left(lower(COALESCE((SELECT sort_page.title FROM project_pages sort_page \
-                     WHERE sort_page.project_id = {project} AND sort_page.id::text = {text}), '')), \
-                     {SORT_PREFIX_CHARACTERS})"
+                     WHERE sort_page.project_id = {project} AND {}), '')), \
+                     {SORT_PREFIX_CHARACTERS})",
+                    matches("sort_page.id")
                 ),
                 "text",
             ),
             _ => key(
                 format!(
                     "COALESCE((SELECT sort_task.number FROM work_items sort_task \
-                     WHERE sort_task.project_id = {project} AND sort_task.id::text = {text}), 0)"
+                     WHERE sort_task.project_id = {project} AND {}), 0)",
+                    matches("sort_task.id")
                 ),
                 "bigint",
             ),
@@ -1834,6 +1870,9 @@ pub fn sort_keys(field: &FieldDefinition, column: &str, project: &str) -> Vec<So
 struct Reading {
     is_null: String,
     text: String,
+    /// The value as a uuid, where it's kept as one: compared in its own
+    /// type, a lookup by it can use the looked-up table's key.
+    uuid: Option<String>,
     number: String,
     checked: String,
     elements: String,
@@ -1853,11 +1892,13 @@ impl Reading {
                     checked: format!("{value} IS NOT DISTINCT FROM 'true'::jsonb"),
                     elements: format!("{} AS element(value)", elements(column, field.id)),
                     text,
+                    uuid: None,
                 }
             }
             Accessor::Column { expr, sql_type, .. } => Self {
                 is_null: format!("({expr}) IS NULL"),
                 text: format!("(({expr})::text)"),
+                uuid: (*sql_type == "uuid").then(|| format!("({expr})")),
                 number: if matches!(
                     *sql_type,
                     "bigint" | "integer" | "double precision" | "numeric"
@@ -1881,6 +1922,7 @@ impl Reading {
                 number: "NULL::double precision".to_owned(),
                 checked: format!("EXISTS ({sql})"),
                 elements: format!("({sql}) AS element(value)"),
+                uuid: None,
             },
         }
     }
@@ -1901,7 +1943,12 @@ pub struct GroupSql {
 /// `group_field`.
 pub fn group_sql(definition: &FieldDefinition, column: &str, project: &str) -> Option<GroupSql> {
     let field = definition.id;
-    let Reading { text, checked, .. } = Reading::of(definition, column);
+    let Reading {
+        text,
+        checked,
+        uuid,
+        ..
+    } = Reading::of(definition, column);
     Some(match definition.field_type {
         // Options of fields that aren't stored are their source's to name
         // (`views::source::RecordSource::group_sql`).
@@ -1927,7 +1974,11 @@ pub fn group_sql(definition: &FieldDefinition, column: &str, project: &str) -> O
         FieldType::Person => GroupSql {
             join: format!(
                 " LEFT JOIN project_memberships group_field \
-                   ON group_field.project_id = {project} AND group_field.actor_id::text = {text}"
+                   ON group_field.project_id = {project} AND {}",
+                match &uuid {
+                    Some(uuid) => format!("group_field.actor_id = {uuid}"),
+                    None => format!("group_field.actor_id::text = {text}"),
+                }
             ),
             key: "COALESCE(group_field.actor_id::text, 'none')".to_owned(),
             label: "COALESCE(group_field.display_name, 'No one')".to_owned(),

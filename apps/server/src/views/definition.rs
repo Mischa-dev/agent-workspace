@@ -65,6 +65,9 @@ pub enum SortBy {
     Title,
     Number,
     Updated,
+    /// The order on the board, for records that are tasks (their status,
+    /// then their place in its column).
+    Rank,
     Field(Uuid),
 }
 
@@ -79,6 +82,7 @@ impl SortBy {
             "title" => Some(Self::Title),
             "number" | "created" | "#" => Some(Self::Number),
             "updated" | "edited" => Some(Self::Updated),
+            "rank" | "manual" => Some(Self::Rank),
             _ => None,
         }
     }
@@ -88,6 +92,7 @@ impl SortBy {
             Self::Title => "title".to_owned(),
             Self::Number => "number".to_owned(),
             Self::Updated => "updated".to_owned(),
+            Self::Rank => "rank".to_owned(),
             Self::Field(id) => id.to_string(),
         }
     }
@@ -270,13 +275,24 @@ pub fn check(config: &ViewConfig, definitions: &[FieldDefinition]) -> Result<(),
         {
             return Err("A sort names a field this collection doesn't have.".to_owned());
         }
+        // Only records that are tasks have a place on the board, and only
+        // their fields read a task's columns.
+        if by == SortBy::Rank
+            && !definitions
+                .iter()
+                .any(|field| field.accessor != fields::Accessor::Stored)
+        {
+            return Err(
+                "Sort by title, number, updated, or one of the collection's fields.".to_owned(),
+            );
+        }
         if !sorted.insert(by.key()) {
             return Err("Sort by each thing once.".to_owned());
         }
     }
     if let Some(group) = config.group_by {
         match active(group) {
-            Some(field) if field.field_type.can_group() => {}
+            Some(field) if field.can_group() => {}
             Some(field) => {
                 return Err(format!(
                     "\"{}\" can't group a view. Group by a single choice, person or checkbox field.",

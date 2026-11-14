@@ -92,6 +92,7 @@ mod review_sweep;
 mod roles_and_access;
 mod server_operators;
 mod settings_accounts;
+mod t1_views_at_scale;
 mod w10_ai_planning;
 mod w11_views_and_data;
 mod w12_harnesses;

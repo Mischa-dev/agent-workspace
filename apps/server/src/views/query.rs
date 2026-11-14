@@ -158,7 +158,7 @@ impl Spec {
         let group = config.group_by.and_then(|id| {
             definitions
                 .iter()
-                .find(|field| field.id == id && field.field_type.can_group())
+                .find(|field| field.id == id && field.can_group())
                 .cloned()
         });
         Self {
@@ -249,6 +249,17 @@ impl Spec {
                     sort.desc,
                 )),
                 (SortBy::Number, _) => keys.push(Key::new("record.number", "bigint", sort.desc)),
+                (SortBy::Rank, _) => keys.extend(
+                    source
+                        .extra_sort(&by_key(SortBy::Rank))
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|key| Key {
+                            expr: key.expr,
+                            ty: key.ty,
+                            desc: sort.desc && key.follows_direction,
+                        }),
+                ),
                 (SortBy::Updated, _) => {
                     keys.push(Key::new("record.updated_at", "timestamptz", sort.desc));
                 }
@@ -459,6 +470,10 @@ pub fn date_range(
     ])
 }
 
+fn by_key(by: SortBy) -> String {
+    by.key()
+}
+
 /// One sort key: a non-null SQL expression, the type its cursor value is
 /// cast back to, and the direction.
 #[derive(Clone, Debug)]
@@ -634,14 +649,55 @@ pub async fn page(
     }))
 }
 
+/// The plan PostgreSQL makes for the first page `spec` finds, as
+/// `EXPLAIN (FORMAT JSON)` gives it: for the guard that lists over large
+/// sources stay on index paths (T1.7, `t1_views_at_scale`).
+pub async fn explain_first_page(
+    executor: impl sqlx::PgExecutor<'_>,
+    source: &dyn RecordSource,
+    spec: &Spec,
+    limit: i64,
+) -> Result<serde_json::Value, AppError> {
+    let keys = spec.keys(source);
+    let mut builder = QueryBuilder::<Postgres>::new(format!(
+        "EXPLAIN (FORMAT JSON) SELECT record.id FROM {}",
+        spec.from_sql(source)
+    ));
+    spec.push_where(&mut builder, source);
+    builder.push(" ORDER BY ");
+    for (index, key) in keys.iter().enumerate() {
+        if index > 0 {
+            builder.push(", ");
+        }
+        builder.push(format!(
+            "{} {}",
+            key.expr,
+            if key.desc { "DESC" } else { "ASC" }
+        ));
+    }
+    builder.push(" LIMIT ");
+    builder.push_bind(limit.clamp(1, MAX_LIMIT) + 1);
+    Ok(builder
+        .build_query_scalar::<serde_json::Value>()
+        .fetch_one(executor)
+        .await?)
+}
+
 /// How many records `spec` finds, across every page.
 pub async fn total(
     executor: impl sqlx::PgExecutor<'_>,
     source: &dyn RecordSource,
     spec: &Spec,
 ) -> Result<i64, AppError> {
+    // A record can be in more than one group (a task's labels): it counts
+    // once.
+    let count = if spec.group.is_some() {
+        "count(DISTINCT record.id)"
+    } else {
+        "count(*)"
+    };
     let mut builder =
-        QueryBuilder::<Postgres>::new(format!("SELECT count(*) FROM {}", spec.from_sql(source)));
+        QueryBuilder::<Postgres>::new(format!("SELECT {count} FROM {}", spec.from_sql(source)));
     spec.push_where(&mut builder, source);
     Ok(builder
         .build_query_scalar::<i64>()

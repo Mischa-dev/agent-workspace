@@ -2,13 +2,17 @@
 //! records of its built-in Tasks collection, through the same query, views,
 //! groups and pages as any collection's records:
 //!
-//! * [`SOURCE`] is a subquery over `work_items` with the columns a record
-//!   has (aliased `record` by the caller), each task's built-in fields
-//!   (status, assignee, priority, dates, labels) folded into its field
-//!   values next to its custom ones.
+//! * [`TasksSource`] reads each record with its task beside it
+//!   (`collection_records record JOIN work_items core`, same ID), and the
+//!   built-in fields read the task's own columns ([`accessor`]), so
+//!   filters, sorts and groups on status, assignee or dates use the task's
+//!   indexes (T1.7). [`source`] folds those fields into a record's values
+//!   for showing a page of records.
 //! * [`fields`] gives the built-in fields, under fixed IDs, then the
 //!   project's task fields, so filters, sorts and views name them as they
-//!   name any field.
+//!   name any field; [`system_fields`] adds the rest a task has (type,
+//!   milestone, parent, blocked, ready, claimed by, estimate, who made it,
+//!   when, and its key).
 //!
 //! Only the collection's views are stored and changed here. Tasks, their
 //! fields and the collection itself change on task screens and with the
@@ -25,9 +29,11 @@ use uuid::{Uuid, uuid};
 use crate::{
     error::AppError,
     fields::{
-        self, ChoiceOption, FieldConfig, FieldDefinition, FieldType, GroupSql, RecordKind, SortKey,
+        self, Accessor, ChoiceOption, FieldConfig, FieldDefinition, FieldType, GroupSql,
+        LinkTarget, RecordKind, SortKey,
     },
     views::source::RecordSource,
+    work_item_planning::HAS_OPEN_BLOCKER,
 };
 
 /// `collections.builtin` for the Tasks collection.
@@ -44,6 +50,19 @@ pub const PRIORITY: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000003");
 pub const START_DATE: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000004");
 pub const DUE_DATE: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000005");
 pub const LABELS: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000006");
+// The built-in fields views over tasks read beyond the six a collection
+// lists (T1.7). 00d and 00e are kept for Delegate and Cycle.
+pub const TYPE: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000007");
+pub const MILESTONE: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000008");
+pub const PARENT: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000009");
+pub const BLOCKED: Uuid = uuid!("0192f5c0-0000-7000-8000-00000000000a");
+pub const READY: Uuid = uuid!("0192f5c0-0000-7000-8000-00000000000b");
+pub const CLAIMED_BY: Uuid = uuid!("0192f5c0-0000-7000-8000-00000000000c");
+pub const ESTIMATE: Uuid = uuid!("0192f5c0-0000-7000-8000-00000000000f");
+pub const CREATED_BY: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000010");
+pub const CREATED: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000011");
+pub const EDITED: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000012");
+pub const KEY: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000013");
 
 /// Priorities as choice options, most urgent first; "no_priority" is no value.
 const PRIORITIES: [(&str, &str, Uuid, &str); 4] = [
@@ -111,6 +130,93 @@ fn status_color(category: &str) -> &'static str {
     }
 }
 
+/// SQL for the color of a status of `category` (an expression).
+fn status_color_sql(category: &str) -> String {
+    let arms = [
+        "backlog",
+        "unstarted",
+        "started",
+        "review",
+        "verification",
+        "completed",
+    ]
+    .iter()
+    .map(|known| format!("WHEN '{known}' THEN '{}'", status_color(known)))
+    .collect::<Vec<_>>()
+    .join(" ");
+    format!("CASE {category} {arms} ELSE '#71717a' END")
+}
+
+/// A task's own column, as a field reads it (record JOIN core, T1.7).
+fn column(expr: impl Into<String>, sql_type: &'static str) -> Accessor {
+    Accessor::Column {
+        expr: expr.into(),
+        sql_type,
+        category: None,
+    }
+}
+
+/// SQL for whether something unfinished blocks the task aliased `core`.
+fn has_open_blocker() -> String {
+    HAS_OPEN_BLOCKER.replace("item.", "core.")
+}
+
+/// SQL for the task's status category: its status is joined beside it
+/// (`core_status`, in `TasksSource::from_sql`).
+const STATUS_CATEGORY: &str = "core_status.semantic_category";
+
+/// Where each built-in field's value is read from, by ID: the task's own
+/// columns (`core`) and the record's (`record`), so filters, sorts and groups
+/// use their indexes instead of reading a folded value.
+pub fn accessor(id: Uuid) -> Option<Accessor> {
+    Some(match id {
+        STATUS => Accessor::Column {
+            expr: "core.status_id".to_owned(),
+            sql_type: "uuid",
+            category: Some(STATUS_CATEGORY.to_owned()),
+        },
+        ASSIGNEE => column("core.assignee_actor_id", "uuid"),
+        PRIORITY => column(priority_value("core"), "text"),
+        START_DATE => column("core.start_date", "date"),
+        DUE_DATE => column("core.due_date", "date"),
+        LABELS => Accessor::Elements {
+            sql: "SELECT label.label_id::text FROM work_item_labels label \
+                  WHERE label.project_id = core.project_id AND label.work_item_id = core.id"
+                .to_owned(),
+        },
+        TYPE => column("core.type_id", "uuid"),
+        MILESTONE => column("core.milestone_id", "uuid"),
+        PARENT => column("core.parent_work_item_id", "uuid"),
+        BLOCKED => column(
+            format!(
+                "CASE WHEN core.blocked_reason IS NOT NULL OR {} THEN true END",
+                has_open_blocker()
+            ),
+            "boolean",
+        ),
+        READY => column(
+            format!(
+                "CASE WHEN {STATUS_CATEGORY} NOT IN ('completed', 'canceled') \
+                 AND core.blocked_reason IS NULL AND NOT {} THEN true END",
+                has_open_blocker()
+            ),
+            "boolean",
+        ),
+        CLAIMED_BY => column(
+            "(SELECT claim.actor_id FROM work_item_claims claim \
+              WHERE claim.work_item_id = core.id AND claim.expires_at > now() \
+              ORDER BY claim.expires_at DESC LIMIT 1)",
+            "uuid",
+        ),
+        ESTIMATE => column("core.estimate", "double precision"),
+        CREATED_BY => column("core.created_by_actor_id", "uuid"),
+        CREATED => column("core.created_at", "timestamptz"),
+        EDITED => column("core.updated_at", "timestamptz"),
+        KEY => column("core.number", "bigint"),
+        _ => return None,
+    })
+}
+
 fn builtin(
     id: Uuid,
     name: &str,
@@ -131,7 +237,7 @@ fn builtin(
         position,
         archived: false,
         version: 1,
-        accessor: fields::Accessor::Stored,
+        accessor: accessor(id).unwrap_or_default(),
     }
 }
 
@@ -143,15 +249,10 @@ struct OptionRow {
     archived: bool,
 }
 
-/// The fields of a collection whose records are tasks: the built-in ones,
-/// then `kind`'s own (archived ones too when asked for). `kind` is
-/// `RecordKind::Task` for the Tasks collection, whose own fields are the
-/// project's task fields.
-pub async fn fields(
+/// The six built-in fields every collection whose records are tasks lists.
+async fn listed(
     connection: &mut PgConnection,
     project_id: Uuid,
-    kind: RecordKind,
-    include_archived: bool,
 ) -> Result<Vec<FieldDefinition>, AppError> {
     let statuses = sqlx::query_as::<_, (Uuid, String, String, bool)>(
         "SELECT id, name, semantic_category, NOT enabled FROM work_item_statuses \
@@ -195,14 +296,27 @@ pub async fn fields(
             category: None,
         })
         .collect();
-    let mut found = vec![
+    Ok(vec![
         builtin(STATUS, "Status", FieldType::SingleChoice, statuses, 0),
         builtin(ASSIGNEE, "Assignee", FieldType::Person, Vec::new(), 1),
         builtin(PRIORITY, "Priority", FieldType::SingleChoice, priorities, 2),
         builtin(START_DATE, "Start date", FieldType::Date, Vec::new(), 3),
         builtin(DUE_DATE, "Due date", FieldType::Date, Vec::new(), 4),
         builtin(LABELS, "Labels", FieldType::MultipleChoice, labels, 5),
-    ];
+    ])
+}
+
+/// The fields of a collection whose records are tasks: the built-in ones,
+/// then `kind`'s own (archived ones too when asked for). `kind` is
+/// `RecordKind::Task` for the Tasks collection, whose own fields are the
+/// project's task fields.
+pub async fn fields(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    kind: RecordKind,
+    include_archived: bool,
+) -> Result<Vec<FieldDefinition>, AppError> {
+    let mut found = listed(&mut *connection, project_id).await?;
     let count = found.len() as i32;
     found.extend(
         fields::list(&mut *connection, project_id, kind, include_archived)
@@ -219,42 +333,113 @@ pub async fn fields(
     Ok(found)
 }
 
-fn priority_value() -> String {
+/// Every built-in field a task has, for views over tasks (T1.7): the six
+/// the collection lists, then its type, milestone, parent, whether it's
+/// blocked or ready, who claimed it, its estimate, who made it, when it was
+/// made and changed, and its key. Views filter, sort and group by these by
+/// ID; the collection screens list them once T1.11 opens Tasks for editing.
+pub async fn system_fields(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+) -> Result<Vec<FieldDefinition>, AppError> {
+    let mut found = listed(&mut *connection, project_id).await?;
+    let types = sqlx::query_as::<_, (Uuid, String, bool)>(
+        "SELECT id, name, NOT enabled FROM work_item_types \
+         WHERE project_id = $1 ORDER BY NOT enabled, position, id",
+    )
+    .bind(project_id)
+    .fetch_all(&mut *connection)
+    .await?
+    .into_iter()
+    .map(|(id, name, archived)| ChoiceOption {
+        id,
+        name,
+        color: "#71717a".to_owned(),
+        archived,
+        category: None,
+    })
+    .collect();
+    let milestones = sqlx::query_as::<_, (Uuid, String, bool)>(
+        "SELECT id, name, archived_at IS NOT NULL FROM project_milestones \
+         WHERE project_id = $1 \
+         ORDER BY archived_at IS NOT NULL, target_date NULLS LAST, lower(name), id",
+    )
+    .bind(project_id)
+    .fetch_all(&mut *connection)
+    .await?
+    .into_iter()
+    .map(|(id, name, archived)| ChoiceOption {
+        id,
+        name,
+        color: "#71717a".to_owned(),
+        archived,
+        category: None,
+    })
+    .collect();
+    let mut parent = builtin(PARENT, "Parent", FieldType::Link, Vec::new(), 8);
+    parent.config.target = Some(LinkTarget::Task);
+    found.extend([
+        builtin(TYPE, "Type", FieldType::SingleChoice, types, 6),
+        builtin(
+            MILESTONE,
+            "Milestone",
+            FieldType::SingleChoice,
+            milestones,
+            7,
+        ),
+        parent,
+        builtin(BLOCKED, "Blocked", FieldType::Checkbox, Vec::new(), 9),
+        builtin(READY, "Ready", FieldType::Checkbox, Vec::new(), 10),
+        builtin(CLAIMED_BY, "Claimed by", FieldType::Person, Vec::new(), 11),
+        builtin(ESTIMATE, "Estimate", FieldType::Number, Vec::new(), 12),
+        builtin(CREATED_BY, "Created by", FieldType::Person, Vec::new(), 13),
+        builtin(CREATED, "Created", FieldType::Date, Vec::new(), 14),
+        builtin(EDITED, "Edited", FieldType::Date, Vec::new(), 15),
+        builtin(KEY, "Key", FieldType::Number, Vec::new(), 16),
+    ]);
+    Ok(found)
+}
+
+/// A task's priority as its Priority option's ID, for the task aliased
+/// `task`; NULL for no priority.
+fn priority_value(task: &str) -> String {
     let arms = PRIORITIES
         .iter()
         .map(|(stored, _, id, _)| format!("WHEN '{stored}' THEN '{id}'"))
         .collect::<Vec<_>>()
         .join(" ");
-    format!("CASE task.priority {arms} END")
+    format!("CASE {task}.priority {arms} END")
 }
 
-/// The project's tasks as records, aliased by the caller: the columns
-/// `collection_records` has, built-in fields folded into `field_values`.
-/// Each is in its own collection: the Tasks collection, or the one that
-/// acts like a task it was made in (`work_items.collection_id`).
+/// A collection's tasks as records, aliased by the caller: the columns
+/// `collection_records` has, the task's built-in fields folded into
+/// `field_values` beside its own, so a record reads the same whatever
+/// collection it's in. Used to show records a page at a time (the query
+/// itself reads columns through `TasksSource`). The version is the task's,
+/// which task writes check.
 pub fn source() -> String {
     format!(
-        "(SELECT task.id, task.project_id, COALESCE(task.collection_id, tasks.id) AS collection_id, task.number, task.title, \
-           task.field_values || jsonb_strip_nulls(jsonb_build_object( \
-             '{STATUS}', task.status_id::text, \
-             '{ASSIGNEE}', task.assignee_actor_id::text, \
+        "(SELECT record.id, record.project_id, record.collection_id, record.number, record.title, \
+           record.field_values || jsonb_strip_nulls(jsonb_build_object( \
+             '{STATUS}', core.status_id::text, \
+             '{ASSIGNEE}', core.assignee_actor_id::text, \
              '{PRIORITY}', {priority}, \
-             '{START_DATE}', task.start_date::text, \
-             '{DUE_DATE}', task.due_date::text, \
+             '{START_DATE}', core.start_date::text, \
+             '{DUE_DATE}', core.due_date::text, \
              '{LABELS}', (SELECT jsonb_agg(label.label_id::text ORDER BY label.label_id) \
                           FROM work_item_labels label \
-                          WHERE label.project_id = task.project_id AND label.work_item_id = task.id) \
+                          WHERE label.project_id = core.project_id AND label.work_item_id = core.id) \
            )) AS field_values, \
-           task.created_by_actor_id, task.created_by_actor_id AS updated_by_actor_id, \
-           task.archived_at, task.version, task.created_at, task.updated_at \
-         FROM work_items task \
-         LEFT JOIN collections tasks ON tasks.project_id = task.project_id AND tasks.builtin = '{BUILTIN}')",
-        priority = priority_value(),
+           core.created_by_actor_id, core.created_by_actor_id AS updated_by_actor_id, \
+           record.archived_at, core.version, record.created_at, record.updated_at \
+         FROM collection_records record JOIN work_items core ON core.id = record.id)",
+        priority = priority_value("core"),
     )
 }
 
-/// The records of a collection whose records are tasks, read with their
-/// tasks' built-in fields folded into their values (`source`).
+/// The records of a collection whose records are tasks, each joined to its
+/// task (`record JOIN core`, same ID), with the built-in fields read from
+/// the task's columns (`accessor`).
 #[derive(Clone, Copy, Debug)]
 pub struct TasksSource {
     pub project_id: Uuid,
@@ -263,7 +448,10 @@ pub struct TasksSource {
 
 impl RecordSource for TasksSource {
     fn from_sql(&self) -> String {
-        format!("{} record", source())
+        "collection_records record JOIN work_items core ON core.id = record.id \
+         JOIN work_item_statuses core_status \
+           ON core_status.project_id = core.project_id AND core_status.id = core.status_id"
+            .to_owned()
     }
 
     fn scope(&self, builder: &mut QueryBuilder<'_, Postgres>) {
@@ -271,13 +459,31 @@ impl RecordSource for TasksSource {
         builder.push_bind(self.project_id);
         builder.push(" AND record.collection_id = ");
         builder.push_bind(self.collection_id);
+        // The task is in the same project; saying so lets the planner use
+        // the task's own project indexes.
+        builder.push(" AND core.project_id = ");
+        builder.push_bind(self.project_id);
     }
 
     fn group_sql(&self, field: &FieldDefinition) -> Option<GroupSql> {
-        if !is_builtin_field(field.id) {
-            return None;
-        }
-        group_sql(field, "record.field_values", "record.project_id")
+        group_sql(field.id)
+    }
+
+    fn extra_sort(&self, key: &str) -> Option<Vec<SortKey>> {
+        (key == RANK).then(|| {
+            vec![
+                SortKey {
+                    expr: "core_status.position".to_owned(),
+                    ty: "integer",
+                    follows_direction: true,
+                },
+                SortKey {
+                    expr: "core.board_rank".to_owned(),
+                    ty: "bigint",
+                    follows_direction: true,
+                },
+            ]
+        })
     }
 
     fn identity(&self) -> String {
@@ -285,63 +491,130 @@ impl RecordSource for TasksSource {
     }
 }
 
-/// Grouping by Status or Priority, whose options aren't stored in
-/// `field_definitions`: their names come from the statuses and the fixed
-/// priorities. None for any other field.
-pub fn group_sql(field: &FieldDefinition, column: &str, project: &str) -> Option<GroupSql> {
-    let text = format!("({column} ->> '{}')", field.id);
-    let join = if field.id == STATUS {
-        format!(
-            " LEFT JOIN LATERAL (SELECT status.name, \
-               CASE status.semantic_category {colors} ELSE '#71717a' END AS color, \
-               status.position::bigint AS position \
-               FROM work_item_statuses status \
-               WHERE status.project_id = {project} AND status.id::text = {text}) group_field ON true",
-            colors = [
-                "backlog",
-                "unstarted",
-                "started",
-                "review",
-                "verification",
-                "completed"
-            ]
-            .iter()
-            .map(|category| format!("WHEN '{category}' THEN '{}'", status_color(category)))
-            .collect::<Vec<_>>()
-            .join(" "),
-        )
-    } else if field.id == PRIORITY {
-        let values = PRIORITIES
-            .iter()
-            .enumerate()
-            .map(|(index, (_, name, id, color))| format!("('{id}', '{name}', '{color}', {index})"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!(
-            " LEFT JOIN LATERAL (SELECT choice.name, choice.color, choice.position::bigint AS position \
-               FROM (VALUES {values}) AS choice(id, name, color, position) \
-               WHERE choice.id = {text}) group_field ON true"
-        )
-    } else {
-        return None;
-    };
-    Some(GroupSql {
-        join,
-        key: format!("CASE WHEN group_field.name IS NULL THEN 'none' ELSE {text} END"),
-        label: "COALESCE(group_field.name, 'No value')".to_owned(),
-        color: "group_field.color".to_owned(),
-        order: vec![
-            SortKey {
-                expr: "(group_field.name IS NULL)::integer".to_owned(),
-                ty: "integer",
-                follows_direction: true,
-            },
-            SortKey {
-                expr: "COALESCE(group_field.position, 0)".to_owned(),
-                ty: "bigint",
-                follows_direction: true,
-            },
-        ],
+/// The sort key only tasks have: their order on the board (status, then
+/// the place in its column).
+pub const RANK: &str = "rank";
+
+fn order(expr: &str, ty: &'static str) -> SortKey {
+    SortKey {
+        expr: expr.to_owned(),
+        ty,
+        follows_direction: true,
+    }
+}
+
+/// Grouping by a built-in field whose groups are the task's own things:
+/// statuses, priorities, types, milestones, parents and labels. None for
+/// any other field (people and checkboxes group the field layer's way).
+pub fn group_sql(field: Uuid) -> Option<GroupSql> {
+    let none_last = |id: &str| order(&format!("({id} IS NULL)::integer"), "integer");
+    Some(match field {
+        STATUS => GroupSql {
+            join: " LEFT JOIN work_item_statuses group_field \
+                   ON group_field.project_id = core.project_id AND group_field.id = core.status_id"
+                .to_owned(),
+            key: "COALESCE(group_field.id::text, 'none')".to_owned(),
+            label: "COALESCE(group_field.name, 'No value')".to_owned(),
+            color: status_color_sql("group_field.semantic_category"),
+            order: vec![
+                none_last("group_field.id"),
+                order("COALESCE(group_field.position, 0)", "integer"),
+                order("COALESCE(group_field.id::text, '')", "text"),
+            ],
+        },
+        PRIORITY => {
+            let values = PRIORITIES
+                .iter()
+                .enumerate()
+                .map(|(index, (stored, name, id, color))| {
+                    format!("('{stored}', '{id}', '{name}', '{color}', {index})")
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            GroupSql {
+                join: format!(
+                    " LEFT JOIN (VALUES {values}) AS group_field(stored, id, name, color, position) \
+                     ON group_field.stored = core.priority"
+                ),
+                key: "COALESCE(group_field.id, 'none')".to_owned(),
+                label: "COALESCE(group_field.name, 'No value')".to_owned(),
+                color: "group_field.color".to_owned(),
+                order: vec![
+                    none_last("group_field.id"),
+                    order("COALESCE(group_field.position, 0)", "integer"),
+                ],
+            }
+        }
+        TYPE => GroupSql {
+            join: " LEFT JOIN work_item_types group_field \
+                   ON group_field.project_id = core.project_id AND group_field.id = core.type_id"
+                .to_owned(),
+            key: "COALESCE(group_field.id::text, 'none')".to_owned(),
+            label: "COALESCE(group_field.name, 'No value')".to_owned(),
+            color: "NULL::text".to_owned(),
+            order: vec![
+                none_last("group_field.id"),
+                order("COALESCE(group_field.position, 0)", "integer"),
+                order("COALESCE(group_field.id::text, '')", "text"),
+            ],
+        },
+        MILESTONE => GroupSql {
+            join: " LEFT JOIN project_milestones group_field \
+                   ON group_field.project_id = core.project_id AND group_field.id = core.milestone_id"
+                .to_owned(),
+            key: "COALESCE(group_field.id::text, 'none')".to_owned(),
+            label: "COALESCE(group_field.name, 'No milestone')".to_owned(),
+            color: "NULL::text".to_owned(),
+            order: vec![
+                none_last("group_field.id"),
+                order("COALESCE(group_field.target_date, 'infinity'::date)", "date"),
+                order(
+                    &format!(
+                        "left(lower(COALESCE(group_field.name, '')), {})",
+                        fields::SORT_PREFIX_CHARACTERS
+                    ),
+                    "text",
+                ),
+                order("COALESCE(group_field.id::text, '')", "text"),
+            ],
+        },
+        PARENT => GroupSql {
+            join: " LEFT JOIN work_items group_field \
+                   ON group_field.project_id = core.project_id \
+                  AND group_field.id = core.parent_work_item_id \
+                 LEFT JOIN projects group_project ON group_project.id = core.project_id"
+                .to_owned(),
+            key: "COALESCE(group_field.id::text, 'none')".to_owned(),
+            label: "COALESCE(group_project.project_key || '-' || group_field.number || ' ' || group_field.title, 'No parent')"
+                .to_owned(),
+            color: "NULL::text".to_owned(),
+            order: vec![
+                none_last("group_field.id"),
+                order("COALESCE(group_field.number, 0)", "bigint"),
+            ],
+        },
+        // One group for each of a task's labels: a task with two is in
+        // both.
+        LABELS => GroupSql {
+            join: " LEFT JOIN work_item_active_labels group_field \
+                   ON group_field.project_id = core.project_id AND group_field.work_item_id = core.id"
+                .to_owned(),
+            key: "COALESCE(group_field.label_id::text, 'none')".to_owned(),
+            label: "COALESCE(group_field.name, 'No label')".to_owned(),
+            color: "group_field.color".to_owned(),
+            order: vec![
+                none_last("group_field.label_id"),
+                order(
+                    &format!(
+                        "left(lower(COALESCE(group_field.name, '')), {})",
+                        fields::SORT_PREFIX_CHARACTERS
+                    ),
+                    "text",
+                ),
+                order("COALESCE(group_field.label_id::text, '')", "text"),
+            ],
+        },
+        _ => return None,
     })
 }
 
