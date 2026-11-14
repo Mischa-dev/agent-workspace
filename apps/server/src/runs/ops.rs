@@ -330,10 +330,13 @@ pub async fn open(
             "Report at least every 30 seconds to every 86,400 (a day).",
         ));
     }
-    let settings = input
-        .settings
-        .clone()
-        .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+    // Measured as stored: after secrets are taken out.
+    let settings = activities::redact_value(
+        input
+            .settings
+            .clone()
+            .unwrap_or_else(|| Value::Object(serde_json::Map::new())),
+    );
     if !settings.is_object()
         || serde_json::to_vec(&settings).map_or(usize::MAX, |bytes| bytes.len())
             > MAX_SETTINGS_BYTES
@@ -343,7 +346,6 @@ pub async fn open(
             "settings is a JSON object of at most 16 KiB.",
         ));
     }
-    let settings = activities::redact_value(settings);
     if !matches!(input.initial, RunState::Working | RunState::Accepted) {
         return Err(refused("state", "A run opens working or accepted."));
     }
@@ -811,7 +813,10 @@ pub async fn append(
         let inserted =
             insert_activity_row(transaction, &run, seq + 1, &activity, reporter.account_id())
                 .await?;
+        // A finished run asks nobody: the interrupt is kept as a step, but
+        // no request opens that nothing would ever withdraw.
         if activity.effect == ActivityEffect::Interrupt
+            && !state.is_terminal()
             && let Some(request) = activity
                 .payload
                 .get("request")

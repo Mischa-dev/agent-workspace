@@ -198,6 +198,49 @@ async fn an_agent_reports_its_own_run_and_nobody_else_can() {
     assert_eq!(finished["value"]["state"], "done", "{finished}");
     let reopened = call("run_update", json!({"runId": run_id, "state": "working"})).await;
     assert_eq!(reopened["outcome"], "invalid_request", "{reopened}");
+    // An interrupt after the end is kept as a step, but opens no request
+    // that would stay open on a finished run.
+    let late = call(
+        "run_activity",
+        json!({"runId": run_id, "activities": [{"id": "late-q", "kind": "interrupt",
+            "payload": {"request": {"kind": "question", "title": "Anything else?"}}}]}),
+    )
+    .await;
+    assert_eq!(late["outcome"], "ok", "{late}");
+    assert_eq!(late["value"]["state"], "done", "{late}");
+    let (kept, open) = sqlx::query_as::<_, (i64, i64)>(
+        r#"
+        SELECT (SELECT count(*) FROM run_activities WHERE run_id = $1 AND client_id = 'late-q'),
+               (SELECT count(*) FROM requests WHERE run_id = $1 AND status = 'open')
+        "#,
+    )
+    .bind(run)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("late interrupt");
+    assert_eq!((kept, open), (1, 0), "kept, and nothing left open");
+
+    // The largest valid ask (8 options, 40-character ids, 200-character
+    // labels of three-byte characters) is stored, not rolled back.
+    let asking = call(
+        "run_open",
+        json!({"title": "Big ask", "cause": {"kind": "manual"}}),
+    )
+    .await;
+    assert_eq!(asking["outcome"], "ok", "{asking}");
+    let options = (0..8)
+        .map(|index| json!({"id": format!("{index}{}", "i".repeat(39)), "label": "漢".repeat(200)}))
+        .collect::<Vec<_>>();
+    let asked = call(
+        "run_activity",
+        json!({"runId": asking["value"]["run"]["runId"],
+               "activities": [{"id": "ask", "kind": "interrupt",
+                   "payload": {"request": {"kind": "approval", "title": "Which way?",
+                                            "options": options}}}]}),
+    )
+    .await;
+    assert_eq!(asked["outcome"], "ok", "{asked}");
+    assert_eq!(asked["value"]["state"], "waiting", "{asked}");
     let events = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM outbox_events WHERE event_type = 'run.changed' AND resource_id = $1",
     )
