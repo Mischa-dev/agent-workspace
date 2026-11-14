@@ -838,10 +838,11 @@ async fn deferred_repository_run_guard_closes_the_concurrent_archive_race() {
         .await
         .expect("create archive-race M3 schema");
     let pool = schema_pool(&database_url, &schema).await;
-    apply_through_m2(&pool).await;
-    apply_m3_foundation(&pool)
+    // Today's schema, so the race is tested against the guard that runs now.
+    sqlx::migrate!("./migrations")
+        .run(&pool)
         .await
-        .expect("apply M3 execution migrations");
+        .expect("apply every migration");
     let temporary_root = tempfile::tempdir().expect("create archive-race data root");
     let config = development_config(&database_url, &temporary_root);
     let seed = dev_seed(&pool, &config)

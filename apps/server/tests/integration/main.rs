@@ -73,6 +73,7 @@ mod mcp_tasks;
 mod message_edits;
 mod message_reactions;
 mod message_replies;
+mod migrations_guard;
 mod modules;
 mod modules_ids;
 mod modules_lists;

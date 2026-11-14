@@ -9,8 +9,8 @@ description: Use when a change needs a database change in Agent Workspace (a new
 
 New migrations are named by a UTC timestamp: `apps/server/migrations/
 YYYYMMDDhhmmss_what_it_does.sql`. The numbered ones stop at 0054, and
-`apps/server/tests/integration/m0_database.rs` refuses new numbered ones and
-duplicate timestamps. Several branches add migrations at once, so:
+`apps/server/tests/integration/migrations_guard.rs` refuses new numbered ones
+and duplicate timestamps. Several branches add migrations at once, so:
 
 - Use the range your workstream was given (the brief or the roadmap says), or
   the current UTC time if none was.
@@ -36,8 +36,9 @@ duplicate timestamps. Several branches add migrations at once, so:
 
 ## Check it
 
-- `cargo test -p agent-workspace-server --test integration -- m0_database`
-  applies every migration to a fresh schema.
+- `cargo test -p agent-workspace-server --test integration -- migrations_guard
+  m0_database` checks the name and applies every migration to a fresh
+  schema.
 - Any integration test applies them too (`sqlx::migrate!` in the test setup).
 - The server's `preflight` command checks a release's migrations against a
   live database before a deploy; nothing to do here, but list the new

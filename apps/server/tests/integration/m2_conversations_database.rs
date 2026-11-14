@@ -563,7 +563,7 @@ async fn concurrent_m2_timeline_writers_allocate_gap_free_unique_sequences() {
         .await
         .expect("create isolated sequence schema");
     let pool = schema_pool(&database_url, &schema).await;
-    apply_all_migrations(&pool).await;
+    apply_every_migration(&pool).await;
 
     let actor_id = Uuid::now_v7();
     let organization_id = Uuid::now_v7();
@@ -679,7 +679,7 @@ async fn archive_updates_serialize_with_thread_and_navigation_validation() {
         .await
         .expect("create isolated archive-race schema");
     let pool = schema_pool(&database_url, &schema).await;
-    apply_all_migrations(&pool).await;
+    apply_every_migration(&pool).await;
 
     let actor_id = Uuid::now_v7();
     let organization_id = Uuid::now_v7();
@@ -1440,30 +1440,13 @@ async fn apply_through_m1(pool: &PgPool) {
     }
 }
 
-async fn apply_all_migrations(pool: &PgPool) {
-    apply_through_m1(pool).await;
-    sqlx::raw_sql(include_str!("../../migrations/0005_m2_conversations.sql"))
-        .execute(pool)
+/// Today's schema: every migration, as the server runs them. Race tests use
+/// it so they test the code that runs now, not an early version of it.
+async fn apply_every_migration(pool: &PgPool) {
+    sqlx::migrate!("./migrations")
+        .run(pool)
         .await
-        .expect("apply M2 migration");
-    sqlx::raw_sql(include_str!(
-        "../../migrations/0006_m2_message_mentions_projection.sql"
-    ))
-    .execute(pool)
-    .await
-    .expect("apply M2 mention projection reconciliation");
-    sqlx::raw_sql(include_str!(
-        "../../migrations/0007_m2_archived_parent_navigation.sql"
-    ))
-    .execute(pool)
-    .await
-    .expect("apply M2 archived-parent navigation boundary");
-    sqlx::raw_sql(include_str!(
-        "../../migrations/0008_m2_conversation_lock_boundaries.sql"
-    ))
-    .execute(pool)
-    .await
-    .expect("apply M2 archive serialization boundary");
+        .expect("apply every migration");
 }
 
 async fn integration_pool() -> Option<(String, PgPool)> {
