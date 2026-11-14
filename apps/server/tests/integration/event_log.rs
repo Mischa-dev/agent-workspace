@@ -575,3 +575,153 @@ async fn quiet_writes_emit_their_events() {
     assert_eq!(audience, "conversation");
     world.finish().await;
 }
+
+// --- K3.4: webhooks and automations read the log -------------------------
+
+/// The router with a fault: the first batch it handles fails after doing
+/// its work, as a router killed mid-batch would.
+struct DiesOnce {
+    died: AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl Consumer for DiesOnce {
+    fn name(&self) -> &'static str {
+        events::ROUTER
+    }
+
+    fn starts_at_head(&self) -> bool {
+        false
+    }
+
+    async fn handle(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        batch: &[LoggedEvent],
+    ) -> Result<(), ConsumerError> {
+        events::Router.handle(transaction, batch).await?;
+        if self.died.fetch_add(1, Ordering::SeqCst) == 0 {
+            return Err(ConsumerError("killed mid-batch".to_owned()));
+        }
+        Ok(())
+    }
+}
+
+/// A router stopped mid-batch loses no delivery and makes none twice, and
+/// routing the same events again makes no new deliveries.
+#[tokio::test]
+async fn the_router_loses_and_repeats_no_delivery() {
+    let Some(world) = WorldBuilder::default()
+        .project("HOOK")
+        .connected_app("helper")
+        .build("event_log_router")
+        .await
+    else {
+        return;
+    };
+    let pool = world.pool().clone();
+    let project = world.project("HOOK");
+    sqlx::query(
+        "INSERT INTO webhook_subscriptions \
+             (id, organization_id, project_id, owner_actor_id, name, url, event_types) \
+         VALUES ($1, $2, $3::uuid, $4, 'Router test', 'https://receiver.invalid/hook', \
+                 '{message.created}')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(world.organization)
+    .bind(project)
+    .bind(world.owner.actor)
+    .execute(&pool)
+    .await
+    .expect("subscription");
+    let setup = Setup {
+        app: world.app.clone(),
+        browser: super::support::app::login(&world.app).await,
+        organization_id: world.organization,
+        pool: pool.clone(),
+        cleanup: None,
+    };
+    let channel = create_channel(&setup, project, "hooks").await;
+    let helper = &world.apps["helper"];
+    for n in 0..3 {
+        let sent = tool(
+            &world.app,
+            &helper.token,
+            &helper.session,
+            "message_send",
+            json!({"conversationId": channel, "text": format!("ping {n}"), "clientRequestId": format!("hook-{n}")}),
+        )
+        .await;
+        assert_eq!(sent["outcome"], "ok", "{sent}");
+    }
+    while sequencer::step(&pool).await.expect("sequence") > 0 {}
+
+    let mut runner = Runner::new(DiesOnce {
+        died: AtomicUsize::new(0),
+    });
+    let route_jobs = || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM background_jobs WHERE kind = 'events.route'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("jobs")
+    };
+    runner.round(&pool).await.expect("the killed round");
+    assert_eq!(
+        route_jobs().await,
+        0,
+        "the killed batch left nothing behind"
+    );
+    while runner.round(&pool).await.expect("round").handled > 0 {}
+    assert_eq!(route_jobs().await, 3, "one routing job per message");
+
+    let registry = agent_workspace_server::jobs::default_registry();
+    let options = agent_workspace_server::jobs::WorkerOptions {
+        concurrency: 1,
+        poll_interval: std::time::Duration::from_millis(20),
+        lease: std::time::Duration::from_secs(30),
+        worker_id: "router-test".to_owned(),
+    };
+    let state = world.state.clone();
+    let route_only = |state: &agent_workspace_server::AppState| {
+        let state = state.clone();
+        let registry = &registry;
+        let options = &options;
+        async move {
+            // Only the routing jobs: deliveries would try to reach the
+            // receiver.
+            sqlx::query(
+                "UPDATE background_jobs SET run_at = now() + interval '1 day' \
+                 WHERE kind <> 'events.route' AND state = 'queued'",
+            )
+            .execute(&state.pool)
+            .await
+            .expect("hold other jobs");
+            while agent_workspace_server::jobs::run_due(&state, registry, options)
+                .await
+                .expect("run jobs")
+                > 0
+            {}
+        }
+    };
+    route_only(&state).await;
+    let deliveries = || async {
+        sqlx::query_as::<_, (i64, i64)>(
+            "SELECT count(*), count(DISTINCT event_key) FROM webhook_deliveries",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("deliveries")
+    };
+    assert_eq!(deliveries().await, (3, 3), "one delivery per message");
+
+    // Routing everything again (a cursor set back) delivers nothing twice.
+    sqlx::query("UPDATE event_consumers SET position = 0 WHERE name = 'router'")
+        .execute(&pool)
+        .await
+        .expect("rewind");
+    while runner.round(&pool).await.expect("round").handled > 0 {}
+    route_only(&state).await;
+    assert_eq!(deliveries().await, (3, 3), "no delivery twice");
+}

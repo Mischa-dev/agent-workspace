@@ -28,10 +28,24 @@ pub async fn drop_schema(pool: &PgPool, schema: &str) -> Result<(), sqlx::Error>
     .fetch_all(pool)
     .await?;
     for statement in tables {
-        sqlx::query(&statement).execute(pool).await?;
+        retry_deadlock(pool, &statement).await?;
     }
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
-        .execute(pool)
-        .await?;
-    Ok(())
+    retry_deadlock(pool, &format!("DROP SCHEMA {schema} CASCADE")).await
+}
+
+/// A drop can deadlock with work the test left running (a run finishing in
+/// the background); the straggler loses on its own soon, so try again.
+async fn retry_deadlock(pool: &PgPool, statement: &str) -> Result<(), sqlx::Error> {
+    let mut tries = 0;
+    loop {
+        match sqlx::query(statement).execute(pool).await {
+            Err(sqlx::Error::Database(error))
+                if error.code().as_deref() == Some("40P01") && tries < 5 =>
+            {
+                tries += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+            result => return result.map(|_| ()),
+        }
+    }
 }

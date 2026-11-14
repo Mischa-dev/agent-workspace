@@ -178,11 +178,18 @@ impl Server {
                 wakes,
                 receiver.clone(),
             );
+            // Webhooks and automations read the log (K3.4), on whichever
+            // instance holds the router's lease.
+            let router = crate::events::run_consumer(
+                cluster.clone(),
+                crate::events::Router,
+                receiver.clone(),
+            );
             let heartbeat_cluster = cluster.clone();
             let heartbeat_shutdown = receiver.clone();
             async move {
                 let heartbeat = heartbeat_cluster.run_heartbeat(heartbeat_shutdown);
-                tokio::join!(replies, sequencer, tail, listener, heartbeat);
+                tokio::join!(replies, sequencer, tail, listener, router, heartbeat);
             }
         });
         // Background jobs (F9). A job lost to a crash is retried once its

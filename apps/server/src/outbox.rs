@@ -540,7 +540,10 @@ impl OutboxEventPayload {
         Ok(value)
     }
 
-    fn from_json(event_type: &str, value: serde_json::Value) -> Result<Self, OutboxEventError> {
+    pub(crate) fn from_json(
+        event_type: &str,
+        value: serde_json::Value,
+    ) -> Result<Self, OutboxEventError> {
         validate_payload_size(&value)?;
         let payload = match event_type {
             "conversation.created" => Self::ConversationCreated(

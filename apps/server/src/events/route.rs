@@ -1,12 +1,16 @@
 //! W14: the workspace events outgoing webhooks (X4) and automations (X5)
-//! hear about, drawn from the outbox.
+//! hear about, read from the event log (K3.4).
 //!
-//! The outbox publisher calls [`queue_route`] in the transaction that marks
-//! an event published, as it does for notifications. When the event's
-//! project has a webhook or an event-triggered rule, that queues one
-//! `events.route` job; the job turns the outbox event (IDs only) into the
-//! events below and hands them to both. Everything after that goes through
-//! the job queue, so it survives restarts and runs on any server.
+//! The [`Router`] consumer reads the log after its own cursor. For each
+//! event whose project has a webhook or an event-triggered rule, it queues
+//! one `events.route` job in the same transaction that advances its cursor,
+//! so a router that stops mid-batch loses and repeats nothing; the job
+//! turns the event (IDs only) into the events below and hands them to both.
+//! Everything after that goes through the job queue, so it survives
+//! restarts and runs on any server. The router runs under its
+//! `consumer:router` lease on whichever instance holds it; the outbox
+//! publisher also nudges an `events.router` job (one at a time) so routing
+//! goes on wherever jobs run.
 //!
 //! Each event has a key that names what happened (`run:<id>:completed`), so
 //! the same change seen twice, from a redelivered outbox event or from two
@@ -29,6 +33,8 @@ use crate::{
 };
 
 pub const ROUTE_KIND: &str = "events.route";
+/// One pass of the router over the log, nudged by the outbox publisher.
+pub const ROUTER_KIND: &str = "events.router";
 
 /// Every event type, as webhooks name them.
 pub const EVENT_TYPES: &[(&str, &str)] = &[
@@ -59,6 +65,12 @@ pub fn register_jobs(registry: &mut JobRegistry) {
     registry.register(ROUTE_KIND, |context: JobContext| async move {
         let payload: RoutePayload = context.job.payload_as()?;
         route(&context.state, &payload)
+            .await
+            .map_err(|error| JobError::retry(error.log_category()))?;
+        Ok(())
+    });
+    registry.register(ROUTER_KIND, |context: JobContext| async move {
+        run_router(&context.state.pool)
             .await
             .map_err(|error| JobError::retry(error.log_category()))?;
         Ok(())
@@ -105,7 +117,38 @@ pub struct Event {
     pub occurred_at: DateTime<Utc>,
     /// Who caused it, when someone did.
     pub actor_id: Option<Uuid>,
+    /// The thing it is about, as the registry names it (K3.4). The
+    /// `subject` fields stay beside it for one release, for receivers that
+    /// read them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thing: Option<ThingRef>,
     pub subject: Subject,
+}
+
+/// A thing by kind and id.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThingRef {
+    pub kind: String,
+    pub id: Uuid,
+}
+
+/// The thing an event is about, from its subject.
+fn thing_of(event_type: &str, subject: &Subject) -> Option<ThingRef> {
+    let thing = |kind: &str, id: Option<Uuid>| {
+        id.map(|id| ThingRef {
+            kind: kind.to_owned(),
+            id,
+        })
+    };
+    match event_type.split('.').next() {
+        Some("message") => thing("message", subject.message_id),
+        Some("run") => thing("run", subject.agent_run_id),
+        Some("pull_request") => thing("pull_request", subject.pull_request_id),
+        Some("record") => thing("record", subject.record_id),
+        Some("task") => thing("task", subject.work_item_id),
+        _ => None,
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -146,29 +189,18 @@ pub(crate) enum RouteSource {
     },
 }
 
-/// Queues the routing job for a published outbox event, when anything in
-/// its project listens. Called by the outbox publisher inside the
-/// transaction that marks the event published.
-pub async fn queue_route(
-    transaction: &mut Transaction<'_, Postgres>,
-    claim: &ClaimedOutboxEvent,
-) -> Result<bool, AppError> {
-    let Ok(payload) = claim.decode() else {
-        return Ok(false);
-    };
-    let source = match payload {
+/// What an outbox payload routes as, if anything.
+fn route_source(payload: OutboxEventPayload) -> Option<RouteSource> {
+    Some(match payload {
         OutboxEventPayload::MessageCreated(created) => RouteSource::Message {
             conversation_id: created.conversation_id,
             message_id: created.message_id,
             author_actor_id: created.author_actor_id,
         },
-        OutboxEventPayload::AgentRunUpdated(updated) => match updated.state {
-            Some(state) => RouteSource::Run {
-                conversation_id: updated.conversation_id,
-                agent_run_id: updated.agent_run_id,
-                state,
-            },
-            None => return Ok(false),
+        OutboxEventPayload::AgentRunUpdated(updated) => RouteSource::Run {
+            conversation_id: updated.conversation_id,
+            agent_run_id: updated.agent_run_id,
+            state: updated.state?,
         },
         OutboxEventPayload::WorkItemUpdated(updated) => RouteSource::WorkItem {
             work_item_id: updated.work_item_id,
@@ -180,10 +212,17 @@ pub async fn queue_route(
                 record_ids: updated.record_ids,
             }
         }
-        _ => return Ok(false),
-    };
-    let project_id = claim.project_id();
-    let listening = sqlx::query_scalar::<_, Uuid>(
+        _ => return None,
+    })
+}
+
+/// The project's workspace, when anything in the project listens to its
+/// events (a webhook, or a rule triggered by events).
+async fn listening(
+    connection: &mut sqlx::PgConnection,
+    project_id: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT project.organization_id
         FROM projects project
@@ -204,25 +243,107 @@ pub async fn queue_route(
         "#,
     )
     .bind(project_id)
-    .fetch_optional(&mut **transaction)
-    .await?;
-    let Some(organization_id) = listening else {
+    .fetch_optional(&mut *connection)
+    .await?)
+}
+
+/// Called by the outbox publisher inside the transaction that marks an
+/// event published: when the event would route and its project listens,
+/// make sure one `events.router` pass is queued. The router reads the
+/// log, not the outbox; this only says "look now".
+pub async fn queue_route(
+    transaction: &mut Transaction<'_, Postgres>,
+    claim: &ClaimedOutboxEvent,
+) -> Result<bool, AppError> {
+    let Ok(payload) = claim.decode() else {
+        return Ok(false);
+    };
+    if route_source(payload).is_none() {
+        return Ok(false);
+    }
+    let Some(organization_id) = listening(transaction, claim.project_id()).await? else {
         return Ok(false);
     };
     jobs::enqueue(
         &mut **transaction,
-        NewJob::new(ROUTE_KIND)
-            .project(organization_id, project_id)
-            .payload(RoutePayload {
-                event_id: claim.event_id(),
-                project_id,
-                organization_id,
-                source,
-            })
-            .unique(format!("events.route:{}", claim.event_id())),
+        NewJob::new(ROUTER_KIND)
+            .project(organization_id, claim.project_id())
+            .unique(ROUTER_KIND),
     )
     .await?;
     Ok(true)
+}
+
+/// The router: a consumer of the log that queues one `events.route` job
+/// per event that has somewhere to go.
+pub struct Router;
+
+/// The router's cursor.
+pub const ROUTER: &str = "router";
+
+#[async_trait::async_trait]
+impl super::Consumer for Router {
+    fn name(&self) -> &'static str {
+        ROUTER
+    }
+
+    /// From the log's start: everything in the log was written after the
+    /// outbox stopped routing, so nothing is routed twice or skipped.
+    fn starts_at_head(&self) -> bool {
+        false
+    }
+
+    async fn handle(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        batch: &[super::LoggedEvent],
+    ) -> Result<(), super::ConsumerError> {
+        for event in batch {
+            let (Some(legacy_type), Some(project_id)) = (&event.legacy_type, event.space_id) else {
+                continue;
+            };
+            let Ok(payload) = OutboxEventPayload::from_json(legacy_type, event.payload.clone())
+            else {
+                continue;
+            };
+            let Some(source) = route_source(payload) else {
+                continue;
+            };
+            let Some(organization_id) = listening(transaction, project_id).await? else {
+                continue;
+            };
+            jobs::enqueue(
+                &mut **transaction,
+                NewJob::new(ROUTE_KIND)
+                    .project(organization_id, project_id)
+                    .payload(RoutePayload {
+                        event_id: event.id,
+                        project_id,
+                        organization_id,
+                        source,
+                    })
+                    .unique(format!("events.route:{}", event.id)),
+            )
+            .await?;
+        }
+        Ok(())
+    }
+}
+
+/// One `events.router` pass: positions for what is staged, then the
+/// router's rounds until it is caught up (or another runner holds it).
+pub async fn run_router(pool: &PgPool) -> Result<usize, AppError> {
+    let mut runner = super::consumer::Runner::new(Router);
+    let mut handled = 0;
+    for _ in 0..50 {
+        super::sequencer::step(pool).await?;
+        let round = runner.round(pool).await?;
+        handled += round.handled + round.parked;
+        if round.busy || round.handled + round.parked == 0 {
+            break;
+        }
+    }
+    Ok(handled)
 }
 
 /// Turns one outbox event into events and hands them to webhooks and
@@ -393,13 +514,12 @@ struct LinkedPullRequest {
 }
 
 async fn expand(pool: &PgPool, payload: &RoutePayload) -> Result<Vec<Event>, AppError> {
-    let occurred_at = sqlx::query_scalar::<_, DateTime<Utc>>(
-        "SELECT created_at FROM outbox_events WHERE event_id = $1",
-    )
-    .bind(payload.event_id)
-    .fetch_optional(pool)
-    .await?
-    .unwrap_or_else(Utc::now);
+    let occurred_at =
+        sqlx::query_scalar::<_, DateTime<Utc>>("SELECT created_at FROM events WHERE id = $1")
+            .bind(payload.event_id)
+            .fetch_optional(pool)
+            .await?
+            .unwrap_or_else(Utc::now);
     let event = |event_type: &str, key: String, actor_id: Option<Uuid>, subject: Subject| Event {
         event_type: event_type.to_owned(),
         key,
@@ -407,6 +527,7 @@ async fn expand(pool: &PgPool, payload: &RoutePayload) -> Result<Vec<Event>, App
         project_id: payload.project_id,
         occurred_at,
         actor_id,
+        thing: thing_of(event_type, &subject),
         subject,
     };
     let mut events = Vec::new();
@@ -489,12 +610,12 @@ async fn expand(pool: &PgPool, payload: &RoutePayload) -> Result<Vec<Event>, App
                 r#"
                 SELECT activity.kind, activity.actor_id,
                        activity.payload->'changedFields' AS changed_fields
-                FROM outbox_events event
+                FROM events event
                 JOIN work_item_activity activity
-                  ON activity.project_id = event.project_id
+                  ON activity.project_id = event.space_id
                  AND activity.work_item_id = $2
                  AND activity.created_at = event.created_at
-                WHERE event.event_id = $1
+                WHERE event.id = $1
                 ORDER BY activity.created_at, activity.id
                 "#,
             )
@@ -568,12 +689,12 @@ async fn expand(pool: &PgPool, payload: &RoutePayload) -> Result<Vec<Event>, App
                 r#"
                 SELECT history.id, history.record_id, history.action, history.actor_id,
                        history.changes
-                FROM outbox_events event
+                FROM events event
                 JOIN collection_record_history history
-                  ON history.project_id = event.project_id
+                  ON history.project_id = event.space_id
                  AND history.record_id = ANY($2)
                  AND history.created_at = event.created_at
-                WHERE event.event_id = $1
+                WHERE event.id = $1
                 ORDER BY history.created_at, history.id
                 "#,
             )
