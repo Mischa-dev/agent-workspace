@@ -29,6 +29,41 @@ async fn an_agent_reports_its_own_run_and_nobody_else_can() {
         async move { tool(app, &token, &session, name, arguments).await }
     };
 
+    // A secret in a title is removed before it is stored, on open and on
+    // update, as it is in status lines and activities.
+    let titled = call(
+        "run_open",
+        json!({"projectId": "WORK", "title": "Deploy API_KEY=abcdef1234567890",
+               "cause": {"kind": "manual"}}),
+    )
+    .await;
+    assert_eq!(titled["outcome"], "ok", "{titled}");
+    let titled_id = titled["value"]["run"]["runId"]
+        .as_str()
+        .expect("run")
+        .to_owned();
+    let retitled = call(
+        "run_update",
+        json!({"runId": titled_id, "title": "Rotate token=zyxw9876vuts5432"}),
+    )
+    .await;
+    assert_eq!(retitled["outcome"], "ok", "{retitled}");
+    let stored = sqlx::query_scalar::<_, String>("SELECT title FROM runs WHERE id = $1::uuid")
+        .bind(&titled_id)
+        .fetch_one(&setup.pool)
+        .await
+        .expect("title");
+    for (secret, shown) in [
+        ("abcdef1234567890", titled.to_string()),
+        ("zyxw9876vuts5432", retitled.to_string()),
+        ("zyxw9876vuts5432", stored.clone()),
+    ] {
+        assert!(!shown.contains(secret), "{secret} leaked: {shown}");
+    }
+    assert!(stored.starts_with("Rotate"), "{stored}");
+    let ended = call("run_update", json!({"runId": titled_id, "state": "done"})).await;
+    assert_eq!(ended["outcome"], "ok", "{ended}");
+
     // Open, then open again with the same clientRunId: one run.
     let open = json!({
         "projectId": "WORK",

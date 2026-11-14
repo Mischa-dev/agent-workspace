@@ -300,8 +300,10 @@ pub async fn open(
     {
         return replayed(transaction, account_id, input.space_id, run).await;
     }
+    // A title is shown wherever the run is: secrets in it are removed, as
+    // in status lines and activities.
     let title = line(
-        &input.title,
+        &crate::run_log::redact(&input.title),
         MAX_TITLE_CHARS,
         "title",
         "Keep the title to 200 characters.",
@@ -682,7 +684,7 @@ pub async fn update(
     let title = match change.title {
         Some(title) => {
             let title = line(
-                &title,
+                &crate::run_log::redact(&title),
                 MAX_TITLE_CHARS,
                 "title",
                 "Keep the title to 200 characters.",
