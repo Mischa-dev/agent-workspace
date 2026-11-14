@@ -104,7 +104,7 @@ pub async fn for_reply_request(
                      AND run.account_id = request.agent_actor_id
         WHERE request.id = $1 AND request.agent_actor_id = $2
           AND run.launch_id IS NOT NULL
-        ORDER BY run.created_at DESC
+        ORDER BY run.created_at DESC, run.id DESC
         LIMIT 1
         "#
     ))
@@ -332,7 +332,10 @@ pub async fn stopped(
 }
 
 /// The reply request a launched run still answers, if it is open: a stop
-/// on the run goes through it so the runner hears it (A1.4).
+/// on the run goes through it so the runner hears it (A1.4). Only while
+/// the run is unfinished and is the request's current attempt (the newest,
+/// as `for_reply_request` picks it): stopping an old attempt never reaches
+/// a retry's request.
 pub async fn open_request_of(
     transaction: &mut Transaction<'_, Postgres>,
     run_id: Uuid,
@@ -345,13 +348,22 @@ pub async fn open_request_of(
           ON request.message_id = run.cause_message_id
          AND request.agent_actor_id = run.account_id
         WHERE run.id = $1 AND run.launch_id IS NOT NULL
+          AND run.state = ANY($2)
           AND request.status IN ('pending', 'claimed')
           AND NOT EXISTS (SELECT 1 FROM agent_runs builtin WHERE builtin.id = run.id)
+          AND NOT EXISTS (
+              SELECT 1 FROM runs later
+              WHERE later.cause_message_id = run.cause_message_id
+                AND later.account_id = run.account_id
+                AND later.launch_id IS NOT NULL
+                AND (later.created_at, later.id) > (run.created_at, run.id)
+          )
         ORDER BY request.updated_at DESC
         LIMIT 1
         "#,
     )
     .bind(run_id)
+    .bind(RunState::active_keys())
     .fetch_optional(&mut **transaction)
     .await?)
 }

@@ -329,6 +329,22 @@ async fn a_launch_to_a_runner_gives_it_a_run_its_reply_calls_move() {
     .await
     .expect("attempt");
     assert_eq!((predecessor, shown), (Some(released_run), Some(attempt)));
+    // Stopping the old, finished attempt leaves the retry's request alone.
+    let _ = owner_call(
+        "run_cancel",
+        json!({"runId": released_run, "clientRequestId": "stop-old-attempt"}),
+    )
+    .await;
+    let still = sqlx::query_scalar::<_, String>("SELECT status FROM reply_requests WHERE id = $1")
+        .bind(released_request)
+        .fetch_one(pool)
+        .await
+        .expect("request");
+    assert_eq!(
+        still, "claimed",
+        "the old attempt's stop never reaches the retry"
+    );
+    assert_eq!(run_row(pool, attempt).await.0, "working");
     let answered = runner_call(
         "reply_send",
         json!({"requestId": released_request, "generation": again["value"]["request"]["generation"],
