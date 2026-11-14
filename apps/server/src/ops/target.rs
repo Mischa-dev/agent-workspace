@@ -99,6 +99,8 @@ const KINDS: &[(&str, &str)] = &[
          JOIN projects project ON project.id = item.project_id \
          WHERE item.id = $1 AND $2::uuid IS NOT NULL",
     ),
+    // A1.3: the run service keeps its SQL (guard G1).
+    ("run", crate::runs::store::LOCATE_SQL),
 ];
 
 /// The kinds `locate` knows; a test checks every operation's thing kind is
@@ -193,6 +195,7 @@ fn what_of(kind: &str) -> &'static str {
         "message" => "That message",
         "decision" => "That decision",
         "task" => "That task",
+        "run" => "That run",
         _ => "That",
     }
 }

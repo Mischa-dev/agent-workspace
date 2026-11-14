@@ -351,6 +351,7 @@ pub fn default_registry() -> JobRegistry {
     crate::retention::register_jobs(&mut registry);
     crate::ai::register_jobs(&mut registry);
     crate::launch::register_jobs(&mut registry);
+    crate::runs::register_jobs(&mut registry);
     crate::work_items::templates::register_jobs(&mut registry);
     crate::work_items::imports::register_jobs(&mut registry);
     registry.register(PRUNE_KIND, |context| async move {

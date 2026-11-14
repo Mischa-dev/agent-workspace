@@ -426,6 +426,7 @@ async fn request_sponsored_execution_inner(
     .bind(&sponsor.membership_role)
     .execute(&mut *transaction)
     .await?;
+    crate::requests::legacy::approval_written(&mut *transaction, approval_id).await?;
     enqueue_external_event(
         &mut transaction,
         connection_id,
@@ -741,6 +742,7 @@ pub(crate) async fn respond_to_sponsored_execution(
     .bind(&response_json)
     .execute(&mut *transaction)
     .await?;
+    crate::requests::legacy::approval_written(&mut *transaction, approval_id).await?;
     sqlx::query(
         r#"
         UPDATE external_execution_requests

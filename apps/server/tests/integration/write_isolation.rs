@@ -378,6 +378,26 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
          workspace ID",
     ),
     ("POST /api/v1/auth/login", SIGN_IN),
+    (
+        "POST /api/v1/host/describe",
+        "a host's own call with its own token, about itself; no session and no workspace ID \
+         (tests/integration/a1_host_protocol.rs)",
+    ),
+    (
+        "POST /api/v1/host/heartbeat",
+        "a host's own call with its own token, about itself and its own runs \
+         (tests/integration/a1_host_protocol.rs)",
+    ),
+    (
+        "POST /api/v1/host/notices",
+        "a host's own call with its own token, about agents bound to it \
+         (tests/integration/a1_host_protocol.rs)",
+    ),
+    (
+        "POST /api/v1/hosts/enrol",
+        "a host trading a one-time code for its token; no session and no workspace ID \
+         (tests/integration/a1_host_protocol.rs)",
+    ),
     ("POST /api/v1/auth/login/two-factor", SIGN_IN),
     ("POST /api/v1/auth/logout", SIGN_IN),
     ("POST /api/v1/auth/password-reset", SIGN_IN),
@@ -446,6 +466,10 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "file_delete",
     "file_upload",
     "github_integration_write",
+    "host_agent_bind",
+    "host_agent_unbind",
+    "host_enrolment_create",
+    "host_unlink",
     "invitation_write",
     "label_write",
     "layout_preset_write",
@@ -494,12 +518,19 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "repository_write",
     "role_assign",
     "role_write",
+    "run_activity_report",
+    "run_cancel",
     "run_dismiss_failure",
+    "run_mark_not_started",
+    "run_create",
     "run_publish",
     "run_request",
+    "run_result_report",
     "run_retry",
     "run_start",
     "run_stop",
+    "run_update",
+    "run_usage_report",
     "scheduled_message_update",
     "session_bind",
     "settings_set",
@@ -1159,6 +1190,9 @@ struct Targets {
     /// More sessions for A's owner: writes are limited per session per
     /// minute, so A's requests rotate through them. Empty for B.
     sessions: Vec<Browser>,
+    /// The workspace's hosts (A1.11): the agent is bound to the first two
+    /// as "net-agent" (HTTP, MCP); the last two are for unlinking.
+    hosts: [Uuid; 4],
     owner: Uuid,
     /// The agent, as an actor.
     agent: Uuid,
@@ -1241,6 +1275,9 @@ struct Targets {
     /// Questions the agent asked the owner (AWD-62): one to answer over
     /// HTTP, one through MCP.
     questions: [Uuid; 2],
+    /// Runs the owner reports on themselves (A1.3): one to report on, one
+    /// to stop, and one whose start is uncertain.
+    reported_runs: [Uuid; 3],
 }
 
 async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targets {
@@ -1579,7 +1616,7 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
                 ARRAY['projects.view', 'tasks.view', 'tasks.create', 'tasks.edit', 'tasks.delete',
                       'channels.post', 'channels.create', 'pages.edit', 'whiteboards.edit',
                       'collections.edit', 'collections.build', 'runs.launch', 'runs.approve', 'runs.interrupt', 'runs.accounts',
-                      'code.view', 'code.publish'])
+                      'runs.report', 'requests.raise', 'code.view', 'code.publish'])
         RETURNING id
         "#,
     )
@@ -1601,10 +1638,74 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
     .fetch_one(pool)
     .await
     .expect("workspace template");
+    let mut reported_runs = [Uuid::nil(); 3];
+    for (index, state) in ["working", "working", "start_uncertain"]
+        .into_iter()
+        .enumerate()
+    {
+        reported_runs[index] = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            INSERT INTO runs (id, workspace_id, space_id, account_id, title, cause_kind, state,
+                              last_report_at, started_at)
+            VALUES (gen_random_uuid(), $1, $2, $3, $4, 'manual', $5, now(), now())
+            RETURNING id
+            "#,
+        )
+        .bind(organization)
+        .bind(project)
+        .bind(owner)
+        .bind(format!("Net reported run {tag} {index}"))
+        .bind(state)
+        .fetch_one(pool)
+        .await
+        .expect("reported run");
+    }
+    let mut hosts = [Uuid::nil(); 4];
+    for (index, host) in hosts.iter_mut().enumerate() {
+        let account = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO actors (id, kind, status) VALUES (gen_random_uuid(), 'integration', 'active') RETURNING id",
+        )
+        .fetch_one(pool)
+        .await
+        .expect("host account");
+        *host = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            INSERT INTO hosts (id, account_id, owner_workspace_id, name, protocol_version,
+                               described_agents, enrolled_by_account_id)
+            VALUES (gen_random_uuid(), $1, $2, $3, '2026-11',
+                    '[{"hostAgentRef": "net-agent", "name": "Net", "backends": [], "actions": []}]',
+                    $4)
+            RETURNING id
+            "#,
+        )
+        .bind(account)
+        .bind(organization)
+        .bind(format!("Net host {tag} {index}"))
+        .bind(owner)
+        .fetch_one(pool)
+        .await
+        .expect("host");
+        if index < 2 {
+            sqlx::query(
+                r#"
+                INSERT INTO host_agents (host_id, account_id, host_agent_ref, bound_by_account_id)
+                VALUES ($1, $2, 'net-agent', $3)
+                "#,
+            )
+            .bind(*host)
+            .bind(agent)
+            .bind(owner)
+            .execute(pool)
+            .await
+            .expect("host agent");
+        }
+    }
     let in_project = |sql: &'static str| scalar(pool, sql, project);
     let in_organization = |sql: &'static str| scalar(pool, sql, organization);
     Targets {
+        hosts,
         questions,
+        reported_runs,
         custom_role,
         workspace_template,
         sessions,
@@ -3018,8 +3119,13 @@ impl<'a> Sender<'a> {
         first: &'a Browser,
         more: &'a [Browser],
     ) -> Self {
-        let mut browsers = vec![first];
-        browsers.extend(more.iter());
+        // The first session made the fixture's own writes in this same
+        // minute, so it only sends when there are no others.
+        let browsers = if more.is_empty() {
+            vec![first]
+        } else {
+            more.iter().collect()
+        };
         Self {
             app,
             pool,
@@ -6743,6 +6849,31 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "importId": b.import}),
             json!({"projectId": a.project, "source": "github", "repositoryId": b.repository}),
         ]),
+        // Hosts (A1.11)
+        mcp_case(
+            "host_enrolment_create",
+            json!({"owner": "workspace", "workspace": a.organization, "label": "Net mcp host"}),
+            vec![json!({"owner": "workspace", "workspace": b.organization, "label": "Net mcp host"})],
+        ),
+        mcp_case(
+            "host_agent_bind",
+            json!({"hostId": ax.hosts[1], "accountId": ax.agent, "hostAgentRef": "net-agent"}),
+            vec![json!({"hostId": bx.hosts[1], "accountId": bx.agent, "hostAgentRef": "net-agent"})],
+        )
+        .rejecting(vec![json!({"hostId": ax.hosts[1], "accountId": bx.agent, "hostAgentRef": "net-agent"})]),
+        mcp_case(
+            "host_agent_unbind",
+            json!({"hostId": ax.hosts[1], "accountId": ax.agent}),
+            vec![json!({"hostId": bx.hosts[1], "accountId": bx.agent})],
+        )
+        .no_effect(vec![json!({"hostId": ax.hosts[1], "accountId": bx.agent})])
+        .last(),
+        mcp_case(
+            "host_unlink",
+            json!({"hostId": ax.hosts[3]}),
+            vec![json!({"hostId": bx.hosts[3]})],
+        )
+        .last(),
         mcp_case(
             "webhook_write",
             json!({
@@ -6962,6 +7093,50 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "run_stop",
             json!({"runId": sp.run_stop, "clientRequestId": "net-stop-own"}),
             vec![json!({"runId": b.run, "clientRequestId": "net-stop-b"})],
+        ),
+        mcp_case(
+            "run_create",
+            json!({"projectId": a.project, "title": "Net run", "cause": {"kind": "manual"}, "clientRunId": "net-open-own"}),
+            vec![json!({"projectId": b.project, "title": "Net run", "cause": {"kind": "manual"}, "clientRunId": "net-open-b"})],
+        )
+        .rejecting(vec![
+            json!({"projectId": a.project, "title": "Net run", "cause": {"kind": "thread", "conversationId": b.channel}, "clientRunId": "net-open-m1"}),
+            json!({"projectId": a.project, "title": "Net run", "cause": {"kind": "task", "taskId": b.task}, "clientRunId": "net-open-m2"}),
+            json!({"projectId": a.project, "title": "Net run", "cause": {"kind": "manual"}, "parentRunId": bx.reported_runs[0], "clientRunId": "net-open-m3"}),
+        ]),
+        mcp_case(
+            "run_update",
+            json!({"runId": ax.reported_runs[0], "statusLine": "Net", "clientRequestId": "net-run-update-own"}),
+            vec![json!({"runId": bx.reported_runs[0], "statusLine": "Net", "clientRequestId": "net-run-update-b"})],
+        ),
+        mcp_case(
+            "run_activity_report",
+            json!({"runId": ax.reported_runs[0], "activities": [{"id": "net-own", "kind": "text_message", "payload": {"text": "Net"}}]}),
+            vec![json!({"runId": bx.reported_runs[0], "activities": [{"id": "net-b", "kind": "text_message", "payload": {"text": "Net"}}]})],
+        ),
+        mcp_case(
+            "run_usage_report",
+            json!({"runId": ax.reported_runs[0], "reportKey": "net-usage-own", "model": "model-a", "inputTokens": 10}),
+            vec![
+                json!({"runId": bx.reported_runs[0], "reportKey": "net-usage-b", "model": "model-a", "inputTokens": 10}),
+                json!({"projectId": b.project, "reportKey": "net-usage-window-b", "model": "model-a", "inputTokens": 10,
+                       "windowStart": "2026-11-14T09:00:00Z", "windowEnd": "2026-11-14T09:15:00Z"}),
+            ],
+        ),
+        mcp_case(
+            "run_result_report",
+            json!({"runId": ax.reported_runs[0], "results": [{"kind": "link", "url": "https://example.com/net-own"}]}),
+            vec![json!({"runId": bx.reported_runs[0], "results": [{"kind": "link", "url": "https://example.com/net-b"}]})],
+        ),
+        mcp_case(
+            "run_cancel",
+            json!({"runId": ax.reported_runs[1], "reason": "Net", "clientRequestId": "net-run-cancel-own"}),
+            vec![json!({"runId": bx.reported_runs[1], "reason": "Net", "clientRequestId": "net-run-cancel-b"})],
+        ),
+        mcp_case(
+            "run_mark_not_started",
+            json!({"runId": ax.reported_runs[2]}),
+            vec![json!({"runId": bx.reported_runs[2]})],
         ),
         mcp_case(
             "run_retry",

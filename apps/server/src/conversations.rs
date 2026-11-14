@@ -3162,25 +3162,11 @@ pub(crate) async fn set_conversation_archived(
             .fetch_all(&mut **transaction)
             .await?;
         }
-        let active_run = sqlx::query_scalar::<_, bool>(
-            r#"
-            SELECT EXISTS (
-                SELECT 1
-                FROM agent_runs run
-                JOIN conversations owned ON owned.id = run.conversation_id
-                WHERE run.state IN (
-                    'created', 'queued', 'starting', 'working', 'blocked', 'recovering'
-                )
-                  AND (
-                      owned.id = $1
-                      OR ($2 = 'channel' AND owned.parent_channel_id = $1)
-                  )
-            )
-            "#,
+        let active_run = crate::runs::store::active_in_conversation_tree(
+            &mut **transaction,
+            conversation.id,
+            conversation.kind == "channel",
         )
-        .bind(conversation.id)
-        .bind(&conversation.kind)
-        .fetch_one(&mut **transaction)
         .await?;
         if active_run {
             return Err(AppError::Conflict(

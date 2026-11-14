@@ -1919,6 +1919,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "record_query",
     "sheet_list",
     "sheet_read",
+    "host_list",
     "inbox_list",
     "invitation_list",
     "label_list",
@@ -2163,6 +2164,17 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         case("webhook_list", vec![json!({})], vec![], vec![]),
+        // A1.11: another workspace's hosts are out of reach.
+        case(
+            "host_list",
+            vec![
+                json!({}),
+                json!({"workspace": a.organization}),
+                json!({"mineOnly": true}),
+            ],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
         case(
             "whiteboard_list",
             vec![
