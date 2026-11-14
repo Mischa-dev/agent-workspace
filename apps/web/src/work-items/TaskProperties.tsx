@@ -3,7 +3,7 @@ import { useRef, useState, type ReactNode } from 'react'
 import { useProjectExperience } from '../experience/layout'
 import { Avatar, Icon, actorKind } from '../ui'
 import { DatePicker } from '../ui/pickers'
-import { priorityLabel } from './constants'
+import { priorityLabel, priorityRank } from './constants'
 import { FieldPicker, type PickerField } from './FieldPicker'
 import { pickToPatch } from './taskEdits'
 import { useFields } from '../fields/api'
@@ -12,7 +12,7 @@ import { TaskCustomFields } from './TaskCustomFields'
 import { EstimateField } from './TaskFields'
 import { TaskGlyph } from './TaskGlyph'
 import { isOverdue } from './taskDisplay'
-import type { WorkItem, WorkItemWorkflow } from './types'
+import type { WorkItem, WorkItemPriority, WorkItemWorkflow } from './types'
 import type { TaskSave } from './useTaskSave'
 import { PriorityIcon, StatusIcon } from './WorkItemIcons'
 import { WorkItemLabels } from './WorkItemLabels'
@@ -26,6 +26,7 @@ export function TaskProperties({
   disabled,
   item,
   onManageLabels,
+  onRaisePriority,
   save,
   variant,
   workflow,
@@ -33,6 +34,8 @@ export function TaskProperties({
   disabled: boolean
   item: WorkItem
   onManageLabels: () => void
+  /** The person moved the priority up; it may be worth raising the blockers too. */
+  onRaisePriority?: (priority: WorkItemPriority) => void
   save: TaskSave
   variant: 'rail' | 'pills'
   workflow: WorkItemWorkflow
@@ -265,7 +268,10 @@ export function TaskProperties({
           field={picker.field}
           onClose={() => setPicker(null)}
           onManageLabels={onManageLabels}
-          onPick={(result) => save.save(result.field, pickToPatch(result))}
+          onPick={(result) => {
+            if (result.field === 'priority' && priorityRank(result.priority) > priorityRank(item.priority)) onRaisePriority?.(result.priority)
+            save.save(result.field, pickToPatch(result))
+          }}
           projectId={item.projectId}
           workflow={workflow}
         />

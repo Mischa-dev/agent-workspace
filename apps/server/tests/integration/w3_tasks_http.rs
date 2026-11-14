@@ -352,6 +352,8 @@ async fn planning_fields_dependencies_and_history_work_over_http() {
         .await;
     assert_eq!(status, StatusCode::OK, "{linked}");
     assert_eq!(linked["blockedBy"][0]["key"], design["key"]);
+    // A blocker carries its priority, so raising this task can offer to raise it (AWD-77).
+    assert_eq!(linked["blockedBy"][0]["priority"], design["priority"]);
     assert_eq!(linked["ready"], false);
     let (_, design_now) = owner.get(&format!("{base}/work-items/{design_id}")).await;
     assert_eq!(design_now["blocks"][0]["key"], build["key"]);

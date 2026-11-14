@@ -865,6 +865,10 @@
   overflow-wrap: anywhere;
 }
 
+.aw-tasknote__key {
+  white-space: nowrap;
+}
+
 .aw-tasknote__text .aw-md {
   font: var(--t-small);
 }
