@@ -702,7 +702,14 @@ async fn reading_through_a_connected_app_reads_the_mentions() {
     let general = create_channel(&setup, &project, "general").await;
     let random = create_channel(&setup, &project, "random").await;
     let (mara, mara_browser) = add_person(&setup, &[&project], "mara").await;
-    say(&setup, &setup.browser, &general, "a1", mention(mara, "One ")).await;
+    say(
+        &setup,
+        &setup.browser,
+        &general,
+        "a1",
+        mention(mara, "One "),
+    )
+    .await;
     say(&setup, &setup.browser, &random, "a2", mention(mara, "Two ")).await;
     drain(&setup).await;
     assert_eq!(inbox(&setup, &mara_browser, "").await["unreadCount"], 2);

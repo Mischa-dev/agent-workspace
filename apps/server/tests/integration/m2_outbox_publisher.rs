@@ -484,7 +484,10 @@ async fn an_event_whose_notifications_fail_is_retried_not_published() {
         .await
         .expect("publish");
     let (published, attempts, summary) = state(message.clone()).await;
-    assert!(!published, "the event was acknowledged without its notifications");
+    assert!(
+        !published,
+        "the event was acknowledged without its notifications"
+    );
     assert_eq!(attempts, 1);
     assert_eq!(
         summary.as_deref(),

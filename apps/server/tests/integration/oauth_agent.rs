@@ -861,7 +861,11 @@ async fn only_people_who_manage_an_agent_in_its_workspace_can_act_as_it() {
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "Pat can't revoke the owner's agent app");
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "Pat can't revoke the owner's agent app"
+    );
 
     // Made a workspace admin as well, Pat may do all of it.
     sqlx::query(

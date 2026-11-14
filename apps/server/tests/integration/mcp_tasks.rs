@@ -1117,14 +1117,16 @@ async fn an_agents_task_comment_mentions_people_and_references_tasks() {
     .await
     .expect("references");
     assert_eq!(referenced, [tasks[1]]);
-    let stored = sqlx::query_scalar::<_, String>(
-        "SELECT plain_text FROM work_item_comments WHERE id = $1",
-    )
-    .bind(comment_id)
-    .fetch_one(&setup.pool)
-    .await
-    .expect("plain text");
-    assert!(stored.contains("@rook") && stored.contains("WORK-2"), "{stored}");
+    let stored =
+        sqlx::query_scalar::<_, String>("SELECT plain_text FROM work_item_comments WHERE id = $1")
+            .bind(comment_id)
+            .fetch_one(&setup.pool)
+            .await
+            .expect("plain text");
+    assert!(
+        stored.contains("@rook") && stored.contains("WORK-2"),
+        "{stored}"
+    );
 
     drain(&setup).await;
     let unread_mentions = || async {

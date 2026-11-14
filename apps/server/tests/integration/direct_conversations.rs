@@ -818,7 +818,10 @@ async fn sidebar_never_lists_other_peoples_direct_threads() {
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{group}");
-    let group_id = group["conversation"]["id"].as_str().expect("group").to_owned();
+    let group_id = group["conversation"]["id"]
+        .as_str()
+        .expect("group")
+        .to_owned();
     let plan = say(
         &setup,
         &setup.browser,

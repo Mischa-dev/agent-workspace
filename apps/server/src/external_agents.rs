@@ -1285,7 +1285,7 @@ fn authorize_management(
     project_id: Uuid,
 ) -> Result<(), AppError> {
     let kind = crate::api::parse_actor_kind(&principal.actor_kind)?;
-    if management_allowed(kind, true, access, project_id) {
+    if management_allowed(principal.actor_id, kind, true, access, project_id) {
         Ok(())
     } else {
         Err(AppError::NotFound("project"))
@@ -1298,6 +1298,7 @@ fn authorize_management(
 /// "agents.manage" is people-only in the catalogue, so the policy refuses
 /// other kinds of account; no kind check is written here.
 fn management_allowed(
+    manager: Uuid,
     manager_kind: ActorKind,
     manager_active: bool,
     access: &AccessRow,
@@ -1316,7 +1317,7 @@ fn management_allowed(
         _ => return false,
     };
     let subject = Subject::new(
-        access_manager(access),
+        manager,
         manager_kind,
         manager_active,
         Some(Membership::project(
@@ -1334,12 +1335,6 @@ fn management_allowed(
         ),
         Decision::Allow
     )
-}
-
-/// The policy reads the subject's id only for self-checks, which
-/// ExternalAgentManage has none of.
-fn access_manager(_access: &AccessRow) -> Uuid {
-    Uuid::nil()
 }
 
 /// An agent connection someone may manage, with where it lives.
@@ -1382,6 +1377,7 @@ pub(crate) async fn may_manage_in(
         return Ok(false);
     };
     Ok(management_allowed(
+        manager,
         kind,
         status == "active",
         &access,

@@ -1576,11 +1576,8 @@ pub(super) async fn background_state(prefix: &str) -> Option<(AppState, PgPool, 
 /// Runs a background loop through a stretch when its table is missing,
 /// then shuts it down: it must still be running after the errors, and
 /// return `Ok` on shutdown.
-pub(super) async fn survives_a_missing_table<F, Fut>(
-    state: AppState,
-    table: &str,
-    run: F,
-) where
+pub(super) async fn survives_a_missing_table<F, Fut>(state: AppState, table: &str, run: F)
+where
     F: FnOnce(AppState, tokio::sync::watch::Receiver<bool>) -> Fut,
     Fut: std::future::Future<Output = Result<(), agent_workspace_server::error::AppError>>
         + Send
