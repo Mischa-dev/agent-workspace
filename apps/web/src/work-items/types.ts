@@ -4,6 +4,8 @@ export type WorkItemCapabilities = {
   view: boolean
   edit: boolean
   archive: boolean
+  /** Manages the project's code, so pull request cards offer Merge. */
+  mergePullRequests?: boolean
 }
 
 export type WorkItemType = { id: string; name: string }
@@ -149,6 +151,23 @@ export type LinkedPullRequest = {
   syncFailureCategory: string | null
   automationState: string
   automationReason: string | null
+  headRef: string
+  /** The head commit last read from GitHub; Merge merges only this one. */
+  headSha: string
+  baseRef: string
+  authorLogin: string
+  requestedReviewers: string[]
+  /** The checks on its head commit, failing ones first (at most 30). */
+  checks: PullRequestCheck[]
+}
+
+export type PullRequestCheck = {
+  name: string
+  /** queued, in_progress or completed. */
+  status: string
+  /** success, failure, neutral, skipped, cancelled, timed_out… once completed. */
+  conclusion: string | null
+  url: string | null
 }
 
 export type AcceptanceCriterion = {

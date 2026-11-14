@@ -1614,6 +1614,56 @@ span.aw-taskstart__fix {
   padding: var(--space-2) var(--space-3);
 }
 
+/* A pull request's branch and checks (AWD-59) */
+.aw-pr {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+}
+
+.aw-pr__from {
+  margin: 0;
+  font: var(--t-caption);
+  color: var(--content-fg-muted);
+  overflow-wrap: anywhere;
+}
+
+.aw-pr__checks {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-pr__check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font: var(--t-caption);
+  color: var(--content-fg-muted);
+}
+
+.aw-pr__check > :nth-child(2) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--content-fg);
+}
+
+.aw-pr__check--success > svg {
+  color: var(--success);
+}
+
+.aw-pr__check--danger {
+  color: var(--danger);
+}
+
+.aw-pr__check--agent > svg {
+  color: var(--agent);
+}
+
 /* Activity */
 .aw-activity__older {
   display: flex;

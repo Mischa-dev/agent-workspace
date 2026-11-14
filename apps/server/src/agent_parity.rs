@@ -911,6 +911,11 @@ mod tests {
         ),
         (
             Post,
+            "/api/v1/projects/{project_id}/pull-requests/{pull_request_id}/merge",
+            Tool("pull_request_merge"),
+        ),
+        (
+            Post,
             "/api/v1/integrations/github/webhook",
             Plumbing("GitHub's own deliveries"),
         ),
@@ -1154,6 +1159,16 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}/primary",
+            Tool("task_link"),
+        ),
+        (
+            Post,
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/pull-requests/{pull_request_id}",
+            Tool("task_link"),
+        ),
+        (
+            Delete,
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/pull-requests/{pull_request_id}",
             Tool("task_link"),
         ),
         (

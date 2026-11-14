@@ -3574,6 +3574,25 @@ impl McpServer {
     }
 
     #[tool(
+        description = "Merge an open pull request on GitHub through the project's GitHub App, as the task's Merge button does. Needs a role that manages the project's repositories. Pass expectedHeadSha (pull_request_get's headSha) to merge only the commit you checked. Linked tasks move once the merge syncs.",
+        annotations(
+            title = "Merge pull request",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
+    )]
+    async fn pull_request_merge(
+        &self,
+        Parameters(arguments): Parameters<publish_tools::PullRequestMergeArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<publish_tools::MergedValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(publish_tools::pull_request_merge(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
         description = "Agents: ask for a Codex run in an existing thread. A person approves it before anything runs.",
         annotations(
             title = "Request a Codex run",

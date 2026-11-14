@@ -215,6 +215,7 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("pull_request_get", Some(CodeView)),
     ("pull_request_create", Some(CodePublish)),
     ("pull_request_refresh", Some(CodePublish)),
+    ("pull_request_merge", Some(CodeManage)),
     ("run_request", Some(RunsLaunch)),
     ("approval_get", None),
     ("approval_respond", Some(RunsApprove)),
