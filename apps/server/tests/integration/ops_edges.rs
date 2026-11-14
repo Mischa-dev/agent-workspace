@@ -176,6 +176,46 @@ async fn every_edge_runs_the_same_operation() {
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{unkeyed}");
     assert_eq!(unkeyed["field"], "Idempotency-Key");
 
+    // R52 from the browser: the same key and input replays, the same key
+    // with other input conflicts, another key with the same input runs.
+    let (_, replay) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &route,
+            Some("web-1"),
+            json!({ "space": space, "text": "web" }),
+        ),
+    )
+    .await;
+    assert_eq!(replay["replayed"], true, "{replay}");
+    assert_eq!(replay["value"]["id"], web["value"]["id"]);
+    let (status, reused) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &route,
+            Some("web-1"),
+            json!({ "space": space, "text": "other" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{reused}");
+    assert_eq!(reused["code"], "request_id_reused", "{reused}");
+    let (_, fresh) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &route,
+            Some("web-1-again"),
+            json!({ "space": space, "text": "web" }),
+        ),
+    )
+    .await;
+    assert_eq!(fresh["outcome"], "ok", "{fresh}");
+    assert_eq!(fresh["replayed"], false, "{fresh}");
+    assert_ne!(fresh["value"]["id"], web["value"]["id"]);
+
     // A script: the same route with a bearer.
     let token = connect_app(app, &setup.browser, "Edge script", "full").await;
     let (status, api) = send(
@@ -191,6 +231,21 @@ async fn every_edge_runs_the_same_operation() {
     .await;
     assert_eq!(status, StatusCode::OK, "{api}");
     assert_eq!(api["value"]["text"], "api");
+
+    // A script's write on v2 carries a request id too.
+    let (status, unkeyed_api) = send(
+        app,
+        bearer(
+            &token,
+            "POST",
+            &route,
+            None,
+            &json!({ "space": space, "text": "api, no key" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{unkeyed_api}");
+    assert_eq!(unkeyed_api["field"], "Idempotency-Key");
 
     // A cookie and a bearer together are refused.
     let mut both = setup.browser.request(
@@ -221,6 +276,46 @@ async fn every_edge_runs_the_same_operation() {
     assert_eq!(mcp["outcome"], "ok", "{mcp}");
     assert_eq!(mcp["value"]["text"], "mcp");
     assert_eq!(mcp["requestId"], "mcp-1");
+
+    // R52 over MCP: the same id and input replays, the same id with other
+    // input conflicts; without an id a call runs once and says so, and an
+    // identical second call is a second change.
+    let mcp_again = tool(
+        app,
+        &token,
+        &session,
+        "echo_create",
+        json!({ "space": space, "text": "mcp", "clientRequestId": "mcp-1" }),
+    )
+    .await;
+    assert_eq!(mcp_again["replayed"], true, "{mcp_again}");
+    assert_eq!(mcp_again["value"]["id"], mcp["value"]["id"]);
+    let mcp_reused = tool(
+        app,
+        &token,
+        &session,
+        "echo_create",
+        json!({ "space": space, "text": "other", "clientRequestId": "mcp-1" }),
+    )
+    .await;
+    assert_eq!(mcp_reused["outcome"], "conflict", "{mcp_reused}");
+    let mut unkeyed_ids = Vec::new();
+    for _ in 0..2 {
+        let once = tool(
+            app,
+            &token,
+            &session,
+            "echo_create",
+            json!({ "space": space, "text": "mcp, no id" }),
+        )
+        .await;
+        assert_eq!(once["outcome"], "ok", "{once}");
+        assert_eq!(once["replaySafe"], false, "{once}");
+        assert_eq!(once["replayed"], false, "{once}");
+        unkeyed_ids.push(once["value"]["id"].clone());
+    }
+    assert_ne!(unkeyed_ids[0], unkeyed_ids[1]);
+    assert_eq!(mcp["replaySafe"], true, "{mcp}");
 
     // An automation rule that runs it, run by hand.
     let (status, rule) = send(
@@ -291,13 +386,23 @@ async fn every_edge_runs_the_same_operation() {
         .collect::<Vec<_>>();
     assert_eq!(
         channels,
-        ["browser", "browser", "api", "mcp", "automation"],
+        [
+            "browser",
+            "browser",
+            "browser",
+            "api",
+            "mcp",
+            "mcp",
+            "mcp",
+            "automation"
+        ],
         "{rows:?}"
     );
     assert_eq!(rows[0].1.as_deref(), Some("web-1"));
-    assert_eq!(rows[3].1.as_deref(), Some("mcp-1"));
+    assert_eq!(rows[4].1.as_deref(), Some("mcp-1"));
+    assert_eq!(rows[5].1, None, "{rows:?}");
     assert!(
-        rows[4]
+        rows[7]
             .1
             .as_deref()
             .is_some_and(|id| id.starts_with("automation-")),

@@ -48,7 +48,7 @@ pub mod target;
 pub mod web;
 
 pub use context::{Caller, Edge, OpCall, OpContext};
-pub use dispatch::{Answer, DispatchRequest, dispatch};
+pub use dispatch::{Answer, DispatchRequest, Unkeyed, dispatch};
 pub use envelope::Envelope;
 pub use error::{ConflictReason, DenyReason, OpError, RetryCategory};
 pub use registry::{OpEntry, OpMeta, Registry, registry};

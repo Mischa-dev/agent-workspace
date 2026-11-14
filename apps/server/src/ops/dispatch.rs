@@ -6,7 +6,6 @@
 
 use axum::http::StatusCode;
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
@@ -33,10 +32,25 @@ pub struct DispatchRequest {
     pub workspace: Option<Uuid>,
     /// The caller's request id (`Idempotency-Key`, `clientRequestId`).
     pub request_id: Option<String>,
+    /// What a write without a request id does (ruling R52).
+    pub unkeyed: Unkeyed,
     /// Run and roll back (operations with `PREVIEW`).
     pub preview: bool,
     /// The old name the caller used (`aliases`), counted once the call is done.
     pub renamed_from: Option<&'static str>,
+}
+
+/// What a write that arrives without a request id does (ruling R52). An
+/// id is never inferred from equal input or the clock.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Unkeyed {
+    /// Refused with a validation error naming the edge's field: the web
+    /// app and the v2 route (`Idempotency-Key`), and automations, which
+    /// derive theirs from their run and step.
+    Refuse(&'static str),
+    /// Runs once and is not retry-safe; the answer says `replaySafe: false`
+    /// (MCP and the v1 routes, whose callers were never asked for one).
+    RunOnce,
 }
 
 /// What an edge sends back: the status its outcome maps to and the
@@ -144,12 +158,10 @@ pub(super) async fn run<O: Operation>(
     }
 }
 
-/// The request id a write is held to: the caller's, or (MCP, the public
-/// API, automations) one derived from who asked for what in the same ten
-/// minutes, so a retried identical call is answered once.
+/// The request id a write is held to: the caller's, checked. A write
+/// without one is refused or runs once, as its edge says (R52).
 fn request_id_for<O: Operation>(
     request: &DispatchRequest,
-    canonical: &Value,
 ) -> Result<Option<IdempotencyKey>, OpError> {
     if O::IDEMPOTENCY == Idempotency::None || !O::KIND.writes() {
         return Ok(None);
@@ -163,22 +175,17 @@ fn request_id_for<O: Operation>(
             message: "A request id is 1 to 128 letters, digits, '-', '_' or '.'.".into(),
         });
     }
-    if matches!(request.edge, Edge::Web { .. }) {
-        return Err(OpError::Invalid {
-            field: "Idempotency-Key".into(),
-            message: "A change from the web app carries an Idempotency-Key.".into(),
-        });
+    match request.unkeyed {
+        Unkeyed::Refuse(field) => Err(OpError::Invalid {
+            field: field.into(),
+            message: format!(
+                "A change through this route carries a request id ({field}): your own id \
+                 for this change, kept the same when you retry it."
+            )
+            .into(),
+        }),
+        Unkeyed::RunOnce => Ok(None),
     }
-    let bucket = chrono::Utc::now().timestamp() / 600;
-    let mut hash = Sha256::new();
-    hash.update(request.caller.account_id.as_bytes());
-    hash.update(O::NAME.as_bytes());
-    hash.update(canonical.to_string().as_bytes());
-    hash.update(bucket.to_be_bytes());
-    let derived = format!("d-{}", &hex::encode(hash.finalize())[..40]);
-    IdempotencyKey::parse(&derived)
-        .map(Some)
-        .map_err(|_| OpError::Unavailable)
 }
 
 /// The field a decode error names, when serde says.
@@ -257,7 +264,7 @@ async fn pipeline<O: Operation>(
     .await?;
     drop(connection);
 
-    let key = request_id_for::<O>(&request, &canonical)?;
+    let key = request_id_for::<O>(&request)?;
     let ctx = OpContext {
         caller: request.caller,
         edge: request.edge,
@@ -312,6 +319,8 @@ async fn pipeline<O: Operation>(
         value: output,
         request_id: ctx.request_id.clone(),
         replayed: call.replayed,
+        // A write without a request id ran once; a retry would run again.
+        replay_safe: writes.then_some(ctx.request_id.is_some()),
         preview: request.preview,
     }
     .to_json();
