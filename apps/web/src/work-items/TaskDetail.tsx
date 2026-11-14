@@ -38,6 +38,7 @@ import { TaskProperties } from './TaskProperties'
 import { TaskSearchPicker } from './TaskSearchPicker'
 import { TaskStart, type StartFix } from './TaskStart'
 import type { WorkItem, WorkItemPriority, WorkItemWorkflow } from './types'
+import { BlockerPriorityNotice } from './BlockerPriorityNotice'
 import { useTaskSave } from './useTaskSave'
 
 export type TaskLayout = 'panel' | 'page'
@@ -55,7 +56,6 @@ const ReferencedIn = lazy(() => import('../modules/references/ReferencedIn'))
 const TaskLinks = lazy(() => import('./TaskLinks').then((module) => ({ default: module.TaskLinks })))
 // What to do about a save that stopped loads only when one does.
 const TaskSaveNotices = lazy(() => import('./TaskSaveNotices').then((module) => ({ default: module.TaskSaveNotices })))
-const BlockerPriorityNotice = lazy(() => import('./BlockerPriorityNotice').then((module) => ({ default: module.BlockerPriorityNotice })))
 // Moving to another project (AWD-102) loads only when someone starts one.
 const MoveTaskDialog = lazy(() => import('./MoveTaskDialog'))
 // Comments and changes are their own chunk, fetched while the task loads.
@@ -352,9 +352,7 @@ function TaskDetailBody({
         </Suspense>
       ) : null}
       {raisedTo && !disabled ? (
-        <Suspense fallback={null}>
-          <BlockerPriorityNotice item={item} onDone={() => setRaised(null)} priority={raisedTo} />
-        </Suspense>
+        <BlockerPriorityNotice item={item} onDone={() => setRaised(null)} priority={raisedTo} />
       ) : null}
       <ClaimNotice item={item} projectArchived={projectArchived} />
       {item.blocked ? (
