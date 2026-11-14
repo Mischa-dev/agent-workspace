@@ -1007,7 +1007,7 @@ pub(crate) async fn visible_to(
            AND ($3::uuid IS NULL OR conversation_visible_to($3, $1))
            AND ($4::uuid IS NULL OR pull_request_visible_to($4, $1))
            AND ($5::uuid IS NULL OR EXISTS (
-               SELECT 1 FROM work_items item WHERE item.id = $5 AND item.project_id = $2
+               SELECT 1 FROM task_rows item WHERE item.id = $5 AND item.project_id = $2
            ))
            -- A task's or pull request's events only while the owner's role
            -- there still lets them see tasks, or code.
@@ -1363,7 +1363,7 @@ pub(crate) async fn task_data(
                (SELECT display_name FROM users WHERE actor_id = item.assignee_actor_id)
                    AS assignee_name,
                item.archived_at IS NOT NULL AS archived, item.version, item.updated_at
-        FROM work_items item
+        FROM task_rows item
         JOIN projects project ON project.id = item.project_id
         JOIN work_item_statuses status
           ON status.project_id = item.project_id AND status.id = item.status_id

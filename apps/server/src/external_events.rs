@@ -102,7 +102,7 @@ pub async fn enqueue_external_work_item_event(
     let connection_ids = sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT connection.id
-        FROM work_items item
+        FROM task_rows item
         JOIN external_agent_connections connection
           ON agent_connection_can_access(connection.id, item.project_id)
          AND connection.actor_id = COALESCE($3, item.assignee_actor_id)

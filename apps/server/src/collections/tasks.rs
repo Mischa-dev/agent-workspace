@@ -579,7 +579,7 @@ pub fn group_sql(field: Uuid) -> Option<GroupSql> {
             ],
         },
         PARENT => GroupSql {
-            join: " LEFT JOIN work_items group_field \
+            join: " LEFT JOIN task_rows group_field \
                    ON group_field.project_id = core.project_id \
                   AND group_field.id = core.parent_work_item_id \
                  LEFT JOIN projects group_project ON group_project.id = core.project_id"

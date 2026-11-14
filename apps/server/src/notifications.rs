@@ -955,7 +955,7 @@ async fn work_item_changes(
           ON activity.project_id = event.project_id
          AND activity.work_item_id = $3
          AND activity.created_at = event.created_at
-        JOIN work_items item
+        JOIN task_rows item
           ON item.project_id = activity.project_id AND item.id = activity.work_item_id
         WHERE event.event_id = $1 AND event.project_id = $2
           AND (
@@ -1232,7 +1232,7 @@ async fn pull_request_notifications(
                 FROM github_pull_request_work_item_links link
                 JOIN github_pull_requests pr
                   ON pr.project_id = link.project_id AND pr.id = link.github_pull_request_id
-                JOIN work_items item
+                JOIN task_rows item
                   ON item.project_id = link.project_id AND item.id = link.work_item_id
                 WHERE link.project_id = $1 AND link.work_item_id = $2 AND pr.state = 'open'
                 "#,
@@ -1565,7 +1565,7 @@ fn list_sql(view_condition: &str, extra: &str) -> String {
           ON n.kind = 'page_comment'
          AND page_comment.id = (n.detail->>'pageCommentId')::uuid
          AND page_comment.deleted_at IS NULL
-        LEFT JOIN work_items item ON item.id = n.work_item_id
+        LEFT JOIN task_rows item ON item.id = n.work_item_id
         LEFT JOIN agent_runs run ON run.id = n.agent_run_id
         LEFT JOIN execution_workers run_worker ON run_worker.id = run.execution_worker_id
         LEFT JOIN project_memberships run_agent

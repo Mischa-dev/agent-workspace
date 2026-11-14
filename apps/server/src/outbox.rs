@@ -790,7 +790,7 @@ pub async fn enqueue_work_item_updated(
             item.status_id,
             item.archived_at IS NOT NULL AS archived,
             (
-                SELECT previous.id FROM work_items previous
+                SELECT previous.id FROM task_rows previous
                 WHERE previous.project_id = item.project_id
                   AND previous.status_id = item.status_id
                   AND (previous.archived_at IS NULL) = (item.archived_at IS NULL)
@@ -799,7 +799,7 @@ pub async fn enqueue_work_item_updated(
                 LIMIT 1
             ) AS after_id,
             (
-                SELECT following.id FROM work_items following
+                SELECT following.id FROM task_rows following
                 WHERE following.project_id = item.project_id
                   AND following.status_id = item.status_id
                   AND (following.archived_at IS NULL) = (item.archived_at IS NULL)
@@ -807,7 +807,7 @@ pub async fn enqueue_work_item_updated(
                 ORDER BY following.board_rank, following.id
                 LIMIT 1
             ) AS before_id
-        FROM work_items item
+        FROM task_rows item
         WHERE item.project_id = $1 AND item.id = $2
         "#,
     )

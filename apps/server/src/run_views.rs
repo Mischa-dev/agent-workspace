@@ -121,7 +121,7 @@ const SUMMARY_SELECT: &str = r#"
         ORDER BY link.created_at, link.work_item_id
         LIMIT 1
     ) task_link ON true
-    LEFT JOIN work_items task
+    LEFT JOIN task_rows task
       ON task.id = task_link.work_item_id AND task.archived_at IS NULL
     LEFT JOIN LATERAL (
         SELECT {TOTALS} FROM agent_run_usage WHERE agent_run_id = run.id

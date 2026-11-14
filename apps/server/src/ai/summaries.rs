@@ -174,7 +174,7 @@ pub async fn task(
     let Some((key, title, description)) = sqlx::query_as::<_, (String, String, String)>(
         r#"
         SELECT project.project_key || '-' || item.number, item.title, left(item.description, 3000)
-        FROM work_items item
+        FROM task_rows item
         JOIN projects project ON project.id = item.project_id
         WHERE item.id = $1 AND item.project_id = $2
           AND actor_can_access_project($3, $4, item.project_id)

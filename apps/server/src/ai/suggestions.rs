@@ -364,11 +364,11 @@ const STILL_USEFUL: &str = r#"
 "#;
 
 const JOINS: &str = r#"
-    JOIN work_items item
+    JOIN task_rows item
       ON item.project_id = suggestion.project_id AND item.id = suggestion.work_item_id
     JOIN work_item_statuses item_status
       ON item_status.project_id = item.project_id AND item_status.id = item.status_id
-    LEFT JOIN work_items other
+    LEFT JOIN task_rows other
       ON other.project_id = suggestion.other_project_id AND other.id = suggestion.other_work_item_id
     LEFT JOIN work_item_statuses other_status
       ON other_status.project_id = other.project_id AND other_status.id = other.status_id
@@ -535,7 +535,7 @@ async fn task_refs(
                item.title, status.name AS status_name, status.semantic_category AS status_category,
                status.semantic_category IN ('completed', 'canceled') AS finished,
                item.archived_at IS NOT NULL AS archived
-        FROM work_items item
+        FROM task_rows item
         JOIN projects project ON project.id = item.project_id
         JOIN work_item_statuses status
           ON status.project_id = item.project_id AND status.id = item.status_id

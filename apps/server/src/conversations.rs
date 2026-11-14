@@ -2134,7 +2134,7 @@ pub(crate) async fn resolve_message_content_with(
             SELECT item.id, project.project_key || '-' || item.number::text,
                    item.title, status.semantic_category,
                    item.archived_at::text AS archived_at
-            FROM work_items item
+            FROM task_rows item
             JOIN projects project ON project.id = item.project_id
             JOIN work_item_statuses status
               ON status.project_id = item.project_id AND status.id = item.status_id
@@ -2501,7 +2501,7 @@ const TIMELINE_ENTRY_SELECT: &str = r#"
                 WHERE reference.message_id = message.id
                 GROUP BY reference.work_item_id
             ) min_reference
-            JOIN work_items item ON item.id = min_reference.referenced_work_item_id
+            JOIN task_rows item ON item.id = min_reference.referenced_work_item_id
             JOIN projects project ON project.id = item.project_id
             JOIN work_item_statuses status
               ON status.project_id = item.project_id AND status.id = item.status_id
@@ -2650,7 +2650,7 @@ async fn conversation_timeline(
                 ) ORDER BY item.number, item.id
             ), '[]'::jsonb)
             FROM work_item_conversation_links link
-            JOIN work_items item
+            JOIN task_rows item
               ON item.project_id = link.project_id AND item.id = link.work_item_id
             JOIN projects project ON project.id = item.project_id
             JOIN work_item_statuses status

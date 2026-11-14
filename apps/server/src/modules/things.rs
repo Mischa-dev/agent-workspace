@@ -127,7 +127,7 @@ const TASKS_SQL: &str = r#"
            project.project_key || '-' || item.number::text || ' ' || item.title AS title,
            status.name AS status, item.assignee_actor_id AS owner_id,
            owner.display_name AS owner_name, item.project_id, NULL::uuid AS organization_id, false AS direct
-    FROM work_items item
+    FROM task_rows item
     JOIN projects project ON project.id = item.project_id
     JOIN work_item_statuses status
       ON status.project_id = item.project_id AND status.id = item.status_id
@@ -384,10 +384,10 @@ fn links_sql(kind: &str) -> Option<&'static str> {
             r#"
             SELECT 'part_of' AS link, 'outgoing' AS direction, 'task' AS other_kind,
                    parent_work_item_id AS other_id
-            FROM work_items WHERE id = $1 AND parent_work_item_id IS NOT NULL
+            FROM task_rows WHERE id = $1 AND parent_work_item_id IS NOT NULL
             UNION ALL
             SELECT 'part_of', 'incoming', 'task', id
-            FROM work_items WHERE parent_work_item_id = $1 AND archived_at IS NULL
+            FROM task_rows WHERE parent_work_item_id = $1 AND archived_at IS NULL
             UNION ALL
             SELECT 'blocks', 'outgoing', 'task', blocked_work_item_id
             FROM work_item_dependencies WHERE blocking_work_item_id = $1

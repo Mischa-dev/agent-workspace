@@ -77,7 +77,7 @@ pub async fn ready_tasks_in(
                project.project_key || '-' || item.number::text AS key,
                item.title, item.priority,
                (SELECT count(*) FROM work_item_dependencies dependency
-                  JOIN work_items waiting
+                  JOIN task_rows waiting
                     ON waiting.project_id = dependency.project_id
                    AND waiting.id = dependency.blocked_work_item_id
                  WHERE dependency.blocking_project_id = item.project_id
@@ -85,7 +85,7 @@ pub async fn ready_tasks_in(
                    AND waiting.archived_at IS NULL) AS unblocks
         FROM served
         JOIN projects project ON project.id = served.project_id
-        JOIN work_items item ON item.project_id = served.project_id
+        JOIN task_rows item ON item.project_id = served.project_id
         JOIN work_item_statuses status
           ON status.project_id = item.project_id AND status.id = item.status_id
         WHERE item.archived_at IS NULL

@@ -25,28 +25,7 @@ const NOT_ALIASES: &[&str] = &[
 
 /// Today's readers that haven't moved, file by file. Lower a number when a
 /// reader moves; never raise one or add a file.
-const ALLOWED: &[(&str, usize)] = &[
-    // Everything else (T1.4c).
-    ("src/agent_profiles.rs", 1),
-    ("src/ai/detect.rs", 3),
-    ("src/ai/http.rs", 2),
-    ("src/ai/ready.rs", 4),
-    ("src/ai/suggestions.rs", 1),
-    ("src/ai/summaries.rs", 1),
-    ("src/conversations.rs", 3),
-    ("src/github.rs", 2),
-    ("src/later.rs", 1),
-    ("src/launch.rs", 3),
-    ("src/modules/things.rs", 3),
-    ("src/notifications.rs", 2),
-    ("src/onboarding.rs", 1),
-    ("src/outbox.rs", 3),
-    ("src/run_views.rs", 1),
-    ("src/search.rs", 1),
-    ("src/usage/ready.rs", 2),
-    ("src/webhooks.rs", 1),
-    ("src/whiteboards.rs", 1),
-];
+const ALLOWED: &[(&str, usize)] = &[];
 
 const HOW: &str = "Read a task's title, field values and archive state from the task_rows view \
      (its record joined to its core), not from work_items, whose copies go in T1.4d \
@@ -74,7 +53,7 @@ fn names(sql: &str, alias: Option<&str>, column: &str) -> bool {
 /// How many times one SQL text reads a shared column from `work_items`.
 fn reads_in(sql: &str) -> usize {
     let mut count = 0;
-    for keyword in ["FROM work_items", "JOIN work_items"] {
+    for keyword in ["FROM work_items", "JOIN work_items", ", work_items"] {
         for (index, _) in sql.match_indices(keyword) {
             let rest = &sql[index + keyword.len()..];
             if rest.bytes().next().is_some_and(is_ident)
@@ -140,6 +119,7 @@ fn a_read_is_found_with_or_without_an_alias() {
         0
     );
     assert_eq!(cached_reads(r#"query("SELECT item.title FROM task_rows item")"#), 0);
+    assert_eq!(cached_reads(r#"query("SELECT item.title FROM query, work_items item")"#), 1);
     assert_eq!(
         cached_reads(r#"query("DELETE FROM work_items WHERE archived_at IS NOT NULL")"#),
         0

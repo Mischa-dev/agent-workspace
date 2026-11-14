@@ -163,7 +163,7 @@ fn select_sql(extra: &str) -> String {
         LEFT JOIN conversations conversation ON conversation.id = message.conversation_id
         LEFT JOIN project_memberships author
           ON author.project_id = message.project_id AND author.actor_id = message.author_actor_id
-        LEFT JOIN work_items work ON work.id = item.work_item_id
+        LEFT JOIN task_rows work ON work.id = item.work_item_id
         LEFT JOIN work_item_statuses status
           ON status.project_id = work.project_id AND status.id = work.status_id
         WHERE item.actor_id = $1
@@ -535,7 +535,7 @@ pub async fn save(
             let (project_id, organization_id) = sqlx::query_as::<_, (Uuid, Uuid)>(
                 r#"
                 SELECT work.project_id, project.organization_id
-                FROM work_items work
+                FROM task_rows work
                 JOIN projects project ON project.id = work.project_id
                 WHERE work.id = $2 AND actor_can_access_project($1, $4, work.project_id)
                   AND ($3::uuid IS NULL OR work.project_id = $3)

@@ -370,7 +370,7 @@ async fn load_task(
                item_type.name AS type_name,
                project.name AS project_name, project.project_key,
                item.archived_at IS NOT NULL AS archived
-        FROM work_items item
+        FROM task_rows item
         JOIN projects project ON project.id = item.project_id
         JOIN work_item_types item_type
           ON item_type.project_id = item.project_id AND item_type.id = item.type_id
@@ -808,7 +808,7 @@ const LAUNCH_VIEW_SELECT: &str = r#"
            launch.created_at, launch.started_at
     FROM launches launch
     JOIN projects project ON project.id = launch.project_id
-    LEFT JOIN work_items item
+    LEFT JOIN task_rows item
       ON item.project_id = launch.project_id AND item.id = launch.work_item_id
     LEFT JOIN project_memberships membership
       ON membership.project_id = launch.project_id
@@ -937,7 +937,7 @@ pub(crate) async fn open_blockers(
                project.project_key || '-' || blocker.number::text AS key,
                blocker.title
         FROM work_item_dependencies dependency
-        JOIN work_items blocker
+        JOIN task_rows blocker
           ON blocker.project_id = dependency.blocking_project_id
          AND blocker.id = dependency.blocking_work_item_id
         JOIN projects project ON project.id = blocker.project_id
