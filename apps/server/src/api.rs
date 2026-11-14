@@ -1310,6 +1310,7 @@ pub(crate) async fn answer_approval(
     .bind(&response_json)
     .execute(&mut *transaction)
     .await?;
+    crate::requests::legacy::approval_written(&mut *transaction, approval_id).await?;
     let resolved_event = insert_significant_event(
         &mut transaction,
         context.run_id,
@@ -1534,6 +1535,7 @@ pub(crate) async fn interrupt_run_in(
     .bind(run_id)
     .execute(&mut *transaction)
     .await?;
+    crate::requests::legacy::run_approvals_written(&mut *transaction, run_id).await?;
     outbox::enqueue_agent_run_updated(
         &mut transaction,
         context.project_id,

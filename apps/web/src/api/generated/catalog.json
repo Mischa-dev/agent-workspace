@@ -30,6 +30,84 @@
     "title": "Record decision"
   },
   {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "host.agent_bound"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "host_agent_bind",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Bind an agent to a host"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "host.agent_unbound"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "host_agent_unbind",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Unbind an agent from a host"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "host.enrolment_created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "agents",
+    "name": "host_enrolment_create",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Make a host enrolment code"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "agents",
+    "name": "host_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List hosts"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "host.unlinked"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "host_unlink",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Unlink a host"
+  },
+  {
     "automation": false,
     "destructive": false,
     "emits": [],
@@ -42,5 +120,117 @@
     "preview": false,
     "proposable": false,
     "title": "Export package"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "run.activity"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "runs",
+    "name": "run_activity_report",
+    "permission": "runs.report",
+    "preview": false,
+    "proposable": false,
+    "title": "Report run activity"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "run.cancel_requested"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "runs",
+    "name": "run_cancel",
+    "permission": "runs.interrupt",
+    "preview": false,
+    "proposable": false,
+    "title": "Stop a run"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "run.opened"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "runs",
+    "name": "run_create",
+    "permission": "runs.report",
+    "preview": false,
+    "proposable": false,
+    "title": "Open a run"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "run.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "runs",
+    "name": "run_mark_not_started",
+    "permission": "runs.interrupt",
+    "preview": false,
+    "proposable": false,
+    "title": "Mark a run not started"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "run.result_added"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "runs",
+    "name": "run_result_report",
+    "permission": "runs.report",
+    "preview": false,
+    "proposable": false,
+    "title": "Report run results"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "run.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "runs",
+    "name": "run_update",
+    "permission": "runs.report",
+    "preview": false,
+    "proposable": false,
+    "title": "Update a run"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "run.usage_reported"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "runs",
+    "name": "run_usage_report",
+    "permission": "runs.report",
+    "preview": false,
+    "proposable": false,
+    "title": "Report usage"
   }
 ]

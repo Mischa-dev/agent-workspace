@@ -32,6 +32,10 @@ const INVITATION_ATTEMPTS_PER_WINDOW: u32 = 20;
 const GLOBAL_INVITATION_ATTEMPTS_PER_WINDOW: u32 = 120;
 const MCP_REQUESTS_PER_WINDOW: u32 = 600;
 const MCP_AUTH_ATTEMPTS_PER_WINDOW: u32 = 600;
+/// Run reports (A1.3) from one account: 20 a second on average, in bursts
+/// of up to 100. In-process until K5's shared limits.
+const RUN_REPORTS_PER_WINDOW: u32 = 100;
+const RUN_REPORT_WINDOW: Duration = Duration::from_secs(5);
 /// Tokens that didn't resolve, across every caller. Valid tokens never
 /// spend it; while it's spent, only tokens that authenticated lately are
 /// looked up.
@@ -96,6 +100,7 @@ pub struct RateLimiters {
     invitation_attempts: FixedWindowLimiter<[u8; 32]>,
     global_invitation_attempts: FixedWindowLimiter<()>,
     mcp_requests: FixedWindowLimiter<Uuid>,
+    run_reports: FixedWindowLimiter<Uuid>,
     mcp_auth_attempts: FixedWindowLimiter<[u8; 32]>,
     global_mcp_auth_failures: FixedWindowLimiter<()>,
     recent_mcp_tokens: RecentKeys,
@@ -191,6 +196,14 @@ impl RateLimiters {
     pub fn check_mcp_request(&self, credential_id: Uuid) -> Result<(), AppError> {
         self.mcp_requests
             .check(credential_id)
+            .map_err(AppError::rate_limited)
+    }
+
+    /// One run report (run_open, run_update, run_activity and the like)
+    /// from `account_id`.
+    pub fn check_run_report(&self, account_id: Uuid) -> Result<(), AppError> {
+        self.run_reports
+            .check(account_id)
             .map_err(AppError::rate_limited)
     }
 
@@ -397,6 +410,11 @@ impl Default for RateLimiters {
             mcp_requests: FixedWindowLimiter::new(
                 MCP_REQUESTS_PER_WINDOW,
                 WINDOW,
+                MAX_SESSION_KEYS,
+            ),
+            run_reports: FixedWindowLimiter::new(
+                RUN_REPORTS_PER_WINDOW,
+                RUN_REPORT_WINDOW,
                 MAX_SESSION_KEYS,
             ),
             mcp_auth_attempts: FixedWindowLimiter::new(

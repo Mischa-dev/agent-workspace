@@ -1057,22 +1057,8 @@ pub(super) async fn project_archive(
             return Ok(ToolResult::ok(project_value(state, project_id).await?));
         }
         if archive {
-            let has_active_run = sqlx::query_scalar::<_, bool>(
-                r#"
-                SELECT EXISTS (
-                    SELECT 1
-                    FROM agent_runs run
-                    JOIN conversations conversation ON conversation.id = run.conversation_id
-                    WHERE conversation.project_id = $1
-                      AND run.state IN (
-                          'created', 'queued', 'starting', 'working', 'blocked', 'recovering'
-                      )
-                )
-                "#,
-            )
-            .bind(project_id)
-            .fetch_one(&mut *transaction)
-            .await?;
+            let has_active_run =
+                crate::runs::store::active_under_space(&mut *transaction, project_id).await?;
             if has_active_run {
                 return Ok(ToolResult::conflict(
                     "A run is still going in that project. Wait for its runs to finish, or interrupt them, then archive it.",

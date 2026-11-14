@@ -1009,6 +1009,26 @@ mod tests {
             "/api/v1/agents/token",
             Plumbing("an agent trading its credential for a token"),
         ),
+        (
+            Post,
+            "/api/v1/hosts/enrol",
+            Plumbing("a host enrolling with the code a person made"),
+        ),
+        (
+            Post,
+            "/api/v1/host/describe",
+            Plumbing("a host describing itself with its own credential"),
+        ),
+        (
+            Post,
+            "/api/v1/host/heartbeat",
+            Plumbing("a host's heartbeat, with its own credential"),
+        ),
+        (
+            Post,
+            "/api/v1/host/notices",
+            Plumbing("a host's notice about its agents, with its own credential"),
+        ),
         (Post, "/oauth/register", Plumbing("OAuth")),
         (Post, "/oauth/authorize", Plumbing("OAuth")),
         (Post, "/connect/confirm", Plumbing("OAuth")),

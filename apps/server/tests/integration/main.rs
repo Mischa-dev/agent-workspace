@@ -1,6 +1,11 @@
 //! Every server integration test, built as one binary so the server is
 //! compiled and linked for tests once rather than once per file.
 
+mod a1_host_protocol;
+mod a1_launch_paths;
+mod a1_requests;
+mod a1_run_reporting;
+mod a1_runs_record;
 mod agent_interface;
 mod awd102_task_move;
 mod awd110_collection_forms;
@@ -32,6 +37,7 @@ mod compat_clients;
 mod direct_conversations;
 mod github_task_keys;
 mod harness_support;
+mod journey;
 mod layouts;
 mod m0_database;
 mod m1_api_policy_database;

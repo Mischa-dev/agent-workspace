@@ -25,6 +25,7 @@ use crate::{
     outbox::{ConversationCreatedPayload, OutboxConversationKind, OutboxEventPayload},
     policy::{Action, ActorKind},
     replies::{LEASE_MINUTES, notify_request, retry_request_in, stop_request_in},
+    runs::launch_paths::{self, ReplyStep},
 };
 
 const MAX_PROGRESS_CHARACTERS: usize = 200;
@@ -239,6 +240,17 @@ pub(super) struct ClaimProjection {
     /// Your session in this conversation, if you bound one with
     /// `session_bind`: resume it rather than starting cold.
     session: Option<ClaimSession>,
+    /// The run a launch opened for this request, if it came from one. Your
+    /// reply_* calls report on it; `run_update` and `run_append` say more.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    run: Option<ClaimRun>,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ClaimRun {
+    run_id: String,
+    state: String,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -565,6 +577,20 @@ pub(super) async fn reply_claim(
             url: session.url,
             state: session.state,
         });
+    // A1.4: the launched run, now that its runner has picked it up.
+    let run = launch_paths::follow_reply_best_effort(
+        &mut transaction,
+        principal.actor_id,
+        request_id,
+        ReplyStep::Claimed {
+            generation: request.generation,
+        },
+    )
+    .await
+    .map(|run| ClaimRun {
+        run_id: run.id.to_string(),
+        state: run.state,
+    });
     if notify_request(
         &mut transaction,
         principal.project_id,
@@ -593,6 +619,7 @@ pub(super) async fn reply_claim(
             recent_messages,
             instructions,
             session,
+            run,
         },
     }
 }
@@ -679,13 +706,18 @@ pub(super) async fn reply_send(
     )
     .await
     {
-        Ok(outcome) => ReplyToolResult::Ok {
-            value: ResolutionProjection {
-                request_id: request_id.to_string(),
-                status: if final_reply { "replied" } else { "claimed" }.to_owned(),
-                message_id: Some(outcome.body.message.id.to_string()),
-            },
-        },
+        Ok(outcome) => {
+            if final_reply {
+                follow_answer(state, principal.actor_id, request_id, arguments.generation).await;
+            }
+            ReplyToolResult::Ok {
+                value: ResolutionProjection {
+                    request_id: request_id.to_string(),
+                    status: if final_reply { "replied" } else { "claimed" }.to_owned(),
+                    message_id: Some(outcome.body.message.id.to_string()),
+                },
+            }
+        }
         Err(AppError::Conflict(_, _)) => ReplyToolResult::Conflict {
             message: match conflict_reason(&state.pool, request_id, principal).await {
                 Some(Conflict::Removed) => ANSWERING_REMOVED.to_owned(),
@@ -700,6 +732,29 @@ pub(super) async fn reply_send(
             tracing::error!(category = error.log_category(), "reply_send failed");
             ReplyToolResult::unavailable()
         }
+    }
+}
+
+/// A1.4: the final reply finishes the request's launched run, after the
+/// reply itself committed. Best effort: the reply stands either way.
+async fn follow_answer(state: &AppState, account_id: Uuid, request_id: Uuid, generation: i32) {
+    let Ok(mut transaction) = state.pool.begin().await else {
+        return;
+    };
+    let followed = launch_paths::follow_reply_best_effort(
+        &mut transaction,
+        account_id,
+        request_id,
+        ReplyStep::Answered { generation },
+    )
+    .await;
+    if followed.is_some()
+        && let Err(error) = transaction.commit().await
+    {
+        tracing::warn!(
+            category = AppError::from(error).log_category(),
+            "a final reply wasn't reported on its run"
+        );
     }
 }
 
@@ -753,6 +808,16 @@ pub(super) async fn reply_progress(
         Ok(None) => return unusable(&mut *transaction, request_id, principal).await,
         Err(_) => return ReplyToolResult::from_failure(ReadFailure::Database("reply_progress")),
     };
+    launch_paths::follow_reply_best_effort(
+        &mut transaction,
+        principal.actor_id,
+        request_id,
+        ReplyStep::Progress {
+            generation: arguments.generation,
+            status,
+        },
+    )
+    .await;
     if notify_request(
         &mut transaction,
         principal.project_id,
@@ -855,6 +920,19 @@ async fn resolve(
         Ok(None) => return unusable(&mut *transaction, request_id, principal).await,
         Err(_) => return ReplyToolResult::from_failure(ReadFailure::Database("reply_resolve")),
     };
+    launch_paths::follow_reply_best_effort(
+        &mut transaction,
+        principal.actor_id,
+        request_id,
+        if status == "passed" {
+            ReplyStep::Passed
+        } else {
+            ReplyStep::Released {
+                reason: reason.as_deref().unwrap_or("Released."),
+            }
+        },
+    )
+    .await;
     if notify_request(
         &mut transaction,
         principal.project_id,

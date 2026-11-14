@@ -307,6 +307,7 @@ async fn respond_inner(
             "approval changed during response",
         ));
     }
+    crate::requests::legacy::approval_written(&mut *transaction, approval_id).await?;
     let event_kind = if context.kind == "question" {
         "question_resolved"
     } else {
