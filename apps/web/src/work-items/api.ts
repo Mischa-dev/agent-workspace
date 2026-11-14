@@ -165,12 +165,27 @@ export function normalizeWorkItem(value: unknown): WorkItem {
         syncFailureCategory: nullableString(pullRequest.syncFailureCategory),
         automationState: string(pullRequest.automationState),
         automationReason: nullableString(pullRequest.automationReason),
+        headRef: string(pullRequest.headRef),
+        headSha: string(pullRequest.headSha),
+        baseRef: string(pullRequest.baseRef),
+        authorLogin: string(pullRequest.authorLogin),
+        requestedReviewers: (Array.isArray(pullRequest.requestedReviewers) ? pullRequest.requestedReviewers : []).map((login) => string(login)),
+        checks: (Array.isArray(pullRequest.checks) ? pullRequest.checks : []).map((value) => {
+          const check = record(value)
+          return {
+            name: string(check.name),
+            status: string(check.status),
+            conclusion: nullableString(check.conclusion),
+            url: nullableString(check.url),
+          }
+        }),
       }
     }),
     capabilities: {
       view: boolean(capabilities.view),
       edit: boolean(capabilities.edit),
       archive: boolean(capabilities.archive),
+      mergePullRequests: boolean(capabilities.mergePullRequests),
     },
     parent: taskRef(item.parent),
     milestone: milestoneRef(item.milestone),
@@ -244,7 +259,7 @@ export function normalizeCard(value: unknown): WorkItemCard {
 function workItemLinkPath(
   projectId: string,
   workItemId: string,
-  collection: 'threads' | 'repositories',
+  collection: 'threads' | 'repositories' | 'pull-requests',
   targetId: string,
 ) {
   return `/api/v1/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(workItemId)}/${collection}/${encodeURIComponent(targetId)}`
@@ -277,6 +292,34 @@ export async function setWorkItemRepositoryLink(input: {
     idempotencyKey: input.idempotencyKey,
     json: input.role ? { expectedVersion: input.expectedVersion, role: input.role } : { expectedVersion: input.expectedVersion },
   }))
+}
+
+/** Links a pull request to a task (confirming a suggested one), or unlinks it (dismissing a suggestion). */
+export async function setWorkItemPullRequestLink(input: {
+  projectId: string
+  workItemId: string
+  pullRequestId: string
+  linked: boolean
+  expectedVersion: number
+  idempotencyKey: string
+}) {
+  return normalizeWorkItem(await requestJson<unknown>(
+    workItemLinkPath(input.projectId, input.workItemId, 'pull-requests', input.pullRequestId),
+    { method: input.linked ? 'POST' : 'DELETE', idempotencyKey: input.idempotencyKey, json: { expectedVersion: input.expectedVersion } },
+  ))
+}
+
+/** Merges a task's pull request on GitHub if its head is still the one shown. */
+export async function mergeWorkItemPullRequest(input: {
+  projectId: string
+  workItemId: string
+  pullRequestId: string
+  expectedHeadSha: string
+}) {
+  return record(await requestJson<unknown>(
+    projectPath(input.projectId, `pull-requests/${encodeURIComponent(input.pullRequestId)}/merge`),
+    { method: 'POST', idempotencyKey: crypto.randomUUID(), json: { expectedHeadSha: input.expectedHeadSha } },
+  ))
 }
 
 export async function setWorkItemPrimaryRepository(input: {

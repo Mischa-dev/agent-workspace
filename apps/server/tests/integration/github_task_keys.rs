@@ -344,3 +344,288 @@ async fn a_pull_request_naming_a_task_key_is_suggested_on_that_task_only() {
         .unwrap_or_else(|| panic!("the suggested pull request: {read}"));
     assert_eq!(suggested["confirmed"], false, "{read}");
 }
+
+#[tokio::test]
+async fn a_suggested_pull_request_is_confirmed_or_dismissed_on_the_task() {
+    let Some((setup, seed, _temporary)) = seeded("github_task_key_confirm").await else {
+        return;
+    };
+    let app = &setup.app;
+    let pool = &setup.pool;
+    let aw = seed.project_id.to_string();
+    let owner = connect_app(app, &setup.browser, "Owner's app", "full").await;
+    let session = initialize(app, &owner).await.expect("owner's app");
+    let created = tool(
+        app,
+        &owner,
+        &session,
+        "task_create",
+        json!({"projectId": aw, "title": "Fix the board"}),
+    )
+    .await;
+    let task: Uuid = created["workItemId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("task: {created}"))
+        .parse()
+        .expect("task id");
+    let key = key_of(pool, task).await;
+    let (pull_request, _) = seed_pull_request(&setup, &aw, seed.repository_id, 59).await;
+    let integration = sqlx::query_scalar::<_, Uuid>(
+        "SELECT installation.integration_actor_id FROM github_pull_requests pr JOIN github_installations installation ON installation.id = pr.github_installation_id WHERE pr.id = $1",
+    )
+    .bind(pull_request)
+    .fetch_one(pool)
+    .await
+    .expect("integration actor");
+    assert_eq!(
+        suggest(
+            pool,
+            seed.project_id,
+            pull_request,
+            &[&key],
+            &[],
+            integration
+        )
+        .await,
+        1
+    );
+
+    // An agent reading the task sees the suggestion, marked as one.
+    let opened = tool(app, &owner, &session, "task_open", json!({"taskId": key})).await;
+    let listed = opened.to_string();
+    assert!(listed.contains("\"suggested\":true"), "{opened}");
+
+    let version = |pool: PgPool| async move {
+        sqlx::query_scalar::<_, i64>("SELECT version FROM work_items WHERE id = $1")
+            .bind(task)
+            .fetch_one(&pool)
+            .await
+            .expect("version")
+    };
+    let path = format!("/api/v1/projects/{aw}/work-items/{task}/pull-requests/{pull_request}");
+    // A stale version is refused.
+    let (status, _) = send(
+        app,
+        setup.browser.request(
+            "DELETE",
+            &path,
+            Some("dismiss-stale"),
+            json!({"expectedVersion": 0}),
+        ),
+    )
+    .await;
+    assert_eq!(status, 409);
+
+    // Dismissing it from the task page keeps it off on the next sync.
+    let (status, read) = send(
+        app,
+        setup.browser.request(
+            "DELETE",
+            &path,
+            Some("dismiss"),
+            json!({"expectedVersion": version(pool.clone()).await}),
+        ),
+    )
+    .await;
+    assert_eq!(status, 200, "{read}");
+    assert!(links(pool, pull_request).await.is_empty());
+    assert_eq!(
+        suggest(
+            pool,
+            seed.project_id,
+            pull_request,
+            &[&key],
+            &[],
+            integration
+        )
+        .await,
+        0
+    );
+
+    // Linking it from the task page confirms it, so automation can move the
+    // task when it merges.
+    let (status, read) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &path,
+            Some("confirm"),
+            json!({"expectedVersion": version(pool.clone()).await}),
+        ),
+    )
+    .await;
+    assert_eq!(status, 200, "{read}");
+    assert_eq!(
+        links(pool, pull_request).await,
+        vec![(task, "explicit".to_owned(), true)]
+    );
+    let confirmed = read["linkedPullRequests"]
+        .as_array()
+        .and_then(|lines| lines.iter().find(|line| line["number"] == 59))
+        .unwrap_or_else(|| panic!("the pull request: {read}"));
+    assert_eq!(confirmed["confirmed"], true, "{read}");
+    // Its card lists each check, failing ones first.
+    for (id, name, conclusion) in [(1_i64, "build", "success"), (2, "lint", "failure")] {
+        sqlx::query(
+            "INSERT INTO github_pull_request_check_runs (id, project_id, github_pull_request_id, github_check_run_id, name, status, conclusion, details_url) VALUES ($1, $2, $3, $4, $5, 'completed', $6, 'https://github.com/checks')",
+        )
+        .bind(Uuid::now_v7())
+        .bind(seed.project_id)
+        .bind(pull_request)
+        .bind(id)
+        .bind(name)
+        .bind(conclusion)
+        .execute(pool)
+        .await
+        .expect("check run");
+    }
+    let (status, read) = send(
+        app,
+        setup.browser.request(
+            "GET",
+            &format!("/api/v1/projects/{aw}/work-items/{task}"),
+            None,
+            serde_json::Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, 200, "{read}");
+    let card = read["linkedPullRequests"]
+        .as_array()
+        .and_then(|lines| lines.iter().find(|line| line["number"] == 59))
+        .unwrap_or_else(|| panic!("the pull request: {read}"));
+    let names = card["checks"]
+        .as_array()
+        .unwrap_or_else(|| panic!("checks: {card}"))
+        .iter()
+        .map(|check| (check["name"].clone(), check["conclusion"].clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        vec![
+            (json!("lint"), json!("failure")),
+            (json!("build"), json!("success"))
+        ]
+    );
+    assert_eq!(card["headRef"], "feature", "{card}");
+
+    let audited = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM audit_events WHERE target_id = $1 AND action IN ('work_item.pull_request_linked', 'work_item.pull_request_unlinked')",
+    )
+    .bind(task)
+    .fetch_one(pool)
+    .await
+    .expect("audit");
+    assert_eq!(audited, 2);
+}
+
+#[tokio::test]
+async fn merging_checks_the_pull_request_before_it_asks_github() {
+    let Some((setup, seed, _temporary)) = seeded("github_task_key_merge").await else {
+        return;
+    };
+    let app = &setup.app;
+    let pool = &setup.pool;
+    let aw = seed.project_id.to_string();
+    let (pull_request, _) = seed_pull_request(&setup, &aw, seed.repository_id, 61).await;
+    let path = format!("/api/v1/projects/{aw}/pull-requests/{pull_request}/merge");
+    let merge = |body: serde_json::Value| {
+        let request = setup.browser.request("POST", &path, Some("merge"), body);
+        send(app, request)
+    };
+    let set = |sql: &'static str| async move {
+        sqlx::query(sql)
+            .bind(pull_request)
+            .execute(pool)
+            .await
+            .expect("change the pull request");
+    };
+
+    let (status, read) = merge(json!({"method": "octopus"})).await;
+    assert_eq!(status, 400, "{read}");
+    let (status, read) = merge(json!({"expectedHeadSha": "abc"})).await;
+    assert_eq!(status, 400, "{read}");
+
+    // The installation doesn't reach the repository yet.
+    let (status, read) = merge(json!({})).await;
+    assert_eq!(status, 400, "{read}");
+    assert!(
+        read.to_string().contains("doesn't reach that repository"),
+        "{read}"
+    );
+    sqlx::query(
+        "INSERT INTO github_installation_repositories (project_id, github_installation_id, repository_id, github_repository_id, access_state, last_verified_at) SELECT project_id, github_installation_id, repository_id, github_repository_id, 'selected', now() FROM github_pull_requests WHERE id = $1",
+    )
+    .bind(pull_request)
+    .execute(pool)
+    .await
+    .expect("installation reaches the repository");
+
+    // A head that moved since the caller looked is never merged.
+    let (status, read) = merge(json!({"expectedHeadSha": "b".repeat(40)})).await;
+    assert_eq!(status, 400, "{read}");
+    assert!(read.to_string().contains("head moved"), "{read}");
+
+    set("UPDATE github_pull_requests SET draft = true WHERE id = $1").await;
+    let (status, read) = merge(json!({})).await;
+    assert_eq!(status, 400, "{read}");
+    assert!(read.to_string().contains("is a draft"), "{read}");
+    set("UPDATE github_pull_requests SET draft = false, state = 'closed' WHERE id = $1").await;
+    let (status, read) = merge(json!({})).await;
+    assert_eq!(status, 400, "{read}");
+    assert!(read.to_string().contains("isn't open"), "{read}");
+
+    // Everything checks out, so the next step is GitHub, which this server
+    // doesn't reach.
+    set("UPDATE github_pull_requests SET state = 'open' WHERE id = $1").await;
+    let (status, read) =
+        merge(json!({"expectedHeadSha": "a".repeat(40), "method": "squash"})).await;
+    assert_eq!(status, 400, "{read}");
+    assert!(read.to_string().contains("isn't set up"), "{read}");
+
+    // The task page offers Merge to those who manage the project's code.
+    let owner = connect_app(app, &setup.browser, "Owner's app", "full").await;
+    let session = initialize(app, &owner).await.expect("owner's app");
+    let created = tool(
+        app,
+        &owner,
+        &session,
+        "task_create",
+        json!({"projectId": aw, "title": "Ship offline mode"}),
+    )
+    .await;
+    let task = created["workItemId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("task: {created}"))
+        .to_owned();
+    // The agent tool checks the same things the button does.
+    let merged = tool(
+        app,
+        &owner,
+        &session,
+        "pull_request_merge",
+        json!({"pullRequestId": pull_request, "expectedHeadSha": "c".repeat(40)}),
+    )
+    .await;
+    assert!(merged.to_string().contains("moved"), "{merged}");
+    let (status, read) = send(
+        app,
+        setup.browser.request(
+            "GET",
+            &format!("/api/v1/projects/{aw}/work-items/{task}"),
+            None,
+            json!(null),
+        ),
+    )
+    .await;
+    assert_eq!(status, 200, "{read}");
+    assert_eq!(read["capabilities"]["mergePullRequests"], true, "{read}");
+    // No merge reached GitHub, so nothing was recorded as merged.
+    let audited = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM audit_events WHERE action = 'github.pull_request_merged'",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("audit");
+    assert_eq!(audited, 0);
+}

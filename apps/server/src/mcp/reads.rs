@@ -168,6 +168,11 @@ pub struct PullRequestProjection {
     pub sync_state: String,
     pub version: i64,
     pub canonical_url: String,
+    /// Suggested because its branch, title or body names this task's key,
+    /// and not confirmed yet: task_link with pullRequestId confirms it, and
+    /// with remove dismisses it. Confirmed pull requests leave this out.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub suggested: bool,
 }
 
 #[derive(Debug, FromRow)]
@@ -252,6 +257,9 @@ struct PullRequestRow {
     mergeability_state: String,
     sync_state: String,
     version: i64,
+    /// Linked only as a suggestion (it names the task's key), not confirmed.
+    #[sqlx(default)]
+    suggested: bool,
 }
 
 pub async fn work_item_get(
@@ -614,14 +622,15 @@ async fn load_linked_pull_requests(
             pull_request.review_state,
             pull_request.mergeability_state,
             pull_request.sync_state,
-            pull_request.version
+            pull_request.version,
+            NOT link.confirmed AS suggested
         FROM github_pull_request_work_item_links link
         JOIN github_pull_requests pull_request
           ON pull_request.project_id = link.project_id
          AND pull_request.id = link.github_pull_request_id
-        WHERE link.project_id = $1 AND link.work_item_id = $2 AND link.confirmed
+        WHERE link.project_id = $1 AND link.work_item_id = $2
           AND pull_request_visible_to(pull_request.id, $3)
-        ORDER BY pull_request.external_updated_at DESC, pull_request.id DESC
+        ORDER BY link.confirmed DESC, pull_request.external_updated_at DESC, pull_request.id DESC
         LIMIT 20
         "#,
     )
@@ -762,6 +771,7 @@ fn pull_request_projection(state: &crate::AppState, row: PullRequestRow) -> Pull
             state,
             &format!("/projects/{}/pull-requests/{}", row.project_id, row.id),
         ),
+        suggested: row.suggested,
     }
 }
 

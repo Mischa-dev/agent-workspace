@@ -11,11 +11,13 @@ import {
   getWorkItemWorkflow,
   listWorkItems,
   getWorkItemTimeline,
+  mergeWorkItemPullRequest,
   namedAssignableActors,
   removeAcceptanceCriterion,
   searchAssignableActors,
   setWorkItemPrimaryRepository,
   setWorkItemArchived,
+  setWorkItemPullRequestLink,
   setWorkItemRepositoryLink,
   setWorkItemThreadLink,
   updateWorkItem,
@@ -197,6 +199,14 @@ export function useSetWorkItemThreadLink() {
 
 export function useSetWorkItemRepositoryLink() {
   return useWorkItemChildMutation(setWorkItemRepositoryLink)
+}
+
+export function useSetWorkItemPullRequestLink() {
+  return useWorkItemChildMutation(setWorkItemPullRequestLink)
+}
+
+export function useMergeWorkItemPullRequest() {
+  return useWorkItemChildMutation(mergeWorkItemPullRequest)
 }
 
 export function useSetWorkItemPrimaryRepository() {

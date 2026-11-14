@@ -3045,6 +3045,152 @@ async fn allocate_timeline_sequence(
     .ok_or(AppError::NotFound("work_item"))
 }
 
+/// What linking or unlinking a pull request did.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PullRequestLinkChange {
+    /// No such pull request in the task's project.
+    NotInProject,
+    Unchanged,
+    /// The change would apply, but the task isn't at the version given.
+    VersionConflict,
+    Changed {
+        version: i64,
+        activity_id: Uuid,
+    },
+}
+
+/// Links a pull request Agent Workspace knows about to a task in the same
+/// project, or unlinks it, for task_link and task_link_pull_request alike. A
+/// link made here is explicit and confirmed, so the project's GitHub
+/// automation moves the task when the pull request opens or merges; a
+/// suggested link (from a branch name) becomes explicit. A change bumps the
+/// version and writes the activity and the outbox event; the caller has
+/// locked the project and the task and writes the audit row.
+/// `expected_version` is checked only when something would change, so a
+/// retry of a link that's already there answers `Unchanged`.
+#[allow(clippy::too_many_arguments)]
+pub async fn change_pull_request_link(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    work_item_id: Uuid,
+    current_version: i64,
+    expected_version: Option<i64>,
+    pull_request_id: Uuid,
+    actor_id: Uuid,
+    link: bool,
+    activity_summary: &str,
+) -> Result<PullRequestLinkChange, AppError> {
+    // Nobody links (or unlinks) a pull request they can't see: one opened
+    // from a private thread stays private (migration 0050).
+    let exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM github_pull_requests WHERE project_id = $1 AND id = $2 AND pull_request_visible_to(id, $3))",
+    )
+    .bind(project_id)
+    .bind(pull_request_id)
+    .bind(actor_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if !exists {
+        return Ok(PullRequestLinkChange::NotInProject);
+    }
+    let source = sqlx::query_scalar::<_, String>(
+        "SELECT source FROM github_pull_request_work_item_links WHERE project_id = $1 AND github_pull_request_id = $2 AND work_item_id = $3",
+    )
+    .bind(project_id)
+    .bind(pull_request_id)
+    .bind(work_item_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    let already = if link {
+        source.as_deref() == Some("explicit")
+    } else {
+        source.is_none()
+    };
+    if already {
+        return Ok(PullRequestLinkChange::Unchanged);
+    }
+    if expected_version.is_some_and(|expected| expected != current_version) {
+        return Ok(PullRequestLinkChange::VersionConflict);
+    }
+    let changed = if link {
+        sqlx::query(
+            r#"
+            INSERT INTO github_pull_request_work_item_links (
+                project_id, github_pull_request_id, work_item_id, source,
+                confirmed, created_by_actor_id
+            ) VALUES ($1, $2, $3, 'explicit', true, $4)
+            ON CONFLICT (github_pull_request_id, work_item_id) DO UPDATE
+            SET source = 'explicit', confirmed = true
+            WHERE github_pull_request_work_item_links.source <> 'explicit'
+            "#,
+        )
+        .bind(project_id)
+        .bind(pull_request_id)
+        .bind(work_item_id)
+        .bind(actor_id)
+        .execute(&mut **transaction)
+        .await?
+    } else {
+        sqlx::query(
+            "DELETE FROM github_pull_request_work_item_links WHERE project_id = $1 AND work_item_id = $2 AND github_pull_request_id = $3",
+        )
+        .bind(project_id)
+        .bind(work_item_id)
+        .bind(pull_request_id)
+        .execute(&mut **transaction)
+        .await?
+    }
+    .rows_affected()
+        == 1;
+    if !changed {
+        return Ok(PullRequestLinkChange::Unchanged);
+    }
+    // An unlinked pull request isn't suggested on the task again when it
+    // next syncs, even if it still names the task's key (AWD-59); linking it
+    // again lifts that.
+    if link {
+        sqlx::query(
+            "DELETE FROM github_pull_request_dismissed_links WHERE project_id = $1 AND github_pull_request_id = $2 AND work_item_id = $3",
+        )
+        .bind(project_id)
+        .bind(pull_request_id)
+        .bind(work_item_id)
+        .execute(&mut **transaction)
+        .await?;
+    } else {
+        sqlx::query(
+            r#"
+            INSERT INTO github_pull_request_dismissed_links (
+                project_id, github_pull_request_id, work_item_id, dismissed_by_actor_id
+            ) VALUES ($1, $2, $3, $4)
+            ON CONFLICT (github_pull_request_id, work_item_id) DO NOTHING
+            "#,
+        )
+        .bind(project_id)
+        .bind(pull_request_id)
+        .bind(work_item_id)
+        .bind(actor_id)
+        .execute(&mut **transaction)
+        .await?;
+    }
+    let version = advance_version(transaction, project_id, work_item_id, current_version).await?;
+    let activity_id = insert_activity(
+        transaction,
+        project_id,
+        work_item_id,
+        actor_id,
+        "work_item_updated",
+        activity_summary,
+        &serde_json::json!({"pullRequestId": pull_request_id, "linked": link}),
+    )
+    .await?;
+    enqueue_update(transaction, project_id, work_item_id, version).await?;
+    Ok(PullRequestLinkChange::Changed {
+        version,
+        activity_id,
+    })
+}
+
 pub async fn record_audit(
     transaction: &mut Transaction<'_, Postgres>,
     actor: &CommandActor,

@@ -24,7 +24,7 @@ use super::{
     field_tools, history, planning,
     reads::{self, ReadResult, WorkItemProjection},
     talk::can_write_in,
-    writes::{self, PullRequestLinkChange, WriteAccess, WriteResult},
+    writes::{self, WriteAccess, WriteResult},
 };
 use crate::{
     AppState,
@@ -32,9 +32,10 @@ use crate::{
     policy::Action,
     work_item_commands::{
         ChangeFinalization, ChangePayload, CommandActor, LinkChange, LinkWording, LockedWorkItem,
-        RepositoryLinkOutcome, ThreadLinkOutcome, advance_version, change_repository_link,
-        change_thread_link, enqueue_update, finalize_change, insert_activity, lock_work_item,
-        lock_work_items, ranks_for_placement, record_audit, validate_assignee, validate_priority,
+        PullRequestLinkChange, RepositoryLinkOutcome, ThreadLinkOutcome, advance_version,
+        change_pull_request_link, change_repository_link, change_thread_link, enqueue_update,
+        finalize_change, insert_activity, lock_work_item, lock_work_items, ranks_for_placement,
+        record_audit, validate_assignee, validate_priority,
     },
     work_item_labels::{self, echo},
     work_item_planning::{HAS_OPEN_BLOCKER, OPEN_BLOCKER_COUNT},
@@ -3926,7 +3927,7 @@ async fn task_link_inner(
             (id, version)
         }
         LinkTarget::PullRequest { id } => {
-            let version = match writes::change_pull_request_link(
+            let version = match change_pull_request_link(
                 &mut transaction,
                 project_id,
                 task_id,

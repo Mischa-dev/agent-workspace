@@ -15,6 +15,7 @@
     "repository_get": "describe",
     "pull_request_list": "query",
     "pull_request_create": "change",
+    "pull_request_merge": "change",
     "pull_request_refresh": "change",
     "pull_request_get": "describe",
     "task_link_pull_request": "change"

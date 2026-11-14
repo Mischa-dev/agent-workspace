@@ -1191,6 +1191,12 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/projects/{project_id}/pull-requests/{pull_request_id}/refresh",
         PullRequestRefresh
     ),
+    policy_route!(
+        "github",
+        Post,
+        "/api/v1/projects/{project_id}/pull-requests/{pull_request_id}/merge",
+        PullRequestMerge
+    ),
     boundary_route!(
         "github",
         Post,
@@ -1487,6 +1493,18 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "work_items",
         Post,
         "/api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}/primary",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/work-items/{work_item_id}/pull-requests/{pull_request_id}",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "work_items",
+        Delete,
+        "/api/v1/projects/{project_id}/work-items/{work_item_id}/pull-requests/{pull_request_id}",
         WorkItemEdit
     ),
     policy_route!(
