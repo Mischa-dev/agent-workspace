@@ -163,11 +163,12 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
   }
 
   // The built-in Tasks collection (AWD-110) reads the project's tasks: a
-  // record opens its task, and only views change here.
+  // record opens its task, and an edit here is a task change. Its name and
+  // fields are the project's, changed in the task settings.
   const tasks = collection.data.collection.builtin === 'tasks'
   // A link to a Tasks record (an embed, an old link) opens its task.
   if (tasks && recordId) return <Navigate replace to={`/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(recordId)}`} />
-  const body = tasks ? { ...collection.data, canBuild: false, canEditRecords: false } : collection.data
+  const body = tasks ? { ...collection.data, canBuild: false } : collection.data
   const canSaveViews = collection.data.canBuild && !(Boolean(project.archivedAt) || body.collection.archived)
   const views = [...body.views].sort((left, right) => left.position - right.position)
   const view = views.find((entry) => entry.id === params.get('view')) ?? views[0] ?? null
@@ -288,7 +289,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
   }
 
   const collectionMenu: MenuEntry[] = [
-    ...(body.canEditRecords ? [{ label: 'Forms…', icon: 'list' as const, onSelect: () => setDialog({ kind: 'forms' }) }] : []),
+    ...(body.canEditRecords && !tasks ? [{ label: 'Forms…', icon: 'list' as const, onSelect: () => setDialog({ kind: 'forms' }) }] : []),
     ...(canBuild
       ? ([
           { label: 'Edit details…', icon: 'pencil', onSelect: () => setDialog({ kind: 'details' }) },

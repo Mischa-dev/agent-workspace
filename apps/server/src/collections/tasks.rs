@@ -72,6 +72,27 @@ const PRIORITIES: [(&str, &str, Uuid, &str); 4] = [
     ),
 ];
 
+/// The stored priority a Priority option stands for.
+pub fn priority_for_option(option: Uuid) -> Option<&'static str> {
+    PRIORITIES
+        .iter()
+        .find(|(_, _, id, _)| *id == option)
+        .map(|(stored, _, _, _)| *stored)
+}
+
+/// Whether a name is one of the built-in fields' (compared lowercased).
+pub fn is_builtin_name(name: &str) -> bool {
+    [
+        "status",
+        "assignee",
+        "priority",
+        "start date",
+        "due date",
+        "labels",
+    ]
+    .contains(&name.trim().to_lowercase().as_str())
+}
+
 /// Whether a field is one of the built-in ones.
 pub fn is_builtin_field(id: Uuid) -> bool {
     [STATUS, ASSIGNEE, PRIORITY, START_DATE, DUE_DATE, LABELS].contains(&id)
@@ -327,5 +348,5 @@ pub async fn ensure(
 /// What to say when a write asks to change the Tasks collection's records,
 /// fields, or the collection itself.
 pub const READ_ONLY_MESSAGE: &str = "Tasks is the built-in collection of this project's tasks: \
-     change tasks and their fields with the task tools or on the tasks page. Only its views \
-     change here.";
+     its name and settings don't change. Change its records with the task tools (task_create, \
+     task_update), and its fields with collection_write.";

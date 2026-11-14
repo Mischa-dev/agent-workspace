@@ -297,6 +297,15 @@ fn archived_collection(collection: &Collection) -> Response {
 
 /// The built-in Tasks collection's records, fields and settings change on
 /// task screens; only its views change here.
+fn task_fields_forbidden() -> Response {
+    refusal(
+        StatusCode::FORBIDDEN,
+        "forbidden",
+        "Only people whose role can change the workflow (owners and admins, unless a custom role says otherwise) can change the task fields.",
+        Value::Null,
+    )
+}
+
 fn builtin_collection() -> Response {
     refusal(
         StatusCode::CONFLICT,
@@ -390,7 +399,7 @@ async fn collection_body(
             .collect(),
         archived_records,
         // The Tasks collection's records are tasks, changed on task screens.
-        can_edit_records: can_edit && !collection.archived && !collection.is_tasks(),
+        can_edit_records: can_edit && !collection.archived,
         can_build,
     })
 }
@@ -803,16 +812,29 @@ async fn create_field(
         .await
     );
     let collection = write.collection(collection_id).await?;
-    if collection.is_tasks() {
-        return Ok(builtin_collection());
-    }
     if collection.archived {
         return Ok(archived_collection(&collection));
     }
+    // Tasks' fields are the project's task fields, changed by those who may
+    // change the workflow; the built-in ones keep their names.
+    let kind = if collection.is_tasks() {
+        if !super::task_writes::may_change_fields(&mut write.transaction, &write.actor).await? {
+            return Ok(task_fields_forbidden());
+        }
+        if super::tasks::is_builtin_name(&name) {
+            return Ok(invalid(
+                "name",
+                format!("Tasks already has a built-in field called \"{name}\"."),
+            ));
+        }
+        fields::RecordKind::Task
+    } else {
+        super::kind(collection_id)
+    };
     let field = match fields::create(
         &mut write.transaction,
         project_id,
-        super::kind(collection_id),
+        kind,
         principal.actor_id,
         NewField {
             name,
@@ -855,7 +877,7 @@ async fn create_field(
         json!({
             "name": field.name,
             "type": field.field_type.as_str(),
-            "recordKind": "record",
+            "recordKind": kind.as_str(),
             "collectionId": collection_id,
         }),
     )
@@ -913,12 +935,28 @@ async fn update_field(
         .await
     );
     let collection = write.collection(collection_id).await?;
-    if collection.is_tasks() {
-        return Ok(builtin_collection());
-    }
     if collection.archived {
         return Ok(archived_collection(&collection));
     }
+    let kind = if collection.is_tasks() {
+        if super::tasks::is_builtin_field(field_id) {
+            return Ok(builtin_collection());
+        }
+        if !super::task_writes::may_change_fields(&mut write.transaction, &write.actor).await? {
+            return Ok(task_fields_forbidden());
+        }
+        if let Some(name) = &name
+            && super::tasks::is_builtin_name(name)
+        {
+            return Ok(invalid(
+                "name",
+                format!("Tasks already has a built-in field called \"{name}\"."),
+            ));
+        }
+        fields::RecordKind::Task
+    } else {
+        super::kind(collection_id)
+    };
     let definitions =
         super::field_definitions(&mut write.transaction, project_id, collection_id, true).await?;
     let Some(current) = definitions.iter().find(|field| field.id == field_id) else {
@@ -939,7 +977,7 @@ async fn update_field(
     let field = match fields::change(
         &mut write.transaction,
         project_id,
-        super::kind(collection_id),
+        kind,
         field_id,
         principal.actor_id,
         FieldChange {
@@ -1612,11 +1650,11 @@ async fn write_record(
     status: StatusCode,
 ) -> Result<Response, AppError> {
     let collection = write.collection(collection_id).await?;
-    if collection.is_tasks() {
-        return Ok(builtin_collection());
-    }
     if collection.archived {
         return Ok(archived_collection(&collection));
+    }
+    if collection.is_tasks() {
+        return write_task_record(write, project_id, collection_id, input, status).await;
     }
     let definitions =
         super::field_definitions(&mut write.transaction, project_id, collection_id, true).await?;
@@ -1661,6 +1699,56 @@ async fn write_record(
     .await?;
     let body = RecordBody {
         record: RecordView::of(record, &definitions),
+        references,
+        history: Vec::new(),
+    };
+    write.finish(status, &body).await
+}
+
+/// A write to the Tasks collection: a task change (`super::task_writes`),
+/// answered with the task as a record.
+async fn write_task_record(
+    mut write: Write,
+    project_id: Uuid,
+    collection_id: Uuid,
+    input: RecordInput,
+    status: StatusCode,
+) -> Result<Response, AppError> {
+    let project_key = write.project_key.clone();
+    let task_id =
+        match super::task_writes::write(&mut write.transaction, &write.actor, &project_key, &input)
+            .await?
+        {
+            Ok(task_id) => task_id,
+            Err(problem) => return record_problem(problem),
+        };
+    outbox::enqueue_collection_updated(
+        &mut write.transaction,
+        project_id,
+        collection_id,
+        &[task_id],
+    )
+    .await?;
+    let record = records::find(
+        &mut *write.transaction,
+        project_id,
+        collection_id,
+        RecordRef::Id(task_id),
+        true,
+    )
+    .await?
+    .ok_or(AppError::Internal("written task is missing"))?;
+    let definitions =
+        super::field_definitions(&mut write.transaction, project_id, collection_id, true).await?;
+    let references = records::references(
+        &mut write.transaction,
+        project_id,
+        &definitions,
+        std::slice::from_ref(&record),
+    )
+    .await?;
+    let body = RecordBody {
+        record: RecordView::of(&record, &definitions),
         references,
         history: Vec::new(),
     };

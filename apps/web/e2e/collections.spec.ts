@@ -347,7 +347,7 @@ const widths = [
   { name: 'phone', width: 390, height: 844 },
 ] as const
 
-test('the built-in Tasks collection shows the project\'s tasks, and a task opens from it', async ({ page, context }) => {
+test('the built-in Tasks collection shows the project\'s tasks, takes new ones and edits, and a task opens from it', async ({ page, context }) => {
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
   await page.setViewportSize({ width: 1440, height: 900 })
@@ -361,16 +361,34 @@ test('the built-in Tasks collection shows the project\'s tasks, and a task opens
     expect(created.ok(), await created.text()).toBe(true)
   }
 
-  // Listed first, built in, and opened like any collection.
+  // Listed first, built in, and opened like any collection; its records
+  // are tasks, added and changed here like any record.
   await page.reload()
   await page.getByRole('list', { name: 'Collections' }).getByRole('link', { name: 'Tasks', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Tasks' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'New record' })).toBeHidden()
+  await expect(page.getByRole('button', { name: 'New record' })).toBeVisible()
   const row = page.locator('.aw-records__title').filter({ hasText: title })
   await expect(row).toBeVisible()
 
+  // A task added from the last row is a task, and its priority changes in place.
+  const added = `Oil the lamp ${Date.now()}`
+  await page.getByRole('textbox', { name: 'New record' }).fill(added)
+  await page.getByRole('textbox', { name: 'New record' }).press('Enter')
+  await expect(page.locator('.aw-records__title').filter({ hasText: added })).toBeVisible()
+  await page.getByRole('button', { name: `Priority of ${added}: empty. Change` }).click()
+  await page.getByRole('option', { name: 'High' }).click()
+  await expect(page.getByRole('button', { name: `Priority of ${added}: High. Change` })).toBeVisible()
+  await expect
+    .poll(async () => {
+      const found = (await (await request.get(`/api/v1/projects/${projectId}/work-items?q=${encodeURIComponent(added)}`)).json()) as {
+        items: Array<{ priority: string }>
+      }
+      return found.items[0]?.priority ?? null
+    })
+    .toBe('high')
+
   // A task opens on its own page.
-  await row.click()
+  await page.getByRole('button', { name: `Open ${title}` }).click()
   await expect(page).toHaveURL(/\/work-items\//)
   await expect(page.getByRole('heading', { name: title })).toBeVisible()
   expect(errors).toEqual([])

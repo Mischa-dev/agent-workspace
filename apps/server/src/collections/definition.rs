@@ -690,7 +690,13 @@ pub async fn apply(
             format!("Write at most {MAX_WRITES} fields and views at a time."),
         ));
     }
-    let kind = super::kind(collection.id);
+    // Tasks' fields are the project's task fields; its built-in ones
+    // (Status, Assignee, …) don't change here.
+    let kind = if collection.is_tasks() {
+        fields::RecordKind::Task
+    } else {
+        super::kind(collection.id)
+    };
     let mut changes = Changes::new();
     for (index, write) in field_writes.iter().enumerate() {
         let at = format!("fields[{index}]");
@@ -772,6 +778,19 @@ pub async fn apply(
                 ));
             }
         };
+        if collection.is_tasks()
+            && (found
+                .as_ref()
+                .is_some_and(|field| super::tasks::is_builtin_field(field.id))
+                || name.as_deref().is_some_and(super::tasks::is_builtin_name))
+        {
+            return Ok(stop(
+                ProblemKind::Invalid,
+                format!("{at}.name"),
+                "Status, Assignee, Priority, Start date, Due date and Labels are built into Tasks: \
+                 change them on tasks, and give a new field another name.",
+            ));
+        }
         let Some(current) = found else {
             // Add a field.
             let Some(name) = name else {
