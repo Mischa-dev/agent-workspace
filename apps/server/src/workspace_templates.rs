@@ -1428,6 +1428,11 @@ async fn project_snapshot(
         else {
             continue;
         };
+        // The Tasks collection comes with every project; its tasks travel
+        // as tasks.
+        if collection.is_tasks() {
+            continue;
+        }
         let fields =
             collections::field_definitions(&mut *connection, project_id, collection.id, true)
                 .await?;

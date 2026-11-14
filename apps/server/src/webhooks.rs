@@ -1415,14 +1415,19 @@ pub(crate) async fn record_data(
     else {
         return Ok(None);
     };
-    let Some(record) = records::by_ids(&mut *connection, project_id, collection_id, &[record_id])
-        .await?
-        .pop()
-    else {
+    let Some(record) = records::by_ids(
+        &mut *connection,
+        project_id,
+        collection_id,
+        &[record_id],
+        false,
+    )
+    .await?
+    .pop() else {
         return Ok(None);
     };
     let definitions =
-        collections::field_definitions(&mut *connection, project_id, collection_id, false).await?;
+        collections::field_definitions(&mut connection, project_id, collection_id, false).await?;
     let references = records::references(
         &mut connection,
         project_id,

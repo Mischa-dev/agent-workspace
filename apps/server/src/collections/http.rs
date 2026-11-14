@@ -295,6 +295,17 @@ fn archived_collection(collection: &Collection) -> Response {
     )
 }
 
+/// The built-in Tasks collection's records, fields and settings change on
+/// task screens; only its views change here.
+fn builtin_collection() -> Response {
+    refusal(
+        StatusCode::CONFLICT,
+        "builtin_collection",
+        super::tasks::READ_ONLY_MESSAGE,
+        Value::Null,
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Collections
 
@@ -313,6 +324,9 @@ async fn list_collections(
 ) -> Result<Json<Value>, AppError> {
     let mut connection = state.pool.acquire().await?;
     let reader = reader(&mut connection, &headers, &principal, project_id).await?;
+    if !reader.project_archived {
+        super::tasks::ensure(&mut connection, project_id, principal.actor_id).await?;
+    }
     let collections = super::list(
         &mut *connection,
         project_id,
@@ -348,13 +362,25 @@ async fn collection_body(
     let definitions =
         super::field_definitions(&mut *connection, project_id, collection.id, true).await?;
     let views = views::list(&mut *connection, project_id, collection.id).await?;
-    let (records, archived_records) = sqlx::query_as::<_, (i64, i64)>(
-        "SELECT count(*) FILTER (WHERE archived_at IS NULL), count(*) FILTER (WHERE archived_at IS NOT NULL) \
-         FROM collection_records WHERE collection_id = $1",
-    )
-    .bind(collection.id)
-    .fetch_one(&mut *connection)
-    .await?;
+    // Each query binds exactly the parameters it names: an extra bind fails
+    // on a reused prepared statement.
+    let (records, archived_records) = if collection.is_tasks() {
+        sqlx::query_as::<_, (i64, i64)>(
+            "SELECT count(*) FILTER (WHERE archived_at IS NULL), count(*) FILTER (WHERE archived_at IS NOT NULL) \
+             FROM work_items WHERE project_id = $1",
+        )
+        .bind(project_id)
+        .fetch_one(&mut *connection)
+        .await?
+    } else {
+        sqlx::query_as::<_, (i64, i64)>(
+            "SELECT count(*) FILTER (WHERE archived_at IS NULL), count(*) FILTER (WHERE archived_at IS NOT NULL) \
+             FROM collection_records WHERE collection_id = $1",
+        )
+        .bind(collection.id)
+        .fetch_one(&mut *connection)
+        .await?
+    };
     Ok(CollectionBody {
         collection: CollectionSummary::of(collection, records),
         fields: definitions.iter().map(FieldView::from).collect(),
@@ -363,7 +389,8 @@ async fn collection_body(
             .map(|view| ViewSummary::of(view, &definitions))
             .collect(),
         archived_records,
-        can_edit_records: can_edit && !collection.archived,
+        // The Tasks collection's records are tasks, changed on task screens.
+        can_edit_records: can_edit && !collection.archived && !collection.is_tasks(),
         can_build,
     })
 }
@@ -622,6 +649,9 @@ async fn update_collection(
         )
         .await
     );
+    if write.collection(collection_id).await?.is_tasks() {
+        return Ok(builtin_collection());
+    }
     let outcome = super::change(
         &mut write.transaction,
         project_id,
@@ -668,7 +698,7 @@ async fn update_collection(
                 &[],
             )
             .await?;
-            collection
+            *collection
         }
         ChangeOutcome::Unchanged(collection) => collection,
         ChangeOutcome::NotFound => return Err(AppError::NotFound("collection")),
@@ -773,6 +803,9 @@ async fn create_field(
         .await
     );
     let collection = write.collection(collection_id).await?;
+    if collection.is_tasks() {
+        return Ok(builtin_collection());
+    }
     if collection.archived {
         return Ok(archived_collection(&collection));
     }
@@ -880,11 +913,14 @@ async fn update_field(
         .await
     );
     let collection = write.collection(collection_id).await?;
+    if collection.is_tasks() {
+        return Ok(builtin_collection());
+    }
     if collection.archived {
         return Ok(archived_collection(&collection));
     }
     let definitions =
-        super::field_definitions(&mut *write.transaction, project_id, collection_id, true).await?;
+        super::field_definitions(&mut write.transaction, project_id, collection_id, true).await?;
     let Some(current) = definitions.iter().find(|field| field.id == field_id) else {
         return Err(AppError::NotFound("field"));
     };
@@ -1055,7 +1091,7 @@ async fn create_view(
         return Ok(archived_collection(&collection));
     }
     let definitions =
-        super::field_definitions(&mut *write.transaction, project_id, collection_id, true).await?;
+        super::field_definitions(&mut write.transaction, project_id, collection_id, true).await?;
     let config = match request.config.clone().for_type(view_type, &definitions) {
         Ok(config) => config,
         Err(message) => return Ok(invalid("config", message)),
@@ -1157,7 +1193,7 @@ async fn update_view(
         return Ok(archived_collection(&collection));
     }
     let definitions =
-        super::field_definitions(&mut *write.transaction, project_id, collection_id, true).await?;
+        super::field_definitions(&mut write.transaction, project_id, collection_id, true).await?;
     if let Some(config) = &request.config
         && let Some(refused) =
             checked_config(&mut write.transaction, project_id, config, &definitions).await?
@@ -1332,11 +1368,11 @@ async fn list_records(
 ) -> Result<Response, AppError> {
     let mut connection = state.pool.acquire().await?;
     reader(&mut connection, &headers, &principal, project_id).await?;
-    super::get(&mut *connection, project_id, collection_id)
+    let collection = super::get(&mut *connection, project_id, collection_id)
         .await?
         .ok_or(AppError::NotFound("collection"))?;
     let definitions =
-        super::field_definitions(&mut *connection, project_id, collection_id, true).await?;
+        super::field_definitions(&mut connection, project_id, collection_id, true).await?;
     let mut config = match query.view {
         Some(view_id) => views::list(&mut *connection, project_id, collection_id)
             .await?
@@ -1398,6 +1434,7 @@ async fn list_records(
     let mut spec =
         Spec::from_config(&config, &definitions, principal.actor_id).searching(words, &definitions);
     spec.archived = archived;
+    spec.tasks = collection.is_tasks();
     if let Some(group) = query.group {
         if spec.group.is_none() {
             return Ok(invalid("group", "A group is read within a grouping."));
@@ -1441,7 +1478,14 @@ async fn list_records(
     let total = query::total(&mut *connection, project_id, collection_id, &spec).await?;
     let groups = query::group_counts(&mut *connection, project_id, collection_id, &spec).await?;
     let ids = page.rows.iter().map(|(id, _)| *id).collect::<Vec<_>>();
-    let found = records::by_ids(&mut *connection, project_id, collection_id, &ids).await?;
+    let found = records::by_ids(
+        &mut *connection,
+        project_id,
+        collection_id,
+        &ids,
+        spec.tasks,
+    )
+    .await?;
     let references = records::references(&mut connection, project_id, &definitions, &found).await?;
     let mut groups_by_id = page.rows.into_iter().collect::<HashMap<_, _>>();
     Ok(Json(RecordPage {
@@ -1477,16 +1521,21 @@ async fn get_record(
 ) -> Result<Json<RecordBody>, AppError> {
     let mut connection = state.pool.acquire().await?;
     reader(&mut connection, &headers, &principal, project_id).await?;
+    let tasks = super::get(&mut *connection, project_id, collection_id)
+        .await?
+        .ok_or(AppError::NotFound("collection"))?
+        .is_tasks();
     let record = records::find(
         &mut *connection,
         project_id,
         collection_id,
         RecordRef::Id(record_id),
+        tasks,
     )
     .await?
     .ok_or(AppError::NotFound("record"))?;
     let definitions =
-        super::field_definitions(&mut *connection, project_id, collection_id, true).await?;
+        super::field_definitions(&mut connection, project_id, collection_id, true).await?;
     let references = records::references(
         &mut connection,
         project_id,
@@ -1563,11 +1612,14 @@ async fn write_record(
     status: StatusCode,
 ) -> Result<Response, AppError> {
     let collection = write.collection(collection_id).await?;
+    if collection.is_tasks() {
+        return Ok(builtin_collection());
+    }
     if collection.archived {
         return Ok(archived_collection(&collection));
     }
     let definitions =
-        super::field_definitions(&mut *write.transaction, project_id, collection_id, true).await?;
+        super::field_definitions(&mut write.transaction, project_id, collection_id, true).await?;
     let project_key = write.project_key.clone();
     let writer = Writer {
         actor_id: write.actor.actor_id,

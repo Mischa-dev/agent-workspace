@@ -138,9 +138,13 @@ async fn form_from_written(
     collection_id: Uuid,
     written: &FormWrite,
 ) -> Result<Result<FormConfig, String>, AppError> {
-    let definitions =
-        crate::collections::field_definitions(&state.pool, project_id, collection_id, false)
-            .await?;
+    let definitions = crate::collections::field_definitions(
+        &mut *state.pool.acquire().await?,
+        project_id,
+        collection_id,
+        false,
+    )
+    .await?;
     let mut fields = Vec::with_capacity(written.fields.len());
     for asked in &written.fields {
         let Some(field) = crate::fields::find(&definitions, &asked.field) else {

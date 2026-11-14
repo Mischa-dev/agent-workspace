@@ -347,6 +347,35 @@ const widths = [
   { name: 'phone', width: 390, height: 844 },
 ] as const
 
+test('the built-in Tasks collection shows the project\'s tasks, and a task opens from it', async ({ page, context }) => {
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  await page.setViewportSize({ width: 1440, height: 900 })
+  const projectId = seededValue('E2E_PROJECT_ID')
+  await page.goto(`/projects/${projectId}/collections`)
+  const { request, headers } = await writer(context, page)
+  const title = 'Sweep the lighthouse stairs'
+  const existing = (await (await request.get(`/api/v1/projects/${projectId}/work-items?q=${encodeURIComponent(title)}`)).json()) as { items: Array<{ id: string }> }
+  if (!existing.items.length) {
+    const created = await request.post(`/api/v1/projects/${projectId}/work-items`, { headers: headers('tasks-collection-task'), data: { title } })
+    expect(created.ok(), await created.text()).toBe(true)
+  }
+
+  // Listed first, built in, and opened like any collection.
+  await page.reload()
+  await page.getByRole('list', { name: 'Collections' }).getByRole('link', { name: 'Tasks', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Tasks' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'New record' })).toBeHidden()
+  const row = page.locator('.aw-records__title').filter({ hasText: title })
+  await expect(row).toBeVisible()
+
+  // A task opens on its own page.
+  await row.click()
+  await expect(page).toHaveURL(/\/work-items\//)
+  await expect(page.getByRole('heading', { name: title })).toBeVisible()
+  expect(errors).toEqual([])
+})
+
 for (const { scheme, theme } of schemes) {
   test.describe(`collections, ${scheme}`, () => {
     test.use({ colorScheme: scheme })

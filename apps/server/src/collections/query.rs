@@ -89,6 +89,8 @@ pub struct Spec {
     /// Only records in this group of `group` (a key `group_counts` gives,
     /// such as an option's ID or "none"): one column of a board.
     pub in_group: Option<String>,
+    /// Read the project's tasks: the built-in Tasks collection (`tasks`).
+    pub tasks: bool,
     /// The collection's text, web address and choice fields, for `words`.
     search_fields: SearchFields,
 }
@@ -251,6 +253,16 @@ impl Spec {
         hex::encode(&hasher.finalize()[..12])
     }
 
+    /// The table (or the tasks' subquery) records are read from, aliased
+    /// `record`.
+    fn source_sql(&self) -> String {
+        if self.tasks {
+            format!("{} record", super::tasks::source())
+        } else {
+            "collection_records record".to_owned()
+        }
+    }
+
     fn push_where(
         &self,
         builder: &mut QueryBuilder<'_, Postgres>,
@@ -399,6 +411,12 @@ pub fn date_range(
 }
 
 fn group_sql(field: &FieldDefinition) -> Option<GroupSql> {
+    if super::tasks::is_builtin_field(field.id)
+        && let Some(group) =
+            super::tasks::group_sql(field, "record.field_values", "record.project_id")
+    {
+        return Some(group);
+    }
     fields::group_sql(
         field.id,
         field.field_type,
@@ -542,7 +560,8 @@ pub async fn page(
         .join(", ");
     let mut builder = QueryBuilder::<Postgres>::new(format!(
         "SELECT record.id, {group_key} AS group_key, {group_label} AS group_label, \
-         ARRAY[{key_array}] AS keys FROM collection_records record {join}"
+         ARRAY[{key_array}] AS keys FROM {from} {join}",
+        from = spec.source_sql(),
     ));
     spec.push_where(&mut builder, project_id, collection_id);
     if let Some(after) = after {
@@ -594,7 +613,7 @@ pub async fn total(
     spec: &Spec,
 ) -> Result<i64, AppError> {
     let mut builder =
-        QueryBuilder::<Postgres>::new("SELECT count(*) FROM collection_records record");
+        QueryBuilder::<Postgres>::new(format!("SELECT count(*) FROM {}", spec.source_sql()));
     spec.push_where(&mut builder, project_id, collection_id);
     Ok(builder
         .build_query_scalar::<i64>()
@@ -632,7 +651,8 @@ pub async fn group_counts(
         .join(", ");
     let mut builder = QueryBuilder::<Postgres>::new(format!(
         "SELECT {key} AS key, min({label}) AS label, count(*) AS count, min({color}) AS color \
-         FROM collection_records record {join}",
+         FROM {from} {join}",
+        from = spec.source_sql(),
         key = group.key,
         label = group.label,
         color = group.color,

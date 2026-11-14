@@ -100,7 +100,11 @@ export function CollectionsListPage() {
                 }
                 key={collection.id}
                 leading={<Icon name="table" size={18} />}
-                meta={[countLabel(collection.records, 'record'), collection.description || null, collection.updatedAt ? `changed ${formatRelative(collection.updatedAt)}` : null]
+                meta={[
+                  collection.builtin === 'tasks' ? countLabel(collection.records, 'task') : countLabel(collection.records, 'record'),
+                  collection.builtin === 'tasks' ? 'Built in: your tasks, in any view' : collection.description || null,
+                  collection.updatedAt ? `changed ${formatRelative(collection.updatedAt)}` : null,
+                ]
                   .filter(Boolean)
                   .join(' · ')}
                 title={<Link to={href(collection)}>{collection.name}</Link>}

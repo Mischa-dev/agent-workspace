@@ -6,6 +6,7 @@ mod awd102_task_move;
 mod awd110_collection_forms;
 mod awd110_collection_views;
 mod awd110_records_everywhere;
+mod awd110_tasks_collection;
 mod awd53_attribution;
 mod awd53_discussion;
 mod awd53_live_pages;

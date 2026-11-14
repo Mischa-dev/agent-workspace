@@ -1583,7 +1583,8 @@ pub async fn create(
     // A link to records names a live collection of this project (AWD-110).
     if let Some(collection) = new.config.collection {
         let found = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM collections WHERE project_id = $1 AND id = $2 AND archived_at IS NULL)",
+            "SELECT EXISTS (SELECT 1 FROM collections WHERE project_id = $1 AND id = $2 \
+             AND archived_at IS NULL AND builtin IS NULL)",
         )
         .bind(project_id)
         .bind(collection)

@@ -1,6 +1,6 @@
 import { Suspense, lazy, useCallback, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
 import { useAuthenticatedSession, type SessionUser } from '../auth/session'
@@ -162,7 +162,13 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
     )
   }
 
-  const body = collection.data
+  // The built-in Tasks collection (AWD-110) reads the project's tasks: a
+  // record opens its task, and only views change here.
+  const tasks = collection.data.collection.builtin === 'tasks'
+  // A link to a Tasks record (an embed, an old link) opens its task.
+  if (tasks && recordId) return <Navigate replace to={`/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(recordId)}`} />
+  const body = tasks ? { ...collection.data, canBuild: false, canEditRecords: false } : collection.data
+  const canSaveViews = collection.data.canBuild && !(Boolean(project.archivedAt) || body.collection.archived)
   const views = [...body.views].sort((left, right) => left.position - right.position)
   const view = views.find((entry) => entry.id === params.get('view')) ?? views[0] ?? null
   // What the view and its unsaved changes say, without what names an archived field.
@@ -183,6 +189,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
   const recordQuery = recordsParams(recordsQuery)
   const layout = view?.type ?? 'table'
   const recordHref = (id: string) => {
+    if (tasks) return `/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(id)}`
     const next = new URLSearchParams(params)
     next.set('record', id)
     return `?${next.toString()}`
@@ -304,12 +311,12 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
     edits,
     filtered,
     onClearFilters: clearFilters,
-    onOpenRecord: openRecord,
+    onOpenRecord: tasks ? (id: string) => navigate(recordHref(id)) : openRecord,
     openRecordId: recordId,
     params: recordQuery,
     projectId,
   }
-  const panel = recordId ? (
+  const panel = recordId && !tasks ? (
     <RecordPanel body={body} canEdit={body.canEditRecords && !readOnly} edits={edits} onClose={closeRecord} projectId={projectId} recordId={recordId} />
   ) : undefined
 
@@ -344,7 +351,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
         ) : null}
         <div className="aw-collection__views">
           <PageTabs current={view?.id ?? ''} label="Views" tabs={views.map((entry) => ({ id: entry.id, label: entry.name, to: `?view=${encodeURIComponent(entry.id)}` }))} />
-          {canBuild ? (
+          {canSaveViews ? (
             <>
               <IconButton icon="plus" label="New view" onClick={() => setDialog({ kind: 'new-view' })} size="sm" />
               {viewMenu.length ? <Menu items={viewMenu} label="View options" trigger={<IconButton icon="more" label="View options" size="sm" />} /> : null}
@@ -355,7 +362,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
           archived={showArchived}
           body={body}
           canBuild={canBuild}
-          canSave={canBuild}
+          canSave={canSaveViews}
           changed={changed}
           config={config}
           layout={layout}
@@ -425,7 +432,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
       {dialog?.kind === 'field' ? (
         <FieldDialog
           field={dialog.field}
-          linkable={(collections.data?.collections ?? []).filter((entry) => !entry.archived)}
+          linkable={(collections.data?.collections ?? []).filter((entry) => !entry.archived && !entry.builtin)}
           onClose={() => setDialog(null)}
           records="records"
           scope={fieldScope(projectId, collectionId)}
