@@ -384,6 +384,82 @@ impl Fixture {
     }
 }
 
+/// P0.14: the registration cap counts only clients nobody has used, so
+/// many apps people authorized (even ones since revoked) never close
+/// registration; a pile of fresh unclaimed ones still does.
+#[tokio::test]
+async fn registration_stays_open_with_many_authorized_clients() {
+    let Ok(database_url) = std::env::var("AGENT_WORKSPACE_DATABASE_URL") else {
+        eprintln!("skipping PostgreSQL integration test: AGENT_WORKSPACE_DATABASE_URL is unset");
+        return;
+    };
+    let fixture = Fixture::new(&database_url, "oauth_registration_cap").await;
+    let pool = schema_pool(&database_url, &fixture.schema).await;
+    // One real grant, copied onto 1,100 clients, each grant revoked.
+    fixture.sign_in_as_agent().await;
+    sqlx::query(
+        r#"
+        WITH template AS (SELECT project_id, actor_id FROM mcp_oauth_grants LIMIT 1),
+        clients AS (
+            INSERT INTO mcp_oauth_clients (id, client_name, redirect_uris)
+            SELECT gen_random_uuid(), 'Authorized ' || n, ARRAY['http://127.0.0.1:9/callback']
+            FROM generate_series(1, 1100) AS n
+            RETURNING id
+        )
+        INSERT INTO mcp_oauth_grants (id, client_id, project_id, actor_id, scopes, revoked_at)
+        SELECT gen_random_uuid(), clients.id, template.project_id, template.actor_id,
+               ARRAY['read'], now()
+        FROM clients, template
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("authorized clients");
+    let register = || async {
+        send(
+            &fixture.app,
+            Request::builder()
+                .method("POST")
+                .uri("/oauth/register")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "client_name": "Newcomer",
+                        "redirect_uris": [REDIRECT],
+                        "token_endpoint_auth_method": "none",
+                        "grant_types": ["authorization_code", "refresh_token"],
+                        "response_types": ["code"]
+                    }))
+                    .expect("registration"),
+                ))
+                .expect("request"),
+        )
+        .await
+    };
+    let (status, body) = register().await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    sqlx::query(
+        r#"
+        INSERT INTO mcp_oauth_clients (id, client_name, redirect_uris)
+        SELECT gen_random_uuid(), 'Unclaimed ' || n, ARRAY['http://127.0.0.1:9/callback']
+        FROM generate_series(1, 1024) AS n
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("unclaimed clients");
+    let (status, body) = register().await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body.to_string()
+            .contains("the local client registration limit has been reached"),
+        "{body}"
+    );
+    pool.close().await;
+    fixture.cleanup().await;
+}
+
 fn refresh_form(refresh_token: &str, client_id: &str) -> String {
     serde_urlencoded::to_string([
         ("grant_type", "refresh_token"),

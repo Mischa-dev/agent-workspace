@@ -142,10 +142,18 @@ struct RegistrationResponse {
     response_types: Vec<&'static str>,
 }
 
+/// Registrations that no one has authorized yet, across the server.
+const MAX_UNCLAIMED_CLIENTS: i64 = 1_024;
+
 async fn register_client(
     State(state): State<AppState>,
+    headers: HeaderMap,
     ApiJson(mut request): ApiJson<RegistrationRequest>,
 ) -> Result<(StatusCode, Json<RegistrationResponse>), OAuthError> {
+    state
+        .rate_limits
+        .check_oauth_registration_sender(crate::rate_limit::client_address(&state.config, &headers))
+        .map_err(OAuthError::from)?;
     state
         .rate_limits
         .check_oauth_ceremony(&request.client_name)
@@ -194,11 +202,19 @@ async fn register_client(
     .execute(&mut *transaction)
     .await
     .map_err(AppError::from)?;
-    let client_count = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM mcp_oauth_clients")
-        .fetch_one(&mut *transaction)
-        .await
-        .map_err(AppError::from)?;
-    if client_count >= 1_024 {
+    // Only registrations nobody has used yet count: they're all an
+    // anonymous caller can grow. Clients someone authorized are bounded by
+    // the people who authorized them, and their (even revoked) grants stay
+    // for history.
+    let unclaimed = sqlx::query_scalar::<_, i64>(
+        r#"SELECT count(*) FROM mcp_oauth_clients client
+           WHERE NOT EXISTS (SELECT 1 FROM mcp_oauth_authorization_codes code WHERE code.client_id = client.id)
+             AND NOT EXISTS (SELECT 1 FROM mcp_oauth_grants grant_row WHERE grant_row.client_id = client.id)"#,
+    )
+    .fetch_one(&mut *transaction)
+    .await
+    .map_err(AppError::from)?;
+    if unclaimed >= MAX_UNCLAIMED_CLIENTS {
         return Err(OAuthError::invalid_client_metadata(
             "the local client registration limit has been reached",
         ));

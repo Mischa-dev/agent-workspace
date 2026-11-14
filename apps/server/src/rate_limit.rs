@@ -39,6 +39,8 @@ const GLOBAL_MCP_AUTH_FAILURES_PER_WINDOW: u32 = 900;
 /// Access tokens last twelve hours, so a day covers every app in use.
 const RECENT_MCP_TOKEN_TTL: Duration = Duration::from_secs(24 * 3_600);
 const OAUTH_CEREMONIES_PER_WINDOW: u32 = 30;
+/// App registrations from one sender address, when the address is known.
+const OAUTH_REGISTRATIONS_PER_ADDRESS_PER_WINDOW: u32 = 20;
 const GLOBAL_OAUTH_CEREMONIES_PER_WINDOW: u32 = 240;
 /// Token refreshes have their own budget: one app running many sessions on a
 /// grant refreshes from all of them at once, and a refused refresh drops the
@@ -98,6 +100,7 @@ pub struct RateLimiters {
     global_mcp_auth_failures: FixedWindowLimiter<()>,
     recent_mcp_tokens: RecentKeys,
     oauth_ceremonies: FixedWindowLimiter<[u8; 32]>,
+    oauth_registration_senders: FixedWindowLimiter<[u8; 32]>,
     global_oauth_ceremonies: FixedWindowLimiter<()>,
     oauth_refreshes: FixedWindowLimiter<[u8; 32]>,
     global_oauth_refreshes: FixedWindowLimiter<()>,
@@ -225,6 +228,17 @@ impl RateLimiters {
         self.oauth_ceremonies
             .check(key)
             .map_err(AppError::rate_limited)
+    }
+
+    /// An app registration from `address` (the caller's, when known).
+    pub fn check_oauth_registration_sender(&self, address: Option<&str>) -> Result<(), AppError> {
+        match address {
+            Some(address) => self
+                .oauth_registration_senders
+                .check(digest(address))
+                .map_err(AppError::rate_limited),
+            None => Ok(()),
+        }
     }
 
     /// Before a refresh is looked at: refuses a sender whose refreshes keep
@@ -400,6 +414,11 @@ impl Default for RateLimiters {
                 OAUTH_CEREMONIES_PER_WINDOW,
                 WINDOW,
                 MAX_SESSION_KEYS,
+            ),
+            oauth_registration_senders: FixedWindowLimiter::new(
+                OAUTH_REGISTRATIONS_PER_ADDRESS_PER_WINDOW,
+                WINDOW,
+                MAX_LOGIN_KEYS,
             ),
             global_oauth_ceremonies: FixedWindowLimiter::new(
                 GLOBAL_OAUTH_CEREMONIES_PER_WINDOW,
