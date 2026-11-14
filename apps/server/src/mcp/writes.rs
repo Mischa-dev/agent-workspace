@@ -1252,7 +1252,11 @@ async fn post_update_inner(
     let Some(update) = normalize_comment(arguments.update.clone()) else {
         return Ok(WriteResult::invalid("update", UPDATE_MESSAGE));
     };
-    let validated = match MessageContent::from_plain_text(update.clone()) {
+    // `@handle` and the project's task keys become mentions and references,
+    // as the web composer writes them (P0.4).
+    let content =
+        super::common::comment_content_from_text(state, principal.project_id, &update).await?;
+    let validated = match MessageContent::from_json(content) {
         Ok(content) => content,
         Err(_) => return Ok(WriteResult::invalid("update", UPDATE_MESSAGE)),
     };
@@ -1337,9 +1341,20 @@ async fn post_update_inner(
             return Ok(WriteResult::invalid("replyToCommentId", REPLY_MESSAGE));
         }
     }
+    let resolved = match crate::work_items::comments::resolve_comment_content(
+        &mut transaction,
+        principal.project_id,
+        validated,
+    )
+    .await
+    {
+        Ok(resolved) => resolved,
+        Err(AppError::Validation(_)) => {
+            return Ok(WriteResult::invalid("update", UPDATE_MESSAGE));
+        }
+        Err(error) => return Err(error),
+    };
     let comment_id = Uuid::now_v7();
-    let content = serde_json::to_value(validated.content())
-        .map_err(|_| AppError::Internal("serialize MCP update"))?;
     sqlx::query(
         r#"
         INSERT INTO work_item_comments (
@@ -1352,10 +1367,18 @@ async fn post_update_inner(
     .bind(principal.project_id)
     .bind(work_item_id)
     .bind(principal.actor_id)
-    .bind(content)
-    .bind(update)
+    .bind(&resolved.content_json)
+    .bind(&resolved.plain_text)
     .bind(reply_to)
     .execute(&mut *transaction)
+    .await?;
+    crate::work_items::comments::insert_comment_projections(
+        &mut transaction,
+        principal.project_id,
+        work_item_id,
+        comment_id,
+        &resolved,
+    )
     .await?;
     let (_sequence, result_id) = finalize_comment(
         &mut transaction,

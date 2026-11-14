@@ -1064,3 +1064,100 @@ async fn archiving_through_task_update_releases_claims_and_keeps_moved_originals
     assert!(still_archived);
     assert_eq!(version(&setup, original).await, current);
 }
+
+/// P0.4: an agent's task comment names people and tasks the way a person's
+/// does: "@rook" notifies Rook and "WORK-2" is a backlink on WORK-2, and an
+/// edit moves the mention.
+#[tokio::test]
+async fn an_agents_task_comment_mentions_people_and_references_tasks() {
+    use super::{message_edits::add_person, notifications::drain};
+
+    let Some(setup) = setup("mcp_task_comment_mentions").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (rook, _) = add_person(&setup, &[&work], "rook").await;
+    let messages = space(&setup).await;
+    let (mara, mara_token) = create_agent(app, &setup.browser, &messages, "Mara", "mara").await;
+    add_member(&setup, &work, mara, "member").await;
+    let session = initialize(app, &mara_token).await.expect("agent MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let token = mara_token.clone();
+        let session = session.clone();
+        async move { tool(app, &token, &session, name, arguments).await }
+    };
+    let mut tasks = Vec::new();
+    for title in ["Ship it", "Write the notes"] {
+        let created = call("task_create", json!({"projectId": "WORK", "title": title})).await;
+        assert_eq!(created["outcome"], "applied", "{created}");
+        tasks.push(id(&created["workItemId"]));
+    }
+    let comment = json!({
+        "taskId": tasks[0],
+        "text": "@rook see WORK-2 (and not WORK-99 or XWORK-2)",
+        "clientRequestId": "comment-1"
+    });
+    let posted = call("task_comment", comment.clone()).await;
+    assert_eq!(posted["outcome"], "applied", "{posted}");
+    let comment_id = id(&posted["activityId"]);
+    let mentioned = sqlx::query_scalar::<_, Uuid>(
+        "SELECT actor_id FROM work_item_comment_mentions WHERE comment_id = $1",
+    )
+    .bind(comment_id)
+    .fetch_all(&setup.pool)
+    .await
+    .expect("mentions");
+    assert_eq!(mentioned, [rook]);
+    let referenced = sqlx::query_scalar::<_, Uuid>(
+        "SELECT referenced_work_item_id FROM work_item_comment_references WHERE comment_id = $1",
+    )
+    .bind(comment_id)
+    .fetch_all(&setup.pool)
+    .await
+    .expect("references");
+    assert_eq!(referenced, [tasks[1]]);
+    let stored = sqlx::query_scalar::<_, String>(
+        "SELECT plain_text FROM work_item_comments WHERE id = $1",
+    )
+    .bind(comment_id)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("plain text");
+    assert!(stored.contains("@rook") && stored.contains("WORK-2"), "{stored}");
+
+    drain(&setup).await;
+    let unread_mentions = || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM notifications WHERE recipient_actor_id = $1 AND kind = 'comment_mention' AND read_at IS NULL",
+        )
+        .bind(rook)
+        .fetch_one(&setup.pool)
+        .await
+        .expect("notifications")
+    };
+    assert_eq!(unread_mentions().await, 1);
+
+    // The same request again is a replay, and tells nobody twice.
+    let replayed = call("task_comment", comment).await;
+    assert_eq!(replayed["activityId"], posted["activityId"], "{replayed}");
+    drain(&setup).await;
+    assert_eq!(unread_mentions().await, 1);
+
+    // Editing it to name the owner moves the mention.
+    let owner = super::message_edits::owner_id(&setup.pool).await;
+    let edited = call(
+        "task_comment_edit",
+        json!({"taskId": tasks[0], "commentId": comment_id, "text": "@owner over to you"}),
+    )
+    .await;
+    assert_eq!(edited["outcome"], "ok", "{edited}");
+    let mentioned = sqlx::query_scalar::<_, Uuid>(
+        "SELECT actor_id FROM work_item_comment_mentions WHERE comment_id = $1",
+    )
+    .bind(comment_id)
+    .fetch_all(&setup.pool)
+    .await
+    .expect("mentions");
+    assert_eq!(mentioned, [owner]);
+}
