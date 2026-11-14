@@ -1,5 +1,5 @@
 import { requestJson } from '../api/client'
-import { callOp } from '../api/generated/client'
+import { callOp, newRequestId } from '../api/ops'
 
 export type PageSummary = {
   id: string
@@ -149,7 +149,7 @@ export function listDecisions(projectId: string, includeSuperseded = false) {
 export function recordDecision(
   projectId: string,
   input: { title: string; detail?: string; sourceMessageId?: string; sourceConversationId?: string; supersedes?: string },
-  requestId: string = crypto.randomUUID(),
+  requestId: string = newRequestId(),
 ) {
   return callOp('decision_record', { spaceId: projectId, ...input }, { requestId }).then((decision) => decision as Decision)
 }
