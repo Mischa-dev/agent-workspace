@@ -9,7 +9,7 @@
 //! error is logged and the old answer stands.
 
 use sha2::{Digest, Sha256};
-use sqlx::PgPool;
+use sqlx::PgConnection;
 use uuid::Uuid;
 
 use super::{Caller, Denied, Grant, Need, Target};
@@ -52,8 +52,14 @@ pub struct Compared<'a> {
     pub old_allowed: bool,
 }
 
-/// Compare the old answer with the new one; record a difference.
-pub async fn compare(pool: &PgPool, compared: Compared<'_>, new: &Result<Grant, Denied>) {
+/// Compare the old answer with the new one; record a difference through
+/// the connection the check already holds (never a second one from the
+/// pool, which a pool of one would wait on).
+pub async fn compare(
+    connection: &mut PgConnection,
+    compared: Compared<'_>,
+    new: &Result<Grant, Denied>,
+) {
     let new_allowed = new.is_ok();
     if new_allowed == compared.old_allowed {
         return;
@@ -80,7 +86,7 @@ pub async fn compare(pool: &PgPool, compared: Compared<'_>, new: &Result<Grant, 
         "old and new access checks disagree"
     );
     if let Err(error) = record(
-        pool,
+        connection,
         &compared,
         permission,
         target_kind,
@@ -121,7 +127,7 @@ pub fn fingerprint(
 }
 
 async fn record(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     compared: &Compared<'_>,
     permission: &str,
     target_kind: &str,
@@ -163,7 +169,7 @@ async fn record(
     .bind(new_allowed)
     .bind(reason)
     .bind(fingerprint)
-    .execute(pool)
+    .execute(&mut *connection)
     .await?;
     Ok(())
 }

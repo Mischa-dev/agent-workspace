@@ -58,6 +58,7 @@ async fn access_agrees_with_the_old_checks_and_records_a_difference() {
     callers.push(Caller::person(Uuid::now_v7(), ActorKind::Human));
 
     let mut connection = world.pool().acquire().await.expect("connection");
+    let mut record_connection = world.pool().acquire().await.expect("connection");
     let mut differences = Vec::new();
     for caller in &callers {
         for (target, located) in [
@@ -159,7 +160,7 @@ async fn access_agrees_with_the_old_checks_and_records_a_difference() {
     assert!(new.is_err(), "a reader may not edit tasks here");
     for _ in 0..2 {
         compare(
-            world.pool(),
+            &mut record_connection,
             Compared {
                 area: "ops",
                 operation: "task_update",
@@ -185,7 +186,7 @@ async fn access_agrees_with_the_old_checks_and_records_a_difference() {
 
     // Answers that agree record nothing.
     compare(
-        world.pool(),
+        &mut record_connection,
         Compared {
             area: "ops",
             operation: "task_update",
@@ -232,5 +233,6 @@ async fn access_agrees_with_the_old_checks_and_records_a_difference() {
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     drop(connection);
+    drop(record_connection);
     world.finish().await;
 }

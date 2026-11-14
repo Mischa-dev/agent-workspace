@@ -190,6 +190,7 @@ impl OutboxPublisher for RealtimeHub {
             "conversation.read_state.updated"
                 | "conversation.member.removed"
                 | "notifications.updated"
+                | "account.managers.changed"
         );
         let invalid_actor_scope = if actor_targeted_event {
             payload_actor_id.is_none() || payload_actor_id != envelope.recipient_actor_id
@@ -211,6 +212,7 @@ impl OutboxPublisher for RealtimeHub {
                 | "work_item.updated"
                 | "project.membership.updated"
                 | "notifications.updated"
+                | "account.managers.changed"
                 | "whiteboard.updated"
                 | "page.updated"
                 | "page.discussion.updated"
@@ -222,6 +224,7 @@ impl OutboxPublisher for RealtimeHub {
             "work_item.updated"
                 | "project.membership.updated"
                 | "notifications.updated"
+                | "account.managers.changed"
                 | "whiteboard.updated"
                 | "page.updated"
                 | "page.discussion.updated"

@@ -1226,5 +1226,14 @@ async fn naming_an_agents_managers_follows_the_one_rule() {
     assert_eq!(named, 0);
     let (status, body) = send(&world.app, attempt("owner", "owner-1", ada)).await;
     assert_eq!(body["outcome"], "ok", "{status} {body}");
+    // Ada hears of it in the same transaction, and nobody else does.
+    let events = sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT (payload->>'actorId')::uuid FROM outbox_events \
+         WHERE event_type = 'account.managers.changed'",
+    )
+    .fetch_all(world.pool())
+    .await
+    .expect("events");
+    assert_eq!(events, vec![Some(ada)]);
     world.finish().await;
 }

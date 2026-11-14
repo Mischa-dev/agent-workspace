@@ -262,7 +262,7 @@ async fn pipeline<O: Operation>(
         match &old {
             Some(old) => {
                 crate::access::compare::compare(
-                    &state.pool,
+                    &mut connection,
                     crate::access::compare::Compared {
                         area: "ops",
                         operation: O::NAME,

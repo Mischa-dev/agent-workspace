@@ -106,6 +106,7 @@ impl Operation for AgentManagersSet {
                 ));
             }
         }
+        let mut changed = Vec::new();
         for manager in &input.add {
             let manager = manager.id();
             if manager == agent {
@@ -142,7 +143,7 @@ impl Operation for AgentManagersSet {
                     ));
                 }
             }
-            sqlx::query(
+            let inserted = sqlx::query(
                 "INSERT INTO account_managers \
                      (account_id, manager_account_id, workspace_id, added_by_actor_id) \
                  VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
@@ -153,17 +154,50 @@ impl Operation for AgentManagersSet {
             .bind(caller.account_id)
             .execute(&mut **tx)
             .await
-            .map_err(crate::error::AppError::from)?;
+            .map_err(crate::error::AppError::from)?
+            .rows_affected();
+            if inserted > 0 {
+                changed.push((manager, true));
+            }
         }
         let removed = input.remove.iter().map(|id| id.id()).collect::<Vec<_>>();
-        sqlx::query(
-            "DELETE FROM account_managers WHERE account_id = $1 AND manager_account_id = ANY($2)",
+        let unnamed = sqlx::query_scalar::<_, Uuid>(
+            "DELETE FROM account_managers WHERE account_id = $1 AND manager_account_id = ANY($2) \
+             RETURNING manager_account_id",
         )
         .bind(agent)
         .bind(&removed)
-        .execute(&mut **tx)
+        .fetch_all(&mut **tx)
         .await
         .map_err(crate::error::AppError::from)?;
+        changed.extend(unnamed.into_iter().map(|manager| (manager, false)));
+        // Everyone whose rights changed hears of it in the same transaction
+        // (rule 6). The envelope needs a space: the workspace's own.
+        if !changed.is_empty() {
+            let space = sqlx::query_scalar::<_, Uuid>(
+                "SELECT id FROM projects WHERE organization_id = $1 \
+                 ORDER BY (kind = 'workspace') DESC, created_at LIMIT 1",
+            )
+            .bind(workspace_id)
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(crate::error::AppError::from)?;
+            for (manager, managing) in &changed {
+                crate::outbox::enqueue_typed(
+                    tx,
+                    space,
+                    crate::outbox::OutboxEventPayload::AccountManagersChanged(
+                        crate::outbox::AccountManagersChangedPayload {
+                            actor_id: *manager,
+                            account_id: agent,
+                            workspace_id,
+                            managing: *managing,
+                        },
+                    ),
+                )
+                .await?;
+            }
+        }
         let managers = sqlx::query_scalar::<_, Uuid>(
             "SELECT manager_account_id FROM account_managers WHERE account_id = $1 \
              ORDER BY created_at, manager_account_id",
