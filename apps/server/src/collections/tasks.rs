@@ -327,6 +327,15 @@ pub async fn fields(
             .filter(|field| !is_builtin_name(&field.name))
             .map(|mut field| {
                 field.position += count;
+                // A task's edited time is its core's, which every change
+                // to the task moves (`TasksSource::updated_at`).
+                if field.field_type == FieldType::EditedTime {
+                    field.accessor = Accessor::Column {
+                        expr: "core.updated_at".to_owned(),
+                        sql_type: "timestamptz",
+                        category: None,
+                    };
+                }
                 field
             }),
     );
@@ -431,7 +440,7 @@ pub fn source() -> String {
                           WHERE label.project_id = core.project_id AND label.work_item_id = core.id) \
            )) AS field_values, \
            core.created_by_actor_id, core.created_by_actor_id AS updated_by_actor_id, \
-           record.archived_at, core.version, record.created_at, record.updated_at \
+           record.archived_at, core.version, record.created_at, core.updated_at \
          FROM collection_records record JOIN work_items core ON core.id = record.id)",
         priority = priority_value("core"),
     )
@@ -484,6 +493,10 @@ impl RecordSource for TasksSource {
                 },
             ]
         })
+    }
+
+    fn updated_at(&self) -> &'static str {
+        "core.updated_at"
     }
 
     fn identity(&self) -> String {

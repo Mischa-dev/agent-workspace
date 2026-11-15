@@ -379,3 +379,130 @@ async fn a_search_finds_words_split_between_title_and_description() {
         .collect::<Vec<_>>();
     assert_eq!(titles, vec![json!("Bridge")], "{listed}");
 }
+
+/// The Tasks collection reads a task's built-in values from the task: a
+/// search finds a task by its status or priority name, and a change to the
+/// task alone (its status) moves it in a view sorted by when it changed,
+/// through record_query and the records route.
+#[tokio::test]
+async fn tasks_as_records_search_built_in_names_and_sort_by_the_tasks_change() {
+    let Some(setup) = setup("t1_task_record_reads").await else {
+        return;
+    };
+    let app = &setup.app;
+    let pool = &setup.pool;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let token = connect_app(app, &setup.browser, "Tool", "full").await;
+    let session = initialize(app, &token).await.expect("MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let token = token.clone();
+        let session = session.clone();
+        async move { tool(app, &token, &session, name, arguments).await }
+    };
+    for (title, priority, key) in [
+        ("Fix the bridge", "urgent", "bridge"),
+        ("Paint the lighthouse", "low", "lighthouse"),
+    ] {
+        let made = call(
+            "task_create",
+            json!({"projectId": "WORK", "title": title, "priority": priority, "clientRequestId": key}),
+        )
+        .await;
+        assert_eq!(made["outcome"], "applied", "{made}");
+    }
+    let tasks = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM collections WHERE project_id = $1::uuid AND builtin = 'tasks'",
+    )
+    .bind(&work)
+    .fetch_one(pool)
+    .await
+    .expect("tasks collection");
+    let titles = |records: &Value| {
+        records
+            .as_array()
+            .unwrap_or_else(|| panic!("no records: {records}"))
+            .iter()
+            .map(|record| record["title"].as_str().unwrap_or_default().to_owned())
+            .collect::<Vec<_>>()
+    };
+    let listed = |query: String| {
+        let request = setup.browser.request(
+            "GET",
+            &format!("/api/v1/projects/{work}/collections/{tasks}/records?{query}"),
+            None,
+            Value::Null,
+        );
+        async move {
+            let (status, body) = send(app, request).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            body
+        }
+    };
+
+    // By priority name, in neither title.
+    let found = call(
+        "record_query",
+        json!({"projectId": "WORK", "collection": "Tasks", "search": "urgent"}),
+    )
+    .await;
+    assert_eq!(found["outcome"], "ok", "{found}");
+    assert_eq!(titles(&found["value"]["records"]), vec!["Fix the bridge"]);
+    let found = listed("search=urgent".to_owned()).await;
+    assert_eq!(titles(&found["records"]), vec!["Fix the bridge"]);
+
+    // By status name: the lighthouse moves to Ready, the bridge stays in
+    // Backlog.
+    let moved = call(
+        "task_update",
+        json!({"taskId": "WORK-2", "status": "Ready", "expectedVersion": 1}),
+    )
+    .await;
+    assert_eq!(moved["outcome"], "applied", "{moved}");
+    let found = call(
+        "record_query",
+        json!({"projectId": "WORK", "collection": "Tasks", "search": "ready"}),
+    )
+    .await;
+    assert_eq!(
+        titles(&found["value"]["records"]),
+        vec!["Paint the lighthouse"]
+    );
+    let found = listed("search=ready".to_owned()).await;
+    assert_eq!(titles(&found["records"]), vec!["Paint the lighthouse"]);
+
+    // A status change touches the task, not its record; the bridge's then
+    // puts it first by when it changed, and its row says so.
+    let moved = call(
+        "task_update",
+        json!({"taskId": "WORK-1", "status": "Ready", "expectedVersion": 1}),
+    )
+    .await;
+    assert_eq!(moved["outcome"], "applied", "{moved}");
+    let sorted = call(
+        "record_query",
+        json!({
+            "projectId": "WORK", "collection": "Tasks",
+            "sort": [{"field": "updated", "direction": "desc"}],
+        }),
+    )
+    .await;
+    assert_eq!(sorted["outcome"], "ok", "{sorted}");
+    assert_eq!(
+        titles(&sorted["value"]["records"]),
+        vec!["Fix the bridge", "Paint the lighthouse"]
+    );
+    let sort = r#"[{"field":"updated","direction":"desc"}]"#;
+    let sorted = listed(serde_urlencoded::to_string([("sort", sort)]).expect("sort")).await;
+    assert_eq!(
+        titles(&sorted["records"]),
+        vec!["Fix the bridge", "Paint the lighthouse"]
+    );
+    let changed = sqlx::query_scalar::<_, String>(
+        "SELECT updated_at::text FROM work_items WHERE project_id = $1::uuid AND number = 1",
+    )
+    .bind(&work)
+    .fetch_one(pool)
+    .await
+    .expect("task changed");
+    assert_eq!(sorted["records"][0]["updatedAt"], changed, "{sorted}");
+}

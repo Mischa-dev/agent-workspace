@@ -129,9 +129,13 @@ impl Default for Spec {
 #[derive(Clone, Debug, Default)]
 struct SearchFields {
     text: Vec<String>,
-    /// (field IDs, then for each word the option IDs whose names hold it).
+    /// The stored choice fields' IDs, read in `record.field_values`.
     choices: Vec<String>,
-    options: Vec<(String, String)>,
+    /// Every choice field's options: (field, option ID, lowercased name).
+    options: Vec<(Uuid, String, String)>,
+    /// Choice fields a source reads elsewhere (a task's status, priority,
+    /// labels...), matched through their accessor.
+    accessed: Vec<Uuid>,
 }
 
 impl Spec {
@@ -197,11 +201,17 @@ impl Spec {
                 | FieldType::Email
                 | FieldType::Phone => search.text.push(field.id.to_string()),
                 FieldType::SingleChoice | FieldType::MultipleChoice | FieldType::Status => {
-                    search.choices.push(field.id.to_string());
+                    if field.accessor == fields::Accessor::Stored {
+                        search.choices.push(field.id.to_string());
+                    } else {
+                        search.accessed.push(field.id);
+                    }
                     for option in &field.config.options {
-                        search
-                            .options
-                            .push((option.id.to_string(), option.name.to_lowercase()));
+                        search.options.push((
+                            field.id,
+                            option.id.to_string(),
+                            option.name.to_lowercase(),
+                        ));
                     }
                 }
                 _ => {}
@@ -274,7 +284,7 @@ impl Spec {
                         }),
                 ),
                 (SortBy::Updated, _) => {
-                    keys.push(Key::new("record.updated_at", "timestamptz", sort.desc));
+                    keys.push(Key::new(source.updated_at(), "timestamptz", sort.desc));
                 }
                 (SortBy::Field(_), Some(field)) => {
                     keys.extend(
@@ -388,13 +398,44 @@ impl Spec {
                 builder.push(")");
             }
             let lower = word.to_lowercase();
+            let named = |field: Uuid| {
+                self.search_fields
+                    .options
+                    .iter()
+                    .filter(|(of, _, name)| *of == field && name.contains(&lower))
+                    .map(|(_, id, _)| id.clone())
+                    .collect::<Vec<_>>()
+            };
             let options = self
                 .search_fields
                 .options
                 .iter()
-                .filter(|(_, name)| name.contains(&lower))
-                .map(|(id, _)| id.clone())
+                .filter(|(field, _, name)| {
+                    !self.search_fields.accessed.contains(field) && name.contains(&lower)
+                })
+                .map(|(_, id, _)| id.clone())
                 .collect::<Vec<_>>();
+            // A choice the source reads elsewhere matches as a filter on
+            // it would: through the field's accessor.
+            for field in &self.search_fields.accessed {
+                let values = named(*field);
+                if values.is_empty() {
+                    continue;
+                }
+                builder.push(" OR (");
+                fields::push_condition(
+                    builder,
+                    "record.field_values",
+                    self.definition(*field),
+                    &FieldClause {
+                        field: *field,
+                        op: FieldOp::Is,
+                        values,
+                    },
+                    today,
+                );
+                builder.push(")");
+            }
             if !options.is_empty() {
                 // A single choice stores the option's ID, a multiple choice
                 // a list of them; `?|` reads both.

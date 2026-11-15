@@ -39,6 +39,13 @@ pub trait RecordSource: Send + Sync {
         None
     }
 
+    /// When a record last changed, for the "updated" sort: the record's
+    /// own time, or for a task its core's, which every change to the task
+    /// moves (a status or a date changes the core, not the record).
+    fn updated_at(&self) -> &'static str {
+        "record.updated_at"
+    }
+
     /// What makes the source's cursors its own: a cursor made for another
     /// source is refused.
     fn identity(&self) -> String;
