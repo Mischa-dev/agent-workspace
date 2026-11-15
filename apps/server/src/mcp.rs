@@ -159,6 +159,13 @@ pub struct McpPrincipal {
 }
 
 impl McpPrincipal {
+    /// The caller `access` decides for. An app acting for a person is held
+    /// to their delegation limit, which the edge loads and sets
+    /// (`ops::mcp::caller_of`); this is the caller without it.
+    pub fn caller(&self) -> crate::access::Caller {
+        crate::access::Caller::of_principal(self, None)
+    }
+
     /// The connected app a person is acting through. Agents act as themselves,
     /// so their writes carry no "via".
     pub fn via_grant_id(&self) -> Option<Uuid> {
