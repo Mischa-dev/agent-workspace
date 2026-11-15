@@ -466,6 +466,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "file_delete",
     "file_upload",
     "github_integration_write",
+    "history_restore",
     "host_agent_bind",
     "host_agent_unbind",
     "host_enrolment_create",
@@ -6781,6 +6782,12 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"whiteboardId": a.whiteboard, "targetKind": "task", "targetId": b.task}),
             json!({"whiteboardId": a.whiteboard, "targetKind": "page", "targetId": b.page}),
         ]),
+        // K3.19: restoring any thing's version, by id alone.
+        mcp_case(
+            "history_restore",
+            json!({"thing": a.page, "version": 1, "expectedVersion": version("project_pages", &a.page)}),
+            vec![json!({"thing": b.page, "version": 1, "expectedVersion": 1})],
+        ),
         // Decisions and planning
         mcp_case(
             "decision_record",

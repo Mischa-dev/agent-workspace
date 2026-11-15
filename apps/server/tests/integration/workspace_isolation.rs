@@ -1931,6 +1931,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "external_event_poll",
     "file_list",
     "file_read",
+    "history_list",
+    "history_show",
     "collection_list",
     "collection_describe",
     "record_query",
@@ -2590,6 +2592,19 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
                 json!({"fileId": b.file.to_string()}),
                 json!({"fileId": b.task_file.to_string()}),
             ],
+            vec![],
+        ),
+        // K3.19: any thing's history by id alone.
+        case(
+            "history_list",
+            vec![json!({"thing": a.page})],
+            vec![json!({"thing": b.page})],
+            vec![],
+        ),
+        case(
+            "history_show",
+            vec![json!({"thing": a.page, "version": 1})],
+            vec![json!({"thing": b.page, "version": 1})],
             vec![],
         ),
     ]

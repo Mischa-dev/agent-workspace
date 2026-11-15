@@ -21,7 +21,7 @@
     "whiteboard_link": "change"
   },
   "routes": ["/api/v1/whiteboards*", "/api/v1/whiteboard-links", "/api/v1/whiteboard-trash/*"],
-  "events": { "emits": ["whiteboard.scene_changed"], "listens": [] },
+  "events": { "emits": ["whiteboard.scene_changed", "whiteboard.version_restored"], "listens": [] },
   "notifications": [],
   "search": ["whiteboards"],
   "automations": { "triggers": [], "actions": [] },

@@ -99,6 +99,21 @@ const KINDS: &[(&str, &str)] = &[
          JOIN projects project ON project.id = item.project_id \
          WHERE item.id = $1 AND $2::uuid IS NOT NULL",
     ),
+    // Any thing by id alone (K3.19), from the registry: a conversation or
+    // anything that follows one (a message, a decision from it) only when
+    // the viewer may see that conversation. The operation then checks the
+    // thing through its kind's own resolver.
+    (
+        "thing",
+        "SELECT thing.workspace_id, thing.space_id FROM things thing \
+         WHERE thing.id = $1 AND thing.deleted_at IS NULL AND $2::uuid IS NOT NULL \
+           AND (thing.kind NOT IN ('channel', 'thread', 'conversation') \
+                OR conversation_visible_to(thing.id, $2)) \
+           AND (thing.access_parent_id IS NULL \
+                OR NOT EXISTS (SELECT 1 FROM conversations parent \
+                               WHERE parent.id = thing.access_parent_id) \
+                OR conversation_visible_to(thing.access_parent_id, $2))",
+    ),
     // A1.3: the run service keeps its SQL (guard G1).
     ("run", crate::runs::store::LOCATE_SQL),
 ];

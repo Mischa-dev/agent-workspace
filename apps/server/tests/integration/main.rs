@@ -40,6 +40,7 @@ mod direct_conversations;
 mod event_log;
 mod github_task_keys;
 mod harness_support;
+mod history_seam;
 mod journey;
 mod layouts;
 mod links_store;

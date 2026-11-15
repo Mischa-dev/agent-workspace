@@ -39,6 +39,7 @@ pub mod github;
 pub mod harness_host;
 pub mod harnesses;
 pub mod health;
+pub mod history;
 pub mod home;
 pub mod hosts;
 pub mod idempotency;

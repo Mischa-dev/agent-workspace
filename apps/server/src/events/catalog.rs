@@ -277,6 +277,12 @@ pub static PAGE_COMMENT_CHANGED: EventType = fact(
     Some("page"),
     "A comment on a page was edited, resolved or deleted",
 );
+pub static PAGE_VERSION_RESTORED: EventType = fact(
+    "page.version_restored",
+    "pages",
+    Some("page"),
+    "An earlier version of a page was put back",
+);
 pub static DECISION_RECORDED: EventType = fact(
     "decision.recorded",
     "pages",
@@ -307,6 +313,13 @@ pub static WHITEBOARD_SCENE_CHANGED: EventType = signal(
     "A whiteboard's scene or details changed",
 )
 .legacy(&["whiteboard.updated"]);
+
+pub static WHITEBOARD_VERSION_RESTORED: EventType = fact(
+    "whiteboard.version_restored",
+    "whiteboards",
+    Some("whiteboard"),
+    "An earlier version of a whiteboard was put back",
+);
 
 // --- collections -----------------------------------------------------------
 pub static COLLECTION_UPDATED: EventType = fact(
@@ -436,10 +449,12 @@ pub fn catalog() -> &'static [&'static EventType] {
         &PAGE_DISCUSSION_CHANGED,
         &PAGE_COMMENTED,
         &PAGE_COMMENT_CHANGED,
+        &PAGE_VERSION_RESTORED,
         &DECISION_RECORDED,
         &DECISION_UPDATED,
         &SHEET_UPDATED,
         &WHITEBOARD_SCENE_CHANGED,
+        &WHITEBOARD_VERSION_RESTORED,
         &COLLECTION_UPDATED,
         &RECORD_CREATED,
         &RECORD_UPDATED,
