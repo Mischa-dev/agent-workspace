@@ -328,6 +328,16 @@ async fn change_space_switches(
     if changed.is_empty() {
         return Ok(None);
     }
+    // Other tabs and server processes learn of it from the outbox (rule 6);
+    // the gate's kept switches on other processes also expire on their own
+    // (`gate::SWITCHES_TTL`).
+    crate::outbox::enqueue_project_modules_updated(
+        transaction,
+        organization_id,
+        space_id,
+        changed.clone(),
+    )
+    .await?;
     let after = state::space_switches(transaction, organization_id, space_id).await?;
     Ok(Some(json!({
         "organizationId": organization_id,

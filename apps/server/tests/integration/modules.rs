@@ -1971,6 +1971,24 @@ async fn a_space_narrows_its_own_modules_only() {
     )
     .await;
     assert!(status.is_success(), "{status}: {body}");
+    // Other tabs and processes hear of it: ids and module ids only.
+    let events = sqlx::query_scalar::<_, Value>(
+        "SELECT payload FROM outbox_events \
+         WHERE event_type = 'project.modules.updated' AND resource_kind = 'project' \
+           AND resource_id = $1 AND project_id = $1",
+    )
+    .bind(Uuid::parse_str(&work).expect("work"))
+    .fetch_all(&setup.pool)
+    .await
+    .expect("events");
+    assert_eq!(
+        events,
+        [json!({
+            "workspaceId": setup.organization_id,
+            "projectId": work,
+            "changed": {"whiteboards": false},
+        })]
+    );
     assert!(off(open_board(&bea_browser, &boards[0]).await));
     assert_eq!(open_board(&bea_browser, &boards[1]).await.0, StatusCode::OK);
     assert_eq!(listed_boards(&bea_browser).await, [boards[1].clone()]);

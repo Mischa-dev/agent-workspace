@@ -26,7 +26,10 @@
 //! project's workspace never changes, so it's kept once looked up, and a
 //! workspace's switches are kept until a switch is written (`forget`) or
 //! for `SWITCHES_TTL` at most, which covers a write whose transaction
-//! commits after a request read the old switches.
+//! commits after a request read the old switches. `forget` only reaches
+//! this process: another server process serves a switch written elsewhere
+//! for `SWITCHES_TTL` at most (a space's switches also go out as
+//! `project.modules.updated` for screens to refetch).
 
 use std::{
     collections::HashMap,
