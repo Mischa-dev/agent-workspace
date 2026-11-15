@@ -289,10 +289,13 @@ const TASKS_SQL: &str = r#"
            NULL::text AS author, item.updated_at::text AS at,
            '/projects/' || item.project_id::text || '/work-items/' || item.id::text AS path,
            (ts_rank(item.search_vector, query.q) * 1.3)::real AS rank
-    FROM query, work_items item
+    FROM query, task_rows item
     JOIN projects project ON project.id = item.project_id
     JOIN work_item_statuses status
       ON status.project_id = item.project_id AND status.id = item.status_id
+    -- A task's words are its record's and its description's, matched as one
+    -- document (task_rows.search_vector joins the two), so a search whose
+    -- words are split between the title and the description still finds it.
     WHERE item.search_vector @@ query.q
       AND item.project_id = ANY($2)
       AND item.archived_at IS NULL
@@ -429,7 +432,7 @@ const FILES_SQL: &str = r#"
     JOIN projects project ON project.id = file.project_id
     LEFT JOIN conversations conversation ON conversation.id = file.conversation_id
     LEFT JOIN messages message ON message.id = file.message_id
-    LEFT JOIN work_items item
+    LEFT JOIN task_rows item
       ON item.project_id = file.project_id AND item.id = file.work_item_id
     LEFT JOIN project_memberships uploader
       ON uploader.project_id = file.project_id AND uploader.actor_id = file.uploaded_by_actor_id
@@ -481,13 +484,12 @@ pub async fn projects_allowing(
         r#"
         SELECT project_id FROM project_memberships
         WHERE actor_id = $1 AND project_id = ANY($2) AND enabled
-          AND role = ANY($4) AND custom_role_allows(role_id, $3)
+          AND role_allows(role, role_id, $3)
         "#,
     )
     .bind(viewer)
     .bind(projects)
     .bind(permission.info().key)
-    .bind(crate::roles::base_roles_with(permission))
     .fetch_all(pool)
     .await?
     .into_iter()

@@ -305,12 +305,26 @@ async fn queued_runs_are_idempotent_and_create_no_workspace_before_admission() {
     .fetch_one(&pool)
     .await
     .expect("read default Work Item workflow");
+    // A task's record comes first (T1.3), in the same transaction.
+    let mut transaction = pool.begin().await.expect("begin");
+    sqlx::query(
+        "INSERT INTO collection_records \
+           (id, project_id, collection_id, number, title, created_by_actor_id, updated_by_actor_id) \
+         VALUES ($1, $2, ensure_tasks_collection($2, $4), $3, 'Repository precedence proof', $4, $4)",
+    )
+    .bind(linked_work_item_id)
+    .bind(seed.project_id)
+    .bind(linked_work_item_number)
+    .bind(seed.human_actor_id)
+    .execute(&mut *transaction)
+    .await
+    .expect("insert repository precedence record");
     sqlx::query(
         r#"
         INSERT INTO work_items (
-            id, project_id, number, title, type_id, status_id,
+            id, project_id, number, type_id, status_id,
             created_by_actor_id, board_rank
-        ) VALUES ($1, $2, $3, 'Repository precedence proof', $4, $5, $6, 1024)
+        ) VALUES ($1, $2, $3, $4, $5, $6, 1024)
         "#,
     )
     .bind(linked_work_item_id)
@@ -319,9 +333,10 @@ async fn queued_runs_are_idempotent_and_create_no_workspace_before_admission() {
     .bind(default_type_id)
     .bind(default_status_id)
     .bind(seed.human_actor_id)
-    .execute(&pool)
+    .execute(&mut *transaction)
     .await
     .expect("insert repository precedence Work Item");
+    transaction.commit().await.expect("commit");
     sqlx::query(
         "INSERT INTO work_item_conversation_links (project_id, work_item_id, conversation_id, created_by_actor_id) VALUES ($1, $2, $3, $4)",
     )

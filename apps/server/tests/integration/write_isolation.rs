@@ -449,6 +449,7 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
 
 /// Every MCP tool that isn't read-only, which `mcp_cases` covers.
 const MCP_WRITE_TOOLS: &[&str] = &[
+    "agent_managers_set",
     "agent_profile_write",
     "ai_analyze",
     "ai_suggestion_decide",
@@ -1776,7 +1777,7 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
             pool,
             r#"
             SELECT status.id FROM work_item_statuses status
-            JOIN work_items task ON task.project_id = status.project_id
+            JOIN task_rows task ON task.project_id = status.project_id
             WHERE task.id = $1 AND status.enabled AND status.id <> task.status_id
             ORDER BY status.position LIMIT 1
             "#,
@@ -1784,7 +1785,7 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         )
         .await,
         backlog_task: in_project(
-            "SELECT id FROM work_items WHERE project_id = $1 AND title = 'Net backlog task'",
+            "SELECT id FROM task_rows WHERE project_id = $1 AND title = 'Net backlog task'",
         )
         .await,
         layout_preset: in_organization("SELECT id FROM layout_presets WHERE organization_id = $1")
@@ -1972,7 +1973,7 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
     .await;
     let task = scalar(
         pool,
-        "SELECT id FROM work_items WHERE title = $1",
+        "SELECT id FROM task_rows WHERE title = $1",
         "Net spare task",
     )
     .await;
@@ -1986,7 +1987,7 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
     .await;
     let second_task = scalar(
         pool,
-        "SELECT id FROM work_items WHERE title = $1",
+        "SELECT id FROM task_rows WHERE title = $1",
         "Net second task",
     )
     .await;
@@ -5972,6 +5973,16 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         .rejecting(vec![
             json!({"projectId": a.project, "installationId": 990_003, "repositories": [b.repository]}),
         ]),
+        // K1.4: naming an agent's managers. B's agent isn't in A, and B's
+        // accounts can't be named in A.
+        mcp_case(
+            "agent_managers_set",
+            json!({"agent": a.agent, "remove": [a.rook]}),
+            vec![
+                json!({"agent": b.agent, "remove": [a.rook]}),
+                json!({"agent": a.agent, "add": [b.rook]}),
+            ],
+        ),
         mcp_case(
             "agent_profile_write",
             json!({"projectId": a.project, "template": "reviewer", "name": "Net mcp reviewer"}),

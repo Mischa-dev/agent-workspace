@@ -292,7 +292,7 @@ pub async fn sweep(state: &AppState) -> Result<usize, AppError> {
         LEFT JOIN ai_project_scans scan ON scan.project_id = project.id
         WHERE project.kind = 'standard' AND project.archived_at IS NULL
           AND EXISTS (
-              SELECT 1 FROM work_items item
+              SELECT 1 FROM task_rows item
               WHERE item.project_id = project.id AND item.archived_at IS NULL
                 AND item.updated_at > COALESCE(scan.last_scan_at, '-infinity'::timestamptz)
           )
@@ -330,7 +330,7 @@ pub async fn nightly(state: &AppState) -> Result<usize, AppError> {
         WHERE project.kind = 'standard' AND project.archived_at IS NULL
           AND COALESCE(scan.last_nightly_at, '-infinity'::timestamptz) < now() - interval '20 hours'
           AND EXISTS (
-              SELECT 1 FROM work_items item
+              SELECT 1 FROM task_rows item
               WHERE item.project_id = project.id AND item.archived_at IS NULL
           )
         ORDER BY scan.last_nightly_at NULLS FIRST
@@ -445,7 +445,7 @@ const TASK_COLUMNS: &str = r#"
 "#;
 
 const TASK_FROM: &str = r#"
-    FROM work_items item
+    FROM task_rows item
     JOIN projects project ON project.id = item.project_id
     JOIN work_item_statuses status
       ON status.project_id = item.project_id AND status.id = item.status_id
@@ -1075,7 +1075,7 @@ impl RunContext<'_> {
                    left(message.plain_text, 1200) AS text,
                    (
                        SELECT link.work_item_id FROM work_item_links link
-                       JOIN work_items item ON item.id = link.work_item_id
+                       JOIN task_rows item ON item.id = link.work_item_id
                        WHERE link.project_id = $1
                          AND item.archived_at IS NULL
                          AND ((link.target_kind = 'conversation' AND link.target_id = conversation.id)

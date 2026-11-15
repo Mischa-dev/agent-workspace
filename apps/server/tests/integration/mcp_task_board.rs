@@ -948,7 +948,7 @@ async fn task_reorder_places_tasks_beside_neighbours_and_rebalances() {
     );
     assert_eq!(versions().await, [2, 1, 3, 1, 2]);
     let (distinct, lowest) = sqlx::query_as::<_, (i64, i64)>(
-        "SELECT count(DISTINCT board_rank), min(board_rank) FROM work_items WHERE project_id = $1::uuid AND archived_at IS NULL",
+        "SELECT count(DISTINCT board_rank), min(board_rank) FROM task_rows WHERE project_id = $1::uuid AND archived_at IS NULL",
     )
     .bind(&order)
     .fetch_one(&setup.pool)
@@ -1805,7 +1805,7 @@ async fn a_claim_waits_behind_a_write_to_its_column() {
         .expect("lock timeout");
     let locked = sqlx::query_scalar::<_, Uuid>(
         r#"
-        SELECT id FROM work_items
+        SELECT id FROM task_rows
         WHERE project_id = $1 AND status_id = $2 AND archived_at IS NULL
         ORDER BY board_rank, id
         FOR UPDATE

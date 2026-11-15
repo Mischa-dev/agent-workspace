@@ -1574,6 +1574,7 @@ All are unit tests next to the code they protect, or in `tests/integration/space
 | immutability triggers, rewritten to allow only "direct project to NULL" | the DM-capable tables (`0037:84-86`, `0047:112`, `:142`, …) | refuse other `project_id` changes | K4.14 | permanent (they guard immutability; the exception is dropped in K4.17) |
 | `direct_space_follows_workspace_role` (existing) | `organization_memberships` | `project_memberships` of the hidden Messages project | today | K4.12. Today it and `workspace_space_follows_workspace_role` both write `project_memberships` from `organization_memberships`, two writers of one table, which ruling R16 forbids; K4.12 removes the second writer |
 | workspace-space mirror (`workspace_space_follows_workspace_role`, existing) | `organization_memberships` | `project_memberships` of the workspace space (a cache the composite keys need) | today | after the composite membership keys are retired (T1, C1, A1), not in K4 |
+| `organizations_slug_history` | `organizations` | `workspace_slugs` (the new current slug; retires the old one) | K4.5 | permanent (the history is the product) |
 | `projects_one_personal_space` and other K4 constraints | — | none (indexes and CHECKs, not triggers) | K4.1, K4.23 | — |
 
 ## Slice table

@@ -254,8 +254,12 @@ pub(super) struct WorkspaceUpdateArguments {
     /// A new name for the workspace.
     #[serde(default)]
     pub name: Option<String>,
-    /// The workspace's version you last read, for a rename. Defaults to the
-    /// current one.
+    /// A new address for the workspace (3 to 40 lowercase letters, digits
+    /// and single hyphens). Links with the old one keep working for members.
+    #[serde(default)]
+    pub slug: Option<String>,
+    /// The workspace's version you last read, for a rename or a new slug.
+    /// Defaults to the current one.
     #[serde(default)]
     pub expected_version: Option<i64>,
     /// A module preset to start from (as in the workspace's settings), then
@@ -272,6 +276,7 @@ pub(super) struct WorkspaceUpdateArguments {
 #[serde(rename_all = "camelCase")]
 pub(super) struct WorkspaceUpdateValue {
     pub name: String,
+    pub slug: String,
     pub version: i64,
     /// Whether the name changed.
     pub renamed: bool,
@@ -298,11 +303,18 @@ pub(super) async fn workspace_update(
         return ToolResult::not_found("That project");
     }
     let switches = arguments.modules.clone().unwrap_or_default();
-    if arguments.name.is_none() && arguments.preset.is_none() && switches.is_empty() {
-        return ToolResult::invalid("name", "Give a new name, a preset, or modules to switch.");
+    let renaming = arguments.name.is_some() || arguments.slug.is_some();
+    if !renaming && arguments.preset.is_none() && switches.is_empty() {
+        return ToolResult::invalid(
+            "name",
+            "Give a new name, a new slug, a preset, or modules to switch.",
+        );
     }
-    if arguments.name.is_none() && arguments.expected_version.is_some() {
-        return ToolResult::invalid("expectedVersion", "expectedVersion goes with a rename.");
+    if !renaming && arguments.expected_version.is_some() {
+        return ToolResult::invalid(
+            "expectedVersion",
+            "expectedVersion goes with a new name or slug.",
+        );
     }
     let project_id = principal.project_id;
     let result = async {
@@ -320,7 +332,7 @@ pub(super) async fn workspace_update(
                 .fetch_one(&mut *transaction)
                 .await?;
         let mut renamed = false;
-        if let Some(name) = arguments.name.as_deref() {
+        if renaming {
             let current =
                 sqlx::query_scalar::<_, i64>("SELECT version FROM organizations WHERE id = $1")
                     .bind(organization_id)
@@ -330,7 +342,10 @@ pub(super) async fn workspace_update(
                 &mut transaction,
                 principal.actor_id,
                 organization_id,
-                name,
+                crate::workspace::WorkspaceChange {
+                    name: arguments.name.as_deref(),
+                    slug: arguments.slug.as_deref(),
+                },
                 arguments.expected_version.unwrap_or(current),
             )
             .await?;
@@ -377,8 +392,8 @@ pub(super) async fn workspace_update(
                 .await?;
             }
         }
-        let (name, version) = sqlx::query_as::<_, (String, i64)>(
-            "SELECT name, version FROM organizations WHERE id = $1",
+        let (name, slug, version) = sqlx::query_as::<_, (String, String, i64)>(
+            "SELECT name, slug, version FROM organizations WHERE id = $1",
         )
         .bind(organization_id)
         .fetch_one(&mut *transaction)
@@ -388,6 +403,7 @@ pub(super) async fn workspace_update(
         transaction.commit().await?;
         Ok::<_, AppError>(ToolResult::ok(WorkspaceUpdateValue {
             name,
+            slug,
             version,
             renamed,
             switched,
@@ -412,6 +428,15 @@ pub(super) async fn workspace_update(
         Err(AppError::Validation(field)) if field.contains("name") => {
             ToolResult::invalid("name", "That name isn't valid.")
         }
+        Err(AppError::Validation("workspace slug")) => ToolResult::invalid(
+            "slug",
+            "A slug is 3 to 40 lowercase letters, digits and single hyphens.",
+        ),
+        Err(AppError::Refused { field, message }) => ToolResult::invalid(field, message),
+        Err(AppError::Conflict("workspace slug", _)) => ToolResult::invalid(
+            "slug",
+            "That address belongs to another workspace. Choose another.",
+        ),
         Err(AppError::VersionConflict {
             current_version, ..
         }) => ToolResult::conflict(format!(

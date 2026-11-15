@@ -188,8 +188,8 @@ async fn task_and_board_tools_check_the_module_where_they_act() {
     assert_module_off(&moved, "Tasks");
     let (archived, in_here) = sqlx::query_as::<_, (bool, i64)>(
         r#"
-        SELECT (SELECT archived_at IS NOT NULL FROM work_items WHERE id = $1),
-               (SELECT count(*) FROM work_items WHERE project_id = $2 AND title = 'There one')
+        SELECT (SELECT archived_at IS NOT NULL FROM task_rows WHERE id = $1),
+               (SELECT count(*) FROM task_rows WHERE project_id = $2 AND title = 'There one')
         "#,
     )
     .bind(tasks[2].parse::<Uuid>().expect("task"))

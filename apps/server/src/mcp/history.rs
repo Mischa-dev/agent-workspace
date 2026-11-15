@@ -400,7 +400,7 @@ async fn look_up(
         lookups.tasks = sqlx::query_as::<_, (Uuid, String)>(
             r#"
             SELECT item.id, project.project_key || '-' || item.number::text
-            FROM work_items item JOIN projects project ON project.id = item.project_id
+            FROM task_rows item JOIN projects project ON project.id = item.project_id
             WHERE item.project_id = $1 AND item.id = ANY($2)
             "#,
         )
@@ -418,7 +418,7 @@ async fn look_up(
         lookups.linked_tasks = sqlx::query_as::<_, (Uuid, String)>(
             r#"
             SELECT item.id, project.project_key || '-' || item.number::text
-            FROM work_items item JOIN projects project ON project.id = item.project_id
+            FROM task_rows item JOIN projects project ON project.id = item.project_id
             WHERE item.id = ANY($1) AND (item.project_id = $2 OR item.project_id = ANY($3))
             "#,
         )
@@ -464,7 +464,7 @@ async fn look_up(
                 r#"
                 SELECT project.project_key || '-' || item.number::text
                 FROM work_item_key_aliases alias
-                JOIN work_items item ON item.id = alias.work_item_id
+                JOIN task_rows item ON item.id = alias.work_item_id
                 JOIN projects project ON project.id = item.project_id
                 WHERE alias.source_work_item_id = $1 AND item.project_id = ANY($2)
                 "#,

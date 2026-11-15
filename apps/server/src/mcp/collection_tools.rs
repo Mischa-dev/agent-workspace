@@ -870,9 +870,12 @@ pub(super) struct RecordQueryArguments {
     /// Up to 3 sort keys: a field's name, or title, number or updated.
     /// Records come by number when left out.
     pub sort: Option<Vec<SortWrite>>,
-    /// A single choice, person or checkbox field to group by: the answer
-    /// counts the records in each group.
+    /// A choice, status, person, checkbox or date field to group by: the
+    /// answer counts the records in each group.
     pub group_by: Option<String>,
+    /// Grouped by a date: "day", "week" (from Monday) or "month" (the
+    /// default).
+    pub group_bucket: Option<crate::fields::DateBucket>,
     /// The fields to return, by name. Left out, every field with a value;
     /// [] returns numbers and titles only.
     pub fields: Option<Vec<String>>,
@@ -1038,7 +1041,7 @@ pub(super) async fn record_query(
             )
             .await?
             {
-                Ok(clauses) => config.filters = clauses,
+                Ok(clauses) => config.filters = clauses.into(),
                 Err(message) => return Ok(ToolResult::invalid("filters", message)),
             }
         }
@@ -1053,6 +1056,9 @@ pub(super) async fn record_query(
                 Ok(group) => config.group_by = group,
                 Err(message) => return Ok(ToolResult::invalid("groupBy", message)),
             }
+        }
+        if arguments.group_bucket.is_some() {
+            config.group_bucket = arguments.group_bucket;
         }
         if let Err(message) = views::check(&config, &definitions) {
             return Ok(ToolResult::invalid("filters", message));
@@ -1085,14 +1091,14 @@ pub(super) async fn record_query(
         let mut spec = Spec::from_config(&config, &definitions, principal.actor_id)
             .searching(words.clone(), &definitions);
         spec.archived = archived;
-        spec.tasks = collection.acts_like_task;
+        let source = crate::collections::source(&collection);
         if let Some(named) = &named {
             let ids = records::ids_of(
                 &mut *connection,
                 project_id,
                 collection.id,
                 named,
-                spec.tasks,
+                collection.acts_like_task,
             )
             .await?;
             let mut found = Vec::with_capacity(ids.len());
@@ -1117,9 +1123,8 @@ pub(super) async fn record_query(
             }
         }
         let Ok(page) = query::page(
-            &mut *connection,
-            project_id,
-            collection.id,
+            &mut connection,
+            source.as_ref(),
             &spec,
             arguments.cursor.as_deref(),
             limit,
@@ -1128,29 +1133,34 @@ pub(super) async fn record_query(
         else {
             return Ok(ToolResult::invalid("cursor", query::CURSOR_MESSAGE));
         };
-        let total = query::total(&mut *connection, project_id, collection.id, &spec).await?;
-        let groups =
-            query::group_counts(&mut *connection, project_id, collection.id, &spec).await?;
+        let total = query::total(&mut connection, source.as_ref(), &spec).await?;
+        let groups = query::group_counts(&mut connection, source.as_ref(), &spec).await?;
         let ids = page.rows.iter().map(|(id, _)| *id).collect::<Vec<_>>();
         let found = records::by_ids(
             &mut *connection,
             project_id,
             collection.id,
             &ids,
-            spec.tasks,
+            collection.acts_like_task,
         )
         .await?;
         let references = work_item_fields::references(
             &mut connection,
             project_id,
             &definitions,
-            found.iter().map(|record| &record.field_values),
+            found
+                .iter()
+                .map(|record| record.shown_values(&definitions))
+                .collect::<Vec<_>>()
+                .iter(),
         )
         .await?;
-        let mut group_of = page
-            .rows
-            .into_iter()
-            .collect::<HashMap<Uuid, Option<query::GroupRef>>>();
+        // A record grouped by several choices is a line in each of its
+        // groups: one per (record, group) the page found, in its order.
+        let by_id = found
+            .iter()
+            .map(|record| (record.id, record))
+            .collect::<HashMap<Uuid, _>>();
         let mut history = Vec::new();
         if history_wanted {
             for record in &found {
@@ -1169,16 +1179,15 @@ pub(super) async fn record_query(
         Ok::<_, AppError>(ToolResult::ok(RecordQueryValue {
             collection: collection.name.clone(),
             title_name: collection.title_name.clone(),
-            records: found
-                .iter()
-                .map(|record| {
+            records: page
+                .rows
+                .into_iter()
+                .filter_map(|(id, group)| {
+                    let record = by_id.get(&id)?;
                     let mut line =
                         RecordLine::of(record, &definitions, &references, only_fields.as_ref());
-                    line.group = group_of
-                        .remove(&record.id)
-                        .flatten()
-                        .map(|group| group.label);
-                    line
+                    line.group = group.map(|group| group.label);
+                    Some(line)
                 })
                 .collect(),
             total,
@@ -1414,7 +1423,11 @@ pub(super) async fn record_write(
             &mut transaction,
             project_id,
             &definitions,
-            written.iter().map(|written| &written.record().field_values),
+            written
+                .iter()
+                .map(|written| written.record().shown_values(&definitions))
+                .collect::<Vec<_>>()
+                .iter(),
         )
         .await?;
         let value = RecordWriteValue {

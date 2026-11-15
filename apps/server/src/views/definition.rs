@@ -13,9 +13,10 @@ use serde_json::Value;
 use sqlx::{FromRow, PgConnection};
 use uuid::Uuid;
 
+use super::filter::Filter;
 use crate::{
     error::AppError,
-    fields::{self, FieldClause, FieldDefinition, FieldType, LinkTarget},
+    fields::{self, DateBucket, FieldDefinition, FieldType, LinkTarget},
 };
 
 /// Views one collection keeps.
@@ -25,37 +26,22 @@ pub const MAX_SORTS: usize = 3;
 pub const MIN_COLUMN_WIDTH: u16 = 48;
 pub const MAX_COLUMN_WIDTH: u16 = 1_200;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ViewType {
-    Table,
-    /// A column for each value of the field it groups by; moving a card to
-    /// another column changes that value.
-    Board,
-    /// A card for each record, with the view's shown fields.
-    Gallery,
-    /// A month, with each record on the day its date field holds.
-    Calendar,
-}
+/// A view's kind: the one list in `crate::views` (T1.2).
+pub use crate::views::ViewKind as ViewType;
 
-impl ViewType {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Table => "table",
-            Self::Board => "board",
-            Self::Gallery => "gallery",
-            Self::Calendar => "calendar",
-        }
-    }
+/// The kinds a collection's view can be today: a table, a board (a column
+/// for each value of the field it groups by), a gallery (a card for each
+/// record) or a calendar (a month, each record on its date).
+pub const COLLECTION_VIEW_TYPES: [ViewType; 4] = [
+    ViewType::Table,
+    ViewType::Board,
+    ViewType::Gallery,
+    ViewType::Calendar,
+];
 
-    pub fn parse(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "table" => Some(Self::Table),
-            "board" => Some(Self::Board),
-            "gallery" => Some(Self::Gallery),
-            "calendar" => Some(Self::Calendar),
-            _ => None,
-        }
-    }
+/// A view kind a collection's view can be, by name.
+pub fn parse_view_type(value: &str) -> Option<ViewType> {
+    ViewType::parse(value).filter(|kind| COLLECTION_VIEW_TYPES.contains(kind))
 }
 
 /// What a view or a query asks for when the type isn't one there is.
@@ -79,6 +65,9 @@ pub enum SortBy {
     Title,
     Number,
     Updated,
+    /// The order on the board, for records that are tasks (their status,
+    /// then their place in its column).
+    Rank,
     Field(Uuid),
 }
 
@@ -93,6 +82,7 @@ impl SortBy {
             "title" => Some(Self::Title),
             "number" | "created" | "#" => Some(Self::Number),
             "updated" | "edited" => Some(Self::Updated),
+            "rank" | "manual" => Some(Self::Rank),
             _ => None,
         }
     }
@@ -102,6 +92,7 @@ impl SortBy {
             Self::Title => "title".to_owned(),
             Self::Number => "number".to_owned(),
             Self::Updated => "updated".to_owned(),
+            Self::Rank => "rank".to_owned(),
             Self::Field(id) => id.to_string(),
         }
     }
@@ -136,12 +127,17 @@ pub struct Column {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ViewConfig {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub filters: Vec<FieldClause>,
+    /// A list of clauses (all must hold), or a tree of "and" and "or"
+    /// groups (`super::filter`).
+    #[serde(default, skip_serializing_if = "Filter::is_empty")]
+    pub filters: Filter,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sort: Vec<SortRule>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_by: Option<Uuid>,
+    /// Grouped by a date: by day, week or month (the default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_bucket: Option<DateBucket>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub columns: Vec<Column>,
     /// The title column's width, in pixels.
@@ -162,12 +158,7 @@ impl ViewConfig {
                 .any(|field| field.id == *id && !field.archived)
         };
         Self {
-            filters: self
-                .filters
-                .iter()
-                .filter(|clause| active(&clause.field))
-                .cloned()
-                .collect(),
+            filters: self.filters.retain(&|clause| active(&clause.field)),
             sort: self
                 .sort
                 .iter()
@@ -179,6 +170,7 @@ impl ViewConfig {
                 .cloned()
                 .collect(),
             group_by: self.group_by.filter(active),
+            group_bucket: self.group_bucket,
             columns: self
                 .columns
                 .iter()
@@ -238,13 +230,10 @@ pub fn check(config: &ViewConfig, definitions: &[FieldDefinition]) -> Result<(),
             .iter()
             .find(|field| field.id == id && !field.archived)
     };
-    if config.filters.len() > fields::MAX_CLAUSES {
-        return Err(format!(
-            "A view has at most {} filters.",
-            fields::MAX_CLAUSES
-        ));
+    if let Some(problem) = config.filters.size_problem() {
+        return Err(problem);
     }
-    for clause in &config.filters {
+    for clause in config.filters.clauses() {
         let Some(field) = active(clause.field) else {
             return Err("A filter names a field this collection doesn't have.".to_owned());
         };
@@ -255,7 +244,10 @@ pub fn check(config: &ViewConfig, definitions: &[FieldDefinition]) -> Result<(),
                 clause.op.as_str(),
                 match clause.op {
                     fields::FieldOp::Empty | fields::FieldOp::NotEmpty => "no values".to_owned(),
-                    fields::FieldOp::Is | fields::FieldOp::IsNot =>
+                    fields::FieldOp::Is
+                    | fields::FieldOp::IsNot
+                    | fields::FieldOp::CategoryIs
+                    | fields::FieldOp::CategoryIsNot =>
                         format!("1 to {} values", fields::MAX_CLAUSE_VALUES),
                     _ => "one value".to_owned(),
                 }
@@ -263,7 +255,7 @@ pub fn check(config: &ViewConfig, definitions: &[FieldDefinition]) -> Result<(),
         }
         // "me" stands for the reader; any member's ID checks the same way.
         let mut checked = clause.clone();
-        if field.field_type == FieldType::Person {
+        if field.field_type.behaves_as() == FieldType::Person {
             for value in &mut checked.values {
                 if value == ME {
                     *value = Uuid::nil().to_string();
@@ -287,16 +279,27 @@ pub fn check(config: &ViewConfig, definitions: &[FieldDefinition]) -> Result<(),
         {
             return Err("A sort names a field this collection doesn't have.".to_owned());
         }
+        // Only records that are tasks have a place on the board, and only
+        // their fields read a task's columns.
+        if by == SortBy::Rank
+            && !definitions.iter().any(|field| {
+                field.accessor != fields::Accessor::Stored && !field.field_type.is_system()
+            })
+        {
+            return Err(
+                "Sort by title, number, updated, or one of the collection's fields.".to_owned(),
+            );
+        }
         if !sorted.insert(by.key()) {
             return Err("Sort by each thing once.".to_owned());
         }
     }
     if let Some(group) = config.group_by {
         match active(group) {
-            Some(field) if field.field_type.can_group() => {}
+            Some(field) if field.can_group() => {}
             Some(field) => {
                 return Err(format!(
-                    "\"{}\" can't group a view. Group by a single choice, person or checkbox field.",
+                    "\"{}\" can't group a view. Group by a choice, status, person, checkbox or date field.",
                     field.name
                 ));
             }
@@ -353,7 +356,7 @@ pub async fn check_references(
     config: &ViewConfig,
     definitions: &[FieldDefinition],
 ) -> Result<Result<(), String>, AppError> {
-    for clause in &config.filters {
+    for clause in config.filters.clauses() {
         let Some(field) = definitions.iter().find(|field| field.id == clause.field) else {
             continue;
         };
@@ -366,7 +369,7 @@ pub async fn check_references(
         if ids.is_empty() {
             continue;
         }
-        let found = match (field.field_type, field.config.target) {
+        let found = match (field.field_type.behaves_as(), field.config.target) {
             (FieldType::Person, _) => {
                 sqlx::query_scalar::<_, i64>(
                     "SELECT count(*) FROM project_memberships WHERE project_id = $1 AND actor_id = ANY($2)",
@@ -412,7 +415,7 @@ pub async fn check_references(
             return Ok(Err(format!(
                 "A filter on \"{}\" names {} that isn't in this project.",
                 field.name,
-                if field.field_type == FieldType::Person {
+                if field.field_type.behaves_as() == FieldType::Person {
                     "someone"
                 } else {
                     "something"
@@ -457,7 +460,7 @@ impl TryFrom<ViewRow> for View {
             id: row.id,
             collection_id: row.collection_id,
             name: row.name,
-            view_type: ViewType::parse(&row.view_type)
+            view_type: parse_view_type(&row.view_type)
                 .ok_or(AppError::Internal("stored view type"))?,
             config: serde_json::from_value(row.config)
                 .map_err(|_| AppError::Internal("stored view config"))?,
@@ -521,7 +524,7 @@ pub async fn list(
 /// Finds one of `views` by ID or name, ignoring case.
 pub fn find<'a>(views: &'a [View], reference: &str) -> Option<&'a View> {
     let reference = reference.trim();
-    if let Some(id) = super::id_in(reference) {
+    if let Some(id) = crate::collections::id_in(reference) {
         return views.iter().find(|view| view.id == id);
     }
     let name = reference
@@ -545,7 +548,7 @@ pub fn names(views: &[View]) -> String {
 }
 
 /// Starts a new collection with its "All records" table.
-pub(super) async fn insert_first(
+pub(crate) async fn insert_first(
     connection: &mut PgConnection,
     project_id: Uuid,
     collection_id: Uuid,
@@ -562,7 +565,7 @@ pub(super) async fn insert_first(
     .bind(Uuid::now_v7())
     .bind(project_id)
     .bind(collection_id)
-    .bind(super::FIRST_VIEW_NAME)
+    .bind(crate::collections::FIRST_VIEW_NAME)
     .bind(actor_id)
     .execute(&mut *connection)
     .await?;
@@ -597,7 +600,7 @@ pub async fn create(
     actor_id: Uuid,
     new: NewView,
 ) -> Result<CreateViewOutcome, AppError> {
-    if super::normalize_name(&new.name).as_deref() != Some(new.name.as_str()) {
+    if crate::collections::normalize_name(&new.name).as_deref() != Some(new.name.as_str()) {
         return Err(AppError::Validation("name"));
     }
     let existing = list(&mut *connection, project_id, collection_id).await?;
@@ -698,7 +701,7 @@ pub async fn change(
         return Ok(ChangeViewOutcome::NotFound);
     };
     let name = change.name.clone().unwrap_or_else(|| current.name.clone());
-    if super::normalize_name(&name).as_deref() != Some(name.as_str()) {
+    if crate::collections::normalize_name(&name).as_deref() != Some(name.as_str()) {
         return Err(AppError::Validation("name"));
     }
     let config = change
@@ -764,6 +767,9 @@ pub async fn change(
 }
 
 #[derive(Clone, Debug)]
+// Made once per call and matched at once: boxing the large variant
+// buys nothing.
+#[allow(clippy::large_enum_variant)]
 pub enum RemoveViewOutcome {
     Removed(View),
     NotFound,
@@ -842,7 +848,7 @@ async fn move_to(
 mod tests {
     use uuid::Uuid;
 
-    use super::{Column, SortBy, SortRule, ViewConfig, ViewType, check};
+    use super::{Column, SortBy, SortRule, ViewConfig, ViewType, check, parse_view_type};
     use crate::fields::{FieldClause, FieldConfig, FieldDefinition, FieldOp, FieldType};
 
     fn field(name: &str, field_type: FieldType, archived: bool) -> FieldDefinition {
@@ -855,6 +861,7 @@ mod tests {
             position: 0,
             archived,
             version: 1,
+            accessor: crate::fields::Accessor::Stored,
         }
     }
 
@@ -869,12 +876,14 @@ mod tests {
                 field: person.id,
                 op: FieldOp::Is,
                 values: vec!["me".to_owned()],
-            }],
+            }]
+            .into(),
             sort: vec![SortRule {
                 field: "updated".to_owned(),
                 direction: super::Direction::Desc,
             }],
             group_by: Some(person.id),
+            group_bucket: None,
             columns: vec![Column {
                 field: text.id,
                 hidden: true,
@@ -889,7 +898,8 @@ mod tests {
                 field: Uuid::now_v7(),
                 op: FieldOp::NotEmpty,
                 values: Vec::new(),
-            }],
+            }]
+            .into(),
             ..ViewConfig::default()
         };
         assert!(check(&elsewhere, &fields).is_err());
@@ -987,7 +997,7 @@ mod tests {
             ..ViewConfig::default()
         };
         assert_eq!(stored.active(&fields).date_field, None);
-        assert_eq!(ViewType::parse(" Calendar "), Some(ViewType::Calendar));
-        assert_eq!(ViewType::parse("list"), None);
+        assert_eq!(parse_view_type(" Calendar "), Some(ViewType::Calendar));
+        assert_eq!(parse_view_type("list"), None);
     }
 }
