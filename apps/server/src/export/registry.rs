@@ -854,7 +854,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("status_id", "work_item_statuses"),
                     ("assignee_actor_id", "actors"),
                     ("created_by_actor_id", "actors"),
-                    ("archived_by_actor_id", "actors"),
                     ("parent_work_item_id", "work_items"),
                     ("blocked_by_actor_id", "actors"),
                     ("milestone_id", "project_milestones"),

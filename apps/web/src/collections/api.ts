@@ -1,7 +1,8 @@
 import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query'
 
 import { requestJson } from '../api/client'
-import { normalizeField, normalizeReferences, normalizeValues, type FieldClause, type FieldDefinition, type FieldReference, type FieldValue, type FieldValues } from '../fields/fieldModel'
+import { normalizeField, normalizeReferences, normalizeValues, type DateBucket, type FieldClause, type FieldDefinition, type FieldReference, type FieldValue, type FieldValues } from '../fields/fieldModel'
+import type { ViewKind } from '../views/kinds'
 
 /**
  * Collections (AWD-90) on the web side: a project's own record types, each
@@ -30,10 +31,22 @@ export type CollectionSummary = {
 
 export type SortRule = { field: string; direction: 'asc' | 'desc' }
 export type ViewColumn = { field: string; hidden?: boolean; width?: number }
+/** A group of a view's filter: clauses (or further groups) joined by "and" or by "or". */
+export type FilterGroup = { and: FilterItem[] } | { or: FilterItem[] }
+export type FilterItem = FieldClause | FilterGroup
 export type ViewConfig = {
+  /** The clauses that must all hold, which the toolbar shows and edits one by one. */
   filters: FieldClause[]
+  /**
+   * Groups that must hold beside them ("this or that", T1.5), kept as the
+   * server sent them: the toolbar shows them but doesn't edit inside them,
+   * and they go back with every change, so changing a sort never drops them.
+   */
+  filterGroups?: FilterGroup[]
   sort: SortRule[]
   groupBy: string | null
+  /** Grouped by a date: by day, week or month (the server's default). */
+  groupBucket?: DateBucket | null
   columns: ViewColumn[]
   titleWidth: number | null
   /** The date field a calendar puts records on. */
@@ -41,7 +54,8 @@ export type ViewConfig = {
 }
 
 /** How a view lays out its records. */
-export type ViewType = 'table' | 'board' | 'gallery' | 'calendar'
+/** The kinds of view a collection draws today, of the one list (views/kinds.ts). */
+export type ViewType = Extract<ViewKind, 'table' | 'board' | 'gallery' | 'calendar'>
 export const VIEW_TYPES: readonly ViewType[] = ['table', 'board', 'gallery', 'calendar']
 const asViewType = (value: unknown): ViewType => (VIEW_TYPES as readonly unknown[]).includes(value) ? (value as ViewType) : 'table'
 
@@ -116,20 +130,58 @@ export function normalizeCollection(value: unknown): CollectionSummary {
   }
 }
 
+function asClause(value: unknown): FieldClause | null {
+  const clause = asRecord(value)
+  if (typeof clause.field !== 'string' || typeof clause.op !== 'string') return null
+  const values = asArray(clause.values).filter((item): item is string => typeof item === 'string')
+  return { field: clause.field, op: clause.op as FieldClause['op'], ...(Array.isArray(clause.values) ? { values } : {}) }
+}
+
+function asFilterItem(value: unknown): FilterItem | null {
+  const raw = asRecord(value)
+  if (Array.isArray(raw.and)) return { and: raw.and.flatMap((item) => asFilterItem(item) ?? []) }
+  if (Array.isArray(raw.or)) return { or: raw.or.flatMap((item) => asFilterItem(item) ?? []) }
+  return asClause(value)
+}
+
+const isGroup = (item: FilterItem): item is FilterGroup => 'and' in item || 'or' in item
+
+/**
+ * A stored filter (a list of clauses, or a tree of "and" and "or" groups) as
+ * the clauses that all hold and the groups beside them.
+ */
+export function splitFilter(value: unknown): Pick<ViewConfig, 'filters' | 'filterGroups'> {
+  const top = Array.isArray(value) ? { and: value } : asRecord(value)
+  const items = Array.isArray(top.and)
+    ? top.and.flatMap((item) => asFilterItem(item) ?? [])
+    : Array.isArray(top.or)
+      ? [{ or: top.or.flatMap((item) => asFilterItem(item) ?? []) }]
+      : []
+  const groups = items.filter(isGroup)
+  return { filters: items.filter((item): item is FieldClause => !isGroup(item)), ...(groups.length ? { filterGroups: groups } : {}) }
+}
+
+/** A view's filter as the server takes it: a plain list when it's only clauses that all hold. */
+export function filterJson(config: Pick<ViewConfig, 'filters' | 'filterGroups'>): FieldClause[] | FilterGroup {
+  const groups = config.filterGroups ?? []
+  if (groups.length === 0) return config.filters
+  if (config.filters.length === 0 && groups.length === 1) return groups[0]
+  return { and: [...config.filters, ...groups] }
+}
+
+/** Whether a view's filter narrows anything. */
+export const hasFilter = (config: Pick<ViewConfig, 'filters' | 'filterGroups'>) => config.filters.length > 0 || Boolean(config.filterGroups?.length)
+
 export function normalizeConfig(value: unknown): ViewConfig {
   const raw = asRecord(value)
   return {
-    filters: asArray(raw.filters).flatMap((entry) => {
-      const clause = asRecord(entry)
-      if (typeof clause.field !== 'string' || typeof clause.op !== 'string') return []
-      const values = asArray(clause.values).filter((item): item is string => typeof item === 'string')
-      return [{ field: clause.field, op: clause.op as FieldClause['op'], ...(Array.isArray(clause.values) ? { values } : {}) }]
-    }),
+    ...splitFilter(raw.filters),
     sort: asArray(raw.sort).flatMap((entry) => {
       const rule = asRecord(entry)
       return typeof rule.field === 'string' ? [{ field: rule.field, direction: rule.direction === 'desc' ? ('desc' as const) : ('asc' as const) }] : []
     }),
     groupBy: typeof raw.groupBy === 'string' && raw.groupBy ? raw.groupBy : null,
+    groupBucket: raw.groupBucket === 'day' || raw.groupBucket === 'week' || raw.groupBucket === 'month' ? raw.groupBucket : null,
     columns: asArray(raw.columns).flatMap((entry) => {
       const column = asRecord(entry)
       if (typeof column.field !== 'string') return []
@@ -267,9 +319,10 @@ export async function updateCollection(
 /** A view's settings as the server stores them: no empty parts. */
 export function configJson(config: ViewConfig) {
   return {
-    ...(config.filters.length ? { filters: config.filters } : {}),
+    ...(hasFilter(config) ? { filters: filterJson(config) } : {}),
     ...(config.sort.length ? { sort: config.sort } : {}),
     ...(config.groupBy ? { groupBy: config.groupBy } : {}),
+    ...(config.groupBy && config.groupBucket ? { groupBucket: config.groupBucket } : {}),
     ...(config.columns.length ? { columns: config.columns } : {}),
     ...(config.titleWidth ? { titleWidth: config.titleWidth } : {}),
     ...(config.dateField ? { dateField: config.dateField } : {}),
@@ -306,9 +359,10 @@ export async function deleteView(projectId: string, collectionId: string, viewId
 /** What a list of records asks for: a saved view, and whatever the person changed on top of it. */
 export type RecordsQuery = {
   view: string | null
-  filters?: FieldClause[]
+  filters?: FieldClause[] | FilterGroup
   sort?: SortRule[]
   groupBy?: string | null
+  groupBucket?: DateBucket | null
   search?: string
   archived?: 'only'
   /** One group of the grouping: a board's column. */
@@ -324,6 +378,7 @@ export function recordsParams(query: RecordsQuery) {
   if (query.filters) params.set('filters', JSON.stringify(query.filters))
   if (query.sort) params.set('sort', JSON.stringify(query.sort))
   if (query.groupBy !== undefined) params.set('groupBy', query.groupBy ?? '')
+  if (query.groupBy && query.groupBucket) params.set('groupBucket', query.groupBucket)
   if (query.search?.trim()) params.set('search', query.search.trim())
   if (query.archived) params.set('archived', query.archived)
   if (query.group !== undefined) params.set('group', query.group)

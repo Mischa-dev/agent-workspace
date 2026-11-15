@@ -755,7 +755,7 @@ async fn target_project(
             "SELECT id, organization_id FROM projects WHERE id = $1 AND kind NOT IN ('direct', 'workspace')"
         }
         TargetKind::WorkItem => {
-            "SELECT project.id, project.organization_id FROM work_items item JOIN projects project ON project.id = item.project_id WHERE item.id = $1"
+            "SELECT project.id, project.organization_id FROM task_rows item JOIN projects project ON project.id = item.project_id WHERE item.id = $1"
         }
         TargetKind::Page => {
             "SELECT project.id, project.organization_id FROM project_pages page JOIN projects project ON project.id = page.project_id WHERE page.id = $1"
@@ -896,7 +896,7 @@ pub async fn links(
                END AS url
         FROM whiteboard_links link
         JOIN projects project ON project.id = link.target_project_id AND project.archived_at IS NULL
-        LEFT JOIN work_items item ON link.target_kind = 'work_item' AND item.id = link.target_id
+        LEFT JOIN task_rows item ON link.target_kind = 'work_item' AND item.id = link.target_id
         LEFT JOIN project_pages page ON link.target_kind = 'page' AND page.id = link.target_id
         WHERE link.whiteboard_id = $1
           AND actor_can_access_project($2, $3, link.target_project_id)

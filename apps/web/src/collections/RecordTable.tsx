@@ -179,7 +179,8 @@ function RecordGrid({
     }
     const record = row.record
     return {
-      key: record.id,
+      // A record grouped by several choices is a row in each of its groups.
+      key: `${record.group?.key ?? ''}:${record.id}`,
       index,
       height: rowHeight,
       className: record.id === openRecordId ? 'is-open' : undefined,

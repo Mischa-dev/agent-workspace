@@ -167,7 +167,14 @@ function FieldInput({
   const text = typeof value === 'string' ? value : ''
   switch (field.type) {
     case 'text':
-      return <TextArea hint={hint} label={label} maxLength={10000} onChange={(event) => onChange(event.target.value)} rows={3} value={text} />
+    case 'long_text':
+      return (
+        <TextArea hint={hint} label={label} maxLength={10000} onChange={(event) => onChange(event.target.value)} rows={field.type === 'long_text' ? 6 : 3} value={text} />
+      )
+    case 'email':
+      return <TextField hint={hint} inputMode="email" label={label} onChange={(event) => onChange(event.target.value)} type="email" value={text} />
+    case 'phone':
+      return <TextField hint={hint} inputMode="tel" label={label} onChange={(event) => onChange(event.target.value)} type="tel" value={text} />
     case 'number':
       return <TextField hint={hint} inputMode="decimal" label={label} onChange={(event) => onChange(event.target.value)} type="number" value={text} />
     case 'date':
@@ -175,6 +182,7 @@ function FieldInput({
     case 'url':
       return <TextField hint={hint} label={label} onChange={(event) => onChange(event.target.value)} placeholder="https://" type="url" value={text} />
     case 'single_choice':
+    case 'status':
       return (
         <SelectField hint={hint} label={label} onChange={(event) => onChange(event.target.value)} value={text}>
           <option value="">Choose…</option>

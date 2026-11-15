@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { requestJson } from '../api/client'
-import { normalizeField, type FieldDefinition } from './fieldModel'
+import { normalizeField, type FieldDefinition, type StatusCategory } from './fieldModel'
 
 /**
  * A project's field definitions for one kind of record. Tasks' live at
@@ -24,7 +24,7 @@ export async function listFields(scope: FieldScope, includeArchived = false): Pr
   return { fields: (payload.fields ?? []).map(normalizeField), canManage: payload.canManage === true }
 }
 
-export type OptionInput = { id?: string; name: string; color?: string }
+export type OptionInput = { id?: string; name: string; color?: string; category?: StatusCategory }
 
 export async function createField(
   scope: FieldScope,

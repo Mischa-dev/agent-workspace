@@ -115,46 +115,14 @@ pub enum LinkDirection {
     Incoming,
 }
 
-/// A field's type, shared by tasks, collections and every module's records.
-/// The names are the ones task fields store (AWD-89, `crate::fields`): one
-/// vocabulary, no translation between them.
-#[derive(
-    Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum FieldType {
-    Text,
-    LongText,
-    Number,
-    Date,
-    Checkbox,
-    Url,
-    /// One of a fixed list of options.
-    SingleChoice,
-    /// Any of a fixed list of options.
-    MultipleChoice,
-    /// A status from the thing's workflow.
-    Status,
-    Person,
-    People,
-    Labels,
-    /// A link to another thing, such as a task or a page.
-    Link,
-}
+/// A field's type, shared by tasks, collections and every module's records:
+/// the one list in `crate::fields` (T1.2), so a manifest, a task field and a
+/// collection's field name types with the same words.
+pub use crate::fields::FieldType;
 
-/// A way to look at many things at once.
-#[derive(
-    Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum ViewType {
-    List,
-    Table,
-    Board,
-    Calendar,
-    Timeline,
-    Gallery,
-}
+/// A way to look at many things at once: the one list in `crate::views`
+/// (T1.2).
+pub use crate::views::ViewKind as ViewType;
 
 /// A piece of screen the app draws for a module. Modules never draw their
 /// own layout: they say which piece, of which kind of thing, with which
@@ -327,25 +295,66 @@ pub struct ThingLink {
 
 #[cfg(test)]
 mod tests {
-    use super::FieldType;
+    use super::{FieldType, ViewType};
 
-    /// Task fields (AWD-89) store these names; the contract uses the same
-    /// ones, so there's nothing to translate between them.
+    /// One vocabulary (T1.2): the contract's field and view types are the
+    /// field layer's and the views engine's own, not copies to keep in step.
     #[test]
-    fn field_types_are_named_as_task_fields_store_them() {
-        let name = |kind: FieldType| serde_json::to_value(kind).expect("name");
+    fn contract_and_fields_are_the_same_types() {
+        let same_field: fn(crate::fields::FieldType) -> FieldType = |kind| kind;
+        let same_view: fn(crate::views::ViewKind) -> ViewType = |kind| kind;
+        assert_eq!(same_field(FieldType::Text), crate::fields::FieldType::Text);
+        assert_eq!(same_view(ViewType::Board), crate::views::ViewKind::Board);
         for (kind, stored) in [
             (FieldType::Text, "text"),
-            (FieldType::Number, "number"),
-            (FieldType::Date, "date"),
+            (FieldType::LongText, "long_text"),
             (FieldType::SingleChoice, "single_choice"),
-            (FieldType::MultipleChoice, "multiple_choice"),
-            (FieldType::Person, "person"),
-            (FieldType::Url, "url"),
-            (FieldType::Checkbox, "checkbox"),
+            (FieldType::People, "people"),
+            (FieldType::Labels, "labels"),
             (FieldType::Link, "link"),
         ] {
-            assert_eq!(name(kind), serde_json::json!(stored));
+            assert_eq!(
+                serde_json::to_value(kind).expect("name"),
+                serde_json::json!(stored)
+            );
         }
+    }
+
+    /// Exactly one definition of each type in the server's sources.
+    #[test]
+    fn one_field_type_and_one_view_kind_are_defined() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        fn walk(folder: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(folder).into_iter().flatten().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, found);
+                } else if path.extension().is_some_and(|extension| extension == "rs") {
+                    found.push(path);
+                }
+            }
+        }
+        walk(&root, &mut files);
+        let defined = |needle: &str| {
+            files
+                .iter()
+                .filter(|file| {
+                    std::fs::read_to_string(file).is_ok_and(|text| {
+                        text.lines().any(|line| {
+                            line.trim_start().starts_with(needle)
+                                || line.contains(&format!("pub {needle}"))
+                        })
+                    })
+                })
+                .count()
+        };
+        assert_eq!(defined("enum FieldType "), 1, "one `enum FieldType`");
+        assert_eq!(defined("enum ViewKind "), 1, "one `enum ViewKind`");
+        assert_eq!(
+            defined("enum ViewType "),
+            0,
+            "views are a `crate::views::ViewKind`"
+        );
     }
 }

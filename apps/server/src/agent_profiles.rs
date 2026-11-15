@@ -1299,7 +1299,7 @@ pub async fn presence(
             WHERE link.project_id = $1 AND link.conversation_id = visible.conversation_id
             ORDER BY link.created_at, link.work_item_id LIMIT 1
         ) task_link ON true
-        LEFT JOIN work_items task ON task.id = task_link.work_item_id AND task.archived_at IS NULL
+        LEFT JOIN task_rows task ON task.id = task_link.work_item_id AND task.archived_at IS NULL
         WHERE profile.id IS NULL OR profile.enabled
         ORDER BY (ranked.actor_id IS NULL), member.name, member.actor_id
         LIMIT 200

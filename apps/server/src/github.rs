@@ -2029,7 +2029,7 @@ pub(crate) async fn queue_pull_request_in(
 ) -> Result<Queued<PullRequestRequestView>, AppError> {
     if !work_item_ids.is_empty() {
         let count = sqlx::query_scalar::<_, i64>(
-            "SELECT count(*) FROM work_items WHERE project_id = $1 AND id = ANY($2) AND archived_at IS NULL",
+            "SELECT count(*) FROM task_rows WHERE project_id = $1 AND id = ANY($2) AND archived_at IS NULL",
         )
         .bind(project_id)
         .bind(work_item_ids)
@@ -4655,7 +4655,7 @@ async fn apply_pull_request_work_item_automation(
                status.semantic_category,
                (item.archived_at IS NOT NULL) AS archived
         FROM github_pull_request_work_item_links link
-        JOIN work_items item
+        JOIN task_rows item
           ON item.project_id = link.project_id AND item.id = link.work_item_id
         JOIN work_item_statuses status
           ON status.project_id = item.project_id AND status.id = item.status_id
@@ -4967,7 +4967,7 @@ async fn enqueue_pull_request_invalidations(
         r#"
         SELECT work_item.id, work_item.version
         FROM github_pull_request_work_item_links link
-        JOIN work_items work_item
+        JOIN task_rows work_item
           ON work_item.project_id = link.project_id AND work_item.id = link.work_item_id
         WHERE link.project_id = $1 AND link.github_pull_request_id = $2
         "#,

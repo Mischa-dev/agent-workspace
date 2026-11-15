@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  behavesAs,
+  canGroup,
+  canGroupRecords,
   clausesParam,
   clauseText,
   displayText,
@@ -73,5 +76,32 @@ describe('custom fields', () => {
     expect(fieldIdOf('field:abc')).toBe('abc')
     expect(fieldIdOf('field:abc:desc')).toBe('abc')
     expect(fieldIdOf('due')).toBeNull()
+  })
+
+  it('reads the easy types and the record’s own columns (T1.10)', () => {
+    const stage = normalizeField({
+      id: 's',
+      name: 'Stage',
+      type: 'status',
+      options: [
+        { id: 'w', name: 'Won', color: 'green', category: 'completed' },
+        { id: 'x', name: 'Odd', color: 'gray', category: 'someday' },
+      ],
+    })
+    expect(stage.type).toBe('status')
+    expect(stage.options.map((option) => option.category)).toEqual(['completed', null])
+    expect(displayText(stage, 'w')).toBe('Won')
+    expect(opsFor('status')).toContain('categoryIs')
+    expect(opsFor('long_text')).toEqual(['contains', 'empty', 'notEmpty'])
+    expect(opsFor('created_by')).toEqual(opsFor('person'))
+    expect(behavesAs('created_time')).toBe('date')
+    expect(displayText({ ...risk, type: 'auto_id' }, 12)).toBe('#12')
+    expect(displayText({ ...risk, type: 'created_by' }, 'a1', [{ id: 'a1', kind: 'person', label: 'Ana', key: '@ana' }])).toBe('Ana')
+    expect(displayText({ ...risk, type: 'email' }, 'ada@example.com')).toBe('ada@example.com')
+    // Task lists group one group per task; collections also by several choices and dates.
+    expect(canGroup('multiple_choice')).toBe(false)
+    expect(canGroupRecords('multiple_choice')).toBe(true)
+    expect(canGroupRecords('created_time')).toBe(true)
+    expect(canGroupRecords('long_text')).toBe(false)
   })
 })

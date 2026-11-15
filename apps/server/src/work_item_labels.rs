@@ -131,7 +131,7 @@ const LABEL_COLUMNS: &str = r#"
     label.archived_at IS NOT NULL AS archived, label.version,
     (SELECT count(*)
      FROM work_item_labels applied
-     JOIN work_items item
+     JOIN task_rows item
        ON item.project_id = applied.project_id AND item.id = applied.work_item_id
      WHERE applied.project_id = label.project_id AND applied.label_id = label.id
        AND item.archived_at IS NULL) AS task_count

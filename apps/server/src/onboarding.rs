@@ -185,7 +185,7 @@ async fn project_steps(
     };
     let tasks = exists(
         pool,
-        "SELECT 1 FROM work_items WHERE project_id = $1 AND archived_at IS NULL AND $2::uuid IS NOT NULL",
+        "SELECT 1 FROM task_rows WHERE project_id = $1 AND archived_at IS NULL AND $2::uuid IS NOT NULL",
         project_id,
         actor_id,
     )
