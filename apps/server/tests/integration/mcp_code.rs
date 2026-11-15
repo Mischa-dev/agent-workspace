@@ -280,7 +280,7 @@ async fn link_task(pool: &PgPool, seed: &DevSeed, pull_request: Uuid, task: Uuid
 
 async fn task_key(pool: &PgPool, task: Uuid) -> String {
     sqlx::query_scalar::<_, String>(
-        "SELECT project.project_key || '-' || item.number FROM work_items item JOIN projects project ON project.id = item.project_id WHERE item.id = $1",
+        "SELECT project.project_key || '-' || item.number FROM task_rows item JOIN projects project ON project.id = item.project_id WHERE item.id = $1",
     )
     .bind(task)
     .fetch_one(pool)

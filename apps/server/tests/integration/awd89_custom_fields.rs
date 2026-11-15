@@ -784,7 +784,7 @@ async fn defining_fields_follows_the_workflow_permission_and_values_follow_task_
     // Only Alex's value landed, and nothing Bea or the app tried defined a field.
     let (values, count) = sqlx::query_as::<_, (Value, i64)>(
         "SELECT item.field_values, (SELECT count(*) FROM field_definitions WHERE project_id = item.project_id) \
-         FROM work_items item WHERE item.id = $1::uuid",
+         FROM task_rows item WHERE item.id = $1::uuid",
     )
     .bind(&task_id)
     .fetch_one(&setup.pool)
@@ -1133,7 +1133,7 @@ async fn values_too_large_as_stored_are_refused_not_failed() {
     };
     too_large(status, &body);
     let (version, stored) = sqlx::query_as::<_, (i64, Value)>(
-        "SELECT version, field_values FROM work_items WHERE id = $1::uuid",
+        "SELECT version, field_values FROM task_rows WHERE id = $1::uuid",
     )
     .bind(&task_id)
     .fetch_one(&setup.pool)
@@ -1154,7 +1154,7 @@ async fn values_too_large_as_stored_are_refused_not_failed() {
     .await;
     too_large(status, &body);
     let made = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM work_items WHERE project_id = $1::uuid AND title = 'Too big from the start'",
+        "SELECT count(*) FROM task_rows WHERE project_id = $1::uuid AND title = 'Too big from the start'",
     )
     .bind(&work)
     .fetch_one(&setup.pool)
@@ -1299,7 +1299,7 @@ async fn bulk_tools_set_fields_on_every_task_or_none() {
         let work = work.clone();
         async move {
             sqlx::query_as::<_, (i64, i64, Value)>(
-                "SELECT number, version, field_values FROM work_items \
+                "SELECT number, version, field_values FROM task_rows \
                  WHERE project_id = $1::uuid ORDER BY number",
             )
             .bind(&work)
@@ -1592,7 +1592,7 @@ async fn fields_are_renamed_and_reordered() {
 
     // The value stayed with its field, under the new name.
     let stored =
-        sqlx::query_scalar::<_, Value>("SELECT field_values FROM work_items WHERE id = $1::uuid")
+        sqlx::query_scalar::<_, Value>("SELECT field_values FROM task_rows WHERE id = $1::uuid")
             .bind(&task_id)
             .fetch_one(&setup.pool)
             .await
@@ -1693,7 +1693,7 @@ async fn bulk_field_changes_hold_task_by_task() {
         let work = work.clone();
         async move {
             let tasks = sqlx::query_as::<_, (i64, i64, Value)>(
-                "SELECT number, version, field_values FROM work_items \
+                "SELECT number, version, field_values FROM task_rows \
                  WHERE project_id = $1::uuid ORDER BY number",
             )
             .bind(&work)
@@ -1816,7 +1816,7 @@ async fn bulk_field_changes_hold_task_by_task() {
                 "SELECT item.version, item.field_values, \
                         (SELECT count(*) FROM work_item_activity activity \
                          WHERE activity.work_item_id = item.id) \
-                 FROM work_items item WHERE item.project_id = $1::uuid AND item.number = $2",
+                 FROM task_rows item WHERE item.project_id = $1::uuid AND item.number = $2",
             )
             .bind(&work)
             .bind(number)
@@ -1950,7 +1950,7 @@ async fn field_tools_and_bulk_arguments_refuse_without_the_role() {
         let work = work.clone();
         async move {
             sqlx::query_as::<_, (i64, Value)>(
-                "SELECT version, field_values FROM work_items WHERE project_id = $1::uuid ORDER BY number",
+                "SELECT version, field_values FROM task_rows WHERE project_id = $1::uuid ORDER BY number",
             )
             .bind(&work)
             .fetch_all(&pool)
@@ -2013,4 +2013,344 @@ async fn field_tools_and_bulk_arguments_refuse_without_the_role() {
     // Refused for the role (Action::WorkItemCreate), checked before any value.
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
     assert_eq!(tasks().await, tasks_before);
+}
+
+/// T1.10: the easy field types and the record's own system fields, in a
+/// collection: each one's values are normalised as written, filter, sort and
+/// group on the server; a phone number that isn't one is refused with the
+/// reason, and nobody writes a system field.
+#[tokio::test]
+async fn every_field_type_normalises_filters_sorts_and_groups() {
+    let Some(setup) = setup("awd89_types").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+    let created = call(
+        "collection_write",
+        json!({
+            "projectId": "WORK",
+            "name": "Contacts",
+            "fields": [
+                {"name": "Notes", "type": "long_text"},
+                {"name": "Email", "type": "email"},
+                {"name": "Phone", "type": "phone"},
+                {"name": "Stage", "type": "status", "options": [
+                    {"name": "Won", "category": "completed"},
+                    {"name": "Lead", "category": "backlog"},
+                    {"name": "Lost", "category": "canceled"},
+                    {"name": "Talking", "category": "started"},
+                ]},
+                {"name": "Tags", "type": "multiple_choice", "options": [{"name": "Press"}, {"name": "Partner"}]},
+                {"name": "Met", "type": "date"},
+                {"name": "Pipeline", "type": "status"},
+                {"name": "Created", "type": "created_time"},
+                {"name": "Edited", "type": "edited_time"},
+                {"name": "Maker", "type": "created_by"},
+                {"name": "Editor", "type": "edited_by"},
+                {"name": "Ref", "type": "auto_id"},
+            ],
+            "clientRequestId": "contacts",
+        }),
+    )
+    .await;
+    assert_eq!(created["outcome"], "ok", "{created}");
+    // A status field made without options starts with three, by category.
+    let described = call(
+        "collection_describe",
+        json!({"projectId": "WORK", "collection": "Contacts"}),
+    )
+    .await;
+    let pipeline = described["value"]["fields"]
+        .as_array()
+        .expect("fields")
+        .iter()
+        .find(|field| field["name"] == "Pipeline")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let categories = pipeline["options"]
+        .as_array()
+        .map(|options| {
+            options
+                .iter()
+                .map(|option| option["category"].as_str().unwrap_or_default().to_owned())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    assert_eq!(
+        categories,
+        ["unstarted", "started", "completed"],
+        "{described}"
+    );
+
+    let write = |records: Value, key: &'static str| {
+        call(
+            "record_write",
+            json!({"projectId": "WORK", "collection": "Contacts", "records": records, "clientRequestId": key}),
+        )
+    };
+    let written = write(
+        json!([
+            {"title": "Ada", "fields": {"Email": " Ada@Example.COM ", "Phone": "+44 20 7946 0958",
+              "Stage": "talking", "Tags": ["Press", "Partner"], "Met": "2026-10-03",
+              "Notes": "Met at the conference.\nWants a demo."}},
+            {"title": "Grace", "fields": {"Email": "grace@example.org", "Phone": "(020) 7946-0001",
+              "Stage": "Won", "Tags": ["Partner"], "Met": "2026-10-28"}},
+            {"title": "Linus", "fields": {"Stage": "Lost", "Met": "2026-11-02"}},
+            {"title": "Margaret", "fields": {"Stage": "Lead", "Tags": "Press"}},
+        ]),
+        "people",
+    )
+    .await;
+    assert_eq!(written["outcome"], "ok", "{written}");
+    assert_eq!(written["value"]["created"], 4);
+
+    // Values come back as stored: the email lowercased, the phone as
+    // written, and the system fields from the record itself.
+    let all = call(
+        "record_query",
+        json!({"projectId": "WORK", "collection": "Contacts", "sort": [{"field": "Ref", "direction": "asc"}]}),
+    )
+    .await;
+    assert_eq!(all["outcome"], "ok", "{all}");
+    let ada = &all["value"]["records"][0];
+    assert_eq!(ada["fields"]["Email"], "ada@example.com", "{ada}");
+    assert_eq!(ada["fields"]["Phone"], "+44 20 7946 0958");
+    assert_eq!(ada["fields"]["Stage"], "Talking");
+    assert_eq!(ada["fields"]["Ref"], 1);
+    assert!(
+        ada["fields"]["Maker"]
+            .as_str()
+            .is_some_and(|maker| !maker.is_empty()),
+        "{ada}"
+    );
+    assert!(ada["fields"]["Created"].as_str().is_some(), "{ada}");
+
+    // A phone that isn't one, an email that isn't one, and a system field
+    // are refused with the reason, and nothing is written.
+    for (fields, says) in [
+        (json!({"Phone": "call me"}), "phone number: only digits"),
+        (json!({"Phone": "+1 2"}), "4 to 15 digits"),
+        (json!({"Email": "ada.example.com"}), "email address"),
+        (json!({"Created": "2020-01-01"}), "set by the app"),
+        (json!({"Stage": "Pending"}), "Won, Lead, Lost, Talking"),
+    ] {
+        let refused = write(json!([{"title": "Bad", "fields": fields}]), "bad").await;
+        assert_eq!(refused["outcome"], "invalid_request", "{fields}: {refused}");
+        assert!(refused.to_string().contains(says), "{fields}: {refused}");
+    }
+
+    let titles = |page: &Value| {
+        page["value"]["records"]
+            .as_array()
+            .unwrap_or_else(|| panic!("no records: {page}"))
+            .iter()
+            .map(|record| record["title"].as_str().unwrap_or_default().to_owned())
+            .collect::<Vec<_>>()
+    };
+    // Filters: by the email in any case, the phone by its digits, a
+    // status's category, words in long text, the record's number, the
+    // maker, and when it was made.
+    for (filter, expected) in [
+        (
+            json!({"field": "Email", "op": "is", "values": ["ADA@example.com"]}),
+            vec!["Ada"],
+        ),
+        (
+            json!({"field": "Phone", "op": "is", "values": ["020 7946 0001"]}),
+            vec!["Grace"],
+        ),
+        (
+            json!({"field": "Phone", "op": "is", "values": ["+442079460958"]}),
+            vec!["Ada"],
+        ),
+        (
+            json!({"field": "Stage", "op": "categoryIs", "values": ["completed", "canceled"]}),
+            vec!["Grace", "Linus"],
+        ),
+        (
+            json!({"field": "Notes", "op": "contains", "values": ["demo"]}),
+            vec!["Ada"],
+        ),
+        (
+            json!({"field": "Ref", "op": "gte", "values": ["3"]}),
+            vec!["Linus", "Margaret"],
+        ),
+        (
+            json!({"field": "Maker", "op": "is", "values": ["me"]}),
+            vec!["Ada", "Grace", "Linus", "Margaret"],
+        ),
+        (
+            json!({"field": "Created", "op": "within", "values": ["last_7_days"]}),
+            vec!["Ada", "Grace", "Linus", "Margaret"],
+        ),
+        (
+            json!({"field": "Edited", "op": "lt", "values": ["2020-01-01"]}),
+            vec![],
+        ),
+        (
+            json!({"field": "Tags", "op": "is", "values": ["Partner"]}),
+            vec!["Ada", "Grace"],
+        ),
+    ] {
+        let page = call(
+            "record_query",
+            json!({"projectId": "WORK", "collection": "Contacts", "filters": [filter],
+                   "sort": [{"field": "Ref", "direction": "asc"}]}),
+        )
+        .await;
+        assert_eq!(page["outcome"], "ok", "{filter}: {page}");
+        assert_eq!(titles(&page), expected, "{filter}: {page}");
+    }
+
+    // Sorts: a status by category (backlog, started, completed, canceled),
+    // an email as text, the record's number.
+    for (sort, expected) in [
+        (
+            json!({"field": "Stage", "direction": "asc"}),
+            vec!["Margaret", "Ada", "Grace", "Linus"],
+        ),
+        (
+            json!({"field": "Email", "direction": "asc"}),
+            vec!["Ada", "Grace", "Linus", "Margaret"],
+        ),
+        (
+            json!({"field": "Ref", "direction": "desc"}),
+            vec!["Margaret", "Linus", "Grace", "Ada"],
+        ),
+        (
+            json!({"field": "Phone", "direction": "asc"}),
+            vec!["Grace", "Ada", "Linus", "Margaret"],
+        ),
+    ] {
+        let page = call(
+            "record_query",
+            json!({"projectId": "WORK", "collection": "Contacts", "sort": [sort]}),
+        )
+        .await;
+        assert_eq!(titles(&page), expected, "{sort}: {page}");
+    }
+
+    // Groups: a status in category order; several choices put a record in
+    // each of its groups, counted once in the total; dates by month or
+    // week; the maker as a person.
+    for (group, bucket, expected) in [
+        (
+            "Stage",
+            None,
+            json!([{"name": "Lead", "count": 1}, {"name": "Talking", "count": 1}, {"name": "Won", "count": 1}, {"name": "Lost", "count": 1}]),
+        ),
+        (
+            "Tags",
+            None,
+            json!([{"name": "Press", "count": 2}, {"name": "Partner", "count": 2}, {"name": "No value", "count": 1}]),
+        ),
+        (
+            "Met",
+            Some("month"),
+            json!([{"name": "October 2026", "count": 2}, {"name": "November 2026", "count": 1}, {"name": "No date", "count": 1}]),
+        ),
+        (
+            "Met",
+            Some("week"),
+            json!([{"name": "Week of 28 Sep 2026", "count": 1}, {"name": "Week of 26 Oct 2026", "count": 1}, {"name": "Week of 2 Nov 2026", "count": 1}, {"name": "No date", "count": 1}]),
+        ),
+    ] {
+        let mut arguments =
+            json!({"projectId": "WORK", "collection": "Contacts", "groupBy": group});
+        if let Some(bucket) = bucket {
+            arguments["groupBucket"] = json!(bucket);
+        }
+        let page = call("record_query", arguments).await;
+        assert_eq!(page["outcome"], "ok", "{group}: {page}");
+        assert_eq!(page["value"]["groups"], expected, "{group}: {page}");
+        assert_eq!(page["value"]["total"], 4, "{group}: {page}");
+    }
+    // A record with two tags is a line in each of its groups, in the agent's
+    // query and in the records route the web reads.
+    let lines = |records: &Value, group: &dyn Fn(&Value) -> String| {
+        let mut lines = records
+            .as_array()
+            .unwrap_or_else(|| panic!("no records: {records}"))
+            .iter()
+            .map(|record| {
+                let title = record["title"]
+                    .as_str()
+                    .or_else(|| record["record"]["title"].as_str())
+                    .unwrap_or_default();
+                (group(record), title.to_owned())
+            })
+            .collect::<Vec<_>>();
+        lines.sort();
+        lines
+    };
+    let expected = [
+        ("No value", "Linus"),
+        ("Partner", "Ada"),
+        ("Partner", "Grace"),
+        ("Press", "Ada"),
+        ("Press", "Margaret"),
+    ]
+    .map(|(group, title)| (group.to_owned(), title.to_owned()))
+    .to_vec();
+    let by_tags = call(
+        "record_query",
+        json!({"projectId": "WORK", "collection": "Contacts", "groupBy": "Tags"}),
+    )
+    .await;
+    assert_eq!(
+        lines(&by_tags["value"]["records"], &|record| record["group"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()),
+        expected,
+        "{by_tags}"
+    );
+    let (contacts, tags) = sqlx::query_as::<_, (uuid::Uuid, uuid::Uuid)>(
+        "SELECT collection.id, field.id FROM collections collection \
+         JOIN field_definitions field ON field.collection_id = collection.id \
+         WHERE collection.name = 'Contacts' AND field.name = 'Tags'",
+    )
+    .fetch_one(&setup.pool)
+    .await
+    .expect("contacts");
+    let (status, listed) = send(
+        app,
+        setup.browser.request(
+            "GET",
+            &format!(
+                "/api/v1/projects/{work}/collections/{contacts}/records?groupBy={tags}&limit=50"
+            ),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_eq!(
+        lines(&listed["records"], &|record| record["group"]["label"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()),
+        expected,
+        "{listed}"
+    );
+    let by_maker = call(
+        "record_query",
+        json!({"projectId": "WORK", "collection": "Contacts", "groupBy": "Maker"}),
+    )
+    .await;
+    assert_eq!(
+        by_maker["value"]["groups"].as_array().map(Vec::len),
+        Some(1),
+        "{by_maker}"
+    );
+    assert_eq!(by_maker["value"]["groups"][0]["count"], 4);
 }

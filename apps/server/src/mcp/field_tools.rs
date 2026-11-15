@@ -132,8 +132,9 @@ pub(super) struct FieldWriteArguments {
     /// The new field's name, or a new name. 1 to 60 characters, unique in
     /// the project ignoring case.
     pub name: Option<String>,
-    /// For a new field: text, number, date, single_choice, multiple_choice,
-    /// person, url, checkbox, or link. It never changes afterwards.
+    /// For a new field: text, long_text, number, date, single_choice,
+    /// multiple_choice, person, url, email, phone, checkbox, or link. It
+    /// never changes afterwards.
     #[serde(rename = "type")]
     pub field_type: Option<String>,
     /// What the field is for, on one line. "" clears it.
@@ -254,11 +255,15 @@ pub(super) async fn field_write(
                     "Give the new field a name, or pass field to change one.",
                 ));
             };
-            let Some(field_type) = arguments.field_type.as_deref().and_then(FieldType::parse)
+            let Some(field_type) = arguments
+                .field_type
+                .as_deref()
+                .and_then(FieldType::parse)
+                .filter(|field_type| field_type.suits_tasks())
             else {
                 return Ok(ToolResult::invalid(
                     "type",
-                    "Pick a type: text, number, date, single_choice, multiple_choice, person, url, checkbox, or link.",
+                    "Pick a type: text, long_text, number, date, single_choice, multiple_choice, person, url, email, phone, checkbox, or link.",
                 ));
             };
             if arguments.archived == Some(true) || arguments.expected_version.is_some() {
@@ -513,7 +518,7 @@ pub(super) async fn task_fields(
         return Ok(Vec::new());
     }
     let values = sqlx::query_scalar::<_, Value>(
-        "SELECT field_values FROM work_items WHERE project_id = $1 AND id = $2",
+        "SELECT field_values FROM task_rows WHERE project_id = $1 AND id = $2",
     )
     .bind(project_id)
     .bind(task_id)
@@ -549,7 +554,7 @@ pub(super) async fn fill_summary_fields(
         return Ok(());
     }
     let rows = sqlx::query_as::<_, (Uuid, Uuid, Option<Uuid>, Value)>(
-        "SELECT id, project_id, collection_id, field_values FROM work_items \
+        "SELECT id, project_id, collection_id, field_values FROM task_rows \
          WHERE id = ANY($1) AND field_values <> '{}'::jsonb",
     )
     .bind(&ids)

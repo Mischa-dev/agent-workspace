@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { isApiError } from '../api/errors'
 import { FieldValueView } from '../fields/FieldValueView'
 import { Button, Icon, ListSkeleton, countLabel } from '../ui'
-import { recordsParams, useCollection, useRecords, type CollectionView } from './api'
+import { hasFilter, recordsParams, useCollection, useRecords, type CollectionView } from './api'
 import { activeConfig, recordName, viewColumns } from './collectionModel'
 import './collectionEmbed.css'
 
@@ -46,7 +46,7 @@ export default function CollectionEmbed({ collectionId, label, projectId, viewId
   const open = view ? `${base}?view=${encodeURIComponent(view.id)}` : base
   const columns = view ? viewColumns(body.fields, view.config).slice(0, COLUMNS) : []
   // A filter on an archived field doesn't count, as the server leaves it out.
-  const filtered = view ? activeConfig(view.config, body.fields).filters.length > 0 : false
+  const filtered = view ? hasFilter(activeConfig(view.config, body.fields)) : false
   const page = records.data?.pages[0]
   const shown = page?.records.slice(0, ROWS) ?? []
   const total = page?.total ?? 0

@@ -633,7 +633,7 @@ async fn load_tree(
             WHERE project_id = $1 AND id = $2
             UNION ALL
             SELECT child.id, tree.depth + 1
-            FROM work_items child
+            FROM task_rows child
             JOIN tree ON child.parent_work_item_id = tree.id
             WHERE child.project_id = $1 AND child.archived_at IS NULL AND tree.depth < $3
         )
@@ -647,7 +647,7 @@ async fn load_tree(
                item.blocked_reason, item.version, item.start_date, item.due_date,
                item.estimate, milestone.name AS milestone_name, item.field_values
         FROM tree
-        JOIN work_items item ON item.id = tree.id
+        JOIN task_rows item ON item.id = tree.id
         LEFT JOIN project_milestones milestone
           ON milestone.project_id = item.project_id AND milestone.id = item.milestone_id
         JOIN projects project ON project.id = item.project_id
@@ -690,6 +690,8 @@ enum Carry {
 }
 
 #[derive(Clone, Debug)]
+// A few per move's plan, read once: boxing the large variant buys nothing.
+#[allow(clippy::large_enum_variant)]
 enum ValuePlan {
     Carry {
         target_field: FieldDefinition,
@@ -757,15 +759,26 @@ async fn carry_value(
         return Ok(None);
     }
     Ok(match source.field_type {
+        // Types only manifests declare are never stored, so never carried.
+        FieldType::People | FieldType::Labels => None,
+        // The record's own columns: nothing stored to carry.
+        FieldType::CreatedTime
+        | FieldType::EditedTime
+        | FieldType::CreatedBy
+        | FieldType::EditedBy
+        | FieldType::AutoId => None,
         FieldType::Text
+        | FieldType::LongText
         | FieldType::Number
         | FieldType::Date
         | FieldType::Url
+        | FieldType::Email
+        | FieldType::Phone
         | FieldType::Checkbox => match fields::normalize_value(target, value) {
             Ok(Normalized::Value(stored)) => Some(Carry::Stored(stored)),
             _ => None,
         },
-        FieldType::SingleChoice => value
+        FieldType::SingleChoice | FieldType::Status => value
             .as_str()
             .and_then(|id| source.option(id))
             .and_then(|option| active_option_by_name(target, &option.name))
@@ -818,7 +831,9 @@ fn issue_reason(source: &FieldDefinition, same_name: Option<&FieldDefinition>) -
         return IssueReason::NoMatchingField;
     }
     match (source.field_type, source.config.target) {
-        (FieldType::SingleChoice | FieldType::MultipleChoice, _) => IssueReason::OptionMissing,
+        (FieldType::SingleChoice | FieldType::MultipleChoice | FieldType::Status, _) => {
+            IssueReason::OptionMissing
+        }
         (FieldType::Person, _) => IssueReason::PersonNotInTarget,
         (FieldType::Link, Some(LinkTarget::Page)) => IssueReason::PageLink,
         (FieldType::Link, _) => IssueReason::LinkOutsideMove,
@@ -1183,7 +1198,7 @@ pub async fn preview(
         ))));
     }
     let archived = sqlx::query_scalar::<_, bool>(
-        "SELECT archived_at IS NOT NULL FROM work_items WHERE project_id = $1 AND id = $2",
+        "SELECT archived_at IS NOT NULL FROM task_rows WHERE project_id = $1 AND id = $2",
     )
     .bind(source_project_id)
     .bind(task_id)
@@ -1265,7 +1280,7 @@ pub async fn destinations(
         return Ok(Err(Refusal::NotFound("That task")));
     }
     let open = sqlx::query_scalar::<_, bool>(
-        "SELECT archived_at IS NULL FROM work_items WHERE project_id = $1 AND id = $2",
+        "SELECT archived_at IS NULL FROM task_rows WHERE project_id = $1 AND id = $2",
     )
     .bind(source_project_id)
     .bind(task_id)
@@ -1586,7 +1601,7 @@ pub async fn execute(
     // The task row's lock orders identical requests: the second waits here,
     // then finds the first one's receipt.
     let archived = sqlx::query_scalar::<_, bool>(
-        "SELECT archived_at IS NOT NULL FROM work_items WHERE project_id = $1 AND id = $2 FOR UPDATE",
+        "SELECT archived_at IS NOT NULL FROM task_rows WHERE project_id = $1 AND id = $2 FOR UPDATE",
     )
     .bind(source_project_id)
     .bind(request.task_id)
@@ -2316,7 +2331,7 @@ async fn replayed(
     .is_empty();
     let titles = if showing {
         sqlx::query_as::<_, (Uuid, String)>(
-            "SELECT id, title FROM work_items WHERE project_id = $1 AND id = ANY($2)",
+            "SELECT id, title FROM task_rows WHERE project_id = $1 AND id = ANY($2)",
         )
         .bind(receipt.target_project_id)
         .bind(&ids)
@@ -2597,18 +2612,32 @@ async fn archive(
     task: &SourceTask,
     new_key: &str,
 ) -> Result<(), AppError> {
+    // Archive state is the record's (crate::task_records); the version is
+    // the task's.
+    if !crate::task_records::write_shared(
+        transaction,
+        actor.project_id,
+        task.id,
+        actor.actor_id,
+        crate::task_records::SharedChange {
+            archived: Some(true),
+            ..Default::default()
+        },
+    )
+    .await?
+    {
+        return Err(AppError::Internal("a moved task was already archived"));
+    }
     let version = sqlx::query_scalar::<_, i64>(
         r#"
         UPDATE work_items
-        SET archived_at = now(), archived_by_actor_id = $3,
-            version = version + 1, updated_at = now()
-        WHERE project_id = $1 AND id = $2 AND archived_at IS NULL
+        SET version = version + 1, updated_at = now()
+        WHERE project_id = $1 AND id = $2
         RETURNING version
         "#,
     )
     .bind(actor.project_id)
     .bind(task.id)
-    .bind(actor.actor_id)
     .fetch_one(&mut **transaction)
     .await?;
     let summary = format!("Work Item moved to {new_key}");
@@ -2645,7 +2674,7 @@ async fn already_moved(
             SELECT $1::uuid, 0
             UNION ALL
             SELECT child.id, source_tree.depth + 1
-            FROM work_items child
+            FROM task_rows child
             JOIN source_tree ON child.parent_work_item_id = source_tree.id
             WHERE source_tree.depth < 50
         )
@@ -2654,7 +2683,7 @@ async fn already_moved(
                item.id, item.project_id, item.title
         FROM source_tree
         JOIN work_item_key_aliases alias ON alias.source_work_item_id = source_tree.id
-        JOIN work_items item ON item.id = alias.work_item_id
+        JOIN task_rows item ON item.id = alias.work_item_id
         JOIN projects project ON project.id = item.project_id
         WHERE actor_can_access_project($2, $3, item.project_id)
           AND ($4::uuid IS NULL OR item.project_id = $4)
@@ -2713,6 +2742,7 @@ mod tests {
                         name: (*name).to_owned(),
                         color: "#336699".to_owned(),
                         archived: false,
+                        category: None,
                     })
                     .collect(),
                 target: (field_type == FieldType::Link).then_some(LinkTarget::Task),
@@ -2721,6 +2751,7 @@ mod tests {
             position: 0,
             archived: false,
             version: 1,
+            accessor: crate::fields::Accessor::Stored,
         }
     }
 

@@ -241,7 +241,7 @@ async fn bug_report_links_make_tasks_as_their_maker_only() {
             r#"
             SELECT item.title, item.description, item.priority, item.created_by_actor_id,
                    item_type.name
-            FROM work_items item
+            FROM task_rows item
             LEFT JOIN work_item_types item_type ON item_type.id = item.type_id
             WHERE item.project_id = $1 AND item.title = 'Ragdoll falls through the floor'
             "#,
@@ -398,7 +398,7 @@ async fn bug_report_links_make_tasks_as_their_maker_only() {
     assert_eq!(state, "disabled");
     assert!(reason.expect("reason").contains("can no longer add tasks"));
     let after = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM work_items WHERE project_id = $1 AND title = 'After'",
+        "SELECT count(*) FROM task_rows WHERE project_id = $1 AND title = 'After'",
     )
     .bind(seed.project_id)
     .fetch_one(&pool)

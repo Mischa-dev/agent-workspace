@@ -268,7 +268,7 @@ async fn load_context(
         r#"
         SELECT link.external_id, item.number
         FROM task_import_links link
-        JOIN work_items item ON item.project_id = link.project_id AND item.id = link.work_item_id
+        JOIN task_rows item ON item.project_id = link.project_id AND item.id = link.work_item_id
         WHERE link.project_id = $1 AND link.source_key = $2
         "#,
     )
@@ -1968,7 +1968,7 @@ async fn export_tasks(
                COALESCE((
                    SELECT array_agg(project.project_key || '-' || blocker.number ORDER BY blocker.number)
                    FROM work_item_dependencies dependency
-                   JOIN work_items blocker
+                   JOIN task_rows blocker
                      ON blocker.project_id = dependency.project_id
                     AND blocker.id = dependency.blocking_work_item_id
                    WHERE dependency.project_id = item.project_id
@@ -1982,7 +1982,7 @@ async fn export_tasks(
                ), ARRAY[]::text[]) AS acceptance_criteria,
                item.archived_at IS NOT NULL AS archived, item.created_at, item.updated_at,
                item.field_values
-        FROM work_items item
+        FROM task_rows item
         JOIN projects project ON project.id = item.project_id
         JOIN work_item_statuses status
           ON status.project_id = item.project_id AND status.id = item.status_id
@@ -1992,7 +1992,7 @@ async fn export_tasks(
           ON assignee.project_id = item.project_id AND assignee.actor_id = item.assignee_actor_id
         LEFT JOIN project_milestones milestone
           ON milestone.project_id = item.project_id AND milestone.id = item.milestone_id
-        LEFT JOIN work_items parent
+        LEFT JOIN task_rows parent
           ON parent.project_id = item.project_id AND parent.id = item.parent_work_item_id
         WHERE item.project_id = $1 AND ($2 OR item.archived_at IS NULL)
         ORDER BY item.number
@@ -2453,6 +2453,7 @@ mod tests {
             position: 0,
             archived: false,
             version: 1,
+            accessor: crate::fields::Accessor::Stored,
         };
         // A custom field named like a built-in column keeps its own column,
         // and so does one whose name starts with the prefix itself.
@@ -2518,6 +2519,7 @@ mod tests {
                 id: None,
                 name: (*name).to_owned(),
                 color: None,
+                category: None,
             })
             .collect::<Vec<_>>();
         FieldDefinition {
@@ -2530,6 +2532,7 @@ mod tests {
             position: 0,
             archived: false,
             version: 1,
+            accessor: crate::fields::Accessor::Stored,
         }
     }
 
@@ -2681,6 +2684,7 @@ mod tests {
                         id: None,
                         name: (*name).to_owned(),
                         color: None,
+                        category: None,
                     })
                     .collect::<Vec<_>>();
                 fields::normalize_config(field_type, None, Some(&options), None)
@@ -2689,6 +2693,7 @@ mod tests {
             position: 0,
             archived: false,
             version: 1,
+            accessor: crate::fields::Accessor::Stored,
         };
         // "=Plan" and "'=Plan" are different options; "''x" starts with two
         // apostrophes of its own.
@@ -2789,6 +2794,7 @@ mod tests {
             position: 0,
             archived: false,
             version: 1,
+            accessor: crate::fields::Accessor::Stored,
         };
         let mut task = areas_task(0, &[]);
         task.fields = serde_json::Map::from_iter([(name.clone(), json!("a;b"))]);

@@ -251,7 +251,7 @@ pub(super) async fn own_task_ref(
         r#"
         SELECT item.id, project.project_key || '-' || item.number, item.title,
                status.name, status.semantic_category
-        FROM work_items item
+        FROM task_rows item
         JOIN projects project ON project.id = item.project_id
         JOIN work_item_statuses status
           ON status.project_id = item.project_id AND status.id = item.status_id
@@ -360,7 +360,7 @@ async fn link_target_refusal<T>(
 ) -> Result<Option<ToolResult<T>>, AppError> {
     let row = sqlx::query_as::<_, (String, bool)>(
         "SELECT project.project_key || '-' || item.number::text, item.archived_at IS NOT NULL \
-         FROM work_items item JOIN projects project ON project.id = item.project_id \
+         FROM task_rows item JOIN projects project ON project.id = item.project_id \
          WHERE item.id = $1 AND item.project_id = $2",
     )
     .bind(task_id)
@@ -959,7 +959,7 @@ pub(super) async fn milestone_write(
         // rather than skip it and report success. Locked so it stays so.
         let locked = sqlx::query_as::<_, (String, bool)>(
             "SELECT project.project_key || '-' || item.number::text, item.archived_at IS NOT NULL \
-             FROM work_items item JOIN projects project ON project.id = item.project_id \
+             FROM task_rows item JOIN projects project ON project.id = item.project_id \
              WHERE item.id = ANY($1) AND item.project_id = $2 \
              ORDER BY item.id FOR UPDATE OF item",
         )

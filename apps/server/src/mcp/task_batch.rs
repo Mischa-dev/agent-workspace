@@ -828,7 +828,7 @@ async fn title_notes(
     let existing = sqlx::query_as::<_, (String, String)>(
         r#"
         SELECT project.project_key || '-' || item.number::text, item.title
-        FROM work_items item JOIN projects project ON project.id = item.project_id
+        FROM task_rows item JOIN projects project ON project.id = item.project_id
         WHERE item.project_id = $1 AND item.archived_at IS NULL AND lower(item.title) = ANY($2)
         ORDER BY item.number
         LIMIT $3
@@ -1219,7 +1219,7 @@ async fn update_many(
     let keys = sqlx::query_as::<_, (Uuid, String)>(
         r#"
         SELECT item.id, project.project_key || '-' || item.number::text
-        FROM work_items item JOIN projects project ON project.id = item.project_id
+        FROM task_rows item JOIN projects project ON project.id = item.project_id
         WHERE item.id = ANY($1)
         "#,
     )
@@ -1504,7 +1504,7 @@ async fn update_many(
             SELECT alias.source_work_item_id, item.project_id,
                    project.project_key || '-' || item.number::text
             FROM work_item_key_aliases alias
-            JOIN work_items item ON item.id = alias.work_item_id
+            JOIN task_rows item ON item.id = alias.work_item_id
             JOIN projects project ON project.id = item.project_id
             WHERE alias.source_work_item_id = ANY($1)
             "#,
@@ -1808,7 +1808,7 @@ async fn update_many(
         let open = sqlx::query_as::<_, (Uuid, i64)>(
             r#"
             SELECT parent_work_item_id, count(*)
-            FROM work_items
+            FROM task_rows
             WHERE project_id = $1 AND parent_work_item_id = ANY($2) AND archived_at IS NULL
             GROUP BY parent_work_item_id
             "#,

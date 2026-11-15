@@ -1,4 +1,4 @@
-import { canGroup, type FieldDefinition } from '../fields/fieldModel'
+import { canGroupRecords, type FieldDefinition } from '../fields/fieldModel'
 import { Button, IconButton, Menu, type MenuEntry } from '../ui'
 import type { SortRule, ViewConfig } from './api'
 import { sortText } from './collectionModel'
@@ -90,7 +90,7 @@ export function FieldHeader({
         if (document.activeElement instanceof HTMLElement) actions.filter(field, document.activeElement)
       },
     },
-    ...(canGroup(field.type) ? [{ label: grouped ? 'Stop grouping' : `Group by ${field.name}`, icon: 'list' as const, onSelect: () => actions.group(grouped ? null : field.id) }] : []),
+    ...(canGroupRecords(field.type) ? [{ label: grouped ? 'Stop grouping' : `Group by ${field.name}`, icon: 'list' as const, onSelect: () => actions.group(grouped ? null : field.id) }] : []),
     { label: 'Hide column', icon: 'x', onSelect: () => actions.hide(field.id) },
     ...(canBuild
       ? [
