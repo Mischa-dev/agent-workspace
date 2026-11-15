@@ -1188,7 +1188,9 @@ number tiles; lazy chunk.
 used by the inbox (C2.12), run page, thread cards and task detail's runs tab.
 - Depends on: A1.5 (runs page and run operations), A1.8 (requests and `request_answer`).
 - Acceptance: component tests for each request kind's answer flow (op called with request id),
-  run view with gaps in activities shown honestly; `App.runs.test.tsx` cases moved here.
+  run view with gaps in activities shown honestly; `App.runs.test.tsx` cases moved here; a
+  run that finishes while the person is on another page shows a toast with Open and its pull
+  request (roadmap N5; added 2026-11-14).
 - Size: M. Beside: Phase C.
 
 **W1.25 Panel block renderer.** `pieces/blocks/` exporting `PanelBlocks({blocks, onAction})`,
@@ -1326,6 +1328,41 @@ words from M1's registrations, so a new module's words are covered without editi
 - Acceptance: the spec runs in CI's e2e job for every shape; turning a module on in a shape
   makes its words allowed with no test edit.
 - Size: M. Beside: anything.
+
+**W1.40 UI hill climb, round 1: visual directions the owner picks.** Added 2026-11-14 by the
+roadmap coverage check (AWD-83 to AWD-86, step 1 of the earlier build-out plan). Two or three
+whole-product visual directions, each drawn on three screens (a channel, the tasks list, a
+page) as tokens and piece styles on W1.17's pieces, never per-page CSS. Round 0's tour and
+scorecard (`docs/plans/ui-hill-climb/round-0.md`) are the starting point. Nothing deploys
+before 5X (R51), so the owner picks from screenshot previews at 1440 and 390 px, light and
+dark, attached to the build's task; the chosen direction's tokens then move into the theme so
+every later piece inherits it.
+- Depends on: W1.17; the owner's pick.
+- Acceptance: each direction's screenshots of the three screens are attached for the owner;
+  after the pick, the tokens change in one place, no per-page colour or spacing override is
+  added, and the accessibility gate (W1.36) passes.
+- Size: M. Beside: Phase A.
+
+**W1.41 UI hill climb, later rounds on the shared pieces.** Each round takes the
+lowest-scoring screens from the scorecard and fixes them in the pieces and tokens (never a
+one-off page style), with before-and-after screenshots at 1440 and 390 px and a coherence
+score; the owner sees each round as a screenshot preview.
+- Depends on: W1.28 (every list on the pieces).
+- Acceptance: each round's preview shows before and after for the screens it touched; the
+  scorecard's lowest score goes up; the shape walk (W1.39) and the accessibility gate pass.
+- Size: M. Beside: anything after W1.28.
+
+**W1.42 Automation builder on the pieces.** Added 2026-11-14 by the roadmap coverage check
+(END-STATE section 8, Automations row: "a clear builder"). The automation screen rebuilt on
+the form piece (W1.22): triggers and actions listed from K2.18's catalogue and every module's
+registrations, including "Ask an agent" (A2.13) and incoming webhooks (K3.26), conditions
+with the filter builder, a test run that shows what would happen without writing, and the
+automation's run history. Nothing is listed by hand per module.
+- Depends on: W1.22, A2.13, K2.18.
+- Acceptance: a person builds "when a task moves to review, ask an agent to check it" without
+  typing JSON; an operation registered by a test module appears as an action with no web
+  edit; a test run writes nothing.
+- Size: M. Beside: W1.41.
 
 ## 6. Guard rails
 
@@ -1547,6 +1584,9 @@ words from M1's registrations, so a new module's words are covered without editi
 | W1.37 | Role choices from the server, not account kind | S | K1 role data | anything |
 | W1.38 | The web app as static files, config fetched at start | S | W1.10, H1's `client-config` | anything |
 | W1.39 | Shape walk test | M | W1.13, W1.35, M1.17 (C2.40 for "Friends") | anything |
+| W1.40 | UI hill climb, round 1: visual directions the owner picks | M | W1.17, the owner's pick | Phase A |
+| W1.41 | UI hill climb, later rounds on the shared pieces | M | W1.28 | anything after W1.28 |
+| W1.42 | Automation builder on the pieces | M | W1.22, A2.13, K2.18 | W1.41 |
 
 ## Review changes
 
