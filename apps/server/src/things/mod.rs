@@ -347,7 +347,7 @@ mod tests {
     const SEEDED: &str = concat!(
         include_str!("../../migrations/20261114192000_thing_registry.sql"),
         include_str!("../../migrations/20261114195000_more_thing_kinds.sql"),
-        include_str!("../../migrations/20261114197000_run_and_request_things.sql"),
+        include_str!("../../migrations/20261114195600_run_and_request_things.sql"),
     );
 
     #[test]
