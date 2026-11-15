@@ -39,6 +39,7 @@ variable that is set still wins.
 | `AGENT_WORKSPACE_CLIENT_ADDRESS_HEADER` | none | The request header that carries the caller's address, as the proxy in front of the server sets it (`cf-connecting-ip` behind Cloudflare). Per-address sign-in and reset limits use it. Unset, no address is read from requests. Set it only when every request comes through that proxy, or callers could name any address. |
 | `AGENT_WORKSPACE_WEB_ROOT` | `apps/web/dist` | The built web app this server serves. |
 | `AGENT_WORKSPACE_LOG_FILTER` | `agent_workspace=info,tower_http=info` | Which log lines are written, in `tracing` filter syntax. |
+| `AGENT_WORKSPACE_ACCESS_` + area | `compare` for `OPS` | Which access check decides in an area while K1 replaces the old checks, such as `AGENT_WORKSPACE_ACCESS_OPS`: `old`, `compare` (the old check decides and differences are recorded) or `new`. |
 | `AGENT_WORKSPACE_OPERATOR_LOGINS` | none | Login names, comma separated, of the people who run this server, besides whoever set it up from its terminal. Only they see Settings › Workspace › Server. |
 
 ## Database and storage

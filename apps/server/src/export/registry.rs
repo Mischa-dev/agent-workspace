@@ -149,6 +149,10 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "a cache or index derived from other rows, rebuilt on import",
             ),
             (
+                "workspace_slugs",
+                "the addresses a workspace had on this server; an import takes its own slug",
+            ),
+            (
                 "operation_alias_usage",
                 "daily counts of calls to old operation names, kept to retire them (K2); this server's own measure",
             ),
@@ -333,7 +337,12 @@ pub const DECLARATIONS: &[ExportDecl] = &[
             KindDecl {
                 kind: "projects",
                 table: "projects",
-                references: &[("id", "projects"), ("archived_by_actor_id", "actors")],
+                references: &[
+                    ("id", "projects"),
+                    ("archived_by_actor_id", "actors"),
+                    ("owner_actor_id", "actors"),
+                    ("created_by_actor_id", "actors"),
+                ],
                 text_references: &[],
                 exclude: &[],
             },

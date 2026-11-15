@@ -17,6 +17,8 @@ code, the path is the file in that pull request.
 
 ---
 
+> **Amended by the architecture review (2026-11-14).** R53 (one public task revision, `work_items.version`) amends section 3.1's separate versions. See `LEAD-RULINGS.md`.
+
 ## 1. Goal
 
 One way to add typed fields to anything, and one views system (table, board, list,

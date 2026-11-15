@@ -11,6 +11,8 @@ paths below are under `apps/server/src/` unless they start with `apps/`, `migrat
 (meaning `apps/server/migrations/`) or `docs/`. Line numbers were re-read in the code, not
 copied from the health check. Where a statement is inferred rather than read, it says so.
 
+> **Amended by the architecture review (2026-11-14).** R59 adds per-call account selection for an integration bound to several agents, and per-call delegation context, to the delegation slices. See `LEAD-RULINGS.md`.
+
 ## 1. Goal
 
 When K1 is done, every person, agent and app is one kind of thing, an account, and what any
@@ -1741,6 +1743,10 @@ when renaming the table.
 | Trigger | On table | Writes | Added by | Removed by |
 | --- | --- | --- | --- | --- |
 | `actors_account_kind` | `actors` | `actors.account_kind` from `kind` | K1.5 | K1.31 (with `kind`) |
+| `actors_owner_chain` | `actors` | nothing (refuses an owner chain that loops, is longer than 3, or owns a person) | K1.5 | permanent |
+| `organization_memberships_fill_account_owner`, `project_memberships_fill_account_owner` | `organization_memberships`, `project_memberships` | `actors.owner_workspace_id` of a new agent or app with no owner | K1.5 | K1.6 (`accounts::create_agent` names the owner) |
+| `hosts_fill_account_owner` | `hosts` (A1's) | `actors.owner_account_id` / `owner_workspace_id` of the host's account | K1.5 (after A1.3 merged) | K1.6 (`accounts::create_agent`) |
+| `external_agent_connections_name_manager` | `external_agent_connections` | `account_managers` (the connection's creator) | K1.4 | K1.6 (`accounts::create_agent` names the managers) |
 | role and `role_id` step-keeping | `organization_memberships`, `project_memberships` | the other of `role` / `role_id` | K1.10 | K1.31 (with `memberships.role`) |
 | `validate_external_agent_connection` (existing, `0033:60-101`) | `external_agent_connections` | refuses connections whose agent lacks the project membership | today | K1.6 (dropped explicitly) |
 | legacy credential mirrors | `mcp_client_credentials`, `mcp_oauth_grants`, `workos_agent_bindings`, `agent_setup_links` | `account_credentials` | K1.22 | K1.31 (with the legacy tables) |

@@ -86,6 +86,7 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("workspace_invitations", ORGANIZATION_ID),
     ("workspace_mail_settings", ORGANIZATION_ID),
     ("workspace_roles", ORGANIZATION_ID),
+    ("workspace_slugs", WORKSPACE_ID),
     ("workspace_template_uses", ORGANIZATION_ID),
     ("workspace_templates", ORGANIZATION_ID),
 ];
@@ -93,6 +94,14 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
 /// Server-wide tables, each with the reason it belongs to no workspace.
 pub const GLOBAL_TABLES: &[(&str, &str)] = &[
     ("_sqlx_migrations", "the schema's migration ledger"),
+    (
+        "access_disagreements",
+        "the server's log of where the old and new access checks differ during K1's cutover; a row names a workspace when there is one",
+    ),
+    (
+        "account_managers",
+        "who manages an agent or app account: accounts and their naming are server-wide (R19)",
+    ),
     (
         "actors",
         "every account, of any kind: accounts are server-wide (R19), each with its owner",
@@ -130,6 +139,10 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
         "the workspaces themselves: a row is its own tenant (its id)",
     ),
     ("password_reset_tokens", "account mail tokens, server-wide"),
+    (
+        "permission_catalogue",
+        "the permissions the server knows, the same for every workspace (K1.3)",
+    ),
     (
         "secret_master_keys_retired",
         "the server's own key history, not any workspace's",
@@ -183,6 +196,7 @@ pub const MUST_BE_GLOBAL: &[&str] = &[
     "workos_login_attempts",
     "mcp_oauth_clients",
     "account_credentials",
+    "account_managers",
     "agent_outside_refs",
     "agent_connections",
     "connection_signing_secrets",

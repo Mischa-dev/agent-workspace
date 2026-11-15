@@ -66,7 +66,8 @@
     "/api/v1/search",
     "/api/v1/settings/*",
     "/api/v1/things/*",
-    "/api/v1/workspace-invitations/*"
+    "/api/v1/workspace-invitations/*",
+    "/api/v1/workspaces/by-slug/*"
   ],
   "events": { "emits": [], "listens": [] },
   "notifications": [],

@@ -449,7 +449,8 @@ fn retention_report_query() -> &'static str {
     ('oauth_access_tokens', (SELECT count(*) FROM mcp_oauth_access_tokens WHERE (revoked_at IS NOT NULL OR expires_at <= now()) AND created_at <= now() - interval '7 days'), 0::bigint), \
     ('oauth_refresh_tokens', (SELECT count(*) FROM mcp_oauth_refresh_tokens WHERE (used_at IS NOT NULL OR revoked_at IS NOT NULL OR expires_at <= now()) AND created_at <= now() - interval '30 days'), 0::bigint), \
     ('published_outbox', (SELECT count(*) FROM outbox_events WHERE published_at <= now() - interval '30 days'), 0::bigint), \
-    ('completed_temporary_jobs', (SELECT count(*) FROM github_jobs WHERE state IN ('completed', 'exhausted') AND updated_at <= now() - interval '30 days'), 0::bigint) \
+    ('completed_temporary_jobs', (SELECT count(*) FROM github_jobs WHERE state IN ('completed', 'exhausted') AND updated_at <= now() - interval '30 days'), 0::bigint), \
+    ('old_access_disagreements', (SELECT count(*) FROM access_disagreements WHERE last_seen_at <= now() - interval '30 days'), 0::bigint) \
     ) AS summary(category, eligible_rows, affected_rows)"
 }
 
@@ -464,6 +465,7 @@ fn retention_apply_query() -> &'static str {
     oauth_refresh_tokens AS (DELETE FROM mcp_oauth_refresh_tokens WHERE id IN (SELECT id FROM refresh_eligible) RETURNING 1), \
     published_outbox AS (DELETE FROM outbox_events WHERE published_at <= now() - interval '30 days' RETURNING 1), \
     completed_temporary_jobs AS (DELETE FROM github_jobs WHERE state IN ('completed', 'exhausted') AND updated_at <= now() - interval '30 days' RETURNING 1), \
+    old_access_disagreements AS (DELETE FROM access_disagreements WHERE last_seen_at <= now() - interval '30 days' RETURNING 1), \
     summary AS (SELECT * FROM (VALUES \
       ('expired_idempotency', (SELECT count(*) FROM expired_idempotency), (SELECT count(*) FROM expired_idempotency)), \
       ('expired_invitations', (SELECT count(*) FROM expired_invitations), (SELECT count(*) FROM expired_invitations)), \
@@ -471,7 +473,8 @@ fn retention_apply_query() -> &'static str {
       ('oauth_access_tokens', (SELECT count(*) FROM oauth_access_tokens), (SELECT count(*) FROM oauth_access_tokens)), \
       ('oauth_refresh_tokens', (SELECT count(*) FROM oauth_refresh_tokens), (SELECT count(*) FROM oauth_refresh_tokens)), \
       ('published_outbox', (SELECT count(*) FROM published_outbox), (SELECT count(*) FROM published_outbox)), \
-      ('completed_temporary_jobs', (SELECT count(*) FROM completed_temporary_jobs), (SELECT count(*) FROM completed_temporary_jobs)) \
+      ('completed_temporary_jobs', (SELECT count(*) FROM completed_temporary_jobs), (SELECT count(*) FROM completed_temporary_jobs)), \
+      ('old_access_disagreements', (SELECT count(*) FROM old_access_disagreements), (SELECT count(*) FROM old_access_disagreements)) \
     ) AS value(category, eligible_rows, affected_rows)) \
     SELECT json_agg(row_to_json(summary) ORDER BY summary.category)::text FROM summary; COMMIT;"
 }
