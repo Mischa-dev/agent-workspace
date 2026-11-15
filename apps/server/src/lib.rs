@@ -48,6 +48,7 @@ pub mod later;
 pub mod launch;
 pub mod layouts;
 pub mod link_previews;
+pub mod links;
 pub mod mail;
 pub mod mcp;
 pub mod memberships;

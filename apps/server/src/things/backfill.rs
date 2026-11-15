@@ -163,6 +163,9 @@ pub fn register_jobs(registry: &mut JobRegistry) {
         let started = Instant::now();
         while started.elapsed() < Duration::from_secs(240) {
             if run(&context.state.pool, BATCH, 10).await?.done {
+                // Every end has its row now: links whose ends were missing
+                // can be copied (K3.12).
+                crate::jobs::enqueue(&context.state.pool, crate::links::backfill_job()).await?;
                 break;
             }
         }
