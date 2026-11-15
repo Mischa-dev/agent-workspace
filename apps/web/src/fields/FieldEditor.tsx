@@ -65,6 +65,7 @@ export function FieldEditor({
   switch (field.type) {
     case 'single_choice':
     case 'multiple_choice':
+    case 'status':
       body = <ChoiceEditor field={field} onClose={onClose} onSet={onSet} value={value} />
       break
     case 'person':
@@ -86,7 +87,7 @@ export function FieldEditor({
       body = <TypedEditor field={field} onSet={pick} references={references} value={value} />
   }
   return (
-    <Popover anchor={anchor} label={field.name} onClose={onClose} open width={field.type === 'text' ? 360 : 300}>
+    <Popover anchor={anchor} label={field.name} onClose={onClose} open width={field.type === 'long_text' ? 480 : field.type === 'text' ? 360 : 300}>
       {body}
     </Popover>
   )
@@ -279,7 +280,7 @@ function RecordEditor({
   )
 }
 
-/** Text, a number or a web address: typed, then set with Enter or Set. */
+/** Text, a number, a web or email address or a phone number: typed, then set with Enter or Set. */
 function TypedEditor({
   field,
   onSet,
@@ -303,20 +304,23 @@ function TypedEditor({
       return onSet(parsed)
     }
     if (field.type === 'url' && /\s/.test(trimmed)) return setProblem('Use a web address, such as https://example.com.')
+    if (field.type === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) return setProblem('Use an email address, such as ada@example.com.')
+    if (field.type === 'phone' && !/^\+?[0-9 ().-]+$/.test(trimmed)) return setProblem('Use a phone number: digits, a leading +, spaces, dots, dashes and brackets.')
     onSet(trimmed)
   }
+  const long = field.type === 'long_text'
   const input =
-    field.type === 'text' ? (
+    field.type === 'text' || long ? (
       <TextArea
         aria-label={field.name}
         autoFocus
         error={problem ?? undefined}
-        maxLength={5000}
+        maxLength={long ? 20000 : 5000}
         onChange={(event) => setTyped(event.target.value)}
         onKeyDown={(event) => {
           if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) submit(event)
         }}
-        rows={3}
+        rows={long ? 8 : 3}
         value={typed}
       />
     ) : (
@@ -325,12 +329,14 @@ function TypedEditor({
         autoFocus
         compact
         error={problem ?? undefined}
-        inputMode={field.type === 'number' ? 'decimal' : field.type === 'url' ? 'url' : undefined}
+        inputMode={
+          field.type === 'number' ? 'decimal' : field.type === 'url' ? 'url' : field.type === 'email' ? 'email' : field.type === 'phone' ? 'tel' : undefined
+        }
         onChange={(event) => {
           setTyped(event.target.value)
           setProblem(null)
         }}
-        placeholder={field.type === 'url' ? 'https://' : field.type === 'number' ? '0' : ''}
+        placeholder={field.type === 'url' ? 'https://' : field.type === 'number' ? '0' : field.type === 'email' ? 'name@example.com' : ''}
         value={typed}
       />
     )

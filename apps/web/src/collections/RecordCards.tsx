@@ -80,7 +80,7 @@ export function RecordCards({
             if (item.kind !== 'record') return null
             const { record } = item
             return (
-              <li key={record.id}>
+              <li key={`${record.group?.key ?? ''}:${record.id}`}>
                 <button
                   aria-current={record.id === openRecordId || undefined}
                   className="aw-recordcards__card"

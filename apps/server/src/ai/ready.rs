@@ -69,7 +69,7 @@ const ROW_SELECT: &str = r#"
            assignee.display_name AS assignee_name,
            EXISTS (SELECT 1 FROM work_item_claims claim
                     WHERE claim.work_item_id = item.id AND claim.expires_at > now()) AS claimed
-    FROM work_items item
+    FROM task_rows item
     JOIN projects project ON project.id = item.project_id
     JOIN work_item_statuses status
       ON status.project_id = item.project_id AND status.id = item.status_id
@@ -198,10 +198,10 @@ async fn load(pool: &PgPool, reader: Reader, project_id: Uuid) -> Result<Loaded,
                         THEN dependency.blocking_project_id ELSE dependency.project_id END
                    AS project_id
         ) other
-        JOIN work_items blocking
+        JOIN task_rows blocking
           ON blocking.project_id = dependency.blocking_project_id
          AND blocking.id = dependency.blocking_work_item_id
-        JOIN work_items blocked
+        JOIN task_rows blocked
           ON blocked.project_id = dependency.project_id
          AND blocked.id = dependency.blocked_work_item_id
         WHERE (dependency.project_id = $1 OR dependency.blocking_project_id = $1)
@@ -637,7 +637,7 @@ pub async fn readiness_of(
     let elsewhere = sqlx::query_scalar::<_, i64>(
         r#"
         SELECT count(*) FROM work_item_dependencies dependency
-        JOIN work_items item
+        JOIN task_rows item
           ON item.project_id = dependency.blocking_project_id
          AND item.id = dependency.blocking_work_item_id
         JOIN work_item_statuses status

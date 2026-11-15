@@ -8,24 +8,12 @@ export type ToolVerb = 'describe' | 'query' | 'create' | 'change' | 'suggest'
 /** How one thing relates to another; every link reads both ways. */
 export type LinkKind = 'part_of' | 'blocks' | 'about' | 'made_from' | 'relates_to' | 'duplicates'
 
-/** A field's type, shared by tasks, collections and every module's records, named as task fields (AWD-89) store them. */
-export type FieldType =
-  | 'text'
-  | 'long_text'
-  | 'number'
-  | 'date'
-  | 'checkbox'
-  | 'url'
-  | 'single_choice'
-  | 'multiple_choice'
-  | 'status'
-  | 'person'
-  | 'people'
-  | 'labels'
-  | 'link'
+/** A field's type: the one list, in fields/fieldModel.ts (T1.2). */
+export type { FieldType } from '../fields/fieldModel'
+import type { FieldType } from '../fields/fieldModel'
 
-/** A way to look at many things at once. */
-export type ViewType = 'list' | 'table' | 'board' | 'calendar' | 'timeline' | 'gallery'
+/** A way to look at many things at once: the one list, in views/kinds.ts (T1.2). */
+export type { ViewKind as ViewType } from '../views/kinds'
 
 /** A piece of screen the app draws for a module. */
 export type PieceType = 'list' | 'table' | 'board' | 'detail' | 'fields' | 'form' | 'card' | 'actions'

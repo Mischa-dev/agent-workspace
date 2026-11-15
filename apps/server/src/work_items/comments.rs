@@ -158,7 +158,7 @@ pub(crate) async fn lock_comment(
                comment.removed_at IS NOT NULL AS removed,
                item.archived_at IS NOT NULL AS task_archived
         FROM work_item_comments comment
-        JOIN work_items item
+        JOIN task_rows item
           ON item.project_id = comment.project_id AND item.id = comment.work_item_id
         WHERE comment.project_id = $1 AND comment.work_item_id = $2 AND comment.id = $3
         FOR UPDATE OF comment

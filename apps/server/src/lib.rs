@@ -102,9 +102,13 @@ pub mod sheets;
 pub mod storage_admission;
 #[cfg(test)]
 mod structure_guards;
+pub mod task_records;
 pub mod telemetry;
 pub mod test_support;
 pub mod usage;
+pub mod views;
+#[cfg(test)]
+mod views_guard;
 pub mod webhooks;
 pub mod whiteboards;
 pub mod work_item_commands;
