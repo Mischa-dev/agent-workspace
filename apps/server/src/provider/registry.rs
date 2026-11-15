@@ -107,6 +107,10 @@ struct RegistryInner {
     route_all_to_demo: bool,
     shutdown: Arc<ShutdownSignal>,
     ceremonies: Mutex<HashMap<Uuid, LoginCeremony>>,
+    /// This instance among the others (K5.3): local turns run only on the
+    /// holder of the built-in host's lease. Unset in tests that build a
+    /// state without a server.
+    cluster: std::sync::OnceLock<crate::cluster::Cluster>,
 }
 
 #[derive(Clone)]
@@ -205,6 +209,7 @@ impl SupervisorRegistry {
                 codex_cloud,
                 shutdown,
                 ceremonies: Mutex::new(HashMap::new()),
+                cluster: std::sync::OnceLock::new(),
             }),
         })
     }
@@ -313,6 +318,16 @@ impl SupervisorRegistry {
         let _ = self.inner.host.set(host);
     }
 
+    /// The instance whose lease decides where local turns run (K5.3). Set
+    /// once when the server starts.
+    pub fn set_cluster(&self, cluster: crate::cluster::Cluster) {
+        let _ = self.inner.cluster.set(cluster);
+    }
+
+    pub fn cluster(&self) -> Option<&crate::cluster::Cluster> {
+        self.inner.cluster.get()
+    }
+
     /// The host cell registered adapters share with the built-in ones.
     pub(crate) fn host_cell(&self) -> HostCell {
         Arc::clone(&self.inner.host)
@@ -398,6 +413,12 @@ impl SupervisorRegistry {
 
     pub async fn shutdown_all(&self) {
         self.request_shutdown();
+        self.stop_local_turns().await;
+    }
+
+    /// Stop every turn running here, as when this instance loses the
+    /// built-in host's lease: nobody may recover them while they run.
+    pub async fn stop_local_turns(&self) {
         let custom = self
             .custom_read()
             .values()

@@ -492,3 +492,90 @@ async fn events_arrive_with_listen_off() {
     }
     cluster.finish().await;
 }
+
+/// A run's state and how many times it was recovered.
+async fn recovered(pool: &sqlx::PgPool, run: Uuid) -> (String, i64) {
+    sqlx::query_as::<_, (String, i64)>(
+        "SELECT state, (SELECT count(*) FROM agent_run_events \
+                        WHERE agent_run_id = run.id AND kind = 'recovery') \
+         FROM agent_runs run WHERE id = $1",
+    )
+    .bind(run)
+    .fetch_one(pool)
+    .await
+    .expect("run")
+}
+
+async fn until_host(instance: &crate::cluster_support::Instance) {
+    let started = Instant::now();
+    while !instance.cluster().holds(&LeaseName::BuiltinHost) {
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "{} never took the host",
+            instance.name
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+async fn until_settled(pool: &sqlx::PgPool, run: Uuid) -> (String, i64) {
+    let started = Instant::now();
+    loop {
+        let (state, count) = recovered(pool, run).await;
+        if !matches!(state.as_str(), "working" | "recovering") {
+            return (state, count);
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "run {run} was never recovered"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// K5.3: only the built-in host's holder recovers runs. A second instance
+/// starting leaves live runs alone; when the holder dies, the next holder
+/// recovers each run once.
+#[tokio::test]
+async fn runs_are_recovered_once_by_the_host() {
+    let Some(mut cluster) = cluster_with("k5_3_recovery", 0, SHORT_LEASES).await else {
+        return;
+    };
+    let root = tempfile::tempdir().expect("data root");
+    let seed = crate::a1_runs_record::seed(&cluster.pool, &root).await;
+    let left_over = crate::a1_runs_record::insert_run(
+        &cluster.pool,
+        &seed,
+        "working",
+        None,
+        "From before the start",
+    )
+    .await;
+
+    // The first holder recovers what was left over, once.
+    cluster.start(SHORT_LEASES).await;
+    until_host(cluster.instance(0)).await;
+    let (_, count) = until_settled(&cluster.pool, left_over).await;
+    assert_eq!(count, 1);
+
+    // A run the holder is running; a second instance starts and leaves it.
+    let live =
+        crate::a1_runs_record::insert_run(&cluster.pool, &seed, "working", None, "Running on A")
+            .await;
+    cluster.start(SHORT_LEASES).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert!(!cluster.instance(1).cluster().holds(&LeaseName::BuiltinHost));
+    assert_eq!(
+        recovered(&cluster.pool, live).await,
+        ("working".to_owned(), 0),
+        "B recovered a run A holds"
+    );
+
+    // The holder dies: B takes the host and recovers the run, once.
+    cluster.instance_mut(0).abort();
+    until_host(cluster.instance(1)).await;
+    let (state, count) = until_settled(&cluster.pool, live).await;
+    assert_eq!(count, 1, "{state}");
+    assert_eq!(recovered(&cluster.pool, left_over).await.1, 1);
+    cluster.finish().await;
+}

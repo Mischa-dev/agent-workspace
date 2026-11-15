@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
+    cluster::{Cluster, Lease},
     domain::{RunState, transition_run},
     error::AppError,
     git_runtime::worktree_is_dirty,
@@ -27,22 +28,35 @@ struct RecoverableRun {
 /// completion is provable. Any ambiguous state terminates as interrupted while
 /// retaining the exact worktree.
 pub async fn reconcile_non_terminal_runs(state: &AppState) -> Result<u64, AppError> {
-    // Queued work has no provider or filesystem ownership yet. A process loss
-    // only invalidates its short scheduler lease; the owned scheduler will
-    // admit it normally after startup.
-    sqlx::query(
-        r#"
-        UPDATE agent_runs
-           SET scheduler_claim_id = NULL,
-               scheduler_claimed_at = NULL,
-               scheduler_lease_expires_at = NULL,
-               updated_at = now()
-         WHERE state IN ('created', 'queued')
-           AND scheduler_claim_id IS NOT NULL
-        "#,
-    )
-    .execute(&state.pool)
-    .await?;
+    reconcile(state, None).await
+}
+
+/// What the built-in host's holder does as it takes the lease (K5.3), at
+/// startup or when it takes over from a holder that died: recover the runs
+/// that were running, each transition fenced by the lease, then the
+/// worktrees and approvals.
+pub async fn reconcile_owned(
+    state: &AppState,
+    cluster: &Cluster,
+    lease: &Lease,
+) -> Result<(), AppError> {
+    let recovered = reconcile(state, Some((cluster, lease))).await?;
+    if recovered > 0 {
+        tracing::warn!(recovered, "reconciled non-terminal Agent Runs");
+    }
+    let inspected_worktrees = reconcile_registered_worktrees(state).await?;
+    let canceled_approvals = cancel_terminal_run_approvals(state).await?;
+    tracing::info!(
+        inspected_worktrees,
+        canceled_approvals,
+        "built-in host reconciliation completed"
+    );
+    Ok(())
+}
+
+// A queued run's scheduler claim is left alone: a lapsed one is cleared by
+// the next claim, and a live one belongs to whoever holds it (K5.3).
+async fn reconcile(state: &AppState, fence: Option<(&Cluster, &Lease)>) -> Result<u64, AppError> {
     let runs = sqlx::query_as::<_, RecoverableRun>(
         r#"
         SELECT run.id, run.state AS previous_state, run.conversation_id,
@@ -58,6 +72,9 @@ pub async fn reconcile_non_terminal_runs(state: &AppState) -> Result<u64, AppErr
 
     for run in &runs {
         let mut transition = state.pool.begin().await?;
+        if let Some((cluster, lease)) = fence {
+            cluster.fence(&mut transition, lease).await?;
+        }
         transition_run(&mut transition, run.id, RunState::Recovering, None).await?;
         outbox::enqueue_agent_run_updated(
             &mut transition,

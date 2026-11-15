@@ -161,6 +161,14 @@ impl Cluster {
         leases::fence(transaction, self, lease).await
     }
 
+    /// The lease of that name this instance holds now, if any.
+    pub fn held_lease(&self, name: &LeaseName) -> Option<Lease> {
+        self.held()
+            .iter()
+            .find(|lease| &lease.name == name && !lease.lost.is_cancelled())
+            .cloned()
+    }
+
     pub fn holds(&self, name: &LeaseName) -> bool {
         self.held()
             .iter()

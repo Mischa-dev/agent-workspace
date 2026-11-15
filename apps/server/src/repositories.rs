@@ -443,33 +443,57 @@ async fn run_preparation(
     Ok(row)
 }
 
+/// The host-scoped job that clones or refreshes a repository on this
+/// machine's disk (K5.3): only the built-in host's holder runs it, and a
+/// crash leaves it queued rather than the repository pending for ever.
+pub const PREPARE_KIND: &str = "repositories.prepare";
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreparePayload {
+    project_id: Uuid,
+    repository_id: Uuid,
+}
+
+pub fn register_jobs(registry: &mut crate::jobs::JobRegistry) {
+    registry.register_host(PREPARE_KIND, |context| async move {
+        let payload = context.job.payload_as::<PreparePayload>()?;
+        prepare(context.state, payload.project_id, payload.repository_id).await?;
+        Ok(())
+    });
+}
+
 /// Clone or refresh a repository without holding up the request that added
-/// it; the repository list shows how it went.
+/// it; the repository list shows how it went. On a server it is a host job;
+/// a state without a server (a test's) prepares it here, as before.
 pub(crate) fn prepare_in_background(state: AppState, project_id: Uuid, repository_id: Uuid) {
     tokio::spawn(async move {
-        let result = async {
-            let admission_root = state.config.data_root.clone();
-            let admission_quota = state.config.data_quota_bytes;
-            let admission_free = state.config.minimum_free_bytes;
-            tokio::task::spawn_blocking(move || {
-                crate::storage_admission::require_growth(
-                    &admission_root,
-                    admission_quota,
-                    admission_free,
-                )
-            })
-            .await
-            .map_err(|_| AppError::Internal("join storage admission"))??;
-            let mut transaction = state.pool.begin().await?;
-            let row = fetch_repository(&mut transaction, project_id, repository_id)
-                .await?
-                .filter(|row| row.archived_at.is_none() && row.enabled && row.trusted)
-                .ok_or(AppError::NotFound("repository"))?;
-            transaction.commit().await?;
-            run_preparation(&state, project_id, repository_id, row).await
+        if state.supervisors.cluster().is_some() {
+            let job = crate::jobs::NewJob::new(PREPARE_KIND)
+                .payload(PreparePayload {
+                    project_id,
+                    repository_id,
+                })
+                .unique(format!("{PREPARE_KIND}:{repository_id}"));
+            let queued = async {
+                crate::jobs::enqueue(&state.pool, job).await?;
+                sqlx::query("SELECT pg_notify(realtime_channel('control'), 'host:kick')")
+                    .execute(&state.pool)
+                    .await?;
+                Ok::<_, AppError>(())
+            }
+            .await;
+            if let Err(error) = queued {
+                tracing::warn!(
+                    %project_id,
+                    %repository_id,
+                    error_category = error.log_category(),
+                    "repository preparation not queued"
+                );
+            }
+            return;
         }
-        .await;
-        if let Err(error) = result {
+        if let Err(error) = prepare(state, project_id, repository_id).await {
             tracing::warn!(
                 %project_id,
                 %repository_id,
@@ -478,6 +502,25 @@ pub(crate) fn prepare_in_background(state: AppState, project_id: Uuid, repositor
             );
         }
     });
+}
+
+async fn prepare(state: AppState, project_id: Uuid, repository_id: Uuid) -> Result<(), AppError> {
+    let admission_root = state.config.data_root.clone();
+    let admission_quota = state.config.data_quota_bytes;
+    let admission_free = state.config.minimum_free_bytes;
+    tokio::task::spawn_blocking(move || {
+        crate::storage_admission::require_growth(&admission_root, admission_quota, admission_free)
+    })
+    .await
+    .map_err(|_| AppError::Internal("join storage admission"))??;
+    let mut transaction = state.pool.begin().await?;
+    let row = fetch_repository(&mut transaction, project_id, repository_id)
+        .await?
+        .filter(|row| row.archived_at.is_none() && row.enabled && row.trusted)
+        .ok_or(AppError::NotFound("repository"))?;
+    transaction.commit().await?;
+    run_preparation(&state, project_id, repository_id, row).await?;
+    Ok(())
 }
 
 /// A repository as the repositories API shows it.

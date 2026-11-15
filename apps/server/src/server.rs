@@ -10,8 +10,14 @@ use sqlx::PgPool;
 use tokio::{net::TcpListener, sync::watch, task::JoinHandle};
 
 use crate::{
-    AppState, cluster::Cluster, config::AppConfig, error::AppError, github, jobs,
-    provider::SupervisorRegistry, rate_limit::RateLimiters, realtime::RealtimeHub, recovery,
+    AppState,
+    cluster::{Cluster, LeaseName},
+    config::AppConfig,
+    error::AppError,
+    github, jobs,
+    provider::SupervisorRegistry,
+    rate_limit::RateLimiters,
+    realtime::RealtimeHub,
     router,
 };
 
@@ -25,8 +31,8 @@ pub struct Server {
 }
 
 impl Server {
-    /// The state, and the one-time startup work: harnesses, run recovery,
-    /// secret migration and the module registries.
+    /// The state, and the one-time startup work: harnesses, secret
+    /// migration (under `server.startup`) and the module registries.
     pub async fn build(config: Arc<AppConfig>, pool: PgPool) -> anyhow::Result<Self> {
         let supervisors =
             SupervisorRegistry::new(&config).context("configure provider supervisors")?;
@@ -50,33 +56,8 @@ impl Server {
                 "registered harnesses not loaded"
             );
         }
-        let recovered = recovery::reconcile_non_terminal_runs(&state)
-            .await
-            .context("reconcile non-terminal Agent Runs")?;
-        if recovered > 0 {
-            tracing::warn!(recovered, "reconciled non-terminal Agent Runs");
-        }
-        let inspected_worktrees = recovery::reconcile_registered_worktrees(&state)
-            .await
-            .context("reconcile registered Git worktrees")?;
-        let canceled_approvals = recovery::cancel_terminal_run_approvals(&state)
-            .await
-            .context("cancel approvals owned by terminal Agent Runs")?;
-        tracing::info!(
-            inspected_worktrees,
-            canceled_approvals,
-            "startup reconciliation completed"
-        );
-
-        let moved_secrets = crate::secrets::migrate_plaintext_webhook_secrets(&pool, &config)
-            .await
-            .context("encrypt plaintext agent webhook secrets")?;
-        if moved_secrets > 0 {
-            tracing::info!(
-                moved_secrets,
-                "moved agent webhook secrets into the secrets store"
-            );
-        }
+        // Run recovery belongs to the built-in host's lease holder (K5.3),
+        // which recovers as it takes the lease, here or after taking over.
 
         // This process as an instance among any number (K5.2); its
         // heartbeat starts with the loops.
@@ -88,6 +69,35 @@ impl Server {
         )
         .await
         .context("register this server instance")?;
+
+        // One-off work at startup runs once however many instances start
+        // together: under `server.startup`, which nobody else can hold
+        // meanwhile. One that finds it held leaves it to that instance.
+        match cluster
+            .try_acquire(LeaseName::StartupMaintenance)
+            .await
+            .context("take the startup lease")?
+        {
+            Some(lease) => {
+                let moved = crate::secrets::migrate_plaintext_webhook_secrets(&pool, &config)
+                    .await
+                    .context("encrypt plaintext agent webhook secrets");
+                if let Err(error) = cluster.release(&lease).await {
+                    tracing::warn!(
+                        error_category = error.log_category(),
+                        "startup lease not released; it runs out instead"
+                    );
+                }
+                let moved_secrets = moved?;
+                if moved_secrets > 0 {
+                    tracing::info!(
+                        moved_secrets,
+                        "moved agent webhook secrets into the secrets store"
+                    );
+                }
+            }
+            None => tracing::info!("another instance is doing the startup work"),
+        }
 
         // Modules (and their operations) that don't fit together stop the
         // server here, before it takes a request.
@@ -139,7 +149,13 @@ impl Server {
         };
         let tail = crate::realtime::tail::channel();
         crate::harnesses::spawn_reloader(state.clone());
-        let scheduler = tokio::spawn(crate::scheduler::run(state.clone(), receiver.clone()));
+        // The run scheduler, recovery and host jobs, on whichever instance
+        // holds the built-in host's lease (K5.3).
+        let scheduler = tokio::spawn(crate::scheduler::run_host(
+            state.clone(),
+            cluster.clone(),
+            receiver.clone(),
+        ));
         let github = tokio::spawn(github::run_jobs(state.clone(), receiver.clone()));
         let outbox = tokio::spawn(crate::realtime::run_outbox_publisher(
             state.pool.clone(),
