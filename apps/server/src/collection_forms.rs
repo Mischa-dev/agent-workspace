@@ -55,9 +55,11 @@ pub struct FormField {
     pub required: bool,
 }
 
-/// Whether a public form may ask for this type of field.
+/// Whether a public form may ask for this type of field: not people or
+/// links (the person filling it in can't see who or what there is), and
+/// not the record's own columns, which nobody fills in.
 pub fn askable(field_type: FieldType) -> bool {
-    !matches!(field_type, FieldType::Person | FieldType::Link)
+    !matches!(field_type, FieldType::Person | FieldType::Link) && !field_type.is_system()
 }
 
 fn clean(value: &str, limit: usize, what: &str) -> Result<String, String> {
@@ -245,7 +247,12 @@ fn text_of(value: &Value) -> Option<String> {
 fn value_for(field: &FieldDefinition, value: &Value) -> Result<Value, String> {
     let wrong = |what: &str| format!("\"{}\" takes {what}.", field.name);
     Ok(match field.field_type {
-        FieldType::Text | FieldType::Url | FieldType::Date => {
+        FieldType::Text
+        | FieldType::LongText
+        | FieldType::Url
+        | FieldType::Email
+        | FieldType::Phone
+        | FieldType::Date => {
             let text = text_of(value).ok_or_else(|| wrong("text"))?;
             if text.chars().count() > MAX_ANSWER_CHARACTERS {
                 return Err(format!(
@@ -275,7 +282,7 @@ fn value_for(field: &FieldDefinition, value: &Value) -> Result<Value, String> {
                 Some("true" | "on" | "yes" | "1" | "checked")
             ),
         }),
-        FieldType::SingleChoice => {
+        FieldType::SingleChoice | FieldType::Status => {
             let text = text_of(value).ok_or_else(|| wrong("one of its options"))?;
             Value::String(text)
         }
@@ -293,7 +300,15 @@ fn value_for(field: &FieldDefinition, value: &Value) -> Result<Value, String> {
                     .ok_or_else(|| wrong("a list of its options"))?,
             )
         }
-        FieldType::Person | FieldType::Link => return Err(wrong("nothing on a form")),
+        FieldType::Person
+        | FieldType::Link
+        | FieldType::People
+        | FieldType::Labels
+        | FieldType::CreatedTime
+        | FieldType::EditedTime
+        | FieldType::CreatedBy
+        | FieldType::EditedBy
+        | FieldType::AutoId => return Err(wrong("nothing on a form")),
     })
 }
 
@@ -390,6 +405,7 @@ mod tests {
             position: 0,
             archived: false,
             version: 1,
+            accessor: crate::fields::Accessor::Stored,
         }
     }
 
@@ -442,6 +458,7 @@ mod tests {
             name: "High".to_owned(),
             color: "red".to_owned(),
             archived: false,
+            category: None,
         }];
         let score = field("Score", FieldType::Number);
         let platforms = field("Platforms", FieldType::MultipleChoice);

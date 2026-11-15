@@ -600,7 +600,7 @@ fn pull_requests_sql() -> String {
             UNION
             SELECT link.github_pull_request_id
             FROM github_pull_request_work_item_links link
-            JOIN work_items item
+            JOIN task_rows item
               ON item.project_id = link.project_id AND item.id = link.work_item_id
             WHERE link.project_id = ANY($1) AND link.confirmed
               AND item.assignee_actor_id = $2 AND item.archived_at IS NULL
@@ -701,7 +701,7 @@ async fn task_pull_requests(
             FROM work_item_key_aliases alias
             JOIN tasks ON tasks.id = alias.work_item_id
         ), reachable AS (
-            SELECT item.id FROM tasks JOIN work_items item ON item.id = tasks.id
+            SELECT item.id FROM tasks JOIN task_rows item ON item.id = tasks.id
             WHERE item.project_id = ANY($2)
         )
         SELECT link.github_pull_request_id
@@ -1046,7 +1046,7 @@ async fn page_details(
               ON invocation.project_id = run.project_id AND invocation.agent_run_id = run.id
             WHERE link.github_pull_request_id = ANY($1)
         ) linked
-        JOIN work_items item ON item.id = linked.work_item_id
+        JOIN task_rows item ON item.id = linked.work_item_id
         JOIN projects project ON project.id = item.project_id
         JOIN work_item_statuses status
           ON status.project_id = item.project_id AND status.id = item.status_id

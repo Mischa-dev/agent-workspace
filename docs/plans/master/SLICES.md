@@ -220,7 +220,7 @@ Generated from `slices.json` by `tools/plan.py --write`. Do not edit by hand.
 | T1.9 | Task lists, `task_list`, automations on the compiler | L | 3T | T1.8 |  |
 | T1.10 | Easy field types and system fields | M | 1T | T1.5 |  |
 | T1.11 | Step 4: edit Tasks like any collection | M | 3T | P0.11, P0.12, T1.4d, T1.10 |  |
-| T1.12 | Step 5: `fields` and `collection` on task tools | M | 4T | K2.13, T1.11 |  |
+| T1.12 | Step 5: `fields` and `collection` on task tools (done early by #268) | M | 4T | K2.13, T1.11 |  |
 | T1.13 | Web views engine on collections, adapters, `FilterEditor` | M | 3T | T1.6, W1.17 | W1.18 |
 | T1.13a | The field registry (from W1.16) | M | 4T | T1.2, W1.17 |  |
 | T1.14 | Timeline and list kinds for every collection | M | 3T | T1.13 |  |
@@ -234,7 +234,7 @@ Generated from `slices.json` by `tools/plan.py --write`. Do not edit by hand.
 | T1.22 | Delegate | S | 4T | T1.7, A1.13 |  |
 | T1.23 | Triage queue | M | 4T | T1.7, T1.15 |  |
 | T1.24 | Cycles | M | 4T | T1.7, T1.31 |  |
-| T1.25 | Step 6: acts like a task | L | 4T | T1.12, T1.16 |  |
+| T1.25 | Step 6: acts like a task (done early by #268; left: forms for task-like collections, switching off once it has records, per-collection workflows, the switch in workspace templates) | L | 4T | T1.12, T1.16 |  |
 | T1.26 | Initiatives (containment by `parent_id`) | M | 4T | K3.10, K4.10, T1.14 |  |
 | T1.27 | Keyboard-first pass | M | 4T | T1.16, T1.41 |  |
 | T1.28 | Forms: definitions, internal, conditions | M | 4T | T1.11 |  |

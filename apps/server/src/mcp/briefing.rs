@@ -296,7 +296,7 @@ pub(super) async fn task_lines(
         SELECT item.id::text AS id, project.project_key || '-' || item.number::text AS key,
                item.title, status.name AS status, item.priority, project.name AS project,
                item.updated_at::text AS updated_at, claimer.display_name AS claimed_by
-        FROM work_items item
+        FROM task_rows item
         JOIN projects project ON project.id = item.project_id
         JOIN work_item_statuses status
           ON status.project_id = item.project_id AND status.id = item.status_id
@@ -398,7 +398,7 @@ pub(super) async fn projects_list(
                    CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END AS name,
                    membership.role, project.kind = 'direct' AS messages_space,
                    project.archived_at IS NOT NULL AS archived, project.version,
-                   (SELECT count(*) FROM work_items item
+                   (SELECT count(*) FROM task_rows item
                     JOIN work_item_statuses status
                       ON status.project_id = item.project_id AND status.id = item.status_id
                     WHERE item.project_id = project.id AND item.archived_at IS NULL
@@ -671,7 +671,7 @@ pub(super) async fn project_open(
             r#"
             SELECT status.name AS status, status.semantic_category AS category, count(item.id) AS count
             FROM work_item_statuses status
-            LEFT JOIN work_items item
+            LEFT JOIN task_rows item
               ON item.project_id = status.project_id AND item.status_id = status.id
              AND item.archived_at IS NULL
             WHERE status.project_id = $1 AND status.enabled
@@ -880,7 +880,7 @@ async fn project_tasks(
         SELECT item.id::text AS id, project.project_key || '-' || item.number::text AS key,
                item.title, status.name AS status, item.priority, project.name AS project,
                item.updated_at::text AS updated_at, claimer.display_name AS claimed_by
-        FROM work_items item
+        FROM task_rows item
         JOIN projects project ON project.id = item.project_id
         JOIN work_item_statuses status
           ON status.project_id = item.project_id AND status.id = item.status_id

@@ -2,7 +2,7 @@
 //!
 //! The field types, their checks, filters and sorts live in `crate::fields`
 //! and know nothing about tasks. This module adds what does: a task's values
-//! live in `work_items.field_values`; a person must be someone in the
+//! live on its record (`task_rows.field_values`); a person must be someone in the
 //! task's project who can hold tasks (the assignee rule); a link names a
 //! task or page in the same project. The web app, MCP, imports, templates,
 //! automations and `task_move` all go through `resolve`, and every change
@@ -252,7 +252,7 @@ pub async fn current_values(
     task: Uuid,
 ) -> Result<Option<Value>, AppError> {
     Ok(sqlx::query_scalar::<_, Value>(
-        "SELECT field_values FROM work_items WHERE project_id = $1 AND id = $2",
+        "SELECT field_values FROM task_rows WHERE project_id = $1 AND id = $2",
     )
     .bind(project_id)
     .bind(task)
@@ -519,7 +519,7 @@ pub async fn find_link(
             Ok(sqlx::query_as::<_, (Uuid, String)>(
                 r#"
                 SELECT item.id, project.project_key || '-' || item.number
-                FROM work_items item JOIN projects project ON project.id = item.project_id
+                FROM task_rows item JOIN projects project ON project.id = item.project_id
                 WHERE item.project_id = $1 AND (item.id = $2 OR item.number = $3)
                 LIMIT 1
                 "#,
@@ -589,7 +589,7 @@ pub async fn references<'a>(
             let Some(id) = fields::referenced_id(field, value) else {
                 continue;
             };
-            match (field.field_type, field.config.target) {
+            match (field.field_type.behaves_as(), field.config.target) {
                 (FieldType::Person, _) => people.insert(id),
                 (FieldType::Link, Some(LinkTarget::Page)) => pages.insert(id),
                 (FieldType::Link, Some(LinkTarget::Record)) => records.insert(id),
@@ -624,7 +624,7 @@ pub async fn references<'a>(
         for (id, label, key) in sqlx::query_as::<_, (Uuid, String, String)>(
             r#"
             SELECT item.id, item.title, project.project_key || '-' || item.number
-            FROM work_items item JOIN projects project ON project.id = item.project_id
+            FROM task_rows item JOIN projects project ON project.id = item.project_id
             WHERE item.project_id = $1 AND item.id = ANY($2)
             "#,
         )

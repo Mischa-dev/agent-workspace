@@ -4,8 +4,8 @@ import '../styles/work.css'
 
 /**
  * A field's value as list cells, board cards and read-only pages show it:
- * choices as the same colored chips labels use, a checkbox as a check, a URL
- * as a link, and anything else as text. Nothing when it's empty, unless
+ * choices and statuses as the same colored chips labels use, a checkbox as a
+ * check, a URL, email or phone as a link, and anything else as text. Nothing when it's empty, unless
  * `empty` says what to show.
  */
 export function FieldValueView({
@@ -20,7 +20,7 @@ export function FieldValueView({
   value: FieldValue | undefined
 }) {
   if (isEmpty(value)) return empty ? <span className="aw-prop__empty">{empty}</span> : null
-  if (field.type === 'single_choice' || field.type === 'multiple_choice') {
+  if (field.type === 'single_choice' || field.type === 'multiple_choice' || field.type === 'status') {
     return (
       <ul aria-label={field.name} className="aw-labels">
         {chosenOptions(field, value).map((option) => (
@@ -51,6 +51,27 @@ export function FieldValueView({
       <a className="aw-prop__text" href={value} onClick={(event) => event.stopPropagation()} rel="noreferrer noopener" target="_blank">
         {host}
       </a>
+    )
+  }
+  if (field.type === 'email' && typeof value === 'string') {
+    return (
+      <a className="aw-prop__text" href={`mailto:${value}`} onClick={(event) => event.stopPropagation()}>
+        {value}
+      </a>
+    )
+  }
+  if (field.type === 'phone' && typeof value === 'string') {
+    return (
+      <a className="aw-prop__text" href={`tel:${value.replace(/[^0-9+]/g, '')}`} onClick={(event) => event.stopPropagation()}>
+        {value}
+      </a>
+    )
+  }
+  if (field.type === 'long_text') {
+    return (
+      <span className="aw-prop__text" style={{ whiteSpace: 'pre-line' }}>
+        {displayText(field, value, references)}
+      </span>
     )
   }
   return <span className="aw-prop__text">{displayText(field, value, references)}</span>
