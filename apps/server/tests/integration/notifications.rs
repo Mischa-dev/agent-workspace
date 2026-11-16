@@ -249,7 +249,15 @@ async fn private_conversations_notify_only_people_inside() {
     );
     assert_eq!(items(&page)[0]["projectName"], "Messages");
     let item = items(&page)[0].clone();
-    assert!(items(&inbox(&setup, &pat_browser, "").await).is_empty());
+    // C2.5: Pat is in the group and not mentioned: told of the message as a
+    // direct message, never of Mara's mention.
+    let pats = inbox(&setup, &pat_browser, "").await;
+    assert!(
+        items(&pats)
+            .iter()
+            .all(|notification| notification["kind"] == "direct_message"),
+        "{pats}"
+    );
 
     // Once removed from the group, what was delivered there is hidden.
     let (status, body) = send(
@@ -880,4 +888,180 @@ async fn page_comment_notifications_never_hold_the_words() {
         assert!(stored.get("preview").is_none(), "{stored}");
         assert!(stored.get("pageCommentId").is_some(), "{stored}");
     }
+}
+
+/// C2.5: a DM or group tells its members (one row that counts up, and a
+/// push), a thread you replied in tells you of the next reply, a level you
+/// chose is never overwritten by following automatically, and a
+/// conversation set to nothing tells you nothing.
+#[tokio::test]
+async fn dms_and_threads_reach_you() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("TR")
+        .person("lena", "member")
+        .person("mara", "member")
+        .person("nina", "member")
+        .private_group("trio", &["lena", "mara", "nina"])
+        .build("c2_5_reach")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let pool = world.pool();
+    let project = world.project("TR").to_owned();
+    let lena = &world.people["lena"];
+    let mara = &world.people["mara"];
+    let nina = &world.people["nina"];
+    let group = world.conversations["trio"].clone();
+    let post = |browser: &Browser, path: String, key: String, text: &str| {
+        let request = browser.request(
+            "POST",
+            &path,
+            Some(&key),
+            json!({"content": {"version": 1, "nodes": [{"type": "text", "text": text}]}}),
+        );
+        async move {
+            let (status, sent) = send(app, request).await;
+            assert!(status.is_success(), "{key}: {sent}");
+        }
+    };
+    let level = |browser: &Browser, conversation: &str, level: Value| {
+        let request = browser.request(
+            "PUT",
+            &format!("/api/v1/conversations/{conversation}/notification-level"),
+            Some(&format!("level-{}", Uuid::now_v7())),
+            json!({ "level": level }),
+        );
+        async move {
+            let (status, body) = send(app, request).await;
+            assert!(status.is_success(), "{body}");
+            body
+        }
+    };
+    let rows = |actor: Uuid, kind: &'static str| async move {
+        sqlx::query_as::<_, (i32,)>(
+            "SELECT repeat_count FROM notifications WHERE recipient_actor_id = $1 AND kind = $2",
+        )
+        .bind(actor)
+        .bind(kind)
+        .fetch_all(pool)
+        .await
+        .expect("notifications")
+        .into_iter()
+        .map(|(count,)| count)
+        .collect::<Vec<_>>()
+    };
+
+    // Mara has a phone.
+    let (status, device) = send(
+        app,
+        mara.browser.request(
+            "POST",
+            "/api/v1/push/subscriptions",
+            Some("c2-5-phone"),
+            json!({
+                "endpoint": "https://fcm.googleapis.com/fcm/send/c2-5-reach",
+                "keys": super::w9_capacity_and_push::device_keys(),
+                "organizationId": world.organization,
+            }),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{device}");
+    // Nina sets the group to nothing; Lena writes twice.
+    level(&nina.browser, &group, json!("nothing")).await;
+    for index in 0..2 {
+        post(
+            &lena.browser,
+            format!("/api/v1/conversations/{group}/messages"),
+            format!("trio-{index}"),
+            "Lunch?",
+        )
+        .await;
+    }
+    super::support::callers::drain_outbox(&world.state).await;
+    assert_eq!(
+        rows(mara.actor, "direct_message").await,
+        vec![2],
+        "one row that counts up"
+    );
+    assert!(rows(nina.actor, "direct_message").await.is_empty());
+    assert!(rows(lena.actor, "direct_message").await.is_empty());
+    let pushes =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM background_jobs WHERE kind = $1")
+            .bind(agent_workspace_server::push::DELIVER_KIND)
+            .fetch_one(pool)
+            .await
+            .expect("push jobs");
+    assert!(pushes > 0, "a DM pushes by default");
+
+    // A thread Lena starts; Mara replies in it, so the next reply reaches her.
+    let (status, channel) = send(
+        app,
+        world.owner.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{project}/channels"),
+            Some("reach-general"),
+            json!({"name": "general"}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{channel}");
+    let channel = channel["conversation"]["id"]
+        .as_str()
+        .or_else(|| channel["id"].as_str())
+        .expect("channel")
+        .to_owned();
+    let (status, thread) = send(
+        app,
+        lena.browser.request(
+            "POST",
+            &format!("/api/v1/channels/{channel}/threads"),
+            Some("reach-thread"),
+            json!({"name": "Launch plan"}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{thread}");
+    let thread = thread["conversation"]["id"]
+        .as_str()
+        .expect("thread")
+        .to_owned();
+    let in_thread = format!("/api/v1/threads/{thread}/messages");
+    post(&mara.browser, in_thread.clone(), "reach-1".into(), "I'm in").await;
+    // Nina chose mentions only for the thread before she posted there.
+    let chosen = level(&nina.browser, &thread, json!("mentions")).await;
+    assert_eq!(chosen["level"], "mentions", "{chosen}");
+    post(&nina.browser, in_thread.clone(), "reach-2".into(), "Me too").await;
+    post(&lena.browser, in_thread.clone(), "reach-3".into(), "Good").await;
+    super::support::callers::drain_outbox(&world.state).await;
+    assert_eq!(rows(mara.actor, "thread_reply").await.len(), 1);
+    assert!(
+        rows(nina.actor, "thread_reply").await.is_empty(),
+        "her choice of mentions stands"
+    );
+    let (_, kept) = get_level(app, &nina.browser, &thread).await;
+    assert_eq!(kept["level"], "mentions", "{kept}");
+    // Lena started it: Mara's and Nina's replies reached her.
+    assert_eq!(rows(lena.actor, "thread_reply").await.len(), 1);
+
+    world.finish().await;
+}
+
+async fn get_level(
+    app: &axum::Router,
+    browser: &Browser,
+    conversation: &str,
+) -> (StatusCode, Value) {
+    send(
+        app,
+        browser.request(
+            "GET",
+            &format!("/api/v1/conversations/{conversation}/notification-level"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await
 }

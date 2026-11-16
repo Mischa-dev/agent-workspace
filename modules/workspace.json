@@ -77,7 +77,7 @@
     "/api/v1/workspaces/by-slug/*"
   ],
   "events": { "emits": [], "listens": [] },
-  "notifications": [],
+  "notifications": ["thing_update"],
   "search": ["files"],
   "automations": { "triggers": [], "actions": [] },
   "things": [],

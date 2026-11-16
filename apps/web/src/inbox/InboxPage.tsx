@@ -61,6 +61,7 @@ const VIEWS: { value: InboxView; label: string }[] = [
 const CATEGORIES: { value: InboxCategory; label: string; markRead: string }[] = [
   { value: 'all', label: 'All', markRead: 'Mark all read' },
   { value: 'mentions', label: 'Mentions', markRead: 'Mark mentions read' },
+  { value: 'threads', label: 'Threads', markRead: 'Mark thread replies read' },
   { value: 'tasks', label: 'Tasks', markRead: 'Mark task updates read' },
   { value: 'runs', label: 'Runs', markRead: 'Mark run updates read' },
   { value: 'pull_requests', label: 'Pull requests', markRead: 'Mark pull request updates read' },

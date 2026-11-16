@@ -51,7 +51,14 @@
     "/api/v1/reply-requests/*"
   ],
   "events": { "emits": ["message.created"], "listens": [] },
-  "notifications": ["mention", "conversation_message", "scheduled_send_failed"],
+  "notifications": [
+    "mention",
+    "conversation_message",
+    "direct_message",
+    "thread_reply",
+    "thing_comment",
+    "scheduled_send_failed"
+  ],
   "search": ["messages"],
   "automations": { "triggers": ["message_posted"], "actions": ["post_message"] },
   "things": [

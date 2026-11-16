@@ -104,6 +104,8 @@ pub enum Category {
     #[default]
     All,
     Mentions,
+    /// Replies in threads you follow (C2.5).
+    Threads,
     Tasks,
     Runs,
     PullRequests,
@@ -116,6 +118,7 @@ impl Category {
         match self {
             Self::All => None,
             Self::Mentions => Some(&[kind::MENTION, kind::COMMENT_MENTION]),
+            Self::Threads => Some(&[kind::THREAD_REPLY]),
             Self::Tasks => Some(&[kind::ASSIGNED, kind::COMMENT_MENTION, kind::TASK_CHANGED]),
             Self::Runs => Some(&[
                 kind::APPROVAL_REQUESTED,
@@ -638,7 +641,7 @@ async fn followed_messages(
     transaction: &mut Transaction<'_, Postgres>,
     message_id: Uuid,
 ) -> Result<Vec<NewNotification>, AppError> {
-    let rows = sqlx::query_as::<_, MentionRow>(
+    let rows = sqlx::query_as::<_, FollowedRow>(
         r#"
         WITH message AS (
             SELECT message.id, message.project_id, message.conversation_id,
@@ -646,6 +649,8 @@ async fn followed_messages(
             FROM messages message
             JOIN conversations conversation ON conversation.id = message.conversation_id
             WHERE message.id = $1 AND message.removed_at IS NULL
+              -- A DM or group tells its members as a direct message.
+              AND conversation.kind NOT IN ('dm', 'group')
         ),
         following AS (
             SELECT level.actor_id
@@ -655,7 +660,8 @@ async fn followed_messages(
              AND level.conversation_id IN (message.conversation_id, message.parent_channel_id)
         )
         SELECT DISTINCT message.project_id, message.conversation_id, message.author_actor_id,
-               following.actor_id AS recipient_actor_id
+               following.actor_id AS recipient_actor_id,
+               message.parent_channel_id IS NOT NULL AS in_thread
         FROM message
         JOIN following ON following.actor_id <> message.author_actor_id
         JOIN actors actor ON actor.id = following.actor_id AND actor.kind = 'human'
@@ -675,13 +681,94 @@ async fn followed_messages(
     Ok(rows
         .into_iter()
         .map(|row| {
+            // A followed thread's reply is a thread reply; a channel set to
+            // every message keeps telling of each message (C2.5).
+            let (kind, group) = if row.in_thread {
+                (
+                    kind::THREAD_REPLY,
+                    format!("thread:{}", row.conversation_id),
+                )
+            } else {
+                (
+                    kind::CONVERSATION_MESSAGE,
+                    format!("messages:{}", row.conversation_id),
+                )
+            };
             let mut notification = NewNotification::new(
                 row.project_id,
                 row.recipient_actor_id,
-                kind::CONVERSATION_MESSAGE,
+                kind,
                 "conversation",
                 row.conversation_id,
-                format!("messages:{}", row.conversation_id),
+                group,
+                format!("message:{message_id}"),
+            );
+            notification.actor_id = Some(row.author_actor_id);
+            notification.conversation_id = Some(row.conversation_id);
+            notification.message_id = Some(message_id);
+            notification
+        })
+        .collect())
+}
+
+#[derive(Debug, FromRow)]
+struct FollowedRow {
+    project_id: Uuid,
+    conversation_id: Uuid,
+    author_actor_id: Uuid,
+    recipient_actor_id: Uuid,
+    in_thread: bool,
+}
+
+/// A message in a DM or group tells its other members (C2.5): one row per
+/// conversation that counts up as messages arrive (`dm:<conversation>`),
+/// and reading the DM reads it. A member who set it to nothing hears
+/// nothing; one it mentions gets the mention instead.
+async fn direct_messages(
+    transaction: &mut Transaction<'_, Postgres>,
+    message_id: Uuid,
+) -> Result<Vec<NewNotification>, AppError> {
+    let rows = sqlx::query_as::<_, MentionRow>(
+        r#"
+        WITH message AS (
+            SELECT message.id, message.project_id, message.conversation_id,
+                   message.author_actor_id
+            FROM messages message
+            JOIN conversations conversation ON conversation.id = message.conversation_id
+            WHERE message.id = $1 AND message.removed_at IS NULL
+              AND conversation.kind IN ('dm', 'group')
+        )
+        SELECT message.project_id, message.conversation_id, message.author_actor_id,
+               member.actor_id AS recipient_actor_id
+        FROM message
+        JOIN conversation_members member
+          ON member.conversation_id = message.conversation_id
+         AND member.actor_id <> message.author_actor_id
+        JOIN actors actor ON actor.id = member.actor_id AND actor.kind = 'human' -- // kind-check: mechanical (an agent in a DM is asked to reply, not told)
+        WHERE conversation_notification_level(member.actor_id, message.conversation_id)
+              <> 'nothing'
+          AND actor_can_access_project(member.actor_id, NULL, message.project_id)
+          AND conversation_visible_to(message.conversation_id, member.actor_id)
+          AND NOT EXISTS (
+              SELECT 1 FROM message_mentions mention
+              WHERE mention.message_id = message.id AND mention.actor_id = member.actor_id
+          )
+        ORDER BY recipient_actor_id
+        "#,
+    )
+    .bind(message_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let mut notification = NewNotification::new(
+                row.project_id,
+                row.recipient_actor_id,
+                kind::DIRECT_MESSAGE,
+                "conversation",
+                row.conversation_id,
+                format!("dm:{}", row.conversation_id),
                 format!("message:{message_id}"),
             );
             notification.actor_id = Some(row.author_actor_id);

@@ -249,11 +249,12 @@ pub(crate) async fn create(
     if let Some(origin_id) = spec.origin_message_id {
         // Whether it was removed comes first: a removed message's text is
         // never read.
-        let origin = sqlx::query_as::<_, (bool, String)>(
+        let origin = sqlx::query_as::<_, (bool, String, Uuid)>(
             r#"
             -- visibility: a message of the parent locked and checked above
             SELECT removed_at IS NOT NULL,
-                   CASE WHEN removed_at IS NULL THEN plain_text ELSE '' END
+                   CASE WHEN removed_at IS NULL THEN plain_text ELSE '' END,
+                   author_actor_id
             FROM messages
             WHERE id = $1 AND conversation_id = $2 AND project_id = $3
             "#,
@@ -294,6 +295,7 @@ pub(crate) async fn create(
             return Err(ORIGIN_REMOVED);
         }
         origin_text = Some(origin.1);
+        origin_author = Some(origin.2);
     }
 
     let (name, auto_named) = match &spec.name {
@@ -341,6 +343,18 @@ pub(crate) async fn create(
     .bind(thread_id)
     .bind(creator.actor_id)
     .execute(&mut **transaction)
+    .await?;
+    // C2.5: whoever starts a thread, and whoever wrote the message it opens
+    // from, follows it.
+    let followers = std::iter::once(creator.actor_id)
+        .chain(origin_author)
+        .collect::<Vec<_>>();
+    crate::notification_settings::follow_automatically(
+        transaction,
+        parent.project_id,
+        thread_id,
+        &followers,
+    )
     .await?;
     if let Some(work_item_id) = spec.link_task {
         sqlx::query(
