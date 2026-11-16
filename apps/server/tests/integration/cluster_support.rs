@@ -179,6 +179,19 @@ pub(crate) struct Cluster {
 
 const NAMES: [&str; 4] = ["A", "B", "C", "D"];
 
+/// What a transaction-mode pooler in front of PostgreSQL needs (K5.17).
+pub(crate) const POOLER: [(&str, &str); 2] = [
+    ("AGENT_WORKSPACE_DATABASE_STATEMENT_CACHE", "0"),
+    ("AGENT_WORKSPACE_DATABASE_LISTEN_URL", "off"),
+];
+
+/// Whether this run is the pooler run: frames that only the listener
+/// carries between instances (sign-outs, streamed text, module switches)
+/// stay on their own instance there until the live role (K5.19).
+pub(crate) fn pooler_run() -> bool {
+    std::env::var("AGENT_WORKSPACE_TEST_POOLER").is_ok_and(|value| value == "1")
+}
+
 /// `count` instances (at most four) on a fresh test database with an owner
 /// who signs in as `owner`. None when no database is configured.
 pub(crate) async fn cluster(name: &str, count: usize) -> Option<Cluster> {
@@ -226,6 +239,16 @@ impl Cluster {
         let name = NAMES[self.instances.len()];
         let mut values =
             BTreeMap::from([("AGENT_WORKSPACE_DATABASE_URL".to_owned(), self.url.clone())]);
+        // `AGENT_WORKSPACE_TEST_POOLER=1` runs the suite the way a
+        // transaction-mode pooler needs (K5.17): no prepared statements kept
+        // and no listener, so everything runs on polls.
+        if pooler_run() {
+            values.extend(
+                POOLER
+                    .iter()
+                    .map(|(key, value)| ((*key).to_owned(), (*value).to_owned())),
+            );
+        }
         for (key, value) in extra {
             values.insert((*key).to_owned(), (*value).to_owned());
         }
@@ -233,7 +256,9 @@ impl Cluster {
         // Each instance has its own small pool, as separate processes do.
         let pool = PgPoolOptions::new()
             .max_connections(6)
-            .connect(&self.url)
+            .connect_with(
+                agent_workspace_server::db::connect_options(&config).expect("connect options"),
+            )
             .await
             .expect("instance pool");
         let server = Server::build(config, pool).await.expect("build instance");

@@ -48,6 +48,7 @@ variable that is set still wins.
 | --- | --- | --- |
 | `AGENT_WORKSPACE_DATABASE_URL` | required | The PostgreSQL connection URL. Secret: prefer `AGENT_WORKSPACE_DATABASE_URL_FILE`. |
 | `AGENT_WORKSPACE_DATABASE_MAX_CONNECTIONS` | `5` | Connections in the server's pool. |
+| `AGENT_WORKSPACE_DATABASE_STATEMENT_CACHE` | `100` | Prepared statements each pooled connection keeps. Set `0` when the database URL goes through a transaction-mode pooler, which can't keep a connection's statements between transactions. |
 | `AGENT_WORKSPACE_DATABASE_LISTEN_URL` | the database URL | Where the one listening connection (outside the pool) goes for wakes and live frames. Point it straight at PostgreSQL when the main URL goes through a transaction-mode pooler. `off` runs on polls alone: live updates and lease hand-overs then take up to a second longer, and live text, sign-outs and module switches reach only the server they happen on. |
 | `AGENT_WORKSPACE_DATA_ROOT` | `.agent-workspace` | Where uploaded files, artifacts and other data on disk live. |
 | `AGENT_WORKSPACE_DATA_QUOTA_BYTES` | `21474836480` | The most the data root may hold (at least 1 GiB). |

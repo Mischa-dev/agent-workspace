@@ -7,7 +7,6 @@ use agent_workspace_server::{
     shutdown_signal, telemetry::init_tracing, work_items,
 };
 use anyhow::{Context, bail};
-use sqlx::postgres::PgPoolOptions;
 use tokio::net::TcpListener;
 use uuid::Uuid;
 
@@ -31,9 +30,7 @@ async fn main() -> anyhow::Result<()> {
         return backup_command(&config).await;
     }
 
-    let pool = PgPoolOptions::new()
-        .max_connections(config.database_max_connections)
-        .connect(config.database_url.expose())
+    let pool = agent_workspace_server::db::connect(&config)
         .await
         .context("connect to PostgreSQL")?;
 

@@ -424,6 +424,10 @@ async fn concurrent_writers_leave_no_gaps() {
 
 #[tokio::test]
 async fn tail_survives_losing_the_listener() {
+    if crate::cluster_support::pooler_run() {
+        eprintln!("this test is about the listener, off in the pooler run");
+        return;
+    }
     let Some(cluster) = cluster("k5_4_listener_lost", 1).await else {
         return;
     };
@@ -817,6 +821,10 @@ async fn private_conversation_events_stay_private_on_both() {
 
 #[tokio::test]
 async fn logout_on_one_instance_closes_the_socket_on_the_other() {
+    if crate::cluster_support::pooler_run() {
+        eprintln!("this frame crosses instances on the listener, off in the pooler run");
+        return;
+    }
     let Some(cluster) = cluster("k5_5_logout", 2).await else {
         return;
     };
@@ -837,6 +845,10 @@ async fn logout_on_one_instance_closes_the_socket_on_the_other() {
 
 #[tokio::test]
 async fn streamed_text_crosses_instances() {
+    if crate::cluster_support::pooler_run() {
+        eprintln!("this frame crosses instances on the listener, off in the pooler run");
+        return;
+    }
     let Some(cluster) = cluster("k5_5_stream", 2).await else {
         return;
     };
@@ -869,6 +881,10 @@ async fn streamed_text_crosses_instances() {
 
 #[tokio::test]
 async fn module_switch_is_seen_everywhere() {
+    if crate::cluster_support::pooler_run() {
+        eprintln!("this frame crosses instances on the listener, off in the pooler run");
+        return;
+    }
     let Some(cluster) = cluster("k5_5_modules", 2).await else {
         return;
     };
@@ -1011,5 +1027,66 @@ async fn limits_survive_a_restart() {
     cluster.start(&[]).await;
     let (status, _) = wrong_sign_in(cluster.instance(1), "owner").await;
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    cluster.finish().await;
+}
+
+// ---------------------------------------------------------------------------
+// K5.17 pooler-safe database use
+// ---------------------------------------------------------------------------
+
+/// Two instances configured as a transaction-mode pooler needs (no kept
+/// statements, no listener) still sign in, write, read across, hear the
+/// log on a socket, and hand a lease over.
+#[tokio::test]
+async fn the_cluster_works_as_a_pooler_needs() {
+    let Some(mut cluster) = cluster_with("k5_17_pooler", 2, &crate::cluster_support::POOLER).await
+    else {
+        return;
+    };
+    let browser = cluster.instance(0).login("owner").await;
+    let (_, channel) = work_channel(&cluster, &browser).await;
+    let mut on_b = cluster.instance(1).socket(&browser).await;
+    let message = say(cluster.instance(0), &browser, channel, "k5-17-hello").await;
+    let frame = frame_of(
+        &mut on_b,
+        "conversation.message.created",
+        Duration::from_secs(5),
+    )
+    .await
+    .expect("the message reached B's socket on polls");
+    assert_eq!(
+        frame["payload"]["messageId"],
+        message.to_string(),
+        "{frame}"
+    );
+    let (status, body) = cluster
+        .instance(1)
+        .send(browser.request(
+            "GET",
+            &format!("/api/v1/conversations/{channel}/timeline"),
+            None,
+            Value::Null,
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.to_string().contains(&message.to_string()), "{body}");
+    let started = Instant::now();
+    let holder = loop {
+        if let Some(holder) = (0..2).find(|index| {
+            cluster
+                .instance(*index)
+                .cluster()
+                .holds(&LeaseName::BuiltinHost)
+        }) {
+            break holder;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "nobody took the host"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    cluster.instance_mut(holder).stop().await;
+    until_host(cluster.instance(1 - holder)).await;
     cluster.finish().await;
 }

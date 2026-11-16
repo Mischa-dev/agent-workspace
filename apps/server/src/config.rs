@@ -97,6 +97,11 @@ pub struct AppConfig {
     /// None when it is `off`: the instance runs on its polls alone.
     pub database_listen_url: Option<SecretString>,
     pub database_max_connections: u32,
+    /// Prepared statements each connection keeps
+    /// (`AGENT_WORKSPACE_DATABASE_STATEMENT_CACHE`, default 100). 0 when the
+    /// database URL goes through a transaction-mode pooler, which can't keep
+    /// a connection's statements between transactions (ruling R24).
+    pub database_statement_cache: usize,
     pub data_root: PathBuf,
     pub data_quota_bytes: u64,
     pub minimum_free_bytes: u64,
@@ -604,6 +609,13 @@ impl AppConfig {
                 reason: "use at most 80 characters".into(),
             });
         }
+        let database_statement_cache = parse::<usize>(values, "DATABASE_STATEMENT_CACHE", "100")?;
+        if database_statement_cache > 10_000 {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}DATABASE_STATEMENT_CACHE"),
+                reason: "must be between 0 and 10000".into(),
+            });
+        }
         let lease_seconds = parse::<u64>(values, "LEASE_SECONDS", "15")?;
         if !(2..=300).contains(&lease_seconds) {
             return Err(ConfigError::Invalid {
@@ -629,6 +641,7 @@ impl AppConfig {
             live_origin,
             database_url: SecretString::new(database_url),
             database_max_connections,
+            database_statement_cache,
             data_root,
             data_quota_bytes,
             minimum_free_bytes,

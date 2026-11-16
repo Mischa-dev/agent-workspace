@@ -330,6 +330,9 @@
     "work_item_workflow.rs": 1,
     "work_items.rs": 1
   },
+  "transactions_across_calls": {
+    "auth/workos/agents.rs": 3
+  },
   "vendor_names_core": {
     "agent_setup_links.rs": 2,
     "environments.rs": 2,
