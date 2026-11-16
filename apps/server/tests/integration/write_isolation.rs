@@ -492,6 +492,13 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "message_schedule",
     "message_send",
     "milestone_write",
+    "module_archive",
+    "module_create",
+    "module_part_link",
+    "module_part_unlink",
+    "module_restore",
+    "module_set",
+    "module_update",
     "model_catalog_write",
     "notification_update",
     "page_comment",
@@ -6796,6 +6803,50 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"whiteboardId": a.whiteboard, "targetKind": "task", "targetId": b.task}),
             json!({"whiteboardId": a.whiteboard, "targetKind": "page", "targetId": b.page}),
         ]),
+        // Built modules (M1.6). Linked, then unlinked, so A's collection
+        // stays visible to the cases after these.
+        mcp_case(
+            "module_create",
+            json!({"spaceId": a.project, "key": "net_own", "name": "Net", "clientRequestId": "net-module-own"}),
+            vec![json!({"spaceId": b.project, "key": "net_b", "name": "Net", "clientRequestId": "net-module-b"})],
+        )
+        .rejecting(vec![
+            json!({"spaceId": a.project, "key": "net_m1", "name": "Net", "parts": [{"kind": "collection", "id": b.collection}], "clientRequestId": "net-module-m1"}),
+            json!({"spaceId": a.project, "key": "net_m2", "name": "Net", "parts": [{"kind": "automation", "id": b.rule}], "clientRequestId": "net-module-m2"}),
+        ]),
+        mcp_case(
+            "module_update",
+            json!({"moduleId": a.module, "expectedRevision": 1, "name": "Net", "clientRequestId": "net-module-update-own"}),
+            vec![json!({"moduleId": b.module, "expectedRevision": 1, "name": "Net", "clientRequestId": "net-module-update-b"})],
+        ),
+        mcp_case(
+            "module_part_link",
+            json!({"moduleId": a.module, "part": {"kind": "collection", "id": a.collection}, "clientRequestId": "net-part-link-own"}),
+            vec![json!({"moduleId": b.module, "part": {"kind": "collection", "id": b.collection}, "clientRequestId": "net-part-link-b"})],
+        )
+        .rejecting(vec![
+            json!({"moduleId": a.module, "part": {"kind": "collection", "id": b.collection}, "clientRequestId": "net-part-link-m1"}),
+        ]),
+        mcp_case(
+            "module_part_unlink",
+            json!({"moduleId": a.module, "part": {"kind": "collection", "id": a.collection}, "clientRequestId": "net-part-unlink-own"}),
+            vec![json!({"moduleId": b.module, "part": {"kind": "collection", "id": b.collection}, "clientRequestId": "net-part-unlink-b"})],
+        ),
+        mcp_case(
+            "module_set",
+            json!({"moduleId": a.module, "on": true, "clientRequestId": "net-module-set-own"}),
+            vec![json!({"moduleId": b.module, "on": false, "clientRequestId": "net-module-set-b"})],
+        ),
+        mcp_case(
+            "module_archive",
+            json!({"moduleId": a.module, "parts": "keep", "clientRequestId": "net-module-archive-own"}),
+            vec![json!({"moduleId": b.module, "parts": "archive", "clientRequestId": "net-module-archive-b"})],
+        ),
+        mcp_case(
+            "module_restore",
+            json!({"moduleId": a.module, "clientRequestId": "net-module-restore-own"}),
+            vec![json!({"moduleId": b.module, "clientRequestId": "net-module-restore-b"})],
+        ),
         // Decisions and planning
         mcp_case(
             "decision_record",

@@ -39,6 +39,7 @@ pub mod manifest;
 pub mod registry;
 pub mod state;
 pub mod things;
+pub mod built;
 
 pub use http::router;
 pub use manifest::{Manifest, core};

@@ -56,6 +56,21 @@ pub(super) struct ModuleListValue {
     pub preset: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<ModuleDetail>,
+    /// Built modules (M1.6) here: open one with module_open.
+    pub built: Vec<BuiltModuleSummary>,
+}
+
+/// A built module in module_list.
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct BuiltModuleSummary {
+    #[schemars(with = "String")]
+    pub id: Uuid,
+    pub key: String,
+    pub name: String,
+    #[schemars(with = "Option<String>")]
+    pub space_id: Option<Uuid>,
+    pub parts: i64,
 }
 
 /// The workspace of the project a call names, or of the connection's own
@@ -130,7 +145,25 @@ pub(super) async fn module_list(
         } else {
             state::for_member(&mut connection, organization_id, principal.actor_id).await?
         };
+        let space = arguments.project_id.is_some().then_some(project_id);
+        let rows = modules::built::list(&mut connection, organization_id, space, false).await?;
+        let counts = modules::built::part_counts(
+            &mut connection,
+            &rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+        )
+        .await?;
+        let built = rows
+            .into_iter()
+            .map(|row| BuiltModuleSummary {
+                parts: counts.get(&row.id).copied().unwrap_or(0),
+                id: row.id,
+                key: row.module_key,
+                name: row.name,
+                space_id: row.space_id,
+            })
+            .collect();
         Ok::<_, AppError>(ToolResult::ok(ModuleListValue {
+            built,
             workspace_id: organization_id,
             modules: manifest::core()
                 .iter()

@@ -389,6 +389,8 @@ const RECORDS_SQL: &str = r#"
       AND record.project_id = ANY($2)
       AND record.archived_at IS NULL
       AND collection.archived_at IS NULL
+      -- M1.6: a built module switched off hides its collections' records.
+      AND module_part_on('collection', collection.id)
       -- A task's record (the built-in Tasks collection) is found as the task.
       AND NOT collection.acts_like_task
       AND $4::uuid IS NULL

@@ -36,6 +36,7 @@ mod backbone;
 mod backup_restore;
 mod bug_report_links;
 mod bug_sweep;
+mod built_modules;
 mod compat_clients;
 mod direct_conversations;
 mod export_declarations;

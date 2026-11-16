@@ -79,6 +79,30 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
             KindDecl {
+                kind: "modules",
+                table: "modules",
+                references: &[
+                    ("space_id", "projects"),
+                    ("created_by_actor_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "module_nav",
+                table: "module_nav",
+                references: &[("module_id", "modules")],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "module_parts",
+                table: "module_parts",
+                references: &[("module_id", "modules"), ("space_id", "projects")],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
                 kind: "onboarding_progress",
                 table: "onboarding_progress",
                 references: &[("actor_id", "actors"), ("project_id", "projects")],

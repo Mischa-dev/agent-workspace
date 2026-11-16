@@ -101,6 +101,12 @@ const KINDS: &[(&str, &str)] = &[
     ),
     // A1.3: the run service keeps its SQL (guard G1).
     ("run", crate::runs::store::LOCATE_SQL),
+    // M1.6: a built module, in its space or (space NULL) the workspace.
+    // Archived ones are found too, so they can be restored.
+    (
+        "module",
+        "SELECT workspace_id, space_id FROM modules WHERE id = $1 AND $2::uuid IS NOT NULL",
+    ),
 ];
 
 /// The kinds `locate` knows; a test checks every operation's thing kind is
@@ -167,7 +173,9 @@ async fn thing(
     let Some((_, sql)) = KINDS.iter().find(|(known, _)| *known == kind) else {
         return Err(OpError::Unavailable);
     };
-    let row = sqlx::query_as::<_, (Uuid, Uuid)>(sql)
+    // The space is NULL only for a thing that lives in the workspace itself
+    // (a workspace-wide built module).
+    let row = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(sql)
         .bind(id)
         .bind(viewer)
         .fetch_optional(&mut *connection)
@@ -176,7 +184,7 @@ async fn thing(
     let (workspace_id, space_id) = row.ok_or(OpError::not_found(what_of(kind)))?;
     Ok(Located {
         workspace_id,
-        space_id: Some(space_id),
+        space_id,
     })
 }
 
@@ -192,10 +200,12 @@ fn what_of(kind: &str) -> &'static str {
     match kind {
         "project" => "That space",
         "conversation" => "That conversation",
-        "message" => "That message",
+        "message" | "message_record" => "That message",
+        "scheduled_message" => "That scheduled message",
         "decision" => "That decision",
         "task" => "That task",
         "run" => "That run",
+        "module" => "That module",
         _ => "That",
     }
 }

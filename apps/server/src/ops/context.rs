@@ -284,6 +284,44 @@ impl From<&OpContext> for crate::work_item_commands::CommandActor {
     }
 }
 
+impl From<&OpContext> for crate::events::Caller {
+    /// Webhooks', rules' and forms' own caller, for an operation that makes
+    /// them (a built module's parts, M1.6). Dispatch already checked the
+    /// credential reaches the space and may write.
+    fn from(ctx: &OpContext) -> Self {
+        let (channel, authentication_class, client_name) = match &ctx.edge {
+            Edge::Web { .. } => ("browser", "password_session", None),
+            Edge::Mcp {
+                authentication_class,
+                client_name,
+                ..
+            } => ("mcp", *authentication_class, Some(client_name.clone())),
+            Edge::PublicApi {
+                authentication_class,
+                client_name,
+                ..
+            } => ("api", *authentication_class, Some(client_name.clone())),
+            Edge::Automation { .. } => ("automation", "automation", None),
+            Edge::Job { .. } | Edge::Proposal { .. } => ("system", "background_job", None),
+        };
+        Self {
+            actor_id: ctx.caller.account_id,
+            actor_kind: ctx.caller.kind,
+            session_id: match ctx.edge {
+                Edge::Web { session_id } => Some(session_id),
+                _ => None,
+            },
+            via_grant_id: ctx.caller.via_grant_id,
+            external_agent_connection_id: ctx.caller.connection_id,
+            token_project_id: ctx.caller.confined_space,
+            can_write: ctx.caller.can_write,
+            channel,
+            authentication_class,
+            client_name: client_name.map(|name| name.chars().take(80).collect()),
+        }
+    }
+}
+
 /// The stored key of an account kind (`actors.kind`).
 pub fn actor_kind_key(kind: ActorKind) -> &'static str {
     crate::accounts::actor_kind_key(kind)

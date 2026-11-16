@@ -840,6 +840,7 @@ async fn check_references(
     conditions: &Conditions,
     trigger: &Trigger,
     actions: &[Action],
+    fresh_collections: &[Uuid],
 ) -> Result<(), AppError> {
     let pool = &state.pool;
     if let Some(view_id) = conditions.view_id {
@@ -870,6 +871,7 @@ async fn check_references(
     | Trigger::RecordChanged {
         collection_id: Some(id),
     } = trigger
+        && !fresh_collections.contains(id)
     {
         let found = sqlx::query_scalar::<_, bool>(
             // Records that act like tasks change as tasks: task triggers
@@ -1020,9 +1022,44 @@ pub(crate) async fn create(
     state: &AppState,
     caller: &Caller,
     project_id: Uuid,
-    mut request: CreateRule,
+    request: CreateRule,
 ) -> Result<RuleView, AppError> {
-    let (can_create, admin) = reader_access(&state.pool, caller, project_id).await?;
+    let (_, admin) = reader_access(&state.pool, caller, project_id).await?;
+    let prepared = prepare(state, caller, project_id, request, &[]).await?;
+    let organization_id =
+        sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
+            .bind(project_id)
+            .fetch_one(&state.pool)
+            .await?;
+    let mut transaction = state.pool.begin().await?;
+    let id = insert(&mut transaction, caller, organization_id, project_id, &prepared).await?;
+    transaction.commit().await?;
+    Ok(view(
+        fetch(&state.pool, project_id, id).await?,
+        caller,
+        admin,
+    ))
+}
+
+/// A rule checked and ready to insert: who may make it, its shape, and
+/// what it refers to. Collections in `fresh_collections` were made in the
+/// caller's own transaction (a built module's inline parts, M1.6), which
+/// the pool can't see yet; they are taken as found.
+pub(crate) struct PreparedRule {
+    name: String,
+    request: CreateRule,
+    enabled: bool,
+    next_run_at: Option<DateTime<Utc>>,
+}
+
+pub(crate) async fn prepare(
+    state: &AppState,
+    caller: &Caller,
+    project_id: Uuid,
+    mut request: CreateRule,
+    fresh_collections: &[Uuid],
+) -> Result<PreparedRule, AppError> {
+    let (can_create, _) = reader_access(&state.pool, caller, project_id).await?;
     if !can_create {
         return Err(AppError::Forbidden);
     }
@@ -1039,26 +1076,43 @@ pub(crate) async fn create(
         &request.conditions,
         &request.trigger,
         &request.actions,
+        fresh_collections,
     )
     .await?;
-    let organization_id =
-        sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
-            .bind(project_id)
-            .fetch_one(&state.pool)
-            .await?;
     let enabled = request.enabled.unwrap_or(true);
     let next_run_at = enabled
         .then(|| next_run_after(&request.trigger, Utc::now()))
         .flatten();
-    let mut transaction = state.pool.begin().await?;
+    Ok(PreparedRule {
+        name,
+        request,
+        enabled,
+        next_run_at,
+    })
+}
+
+/// Inserts a prepared rule in the caller's transaction, with its audit row.
+pub(crate) async fn insert(
+    transaction: &mut Transaction<'_, Postgres>,
+    caller: &Caller,
+    organization_id: Uuid,
+    project_id: Uuid,
+    prepared: &PreparedRule,
+) -> Result<Uuid, AppError> {
+    let PreparedRule {
+        name,
+        request,
+        enabled,
+        next_run_at,
+    } = prepared;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(format!("automations:{project_id}"))
-        .execute(&mut *transaction)
+        .execute(&mut **transaction)
         .await?;
     let count =
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM automation_rules WHERE project_id = $1")
             .bind(project_id)
-            .fetch_one(&mut *transaction)
+            .fetch_one(&mut **transaction)
             .await?;
     if count >= MAX_RULES_PER_PROJECT {
         return Err(AppError::Conflict(
@@ -1082,7 +1136,7 @@ pub(crate) async fn create(
     .bind(caller.actor_id)
     .bind(caller.via_grant_id)
     .bind(caller.external_agent_connection_id)
-    .bind(&name)
+    .bind(name)
     .bind(enabled)
     .bind(request.trigger.kind())
     .bind(serde_json::to_value(&request.trigger).map_err(|_| AppError::Validation("trigger"))?)
@@ -1091,10 +1145,10 @@ pub(crate) async fn create(
     .bind(serde_json::to_value(&request.actions).map_err(|_| AppError::Validation("actions"))?)
     .bind(next_run_at)
     .bind(through_app(caller))
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
     events::audit(
-        &mut *transaction,
+        &mut **transaction,
         caller,
         organization_id,
         Some(project_id),
@@ -1104,12 +1158,7 @@ pub(crate) async fn create(
         json!({ "trigger": request.trigger.kind(), "actions": request.actions.iter().map(Action::kind).collect::<Vec<_>>() }),
     )
     .await?;
-    transaction.commit().await?;
-    Ok(view(
-        fetch(&state.pool, project_id, id).await?,
-        caller,
-        admin,
-    ))
+    Ok(id)
 }
 
 pub(crate) async fn update(
@@ -1169,6 +1218,7 @@ pub(crate) async fn update(
             &conditions,
             &trigger,
             &actions,
+            &[],
         )
         .await?;
     }
@@ -2062,6 +2112,17 @@ async fn fire(state: &AppState, run_id: Uuid) -> Result<(), AppError> {
     if let Some(module) = module_off(pool, &rule).await? {
         let reason = format!("{} is turned off in this workspace.", module.name);
         return finish(pool, run_id, "skipped", Some(reason.as_str()), &[]).await;
+    }
+    // M1.6: a rule that is part of a built module waits while the module is
+    // switched off (or archived with its parts).
+    let rule_id = rule.id;
+    let module_on = crate::db::scoped_one(pool, async |connection| {
+        crate::modules::built::object_on(connection, "automation", rule_id).await
+    })
+    .await?;
+    if !module_on {
+        let reason = "Its module is turned off.";
+        return finish(pool, run_id, "skipped", Some(reason), &[]).await;
     }
     let recent = sqlx::query_scalar::<_, i64>(
         r#"
