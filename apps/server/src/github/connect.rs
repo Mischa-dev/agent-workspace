@@ -264,7 +264,7 @@ async fn connection(
     principal: AuthenticatedActor,
     ApiPath(project_id): ApiPath<Uuid>,
 ) -> Result<Json<ConnectionResponse>, AppError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let role = require_project_access(
         &mut transaction,
         &principal,
@@ -363,7 +363,7 @@ async fn start_connect(
         "github_integration",
         "connect_not_configured",
     ))?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     require_project_access(
         &mut transaction,
         &principal,
@@ -508,8 +508,9 @@ async fn take_attempt(
     let Some(browser) = browser else {
         return Err("expired");
     };
-    let attempt = sqlx::query_as::<_, Attempt>(
-        r#"
+    let attempt = crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query_as::<_, Attempt>(
+            r#"
         UPDATE github_connect_attempts
         SET used_at = COALESCE(used_at, now())
         WHERE state_digest = $1 AND browser_digest = $2
@@ -517,10 +518,12 @@ async fn take_attempt(
                   expires_at <= now() AS expired,
                   used_at <> now() AS used
         "#,
-    )
-    .bind(digest("aw-github-connect-state:v1:", oauth_state))
-    .bind(digest("aw-github-connect-browser:v1:", browser))
-    .fetch_optional(&state.pool)
+        )
+        .bind(digest("aw-github-connect-state:v1:", oauth_state))
+        .bind(digest("aw-github-connect-browser:v1:", browser))
+        .fetch_optional(connection)
+        .await
+    })
     .await
     .map_err(|_| "failed")?
     .ok_or("expired")?;
@@ -593,7 +596,7 @@ async fn record_claims(
     attempt: &Attempt,
     installations: &[GitHubInstallation],
 ) -> Result<(), AppError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     // The person who started this must still be allowed to manage the
     // project's GitHub connection when they come back.
     let (role, role_permissions, kind) =
@@ -691,7 +694,7 @@ async fn available_repositories(
     principal: AuthenticatedActor,
     ApiPath(project_id): ApiPath<Uuid>,
 ) -> Result<Json<AvailableRepositoriesResponse>, AppError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     require_project_access(
         &mut transaction,
         &principal,
@@ -867,7 +870,7 @@ pub(crate) async fn add_picked_repository_as(
         .ok_or(AppError::Conflict("github_integration", "not_configured"))?;
 
     // Check the person and the claim before asking GitHub anything.
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     require_project_access_as(
         &mut transaction,
         actor_id,
@@ -937,7 +940,7 @@ pub(crate) async fn add_picked_repository_as(
         .clone()
         .ok_or(AppError::Validation("defaultBranch"))?;
 
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let role = require_project_access_as(
         &mut transaction,
         actor_id,
