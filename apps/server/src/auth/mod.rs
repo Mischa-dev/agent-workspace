@@ -240,8 +240,9 @@ async fn login(
         return Err(AppError::InvalidCredentials);
     }
 
-    let credential = match sqlx::query_as::<_, CredentialRow>(
-        r#"
+    let credential = match crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query_as::<_, CredentialRow>(
+            r#"
         SELECT
             u.id AS user_id,
             u.actor_id,
@@ -258,9 +259,11 @@ async fn login(
           AND a.status = 'active'
           AND a.kind = 'human'
         "#,
-    )
-    .bind(&login_name)
-    .fetch_optional(&state.pool)
+        )
+        .bind(&login_name)
+        .fetch_optional(connection)
+        .await
+    })
     .await
     {
         Ok(credential) => credential,
@@ -292,7 +295,7 @@ async fn login(
     // even when a second factor is still to come.
     state.rate_limits.note_login_success(&login_name);
 
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     if crate::account_security::two_factor_enabled(&mut transaction, credential.user_id).await? {
         // A correct password is half of it: answer with a challenge for the
         // code, and no session until the code is right.
@@ -437,7 +440,7 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Result<Res
         // Logout remains available even when this session has exhausted its
         // ordinary mutation budget. Origin and CSRF checks still apply.
         require_csrf(&state.config, &headers, &principal)?;
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         sqlx::query(
             "UPDATE sessions SET revoked_at = COALESCE(revoked_at, now()), updated_at = now() WHERE id = $1",
         )
@@ -554,8 +557,9 @@ pub async fn load_authenticated_actor(
         return Ok(None);
     }
     let token_hash = hash_secret(&token);
-    let row = sqlx::query_as::<_, SessionRow>(
-        r#"
+    let row = crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query_as::<_, SessionRow>(
+            r#"
         SELECT
             s.id AS session_id,
             u.id AS user_id,
@@ -576,9 +580,11 @@ pub async fn load_authenticated_actor(
           AND a.status = 'active'
           AND a.kind = 'human'
         "#,
-    )
-    .bind(token_hash.to_vec())
-    .fetch_optional(&state.pool)
+        )
+        .bind(token_hash.to_vec())
+        .fetch_optional(connection)
+        .await
+    })
     .await?;
     let Some(row) = row else {
         return Ok(None);
@@ -586,16 +592,19 @@ pub async fn load_authenticated_actor(
     if !workos::session_valid(state, row.session_id).await? {
         return Ok(None);
     }
-    sqlx::query(
-        r#"
+    crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query(
+            r#"
         UPDATE sessions
         SET last_seen_at = now(),
             idle_expires_at = LEAST(now() + interval '7 days', absolute_expires_at)
         WHERE id = $1 AND last_seen_at < now() - interval '5 minutes'
         "#,
-    )
-    .bind(row.session_id)
-    .execute(&state.pool)
+        )
+        .bind(row.session_id)
+        .execute(connection)
+        .await
+    })
     .await?;
     crate::tenancy::signed_in(row.actor_id);
     Ok(Some(AuthenticatedActor {
@@ -632,9 +641,11 @@ async fn session_response(
         WHERE om.actor_id = $1 AND om.enabled
         ORDER BY lower(o.name), o.id
         "#,
-    )
-    .bind(principal.actor_id)
-    .fetch_all(&state.pool)
+        )
+        .bind(principal.actor_id)
+        .fetch_all(connection)
+        .await
+    })
     .await?;
     let actor_kind = crate::accounts::actor_kind(&principal.actor_kind)?;
     let mut create_project = false;
