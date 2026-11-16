@@ -51,8 +51,9 @@ pub(super) async fn try_acquire(
     name: &str,
     ttl: Duration,
 ) -> Result<Option<i64>, AppError> {
-    Ok(sqlx::query_scalar::<_, i64>(
-        r#"
+    Ok(crate::db::scoped_one(cluster.pool(), async |connection| {
+        sqlx::query_scalar::<_, i64>(
+            r#"
         INSERT INTO leases AS l (name, holder_instance_id, token, acquired_at, expires_at)
         VALUES ($1, $2, 1, now(), now() + make_interval(secs => $3))
         ON CONFLICT (name) DO UPDATE SET
@@ -67,17 +68,19 @@ pub(super) async fn try_acquire(
         WHERE l.expires_at <= now() OR l.holder_instance_id = EXCLUDED.holder_instance_id
         RETURNING token
         "#,
-    )
-    .bind(name)
-    .bind(cluster.instance_id().0)
-    .bind(ttl.as_secs_f64())
-    .fetch_optional(cluster.pool())
+        )
+        .bind(name)
+        .bind(cluster.instance_id().0)
+        .bind(ttl.as_secs_f64())
+        .fetch_optional(&mut *connection)
+        .await
+    })
     .await?)
 }
 
 /// Let `name` go at once, and wake whoever waits for it.
 pub(super) async fn release(cluster: &Cluster, name: &str, token: i64) -> Result<(), AppError> {
-    let mut transaction = cluster.pool().begin().await?;
+    let mut transaction = crate::db::scoped_tx(cluster.pool()).await?;
     let released = sqlx::query(
         "UPDATE leases SET expires_at = now() \
          WHERE name = $1 AND holder_instance_id = $2 AND token = $3 AND expires_at > now()",
@@ -131,7 +134,7 @@ pub(super) async fn renew(
     names: &[String],
     ttl: Duration,
 ) -> Result<Vec<(String, i64)>, AppError> {
-    let mut transaction = cluster.pool().begin().await?;
+    let mut transaction = crate::db::scoped_tx(cluster.pool()).await?;
     // A blocked renewal fails rather than waits: the holder fences itself
     // long before this runs out.
     sqlx::query(&format!(

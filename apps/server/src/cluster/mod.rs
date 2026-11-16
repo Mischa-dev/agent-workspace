@@ -58,14 +58,17 @@ impl Cluster {
         ttl: Duration,
     ) -> Result<Self, AppError> {
         let id = InstanceId::new();
-        sqlx::query(
-            "INSERT INTO server_instances (id, roles, label, release) VALUES ($1, $2, $3, $4)",
-        )
-        .bind(id.0)
-        .bind(roles.names())
-        .bind(label)
-        .bind(env!("CARGO_PKG_VERSION"))
-        .execute(&pool)
+        crate::db::scoped_one(&pool, async |connection| {
+            sqlx::query(
+                "INSERT INTO server_instances (id, roles, label, release) VALUES ($1, $2, $3, $4)",
+            )
+            .bind(id.0)
+            .bind(roles.names())
+            .bind(label)
+            .bind(env!("CARGO_PKG_VERSION"))
+            .execute(&mut *connection)
+            .await
+        })
         .await?;
         Ok(Self {
             inner: Arc::new(Inner {
@@ -305,24 +308,25 @@ impl Cluster {
     }
 
     pub async fn mark_draining(&self) -> Result<(), AppError> {
-        sqlx::query(
+        crate::db::scoped_one(&self.inner.pool, async |connection| {
+            sqlx::query(
             "UPDATE server_instances SET draining_at = coalesce(draining_at, now()) WHERE id = $1",
         )
         .bind(self.inner.id.0)
-        .execute(&self.inner.pool)
+        .execute(&mut *connection).await
+        })
         .await?;
         Ok(())
     }
 
     pub async fn mark_stopped(&self) -> Result<(), AppError> {
-        sqlx::query(
+        crate::db::scoped_one(&self.inner.pool, async |connection| sqlx::query(
             "UPDATE server_instances \
              SET draining_at = coalesce(draining_at, now()), stopped_at = coalesce(stopped_at, now()) \
              WHERE id = $1",
         )
         .bind(self.inner.id.0)
-        .execute(&self.inner.pool)
-        .await?;
+        .execute(&mut *connection).await).await?;
         Ok(())
     }
 

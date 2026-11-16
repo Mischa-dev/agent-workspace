@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
+import { apiUrl } from '../../api/client'
 import { automationKeys, getOpenApi, type OpenApiDocument, type OpenApiOperation, type OpenApiSchema } from '../../automations/api'
 import '../../automations/automations.css'
 import { Button, EmptyState, ErrorState, Icon, ListSkeleton, PageHeader, Section, StatusChip, TextField, showToast } from '../../ui'
@@ -80,7 +81,7 @@ export default function ApiReferencePage() {
     staleTime: 5 * 60_000,
   })
   const [filter, setFilter] = useState('')
-  const base = `${window.location.origin}${openapi.data?.servers?.[0]?.url ?? '/api/public/v1'}`
+  const base = new URL(apiUrl(openapi.data?.servers?.[0]?.url ?? '/api/public/v1'), window.location.href).href
 
   const groups = useMemo(() => {
     if (!openapi.data) return []
@@ -101,7 +102,7 @@ export default function ApiReferencePage() {
     <>
       <PageHeader
         actions={
-          <a className="aw-btn aw-btn--secondary aw-btn--md" download href="/api/public/v1/openapi.json">
+          <a className="aw-btn aw-btn--secondary aw-btn--md" download href={apiUrl('/api/public/v1/openapi.json')}>
             <Icon name="arrow-down" size={16} />
             OpenAPI document
           </a>

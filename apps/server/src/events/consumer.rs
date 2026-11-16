@@ -150,7 +150,7 @@ impl<C: Consumer> Runner<C> {
         lease: Option<(&Cluster, &Lease)>,
     ) -> Result<Round, AppError> {
         let one_by_one = self.one_by_one_until.is_some();
-        let mut transaction = pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(pool).await?;
         if let Some((cluster, lease)) = lease {
             cluster.fence(&mut transaction, lease).await?;
         }
@@ -226,17 +226,20 @@ impl<C: Consumer> Runner<C> {
     /// Retry parked events that are due; each success is resolved, each
     /// failure waits longer.
     pub async fn sweep(&self, pool: &PgPool) -> Result<usize, AppError> {
-        let due = sqlx::query_scalar::<_, i64>(
-            "SELECT event_position FROM event_consumer_failures \
+        let due = crate::db::scoped_one(pool, async |connection| {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT event_position FROM event_consumer_failures \
              WHERE consumer = $1 AND resolved_at IS NULL AND next_attempt_at <= now() \
              ORDER BY event_position LIMIT 50",
-        )
-        .bind(self.consumer.name())
-        .fetch_all(pool)
+            )
+            .bind(self.consumer.name())
+            .fetch_all(&mut *connection)
+            .await
+        })
         .await?;
         let mut resolved = 0;
         for position in due {
-            let mut transaction = pool.begin().await?;
+            let mut transaction = crate::db::scoped_tx(pool).await?;
             let events = read(&mut transaction, &EventFilter::default(), position - 1, 1).await?;
             let outcome = match events.first() {
                 Some(event) if event.position == position => {
@@ -260,7 +263,7 @@ impl<C: Consumer> Runner<C> {
                 }
                 Err(error) => {
                     transaction.rollback().await?;
-                    sqlx::query(
+                    crate::db::scoped_one(pool, async |connection| sqlx::query(
                         "UPDATE event_consumer_failures \
                          SET attempts = attempts + 1, last_error = left($3, 500), \
                              next_attempt_at = now() + make_interval(secs => least(3600, 30 * 2 ^ least(attempts, 7))) \
@@ -269,8 +272,7 @@ impl<C: Consumer> Runner<C> {
                     .bind(self.consumer.name())
                     .bind(position)
                     .bind(&error.0)
-                    .execute(pool)
-                    .await?;
+                    .execute(&mut *connection).await).await?;
                 }
             }
         }
@@ -321,7 +323,7 @@ async fn park<C: Consumer>(
     position: i64,
     error: &ConsumerError,
 ) -> Result<(), AppError> {
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     if lock_cursor(&mut transaction, consumer).await?.is_none() {
         return Ok(());
     }

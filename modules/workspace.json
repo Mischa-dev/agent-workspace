@@ -39,6 +39,7 @@
   },
   "routes": [
     "/health/*",
+    "/client-config",
     "/metrics",
     "/llms.txt",
     "/auth.md",

@@ -31,9 +31,7 @@ async fn visible_kind(call: &OpCall<'_>, id: Uuid) -> Result<String, OpError> {
     let not_found = || OpError::not_found("That thing");
     let state = call.state;
     let account = call.account_id();
-    let mut connection = state
-        .pool
-        .acquire()
+    let mut connection = crate::db::scoped_tx(&state.pool)
         .await
         .map_err(crate::error::AppError::from)?;
     let kind = match crate::things::locate(&mut connection, id).await? {
@@ -141,10 +139,7 @@ impl Operation for HistoryList {
     ) -> Result<HistoryListOutput, OpError> {
         let id = input.thing.id();
         let kind = visible_kind(call, id).await?;
-        let mut connection = call
-            .state
-            .pool
-            .acquire()
+        let mut connection = crate::db::scoped_tx(&call.state.pool)
             .await
             .map_err(crate::error::AppError::from)?;
         let entries = super::list(
@@ -215,10 +210,7 @@ impl Operation for HistoryShow {
         if let Support::Not(reason) = adapter_for(&kind)?.show {
             return Err(not_supported(&kind, "show a version", reason));
         }
-        let mut connection = call
-            .state
-            .pool
-            .acquire()
+        let mut connection = crate::db::scoped_tx(&call.state.pool)
             .await
             .map_err(crate::error::AppError::from)?;
         let content = super::show(&mut connection, &kind, id, input.version)
@@ -304,10 +296,7 @@ impl Operation for HistoryRestore {
                 workspace_id: call.ctx.workspace_id,
                 space_id: call.ctx.space_id,
             };
-            let mut connection = call
-                .state
-                .pool
-                .acquire()
+            let mut connection = crate::db::scoped_tx(&call.state.pool)
                 .await
                 .map_err(crate::error::AppError::from)?;
             crate::ops::access_shim::check(

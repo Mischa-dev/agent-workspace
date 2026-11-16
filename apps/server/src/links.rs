@@ -15,9 +15,12 @@ pub const BACKFILL_KIND: &str = "links.backfill";
 /// Copy every old store into `links`, skipping what is there; how many
 /// links were added. Safe to run again.
 pub async fn copy_all(pool: &PgPool) -> Result<i64, AppError> {
-    Ok(sqlx::query_scalar::<_, i64>("SELECT links_copy_all()")
-        .fetch_one(pool)
-        .await?)
+    Ok(crate::db::scoped_one(pool, async |connection| {
+        sqlx::query_scalar::<_, i64>("SELECT links_copy_all()")
+            .fetch_one(&mut *connection)
+            .await
+    })
+    .await?)
 }
 
 /// The copy, queued once (the registry backfill queues it when it ends).

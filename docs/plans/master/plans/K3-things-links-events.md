@@ -1199,6 +1199,17 @@ log tests; the web's realtime test fixtures pass with envelopes built from event
 no readers. Depends: K3.16, A2.28 (for `external_agent_events`, if A2 asks K3 to drop it).
 Accept: a test that no Rust file names a dropped table.
 
+**K3.26 Incoming webhooks as an automation trigger** (M). Added 2026-11-14 by the roadmap
+coverage check (END-STATE section 8, Automations row). An outside service can start an
+automation: an operation (with its agent tool and `clientRequestId`) makes a hook with its
+own address and a signing secret held in the secrets store and shown once; a delivery whose
+signature checks out is stored as a delivery record and becomes an event in the log carrying
+the hook and delivery ids, never the body, and automations trigger on it through K3.4's
+router. Deliveries are counted by K5's shared limits. Depends: K3.4, K2.18. Accept: a signed
+delivery runs the automation once, and a retry with the same delivery id doesn't run it
+again; a wrong signature is refused and logged without the body; a hook in one workspace
+can't trigger another workspace's automation (an isolation case).
+
 ## 6. Guard rails
 
 1. **Every registered kind has every shared service or says why not.**
@@ -1363,6 +1374,7 @@ Questions only the owner can answer:
 | K3.23 | Contract the old link stores | S | K3.16, A2.28 (for its table) | K3.22 |
 | K3.24 | The direct scope and merged streams in the log | S | K3.3, K4.23 | K3.4 onward |
 | K3.25 | Cold log and history | M | K3.20, K5.11 | K3.21 onward |
+| K3.26 | Incoming webhooks as an automation trigger | M | K3.4, K2.18 | K3.17 onward |
 
 ## Review changes
 

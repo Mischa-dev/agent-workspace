@@ -109,7 +109,9 @@ impl Server {
             "modules registered"
         );
         let tail_start = {
-            let mut connection = pool.acquire().await.context("read the log's head")?;
+            let mut connection = crate::db::scoped_tx(&pool)
+                .await
+                .context("read the log's head")?;
             crate::events::head(&mut connection)
                 .await
                 .context("read the log's head")?

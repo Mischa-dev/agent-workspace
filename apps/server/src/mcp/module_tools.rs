@@ -212,7 +212,7 @@ pub(super) async fn thing_open(
         let kind = match kind {
             Some(kind) => kind,
             None => {
-                let mut connection = state.pool.acquire().await?;
+                let mut connection = crate::db::scoped_tx(&state.pool).await?;
                 match crate::things::locate(&mut connection, id).await? {
                     Some(located) if !located.deleted => located.kind.to_string(),
                     _ => return Ok(ToolResult::not_found("That thing")),

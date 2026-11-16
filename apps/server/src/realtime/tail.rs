@@ -88,7 +88,7 @@ pub async fn run(
 
 /// One read: returns how many events it handed on.
 async fn step(pool: &PgPool, after: &mut i64, sender: &TailSender) -> Result<usize, AppError> {
-    let mut connection = pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(pool).await?;
     let head = events::head(&mut connection).await?;
     let position = *after;
     if head - position > JUMP_AFTER {

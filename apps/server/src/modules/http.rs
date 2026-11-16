@@ -329,7 +329,7 @@ async fn open_thing_by_id(
     principal: AuthenticatedActor,
     ApiPath(id): ApiPath<Uuid>,
 ) -> Result<Json<ThingResponse>, AppError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let located = crate::things::locate(&mut connection, id)
         .await?
         .filter(|located| !located.deleted)

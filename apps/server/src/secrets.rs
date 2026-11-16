@@ -50,6 +50,7 @@ use crate::{
     auth::{AuthenticatedActor, require_authenticated_write},
     config::AppConfig,
     error::{ApiJson, ApiPath, AppError},
+    maintenance_lease,
 };
 
 const KEYRING_HEADER: &str = "aw-secrets-v1";
@@ -58,10 +59,6 @@ pub const MAX_SECRET_BYTES: usize = 64 * 1024;
 /// Secret writes hold this advisory lock shared; key rotation takes it
 /// exclusively while it retires old master keys.
 const ROTATION_LOCK: (i32, i32) = (470127786, 2);
-/// Held for a whole rotation, so two rotations never interleave. The daily
-/// backup (deploy/redhat/agent-workspace-backup) holds it during the dump,
-/// so a dump never catches a rotation halfway.
-const ONE_ROTATION_LOCK: (i32, i32) = (470127786, 3);
 
 // ---------------------------------------------------------------------------
 // Values
@@ -440,6 +437,27 @@ pub fn keyring(config: &AppConfig) -> Result<Arc<dyn KeyEncryption>, SecretError
         None => return Err(SecretError::NotConfigured),
     };
     load_cached(&path)
+}
+
+/// Creates the configured keyring when the path names a file that doesn't
+/// exist yet (checked as a safe place when the configuration loaded), as
+/// `secret-key-init` would. Returns the path when it made one, so the server
+/// can log where it is (never the key). Losing a race to another process
+/// starting at once is fine: whichever file won is kept.
+pub fn ensure_keyring(config: &AppConfig) -> Result<Option<PathBuf>, SecretError> {
+    let Some(path) = config.secrets_key_path.as_ref() else {
+        return Ok(None);
+    };
+    if path.exists() {
+        return Ok(None);
+    }
+    crate::config::validate_new_secret_location(path, config)
+        .map_err(|_| SecretError::KeyringUnreadable)?;
+    match write_new_keyring(path, &FileKeyring::generate()) {
+        Ok(()) => Ok(Some(path.clone())),
+        Err(_) if path.exists() => Ok(None),
+        Err(_) => Err(SecretError::KeyringUnreadable),
+    }
 }
 
 fn development_keyring_path() -> Result<PathBuf, SecretError> {
@@ -1102,17 +1120,19 @@ pub async fn rotate_master_key(
         .secrets_key_path
         .clone()
         .ok_or(AppError::SecretsNotConfigured)?;
-    // On a connection of its own, outside the pool, so a pool of one still
-    // has room for the rotation's work; closing it releases the lock.
-    let mut one_rotation = PgConnection::connect_with(&pool.connect_options()).await?;
-    sqlx::query("SELECT pg_advisory_lock($1, $2)")
-        .bind(ONE_ROTATION_LOCK.0)
-        .bind(ONE_ROTATION_LOCK.1)
-        .execute(&mut one_rotation)
-        .await?;
-    let current = read_keyring(&path)?;
+    // The keyring lease, held for the whole rotation, so two rotations
+    // never interleave and a backup's dump never catches one halfway. Held
+    // by either, it refuses this rotation rather than waiting.
+    let lease = maintenance_lease::Lease::take(pool, maintenance_lease::KEYRING).await?;
+    let rotated = lease.hold_while(pool, rotate_keyring(pool, &path)).await;
+    let _ = lease.release(pool).await;
+    rotated?
+}
+
+async fn rotate_keyring(pool: &PgPool, path: &Path) -> Result<RotationResult, AppError> {
+    let current = read_keyring(path)?;
     let rotated = current.with_new_active_key();
-    replace_keyring(&path, &rotated).map_err(|_| AppError::Internal("write secrets keyring"))?;
+    replace_keyring(path, &rotated).map_err(|_| AppError::Internal("write secrets keyring"))?;
     let mut rewrapped_secrets = rewrap_all(pool, &rotated).await?;
     // Writers that read the keyring before it changed may still be sealing
     // under an old key. Wait for them, re-seal what they stored, and mark
@@ -1155,8 +1175,7 @@ pub async fn rotate_master_key(
     .execute(&mut *transaction)
     .await?;
     transaction.commit().await?;
-    replace_keyring(&path, &trimmed).map_err(|_| AppError::Internal("write secrets keyring"))?;
-    let _ = one_rotation.close().await;
+    replace_keyring(path, &trimmed).map_err(|_| AppError::Internal("write secrets keyring"))?;
     Ok(RotationResult {
         active_key_id: trimmed.active_key_id().to_owned(),
         rewrapped_secrets,

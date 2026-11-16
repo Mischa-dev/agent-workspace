@@ -25,8 +25,9 @@ const DELETE_BATCH: i64 = 10_000;
 
 /// The upper bound of the newest range partition (exclusive).
 async fn newest_bound(pool: &PgPool) -> Result<i64, AppError> {
-    let bounds = sqlx::query_scalar::<_, String>(
-        r#"
+    let bounds = crate::db::scoped_one(pool, async |connection| {
+        sqlx::query_scalar::<_, String>(
+            r#"
         SELECT pg_get_expr(child.relpartbound, child.oid)
         FROM pg_inherits
         JOIN pg_class child ON child.oid = pg_inherits.inhrelid
@@ -34,8 +35,10 @@ async fn newest_bound(pool: &PgPool) -> Result<i64, AppError> {
         WHERE parent.relname = 'events'
           AND parent.relnamespace = to_regnamespace(current_schema())
         "#,
-    )
-    .fetch_all(pool)
+        )
+        .fetch_all(&mut *connection)
+        .await
+    })
     .await?;
     Ok(bounds
         .iter()
@@ -54,9 +57,12 @@ async fn newest_bound(pool: &PgPool) -> Result<i64, AppError> {
 /// added one.
 pub async fn ensure_partitions(pool: &PgPool) -> Result<bool, AppError> {
     let upper = newest_bound(pool).await?;
-    let next = sqlx::query_scalar::<_, i64>("SELECT next_position FROM event_position_counter")
-        .fetch_one(pool)
-        .await?;
+    let next = crate::db::scoped_one(pool, async |connection| {
+        sqlx::query_scalar::<_, i64>("SELECT next_position FROM event_position_counter")
+            .fetch_one(&mut *connection)
+            .await
+    })
+    .await?;
     let lower = upper - PARTITION_SIZE;
     if next < lower + PARTITION_SIZE * 8 / 10 {
         return Ok(false);
@@ -70,7 +76,7 @@ pub async fn ensure_partitions(pool: &PgPool) -> Result<bool, AppError> {
 pub async fn add_partition(pool: &PgPool, lower: i64) -> Result<(), AppError> {
     let upper = lower + PARTITION_SIZE;
     let name = format!("events_p{}", lower / PARTITION_SIZE);
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     sqlx::query("SET LOCAL lock_timeout = '5s'")
         .execute(&mut *transaction)
         .await?;
@@ -104,16 +110,19 @@ pub async fn apply_retention(pool: &PgPool) -> Result<u64, AppError> {
     let mut deleted = 0;
     for (class, days) in [("signal", SIGNAL_DAYS), ("fact", FACT_DAYS)] {
         loop {
-            let gone = sqlx::query(
-                "DELETE FROM events WHERE position IN ( \
+            let gone = crate::db::scoped_one(pool, async |connection| {
+                sqlx::query(
+                    "DELETE FROM events WHERE position IN ( \
                      SELECT position FROM events \
                      WHERE class = $1 AND created_at < now() - make_interval(days => $2) \
                      ORDER BY position LIMIT $3)",
-            )
-            .bind(class)
-            .bind(days)
-            .bind(DELETE_BATCH)
-            .execute(pool)
+                )
+                .bind(class)
+                .bind(days)
+                .bind(DELETE_BATCH)
+                .execute(&mut *connection)
+                .await
+            })
             .await?
             .rows_affected();
             deleted += gone;

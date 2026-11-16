@@ -32,14 +32,17 @@ const BATCH: i64 = 1000;
 /// counter).
 pub async fn step(pool: &PgPool) -> Result<u64, AppError> {
     // Skip empty rounds without taking the counter row.
-    if sqlx::query_scalar::<_, i32>("SELECT 1 FROM event_staging LIMIT 1")
-        .fetch_optional(pool)
-        .await?
-        .is_none()
+    if crate::db::scoped_one(pool, async |connection| {
+        sqlx::query_scalar::<_, i32>("SELECT 1 FROM event_staging LIMIT 1")
+            .fetch_optional(&mut *connection)
+            .await
+    })
+    .await?
+    .is_none()
     {
         return Ok(0);
     }
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     sqlx::query("SET LOCAL lock_timeout = '2s'")
         .execute(&mut *transaction)
         .await?;

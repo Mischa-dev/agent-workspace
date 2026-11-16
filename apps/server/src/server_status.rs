@@ -274,13 +274,12 @@ async fn read_http(
         },
     };
     let queue = jobs::queue_stats(&state.pool).await?;
-    let (waiting, oldest_waiting_seconds, parked) = sqlx::query_as::<_, (i64, f64, i64)>(
+    let (waiting, oldest_waiting_seconds, parked) = crate::db::scoped_one(&state.pool, async |connection| sqlx::query_as::<_, (i64, f64, i64)>(
         "SELECT (SELECT count(*) FROM event_staging), \
                 COALESCE((SELECT EXTRACT(EPOCH FROM now() - min(staged_at)) FROM event_staging), 0)::float8, \
                 (SELECT count(*) FROM event_consumer_failures WHERE resolved_at IS NULL)",
     )
-    .fetch_one(&state.pool)
-    .await?;
+    .fetch_one(&mut *connection).await).await?;
     Ok(Json(ServerView {
         version: env!("CARGO_PKG_VERSION"),
         commit: BUILD_COMMIT,

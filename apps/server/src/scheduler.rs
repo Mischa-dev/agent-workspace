@@ -74,11 +74,14 @@ pub fn kick(state: AppState) {
             None => drain(&state, None).await,
             Some(cluster) => match cluster.held_lease(&LeaseName::BuiltinHost) {
                 Some(lease) => drain(&state, Some((cluster, &lease))).await,
-                None => sqlx::query("SELECT pg_notify(realtime_channel('control'), 'host:kick')")
-                    .execute(&state.pool)
-                    .await
-                    .map(|_| ())
-                    .map_err(AppError::from),
+                None => crate::db::scoped_one(&state.pool, async |connection| {
+                    sqlx::query("SELECT pg_notify(realtime_channel('control'), 'host:kick')")
+                        .execute(&mut *connection)
+                        .await
+                })
+                .await
+                .map(|_| ())
+                .map_err(AppError::from),
             },
         };
         if let Err(error) = result {

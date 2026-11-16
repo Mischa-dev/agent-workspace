@@ -477,9 +477,12 @@ pub(crate) fn prepare_in_background(state: AppState, project_id: Uuid, repositor
                 .unique(format!("{PREPARE_KIND}:{repository_id}"));
             let queued = async {
                 crate::jobs::enqueue(&state.pool, job).await?;
-                sqlx::query("SELECT pg_notify(realtime_channel('control'), 'host:kick')")
-                    .execute(&state.pool)
-                    .await?;
+                crate::db::scoped_one(&state.pool, async |connection| {
+                    sqlx::query("SELECT pg_notify(realtime_channel('control'), 'host:kick')")
+                        .execute(&mut *connection)
+                        .await
+                })
+                .await?;
                 Ok::<_, AppError>(())
             }
             .await;
@@ -513,7 +516,7 @@ async fn prepare(state: AppState, project_id: Uuid, repository_id: Uuid) -> Resu
     })
     .await
     .map_err(|_| AppError::Internal("join storage admission"))??;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let row = fetch_repository(&mut transaction, project_id, repository_id)
         .await?
         .filter(|row| row.archived_at.is_none() && row.enabled && row.trusted)

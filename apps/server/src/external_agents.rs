@@ -358,7 +358,7 @@ fn validate_webhook_url(
         .map(|url| url.trim().to_owned())
         .filter(|url| !url.is_empty());
     if let Some(url) = &url {
-        crate::replies::validate_webhook_url(url, trusted_origins)?;
+        crate::outbound::validate_webhook_url(url, trusted_origins)?;
     }
     Ok(url)
 }
@@ -477,7 +477,7 @@ pub async fn set_webhook_for_host(
     trusted_origins: &[String],
     typed_wakeups: bool,
 ) -> Result<String, AppError> {
-    crate::replies::validate_webhook_url(url, trusted_origins)?;
+    crate::outbound::validate_webhook_url(url, trusted_origins)?;
     let secret = crate::replies::new_webhook_secret();
     let mut transaction = pool.begin().await?;
     let secret_id = crate::secrets::put_webhook_secret(

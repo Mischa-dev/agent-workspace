@@ -171,7 +171,7 @@ pub async fn search(
     let board_workspaces = if let (true, Some(board_module)) =
         (kinds.contains(&SearchKind::Whiteboards), board_module)
     {
-        let mut connection = pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(pool).await?;
         let on = crate::modules::state::by_workspace(&mut connection, viewer)
             .await?
             .into_iter()

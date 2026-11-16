@@ -46,6 +46,8 @@ struct Registry {
     browser_window: Mutex<Option<(Instant, u32)>>,
     server_errors: Mutex<BTreeMap<&'static str, u64>>,
     live: Mutex<Live>,
+    tenancy_transactions: Mutex<BTreeMap<&'static str, u64>>,
+    tenancy_unscoped_sites: Mutex<BTreeMap<(&'static str, u32), u64>>,
 }
 
 /// This process's wake listener and tail (K5.4).
@@ -119,6 +121,27 @@ pub fn tail_moved(position: i64, lag: i64, gaps: u64) {
 /// Record a server error by category (`AppError::log_category`).
 pub fn server_error(category: &'static str) {
     bump(&registry().server_errors, category);
+}
+
+/// Record a scoped transaction by the kind of tenancy scope it carried
+/// (`unscoped` when it had none: observe mode's count).
+pub fn tenancy_transaction(scope: &'static str) {
+    bump(&registry().tenancy_transactions, scope);
+}
+
+/// Count an unscoped transaction by the source line that began it (observe
+/// mode, H1.20). Whether it is that line's first in this process, so the
+/// caller logs it once.
+pub fn unscoped_call_site(file: &'static str, line: u32) -> bool {
+    registry()
+        .tenancy_unscoped_sites
+        .lock()
+        .map(|mut sites| {
+            let count = sites.entry((file, line)).or_default();
+            *count += 1;
+            *count == 1
+        })
+        .unwrap_or(false)
 }
 
 /// Middleware: count and time every request by route class and status.
@@ -353,6 +376,36 @@ async fn render(state: &AppState) -> Result<String, AppError> {
             "aw_server_errors_total{{category=\"{category}\"}} {count}"
         );
     }
+    out.push_str(
+        "# HELP aw_tenancy_transactions_total Scoped transactions by the tenancy scope they carried.\n",
+    );
+    out.push_str("# TYPE aw_tenancy_transactions_total counter\n");
+    for (scope, count) in registry
+        .tenancy_transactions
+        .lock()
+        .map(|map| map.clone())
+        .unwrap_or_default()
+    {
+        let _ = writeln!(
+            out,
+            "aw_tenancy_transactions_total{{scope=\"{scope}\"}} {count}"
+        );
+    }
+    out.push_str(
+        "# HELP aw_tenancy_unscoped_sites_total Transactions begun with no tenancy scope, by the source line that began them.\n",
+    );
+    out.push_str("# TYPE aw_tenancy_unscoped_sites_total counter\n");
+    for ((file, line), count) in registry
+        .tenancy_unscoped_sites
+        .lock()
+        .map(|map| map.clone())
+        .unwrap_or_default()
+    {
+        let _ = writeln!(
+            out,
+            "aw_tenancy_unscoped_sites_total{{site=\"{file}:{line}\"}} {count}"
+        );
+    }
     out.push_str("# TYPE aw_browser_errors_dropped_total counter\n");
     let _ = writeln!(
         out,
@@ -398,18 +451,21 @@ async fn render(state: &AppState) -> Result<String, AppError> {
 
     // The event log (K3.3): events waiting for a position, and how far
     // behind each consumer is.
-    let (staged, oldest_staged) = sqlx::query_as::<_, (i64, f64)>(
-        "SELECT count(*), COALESCE(EXTRACT(EPOCH FROM now() - min(staged_at)), 0)::float8 \
+    let (staged, oldest_staged) = crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query_as::<_, (i64, f64)>(
+            "SELECT count(*), COALESCE(EXTRACT(EPOCH FROM now() - min(staged_at)), 0)::float8 \
          FROM event_staging",
-    )
-    .fetch_one(&state.pool)
+        )
+        .fetch_one(&mut *connection)
+        .await
+    })
     .await?;
     out.push_str("# HELP aw_event_staging Events waiting for a position in the log.\n");
     out.push_str("# TYPE aw_event_staging gauge\n");
     let _ = writeln!(out, "aw_event_staging {staged}");
     out.push_str("# TYPE aw_event_staging_oldest_seconds gauge\n");
     let _ = writeln!(out, "aw_event_staging_oldest_seconds {oldest_staged:.3}");
-    let consumers = sqlx::query_as::<_, (String, i64, i64)>(
+    let consumers = crate::db::scoped_one(&state.pool, async |connection| sqlx::query_as::<_, (String, i64, i64)>(
         r#"
         SELECT consumer.name,
                GREATEST((SELECT next_position - 1 FROM event_position_counter) - consumer.position, 0),
@@ -418,8 +474,7 @@ async fn render(state: &AppState) -> Result<String, AppError> {
         FROM event_consumers consumer ORDER BY consumer.name
         "#,
     )
-    .fetch_all(&state.pool)
-    .await?;
+    .fetch_all(&mut *connection).await).await?;
     out.push_str("# HELP aw_event_consumer_lag Events a consumer has yet to handle.\n");
     out.push_str("# TYPE aw_event_consumer_lag gauge\n");
     for (name, lag, _) in &consumers {
@@ -447,9 +502,12 @@ async fn render(state: &AppState) -> Result<String, AppError> {
     out.push_str("# HELP aw_event_tail_gaps_total Gaps in positions the tail found (a bug).\n");
     out.push_str("# TYPE aw_event_tail_gaps_total counter\n");
     let _ = writeln!(out, "aw_event_tail_gaps_total {}", live.tail_gaps);
-    let queue_usage = sqlx::query_scalar::<_, f64>("SELECT pg_notification_queue_usage()")
-        .fetch_one(&state.pool)
-        .await?;
+    let queue_usage = crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query_scalar::<_, f64>("SELECT pg_notification_queue_usage()")
+            .fetch_one(&mut *connection)
+            .await
+    })
+    .await?;
     out.push_str("# TYPE aw_notification_queue_usage gauge\n");
     let _ = writeln!(out, "aw_notification_queue_usage {queue_usage:.6}");
 

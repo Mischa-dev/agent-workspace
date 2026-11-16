@@ -72,7 +72,7 @@ pub async fn run(pool: &PgPool, batch: i64, max_batches: usize) -> Result<Progre
 /// One batch of `table`. `None` when the source was already done.
 async fn copy_batch(pool: &PgPool, table: &str, batch: i64) -> Result<Option<u64>, AppError> {
     let source = format!("thing_source_{table}");
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     sqlx::query("INSERT INTO things_backfill (source) VALUES ($1) ON CONFLICT (source) DO NOTHING")
         .bind(&source)
         .execute(&mut *transaction)
@@ -115,7 +115,7 @@ async fn copy_batch(pool: &PgPool, table: &str, batch: i64) -> Result<Option<u64
 
 /// Parents and access parents whose own rows came after them.
 async fn set_parents(pool: &PgPool) -> Result<(), AppError> {
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     for table in [
         "conversations",
         "project_decisions",
@@ -146,10 +146,13 @@ async fn set_parents(pool: &PgPool) -> Result<(), AppError> {
 
 /// Whether every source has been copied.
 pub async fn is_done(pool: &PgPool) -> Result<bool, AppError> {
-    let done = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM things_backfill WHERE done_at IS NOT NULL",
-    )
-    .fetch_one(pool)
+    let done = crate::db::scoped_one(pool, async |connection| {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM things_backfill WHERE done_at IS NOT NULL",
+        )
+        .fetch_one(&mut *connection)
+        .await
+    })
     .await?;
     Ok(usize::try_from(done).unwrap_or(0) == SOURCES.len())
 }
