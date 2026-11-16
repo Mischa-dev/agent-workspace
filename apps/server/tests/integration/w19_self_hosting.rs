@@ -847,6 +847,69 @@ async fn a_reset_keeps_connected_apps_unless_asked_to_disconnect_them() {
 /// H1.17: with the server's own transport set (`AGENT_WORKSPACE_MAIL_URL`),
 /// a reset email goes out through it though no workspace sends mail.
 #[tokio::test]
+async fn notification_mail_falls_back_to_the_server_transport() {
+    let (port, inbox) = fake_smtp().await;
+    let Some(fixture) = fixture_with("w19_server_notify", move |config| {
+        with_local_relay(config);
+        config.server_mail = Some(ServerMail {
+            smtp: smtp::Settings {
+                host: "127.0.0.1".to_owned(),
+                port,
+                security: smtp::Security::None,
+                username: None,
+            },
+            password: None,
+            from_address: "server@example.com".to_owned(),
+            from_name: None,
+        });
+    })
+    .await
+    else {
+        return;
+    };
+    let setup = &fixture.setup;
+    // The workspace never set up a mail server of its own.
+    let project = create_project(setup, "SRV", "Server mail").await;
+    let general = create_channel(setup, &project, "general").await;
+    let (mara_id, mara) = add_person(setup, &[&project], "mara").await;
+    let (mara_user, _) = user_of(setup, mara_id).await;
+    sqlx::query(
+        "INSERT INTO user_email_addresses (user_id, address, verified_at) VALUES ($1, 'mara@example.com', now())",
+    )
+    .bind(mara_user)
+    .execute(&setup.pool)
+    .await
+    .expect("confirmed address");
+    let settings = browser_settings(
+        setup,
+        &mara,
+        json!({"group": "mentions", "channel": "email", "enabled": true}),
+    )
+    .await;
+    assert_eq!(settings["mailConfigured"], true);
+    assert_eq!(settings["emailAvailable"], true);
+    let mention = json!({
+        "version": 1,
+        "nodes": [
+            {"type": "text", "text": "Over the server's mail "},
+            {"type": "mention", "actorId": mara_id}
+        ]
+    });
+    say(setup, &setup.browser, &general, "server-mention", mention).await;
+    drain(setup).await;
+    run_jobs(&fixture).await;
+    assert_eq!(mail_count(&inbox), 1);
+    let email = last_mail(&inbox);
+    assert_eq!(email.to, "mara@example.com");
+    assert!(email.data.contains("server@example.com"), "{}", email.data);
+    assert!(
+        email.body().contains("Over the server's mail"),
+        "{}",
+        email.body()
+    );
+}
+
+#[tokio::test]
 async fn a_reset_email_goes_out_through_the_server_transport() {
     const SERVER_PASSWORD: &str = "w19-server-relay-password";
     let (port, inbox) = fake_smtp().await;

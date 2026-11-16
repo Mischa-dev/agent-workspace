@@ -234,6 +234,136 @@ pub async fn ensure_open_for_space(
     Ok(workspace)
 }
 
+/// The browser's v1 routes refuse writes into a suspended or deleting
+/// workspace, as operations and tools do. The workspace comes from the
+/// route the way the module gate finds it (`/projects/{id}`,
+/// `/organizations/{id}`, content registered by id), plus a conversation
+/// or message named by id. Reads still answer, so people can see their
+/// work and the state; keeping a workspace is an operation (`/api/v2`),
+/// which checks for itself. Routes that name no workspace (a person's own
+/// account, sign-in) are not the workspace's to refuse.
+pub async fn refuse_writes_when_closed(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    mut request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::{RequestExt, http::Method, response::IntoResponse};
+
+    if matches!(
+        *request.method(),
+        Method::GET | Method::HEAD | Method::OPTIONS
+    ) {
+        return next.run(request).await;
+    }
+    let Some(template) = request
+        .extensions()
+        .get::<axum::extract::MatchedPath>()
+        .map(|matched| matched.as_str().to_owned())
+    else {
+        return next.run(request).await;
+    };
+    if !template.starts_with("/api/v1/") {
+        return next.run(request).await;
+    }
+    let params = request
+        .extract_parts::<axum::extract::RawPathParams>()
+        .await
+        .ok();
+    let param = |name: &str| {
+        params
+            .as_ref()?
+            .iter()
+            .find_map(|(key, value)| (key == name).then(|| value.to_owned()))
+    };
+    match closed_for_route(&state, &template, param).await {
+        Ok(false) => next.run(request).await,
+        Ok(true) => AppError::WorkspaceSuspended.into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+async fn closed_for_route(
+    state: &AppState,
+    template: &str,
+    param: impl Fn(&str) -> Option<String>,
+) -> Result<bool, AppError> {
+    use crate::modules::gate::{self, Scope};
+
+    let found = match gate::scope(template, &param) {
+        Some(found) => Some(found),
+        None => match gate::id_scope(state, template, &param).await? {
+            Some(found) => Some(found),
+            None => conversation_scope(state, template, &param).await?,
+        },
+    };
+    let Some(found) = found else {
+        return Ok(false);
+    };
+    let lifecycle = crate::db::scoped_one(&state.pool, async |connection| match found {
+        Scope::Workspace(workspace) => {
+            sqlx::query_scalar::<_, String>("SELECT lifecycle FROM organizations WHERE id = $1")
+                .bind(workspace)
+                .fetch_optional(connection)
+                .await
+        }
+        Scope::Project(space) => {
+            sqlx::query_scalar::<_, String>(
+                "SELECT organization.lifecycle FROM projects space \
+                 JOIN organizations organization ON organization.id = space.organization_id \
+                 WHERE space.id = $1",
+            )
+            .bind(space)
+            .fetch_optional(connection)
+            .await
+        }
+    })
+    .await?;
+    Ok(matches!(
+        lifecycle.as_deref(),
+        Some("suspended" | "deleting")
+    ))
+}
+
+/// The space of a conversation or message a v1 route names by id.
+async fn conversation_scope(
+    state: &AppState,
+    template: &str,
+    param: impl Fn(&str) -> Option<String>,
+) -> Result<Option<crate::modules::gate::Scope>, AppError> {
+    let (rest, lookup) = if let Some(rest) = template.strip_prefix("/api/v1/conversations/{") {
+        (
+            rest,
+            "SELECT project_id FROM conversations \
+             -- visibility: the space only, to refuse a write; the handler checks access\n \
+             WHERE id = $1",
+        )
+    } else if let Some(rest) = template.strip_prefix("/api/v1/messages/{") {
+        (
+            rest,
+            "SELECT conversation.project_id FROM messages message \
+             JOIN conversations conversation ON conversation.id = message.conversation_id \
+             -- visibility: the space only, to refuse a write; the handler checks access\n \
+             WHERE message.id = $1",
+        )
+    } else {
+        return Ok(None);
+    };
+    let Some(name) = rest.split_once('}').map(|(name, _)| name) else {
+        return Ok(None);
+    };
+    let Some(id) = param(name).and_then(|raw| Uuid::parse_str(&raw).ok()) else {
+        return Ok(None);
+    };
+    let space = crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query_scalar::<_, Uuid>(lookup)
+            .bind(id)
+            .fetch_optional(connection)
+            .await
+    })
+    .await?;
+    Ok(space.map(crate::modules::gate::Scope::Project))
+}
+
 /// Lock the workspace row and read its lifecycle.
 async fn lock(connection: &mut PgConnection, workspace: Uuid) -> Result<Lifecycle, AppError> {
     let stored = sqlx::query_scalar::<_, String>(
@@ -244,6 +374,39 @@ async fn lock(connection: &mut PgConnection, workspace: Uuid) -> Result<Lifecycl
     .await?
     .ok_or(AppError::NotFound("workspace"))?;
     Lifecycle::parse(&stored)
+}
+
+/// Tell open screens and other processes the workspace's lifecycle changed
+/// (rule 6), in the same transaction. The envelope needs a space: the
+/// workspace's own.
+async fn announce(
+    connection: &mut PgConnection,
+    workspace: Uuid,
+    lifecycle: Lifecycle,
+) -> Result<(), AppError> {
+    let Some(space) = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM projects WHERE organization_id = $1 \
+         ORDER BY (kind = 'workspace') DESC, created_at LIMIT 1",
+    )
+    .bind(workspace)
+    .fetch_optional(&mut *connection)
+    .await?
+    else {
+        return Ok(());
+    };
+    let event = crate::outbox::NewOutboxEvent::new(
+        space,
+        crate::outbox::OutboxEventPayload::WorkspaceLifecycleChanged(
+            crate::outbox::WorkspaceLifecycleChangedPayload {
+                workspace_id: workspace,
+                project_id: space,
+                lifecycle: lifecycle.key().to_owned(),
+            },
+        ),
+    )
+    .map_err(|_| AppError::Internal("workspace lifecycle event"))?;
+    crate::outbox::enqueue_on(connection, &event).await?;
+    Ok(())
 }
 
 /// Stop a workspace. An active or importing workspace only.
@@ -273,7 +436,7 @@ pub async fn suspend(
     .bind(reason.key())
     .execute(&mut *connection)
     .await?;
-    Ok(())
+    announce(connection, workspace, Lifecycle::Suspended).await
 }
 
 /// Let a suspended workspace work again.
@@ -292,7 +455,7 @@ pub async fn resume(connection: &mut PgConnection, workspace: Uuid) -> Result<()
     .bind(workspace)
     .execute(&mut *connection)
     .await?;
-    Ok(())
+    announce(connection, workspace, Lifecycle::Active).await
 }
 
 fn delete_job_key(workspace: Uuid) -> String {
@@ -349,6 +512,7 @@ pub async fn request_deletion(
             .max_attempts(20),
     )
     .await?;
+    announce(connection, workspace, Lifecycle::Deleting).await?;
     Ok(delete_after)
 }
 
@@ -372,7 +536,7 @@ pub async fn cancel_deletion(
     .execute(&mut *connection)
     .await?;
     crate::jobs::cancel_queued(&mut *connection, &delete_job_key(workspace)).await?;
-    Ok(())
+    announce(connection, workspace, Lifecycle::Active).await
 }
 
 /// The agent and app accounts `workspace` owns that are still active:
@@ -442,29 +606,11 @@ async fn delete_in_scope(
     workspace: Uuid,
     ignore_date: bool,
 ) -> Result<Option<Deleted>, AppError> {
-    let due = crate::db::scoped_one(&state.pool, async |connection| {
-        sqlx::query_scalar::<_, bool>(
-            "SELECT lifecycle = 'deleting' AND ($2 OR delete_after <= now()) \
-             FROM organizations WHERE id = $1",
-        )
-        .bind(workspace)
-        .bind(ignore_date)
-        .fetch_optional(connection)
-        .await
-    })
-    .await?;
-    if due != Some(true) {
-        return Ok(None);
-    }
-    // The bytes first: deleting them twice is harmless, and a failure here
-    // leaves the rows for the job's next attempt.
-    crate::files::store::FileStore::from_config(&state.config)
-        .delete_workspace(workspace)
-        .await?;
-
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let connection = &mut *transaction;
-    // Checked again under the row lock: an owner may have cancelled.
+    // The decision is taken under the workspace's row lock, which keeping
+    // the workspace (`cancel_deletion`) also takes: once this transaction
+    // holds it, a cancellation waits and then finds no workspace.
     let still_due = sqlx::query_scalar::<_, bool>(
         "SELECT lifecycle = 'deleting' AND ($2 OR delete_after <= now()) \
          FROM organizations WHERE id = $1 FOR UPDATE",
@@ -473,8 +619,26 @@ async fn delete_in_scope(
     .bind(ignore_date)
     .fetch_optional(&mut *connection)
     .await?;
-    if still_due != Some(true) {
-        return Ok(None);
+    match still_due {
+        Some(true) => {}
+        Some(false) => return Ok(None),
+        None => {
+            // Already deleted: a previous attempt committed the rows and
+            // then failed to remove the bytes. Remove them now.
+            let deleted = sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS (SELECT 1 FROM deleted_workspaces WHERE id = $1)",
+            )
+            .bind(workspace)
+            .fetch_one(&mut *connection)
+            .await?;
+            drop(transaction);
+            if deleted {
+                crate::files::store::FileStore::from_config(&state.config)
+                    .delete_workspace(workspace)
+                    .await?;
+            }
+            return Ok(None);
+        }
     }
     sqlx::query("SELECT set_config('aw.workspace_delete', $1, true)")
         .bind(workspace.to_string())
@@ -504,6 +668,12 @@ async fn delete_in_scope(
     .execute(&mut *connection)
     .await?;
     transaction.commit().await?;
+    // The bytes go only once the rows are gone for good, so a kept
+    // workspace never loses a file. If this fails, the job's next attempt
+    // finds the workspace in `deleted_workspaces` and tries again.
+    crate::files::store::FileStore::from_config(&state.config)
+        .delete_workspace(workspace)
+        .await?;
     tracing::info!(
         target: "agent_workspace::lifecycle",
         workspace_id = %workspace,

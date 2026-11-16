@@ -59,7 +59,7 @@ impl Operation for WorkspaceDelete {
         workspace_delete_cancel keeps it; until then everything but cancelling is refused with \
         workspace_suspended. Accounts stay; the agent and app accounts the workspace owns are \
         retired. Pass the workspace's address as confirm.";
-    const EMITS: &'static [&'static str] = &["workspace.deletion_requested"];
+    const EMITS: &'static [&'static str] = &["workspace.lifecycle.changed"];
 
     type Input = WorkspaceDeleteInput;
     type Output = WorkspaceLifecycleOutput;
@@ -119,7 +119,7 @@ impl Operation for WorkspaceDeleteCancel {
     const TITLE: &'static str = "Keep workspace";
     const DESCRIPTION: &'static str = "Cancel a scheduled deletion of this workspace, within its \
         14 days. Everything works again at once.";
-    const EMITS: &'static [&'static str] = &["workspace.deletion_cancelled"];
+    const EMITS: &'static [&'static str] = &["workspace.lifecycle.changed"];
 
     type Input = WorkspaceDeleteCancelInput;
     type Output = WorkspaceLifecycleOutput;

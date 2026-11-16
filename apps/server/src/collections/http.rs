@@ -343,6 +343,8 @@ async fn list_collections(
         query.include_archived.unwrap_or(false),
     )
     .await?;
+    // `ensure` may have made the Tasks collection just now: keep it.
+    connection.commit().await?;
     Ok(Json(json!({
         "collections": collections,
         "canBuild": reader.can_build && !reader.project_archived,

@@ -222,6 +222,11 @@ pub fn router(state: AppState) -> Router {
             state.clone(),
             modules::gate::refuse_off_modules,
         ))
+        // A suspended or deleting workspace refuses v1 writes (H1.24).
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            workspace::lifecycle::refuse_writes_when_closed,
+        ))
         .fallback_service(
             ServeDir::new(web_root)
                 .append_index_html_on_directories(true)

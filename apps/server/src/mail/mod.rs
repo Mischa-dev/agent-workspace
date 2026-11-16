@@ -289,6 +289,32 @@ pub async fn transport(
     load(state, row).await.map(Some)
 }
 
+/// The transport for a workspace's notification mail: the workspace's own
+/// mail server when it set one up (it overrides only that), else the
+/// server's own transport (H1.17), else None.
+pub async fn notification_transport(
+    state: &AppState,
+    organization_id: Uuid,
+) -> Result<Option<Transport>, AppError> {
+    match transport(state, organization_id).await? {
+        Some(transport) => Ok(Some(transport)),
+        None => Ok(server_transport(state)),
+    }
+}
+
+/// Whether the workspace's notification mail has a way out: its own mail
+/// server, or the server's.
+pub async fn notification_mail_configured<'e, E: PgExecutor<'e>>(
+    state: &AppState,
+    executor: E,
+    organization_id: Uuid,
+) -> Result<bool, AppError> {
+    if state.config.server_mail.is_some() {
+        return Ok(true);
+    }
+    configured(executor, organization_id).await
+}
+
 pub(crate) async fn load(state: &AppState, row: SettingsRow) -> Result<Transport, AppError> {
     let provider = Provider::parse(&row.provider, &row.provider_config)
         .ok_or(AppError::Internal("stored mail settings"))?;

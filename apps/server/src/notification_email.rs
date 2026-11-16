@@ -56,17 +56,21 @@ struct SendJob {
     recipient: Uuid,
 }
 
-/// Whether `recipient` can get email in `organization_id` at all: the
-/// workspace sends mail and they confirmed an address.
+/// Whether an email for `recipient` in `organization_id` is worth queuing:
+/// they confirmed an address. Whether it can go out (the workspace's mail
+/// server, else the server's own transport, H1.17) is the send job's
+/// question, because the server's transport is configuration this
+/// transaction can't see; with neither, the job ends without sending.
 pub async fn available(
     connection: &mut sqlx::PgConnection,
-    organization_id: Uuid,
+    _organization_id: Uuid,
     recipient: Uuid,
 ) -> Result<bool, AppError> {
-    Ok(mail::configured(&mut *connection, organization_id).await?
-        && mail::verified_address_for_actor(&mut *connection, recipient)
+    Ok(
+        mail::verified_address_for_actor(&mut *connection, recipient)
             .await?
-            .is_some())
+            .is_some(),
+    )
 }
 
 /// Queue the email for a notification occurrence just written, unless the
@@ -183,7 +187,7 @@ async fn send_one(state: &AppState, job: &SendJob) -> Result<(), JobError> {
     let Some(address) = mail::verified_address_for_actor(&state.pool, job.recipient).await? else {
         return Ok(());
     };
-    let Some(transport) = mail::transport(state, organization_id).await? else {
+    let Some(transport) = mail::notification_transport(state, organization_id).await? else {
         return Ok(());
     };
     let origin = crate::events::public_origin(state);
@@ -308,7 +312,8 @@ async fn send_digest(state: &AppState, candidate: &DigestCandidate) -> Result<()
     else {
         return Ok(());
     };
-    let Some(transport) = mail::transport(state, candidate.organization_id).await? else {
+    let Some(transport) = mail::notification_transport(state, candidate.organization_id).await?
+    else {
         return Ok(());
     };
     let workspace = sqlx::query_scalar::<_, String>("SELECT name FROM organizations WHERE id = $1")

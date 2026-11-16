@@ -134,6 +134,40 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
     .await;
     assert_eq!(status, StatusCode::LOCKED, "{body}");
     assert_eq!(body["outcome"], "workspace_suspended", "{body}");
+    // The browser's older routes refuse writes too, and still answer reads.
+    let (status, body) = send(
+        &t.app,
+        a.browser.request(
+            "PATCH",
+            &format!("/api/v1/organizations/{}", a.organization),
+            None,
+            json!({"name": "Renamed while suspended"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::LOCKED, "{body}");
+    let (status, body) = send(
+        &t.app,
+        a.browser.request(
+            "GET",
+            &format!("/api/v1/organizations/{}", a.organization),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // Open screens hear of it.
+    let announced = sqlx::query_scalar::<_, String>(
+        "SELECT payload->>'lifecycle' FROM outbox_events \
+         WHERE event_type = 'workspace.lifecycle.changed' AND payload->>'workspaceId' = $1 \
+         ORDER BY event_cursor DESC LIMIT 1",
+    )
+    .bind(a.organization.to_string())
+    .fetch_optional(&t.pool)
+    .await
+    .expect("lifecycle event");
+    assert_eq!(announced.as_deref(), Some("suspended"));
     // The session says why.
     let (_, session) = send(
         &t.app,

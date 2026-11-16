@@ -77,7 +77,7 @@ pub fn forget(organization_id: Uuid) {
 
 /// Where a request acts, read from its path.
 #[derive(Debug, PartialEq, Eq)]
-enum Scope {
+pub(crate) enum Scope {
     Project(Uuid),
     Workspace(Uuid),
 }
@@ -86,7 +86,7 @@ enum Scope {
 /// right after `/api/v1/projects/` or `/api/v1/organizations/`. The ID is
 /// the route's decoded parameter, as its handler sees it, so an encoded
 /// spelling of the same ID can't step around the gate.
-fn scope(template: &str, param: impl Fn(&str) -> Option<String>) -> Option<Scope> {
+pub(crate) fn scope(template: &str, param: impl Fn(&str) -> Option<String>) -> Option<Scope> {
     let mut pattern = template.trim_start_matches('/').split('/');
     if pattern.next()? != "api" || pattern.next()? != "v1" {
         return None;
@@ -173,7 +173,7 @@ pub(crate) const ID_EXEMPT: &[(&str, &str)] = &[
 ];
 
 /// The scope a route named by id acts in, looked up from the database.
-async fn id_scope(
+pub(crate) async fn id_scope(
     state: &AppState,
     template: &str,
     param: impl Fn(&str) -> Option<String>,

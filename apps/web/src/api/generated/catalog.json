@@ -253,7 +253,7 @@
     "automation": true,
     "destructive": false,
     "emits": [
-      "workspace.deletion_requested"
+      "workspace.lifecycle.changed"
     ],
     "idempotent": true,
     "kind": "change",
@@ -269,7 +269,7 @@
     "automation": true,
     "destructive": false,
     "emits": [
-      "workspace.deletion_cancelled"
+      "workspace.lifecycle.changed"
     ],
     "idempotent": true,
     "kind": "change",
