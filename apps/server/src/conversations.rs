@@ -960,8 +960,8 @@ pub(crate) async fn insert_channel(
     let conversation_id = Uuid::now_v7();
     let inserted = sqlx::query(
         r#"
-        INSERT INTO conversations (id, project_id, kind, name)
-        VALUES ($1, $2, 'channel', $3)
+        INSERT INTO conversations (id, project_id, workspace_id, kind, name)
+        VALUES ($1, $2, (SELECT organization_id FROM projects WHERE id = $2), 'channel', $3)
         "#,
     )
     .bind(conversation_id)
@@ -1082,9 +1082,10 @@ async fn create_thread(
     let inserted = sqlx::query(
         r#"
         INSERT INTO conversations (
-            id, project_id, kind, parent_channel_id, origin_message_id, name, auto_named
+            id, project_id, workspace_id, kind, parent_channel_id, origin_message_id, name,
+            auto_named
         )
-        VALUES ($1, $2, 'thread', $3, $4, $5, $6)
+        VALUES ($1, $2, (SELECT organization_id FROM projects WHERE id = $2), 'thread', $3, $4, $5, $6)
         "#,
     )
     .bind(thread_id)

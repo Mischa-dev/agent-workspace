@@ -155,10 +155,11 @@ raising a number.
    same transaction.
 7. **Every conversation read goes through `conversation_visible_to`.** It is
    the only gate (K1 owns its body; K4 and C1 each own one helper inside it;
-   never `CREATE OR REPLACE` it or a helper you don't own). Until K4 makes it
-   whole, it only says whether the conversation is project-wide or the viewer
-   is on its member list, so pair it with a membership check
-   (`actor_can_access_project` or the membership join). A query that lists
+   never `CREATE OR REPLACE` it or a helper you don't own). Since K4.4 it is
+   whole (an active account; DMs and groups for participants only; channels
+   for readers of the space). Until K4.6 moves the routes onto it alone, keep
+   pairing it with a membership check (`actor_can_access_project` or the
+   membership join) where a route already does. A query that lists
    conversations or messages (a sidebar, a list, a search, a count) filters
    every row by the rule, even after a project check: being in a project,
    including the hidden direct project or the direct scope, doesn't make its

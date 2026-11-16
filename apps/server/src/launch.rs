@@ -1816,8 +1816,8 @@ async fn task_thread(
     let thread_id = Uuid::now_v7();
     sqlx::query(
         r#"
-        INSERT INTO conversations (id, project_id, kind, parent_channel_id, name)
-        VALUES ($1, $2, 'thread', $3, $4)
+        INSERT INTO conversations (id, project_id, workspace_id, kind, parent_channel_id, name)
+        VALUES ($1, $2, (SELECT organization_id FROM projects WHERE id = $2), 'thread', $3, $4)
         "#,
     )
     .bind(thread_id)
@@ -3031,8 +3031,10 @@ async fn thread_under(
     let thread_id = Uuid::now_v7();
     sqlx::query(
         r#"
-        INSERT INTO conversations (id, project_id, kind, parent_channel_id, origin_message_id, name)
-        VALUES ($1, $2, 'thread', $3, $4, $5)
+        INSERT INTO conversations (
+            id, project_id, workspace_id, kind, parent_channel_id, origin_message_id, name
+        )
+        VALUES ($1, $2, (SELECT organization_id FROM projects WHERE id = $2), 'thread', $3, $4, $5)
         "#,
     )
     .bind(thread_id)

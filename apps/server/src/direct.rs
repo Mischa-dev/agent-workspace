@@ -803,8 +803,8 @@ pub(crate) async fn open_dm_in(
     let dm_key = format!("{first}:{second}");
     let inserted = sqlx::query_scalar::<_, Uuid>(
         r#"
-        INSERT INTO conversations (id, project_id, kind, name, visibility, dm_key)
-        VALUES ($1, $2, 'dm', $3, 'members', $4)
+        INSERT INTO conversations (id, project_id, workspace_id, kind, name, visibility, dm_key)
+        VALUES ($1, $2, (SELECT organization_id FROM projects WHERE id = $2), 'dm', $3, 'members', $4)
         ON CONFLICT DO NOTHING
         RETURNING id
         "#,
@@ -859,8 +859,8 @@ pub(crate) async fn create_group_in(
     let conversation_id = Uuid::now_v7();
     sqlx::query(
         r#"
-        INSERT INTO conversations (id, project_id, kind, name, visibility)
-        VALUES ($1, $2, 'group', $3, 'members')
+        INSERT INTO conversations (id, project_id, workspace_id, kind, name, visibility)
+        VALUES ($1, $2, (SELECT organization_id FROM projects WHERE id = $2), 'group', $3, 'members')
         "#,
     )
     .bind(conversation_id)
