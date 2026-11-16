@@ -2,12 +2,13 @@ import { lazy, Suspense, useEffect, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import { useHomeExperience, useProjectExperience } from '../experience/layout'
+import { moduleShortcuts } from '../modules/registry'
 import { useProjects } from '../projects/hooks'
 import { projectSettingsHref } from '../settings/paths'
 import { createTaskHref } from '../work-items/links'
 import { closeCommandMenu, openCommandMenu, openMarkAllRead, openShortcutSheet, useCommandState } from './commandStore'
 import { loadShellLazy } from './loadShellLazy'
-import { createShortcutMatcher, type ShortcutAction } from './shortcuts'
+import { createShortcutMatcher, type ShellAction, type ShortcutAction } from './shortcuts'
 import { shortcutOn } from './shortcutModules'
 import { projectPath, useRouteProject } from './useRouteProject'
 
@@ -64,7 +65,7 @@ export function CommandCenter() {
       if (project) go(projectPath(project.id, rest))
       else openCommandMenu()
     }
-    const handlers: Record<ShortcutAction, () => void> = {
+    const handlers: Record<ShellAction, () => void> = {
       'command-menu': () => openCommandMenu(),
       'shortcut-sheet': openShortcutSheet,
       'create-task': () => {
@@ -80,19 +81,22 @@ export function CommandCenter() {
       'previous-unread': () => moveInSidebar(-1, true),
       'next-unread': () => moveInSidebar(1, true),
       'go-home': () => go('/home'),
-      'go-inbox': () => go('/inbox'),
-      'go-my-work': () => go('/my-work'),
-      'go-later': () => go('/later'),
-      'go-messages': () => go('/messages'),
-      'go-tasks': () => inProject('/work-items'),
-      'go-board': () => inProject('/work-items?view=board'),
-      'go-pages': () => inProject('/pages'),
-      'go-decisions': () => inProject('/decisions'),
       'go-settings': () => {
         const project = currentRef.current
         go(project ? projectSettingsHref(project.id) : '/settings')
       },
       'go-appearance': () => go('/settings/account/appearance'),
+    }
+    // W1.13: a module's G keys open its registered pages.
+    const registered = new Map(moduleShortcuts().map((shortcut) => [shortcut.action as string, shortcut]))
+    const run = (action: ShortcutAction) => {
+      const shortcut = registered.get(action)
+      if (shortcut) {
+        if (shortcut.inProject) inProject(shortcut.path)
+        else go(shortcut.path)
+        return
+      }
+      if (action in handlers) handlers[action as ShellAction]()
     }
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return
@@ -108,7 +112,7 @@ export function CommandCenter() {
         closeCommandMenu()
         return
       }
-      handlers[action]()
+      run(action)
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)

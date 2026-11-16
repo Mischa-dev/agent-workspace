@@ -101,5 +101,12 @@ export default {
       path: '/my-work',
     },
   ],
+  shortcuts: [
+    { action: 'go-my-work', key: 'w', label: 'My work', path: '/my-work', rank: 30 },
+    { action: 'go-tasks', key: 't', label: 'Tasks', path: '/work-items', inProject: true, rank: 60 },
+    { action: 'go-board', key: 'b', label: 'Board', path: '/work-items?view=board', inProject: true, rank: 70 },
+  ],
+  things: [{ kind: 'task', label: 'Task', icon: 'checklist' }],
+  capture: [{ id: 'task', label: 'New task', icon: 'checklist', path: '/new-task' }],
   phone: true,
 } satisfies WebModule

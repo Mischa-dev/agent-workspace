@@ -11,7 +11,8 @@
 //! header) makes the web edge, a bearer token the public API edge; a request
 //! carrying both is refused, so a script's token never rides on a browser's
 //! session or the other way round. A write's request id is the
-//! `Idempotency-Key` header; `?preview=true` runs an operation that has a
+//! `Idempotency-Key` header, which every write on this route must carry
+//! (ruling R52); `?preview=true` runs an operation that has a
 //! preview and rolls it back. The answer is the envelope, with the status
 //! its outcome maps to. Failing to sign in or the CSRF check answers as
 //! every other route does.
@@ -26,7 +27,7 @@ use axum::{
 };
 
 use super::{
-    Caller, DispatchRequest, Edge, OpError,
+    Caller, DispatchRequest, Edge, OpError, Unkeyed,
     dispatch::{Answer, dispatch},
     registry, target,
 };
@@ -109,13 +110,9 @@ pub(crate) async fn run_for_session(
         },
         trace_id: text(crate::REQUEST_ID_HEADER.as_str()),
         workspace: None,
-        // v1 never asked for a request id: a write without one gets its own.
-        request_id: text("idempotency-key").or_else(|| {
-            registry()
-                .get(name)
-                .is_some_and(|entry| entry.meta.kind.writes())
-                .then(|| uuid::Uuid::now_v7().to_string())
-        }),
+        // v1 never asked for a request id: a write without one runs once.
+        request_id: text("idempotency-key"),
+        unkeyed: Unkeyed::RunOnce,
         preview: false,
         renamed_from: None,
     };
@@ -261,6 +258,8 @@ async fn call(
         trace_id: text(crate::REQUEST_ID_HEADER.as_str()),
         workspace,
         request_id: text("idempotency-key"),
+        // The web app and scripts on v2 always send one (R52).
+        unkeyed: Unkeyed::Refuse("Idempotency-Key"),
         preview,
         renamed_from: None,
     };

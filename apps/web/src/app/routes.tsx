@@ -9,7 +9,7 @@ import {
   RootLayout,
   RouteErrorPage,
 } from './boundaries'
-import type { ModuleRoute } from '../modules/define'
+import type { ModuleRoute, WebModule } from '../modules/define'
 import { WEB_MODULES } from '../modules/registry'
 import { ShellLayout } from '../shell/ShellLayout'
 import {
@@ -77,8 +77,8 @@ function modulePage(route: ModuleRoute): AppRoute {
 }
 
 /** Every module's pages, from their registrations (`<folder>/module.ts`). */
-const moduleRoutes = (key: 'routes' | 'publicRoutes'): AppRoute[] =>
-  WEB_MODULES.flatMap((module) => (module[key] ?? []).map(modulePage))
+export const moduleRoutes = (key: 'routes' | 'publicRoutes', modules: readonly WebModule[] = WEB_MODULES): AppRoute[] =>
+  modules.flatMap((module) => (module[key] ?? []).map(modulePage))
 
 /** Signed out: these pages need no session. */
 const publicRoutes: AppRoute[] = [

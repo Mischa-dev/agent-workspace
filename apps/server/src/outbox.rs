@@ -298,6 +298,21 @@ pub struct SheetUpdatedPayload {
     pub revision: i64,
 }
 
+/// The most modules one `project.modules.updated` names.
+pub const MAX_MODULE_EVENT_SWITCHES: usize = 200;
+
+/// A space's own module switches changed (M1.2): which modules, on or off.
+/// Module ids only; open screens and other processes read the switches
+/// again.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectModulesUpdatedPayload {
+    pub workspace_id: Uuid,
+    pub project_id: Uuid,
+    /// Module id to on.
+    pub changed: std::collections::BTreeMap<String, bool>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OutboxEventPayload {
     ConversationCreated(ConversationCreatedPayload),
@@ -320,6 +335,7 @@ pub enum OutboxEventPayload {
     PageDiscussionUpdated(PageDiscussionUpdatedPayload),
     CollectionUpdated(CollectionUpdatedPayload),
     SheetUpdated(SheetUpdatedPayload),
+    ProjectModulesUpdated(ProjectModulesUpdatedPayload),
 }
 
 impl OutboxEventPayload {
@@ -345,6 +361,7 @@ impl OutboxEventPayload {
             Self::PageDiscussionUpdated(_) => "page.discussion.updated",
             Self::CollectionUpdated(_) => "collection.updated",
             Self::SheetUpdated(_) => "sheet.updated",
+            Self::ProjectModulesUpdated(_) => "project.modules.updated",
         }
     }
 
@@ -372,7 +389,8 @@ impl OutboxEventPayload {
             | Self::PageUpdated(_)
             | Self::PageDiscussionUpdated(_)
             | Self::CollectionUpdated(_)
-            | Self::SheetUpdated(_) => None,
+            | Self::SheetUpdated(_)
+            | Self::ProjectModulesUpdated(_) => None,
         }
     }
 
@@ -410,6 +428,7 @@ impl OutboxEventPayload {
             Self::PageDiscussionUpdated(_) => OutboxResourceKind::Page,
             Self::CollectionUpdated(_) => OutboxResourceKind::Collection,
             Self::SheetUpdated(_) => OutboxResourceKind::Sheet,
+            Self::ProjectModulesUpdated(_) => OutboxResourceKind::Project,
         }
     }
 
@@ -438,6 +457,7 @@ impl OutboxEventPayload {
             Self::PageDiscussionUpdated(payload) => payload.page_id,
             Self::CollectionUpdated(payload) => payload.collection_id,
             Self::SheetUpdated(payload) => payload.sheet_id,
+            Self::ProjectModulesUpdated(payload) => payload.project_id,
         }
     }
 
@@ -502,6 +522,22 @@ impl OutboxEventPayload {
             Self::SheetUpdated(payload) if payload.revision < 1 || payload.sheet_id.is_nil() => {
                 Err(OutboxEventError::MalformedPayload)
             }
+            Self::ProjectModulesUpdated(payload)
+                if payload.workspace_id.is_nil()
+                    || payload.project_id.is_nil()
+                    || !(1..=MAX_MODULE_EVENT_SWITCHES).contains(&payload.changed.len())
+                    || payload.changed.keys().any(|module| {
+                        !(1..=81).contains(&module.len())
+                            || !module.bytes().all(|byte| {
+                                byte.is_ascii_lowercase()
+                                    || byte.is_ascii_digit()
+                                    || byte == b'_'
+                                    || byte == b'.'
+                            })
+                    }) =>
+            {
+                Err(OutboxEventError::MalformedPayload)
+            }
             Self::CollectionUpdated(payload)
                 if payload.record_ids.len() > MAX_COLLECTION_EVENT_RECORDS
                     || payload.record_ids.iter().any(Uuid::is_nil) =>
@@ -535,6 +571,7 @@ impl OutboxEventPayload {
             Self::PageDiscussionUpdated(payload) => serde_json::to_value(payload),
             Self::CollectionUpdated(payload) => serde_json::to_value(payload),
             Self::SheetUpdated(payload) => serde_json::to_value(payload),
+            Self::ProjectModulesUpdated(payload) => serde_json::to_value(payload),
         }
         .map_err(|_| OutboxEventError::MalformedPayload)?;
         validate_payload_size(&value)?;
@@ -602,6 +639,9 @@ impl OutboxEventPayload {
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "sheet.updated" => Self::SheetUpdated(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "project.modules.updated" => Self::ProjectModulesUpdated(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             _ => return Err(OutboxEventError::UnknownEventType),
@@ -904,6 +944,26 @@ pub async fn enqueue_collection_updated(
         OutboxEventPayload::CollectionUpdated(CollectionUpdatedPayload {
             collection_id,
             record_ids,
+        }),
+    )
+    .await
+}
+
+/// Enqueue `project.modules.updated`: a space's own module switches
+/// changed (module id to on).
+pub async fn enqueue_project_modules_updated(
+    transaction: &mut Transaction<'_, Postgres>,
+    workspace_id: Uuid,
+    project_id: Uuid,
+    changed: std::collections::BTreeMap<String, bool>,
+) -> Result<Uuid, AppError> {
+    enqueue_typed(
+        transaction,
+        project_id,
+        OutboxEventPayload::ProjectModulesUpdated(ProjectModulesUpdatedPayload {
+            workspace_id,
+            project_id,
+            changed,
         }),
     )
     .await

@@ -1,3 +1,5 @@
+import type { WebModule } from '../modules/define'
+import { moduleShortcuts, WEB_MODULES } from '../modules/registry'
 import type { ShortcutAction } from './shortcuts'
 
 /** What the shortcut sheet lists. The keys themselves are handled in shortcuts.ts. */
@@ -11,7 +13,8 @@ export type Shortcut = {
   inProject?: boolean
 }
 
-export const SHORTCUTS: Shortcut[] = [
+/** The shell's own keys, before the modules' "Go to" keys. */
+const SHELL: Shortcut[] = [
   { action: 'command-menu', keys: ['⌘', 'K'], label: 'Search and run commands', group: 'General' },
   { action: 'shortcut-sheet', keys: ['?'], label: 'Show keyboard shortcuts', group: 'General' },
   { action: 'create-task', keys: ['C'], label: 'New task', group: 'General' },
@@ -22,14 +25,29 @@ export const SHORTCUTS: Shortcut[] = [
   { action: 'next-unread', keys: ['⌥', '⇧', '↓'], label: 'Next unread conversation', group: 'Conversations' },
   { action: 'mark-all-read', keys: ['⇧', 'Esc'], label: 'Mark all messages read', group: 'Conversations' },
   { action: 'go-home', keys: ['G', 'H'], label: 'Home', group: 'Go to' },
-  { action: 'go-inbox', keys: ['G', 'I'], label: 'Inbox', group: 'Go to' },
-  { action: 'go-my-work', keys: ['G', 'W'], label: 'My work', group: 'Go to' },
-  { action: 'go-later', keys: ['G', 'L'], label: 'Later', group: 'Go to' },
-  { action: 'go-messages', keys: ['G', 'M'], label: 'Messages', group: 'Go to' },
-  { action: 'go-tasks', keys: ['G', 'T'], label: 'Tasks', group: 'Go to', inProject: true },
-  { action: 'go-board', keys: ['G', 'B'], label: 'Board', group: 'Go to', inProject: true },
-  { action: 'go-pages', keys: ['G', 'P'], label: 'Pages', group: 'Go to', inProject: true },
-  { action: 'go-decisions', keys: ['G', 'D'], label: 'Decisions', group: 'Go to', inProject: true },
+]
+
+/** The shell's settings keys, after the modules'. */
+const SHELL_LAST: Shortcut[] = [
   { action: 'go-settings', keys: ['G', 'S'], label: 'Project settings', group: 'Go to', inProject: true },
   { action: 'go-appearance', keys: ['G', 'A'], label: 'Appearance', group: 'Go to' },
 ]
+
+/** The sheet: the shell's keys and every registered module's (W1.13). */
+export function shortcutSheet(modules: readonly WebModule[] = WEB_MODULES): Shortcut[] {
+  return [
+    ...SHELL,
+    ...moduleShortcuts(modules).map(
+      (shortcut): Shortcut => ({
+        action: shortcut.action,
+        keys: ['G', shortcut.key.toUpperCase()],
+        label: shortcut.label,
+        group: 'Go to',
+        ...(shortcut.inProject ? { inProject: true } : {}),
+      }),
+    ),
+    ...SHELL_LAST,
+  ]
+}
+
+export const SHORTCUTS: Shortcut[] = shortcutSheet()

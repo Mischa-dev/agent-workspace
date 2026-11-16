@@ -34,5 +34,9 @@ export default {
       path: '/later',
     },
   ],
+  shortcuts: [
+    { action: 'go-inbox', key: 'i', label: 'Inbox', path: '/inbox', rank: 20 },
+    { action: 'go-later', key: 'l', label: 'Later', path: '/later', rank: 40 },
+  ],
   phone: true,
 } satisfies WebModule

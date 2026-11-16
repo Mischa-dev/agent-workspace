@@ -753,10 +753,10 @@
             }
           },
           {
-            "description": "Your id for this request: a retry with the same id is answered once, with replayed: true.",
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
             "in": "header",
             "name": "Idempotency-Key",
-            "required": false,
+            "required": true,
             "schema": {
               "maxLength": 128,
               "type": "string"
@@ -815,6 +815,9 @@
                           "const": "ok"
                         },
                         "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
                           "type": "boolean"
                         },
                         "replayed": {
@@ -1178,6 +1181,9 @@
                           "const": "ok"
                         },
                         "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
                           "type": "boolean"
                         },
                         "replayed": {
@@ -1603,6 +1609,9 @@
                         "preview": {
                           "type": "boolean"
                         },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
                         "replayed": {
                           "type": "boolean"
                         },
@@ -1960,6 +1969,9 @@
                           "const": "ok"
                         },
                         "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
                           "type": "boolean"
                         },
                         "replayed": {
@@ -2331,10 +2343,10 @@
             }
           },
           {
-            "description": "Your id for this request: a retry with the same id is answered once, with replayed: true.",
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
             "in": "header",
             "name": "Idempotency-Key",
-            "required": false,
+            "required": true,
             "schema": {
               "maxLength": 128,
               "type": "string"
@@ -2417,6 +2429,9 @@
                           "const": "ok"
                         },
                         "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
                           "type": "boolean"
                         },
                         "replayed": {
@@ -2841,6 +2856,9 @@
                           "const": "ok"
                         },
                         "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
                           "type": "boolean"
                         },
                         "replayed": {
@@ -3277,10 +3295,10 @@
             }
           },
           {
-            "description": "Your id for this request: a retry with the same id is answered once, with replayed: true.",
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
             "in": "header",
             "name": "Idempotency-Key",
-            "required": false,
+            "required": true,
             "schema": {
               "maxLength": 128,
               "type": "string"
@@ -3332,6 +3350,9 @@
                           "const": "ok"
                         },
                         "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
                           "type": "boolean"
                         },
                         "replayed": {
@@ -3783,6 +3804,9 @@
                           "const": "ok"
                         },
                         "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
                           "type": "boolean"
                         },
                         "replayed": {
@@ -4246,10 +4270,10 @@
             }
           },
           {
-            "description": "Your id for this request: a retry with the same id is answered once, with replayed: true.",
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
             "in": "header",
             "name": "Idempotency-Key",
-            "required": false,
+            "required": true,
             "schema": {
               "maxLength": 128,
               "type": "string"
@@ -4296,6 +4320,9 @@
                           "const": "ok"
                         },
                         "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
                           "type": "boolean"
                         },
                         "replayed": {
@@ -4747,6 +4774,9 @@
                           "const": "ok"
                         },
                         "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
                           "type": "boolean"
                         },
                         "replayed": {
@@ -5210,10 +5240,10 @@
             }
           },
           {
-            "description": "Your id for this request: a retry with the same id is answered once, with replayed: true.",
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
             "in": "header",
             "name": "Idempotency-Key",
-            "required": false,
+            "required": true,
             "schema": {
               "maxLength": 128,
               "type": "string"
@@ -5260,6 +5290,9 @@
                           "const": "ok"
                         },
                         "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
                           "type": "boolean"
                         },
                         "replayed": {
@@ -5629,6 +5662,9 @@
                           "const": "ok"
                         },
                         "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
                           "type": "boolean"
                         },
                         "replayed": {
@@ -6042,6 +6078,9 @@
                         "preview": {
                           "type": "boolean"
                         },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
                         "replayed": {
                           "type": "boolean"
                         },
@@ -6399,6 +6438,9 @@
                           "const": "ok"
                         },
                         "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
                           "type": "boolean"
                         },
                         "replayed": {
@@ -6770,10 +6812,10 @@
             }
           },
           {
-            "description": "Your id for this request: a retry with the same id is answered once, with replayed: true.",
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
             "in": "header",
             "name": "Idempotency-Key",
-            "required": false,
+            "required": true,
             "schema": {
               "maxLength": 128,
               "type": "string"
@@ -6814,6 +6856,9 @@
                           "const": "ok"
                         },
                         "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
                           "type": "boolean"
                         },
                         "replayed": {
@@ -7265,6 +7310,9 @@
                           "const": "ok"
                         },
                         "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
                           "type": "boolean"
                         },
                         "replayed": {
@@ -7785,6 +7833,9 @@
                         "preview": {
                           "type": "boolean"
                         },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
                         "replayed": {
                           "type": "boolean"
                         },
@@ -8144,6 +8195,9 @@
                           "const": "ok"
                         },
                         "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
                           "type": "boolean"
                         },
                         "replayed": {
@@ -8517,10 +8571,10 @@
             }
           },
           {
-            "description": "Your id for this request: a retry with the same id is answered once, with replayed: true.",
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
             "in": "header",
             "name": "Idempotency-Key",
-            "required": false,
+            "required": true,
             "schema": {
               "maxLength": 128,
               "type": "string"
@@ -8569,6 +8623,9 @@
                           "const": "ok"
                         },
                         "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
                           "type": "boolean"
                         },
                         "replayed": {
@@ -8962,6 +9019,9 @@
                           "const": "ok"
                         },
                         "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
                           "type": "boolean"
                         },
                         "replayed": {
@@ -9367,10 +9427,10 @@
             }
           },
           {
-            "description": "Your id for this request: a retry with the same id is answered once, with replayed: true.",
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
             "in": "header",
             "name": "Idempotency-Key",
-            "required": false,
+            "required": true,
             "schema": {
               "maxLength": 128,
               "type": "string"
@@ -9418,6 +9478,9 @@
                           "const": "ok"
                         },
                         "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
                           "type": "boolean"
                         },
                         "replayed": {
@@ -9777,6 +9840,9 @@
                           "const": "ok"
                         },
                         "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
                           "type": "boolean"
                         },
                         "replayed": {
@@ -10148,10 +10214,10 @@
             }
           },
           {
-            "description": "Your id for this request: a retry with the same id is answered once, with replayed: true.",
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
             "in": "header",
             "name": "Idempotency-Key",
-            "required": false,
+            "required": true,
             "schema": {
               "maxLength": 128,
               "type": "string"
@@ -10234,6 +10300,9 @@
                           "const": "ok"
                         },
                         "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
                           "type": "boolean"
                         },
                         "replayed": {
@@ -10594,6 +10663,9 @@
                           "const": "ok"
                         },
                         "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
                           "type": "boolean"
                         },
                         "replayed": {
@@ -10966,10 +11038,10 @@
             }
           },
           {
-            "description": "Your id for this request: a retry with the same id is answered once, with replayed: true.",
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
             "in": "header",
             "name": "Idempotency-Key",
-            "required": false,
+            "required": true,
             "schema": {
               "maxLength": 128,
               "type": "string"
@@ -11010,6 +11082,9 @@
                           "const": "ok"
                         },
                         "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
                           "type": "boolean"
                         },
                         "replayed": {
@@ -11369,6 +11444,9 @@
                           "const": "ok"
                         },
                         "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
                           "type": "boolean"
                         },
                         "replayed": {
@@ -11740,10 +11818,10 @@
             }
           },
           {
-            "description": "Your id for this request: a retry with the same id is answered once, with replayed: true.",
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
             "in": "header",
             "name": "Idempotency-Key",
-            "required": false,
+            "required": true,
             "schema": {
               "maxLength": 128,
               "type": "string"
@@ -11792,6 +11870,9 @@
                           "const": "ok"
                         },
                         "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
                           "type": "boolean"
                         },
                         "replayed": {
@@ -12154,6 +12235,9 @@
                           "const": "ok"
                         },
                         "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
                           "type": "boolean"
                         },
                         "replayed": {
@@ -12528,10 +12612,10 @@
             }
           },
           {
-            "description": "Your id for this request: a retry with the same id is answered once, with replayed: true.",
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
             "in": "header",
             "name": "Idempotency-Key",
-            "required": false,
+            "required": true,
             "schema": {
               "maxLength": 128,
               "type": "string"
@@ -12628,6 +12712,9 @@
                           "const": "ok"
                         },
                         "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
                           "type": "boolean"
                         },
                         "replayed": {
@@ -12987,6 +13074,9 @@
                           "const": "ok"
                         },
                         "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
                           "type": "boolean"
                         },
                         "replayed": {
@@ -13358,10 +13448,10 @@
             }
           },
           {
-            "description": "Your id for this request: a retry with the same id is answered once, with replayed: true.",
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
             "in": "header",
             "name": "Idempotency-Key",
-            "required": false,
+            "required": true,
             "schema": {
               "maxLength": 128,
               "type": "string"
@@ -13473,6 +13563,9 @@
                           "const": "ok"
                         },
                         "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
                           "type": "boolean"
                         },
                         "replayed": {
@@ -13839,6 +13932,9 @@
                           "const": "ok"
                         },
                         "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
                           "type": "boolean"
                         },
                         "replayed": {
