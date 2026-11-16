@@ -113,6 +113,13 @@ pub(super) struct PermissionLine {
     pub module: String,
     pub label: String,
     pub meaning: String,
+    /// For a level, the kind of thing it is on; absent for a capability.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thing_kind: Option<String>,
+    /// For a level: see, comment, suggest, edit_own, edit or manage. A
+    /// higher level holds every lower one on the same kind.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub level: Option<String>,
     /// Agents never get it, whatever their role says.
     pub people_only: bool,
 }
@@ -148,6 +155,8 @@ pub(super) async fn role_list(
                     module: entry.module.to_owned(),
                     label: entry.label.to_owned(),
                     meaning: entry.meaning.to_owned(),
+                    thing_kind: entry.thing_kind.map(str::to_owned),
+                    level: entry.level.map(str::to_owned),
                     people_only: entry.people_only,
                 })
                 .collect(),

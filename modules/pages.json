@@ -8,7 +8,7 @@
   "switchable": true,
   "needs": [],
   "worksWith": ["tasks", "whiteboards"],
-  "permissions": ["pages.edit"],
+  "permissions": ["pages.edit", "pages.see", "pages.comment", "pages.suggest", "pages.edit_own"],
   "tools": {
     "page_list": "query",
     "page_get": "describe",

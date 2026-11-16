@@ -8,7 +8,7 @@
   "switchable": true,
   "needs": ["projects"],
   "worksWith": ["pages", "runs", "code", "channels"],
-  "permissions": ["tasks.view", "tasks.create", "tasks.edit", "tasks.delete", "tasks.workflow"],
+  "permissions": ["tasks.view", "tasks.create", "tasks.edit", "tasks.delete", "tasks.workflow", "tasks.comment", "tasks.suggest", "tasks.edit_own", "views.share", "dashboards.view", "dashboards.edit"],
   "tools": {
     "workflow_get": "describe",
     "workflow_update": "change",

@@ -674,6 +674,12 @@ pub(crate) struct PermissionEntry {
     pub scope: &'static str,
     /// The built-in roles that hold it.
     pub built_in: Vec<&'static str>,
+    /// For a level: the kind of thing it is on (`task`, `page`, ...).
+    /// `None` for a capability.
+    pub thing_kind: Option<&'static str>,
+    /// For a level: `see`, `comment`, `suggest`, `edit_own`, `edit` or
+    /// `manage`. A higher level holds every lower one on the same kind.
+    pub level: Option<&'static str>,
     pub people_only: bool,
     pub required: bool,
 }
@@ -703,6 +709,8 @@ pub(crate) fn catalogue() -> (Vec<ModuleEntry>, Vec<PermissionEntry>) {
                 .zip(info.built_in)
                 .filter_map(|(role, held)| held.then_some(role))
                 .collect(),
+            thing_kind: info.level.map(|(kind, _)| kind),
+            level: info.level.map(|(_, level)| level.key()),
             people_only: info.people_only,
             required: info.required,
         })
@@ -1011,14 +1019,17 @@ fn may_define(caller: Standing, base: MembershipRole) -> Result<(), AppError> {
     Ok(())
 }
 
-/// A custom role's permissions: known keys, within its base, and within
-/// what the caller holds.
+/// A custom role's permissions: known keys, closed under level implication
+/// (holding a level holds the lower ones, K1.9), within its base, and
+/// within what the caller holds.
 fn custom_permissions(
     caller: Standing,
     base: MembershipRole,
     keys: &[String],
 ) -> Result<PermissionSet, AppError> {
-    let permissions = permission_keys(keys)?.union(PermissionSet::required());
+    let permissions = permission_keys(keys)?
+        .union(PermissionSet::required())
+        .implied();
     if !permissions.is_subset_of(PermissionSet::built_in(base)) {
         return Err(AppError::Refused {
             field: "permissions",
@@ -2371,7 +2382,15 @@ mod tests {
                 .map(|key| (*key).to_owned())
                 .collect::<Vec<_>>();
             let permissions = custom_permissions(owner, base, &keys).expect("valid in the test");
-            assert_eq!(permissions.keys(), point.permissions, "{}", point.key);
+            // Saved closed under level implication (K1.9).
+            assert_eq!(
+                permissions,
+                PermissionSet::from_keys(&point.permissions[..])
+                    .union(PermissionSet::required())
+                    .implied(),
+                "{}",
+                point.key
+            );
             for key in point.agent_limit.iter().flatten() {
                 assert!(Permission::from_key(key).is_some(), "{key}");
             }

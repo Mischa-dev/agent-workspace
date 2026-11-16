@@ -5774,8 +5774,21 @@ async fn catalogue_matches_sql_and_role_allows_holds_to_the_role() {
     let Some(setup) = setup("k13_catalogue").await else {
         return;
     };
-    let rows = sqlx::query_as::<_, (String, String, String, bool, Vec<String>)>(
-        "SELECT key, module, scope, required, default_for FROM permission_catalogue ORDER BY key",
+    #[allow(clippy::type_complexity)]
+    let rows = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            String,
+            bool,
+            Vec<String>,
+            Option<String>,
+            Option<String>,
+        ),
+    >(
+        "SELECT key, module, scope, required, default_for, thing_kind, level \
+         FROM permission_catalogue ORDER BY key",
     )
     .fetch_all(&setup.pool)
     .await
@@ -5800,6 +5813,8 @@ async fn catalogue_matches_sql_and_role_allows_holds_to_the_role() {
                 scope.to_owned(),
                 info.required,
                 default_for,
+                info.level.map(|(kind, _)| kind.to_owned()),
+                info.level.map(|(_, level)| level.key().to_owned()),
             )
         })
         .collect::<Vec<_>>();
@@ -5872,5 +5887,81 @@ async fn catalogue_matches_sql_and_role_allows_holds_to_the_role() {
     assert!(
         !allows("viewer", Some(reader), "tasks.edit").await,
         "a custom role never holds more than its base"
+    );
+}
+
+/// K1.9: a custom role saved before the catalogue's new shape means the same
+/// after it. One holding `pages.edit` holds `pages.comment` (page comments
+/// needed `pages.edit` before), and the backfill is safe to run again.
+#[tokio::test]
+async fn a_custom_role_keeps_its_meaning_when_the_catalogue_grows() {
+    let Some(setup) = setup("k19_catalogue_backfill").await else {
+        return;
+    };
+    let role = Uuid::now_v7();
+    // An old server's row: the keys it knew, no more.
+    sqlx::query(
+        "INSERT INTO workspace_roles (id, organization_id, key, name, base_role, permissions) \
+         VALUES ($1, $2, 'old-writers', 'Old writers', 'member', ARRAY['projects.view', 'pages.edit', 'tasks.edit'])",
+    )
+    .bind(role)
+    .bind(setup.organization_id)
+    .execute(&setup.pool)
+    .await
+    .expect("an old custom role");
+    for _ in 0..2 {
+        sqlx::raw_sql(include_str!(
+            "../../migrations/20261115011300_catalogue_levels.sql"
+        ))
+        .execute(&setup.pool)
+        .await
+        .expect("the backfill runs, and runs again");
+    }
+    let permissions = sqlx::query_scalar::<_, Vec<String>>(
+        "SELECT permissions FROM workspace_roles WHERE id = $1",
+    )
+    .bind(role)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("permissions");
+    for key in [
+        "pages.comment",
+        "pages.suggest",
+        "pages.edit_own",
+        "pages.see",
+        "tasks.view",
+        "tasks.comment",
+        "conversations.see",
+        "dashboards.view",
+    ] {
+        assert!(permissions.iter().any(|held| held == key), "{key} in {permissions:?}");
+    }
+    for key in ["sheets.comment", "code.view", "data.connect"] {
+        assert!(!permissions.iter().any(|held| held == key), "{key} in {permissions:?}");
+    }
+    let mut unique = permissions.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), permissions.len(), "no key twice: {permissions:?}");
+    let allows = |key: &'static str| {
+        let pool = setup.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, bool>("SELECT role_allows('member', $1, $2)")
+                .bind(role)
+                .bind(key)
+                .fetch_one(&pool)
+                .await
+                .expect("role_allows")
+        }
+    };
+    assert!(allows("pages.comment").await);
+    assert!(!allows("sheets.comment").await);
+    // Rust reads the same.
+    let grant = agent_workspace_server::policy::RoleGrant::stored("member", Some(&permissions))
+        .expect("a member role");
+    assert!(
+        grant
+            .permissions()
+            .contains(agent_workspace_server::policy::Permission::PagesComment)
     );
 }

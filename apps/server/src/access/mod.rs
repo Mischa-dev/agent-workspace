@@ -2,6 +2,7 @@
 //! delegation limits, credential scopes, module switches and account status
 //! to decide what a caller may do (ruling R2: allow, suggest only, deny).
 //!
+//! - `catalogue`: every permission, its kind and level or capability (K1.9).
 //! - `caller`: who is calling, resolved at the edge (`Caller`, `Via`,
 //!   `Reach`).
 //! - `decide`: the pure core, with no database and no account kind.
@@ -18,6 +19,7 @@
 //! writes on kinds with levels. Everything else calls these.
 
 pub mod caller;
+pub mod catalogue;
 pub mod compare;
 pub mod decide;
 pub mod holding;

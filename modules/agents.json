@@ -8,7 +8,7 @@
   "switchable": true,
   "needs": [],
   "worksWith": ["messages", "runs"],
-  "permissions": ["agents.manage", "agents.manage_any", "hosts.manage"],
+  "permissions": ["agents.manage", "agents.manage_any", "hosts.manage", "agents.create"],
   "tools": {
     "agent_list": "query",
     "agent_managers_set": "change",

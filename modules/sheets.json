@@ -8,7 +8,7 @@
   "switchable": true,
   "needs": ["projects"],
   "worksWith": ["pages", "collections"],
-  "permissions": ["sheets.edit"],
+  "permissions": ["sheets.edit", "sheets.comment", "sheets.suggest", "sheets.edit_own"],
   "tools": {
     "sheet_list": "query",
     "sheet_read": "query",

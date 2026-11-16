@@ -8,7 +8,7 @@
   "switchable": true,
   "needs": [],
   "worksWith": ["channels", "tasks", "pages"],
-  "permissions": ["projects.view", "projects.create", "projects.manage"],
+  "permissions": ["projects.view", "projects.create", "projects.manage", "spaces.browse"],
   "tools": {
     "projects_list": "query",
     "project_open": "describe",
