@@ -3,14 +3,13 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
-import { useAuthenticatedSession, type SessionUser } from '../auth/session'
 import { useFieldMutations } from '../fields/api'
 import { clausesWithinLimits, type FieldClause, type FieldDefinition } from '../fields/fieldModel'
 import { FieldDialog } from '../fields/FieldManager'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
 import { useProject } from '../projects/hooks'
 import type { Project } from '../projects/types'
-import { AppShell } from '../shell/AppShell'
+import { ShellPanel, useShellPage } from '../shell/shellStore'
 import { usePageTitle } from '../shell/documentTitleModel'
 import { Banner, Button, ButtonLink, ConfirmDialog, ErrorState, IconButton, ListSkeleton, Menu, PageHeader, PageTabs, describeError, showToast, type MenuEntry } from '../ui'
 import { FieldFilterEditor } from '../work-items/FieldFilters'
@@ -67,28 +66,24 @@ const sameQuery = (left: ViewConfig, right: ViewConfig) =>
 
 /** One collection: its views as tabs, a table you edit in place (cards on a phone), and a record beside it. */
 export function CollectionPage() {
-  const session = useAuthenticatedSession()
   const { projectId = '', collectionId = '' } = useParams()
   const project = useProject(projectId)
+  useShellPage({ project: project.data })
   if (project.isPending) {
     return (
-      <AppShell user={session.user}>
-        <ProjectPageLoading label="Loading the collection" />
-      </AppShell>
+      <ProjectPageLoading label="Loading the collection" />
     )
   }
   if (project.isError) {
     return (
-      <AppShell user={session.user}>
-        <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
-      </AppShell>
+      <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
     )
   }
   // A collection's lists and drafts start fresh when another one opens.
-  return <CollectionWorkspace collectionId={collectionId} key={collectionId} project={project.data} user={session.user} />
+  return <CollectionWorkspace collectionId={collectionId} key={collectionId} project={project.data} />
 }
 
-function CollectionWorkspace({ collectionId, project, user }: { collectionId: string; project: Project; user: SessionUser }) {
+function CollectionWorkspace({ collectionId, project }: { collectionId: string; project: Project }) {
   const projectId = project.id
   const client = useQueryClient()
   const navigate = useNavigate()
@@ -107,6 +102,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
   const [saving, setSaving] = useState(false)
   const [deleteProblem, setDeleteProblem] = useState<string | null>(null)
   const recordId = params.get('record')
+  useShellPage({ project })
   usePageTitle(collection.data?.collection.name ?? null)
 
   const openRecord = useCallback(
@@ -133,35 +129,31 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
 
   if (collection.isPending) {
     return (
-      <AppShell project={project} user={user}>
-        <div aria-busy="true" className="aw-page aw-page--full">
-          <ListSkeleton label="Loading the collection" rows={6} />
-        </div>
-      </AppShell>
+      <div aria-busy="true" className="aw-page aw-page--full">
+        <ListSkeleton label="Loading the collection" rows={6} />
+      </div>
     )
   }
   // A refetch that fails keeps showing what loaded before.
   if (!collection.data) {
     const gone = isApiError(collection.error) && collection.error.status === 404
     return (
-      <AppShell project={project} user={user}>
-        <div className="aw-page">
-          {gone ? (
-            <ErrorState
-              action={
-                <ButtonLink to={`/projects/${encodeURIComponent(projectId)}/collections`} variant="primary">
-                  See the collections
-                </ButtonLink>
-              }
-              title="This collection isn’t here"
-            >
-              It may have been removed, or the link is wrong.
-            </ErrorState>
-          ) : (
-            <ErrorState error={collection.error} onRetry={() => void collection.refetch()} title="The collection didn’t load" />
-          )}
-        </div>
-      </AppShell>
+      <div className="aw-page">
+        {gone ? (
+          <ErrorState
+            action={
+              <ButtonLink to={`/projects/${encodeURIComponent(projectId)}/collections`} variant="primary">
+                See the collections
+              </ButtonLink>
+            }
+            title="This collection isn’t here"
+          >
+            It may have been removed, or the link is wrong.
+          </ErrorState>
+        ) : (
+          <ErrorState error={collection.error} onRetry={() => void collection.refetch()} title="The collection didn’t load" />
+        )}
+      </div>
     )
   }
 
@@ -327,8 +319,9 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
   ) : undefined
 
   return (
-    <AppShell context={panel} contextKey={recordId ?? undefined} onContextDismiss={closeRecord} project={project} user={user}>
+    <>
       <div className="aw-page aw-page--full aw-collection">
+        <ShellPanel onDismiss={closeRecord} panel={panel} panelKey={recordId ?? undefined} />
         <PageHeader
           actions={
             <>
@@ -502,7 +495,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
           The records stay. Only this way of showing them goes, for everyone.
         </ConfirmDialog>
       ) : null}
-    </AppShell>
+    </>
   )
 }
 

@@ -15,7 +15,7 @@ import type { Project } from '../projects/types'
 import { Avatar, Badge, Icon, Menu, Tooltip, initials, showToast, swatchFor, type IconName } from '../ui'
 import { useOptionalRealtime } from '../realtime/realtimeContext'
 import { openCommandMenu, useCommandState } from './commandStore'
-import { inHomeSpace, useInboxUnread } from './homeSpace'
+import { useInboxUnread } from './homeSpace'
 import { loadShellLazy } from './loadShellLazy'
 import { isMobileWidth } from './mobileNavigation'
 import { usePausedUntil } from './pauseStatus'
@@ -145,12 +145,15 @@ function WorkspaceSwitcher({
  */
 export function ProjectRail({
   currentProjectId,
+  homeActive = false,
   mobileOpen,
   onNavigate,
   onSpaceSelected = onNavigate,
   user,
 }: {
   currentProjectId: string | null
+  /** The page is in the Home space (from its route). */
+  homeActive?: boolean
   mobileOpen: boolean
   onNavigate: () => void
   /**
@@ -263,7 +266,7 @@ export function ProjectRail({
           </>
         ) : null}
         <UtilityTile
-          active={inHomeSpace(location.pathname)}
+          active={homeActive}
           badge={inboxUnread}
           icon="home"
           label="Home"

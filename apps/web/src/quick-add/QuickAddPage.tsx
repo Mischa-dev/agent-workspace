@@ -4,7 +4,7 @@ import { useLocation, useSearchParams } from 'react-router-dom'
 import { legacyPathOf } from '../app/href'
 import { useAuthenticatedSession } from '../auth/session'
 import { useProjects } from '../projects/hooks'
-import { AppShell } from '../shell/AppShell'
+import { useShellPage } from '../shell/shellStore'
 import { ButtonLink, EmptyState, ErrorState, Icon, PageHeader, SegmentedControl, SettingsSkeleton } from '../ui'
 import { formatBytes } from '../files/api'
 import { QuickMessageForm, QuickTaskForm } from './QuickAddForms'
@@ -20,6 +20,7 @@ import { FileGlyph, ImageGlyph } from '../files/icons'
  */
 export function QuickAddPage() {
   const session = useAuthenticatedSession()
+  useShellPage({ mainClassName: 'aw-main--page' })
   const location = useLocation()
   const [params] = useSearchParams()
   const sharing = legacyPathOf(location.pathname) === '/share'
@@ -66,35 +67,33 @@ export function QuickAddPage() {
   }
 
   return (
-    <AppShell mainClassName="aw-main--page" user={session.user}>
-      <div className="aw-page aw-page--reading aw-quick">
-        <PageHeader icon={sharing ? 'link' : 'plus'} title={sharing ? 'Share' : 'New task'} />
-        {shared ? <SharedPreview shared={shared} /> : null}
-        {files?.length ? (
-          <ul aria-label="Shared files" className="aw-quick__files">
-            {files.map((file, index) => (
-              <li key={`${file.name}-${index}`}>
-                <Icon name={file.type.startsWith('image/') ? ImageGlyph : FileGlyph} size={14} />
-                <span className="aw-quick__file-name">{file.name}</span>
-                <span className="aw-quick__file-size">{formatBytes(file.size)}</span>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-        {sharing ? (
-          <SegmentedControl
-            label="Share as"
-            onChange={setMode}
-            options={[
-              { value: 'task', label: 'New task', icon: 'work' },
-              { value: 'message', label: 'Message', icon: 'message' },
-            ]}
-            value={mode}
-          />
-        ) : null}
-        {body}
-      </div>
-    </AppShell>
+    <div className="aw-page aw-page--reading aw-quick">
+      <PageHeader icon={sharing ? 'link' : 'plus'} title={sharing ? 'Share' : 'New task'} />
+      {shared ? <SharedPreview shared={shared} /> : null}
+      {files?.length ? (
+        <ul aria-label="Shared files" className="aw-quick__files">
+          {files.map((file, index) => (
+            <li key={`${file.name}-${index}`}>
+              <Icon name={file.type.startsWith('image/') ? ImageGlyph : FileGlyph} size={14} />
+              <span className="aw-quick__file-name">{file.name}</span>
+              <span className="aw-quick__file-size">{formatBytes(file.size)}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {sharing ? (
+        <SegmentedControl
+          label="Share as"
+          onChange={setMode}
+          options={[
+            { value: 'task', label: 'New task', icon: 'work' },
+            { value: 'message', label: 'Message', icon: 'message' },
+          ]}
+          value={mode}
+        />
+      ) : null}
+      {body}
+    </div>
   )
 }
 

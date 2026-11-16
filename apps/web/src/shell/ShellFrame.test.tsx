@@ -7,9 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { queryKeys } from '../api/queryKeys'
 import type { SessionUser } from '../auth/session'
 import type { Project } from '../projects/types'
-import { AppShell } from './AppShell'
-import { MobileNavigationProvider } from './MobileNavigationProvider'
-import { useMobileNavigation } from './mobileNavigation'
+import { ShellFrame } from './ShellFrame'
 
 vi.mock('./ProjectRail', () => ({
   ProjectRail: ({ mobileOpen, onSpaceSelected }: { mobileOpen: boolean; onSpaceSelected: () => void }) => (
@@ -64,7 +62,7 @@ const project: Project = {
   },
 }
 
-/** The shell reads the address and the project list, as it does inside the app. */
+/** The frame reads the address, as it does inside the app. */
 function renderInApp(ui: ReactElement) {
   const client = new QueryClient()
   client.setQueryData(queryKeys.projects, { projects: [] })
@@ -75,7 +73,7 @@ function renderInApp(ui: ReactElement) {
   )
 }
 
-describe('AppShell on narrow screens', () => {
+describe('the shell frame on narrow screens', () => {
   beforeEach(() => {
     vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
       callback(0)
@@ -95,9 +93,9 @@ describe('AppShell on narrow screens', () => {
 
   it('opens the rail and sidebar as one drawer, keeps focus inside it, and makes the rest inert', async () => {
     renderInApp(
-      <AppShell context={<aside className="context-drawer">Context</aside>} project={project} user={user}>
+      <ShellFrame context={<aside className="context-drawer">Context</aside>} project={project} user={user}>
         <button type="button">Main action</button>
-      </AppShell>,
+      </ShellFrame>,
     )
 
     const menuButton = screen.getByRole('button', { name: 'Agent Workspace: open navigation' })
@@ -142,9 +140,9 @@ describe('AppShell on narrow screens', () => {
 
   it('closes the drawer from the backdrop and restores its trigger focus', () => {
     renderInApp(
-      <AppShell project={project} user={user}>
+      <ShellFrame project={project} user={user}>
         <h1>Workspace</h1>
-      </AppShell>,
+      </ShellFrame>,
     )
 
     const menuButton = screen.getByRole('button', { name: 'Agent Workspace: open navigation' })
@@ -158,7 +156,7 @@ describe('AppShell on narrow screens', () => {
     function Page() {
       const [open, setOpen] = useState(false)
       return (
-        <AppShell
+        <ShellFrame
           context={open ? <aside className="context-drawer">Thread details</aside> : undefined}
           contextKey={open ? 'details' : undefined}
           mainClassName="aw-main--conversation"
@@ -169,7 +167,7 @@ describe('AppShell on narrow screens', () => {
           <button aria-pressed={open} onClick={() => setOpen(!open)} type="button">
             Show details
           </button>
-        </AppShell>
+        </ShellFrame>
       )
     }
     renderInApp(<Page />)
@@ -193,49 +191,35 @@ describe('AppShell on narrow screens', () => {
     fireEvent.click(toggle)
     expect(screen.getByRole('dialog', { name: 'Details' })).toBeInTheDocument()
   })
-})
 
-describe('MobileNavigationProvider', () => {
-  function Probe() {
-    const navigation = useMobileNavigation()
-    const navigate = useNavigate()
-    return (
-      <>
-        <output aria-label="Drawer">{navigation.open ? 'open' : 'closed'}</output>
-        <button onClick={() => navigation.setOpen(true)} type="button">
-          Open
-        </button>
-        <button
-          onClick={() => {
-            navigation.keepOpenOnNextNavigation()
-            navigate('/projects/b')
-          }}
-          type="button"
-        >
-          Switch Project
-        </button>
-        <button onClick={() => navigate('/projects/b/channels/c')} type="button">
-          Open channel
-        </button>
-      </>
+  it('keeps the drawer open through a space picked from the rail and closes it on any other navigation', () => {
+    function Probe() {
+      const navigate = useNavigate()
+      return (
+        <>
+          <button onClick={() => navigate('/projects/b')} type="button">
+            Go to project B
+          </button>
+          <button onClick={() => navigate('/projects/b/channels/c')} type="button">
+            Open channel
+          </button>
+        </>
+      )
+    }
+    renderInApp(
+      <ShellFrame project={project} user={user}>
+        <Probe />
+      </ShellFrame>,
     )
-  }
+    const rail = document.querySelector<HTMLElement>('#project-rail')
 
-  it('keeps the drawer open through a space switch and closes it on any other navigation', () => {
-    render(
-      <MemoryRouter initialEntries={['/projects/a']}>
-        <MobileNavigationProvider>
-          <Probe />
-        </MobileNavigationProvider>
-      </MemoryRouter>,
-    )
-    const drawer = screen.getByRole('status', { name: 'Drawer' })
-
-    fireEvent.click(screen.getByRole('button', { name: 'Open' }))
-    act(() => fireEvent.click(screen.getByRole('button', { name: 'Switch Project' })))
-    expect(drawer).toHaveTextContent('open')
+    fireEvent.click(screen.getByRole('button', { name: 'Agent Workspace: open navigation' }))
+    expect(rail).toHaveAttribute('data-mobile-open', 'true')
+    act(() => fireEvent.click(screen.getByRole('button', { name: 'Last rail action' })))
+    act(() => fireEvent.click(screen.getByRole('button', { name: 'Go to project B' })))
+    expect(rail).toHaveAttribute('data-mobile-open', 'true')
 
     act(() => fireEvent.click(screen.getByRole('button', { name: 'Open channel' })))
-    expect(drawer).toHaveTextContent('closed')
+    expect(rail).toHaveAttribute('data-mobile-open', 'false')
   })
 })
