@@ -2,9 +2,7 @@
   "ceiling": 61,
   "files": {
     "apps/server/src/config.rs": 7,
-    "apps/server/src/link_previews/guard.rs": 1,
-    "apps/server/src/outbound.rs": 1,
-    "apps/server/src/replies.rs": 8,
+    "apps/server/src/outbound.rs": 10,
     "deploy/redhat/deploy-dev-checkout.sh": 3,
     "deploy/redhat/deploy-release.sh": 1,
     "docs/compatibility/hermes-agent.md": 4,

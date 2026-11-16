@@ -527,22 +527,22 @@ async fn module_gate<O: Operation>(
     Ok(())
 }
 
-/// Begin a call's transaction with its tenancy scope set (H1.20 replaces
-/// this with `db::scoped_tx`) and the connected app it acts through.
+/// Begin a call's transaction narrowed to the call's workspace
+/// (`db::scoped_tx` under `Tenancy::Workspace`, H1.20) and the connected
+/// app it acts through.
 pub(super) async fn begin(
     state: &AppState,
     ctx: &OpContext,
 ) -> Result<Transaction<'static, Postgres>, OpError> {
-    let mut tx = state
-        .pool
-        .begin()
-        .await
-        .map_err(|error| OpError::logged(ctx.op, &error.into()))?;
-    sqlx::query("SELECT set_config('app.tenancy', $1, true)")
-        .bind(format!("w:{}|{}", ctx.caller.account_id, ctx.workspace_id))
-        .execute(&mut *tx)
-        .await
-        .map_err(|error| OpError::logged(ctx.op, &error.into()))?;
+    let mut tx = crate::tenancy::scoped(
+        crate::tenancy::Tenancy::Workspace {
+            account: Some(ctx.caller.account_id),
+            workspace: ctx.workspace_id,
+        },
+        crate::db::scoped_tx(&state.pool),
+    )
+    .await
+    .map_err(|error| OpError::logged(ctx.op, &error.into()))?;
     crate::domain::set_via_grant(&mut tx, ctx.caller.via_grant_id)
         .await
         .map_err(|error| OpError::logged(ctx.op, &error))?;
