@@ -362,7 +362,7 @@ pub(crate) async fn forward(
                 .as_ref()
                 .map(|credential| credential.connection_id),
         )
-        .fetch_optional(&state.pool)
+        .fetch_optional(crate::db::scoped(&state.pool))
         .await?
         .filter(|row| !row.removed)
         .ok_or(AppError::NotFound("message"))?;

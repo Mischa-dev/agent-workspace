@@ -31,7 +31,7 @@ fn to_value(value: impl serde::Serialize) -> Result<Value, AppError> {
 /// serve forms where only Collections is on; task links stay out of reach
 /// there.
 async fn tasks_on(state: &AppState, principal: &McpPrincipal) -> Result<bool, AppError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     Ok(crate::modules::state::for_project(
         &mut connection,
         principal.project_id,
@@ -139,7 +139,7 @@ async fn form_from_written(
     written: &FormWrite,
 ) -> Result<Result<FormConfig, String>, AppError> {
     let definitions = crate::collections::field_definitions(
-        &mut *state.pool.acquire().await?,
+        &mut *crate::db::scoped_tx(&state.pool).await?,
         project_id,
         collection_id,
         false,

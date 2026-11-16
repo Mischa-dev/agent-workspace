@@ -332,7 +332,7 @@ pub(super) async fn list_project_templates(
     ApiPath(organization_id): ApiPath<Uuid>,
     crate::error::ApiQuery(query): crate::error::ApiQuery<ListQuery>,
 ) -> Result<Json<ProjectTemplatesResponse>, AppError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let templates = templates_for(
         &mut connection,
         TemplateReader::browser(&principal),
@@ -510,7 +510,7 @@ pub(super) async fn save_as_template(
     if let Some(refused) = check_name_and_description(&request.name, &request.description) {
         return Ok(outcome_response(refused, StatusCode::CREATED));
     }
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let organization_id =
         settings::authorize_project_manage(&mut *transaction, &principal, project_id).await?;
     let outcome = save_project_template(
@@ -681,7 +681,7 @@ pub(super) async fn update_project_template(
     ApiJson(request): ApiJson<UpdateProjectTemplateRequest>,
 ) -> Result<Response, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let outcome = change_project_template(
         &mut transaction,
         TemplateReader::browser(&principal),

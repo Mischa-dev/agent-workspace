@@ -56,7 +56,7 @@ async fn conversation_value(
         Some(parent_id) => {
             sqlx::query_scalar::<_, String>("SELECT kind FROM conversations WHERE id = $1")
                 .bind(parent_id)
-                .fetch_optional(&state.pool)
+                .fetch_optional(crate::db::scoped(&state.pool))
                 .await?
         }
         None => None,
@@ -130,7 +130,7 @@ pub(super) async fn channel_create(
     };
     let project_id = principal.project_id;
     let result = async {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let messages_space = match memory::project_access(
             &mut *transaction,
             principal.actor_id,
@@ -263,7 +263,7 @@ pub(super) async fn conversation_update(
         )
         .bind(conversation_id)
         .bind(principal.actor_id)
-        .fetch_optional(&state.pool)
+        .fetch_optional(crate::db::scoped(&state.pool))
         .await?
         else {
             return Ok(ToolResult::not_found("That conversation"));
@@ -289,7 +289,7 @@ pub(super) async fn conversation_update(
                 "Groups can't be archived. Leave them out of your briefing with mark_read instead.",
             ));
         }
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         mark_via(&mut transaction, principal).await?;
         let mut changes = Vec::new();
         let mut view = None;
@@ -466,7 +466,7 @@ pub(super) async fn pin_set(
     };
     let pinned = arguments.pinned.unwrap_or(true);
     let result = async {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         mark_via(&mut transaction, principal).await?;
         let project_id = match memory::set_pin(
             &mut transaction,

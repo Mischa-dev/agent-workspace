@@ -313,7 +313,7 @@ pub(super) async fn view_write(
                 }
             },
         };
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         match check_access_for(&mut transaction, principal, Action::WorkItemView).await? {
             WriteAccess::Allowed => {}
             WriteAccess::ReadOnly => return Ok(ToolResult::read_only()),
@@ -618,7 +618,7 @@ pub(super) async fn my_work(
         let projects = scope_projects(state, principal).await?;
         // AWD-75: only projects where Tasks is on for the caller, as task_list.
         let projects = {
-            let mut connection = state.pool.acquire().await?;
+            let mut connection = crate::db::scoped_tx(&state.pool).await?;
             crate::modules::state::ProjectModules::load(
                 &mut connection,
                 principal.actor_id,
@@ -673,7 +673,7 @@ pub(super) async fn template_list(
     }
     let result = async {
         can_view(state, principal).await?;
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         let rows = templates::list_templates(&mut connection, principal.project_id, false).await?;
         let recurring = templates::list_recurring(&mut connection, principal.project_id).await?;
         Ok::<_, AppError>(ToolResult::ok(TemplateListValue {
@@ -824,7 +824,7 @@ pub(super) async fn template_write(
     }
     let project_id = principal.project_id;
     let result = async {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         match check_access_for(&mut transaction, principal, Action::WorkItemEdit).await? {
             WriteAccess::Allowed => {}
             WriteAccess::ReadOnly => return Ok(ToolResult::read_only()),
@@ -1124,7 +1124,7 @@ pub(super) async fn recurring_write(
     }
     let project_id = principal.project_id;
     let result = async {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         match check_access_for(&mut transaction, principal, Action::WorkItemCreate).await? {
             WriteAccess::Allowed => {}
             WriteAccess::ReadOnly => return Ok(ToolResult::read_only()),
@@ -1356,7 +1356,7 @@ pub(super) async fn task_from_template(
     };
     let project_id = principal.project_id;
     let result = async {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         if let Some(refusal) = access_refusal(
             check_access_for(&mut transaction, principal, Action::WorkItemCreate).await?,
         ) {
@@ -1567,7 +1567,7 @@ pub(super) async fn task_import(
         Some(Err((field, message))) => return ToolResult::invalid(field, message),
     };
     let result = async {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         if let Some(refusal) = access_refusal(
             check_access_for(&mut transaction, principal, Action::WorkItemCreate).await?,
         ) {
@@ -1663,7 +1663,7 @@ pub(super) async fn project_export(
     let project_id = principal.project_id;
     let result = async {
         can_view(state, principal).await?;
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         let mut export = imports::export_json(
             &mut connection,
             project_id,

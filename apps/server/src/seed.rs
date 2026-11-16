@@ -41,7 +41,7 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
         "m0-retained",
     )?;
 
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
 
     let organization_id = sqlx::query_scalar::<_, Uuid>(
         r#"

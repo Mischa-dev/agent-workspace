@@ -148,7 +148,7 @@ pub(super) async fn model_catalog_write(
         let organization_id =
             sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
                 .bind(project_id)
-                .fetch_one(&state.pool)
+                .fetch_one(crate::db::scoped(&state.pool))
                 .await?;
         settings::authorize_personal_as(
             &state.pool,
@@ -195,7 +195,7 @@ pub(super) async fn model_catalog_write(
                 ("refreshed", "harness_catalog.refreshed", None, view)
             }
         };
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         mark_via(&mut transaction, principal).await?;
         insert_audit(
             &mut transaction,

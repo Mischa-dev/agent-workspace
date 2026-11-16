@@ -33,3 +33,10 @@ and why (R50). Newest last.
   W1.24, C1.29 and C1.35. T1 notes that #262, #265 and #268 already did tasks-into-records
   steps 2, 3, 5 and 6. Admin retention rules and moving AI suggestions onto requests are
   open questions in `decisions.md` (Lead Q1, Q2). No slice removed.
+- **2026-11-16.** H1.22 (build 3R): observe mode observes set scopes too. Until
+  `app.tenancy_strict` is on, row rules refuse nothing: a statement with no scope is allowed
+  and the server logs its call site, and a row outside a set scope is allowed and noted in
+  the database's log. Strict mode refuses both, so H1.63 is the one switch. The R20
+  direct-scope acceptance is tested with strict mode on. A new tenant table calls
+  `tenancy_protect` in its own migration. Why: the build brief (observe never refuses),
+  confirmed by the lead.
