@@ -242,6 +242,7 @@ pub enum Permission {
     MembersManage,
     RolesManage,
     SettingsManage,
+    WorkspaceDelete,
 }
 
 /// Where a permission is checked: in a project (by the role someone has
@@ -325,7 +326,7 @@ const MANAGERS: [bool; 4] = [true, true, false, false];
 const OWNERS: [bool; 4] = [true, false, false, false];
 
 /// Every permission, in the order the Roles page shows them.
-pub const PERMISSIONS: [PermissionInfo; 34] = [
+pub const PERMISSIONS: [PermissionInfo; 35] = [
     required(permission(
         Permission::ProjectsView,
         "projects.view",
@@ -639,6 +640,17 @@ pub const PERMISSIONS: [PermissionInfo; 34] = [
         PermissionScope::Both,
         MANAGERS,
     )),
+    // H1.24: deleting the whole workspace, after a 14-day grace period
+    // anyone holding it can cancel.
+    permission(
+        Permission::WorkspaceDelete,
+        "workspace.delete",
+        "settings",
+        "Delete the workspace",
+        "Schedule the whole workspace for deletion, or cancel that within 14 days.",
+        PermissionScope::Workspace,
+        OWNERS,
+    ),
 ];
 
 /// The modules permissions are grouped by, in order, with their names.
@@ -2093,7 +2105,7 @@ mod tests {
             .collect::<Vec<_>>();
         indexes.sort_unstable();
         assert_eq!(indexes, (0..PERMISSIONS.len()).collect::<Vec<_>>());
-        assert_eq!(Permission::SettingsManage as usize, PERMISSIONS.len() - 1);
+        assert_eq!(Permission::WorkspaceDelete as usize, PERMISSIONS.len() - 1);
         for info in PERMISSIONS {
             assert_eq!(Permission::from_key(info.key), Some(info.permission));
             assert_eq!(info.permission.info().key, info.key);

@@ -331,17 +331,19 @@ pub async fn bootstrap_admin(
                 }
             };
             let actor_id = Uuid::now_v7();
-            let organization_id = Uuid::now_v7();
             sqlx::query("INSERT INTO actors (id, kind) VALUES ($1, 'human')")
                 .bind(actor_id)
                 .execute(&mut *transaction)
                 .await?;
-            sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3)")
-                .bind(organization_id)
-                .bind(organization_name)
-                .bind(organization_slug)
-                .execute(&mut *transaction)
-                .await?;
+            let organization_id = crate::workspace::lifecycle::create(
+                &mut transaction,
+                actor_id,
+                crate::workspace::lifecycle::NewWorkspace {
+                    name: organization_name.clone(),
+                    slug: Some(organization_slug),
+                },
+            )
+            .await?;
             (actor_id, organization_id, false)
         }
     };

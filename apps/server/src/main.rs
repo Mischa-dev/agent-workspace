@@ -136,6 +136,35 @@ async fn main() -> anyhow::Result<()> {
             println!("{}", serde_json::to_string_pretty(&rotated)?);
             return Ok(());
         }
+        Some(command @ ("workspace-suspend" | "workspace-resume")) => {
+            // H1.24: an operator stops or restarts a workspace by address.
+            let options = parse_options(arguments)?;
+            let action = if command == "workspace-suspend" {
+                reject_unknown_options(&options, &["slug", "reason"])?;
+                let reason = options.get("reason").map_or("operator", String::as_str);
+                let reason =
+                    agent_workspace_server::workspace::lifecycle::SuspendReason::parse(reason)
+                        .context("--reason is operator, abuse or billing")?;
+                agent_workspace_server::workspace::lifecycle::OperatorAction::Suspend(reason)
+            } else {
+                reject_unknown_options(&options, &["slug"])?;
+                agent_workspace_server::workspace::lifecycle::OperatorAction::Resume
+            };
+            let workspace = agent_workspace_server::workspace::lifecycle::operator_command(
+                &pool,
+                required_option(&options, "slug")?,
+                action,
+            )
+            .await
+            .context("change the workspace's lifecycle")?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &serde_json::json!({ "workspaceId": workspace, "done": command })
+                )?
+            );
+            return Ok(());
+        }
         Some("secret-key-init") => {
             // Creates a new keyring file; refuses to replace one.
             let options = parse_options(arguments)?;

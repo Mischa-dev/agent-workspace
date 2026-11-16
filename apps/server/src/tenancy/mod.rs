@@ -67,6 +67,9 @@ pub const SYSTEM_REASONS: &[(&str, &[&str])] = &[
     ("jobs.server", &["jobs.rs"]),
     // Taking, renewing and releasing a server-wide maintenance lease.
     ("maintenance.lease", &["maintenance_lease.rs"]),
+    // An operator suspending or resuming a workspace from the command line
+    // (H1.24), before any account is known.
+    ("workspace.operator", &["workspace/lifecycle.rs"]),
 ];
 
 impl Tenancy {

@@ -31,6 +31,8 @@ use subtle::ConstantTimeEq;
 use uuid::Uuid;
 use zeroize::{Zeroize, Zeroizing};
 
+pub mod lifecycle;
+pub mod ops;
 pub mod slug;
 
 use crate::{
@@ -275,6 +277,8 @@ struct WorkspaceRow {
     agent_count: i64,
     project_count: i64,
     owner_count: i64,
+    lifecycle: String,
+    delete_after: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -291,6 +295,10 @@ struct WorkspaceView {
     people_count: i64,
     agent_count: i64,
     project_count: i64,
+    /// `active`, `importing`, `suspended` or `deleting` (H1.24).
+    lifecycle: String,
+    /// When a deleting workspace goes for good.
+    delete_after: Option<DateTime<Utc>>,
     capabilities: WorkspaceCapabilities,
 }
 
@@ -302,6 +310,9 @@ struct WorkspaceCapabilities {
     transfer_ownership: bool,
     leave: bool,
     view_audit_log: bool,
+    /// Holds "Delete the workspace" (H1.24): may schedule its deletion, or
+    /// keep it.
+    delete: bool,
 }
 
 fn role_name(role: WorkspaceRole) -> &'static str {
@@ -338,7 +349,8 @@ async fn load_workspace(
                    AND project.archived_at IS NULL AND project.kind NOT IN ('direct', 'workspace')) AS project_count,
                (SELECT count(*) FROM organization_memberships membership
                  WHERE membership.organization_id = organization.id AND membership.enabled
-                   AND membership.role = 'owner') AS owner_count
+                   AND membership.role = 'owner') AS owner_count,
+               organization.lifecycle, organization.delete_after
         FROM organizations organization
         WHERE organization.id = $1
         "#,
@@ -358,12 +370,15 @@ async fn load_workspace(
         people_count: row.people_count,
         agent_count: row.agent_count,
         project_count: row.project_count,
+        lifecycle: row.lifecycle,
+        delete_after: row.delete_after,
         capabilities: WorkspaceCapabilities {
             rename: role.manages(),
             manage_members: role.manages(),
             transfer_ownership: role == WorkspaceRole::Owner,
             leave: role != WorkspaceRole::Owner || row.owner_count > 1,
             view_audit_log: role.manages(),
+            delete: false,
         },
     })
 }
@@ -375,9 +390,13 @@ async fn read_workspace(
 ) -> Result<Json<WorkspaceView>, AppError> {
     let mut connection = state.pool.acquire().await?;
     let role = caller_role(&mut connection, &principal, organization_id, false).await?;
-    Ok(Json(
-        load_workspace(&mut connection, organization_id, role).await?,
-    ))
+    let mut view = load_workspace(&mut connection, organization_id, role).await?;
+    view.capabilities.delete =
+        crate::roles::standing(&mut connection, organization_id, principal.actor_id)
+            .await?
+            .permissions
+            .contains(crate::policy::Permission::WorkspaceDelete);
+    Ok(Json(view))
 }
 
 #[derive(Debug, Deserialize)]

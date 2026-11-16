@@ -40,6 +40,7 @@ export const PERMISSION_KEYS = [
   'members.manage',
   'roles.manage',
   'settings.manage',
+  'workspace.delete',
 ] as const
 
 export type PermissionKey = (typeof PERMISSION_KEYS)[number]

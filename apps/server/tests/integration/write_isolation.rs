@@ -574,6 +574,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "workspace_template_save",
     "project_template_write",
     "workspace_update",
+    "workspace_delete",
+    "workspace_delete_cancel",
 ];
 
 /// Write tools this suite deliberately doesn't call, and why.
@@ -5987,6 +5989,21 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 json!({"agent": a.agent, "add": [b.rook]}),
             ],
         ),
+        // H1.24: deleting a workspace, or keeping it, only ever acts on the
+        // caller's own. A's own call would stop every later case here;
+        // workspace_lifecycle.rs runs it.
+        mcp_case(
+            "workspace_delete",
+            json!({}),
+            vec![json!({"workspace": b.organization, "confirm": b.slug})],
+        )
+        .without_own("deleting A would stop every later case; workspace_lifecycle.rs covers it"),
+        mcp_case(
+            "workspace_delete_cancel",
+            json!({}),
+            vec![json!({"workspace": b.organization})],
+        )
+        .without_own("A isn't being deleted; workspace_lifecycle.rs covers keeping it"),
         mcp_case(
             "agent_profile_write",
             json!({"projectId": a.project, "template": "reviewer", "name": "Net mcp reviewer"}),

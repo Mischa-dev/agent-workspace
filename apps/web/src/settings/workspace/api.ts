@@ -1,4 +1,5 @@
 import { requestJson } from '../../api/client'
+import { callOp } from '../../api/ops'
 import type { OrganizationRole } from '../../auth/session'
 
 export type Workspace = {
@@ -13,14 +14,29 @@ export type Workspace = {
   peopleCount?: number
   agentCount?: number
   projectCount: number
+  /** Where the workspace is in its life; missing from older servers. */
+  lifecycle?: WorkspaceLifecycle
+  /** When a deleting workspace goes for good. */
+  deleteAfter?: string | null
   capabilities: {
     rename: boolean
     manageMembers: boolean
     transferOwnership: boolean
     leave: boolean
     viewAuditLog: boolean
+    /** Holds "Delete the workspace": may schedule its deletion or keep it. */
+    delete?: boolean
   }
 }
+
+export type WorkspaceLifecycle = 'active' | 'importing' | 'suspended' | 'deleting'
+
+/** Schedule the workspace's deletion in 14 days; `confirm` is its address, typed out. */
+export const deleteWorkspace = (workspaceId: string, confirm: string) =>
+  callOp('workspace_delete', { confirm }, { workspaceId })
+
+/** Keep a workspace that was going to be deleted. */
+export const keepWorkspace = (workspaceId: string) => callOp('workspace_delete_cancel', {}, { workspaceId })
 
 export type WorkspaceMember = {
   actorId: string

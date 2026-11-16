@@ -1237,3 +1237,104 @@ async fn naming_an_agents_managers_follows_the_one_rule() {
     assert_eq!(events, vec![Some(ada)]);
     world.finish().await;
 }
+
+/// H1.24: deleting the workspace needs "Delete the workspace"
+/// (`workspace.delete`), which only owners start with. A member and an
+/// admin are refused; the owner schedules it and keeps it again.
+#[tokio::test]
+async fn only_holders_of_workspace_delete_may_delete_or_keep_it() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .person("ada", "admin")
+        .build("privacy_workspace_delete")
+        .await
+    else {
+        return;
+    };
+    let ada = world.people["ada"].actor;
+    sqlx::query(
+        "UPDATE organization_memberships SET role = 'admin', role_explicit = true \
+         WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(world.organization)
+    .bind(ada)
+    .execute(world.pool())
+    .await
+    .expect("ada is a workspace admin");
+    let slug = sqlx::query_scalar::<_, String>("SELECT slug FROM organizations WHERE id = $1")
+        .bind(world.organization)
+        .fetch_one(world.pool())
+        .await
+        .expect("slug");
+    let call = |browser: &super::support::app::Browser, name: &str, key: &str, input| {
+        browser.request(
+            "POST",
+            &format!("/api/v2/w/{}/ops/{name}", world.organization),
+            Some(key),
+            input,
+        )
+    };
+    for person in ["lena", "ada"] {
+        let browser = &world.people[person].browser;
+        let (status, body) = send(
+            &world.app,
+            call(
+                browser,
+                "workspace_delete",
+                &format!("{person}-delete"),
+                json!({"confirm": slug}),
+            ),
+        )
+        .await;
+        assert_ne!(body["outcome"], "ok", "{person} deletes: {status} {body}");
+    }
+    let lifecycle = || async {
+        sqlx::query_scalar::<_, String>("SELECT lifecycle FROM organizations WHERE id = $1")
+            .bind(world.organization)
+            .fetch_one(world.pool())
+            .await
+            .expect("lifecycle")
+    };
+    assert_eq!(lifecycle().await, "active");
+    let (status, body) = send(
+        &world.app,
+        call(
+            &world.owner.browser,
+            "workspace_delete",
+            "owner-delete",
+            json!({"confirm": slug}),
+        ),
+    )
+    .await;
+    assert_eq!(body["outcome"], "ok", "the owner deletes: {status} {body}");
+    assert_eq!(lifecycle().await, "deleting");
+    // Nor may they keep it.
+    for person in ["lena", "ada"] {
+        let browser = &world.people[person].browser;
+        let (status, body) = send(
+            &world.app,
+            call(
+                browser,
+                "workspace_delete_cancel",
+                &format!("{person}-keep"),
+                json!({}),
+            ),
+        )
+        .await;
+        assert_ne!(body["outcome"], "ok", "{person} keeps it: {status} {body}");
+    }
+    assert_eq!(lifecycle().await, "deleting");
+    let (status, body) = send(
+        &world.app,
+        call(
+            &world.owner.browser,
+            "workspace_delete_cancel",
+            "owner-keep",
+            json!({}),
+        ),
+    )
+    .await;
+    assert_eq!(body["outcome"], "ok", "the owner keeps it: {status} {body}");
+    assert_eq!(lifecycle().await, "active");
+}

@@ -487,7 +487,6 @@ async fn resolve_identity(
             .ok_or(AppError::Validation("choose a username before signing up"))?;
         let id = Uuid::now_v7();
         let actor = Uuid::now_v7();
-        let org = Uuid::now_v7();
         let name = format!(
             "{} {}",
             user.first_name.as_deref().unwrap_or(""),
@@ -510,13 +509,15 @@ async fn resolve_identity(
             .execute(&mut **tx)
             .await?;
         // A readable slug from the name, with a numeric suffix (K4.5).
-        let slug = crate::workspace::slug::readable_for_new(tx, "My workspace").await?;
-        sqlx::query("INSERT INTO organizations(id,name,slug) VALUES ($1,'My workspace',$2)")
-            .bind(org)
-            .bind(slug)
-            .execute(&mut **tx)
-            .await?;
-        sqlx::query("INSERT INTO organization_memberships(organization_id,actor_id,role) VALUES ($1,$2,'owner')").bind(org).bind(actor).execute(&mut **tx).await?;
+        crate::workspace::lifecycle::create(
+            tx,
+            actor,
+            crate::workspace::lifecycle::NewWorkspace {
+                name: "My workspace".to_owned(),
+                slug: None,
+            },
+        )
+        .await?;
         id
     };
     sqlx::query(

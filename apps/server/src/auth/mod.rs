@@ -133,6 +133,11 @@ struct OrganizationSummary {
     role_name: Option<String>,
     #[serde(skip)]
     role_permissions: Option<Vec<String>>,
+    /// `active`, `importing`, `suspended` or `deleting` (H1.24): the web
+    /// says why a workspace that isn't active refuses changes.
+    lifecycle: String,
+    /// When a deleting workspace goes for good.
+    delete_after: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -615,10 +620,12 @@ async fn session_response(
             organizations: Vec::new(),
         });
     };
-    let organizations = sqlx::query_as::<_, OrganizationSummary>(
-        r#"
+    let organizations = crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query_as::<_, OrganizationSummary>(
+            r#"
         SELECT o.id, o.name, o.slug, om.role, custom.name AS role_name,
-               workspace_role_permissions(om.role_id) AS role_permissions
+               workspace_role_permissions(om.role_id) AS role_permissions,
+               o.lifecycle, o.delete_after
         FROM organization_memberships om
         JOIN organizations o ON o.id = om.organization_id
         LEFT JOIN workspace_roles custom ON custom.id = om.role_id
