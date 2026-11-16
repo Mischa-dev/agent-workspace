@@ -38,9 +38,9 @@ import { CollectionDetailsDialog, ViewNameDialog } from './CollectionDialogs'
 import { CollectionToolbar } from './CollectionToolbar'
 import type { ColumnActions } from './ColumnMenus'
 import { CollectionBoardView } from './CollectionBoardView'
-import { RecordCalendar } from './RecordCalendar'
+import { CollectionCalendarView } from './CollectionCalendarView'
+import { CollectionGalleryView } from './CollectionGalleryView'
 import { RecordCards } from './RecordCards'
-import { RecordGallery } from './RecordGallery'
 import { RecordPanel } from './RecordPanel'
 import { RecordTable } from './RecordTable'
 import { useRecordEdits } from './useRecordEdits'
@@ -400,9 +400,9 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
             recordHref={recordHref}
           />
         ) : layout === 'gallery' ? (
-          <RecordGallery {...shared} params={recordsParams({ ...recordsQuery, groupBy: null })} recordHref={recordHref} />
+          <CollectionGalleryView {...shared} params={recordsParams({ ...recordsQuery, groupBy: null })} recordHref={recordHref} />
         ) : layout === 'calendar' ? (
-          <RecordCalendar
+          <CollectionCalendarView
             {...shared}
             dateFields={dateFields(body.fields)}
             onDateField={(fieldId) => setConfig({ ...config, dateField: fieldId })}

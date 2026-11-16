@@ -37,7 +37,7 @@ const ALLOWED_FILES = new Set([
 ])
 
 /** Files that call the board drag hook today, besides its own. */
-const ALLOWED_DRAG = new Set(['collections/RecordCalendar.tsx', 'work-items/WorkItemBoard.tsx'])
+const ALLOWED_DRAG = new Set(['work-items/WorkItemBoard.tsx'])
 
 const ENGINE = ['views/', 'pieces/']
 const SHAPED = /(Board\.tsx|FilterBar[^/]*|filterModel[^/]*|viewDraft[^/]*)$/
