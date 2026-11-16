@@ -9,6 +9,10 @@ use uuid::Uuid;
 use super::{
     agent_interface::{connect_app, initialize, tool},
     mcp_admin::{create_project, setup},
+    support::{
+        app::{send, tool as support_tool},
+        world::WorldBuilder,
+    },
 };
 
 #[tokio::test]
@@ -223,4 +227,78 @@ async fn pages_and_boards_restore_through_one_seam() {
     // one in another workspace to the same answer).
     let missing = call("history_list", json!({"thing": Uuid::now_v7()})).await;
     assert_eq!(missing["outcome"], "not_found", "{missing}");
+}
+
+/// By id alone, a private conversation's message stays its members' even
+/// while the registry doesn't yet know its conversation (a backfill still
+/// running leaves `access_parent_id` empty), and a workspace board, which
+/// has no space, is found.
+#[tokio::test]
+async fn history_by_id_keeps_private_messages_and_finds_workspace_boards() {
+    let Some(world) = WorldBuilder::default()
+        .project("HIST")
+        .person("ana", "member")
+        .agent("bob", "member")
+        .connected_app("helper")
+        .private_group("secret", &["ana"])
+        .build("k3_19_private_history")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let helper = &world.apps["helper"];
+    let bob = &world.agents["bob"];
+    let as_helper = |name: &'static str, arguments: Value| {
+        support_tool(app, &helper.token, &helper.session, name, arguments)
+    };
+    let sent = as_helper(
+        "message_send",
+        json!({"conversationId": world.conversations["secret"], "text": "between us", "clientRequestId": "k3-19-secret"}),
+    )
+    .await;
+    assert_eq!(sent["outcome"], "ok", "{sent}");
+    let message = sent["value"]["messageId"]
+        .as_str()
+        .expect("message id")
+        .to_owned();
+
+    // The registry loses the message's conversation, as before a backfill
+    // reaches it.
+    sqlx::query("UPDATE things SET access_parent_id = NULL, parent_id = NULL WHERE id = $1::uuid")
+        .bind(&message)
+        .execute(world.pool())
+        .await
+        .expect("forget the parent");
+    let own = as_helper("history_list", json!({"thing": message})).await;
+    assert_eq!(own["outcome"], "ok", "a member reads it: {own}");
+    for (name, arguments) in [
+        ("history_list", json!({"thing": message})),
+        ("history_show", json!({"thing": message, "version": 1})),
+    ] {
+        let theirs = support_tool(app, &bob.token, &bob.session, name, arguments).await;
+        assert_eq!(
+            theirs["outcome"], "not_found",
+            "{name} as a non-member: {theirs}"
+        );
+        assert!(!theirs.to_string().contains("between us"), "{theirs}");
+    }
+
+    // A workspace board (no space) is located and listed.
+    let (status, created) = send(
+        app,
+        world.owner.browser.request(
+            "POST",
+            "/api/v1/whiteboards",
+            None,
+            json!({"title": "Whole workspace", "organizationId": world.organization}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status} {created}");
+    let board = created["whiteboard"]["id"].as_str().expect("board id");
+    let listed = as_helper("history_list", json!({"thing": board})).await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    assert_eq!(listed["value"]["kind"], "whiteboard", "{listed}");
+    world.finish().await;
 }

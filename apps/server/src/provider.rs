@@ -752,6 +752,11 @@ async fn drive_turn(
     provider_thread_id: String,
     turn_id: String,
 ) -> Result<(), AppError> {
+    // Losing the built-in host's lease stops this turn like a shutdown does:
+    // the run stays as it is for the next holder to recover (K5.3).
+    let _active = state.supervisors.turn_started();
+    let lease_lost = state.supervisors.host_lease_lost();
+    let stopping = || state.supervisors.is_shutting_down() || lease_lost.is_cancelled();
     let mut message = PlainTextMessageBuffer::default();
     let message_stream_id = Uuid::now_v7();
     loop {
@@ -760,10 +765,10 @@ async fn drive_turn(
                 let event = match event {
                     Ok(event) => event,
                     Err(error) => {
-                        if !state.supervisors.is_shutting_down() {
+                        if !stopping() {
                             sleep(Duration::from_millis(100)).await;
                         }
-                        if state.supervisors.is_shutting_down() {
+                        if stopping() {
                             provider.shutdown().await;
                             return Ok(());
                         }
@@ -778,6 +783,7 @@ async fn drive_turn(
                         run_id,
                         conversation_id,
                         request,
+                        &lease_lost,
                     ).await?,
                     HarnessEvent::MessageDelta(delta) => {
                         if let Err(error) = message.push(&delta) {
@@ -863,7 +869,7 @@ async fn drive_turn(
                 }
             }
             () = sleep(Duration::from_millis(500)) => {
-                if state.supervisors.is_shutting_down() {
+                if stopping() {
                     provider.shutdown().await;
                     return Ok(());
                 }
@@ -893,6 +899,10 @@ async fn drive_turn(
                 provider.shutdown().await;
                 return Ok(());
             }
+            () = lease_lost.cancelled() => {
+                provider.shutdown().await;
+                return Ok(());
+            }
         }
     }
 }
@@ -904,6 +914,7 @@ async fn handle_provider_request(
     run_id: Uuid,
     conversation_id: Uuid,
     request: HarnessRequest,
+    lease_lost: &tokio_util::sync::CancellationToken,
 ) -> Result<(), AppError> {
     if request.kind == RequestKind::Unsupported {
         provider
@@ -992,7 +1003,7 @@ async fn handle_provider_request(
 
     loop {
         sleep(Duration::from_millis(300)).await;
-        if state.supervisors.is_shutting_down() {
+        if state.supervisors.is_shutting_down() || lease_lost.is_cancelled() {
             let _ = provider.answer(request, HarnessAnswer::Deny).await;
             provider.shutdown().await;
             return Ok(());
