@@ -803,8 +803,11 @@ async fn revoke_project_credentials(
     project_id: Uuid,
     actor_id: Uuid,
 ) -> Result<(), AppError> {
+    // K1.6: an agent connection's credential belongs to the workspace; the
+    // project it was first added to only anchors it, so leaving that project
+    // closes the project (checked on every call) without signing it out.
     sqlx::query(
-        "UPDATE mcp_client_credentials SET status = 'revoked', version = version + 1, revoked_at = now(), updated_at = now() WHERE project_id = $1 AND actor_id = $2 AND status = 'active'",
+        "UPDATE mcp_client_credentials SET status = 'revoked', version = version + 1, revoked_at = now(), updated_at = now() WHERE project_id = $1 AND actor_id = $2 AND status = 'active' AND external_agent_connection_id IS NULL",
     )
     .bind(project_id)
     .bind(actor_id)

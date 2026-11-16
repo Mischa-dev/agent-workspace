@@ -3887,6 +3887,9 @@ const SPANNING_LISTS: &[&str] = &[
     "task_list",
     "my_work",
     "conversation_list",
+    // K1.6: an agent made at workspace level is anchored in the workspace's
+    // own space, where Projects isn't a module; its projects are elsewhere.
+    "projects_list",
     "agent_list",
     "repository_list",
     "pull_request_list",
