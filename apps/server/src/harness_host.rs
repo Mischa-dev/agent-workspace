@@ -37,7 +37,7 @@ impl ServerHost {
             "SELECT organization_id, owner_actor_id FROM provider_accounts WHERE id = $1",
         )
         .bind(account_id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(crate::db::scoped(&self.pool))
         .await
         .map_err(failed)?
         .ok_or(HarnessError::MissingResult("the account"))?;
@@ -97,7 +97,7 @@ impl HarnessHost for ServerHost {
         Box::pin(async move {
             let owner = self.owner(account_id).await?;
             let keys = self.keys()?;
-            let mut connection = self.pool.acquire().await.map_err(failed)?;
+            let mut connection = crate::db::scoped_tx(&self.pool).await.map_err(failed)?;
             secrets::put(
                 &mut connection,
                 keys.as_ref(),
@@ -112,6 +112,7 @@ impl HarnessHost for ServerHost {
             )
             .await
             .map_err(app_failed)?;
+            connection.commit().await.map_err(failed)?;
             Ok(())
         })
     }
@@ -179,7 +180,7 @@ impl HarnessHost for ServerHost {
                     "#,
                 )
                 .bind(&path)
-                .fetch_optional(&self.pool)
+                .fetch_optional(crate::db::scoped(&self.pool))
                 .await
                 .map_err(failed)?
                 .ok_or(HarnessError::MissingResult("the run's repository"))?;

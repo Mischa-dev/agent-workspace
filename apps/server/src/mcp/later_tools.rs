@@ -149,7 +149,7 @@ async fn inbox_within(
     actor_id: Uuid,
     within: Option<Vec<Uuid>>,
 ) -> Result<Vec<Uuid>, AppError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let projects = match within {
         Some(projects) => projects,
         None => {
@@ -311,7 +311,7 @@ pub(super) async fn later_save(
                     Err(error) => return Err(error),
                 };
                 if let Some(home) = home {
-                    let mut connection = state.pool.acquire().await?;
+                    let mut connection = crate::db::scoped_tx(&state.pool).await?;
                     if crate::modules::state::by_workspace(&mut connection, principal.actor_id)
                         .await?
                         .get(&home)
@@ -540,7 +540,7 @@ pub(super) async fn message_schedule(
     // connection: a retry waits for this one and answers with its message,
     // and a crash leaves neither.
     let scheduled = async {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let reservation = match reserve_create(
             &mut transaction,
             principal,

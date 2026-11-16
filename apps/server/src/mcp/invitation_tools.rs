@@ -121,7 +121,7 @@ pub(super) async fn invitation_list(
     }
     if arguments.workspace.unwrap_or(false) {
         let listed = async {
-            let mut connection = state.pool.acquire().await?;
+            let mut connection = crate::db::scoped_tx(&state.pool).await?;
             let organization_id = organization_of(&mut connection, principal.project_id).await?;
             crate::workspace::workspace_invitations_for(
                 &mut connection,
@@ -268,7 +268,7 @@ pub(super) async fn invitation_write(
     }
     let project_id = principal.project_id;
     let result = async {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         match check_access_for(&mut transaction, principal, Action::InvitationManage).await? {
             WriteAccess::Allowed => {}
             WriteAccess::ReadOnly => return Ok(ToolResult::read_only()),
@@ -429,7 +429,7 @@ async fn workspace_invitation_write(
         return Ok(ToolResult::not_found("That project"));
     }
     let project_id = principal.project_id;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     mark_via(&mut transaction, principal).await?;
     let organization_id = organization_of(&mut transaction, project_id).await?;
     let (done, invitation_id, token, action, metadata) = match existing {

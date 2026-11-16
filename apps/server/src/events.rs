@@ -232,7 +232,7 @@ pub(crate) async fn route(state: &AppState, payload: &RoutePayload) -> Result<us
     // the workspace's events; nor do events of a module that's off. A space
     // that turns a module off narrows it for its own events (AWD-186).
     let modules = {
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         crate::modules::state::in_space(
             &mut connection,
             payload.organization_id,
@@ -247,7 +247,7 @@ pub(crate) async fn route(state: &AppState, payload: &RoutePayload) -> Result<us
         let direct =
             sqlx::query_scalar::<_, bool>("SELECT kind = 'direct' FROM projects WHERE id = $1")
                 .bind(event.project_id)
-                .fetch_one(&state.pool)
+                .fetch_one(crate::db::scoped(&state.pool))
                 .await?;
         if shut_out(modules, &event.event_type, direct) {
             continue;
@@ -402,7 +402,7 @@ async fn expand(pool: &PgPool, payload: &RoutePayload) -> Result<Vec<Event>, App
         "SELECT created_at FROM outbox_events WHERE event_id = $1",
     )
     .bind(payload.event_id)
-    .fetch_optional(pool)
+    .fetch_optional(crate::db::scoped(pool))
     .await?
     .unwrap_or_else(Utc::now);
     let event = |event_type: &str, key: String, actor_id: Option<Uuid>, subject: Subject| Event {
@@ -446,7 +446,7 @@ async fn expand(pool: &PgPool, payload: &RoutePayload) -> Result<Vec<Event>, App
                 "#,
             )
             .bind(agent_run_id)
-            .fetch_optional(pool)
+            .fetch_optional(crate::db::scoped(pool))
             .await?
             .unwrap_or((Uuid::nil(), None));
             let state_name = state.to_string();
@@ -505,7 +505,7 @@ async fn expand(pool: &PgPool, payload: &RoutePayload) -> Result<Vec<Event>, App
             )
             .bind(payload.event_id)
             .bind(work_item_id)
-            .fetch_all(pool)
+            .fetch_all(crate::db::scoped(pool))
             .await?;
             let created = activities
                 .iter()
@@ -584,7 +584,7 @@ async fn expand(pool: &PgPool, payload: &RoutePayload) -> Result<Vec<Event>, App
             )
             .bind(payload.event_id)
             .bind(record_ids)
-            .fetch_all(pool)
+            .fetch_all(crate::db::scoped(pool))
             .await?;
             for entry in entries {
                 let created = entry.action == "created";
@@ -659,7 +659,7 @@ async fn linked_pull_requests(
             )
             .bind(payload.project_id)
             .bind(run_id)
-            .fetch_all(pool)
+            .fetch_all(crate::db::scoped(pool))
             .await?
         }
         PullRequestLink::WorkItem(work_item_id) => {
@@ -674,7 +674,7 @@ async fn linked_pull_requests(
             )
             .bind(payload.project_id)
             .bind(work_item_id)
-            .fetch_all(pool)
+            .fetch_all(crate::db::scoped(pool))
             .await?
         }
     };

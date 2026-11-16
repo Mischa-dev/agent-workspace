@@ -210,7 +210,7 @@ pub async fn rotate_password(
         return Err(error);
     }
     let password_phc = password::hash_password(password).await?;
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     let user = sqlx::query_as::<_, (Uuid, Uuid)>(
         r#"
         SELECT id, actor_id
@@ -296,7 +296,7 @@ pub async fn bootstrap_admin(
     }
     let password_phc = password::hash_password(password).await?;
 
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     sqlx::query(
         "SELECT pg_advisory_xact_lock(hashtextextended('agent-workspace.bootstrap-admin', 0))",
     )
@@ -434,7 +434,7 @@ pub async fn bootstrap_development_member(
         .ok_or(BootstrapError::InvalidMemberAdoption)?;
     let password_phc = password::hash_password(password).await?;
 
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(format!("agent-workspace.bootstrap-member:{actor_id}"))
         .execute(&mut *transaction)

@@ -137,12 +137,12 @@ pub async fn home_for(state: &AppState, viewer: Uuid) -> Result<Home, AppError> 
         "#
     ))
     .bind(viewer)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let working_total =
         sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) {RUNS_FROM} {VISIBLE_ACTIVE}"))
             .bind(viewer)
-            .fetch_one(&state.pool)
+            .fetch_one(crate::db::scoped(&state.pool))
             .await?;
     let queued_launches = sqlx::query_scalar::<_, i64>(
         r#"
@@ -154,7 +154,7 @@ pub async fn home_for(state: &AppState, viewer: Uuid) -> Result<Home, AppError> 
         "#,
     )
     .bind(viewer)
-    .fetch_one(&state.pool)
+    .fetch_one(crate::db::scoped(&state.pool))
     .await?;
     let working = rows
         .into_iter()

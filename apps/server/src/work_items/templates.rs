@@ -383,7 +383,7 @@ pub(super) async fn get_templates(
         .await?
         .ok_or(AppError::NotFound("project"))?;
     authorize_work_item(&principal, &membership, Action::WorkItemView, None)?;
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let templates = list_templates(&mut connection, project_id, true).await?;
     let recurring = list_recurring(&mut connection, project_id).await?;
     Ok(Json(TemplatesResponse {
@@ -1773,7 +1773,7 @@ pub(crate) async fn queue_due(pool: &PgPool) -> Result<usize, AppError> {
         LIMIT 500
         "#,
     )
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?;
     let count = due.len();
     for (id, project_id, organization_id, occurrence) in due {
@@ -1866,7 +1866,7 @@ async fn acting_actor(
 async fn create_occurrence(context: &JobContext) -> Result<(), JobError> {
     let payload: OccurrencePayload = context.job.payload_as()?;
     let pool = &context.state.pool;
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     let Some(row) = recurring_for_update(&mut transaction, None, payload.recurring_task_id).await?
     else {
         return Ok(());

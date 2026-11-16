@@ -553,7 +553,7 @@ pub(super) async fn conversation_list(
         // project, Channels in the others, so pages and cursors count only
         // those.
         let listed = {
-            let mut connection = state.pool.acquire().await?;
+            let mut connection = crate::db::scoped_tx(&state.pool).await?;
             crate::modules::state::ProjectModules::load(
                 &mut connection,
                 principal.actor_id,
@@ -695,7 +695,7 @@ pub(super) async fn list_rows(
     .bind(filter.only_id)
     .bind(offset)
     .bind(limit)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?)
 }
 
@@ -775,7 +775,7 @@ async fn resolve_person_anywhere(
     )
     .bind(projects)
     .bind(person.trim_start_matches('@'))
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?)
 }
 
@@ -827,7 +827,7 @@ pub(super) async fn conversation_module_off(
     actor_id: Uuid,
     project_id: Uuid,
 ) -> Result<Option<&'static str>, AppError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let kind = sqlx::query_scalar::<_, String>("SELECT kind FROM projects WHERE id = $1")
         .bind(project_id)
         .fetch_one(&mut *connection)
@@ -946,7 +946,7 @@ pub(super) async fn conversation_read(
             )
             .bind(conversation.id)
             .bind(message_id)
-            .fetch_optional(&state.pool)
+            .fetch_optional(crate::db::scoped(&state.pool))
             .await?
             else {
                 return Ok(ToolResult::not_found("That message in this conversation"));
@@ -1029,7 +1029,7 @@ pub(super) async fn message_items(
     .bind(conversation_id)
     .bind(from)
     .bind(to)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let live = rows
         .iter()
@@ -1064,7 +1064,7 @@ pub(super) async fn message_items(
         )
         .bind(&ids)
         .bind(conversation_id)
-        .fetch_all(&state.pool)
+        .fetch_all(crate::db::scoped(&state.pool))
         .await?;
         let mut readable = std::collections::HashMap::<Uuid, bool>::new();
         for (id, source_conversation, source_project) in elsewhere {
@@ -1206,7 +1206,7 @@ async fn read_sequence(
     )
     .bind(conversation_id)
     .bind(actor_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     .unwrap_or(0))
 }
@@ -1250,7 +1250,7 @@ async fn conversation_detail(
                 "#,
             )
             .bind(conversation.membership_conversation_id())
-            .fetch_all(&state.pool)
+            .fetch_all(crate::db::scoped(&state.pool))
             .await?,
         )
     } else {
@@ -1322,7 +1322,7 @@ pub(super) async fn pinned_items(
     )
     .bind(conversation_id)
     .bind(viewer)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     Ok(rows
         .into_iter()
@@ -1396,7 +1396,7 @@ async fn mark(
     up_to: i64,
 ) -> Result<i64, AppError> {
     // The same read as the web's: the mark, the event and the inbox (P0.5).
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     crate::read_state::mark_seen(
         &mut transaction,
         conversation.project_id,
@@ -1476,7 +1476,7 @@ async fn mark_unread(
             }
         },
     };
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     mark_via(&mut transaction, principal).await?;
     let change = match mark_unread_from(
         &mut transaction,
@@ -1632,7 +1632,7 @@ pub(super) async fn message_forward(
         .bind(message_id)
         .bind(principal.actor_id)
         .bind(principal.external_agent_connection_id)
-        .fetch_optional(&state.pool)
+        .fetch_optional(crate::db::scoped(&state.pool))
         .await?;
         let Some((source_project, source_conversation)) = source else {
             return Ok(ToolResult::not_found("That message"));
@@ -1841,7 +1841,7 @@ pub(super) async fn conversation_start(
         None => None,
     };
     let result = async {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let (space_id, role) = crate::direct::space_for_actor(
             &mut transaction,
             principal.actor_id,
@@ -2024,7 +2024,7 @@ pub(super) async fn people_search(
         .bind(&projects)
         .bind(query.trim().trim_start_matches('@'))
         .bind(limit)
-        .fetch_all(&state.pool)
+        .fetch_all(crate::db::scoped(&state.pool))
         .await?;
         Ok::<_, AppError>(ToolResult::ok(PeopleValue {
             people: rows
@@ -2067,7 +2067,7 @@ pub(super) async fn thread_start(
         None => None,
     };
     let result = async {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let parent = match lock_conversation_for(
             &mut transaction,
             principal.actor_id,
@@ -2330,7 +2330,7 @@ pub(super) async fn thread_update(
         clear_outcome: arguments.clear_outcome.unwrap_or(false),
     };
     let result = async {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let view = match update_thread(
             &mut transaction,
             principal.actor_id,

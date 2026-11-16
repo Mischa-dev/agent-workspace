@@ -121,7 +121,7 @@ pub(super) async fn message_react(
     };
     let reacted = arguments.reacted.unwrap_or(true);
     let result = async {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         mark_via(&mut transaction, principal).await?;
         let outcome = match set_reaction(
             &mut transaction,

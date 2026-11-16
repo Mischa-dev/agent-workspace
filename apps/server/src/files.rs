@@ -220,7 +220,7 @@ pub(crate) async fn readable_file(
 ) -> Result<FileRow, AppError> {
     let sql = format!("SELECT {FILE_COLUMNS} FROM files file WHERE file.id = $1 AND {READABLE}");
     bind_reader(sqlx::query_as::<_, FileRow>(&sql).bind(file_id), reader)
-        .fetch_optional(pool)
+        .fetch_optional(crate::db::scoped(pool))
         .await?
         .filter(|row| !hidden_by_agent_limit(reader, row))
         .ok_or(AppError::NotFound("file"))
@@ -238,7 +238,7 @@ pub(crate) async fn message_files(
     );
     Ok(
         bind_reader(sqlx::query_as::<_, FileRow>(&sql).bind(message_id), reader)
-            .fetch_all(pool)
+            .fetch_all(crate::db::scoped(pool))
             .await?,
     )
 }
@@ -262,7 +262,7 @@ pub(crate) async fn task_files(
         reader,
     )
     .bind(project_id)
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?
     .into_iter()
     .filter(|row| !hidden_by_agent_limit(reader, row))
@@ -353,7 +353,7 @@ pub(crate) async fn store_upload(
     upload: Upload,
 ) -> Result<FileRow, AppError> {
     let prepared = prepare_upload(upload).await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let row = store_prepared(state, &mut transaction, uploader, destination, prepared).await?;
     if let Err(error) = transaction.commit().await {
         discard_stored(state, &row).await;
@@ -883,7 +883,7 @@ pub async fn cleanup(state: &AppState) -> Result<u64, AppError> {
         "#,
     )
     .bind(UNSENT_HOURS)
-    .execute(&state.pool)
+    .execute(crate::db::scoped(&state.pool))
     .await?;
     let removed = sqlx::query_as::<_, (Uuid, String, Option<String>)>(
         r#"
@@ -894,7 +894,7 @@ pub async fn cleanup(state: &AppState) -> Result<u64, AppError> {
         "#,
     )
     .bind(CLEANUP_BATCH)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let store = FileStore::from_config(&state.config);
     let mut deleted = 0;
@@ -913,7 +913,7 @@ pub async fn cleanup(state: &AppState) -> Result<u64, AppError> {
         }
         sqlx::query("UPDATE files SET blob_deleted_at = now() WHERE id = $1")
             .bind(id)
-            .execute(&state.pool)
+            .execute(crate::db::scoped(&state.pool))
             .await?;
         deleted += 1;
     }

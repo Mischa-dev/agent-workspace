@@ -442,7 +442,7 @@ pub(super) async fn task_criteria(
             return Ok(ToolResult::not_found("That task"));
         };
         let scoped = scoped(principal, project_id);
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         // Marks the app a person acts through, takes the project lock every
         // task write takes first, and checks the role (Action::McpWrite).
         match writes::check_write_access(&mut transaction, &scoped).await? {

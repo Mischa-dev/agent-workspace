@@ -126,7 +126,7 @@ pub async fn search(
     };
     // AWD-75: each kind searches only where its module is on.
     let modules = {
-        let mut connection = pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(pool).await?;
         ProjectModules::load(&mut connection, viewer, projects).await?
     };
     // Tasks, and files attached to tasks, come only from projects where the
@@ -187,7 +187,7 @@ pub async fn search(
                 .bind(&task_projects[..])
                 .bind(&conversation_projects[..]);
         }
-        let rows = query.fetch_all(pool).await?;
+        let rows = query.fetch_all(crate::db::scoped(pool)).await?;
         hits.extend(rows);
     }
     hits.sort_by(|left, right| {
@@ -492,7 +492,7 @@ pub async fn projects_allowing(
     .bind(viewer)
     .bind(projects)
     .bind(permission.info().key)
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?
     .into_iter()
     .filter(|project| !crate::policy::agent_limit_hides(viewer, *project, permission))
@@ -511,7 +511,7 @@ pub async fn browser_projects(pool: &PgPool, actor_id: Uuid) -> Result<Vec<Uuid>
         "#,
     )
     .bind(actor_id)
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?)
 }
 

@@ -89,7 +89,7 @@ async fn task_in_scope(
             )
             .bind(id)
             .bind(principal.project_id)
-            .fetch_optional(&state.pool)
+            .fetch_optional(crate::db::scoped(&state.pool))
             .await?
         }
         None => super::tasks::resolve_task(state, principal, reference)
@@ -155,7 +155,7 @@ pub(super) async fn task_comment_edit(
         let Some(task_id) = task_in_scope(state, principal, &arguments.task_id).await? else {
             return Ok(ToolResult::invalid("taskId", TASK_ID_MESSAGE));
         };
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         if let Some(result) = access_result(check_write_access(&mut transaction, principal).await?)
         {
             return Ok(result);
@@ -213,7 +213,7 @@ pub(super) async fn task_comment_delete(
         let Some(task_id) = task_in_scope(state, principal, &arguments.task_id).await? else {
             return Ok(ToolResult::invalid("taskId", TASK_ID_MESSAGE));
         };
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         if let Some(result) = access_result(check_write_access(&mut transaction, principal).await?)
         {
             return Ok(result);

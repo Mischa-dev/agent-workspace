@@ -481,7 +481,7 @@ async fn store_tokens(state: &AppState, run_id: Uuid, usage: TokenUsage) -> Resu
         "#,
     )
     .bind(run_id)
-    .fetch_one(&state.pool)
+    .fetch_one(crate::db::scoped(&state.pool))
     .await?;
     let model = usage
         .model
@@ -537,7 +537,7 @@ async fn store_tokens(state: &AppState, run_id: Uuid, usage: TokenUsage) -> Resu
     .bind(cost)
     .bind(prices.as_ref().map(|prices| prices.currency.clone()))
     .bind(reported)
-    .execute(&state.pool)
+    .execute(crate::db::scoped(&state.pool))
     .await?;
     Ok(())
 }
@@ -561,7 +561,7 @@ pub async fn run_totals(pool: &PgPool, run_id: Uuid) -> Result<UsageTotals, AppE
         "SELECT {TOTALS} FROM agent_run_usage WHERE agent_run_id = $1"
     ))
     .bind(run_id)
-    .fetch_one(pool)
+    .fetch_one(crate::db::scoped(pool))
     .await?)
 }
 

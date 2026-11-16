@@ -116,3 +116,8 @@ VALUES
 ON CONFLICT (key) DO UPDATE
 SET module = EXCLUDED.module, scope = EXCLUDED.scope, required = EXCLUDED.required,
     default_for = EXCLUDED.default_for;
+
+-- Row security (H1.22): each table is protected by its workspace.
+SELECT tenancy_protect('modules', 'workspace_id');
+SELECT tenancy_protect('module_nav', 'workspace_id');
+SELECT tenancy_protect('module_parts', 'workspace_id');

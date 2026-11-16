@@ -108,7 +108,7 @@ pub(super) async fn field_list(
                 "SELECT archived_at IS NULL FROM projects WHERE id = $1",
             )
             .bind(principal.project_id)
-            .fetch_one(&state.pool)
+            .fetch_one(crate::db::scoped(&state.pool))
             .await?;
         Ok::<_, AppError>(ToolResult::ok(FieldListValue {
             fields: definitions.iter().map(FieldView::from).collect(),
@@ -213,7 +213,7 @@ pub(super) async fn field_write(
         if !can_write_in(state, principal, project_id, Action::WorkflowManage).await? {
             return Ok(ToolResult::denied(MANAGERS_MESSAGE));
         }
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         mark_via(&mut transaction, principal).await?;
         let Some(membership) =
             lock_membership(&mut transaction, principal.actor_id, project_id).await?

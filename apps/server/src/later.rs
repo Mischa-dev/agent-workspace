@@ -305,7 +305,7 @@ pub async fn list(
         .bind(viewer)
         .bind(within)
         .bind(LIST_LIMIT)
-        .fetch_all(pool)
+        .fetch_all(crate::db::scoped(pool))
         .await?;
     let open_count = open_count(pool, viewer, within).await?;
     Ok(LaterPage {
@@ -354,7 +354,7 @@ pub async fn open_count(
         viewer,
         crate::policy::Permission::TasksView,
     ))
-    .fetch_one(pool)
+    .fetch_one(crate::db::scoped(pool))
     .await?)
 }
 
@@ -363,7 +363,7 @@ pub async fn get_item(pool: &PgPool, viewer: Uuid, id: Uuid) -> Result<SavedItem
     sqlx::query_as::<_, SavedRow>(&select_sql("AND item.id = $2"))
         .bind(viewer)
         .bind(id)
-        .fetch_optional(pool)
+        .fetch_optional(crate::db::scoped(pool))
         .await?
         .filter(|row| !hidden_by_limit(viewer, row))
         .map(view)
@@ -486,7 +486,7 @@ pub async fn save(
         .as_deref()
         .map(parse_remind_at)
         .transpose()?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let open = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM saved_items WHERE actor_id = $1 AND done_at IS NULL",
     )
@@ -746,7 +746,7 @@ pub async fn change(
         Some(None) => Some(None),
         Some(Some(value)) => Some(Some(parse_remind_at(value)?)),
     };
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let item = sqlx::query_as::<_, LockedItem>(
         "SELECT id, organization_id, kind, remind_at, done_at FROM saved_items WHERE id = $1 AND actor_id = $2 FOR UPDATE",
     )
@@ -801,7 +801,7 @@ pub async fn change(
 }
 
 pub async fn remove(pool: &PgPool, actor_id: Uuid, id: Uuid) -> Result<(), AppError> {
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     let removed = sqlx::query_as::<_, (Uuid, Option<DateTime<Utc>>)>(
         "DELETE FROM saved_items WHERE id = $1 AND actor_id = $2 RETURNING id, remind_at",
     )
@@ -902,7 +902,7 @@ struct DueRow {
 }
 
 async fn remind(state: &AppState, job: &RemindJob) -> Result<(), JobError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     // Access is checked now, as the item's owner, with an active account.
     let Some(row) = sqlx::query_as::<_, DueRow>(
         r#"

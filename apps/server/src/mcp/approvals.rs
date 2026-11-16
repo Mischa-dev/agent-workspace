@@ -234,7 +234,7 @@ async fn respond_inner(
     approval_id: Uuid,
     key: IdempotencyKey,
 ) -> Result<ApprovalToolResult, AppError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let Some(context) = load_context(&mut transaction, principal, approval_id, true, true).await?
     else {
         return Ok(ApprovalToolResult::not_found());
@@ -458,7 +458,7 @@ async fn fetch_context(
     approval_id: Uuid,
     lock: bool,
 ) -> Result<Option<ApprovalContext>, AppError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let context = load_context(&mut transaction, principal, approval_id, lock, false).await?;
     if let Some(context) = &context {
         require_policy(principal, context)?;

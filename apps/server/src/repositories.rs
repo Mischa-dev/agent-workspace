@@ -130,7 +130,7 @@ async fn list_repositories(
     principal: AuthenticatedActor,
     ApiPath(project_id): ApiPath<Uuid>,
 ) -> Result<Json<RepositoryListResponse>, AppError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let role = require_project_access(
         &mut transaction,
         &principal,
@@ -177,7 +177,7 @@ async fn register_repository(
     let request = validate_registration(request)?;
     let request_hash = RequestHash::for_value(&request)?;
     let scope = idempotency::resource_bound_scope("project", project_id, "repository_register")?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let role = require_project_access(
         &mut transaction,
         &principal,
@@ -227,7 +227,7 @@ async fn register_repository(
     .await?;
     transaction.commit().await?;
 
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let row = fetch_repository(&mut transaction, project_id, repository_id)
         .await?
         .ok_or(AppError::NotFound("repository"))?;
@@ -327,7 +327,7 @@ async fn prepare_registered_repository(
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
     let scope = idempotency::resource_bound_scope("repository", repository_id, "prepare")?;
     let request_hash = RequestHash::for_value(&request)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let role = require_project_access(
         &mut transaction,
         &principal,
@@ -436,7 +436,7 @@ async fn run_preparation(
     if !prepared {
         tracing::warn!(%project_id, %repository_id, "repository preparation failed");
     }
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let row =
         apply_preparation_result(&mut transaction, project_id, repository_id, prepared).await?;
     transaction.commit().await?;
@@ -460,7 +460,7 @@ pub(crate) fn prepare_in_background(state: AppState, project_id: Uuid, repositor
             })
             .await
             .map_err(|_| AppError::Internal("join storage admission"))??;
-            let mut transaction = state.pool.begin().await?;
+            let mut transaction = crate::db::scoped_tx(&state.pool).await?;
             let row = fetch_repository(&mut transaction, project_id, repository_id)
                 .await?
                 .filter(|row| row.archived_at.is_none() && row.enabled && row.trusted)
@@ -508,7 +508,7 @@ async fn archive_repository(
     }
     let scope = idempotency::resource_bound_scope("repository", repository_id, "archive")?;
     let request_hash = RequestHash::for_value(&request)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let role = require_project_access(
         &mut transaction,
         &principal,
@@ -624,7 +624,7 @@ pub(crate) async fn prepare_in(
     })
     .await
     .map_err(|_| AppError::Internal("join storage admission"))??;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let row = fetch_repository(&mut transaction, project_id, repository_id)
         .await?
         .filter(|row| row.archived_at.is_none() && row.enabled && row.trusted)

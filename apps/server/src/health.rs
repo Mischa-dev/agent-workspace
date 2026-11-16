@@ -51,7 +51,7 @@ async fn version() -> Json<VersionResponse> {
 
 async fn ready(State(state): State<HealthState>) -> Result<Json<HealthResponse>, AppError> {
     sqlx::query_scalar::<_, i32>("SELECT 1")
-        .fetch_one(&state.pool)
+        .fetch_one(crate::db::scoped(&state.pool))
         .await?;
 
     Ok(Json(HealthResponse { status: "ready" }))

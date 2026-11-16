@@ -46,7 +46,7 @@ pub async fn prepare_m3_repository_upgrade(
     let repositories = sqlx::query_as::<_, RepositoryMirrorUpgrade>(
         "SELECT id, clone_url, default_branch, mirror_path FROM repositories",
     )
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?;
     let mut upgrades = Vec::new();
     for repository in repositories {
@@ -76,7 +76,7 @@ pub async fn prepare_m3_repository_upgrade(
             mirrors_adopted: 0,
         });
     }
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS m3_repository_path_upgrades (
@@ -151,7 +151,7 @@ pub async fn prepare_m3_upgrade(
         resolve_path_within_data_root(&config.data_root, &seed_mirror_path(config))?;
     let legacy_mirror = seed_mirror_path(config);
 
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     sqlx::raw_sql(
         r#"
         LOCK TABLE provider_connections,
@@ -274,7 +274,7 @@ pub async fn prepare_m3_upgrade(
 async fn m3_preflight_required(pool: &PgPool) -> Result<bool, AppError> {
     let migrations_table_exists =
         sqlx::query_scalar::<_, bool>("SELECT to_regclass('_sqlx_migrations') IS NOT NULL")
-            .fetch_one(pool)
+            .fetch_one(crate::db::scoped(pool))
             .await?;
     if !migrations_table_exists {
         return Ok(false);
@@ -291,7 +291,7 @@ async fn m3_preflight_required(pool: &PgPool) -> Result<bool, AppError> {
                )
         "#,
     )
-    .fetch_one(pool)
+    .fetch_one(crate::db::scoped(pool))
     .await
     .map_err(AppError::from)
 }
@@ -303,7 +303,7 @@ async fn migration_pending(
 ) -> Result<bool, AppError> {
     let migrations_table_exists =
         sqlx::query_scalar::<_, bool>("SELECT to_regclass('_sqlx_migrations') IS NOT NULL")
-            .fetch_one(pool)
+            .fetch_one(crate::db::scoped(pool))
             .await?;
     if !migrations_table_exists {
         return Ok(false);
@@ -322,7 +322,7 @@ async fn migration_pending(
     )
     .bind(completed_version)
     .bind(pending_version)
-    .fetch_one(pool)
+    .fetch_one(crate::db::scoped(pool))
     .await
     .map_err(AppError::from)
 }

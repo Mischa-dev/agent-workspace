@@ -173,7 +173,7 @@ async fn resolve_members(
             )
             .bind(project_id)
             .bind(actor_id)
-            .fetch_optional(&state.pool)
+            .fetch_optional(crate::db::scoped(&state.pool))
             .await?
         } else {
             sqlx::query_scalar::<_, Uuid>(
@@ -186,7 +186,7 @@ async fn resolve_members(
             )
             .bind(project_id)
             .bind(person.trim_start_matches('@'))
-            .fetch_optional(&state.pool)
+            .fetch_optional(crate::db::scoped(&state.pool))
             .await?
         };
         match found {
@@ -302,7 +302,7 @@ pub(super) async fn conversation_members(
         }
         let add_ids = add_ids.into_iter().collect::<Vec<_>>();
         let remove_ids = remove_ids.into_iter().collect::<Vec<_>>();
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         mark_via(&mut transaction, principal).await?;
         let reservation = match &key {
             None => None,
@@ -460,7 +460,7 @@ pub(super) async fn conversation_continue(
         if row.effective_kind() != "group" {
             return Ok(ToolResult::invalid("conversationId", not_a_group(&row)));
         }
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         mark_via(&mut transaction, principal).await?;
         let reservation = match &key {
             None => None,

@@ -89,3 +89,9 @@ CREATE UNIQUE INDEX agent_templates_key ON agent_templates (workspace_id, templa
 
 ALTER TABLE modules
     ADD COLUMN package_install_id UUID REFERENCES package_installs(id) ON DELETE SET NULL;
+
+-- Row security (H1.22): each table is protected by its workspace.
+SELECT tenancy_protect('packages', 'workspace_id');
+SELECT tenancy_protect('package_installs', 'workspace_id');
+SELECT tenancy_protect('package_objects', 'workspace_id');
+SELECT tenancy_protect('agent_templates', 'workspace_id');

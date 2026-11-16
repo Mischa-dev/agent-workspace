@@ -96,7 +96,7 @@ async fn workspace_of(
     Ok(
         sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
             .bind(project_id)
-            .fetch_optional(&state.pool)
+            .fetch_optional(crate::db::scoped(&state.pool))
             .await?
             .map(|organization_id| (organization_id, project_id)),
     )
@@ -133,7 +133,7 @@ pub(super) async fn module_list(
         else {
             return Ok(ToolResult::not_found("That project"));
         };
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         let switches = state::switches(&mut connection, organization_id).await?;
         // In a project the caller names, their role there narrows the
         // workspace's switches, as tool calls there are checked; otherwise
@@ -240,7 +240,7 @@ pub(super) async fn thing_open(
         let task_projects =
             crate::search::projects_showing_tasks(&state.pool, principal.actor_id, &projects)
                 .await?;
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         let anywhere = state::anywhere(&mut connection, principal.actor_id).await?;
         let workspaces = state::by_workspace(&mut connection, principal.actor_id).await?;
         let viewer = modules::things::Viewer {
@@ -362,7 +362,7 @@ pub(super) async fn workspace_update(
         {
             return Ok(ToolResult::not_found("That project"));
         }
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         super::common::mark_via(&mut transaction, principal).await?;
         let organization_id =
             sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")

@@ -154,7 +154,7 @@ async fn vapid_key(
     {
         return decode_vapid(&value);
     }
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     // Two first uses at once must not make two keys: devices subscribe to
     // exactly one.
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
@@ -261,7 +261,7 @@ pub async fn devices(pool: &PgPool, actor_id: Uuid) -> Result<Vec<DeviceView>, A
         "#,
     )
     .bind(actor_id)
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?)
 }
 
@@ -307,7 +307,7 @@ async fn subscribe(
         .unwrap_or_else(|| "This device".to_owned());
     let endpoint_hash = hash(&request.endpoint);
     let keys = keyring(state)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(format!("push-devices:{actor_id}"))
         .execute(&mut *transaction)
@@ -388,7 +388,7 @@ async fn subscribe(
 
 /// Remove a device and its stored endpoint.
 async fn remove_device(pool: &PgPool, actor_id: Uuid, id: Uuid) -> Result<bool, AppError> {
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     let Some(secret_id) = sqlx::query_scalar::<_, Uuid>(
         "DELETE FROM push_subscriptions WHERE id = $1 AND actor_id = $2 RETURNING secret_id",
     )
@@ -534,11 +534,11 @@ async fn record(pool: &PgPool, device: &DeviceRow, result: SendResult) -> Result
                 "UPDATE push_subscriptions SET last_sent_at = now(), failure_count = 0 WHERE id = $1",
             )
             .bind(device.id)
-            .execute(pool)
+            .execute(crate::db::scoped(pool))
             .await?;
         }
         SendResult::Gone => {
-            let mut transaction = pool.begin().await?;
+            let mut transaction = crate::db::scoped_tx(pool).await?;
             sqlx::query("DELETE FROM push_subscriptions WHERE id = $1")
                 .bind(device.id)
                 .execute(&mut *transaction)
@@ -555,7 +555,7 @@ async fn record(pool: &PgPool, device: &DeviceRow, result: SendResult) -> Result
                 "#,
             )
             .bind(device.id)
-            .fetch_optional(pool)
+            .fetch_optional(crate::db::scoped(pool))
             .await?;
             if failures.is_some_and(|count| count >= MAX_CONSECUTIVE_FAILURES) {
                 Box::pin(record(pool, device, SendResult::Gone)).await?;
@@ -578,7 +578,7 @@ async fn recipient_devices(pool: &PgPool, actor_id: Uuid) -> Result<Vec<DeviceRo
         "SELECT id, organization_id, secret_id FROM push_subscriptions WHERE actor_id = $1 ORDER BY id",
     )
     .bind(actor_id)
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?)
 }
 
@@ -598,10 +598,12 @@ async fn deliver_job(state: &AppState, job: &DeliverJob) -> Result<(), JobError>
     let organization_id =
         sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
             .bind(notification.project_id)
-            .fetch_one(&state.pool)
+            .fetch_one(crate::db::scoped(&state.pool))
             .await?;
     {
-        let mut connection = state.pool.acquire().await.map_err(AppError::from)?;
+        let mut connection = crate::db::scoped_tx(&state.pool)
+            .await
+            .map_err(AppError::from)?;
         let decision = notification_settings::decide(
             &mut connection,
             job.recipient,
@@ -670,7 +672,7 @@ async fn deliver_job(state: &AppState, job: &DeliverJob) -> Result<(), JobError>
         )
         .bind(device.id)
         .bind(&job.delivery_key)
-        .fetch_one(&state.pool)
+        .fetch_one(crate::db::scoped(&state.pool))
         .await?;
         if sent {
             continue;
@@ -682,7 +684,7 @@ async fn deliver_job(state: &AppState, job: &DeliverJob) -> Result<(), JobError>
             )
             .bind(device.id)
             .bind(&job.delivery_key)
-            .execute(&state.pool)
+            .execute(crate::db::scoped(&state.pool))
             .await?;
         }
         retry |= result == SendResult::Retry;
@@ -698,7 +700,7 @@ async fn deliver_job(state: &AppState, job: &DeliverJob) -> Result<(), JobError>
 pub async fn prune_deliveries(pool: &PgPool) -> Result<u64, AppError> {
     Ok(
         sqlx::query("DELETE FROM push_deliveries WHERE sent_at < now() - interval '7 days'")
-            .execute(pool)
+            .execute(crate::db::scoped(pool))
             .await?
             .rows_affected(),
     )
@@ -817,7 +819,7 @@ async fn test_http(
     )
     .bind(id)
     .bind(principal.actor_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     .ok_or(AppError::NotFound("push_subscription"))?;
     let payload = serde_json::to_vec(&json!({
