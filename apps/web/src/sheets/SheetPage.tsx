@@ -1,9 +1,12 @@
 import { useMemo, useState } from 'react'
 import { Download } from 'lucide-react'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useParams, useSearchParams } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
+import { opQuery } from '../api/ops'
+import { AnchoredThreadPanel } from '../discussion/AnchoredThreadPanel'
+import { useProjectExperience } from '../experience/layout'
 import { useAuthenticatedSession, type SessionUser } from '../auth/session'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
 import { useProject } from '../projects/hooks'
@@ -21,6 +24,7 @@ import {
   ListSkeleton,
   Menu,
   PageHeader,
+  SidePanel,
   TextField,
   describeError,
   showToast,
@@ -30,6 +34,7 @@ import { usePhoneWidth } from '../ui/useCoarsePointer'
 import { changeSheet, sheetExportHref, sheetKeys, updateSheet, useSheet, type SheetBody, type SheetChange, type SheetTab } from './api'
 import { SheetDetailsDialog, TabNameDialog } from './SheetDialogs'
 import { SheetGrid, type GridEdit } from './SheetGrid'
+import { commentedCells, selectionAnchor, threadAt, type SheetAnchor } from './sheetComments'
 import { bounds, cards, cellKey, cellMap, cellName, extent, patched, type Selection } from './sheetModel'
 
 type Dialogs =
@@ -92,6 +97,11 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
 
   const body = sheet.data
   const cells = useMemo(() => cellMap(body?.cells ?? []), [body?.cells])
+  // Comments on cells (C1.19): marks in the grid, and a panel for the
+  // thread about the selected cell or range.
+  const showComments = useProjectExperience(projectId).shows('thing.comments')
+  const comments = useQuery({ ...opQuery('comment_list', { thing: { kind: 'sheet', id: sheetId } }), enabled: showComments })
+  const [commenting, setCommenting] = useState<{ anchor: SheetAnchor; label: string } | null>(null)
 
   if (sheet.isPending) {
     return (
@@ -135,6 +145,20 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
     columns: Math.max(used.columns, Math.min(200, selection.focus.column + 2)),
   }
   const focusCell = cells.get(cellKey(selection.focus.row, selection.focus.column))
+  const marks = tab && comments.data ? commentedCells(comments.data.threads, tab.id) : undefined
+  const focusThread = marks?.get(cellKey(selection.focus.row, selection.focus.column))
+  const commentingStart = commenting ? (commenting.anchor.kind === 'cell' ? [commenting.anchor.row, commenting.anchor.column] : commenting.anchor.from) : null
+  const commentingThread =
+    commenting && commentingStart && comments.data ? threadAt(comments.data.threads, commenting.anchor.tabId, commentingStart[0] + 1, commentingStart[1] + 1) : null
+  const openComments = () => {
+    if (!tab) return
+    const box = bounds(selection)
+    const single = box.top === box.bottom && box.left === box.right
+    setCommenting({
+      anchor: selectionAnchor(selection, tab.id),
+      label: single ? cellName({ row: box.top, column: box.left }) : `${cellName({ row: box.top, column: box.left })}:${cellName({ row: box.bottom, column: box.right })}`,
+    })
+  }
   const prefix = `${tab?.id ?? ''}:`
   const tabPending = new Map([...pending].filter(([at]) => at.startsWith(prefix)).map(([at, input]) => [at.slice(prefix.length), input]))
   const scope = sheetKeys.one(projectId, sheetId)
@@ -471,6 +495,11 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
               <span className="aw-sheet__formula" title={focusCell?.input}>
                 {tabPending.get(cellKey(selection.focus.row, selection.focus.column)) ?? focusCell?.input ?? ''}
               </span>
+              {showComments && comments.data && (comments.data.acceptsComments || focusThread) ? (
+                <Button icon="message" onClick={openComments} size="sm" variant="ghost">
+                  {focusThread ? 'Comments' : 'Comment'}
+                </Button>
+              ) : null}
               {writable && gridItems.length ? (
                 <Menu
                   items={gridItems}
@@ -487,6 +516,7 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
             {tab ? (
               <SheetGrid
                 cells={cells}
+                commented={marks}
                 editable={writable}
                 key={tab.id}
                 onEdits={edit}
@@ -515,6 +545,19 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
           {writable ? <IconButton icon="plus" label="Add a tab" onClick={() => setDialog({ kind: 'add-tab' })} size="sm" /> : null}
         </nav>
       </div>
+      {commenting && comments.data ? (
+        <SidePanel onClose={() => setCommenting(null)} title={`Comments on ${commenting.label}`}>
+          <AnchoredThreadPanel
+            acceptsComments={comments.data.acceptsComments}
+            anchor={commenting.anchor}
+            kind="sheet"
+            spaceId={comments.data.spaceId ?? projectId}
+            thingId={sheetId}
+            thread={commentingThread}
+            viewerId={user.id}
+          />
+        </SidePanel>
+      ) : null}
       {dialog?.kind === 'details' ? (
         <SheetDetailsDialog
           onClose={() => setDialog(null)}

@@ -160,3 +160,187 @@ pub async fn check(
         _ => Err(refused("That kind of anchor doesn't fit this thing.")),
     }
 }
+
+/// A row or column insert or delete on a sheet tab, in the order a write
+/// made them, each `at` counted in the grid as it stood then (C1.19).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GridMove {
+    pub rows: bool,
+    pub insert: bool,
+    pub at: i64,
+    pub count: i64,
+}
+
+/// A span `[start, end]` on one axis after a move on that axis, or `None`
+/// when the move deleted all of it. An insert inside a span widens it; a
+/// delete that takes part of it narrows it.
+fn follow_span(start: i64, end: i64, step: &GridMove) -> Option<(i64, i64)> {
+    let (at, count) = (step.at, step.count);
+    if step.insert {
+        let shift = |place: i64| if place >= at { place + count } else { place };
+        return Some((shift(start), shift(end)));
+    }
+    let gone_end = at + count;
+    let start = if start < at {
+        start
+    } else if start >= gone_end {
+        start - count
+    } else {
+        at
+    };
+    let end = if end < at {
+        end
+    } else if end >= gone_end {
+        end - count
+    } else {
+        at - 1
+    };
+    (end >= start).then_some((start, end))
+}
+
+/// A sheet anchor after `moves`: the same shape at its new place, or `None`
+/// when its cells were deleted or pushed off the grid. Other anchors come
+/// back as they are.
+pub fn follow(anchor: &Value, moves: &[GridMove]) -> Option<Value> {
+    let kind = anchor.get("kind").and_then(Value::as_str).unwrap_or("");
+    let (mut rows, mut columns) = match kind {
+        "cell" => {
+            let row = anchor.get("row")?.as_i64()?;
+            let column = anchor.get("column")?.as_i64()?;
+            ((row, row), (column, column))
+        }
+        "range" => {
+            let from = cell(anchor.get("from"))?;
+            let to = cell(anchor.get("to"))?;
+            ((from.0, to.0), (from.1, to.1))
+        }
+        _ => return Some(anchor.clone()),
+    };
+    for step in moves {
+        let span = if step.rows { &mut rows } else { &mut columns };
+        *span = follow_span(span.0, span.1, step)?;
+    }
+    in_grid(rows.1, columns.1)?;
+    let mut moved = anchor.clone();
+    if kind == "cell" {
+        moved["row"] = json!(rows.0);
+        moved["column"] = json!(columns.0);
+    } else {
+        moved["from"] = json!([rows.0, columns.0]);
+        moved["to"] = json!([rows.1, columns.1]);
+    }
+    Some(moved)
+}
+
+/// Moves the anchors of a sheet tab's comment threads with the rows and
+/// columns a write inserted or deleted (C1.19), in the write's transaction.
+/// A thread whose cells were deleted keeps its comments and loses its
+/// anchor, so it stays about the sheet as a whole.
+pub async fn follow_sheet_moves(
+    connection: &mut PgConnection,
+    sheet_id: Uuid,
+    tab_id: Uuid,
+    moves: &[GridMove],
+) -> Result<(), AppError> {
+    if moves.is_empty() {
+        return Ok(());
+    }
+    let threads = sqlx::query_as::<_, (Uuid, Value)>(
+        r#"
+        -- visibility: the sheet's own write moving its threads' anchors; nothing is read out
+        SELECT thread.id, thread.anchor
+        FROM conversations thread
+        JOIN conversations comments ON comments.id = thread.parent_channel_id
+        WHERE comments.kind = 'comments'
+          AND comments.subject_kind = 'sheet'
+          AND comments.subject_id = $1
+          AND thread.anchor ->> 'tabId' = $2::text
+        ORDER BY thread.id
+        FOR UPDATE OF thread
+        "#,
+    )
+    .bind(sheet_id)
+    .bind(tab_id)
+    .fetch_all(&mut *connection)
+    .await?;
+    let mut ids = Vec::new();
+    let mut anchors = Vec::new();
+    for (id, anchor) in threads {
+        let moved = follow(&anchor, moves);
+        if moved.as_ref() != Some(&anchor) {
+            ids.push(id);
+            anchors.push(moved);
+        }
+    }
+    if ids.is_empty() {
+        return Ok(());
+    }
+    sqlx::query(
+        r#"
+        UPDATE conversations thread
+        SET anchor = moved.anchor, updated_at = now()
+        FROM UNNEST($1::uuid[], $2::jsonb[]) AS moved(id, anchor)
+        WHERE thread.id = moved.id
+        "#,
+    )
+    .bind(&ids)
+    .bind(&anchors)
+    .execute(&mut *connection)
+    .await?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rows(insert: bool, at: i64, count: i64) -> GridMove {
+        GridMove {
+            rows: true,
+            insert,
+            at,
+            count,
+        }
+    }
+
+    #[test]
+    fn cell_anchors_follow_rows_and_columns() {
+        let tab = "00000000-0000-0000-0000-000000000001";
+        let anchor = json!({"kind": "cell", "tabId": tab, "row": 4, "column": 2});
+        let moved = follow(&anchor, &[rows(true, 4, 2)]).expect("kept");
+        assert_eq!(moved["row"], 6);
+        let moved = follow(&anchor, &[rows(true, 5, 2)]).expect("kept");
+        assert_eq!(moved["row"], 4);
+        let moved = follow(
+            &anchor,
+            &[GridMove {
+                rows: false,
+                insert: false,
+                at: 0,
+                count: 2,
+            }],
+        )
+        .expect("kept");
+        assert_eq!(moved["column"], 0);
+        assert_eq!(moved["tabId"], tab);
+        assert!(follow(&anchor, &[rows(false, 3, 2)]).is_none());
+        assert_eq!(
+            follow(&anchor, &[rows(false, 0, 2), rows(true, 0, 1)]).expect("kept")["row"],
+            3
+        );
+    }
+
+    #[test]
+    fn range_anchors_grow_and_shrink() {
+        let anchor = json!({"kind": "range", "tabId": "t", "from": [2, 1], "to": [6, 3]});
+        let grown = follow(&anchor, &[rows(true, 4, 3)]).expect("kept");
+        assert_eq!(grown["from"], json!([2, 1]));
+        assert_eq!(grown["to"], json!([9, 3]));
+        let cut = follow(&anchor, &[rows(false, 1, 3)]).expect("kept");
+        assert_eq!(cut["from"], json!([1, 1]));
+        assert_eq!(cut["to"], json!([3, 3]));
+        assert!(follow(&anchor, &[rows(false, 0, 10)]).is_none());
+        let page = json!({"kind": "text", "blockId": "b", "quote": "q"});
+        assert_eq!(follow(&page, &[rows(false, 0, 10)]), Some(page));
+    }
+}

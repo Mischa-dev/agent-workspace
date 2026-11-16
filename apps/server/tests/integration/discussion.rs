@@ -524,3 +524,120 @@ async fn comments_that_mention_agents_tell_them() {
     );
     assert!(mentioned_events(pool, kite.connection).await.is_empty());
 }
+
+/// C1.19: a comment on a cell stays on that cell when rows go in above it
+/// and a column comes out before it, and a thread whose cell is deleted
+/// keeps its comments with no anchor.
+#[tokio::test]
+async fn sheet_anchor_follows_a_row_insert() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .agent("rook", "member")
+        .build("c1_19_sheet_anchor")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let pool = world.pool();
+    let workspace = world.organization;
+    let work = world.project("WORK").to_owned();
+    let lena = &world.people["lena"];
+    let rook = &world.agents["rook"];
+    let sheet = tool(
+        app,
+        &rook.token,
+        &rook.session,
+        "sheet_write",
+        json!({
+            "projectId": work,
+            "name": "Budget",
+            "cells": [{"cell": "C3", "input": "Rent"}, {"cell": "A9", "input": "Spare"}],
+            "clientRequestId": "anchor-sheet",
+        }),
+    )
+    .await;
+    assert_eq!(sheet["outcome"], "ok", "{sheet}");
+    let sheet = sheet["value"]["id"].as_str().expect("sheet").to_owned();
+    let tab = sqlx::query_scalar::<_, Uuid>("SELECT id FROM sheet_tabs WHERE sheet_id = $1::uuid")
+        .bind(&sheet)
+        .fetch_one(pool)
+        .await
+        .expect("tab");
+    // C3 is row 2, column 2 counted from 0; A9 is row 8.
+    let mut threads = Vec::new();
+    for anchor in [
+        json!({"kind": "cell", "tabId": tab, "row": 2, "column": 2}),
+        json!({"kind": "cell", "tabId": tab, "row": 8, "column": 0}),
+    ] {
+        let (_, made) = op(
+            app,
+            &lena.browser,
+            workspace,
+            "comment_create",
+            json!({"thing": {"kind": "sheet", "id": sheet}, "text": "Check this", "anchor": anchor}),
+        )
+        .await;
+        assert_eq!(made["outcome"], "ok", "{made}");
+        threads.push(made["value"]["threadId"].as_str().expect("thread").to_owned());
+    }
+
+    // Two rows above C3 and the first column out: the cell is now B5, and
+    // A9's column is gone.
+    let wrote = tool(
+        app,
+        &rook.token,
+        &rook.session,
+        "sheet_write",
+        json!({
+            "projectId": work,
+            "sheet": sheet,
+            "tabs": [
+                {"tab": "Sheet1", "insertRowsAt": 1, "count": 2},
+                {"tab": "Sheet1", "deleteColumnsAt": "A"},
+            ],
+        }),
+    )
+    .await;
+    assert_eq!(wrote["outcome"], "ok", "{wrote}");
+    let input = sqlx::query_scalar::<_, String>(
+        "SELECT input FROM sheet_cells WHERE tab_id = $1 AND row_number = 5 AND column_number = 2",
+    )
+    .bind(tab)
+    .fetch_one(pool)
+    .await
+    .expect("the cell moved to B5");
+    assert_eq!(input, "Rent");
+    let anchor_of = |thread: String| async move {
+        sqlx::query_scalar::<_, Option<Value>>(
+            "SELECT anchor FROM conversations WHERE id = $1::uuid",
+        )
+        .bind(thread)
+        .fetch_one(pool)
+        .await
+        .expect("anchor")
+    };
+    assert_eq!(
+        anchor_of(threads[0].clone()).await,
+        Some(json!({"kind": "cell", "tabId": tab, "row": 4, "column": 1}))
+    );
+    // A9 was in the deleted column, so its thread is about the whole sheet.
+    assert_eq!(anchor_of(threads[1].clone()).await, None);
+
+    let (_, listed) = op(
+        app,
+        &lena.browser,
+        workspace,
+        "comment_list",
+        json!({"thing": {"kind": "sheet", "id": sheet}}),
+    )
+    .await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    let threads = listed["value"]["threads"].as_array().expect("threads");
+    assert_eq!(threads.len(), 2, "both threads keep their comments: {listed}");
+    assert!(
+        threads.iter().all(|thread| thread["messageCount"] == 1),
+        "{listed}"
+    );
+}

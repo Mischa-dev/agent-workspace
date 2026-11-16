@@ -33,6 +33,7 @@ export type GridEdit = { row: number; column: number; input: string; revision?: 
  */
 export function SheetGrid({
   cells,
+  commented,
   editable,
   onEdits,
   onResize,
@@ -44,6 +45,8 @@ export function SheetGrid({
   tab,
 }: {
   cells: Map<string, SheetCell>
+  /** Cells a comment thread is about, by `row:column`: they get a corner mark. */
+  commented?: ReadonlyMap<string, unknown>
   editable: boolean
   onEdits: (edits: GridEdit[]) => void
   onResize: (column: number, width: number | null) => void
@@ -284,6 +287,7 @@ export function SheetGrid({
           waiting !== undefined ? 'is-pending' : '',
           selected ? 'is-selected' : '',
           focused ? 'is-focused' : '',
+          commented?.has(cellKey(row, column)) ? 'has-comment' : '',
         ]
           .filter(Boolean)
           .join(' ')

@@ -1640,6 +1640,26 @@ async fn apply_unbounded(
                     .execute(&mut *connection)
                     .await?;
                 }
+                if tab.structure_changed {
+                    let moves = tab
+                        .moves
+                        .iter()
+                        .map(|step| crate::discussion::anchors::GridMove {
+                            rows: step.rows,
+                            insert: step.insert,
+                            // Anchors count from 0; a write's rows and columns from 1.
+                            at: i64::from(step.at) - 1,
+                            count: i64::from(step.count),
+                        })
+                        .collect::<Vec<_>>();
+                    crate::discussion::anchors::follow_sheet_moves(
+                        &mut *connection,
+                        sheet.id,
+                        *id,
+                        &moves,
+                    )
+                    .await?;
+                }
             }
         }
     }
