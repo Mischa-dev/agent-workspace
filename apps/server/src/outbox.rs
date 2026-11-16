@@ -699,6 +699,32 @@ pub struct OutboxEnvelope {
     pub payload: serde_json::Value,
 }
 
+impl OutboxEnvelope {
+    /// Protocol 1's frame for a logged event (K5.5): the outbox event the log
+    /// mirrored, with the same id, rebuilt from the log on every instance's
+    /// tail. The cursor is the event's position. None for an event that
+    /// never was an outbox event (it has no `legacy_type`) or doesn't decode.
+    pub fn from_logged(event: &crate::events::LoggedEvent) -> Option<Self> {
+        let event_type = event.legacy_type.as_deref()?;
+        let project_id = event.space_id?;
+        let decoded = OutboxEventPayload::from_json(event_type, event.payload.clone()).ok()?;
+        Some(Self {
+            event_id: event.id,
+            event_cursor: event.position,
+            version: OUTBOX_SCHEMA_VERSION,
+            project_id,
+            conversation_id: decoded.conversation_id(),
+            recipient_actor_id: decoded.recipient_actor_id(),
+            event_type: event_type.to_owned(),
+            occurred_at: event
+                .created_at
+                .format("%Y-%m-%dT%H:%M:%S%.6fZ")
+                .to_string(),
+            payload: decoded.to_json().ok()?,
+        })
+    }
+}
+
 #[derive(Clone, FromRow)]
 pub struct ClaimedOutboxEvent {
     event_id: Uuid,

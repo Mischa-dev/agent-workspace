@@ -1,5 +1,6 @@
 //! The wake (K5 3.4): one listening connection per instance, outside the
-//! pool, on this schema's `log`, `events` and `control` channels. A
+//! pool, on this schema's `log`, `events`, `control` and `ephemeral`
+//! channels (the last carries frames, `realtime::ephemeral`, K5.5). A
 //! notification only says "look now": the sequencer and the tail also poll,
 //! so a lost wake costs a poll's delay and never an event (ruling R24 rule
 //! 3). This is the only place that runs `LISTEN`.
@@ -16,7 +17,7 @@ use sqlx::postgres::{PgConnectOptions, PgListener, PgPoolOptions};
 use tokio::sync::{Notify, watch};
 
 /// The channels the listener hears, by suffix (`realtime_channel`).
-pub const CHANNELS: [&str; 3] = ["log", "events", "control"];
+pub const CHANNELS: [&str; 4] = ["log", "events", "control", "ephemeral"];
 
 const FIRST_RETRY: Duration = Duration::from_millis(100);
 const LAST_RETRY: Duration = Duration::from_secs(5);
@@ -30,12 +31,25 @@ pub struct Wakes {
     pub events: Arc<Notify>,
     /// A lease released, a host kick: every loop waiting on it looks.
     pub control: Arc<Notify>,
+    /// Where frames from other instances go (none: they are ignored).
+    pub ephemeral: Option<super::RealtimeHub>,
 }
 
 impl Wakes {
     /// Wake everyone, as after a reconnect.
     pub fn all(&self) {
         for suffix in CHANNELS {
+            self.wake(suffix);
+        }
+    }
+
+    /// A notification on `suffix` with its payload.
+    fn heard(&self, suffix: &str, payload: &str) {
+        if suffix == "ephemeral" {
+            if let Some(hub) = &self.ephemeral {
+                super::ephemeral::receive(hub, payload);
+            }
+        } else {
             self.wake(suffix);
         }
     }
@@ -48,6 +62,8 @@ impl Wakes {
             "events" => self.events.notify_one(),
             // Any number of lease loops.
             "control" => self.control.notify_waiters(),
+            // Frames, not wakes: nothing to look at after a reconnect.
+            "ephemeral" => {}
             _ => return false,
         }
         true
@@ -136,7 +152,7 @@ async fn listen(
             notification = listener.try_recv() => match notification? {
                 Some(notification) => {
                     let suffix = notification.channel().strip_prefix(prefix.as_str()).unwrap_or("");
-                    wakes.wake(suffix);
+                    wakes.heard(suffix, notification.payload());
                 }
                 // The connection dropped; the next receive reconnects.
                 None => {

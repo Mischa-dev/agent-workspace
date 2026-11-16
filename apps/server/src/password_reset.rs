@@ -873,7 +873,7 @@ async fn complete_reset_http(
     .await?;
     transaction.commit().await?;
     for session_id in revoked {
-        state.realtime.revoke_session(session_id);
+        crate::realtime::ephemeral::revoke_session(&state, session_id).await;
         crate::auth::workos::revoke_provider_session(&state, session_id).await;
     }
     Ok(StatusCode::NO_CONTENT)

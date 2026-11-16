@@ -62,11 +62,36 @@ static PROJECTS: LazyLock<Mutex<HashMap<Uuid, (Uuid, &'static str)>>> =
 type Switches = HashMap<Uuid, (ModuleSet, bool, Instant)>;
 static SWITCHES: LazyLock<Mutex<Switches>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// Drops a workspace's kept switches; called whenever one is written.
+/// Drops a workspace's kept switches here. A write calls
+/// `forget_everywhere`, which reaches every instance (K5.5).
 pub fn forget(organization_id: Uuid) {
     if let Ok(mut switches) = SWITCHES.lock() {
         switches.remove(&organization_id);
     }
+}
+
+/// Drops every workspace's kept switches here.
+pub fn forget_all() {
+    if let Ok(mut switches) = SWITCHES.lock() {
+        switches.clear();
+    }
+}
+
+/// Drops a workspace's kept switches on every instance once `transaction`
+/// commits, and here at once.
+pub async fn forget_everywhere(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    organization_id: Uuid,
+) -> Result<(), crate::error::AppError> {
+    forget(organization_id);
+    crate::realtime::ephemeral::publish_on_commit(
+        transaction,
+        crate::realtime::ephemeral::EphemeralFrame::Invalidate {
+            cache: crate::realtime::ephemeral::CacheName::Modules,
+            workspace: Some(organization_id),
+        },
+    )
+    .await
 }
 
 /// Where a request acts, read from its path.

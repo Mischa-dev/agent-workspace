@@ -679,7 +679,7 @@ pub(super) async fn session_valid(state: &AppState, session_id: Uuid) -> Result<
             .bind(session_id)
             .execute(&state.pool)
             .await?;
-        state.realtime.revoke_session(session_id);
+        crate::realtime::ephemeral::revoke_session(state, session_id).await;
     }
     Ok(valid)
 }

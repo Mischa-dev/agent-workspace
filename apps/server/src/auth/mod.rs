@@ -411,7 +411,7 @@ pub(crate) async fn respond_with_established_session(
     established: EstablishedSession,
 ) -> Result<Response, AppError> {
     if let Some(rotated_session_id) = established.rotated_from_session_id {
-        state.realtime.revoke_session(rotated_session_id);
+        crate::realtime::ephemeral::revoke_session(state, rotated_session_id).await;
     }
     let response = session_response(state, Some(&established.principal)).await?;
     let mut response_headers = HeaderMap::new();
@@ -457,7 +457,7 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Result<Res
         .execute(&mut *transaction)
         .await?;
         transaction.commit().await?;
-        state.realtime.revoke_session(principal.session_id);
+        crate::realtime::ephemeral::revoke_session(&state, principal.session_id).await;
         workos::revoke_provider_session(&state, principal.session_id).await;
     }
 

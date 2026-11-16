@@ -784,7 +784,8 @@ async fn drive_turn(
                             provider.shutdown().await;
                             return Err(provider_message_error(run_id, error));
                         }
-                        state.realtime.publish(RealtimeEvent {
+                        // To the conversation's sockets on every instance (K5.5).
+                        crate::realtime::ephemeral::stream_delta(&state, RealtimeEvent {
                             event_id: Uuid::now_v7(),
                             kind: "message.delta",
                             project_id,
@@ -794,7 +795,7 @@ async fn drive_turn(
                                 "agent_run_id": run_id,
                                 "delta": delta
                             }),
-                        });
+                        }).await;
                     }
                     HarnessEvent::ItemStarted(event)
                         if event.kind == ItemKind::CommandExecution => {

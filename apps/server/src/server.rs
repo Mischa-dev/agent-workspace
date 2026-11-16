@@ -147,9 +147,13 @@ impl Server {
         // standbys; each also polls, so it is only ever an optimisation.
         let wakes = crate::realtime::wake::Wakes {
             control: cluster.release_wake(),
+            ephemeral: Some(state.realtime.clone()),
             ..crate::realtime::wake::Wakes::default()
         };
         let tail = crate::realtime::tail::channel();
+        // This instance's sockets hear the log through the tail (K5.5).
+        let feed =
+            crate::realtime::tail::feed(state.realtime.clone(), tail.subscribe(), receiver.clone());
         crate::harnesses::spawn_reloader(state.clone());
         // The run scheduler, recovery and host jobs, on whichever instance
         // holds the built-in host's lease (K5.3).
@@ -207,7 +211,7 @@ impl Server {
             let heartbeat_shutdown = receiver.clone();
             async move {
                 let heartbeat = heartbeat_cluster.run_heartbeat(heartbeat_shutdown);
-                tokio::join!(replies, sequencer, tail, listener, router, heartbeat);
+                tokio::join!(replies, sequencer, tail, feed, listener, router, heartbeat);
             }
         });
         // Background jobs (F9). A job lost to a crash is retried once its

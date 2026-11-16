@@ -27,6 +27,10 @@ use crate::{
     support::db::{Db, db},
 };
 
+/// A browser's realtime socket.
+pub(crate) type Socket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
 /// One running instance.
 pub(crate) struct Instance {
     pub(crate) name: &'static str,
@@ -120,6 +124,33 @@ impl Instance {
             cookie: cookies.join("; "),
             csrf,
         }
+    }
+
+    /// A browser's realtime socket on this instance.
+    pub(crate) async fn socket(&self, browser: &Browser) -> Socket {
+        use tokio_tungstenite::tungstenite::{
+            client::IntoClientRequest,
+            http::{
+                HeaderValue,
+                header::{COOKIE, ORIGIN},
+            },
+        };
+        let url = format!(
+            "{}/api/v1/realtime",
+            self.base.replacen("http://", "ws://", 1)
+        );
+        let mut request = url.into_client_request().expect("socket request");
+        request
+            .headers_mut()
+            .insert(ORIGIN, HeaderValue::from_static("http://127.0.0.1:3100"));
+        request.headers_mut().insert(
+            COOKIE,
+            HeaderValue::from_str(&browser.cookie).expect("cookie"),
+        );
+        tokio_tungstenite::connect_async(request)
+            .await
+            .expect("socket")
+            .0
     }
 
     /// Stop gracefully.

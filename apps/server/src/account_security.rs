@@ -227,7 +227,7 @@ async fn revoke_session(
     )
     .await?;
     transaction.commit().await?;
-    state.realtime.revoke_session(session_id);
+    crate::realtime::ephemeral::revoke_session(&state, session_id).await;
     crate::auth::workos::revoke_provider_session(&state, session_id).await;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -278,7 +278,7 @@ async fn revoke_other_sessions(
     .await?;
     transaction.commit().await?;
     for session_id in &revoked {
-        state.realtime.revoke_session(*session_id);
+        crate::realtime::ephemeral::revoke_session(&state, *session_id).await;
         crate::auth::workos::revoke_provider_session(&state, *session_id).await;
     }
     Ok(Json(RevokedResponse {
@@ -387,7 +387,7 @@ async fn change_password(
     .await?;
     transaction.commit().await?;
     for session_id in revoked {
-        state.realtime.revoke_session(session_id);
+        crate::realtime::ephemeral::revoke_session(&state, session_id).await;
         crate::auth::workos::revoke_provider_session(&state, session_id).await;
     }
     Ok(StatusCode::NO_CONTENT)

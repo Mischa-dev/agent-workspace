@@ -4,10 +4,10 @@
 //! at a time and 20 a second, 500 events a read; if it falls more than
 //! 10,000 positions behind it jumps to the head and says `Resync`.
 //!
-//! K5.4 runs it in shadow: it counts what it sees (position, lag, gaps),
-//! and the sockets are still fed by the outbox publisher until K5.5. A gap
-//! in positions is a bug (the sequencer makes them dense), so it is counted
-//! and logged, never skipped silently.
+//! It counts what it sees (position, lag, gaps), and since K5.5 it feeds
+//! this instance's sockets (`feed`): the outbox publisher keeps side effects
+//! only. A gap in positions is a bug (the sequencer makes them dense), so it
+//! is counted and logged, never skipped silently.
 
 use std::{sync::Arc, time::Duration};
 
@@ -83,6 +83,34 @@ pub async fn run(
             }
         }
         tokio::time::sleep_until(wait_until).await;
+    }
+}
+
+/// Hands what the tail reads to this instance's sockets until shutdown. A
+/// skip ahead, or falling behind the tail's own channel, closes every
+/// socket to refetch, as a lagging socket does.
+pub async fn feed(
+    hub: super::RealtimeHub,
+    mut events: broadcast::Receiver<Tailed>,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    loop {
+        tokio::select! {
+            received = events.recv() => match received {
+                Ok(Tailed::Event(event)) => hub.deliver_logged(&event),
+                Ok(Tailed::Resync) => hub.resync(),
+                Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                    tracing::warn!(skipped, "socket feed fell behind the tail; resync");
+                    hub.resync();
+                }
+                Err(broadcast::error::RecvError::Closed) => return,
+            },
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    return;
+                }
+            }
+        }
     }
 }
 
