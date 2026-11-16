@@ -150,7 +150,10 @@ pub(super) async fn renew(
             WHERE id = $1 AND stopped_at IS NULL RETURNING id
         )
         UPDATE leases SET expires_at = now() + make_interval(secs => $2)
-        WHERE holder_instance_id = (SELECT id FROM beat) AND expires_at > now()
+        WHERE holder_instance_id = (SELECT id FROM beat)
+          -- The clock, not the transaction's start: a release that commits
+          -- while this waits for the row must not be undone by it.
+          AND expires_at > clock_timestamp()
           AND name = ANY($3)
         RETURNING name, token
         "#,
