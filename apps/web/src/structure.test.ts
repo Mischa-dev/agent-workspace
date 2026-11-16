@@ -49,8 +49,8 @@ const kindNeedles = ["external_agent", "human"].flatMap((kind) => [
 ]);
 const vendorNeedles = ["Codex", "Claude"];
 
-/** `<AppShell` uses left when W1.12a landed; lower it as folders move off. */
-const CEILING_APP_SHELL = 59;
+/** `<AppShell` uses left after W1.12a and W1.12b; W1.12c takes it to zero. */
+const CEILING_APP_SHELL = 27;
 
 const rules: Rule[] = [
   {

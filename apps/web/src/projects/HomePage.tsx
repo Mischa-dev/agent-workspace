@@ -5,7 +5,7 @@ import homeClaims from 'virtual:modules/slots/home'
 import { useAuthenticatedSession } from '../auth/session'
 import { useHomeExperience } from '../experience/layout'
 import { ownerOf } from '../modules/ownership'
-import { AppShell } from '../shell/AppShell'
+import { useShellPage } from '../shell/shellStore'
 import { defaultWorkspace } from '../settings/workspaceChoice'
 import { Badge, Banner, ButtonLink, EmptyState, ErrorState, Icon, ListSkeleton, PageHeader, Row, RowList, Section, relativeDay } from '../ui'
 import { firstName, homeGreeting } from './greeting'
@@ -84,6 +84,8 @@ export function HomePage() {
   const left = sections.filter((section) => (section === 'needsYou' || section === 'working') && !quiet[section])
   const right = sections.filter((section) => (section === 'capacity' || section === 'tasks') && !quiet[section])
 
+  useShellPage({ home: true, mainClassName: 'aw-main--page' })
+
   const newProject = (
     <ButtonLink icon="plus" to="/projects/new" variant="primary">
       New project
@@ -91,7 +93,7 @@ export function HomePage() {
   )
 
   return (
-    <AppShell home mainClassName="aw-main--page" user={session.user}>
+    <>
       <div className="aw-page aw-home">
         {/* With no projects yet, the empty state below holds the one New project button. */}
         <PageHeader actions={canCreate && !noProjects && homeOn('recent') ? newProject : null} title={homeGreeting(firstName(session.user.displayName), firstVisit)} />
@@ -159,6 +161,6 @@ export function HomePage() {
           </div>
         </div>
       </div>
-    </AppShell>
+    </>
   )
 }

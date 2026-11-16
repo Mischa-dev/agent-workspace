@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
 import { useAuthenticatedSession } from '../auth/session'
-import { AppShell } from '../shell/AppShell'
+import { useShellPage } from '../shell/shellStore'
 import { Banner, Button, ButtonLink, ErrorState, PageHeader, SelectField, TextField, describeError, showToast } from '../ui'
 import { listProjectTemplates, viewKeys } from '../views/api'
 import { useCreateProject, useSwitchProject } from './hooks'
@@ -56,9 +56,11 @@ export function CreateProjectPage() {
           : null
   const canCreate = session.user.capabilities.createProject && creatableOrganizations.length > 0
 
+  useShellPage({ mainClassName: 'aw-main--page' })
+
   if (!canCreate) {
     return (
-      <AppShell mainClassName="aw-main--page" user={session.user}>
+      <>
         <div className="aw-page aw-page--reading">
           <ErrorState
             action={
@@ -71,7 +73,7 @@ export function CreateProjectPage() {
             Only workspace owners and admins can create projects. Ask one of them to create it, or to change your role.
           </ErrorState>
         </div>
-      </AppShell>
+      </>
     )
   }
 
@@ -119,7 +121,7 @@ export function CreateProjectPage() {
 
   const organizationName = creatableOrganizations[0]?.name
   return (
-    <AppShell mainClassName="aw-main--page" user={session.user}>
+    <>
       <div className="aw-page aw-page--reading">
         <PageHeader icon="plus" title="New project" />
         {error && (
@@ -214,6 +216,6 @@ export function CreateProjectPage() {
           </div>
         </form>
       </div>
-    </AppShell>
+    </>
   )
 }
