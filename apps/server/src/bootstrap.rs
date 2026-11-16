@@ -343,7 +343,11 @@ pub async fn bootstrap_admin(
                     slug: Some(organization_slug),
                 },
             )
-            .await?;
+            .await
+            .map_err(|error| match error {
+                AppError::Database(error) => BootstrapError::Database(error),
+                other => BootstrapError::Application(other),
+            })?;
             (actor_id, organization_id, false)
         }
     };
