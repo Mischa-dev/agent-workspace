@@ -237,8 +237,9 @@ impl Operation for PackagePreview {
         let package = install::read(&input.package)?;
         let place = input.target.place(call, &package)?;
         let workspace = call.ctx.workspace_id;
+        let actor = call.account_id();
         let tx = call.tx().await?;
-        Ok(install::plan(tx, workspace, &package, &place).await?)
+        Ok(install::plan(tx, workspace, actor, &package, &place).await?)
     }
 }
 
@@ -348,7 +349,7 @@ impl Operation for PackageInstall {
         let tx = call.tx().await?;
 
         // The plan the preview showed, read again in this transaction.
-        let plan = install::plan(tx, workspace, &package, &place).await?;
+        let plan = install::plan(tx, workspace, actor, &package, &place).await?;
         if plan.plan_hash != input.plan_hash.trim() {
             return Err(OpError::Conflict {
                 reason: ConflictReason::State {
@@ -502,6 +503,10 @@ impl Operation for PackageInstall {
                         }
                     }
                 }
+                // A collection the preview showed as reused is left as it
+                // is: applying its definition would change a live schema
+                // the preview never showed.
+                ContentKind::Collection if action_of("collection", &part.key) != "create" => {}
                 ContentKind::Collection => {
                     let collection = serde_json::from_value(body).map_err(|error| {
                         invalid_at(
@@ -704,12 +709,18 @@ impl Operation for PackageInstall {
                 continue;
             }
             let field = |what: &str| format!("package.{kind}:{key}{what}");
-            let body = install::resolve_refs(
-                part.body.clone().unwrap_or_default(),
-                &collections,
-                &channels,
-            )
-            .map_err(|message| invalid_at(field(""), message))?;
+            // Only forms, automations and modules point at other parts;
+            // a page's or skill's text stays exactly as it was written.
+            let body = part.body.clone().unwrap_or_default();
+            let body = if matches!(
+                part.kind,
+                ContentKind::Form | ContentKind::Automation | ContentKind::Module
+            ) {
+                install::resolve_refs(body, &collections, &channels)
+                    .map_err(|message| invalid_at(field(""), message))?
+            } else {
+                body
+            };
             let made = match part.kind {
                 ContentKind::Form => {
                     let space = space.ok_or(OpError::Unavailable)?;
@@ -894,7 +905,8 @@ impl Operation for PackageInstall {
                                 ),
                             ));
                         };
-                        crate::modules::built::link_part(tx, &module, part_kind, object.id).await?;
+                        crate::modules::built::link_part(tx, &module, part_kind, object.id, actor)
+                            .await?;
                     }
                     for entry in body["nav"].as_array().cloned().unwrap_or_default() {
                         let label = entry["label"].as_str().unwrap_or("").trim();

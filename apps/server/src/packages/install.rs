@@ -242,9 +242,11 @@ async fn existing(
 
 const ROLE_BY_NAME: &str =
     "SELECT id FROM workspace_roles WHERE organization_id = $1 AND lower(name) = lower($2)";
-const CHANNEL_BY_NAME: &str = "SELECT id FROM conversations WHERE project_id = $1 \
-     AND kind = 'channel' AND archived_at IS NULL AND lower(name) = lower($2) LIMIT 1 \
-     -- visibility: a name check before the install makes a channel; only an id, never content";
+/// A channel of this name in the space, and whether the viewer may see it:
+/// a members-only channel they aren't on is reused without its id shown.
+const CHANNEL_BY_NAME: &str = "SELECT id, conversation_visible_to(id, $3) FROM conversations \
+     WHERE project_id = $1 AND kind = 'channel' AND archived_at IS NULL \
+     AND lower(name) = lower($2) LIMIT 1";
 const COLLECTION_BY_NAME: &str = "SELECT id FROM collections WHERE project_id = $1 \
      AND archived_at IS NULL AND lower(name) = lower($2) LIMIT 1";
 const FORM_BY_NAME: &str = "SELECT id FROM bug_report_links WHERE project_id = $1 \
@@ -263,6 +265,7 @@ const MODULE_BY_KEY: &str = "SELECT id FROM modules WHERE workspace_id = $1 \
 pub async fn plan(
     connection: &mut PgConnection,
     workspace_id: Uuid,
+    viewer: Uuid,
     package: &Package,
     place: &Place,
 ) -> Result<Plan, AppError> {
@@ -348,12 +351,19 @@ pub async fn plan(
                 for channel in body["channels"].as_array().cloned().unwrap_or_default() {
                     let name = text(&channel, "name");
                     items.push(match space {
-                        Some(space) => found(
-                            "channel",
-                            name,
-                            name,
-                            existing(connection, CHANNEL_BY_NAME, space, name).await?,
-                        ),
+                        Some(space) => {
+                            let held = sqlx::query_as::<_, (Uuid, bool)>(CHANNEL_BY_NAME)
+                                .bind(space)
+                                .bind(name)
+                                .bind(viewer)
+                                .fetch_optional(&mut *connection)
+                                .await?;
+                            let mut line = found("channel", name, name, held.map(|(id, _)| id));
+                            if held.is_some_and(|(_, visible)| !visible) {
+                                line.existing_id = None;
+                            }
+                            line
+                        }
                         None if matches!(place, Place::New(_)) => {
                             found("channel", name, name, None)
                         }
@@ -468,14 +478,22 @@ pub fn resolve_refs(
     collections: &HashMap<String, Uuid>,
     channels: &HashMap<String, Uuid>,
 ) -> Result<Value, String> {
+    // A reference is one token: "@key" or "#name", nothing else in the
+    // string. Text that only starts with @ or # is left alone.
+    let token = |rest: &str| {
+        !rest.is_empty()
+            && rest
+                .chars()
+                .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    };
     Ok(match value {
         Value::String(text) => {
-            if let Some(key) = text.strip_prefix('@') {
+            if let Some(key) = text.strip_prefix('@').filter(|key| token(key)) {
                 let id = collections
                     .get(key)
                     .ok_or_else(|| format!("@{key} names no collection in the package"))?;
                 Value::String(id.to_string())
-            } else if let Some(name) = text.strip_prefix('#') {
+            } else if let Some(name) = text.strip_prefix('#').filter(|name| token(name)) {
                 let id = channels
                     .get(&name.to_lowercase())
                     .ok_or_else(|| format!("#{name} names no channel in the space"))?;
@@ -669,6 +687,12 @@ mod tests {
         );
         assert_eq!(resolved["actions"][0]["text"], "plain");
         assert!(resolve_refs(json!("@missing"), &collections, &channels).is_err());
+        // Text that only starts with # or @ is not a reference.
+        let prose = json!({"body": "# Getting started", "note": "@rook see this"});
+        assert_eq!(
+            resolve_refs(prose.clone(), &collections, &channels).expect("prose resolves"),
+            prose
+        );
     }
 
     #[test]

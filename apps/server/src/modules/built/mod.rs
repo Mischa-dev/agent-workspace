@@ -243,13 +243,15 @@ pub async fn object_place(
 }
 
 /// Makes an object a part of a module. The object must be in the module's
-/// workspace (and space, for a space's module) and in no other module.
-/// Returns false when it was already this module's.
+/// workspace (and space, for a space's module), in a space `actor` is a
+/// member of, and in no other module. Returns false when it was already this
+/// module's.
 pub async fn link_part(
     connection: &mut PgConnection,
     module: &ModuleRow,
     part_kind: &'static str,
     object_id: Uuid,
+    actor: Uuid,
 ) -> Result<bool, AppError> {
     let Some((workspace_id, space_id)) = object_place(connection, part_kind, object_id).await?
     else {
@@ -259,6 +261,19 @@ pub async fn link_part(
     {
         // Another workspace's object is not found here, the same as a
         // missing one.
+        return Err(AppError::NotFound("part"));
+    }
+    // A workspace-wide module may gather parts from several spaces, but only
+    // from spaces the caller is in; another space's object is not found.
+    let member = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM project_memberships \
+         WHERE project_id = $1 AND actor_id = $2 AND enabled)",
+    )
+    .bind(space_id)
+    .bind(actor)
+    .fetch_one(&mut *connection)
+    .await?;
+    if !member {
         return Err(AppError::NotFound("part"));
     }
     let owner = sqlx::query_scalar::<_, Uuid>(

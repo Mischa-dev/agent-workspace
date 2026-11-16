@@ -254,6 +254,7 @@ async fn a_module_switched_off_hides_its_parts_and_loses_nothing() {
 async fn a_part_from_another_workspace_never_joins() {
     let Some(world) = WorldBuilder::default()
         .project("WORK")
+        .person("vee", "member")
         .connected_app("builder")
         .build("m16_other_workspace")
         .await
@@ -341,6 +342,66 @@ async fn a_part_from_another_workspace_never_joins() {
     let parts =
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM module_parts WHERE object_id = $1")
             .bind(foreign)
+            .fetch_one(&pool)
+            .await
+            .expect("parts");
+    assert_eq!(parts, 0);
+
+    // A space in this workspace the owner isn't in: a workspace-wide module
+    // can't take a part from it either.
+    let closed_space = Uuid::now_v7();
+    let hidden = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO projects (id, organization_id, project_key, name) VALUES ($1, $2, 'SHUT', 'Shut')",
+    )
+    .bind(closed_space)
+    .bind(world.organization)
+    .execute(&pool)
+    .await
+    .expect("closed space");
+    let vee = world.people["vee"].actor;
+    sqlx::query(
+        "INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle) \
+         VALUES ($1, $2, $3, 'owner', 'Vee', 'vee')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(closed_space)
+    .bind(vee)
+    .execute(&pool)
+    .await
+    .expect("vee in the closed space");
+    sqlx::query(
+        "INSERT INTO collections (id, project_id, name, description, title_name, position, \
+         created_by_actor_id) VALUES ($1, $2, 'Hidden', '', 'Name', 0, $3)",
+    )
+    .bind(hidden)
+    .bind(closed_space)
+    .bind(vee)
+    .execute(&pool)
+    .await
+    .expect("hidden collection");
+    let wide = tool(
+        &world,
+        "builder",
+        "module_create",
+        json!({"key": "wide", "name": "Wide", "workspace": world.organization,
+               "clientRequestId": "wide"}),
+    )
+    .await;
+    assert_eq!(wide["outcome"], "ok", "{wide}");
+    let reached = tool(
+        &world,
+        "builder",
+        "module_part_link",
+        json!({"moduleId": wide["value"]["id"], "part": {"kind": "collection", "id": hidden},
+               "clientRequestId": "wide-1"}),
+    )
+    .await;
+    assert_ne!(reached["outcome"], "ok", "{reached}");
+    assert!(!reached.to_string().contains("Hidden"), "{reached}");
+    let parts =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM module_parts WHERE object_id = $1")
+            .bind(hidden)
             .fetch_one(&pool)
             .await
             .expect("parts");

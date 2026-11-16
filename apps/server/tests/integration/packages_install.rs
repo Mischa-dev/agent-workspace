@@ -318,3 +318,55 @@ async fn an_install_runs_only_the_plan_previewed_by_someone_allowed() {
     assert_eq!(collections, 1);
     world.finish().await;
 }
+
+/// A members-only channel the caller isn't on is never named to them by a
+/// preview: a package naming it shows it reused, without its id.
+#[tokio::test]
+async fn a_preview_never_reveals_a_channel_the_caller_cannot_see() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .connected_app("desk")
+        .build("m19_hidden_channel")
+        .await
+    else {
+        return;
+    };
+    let pool = world.pool().clone();
+    let space = world.project("WORK").to_owned();
+    let hidden = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO conversations (id, project_id, kind, name, visibility) \
+         VALUES ($1, $2::uuid, 'channel', 'war-room', 'members')",
+    )
+    .bind(hidden)
+    .bind(&space)
+    .execute(&pool)
+    .await
+    .expect("members-only channel");
+    let package = json!({
+        "format": "agent-workspace-package/1",
+        "id": "studio.rooms",
+        "version": "1.0.0",
+        "name": "Rooms",
+        "target": "space",
+        "contents": [
+            {"kind": "channels", "key": "channels",
+             "body": {"channels": [{"name": "war-room"}]}}
+        ]
+    });
+    // The owner's app: an owner too reads a members-only channel only from
+    // its member list.
+    let preview = tool(
+        &world,
+        "desk",
+        "package_preview",
+        json!({"package": package, "target": {"spaceId": space}}),
+    )
+    .await;
+    assert_eq!(preview["outcome"], "ok", "{preview}");
+    assert!(
+        !preview.to_string().contains(&hidden.to_string()),
+        "{preview}"
+    );
+    world.finish().await;
+}
