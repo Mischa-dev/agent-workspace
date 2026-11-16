@@ -354,8 +354,7 @@ pub async fn transport_for_actor(
         "#,
     )
     .bind(actor_id)
-    .fetch_optional(&state.pool)
-    .await?;
+    .fetch_optional(connection).await }).await?;
     match organization_id {
         Some(organization_id) => transport(state, organization_id).await,
         None => Ok(None),
