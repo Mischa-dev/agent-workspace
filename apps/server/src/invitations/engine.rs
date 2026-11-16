@@ -124,12 +124,12 @@ pub async fn role_permissions(
     role_id: Option<Uuid>,
 ) -> Result<PermissionSet, AppError> {
     let custom = match role_id {
-        Some(role_id) => sqlx::query_scalar::<_, Option<Vec<String>>>(
-            "SELECT workspace_role_permissions($1)",
-        )
-        .bind(role_id)
-        .fetch_one(&mut *connection)
-        .await?,
+        Some(role_id) => {
+            sqlx::query_scalar::<_, Option<Vec<String>>>("SELECT workspace_role_permissions($1)")
+                .bind(role_id)
+                .fetch_one(&mut *connection)
+                .await?
+        }
         None => None,
     };
     Ok(RoleGrant::stored(role, custom.as_deref())
@@ -205,7 +205,9 @@ pub async fn join_workspace_space(
 ) -> Result<Uuid, AppError> {
     let space = crate::workspace_space::join(transaction, workspace_id, account_id)
         .await?
-        .ok_or(AppError::Internal("admitted account is not a workspace member"))?;
+        .ok_or(AppError::Internal(
+            "admitted account is not a workspace member",
+        ))?;
     let version = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
     )
@@ -332,7 +334,12 @@ mod tests {
 
     #[test]
     fn tokens_are_fifty_characters_and_differ() {
-        for family in [Family::Project, Family::Workspace, Family::Claim, Family::Link] {
+        for family in [
+            Family::Project,
+            Family::Workspace,
+            Family::Claim,
+            Family::Link,
+        ] {
             let first = issue(family);
             assert_eq!(first.token.len(), 50);
             assert!(first.token.starts_with(family.tag()));

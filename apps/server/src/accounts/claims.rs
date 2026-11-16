@@ -13,13 +13,7 @@
 //! Only a claim's digest is stored. An unknown, used, revoked or expired
 //! link gets the same answer.
 
-use axum::{
-    Router,
-    extract::State,
-    http::HeaderMap,
-    response::Response,
-    routing::post,
-};
+use axum::{Router, extract::State, http::HeaderMap, response::Response, routing::post};
 use chrono::{DateTime, Duration, Utc};
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
@@ -97,7 +91,10 @@ impl Operation for PersonCreate {
     type Input = PersonCreateInput;
     type Output = PersonCreateView;
 
-    async fn run(call: &mut OpCall<'_>, input: PersonCreateInput) -> Result<PersonCreateView, OpError> {
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: PersonCreateInput,
+    ) -> Result<PersonCreateView, OpError> {
         let display_name = input.display_name.trim().to_owned();
         if display_name.is_empty()
             || display_name.chars().count() > 120
@@ -254,7 +251,7 @@ async fn accept_claim(
     let _password_kdf_permit = state.rate_limits.try_acquire_password_kdf()?;
     let password_phc = password::hash_password(std::mem::take(&mut *submitted_password)).await?;
 
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let claim = sqlx::query_as::<_, ClaimRow>(
         r#"
         SELECT claim.id, claim.workspace_id, claim.account_id, claim.token_digest,
@@ -312,10 +309,11 @@ async fn accept_claim(
         },
     )
     .await?;
+    // A claim link is one of the invitation engine's links (K1.29).
     crate::account_security::record_sign_in_method(
         &mut transaction,
         established.principal.session_id,
-        "claim",
+        "invitation",
     )
     .await?;
     sqlx::query(

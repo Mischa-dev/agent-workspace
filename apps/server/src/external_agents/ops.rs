@@ -82,7 +82,10 @@ impl Operation for AgentCreate {
     type Input = AgentCreateInput;
     type Output = AgentCreateView;
 
-    async fn run(call: &mut OpCall<'_>, input: AgentCreateInput) -> Result<AgentCreateView, OpError> {
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: AgentCreateInput,
+    ) -> Result<AgentCreateView, OpError> {
         let display_name = input.display_name.trim().to_owned();
         if display_name.is_empty()
             || display_name.chars().count() > 80
@@ -107,19 +110,24 @@ impl Operation for AgentCreate {
             .to_owned();
         if connection_name.is_empty()
             || connection_name.chars().count() > 80
-            || !connection_name.chars().enumerate().all(|(index, character)| {
-                character.is_ascii_alphanumeric()
-                    || (index > 0 && matches!(character, '.' | '_' | '-' | ' '))
-            })
+            || !connection_name
+                .chars()
+                .enumerate()
+                .all(|(index, character)| {
+                    character.is_ascii_alphanumeric()
+                        || (index > 0 && matches!(character, '.' | '_' | '-' | ' '))
+                })
         {
             return Err(OpError::invalid(
                 "connectionName",
                 "Use 1 to 80 letters, digits, spaces, ., _ or -, starting with a letter or digit.",
             ));
         }
-        let scopes = super::normalize_scopes(input.scopes.unwrap_or_else(|| {
-            ["read", "write", "events"].map(str::to_owned).to_vec()
-        }))
+        let scopes = super::normalize_scopes(
+            input
+                .scopes
+                .unwrap_or_else(|| ["read", "write", "events"].map(str::to_owned).to_vec()),
+        )
         .map_err(|_| {
             OpError::invalid(
                 "scopes",

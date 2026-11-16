@@ -26,6 +26,7 @@ pub const WORKSPACE_ID: &str = "workspace_id";
 
 /// Workspace-owned tables and their tenant column.
 pub const TENANT_TABLES: &[(&str, &str)] = &[
+    ("account_claims", WORKSPACE_ID),
     ("agent_profiles", ORGANIZATION_ID),
     ("agent_run_usage", ORGANIZATION_ID),
     ("agent_sessions", ORGANIZATION_ID),
@@ -40,6 +41,7 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("bug_report_links", ORGANIZATION_ID),
     ("capacity_alert_rules", ORGANIZATION_ID),
     ("custom_harnesses", ORGANIZATION_ID),
+    ("external_agent_connections", WORKSPACE_ID),
     ("files", ORGANIZATION_ID),
     ("github_connect_attempts", ORGANIZATION_ID),
     ("github_installation_claims", ORGANIZATION_ID),
@@ -231,7 +233,6 @@ pub const MISSING_WORKSPACE_COLUMN: &[(&str, &str)] = &[
     ("conversations", "H1.4"),
     ("execution_profiles", "H1.7"),
     ("execution_workers", "H1.7"),
-    ("external_agent_connections", "H1.7"),
     ("external_agent_event_counters", "H1.7"),
     ("external_agent_events", "H1.7"),
     ("external_execution_requests", "H1.7"),

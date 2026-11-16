@@ -133,6 +133,10 @@ pub const DECLARATIONS: &[ExportDecl] = &[
         ],
         not_exported: &[
             (
+                "account_claims",
+                "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
+            ),
+            (
                 "background_jobs",
                 "runtime state of this server (queues, leases, retries)",
             ),
