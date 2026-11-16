@@ -29,6 +29,7 @@ use crate::{
 };
 
 pub mod activities;
+pub mod brief;
 pub mod finished;
 #[cfg(test)]
 mod guards;
@@ -36,9 +37,13 @@ pub mod launch_paths;
 pub mod liveness;
 pub mod operations;
 pub mod ops;
+pub mod pages;
+pub mod reads;
+pub mod sql;
 pub mod state;
 pub mod store;
 pub mod usage;
+pub mod views;
 
 pub use state::{Liveness, RunState};
 

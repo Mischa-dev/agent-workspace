@@ -15,6 +15,7 @@ use serde_json::Value;
 use sqlx::{PgConnection, Postgres, Transaction};
 use uuid::Uuid;
 
+pub mod capacity;
 pub mod lease;
 
 use crate::{
@@ -80,7 +81,7 @@ pub(crate) async fn admit(
 
 /// Whether the thread has a built-in run that hasn't finished.
 pub(crate) async fn thread_busy(
-    connection: &mut PgConnection,
+    executor: impl sqlx::PgExecutor<'_>,
     conversation_id: Uuid,
 ) -> Result<bool, AppError> {
     Ok(sqlx::query_scalar::<_, bool>(
@@ -93,7 +94,7 @@ pub(crate) async fn thread_busy(
     )
     .bind(conversation_id)
     .bind(&ACTIVE_RUN_STATES[..])
-    .fetch_one(connection)
+    .fetch_one(executor)
     .await?)
 }
 

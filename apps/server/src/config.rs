@@ -381,12 +381,20 @@ impl AppConfig {
         let codex_binary = PathBuf::from(optional(values, "CODEX_BINARY", "codex"));
         // Harness account homes live in the data root unless placed elsewhere
         // inside it.
+        // A1.6: the neutral names, with the old ones still read for a
+        // release (an old name is used only when the new one is unset).
+        let home_root_key = aliased(values, "PROVIDER_HOME_ROOT", "CODEX_HOME_ROOT");
         let codex_home_root = PathBuf::from(optional(
             values,
-            "CODEX_HOME_ROOT",
+            home_root_key,
             &data_root.join("codex/profiles").to_string_lossy(),
         ));
-        let codex_host_concurrency_limit = parse(values, "CODEX_HOST_CONCURRENCY_LIMIT", "1")?;
+        let concurrency_key = aliased(
+            values,
+            "HARNESS_HOST_CONCURRENCY_LIMIT",
+            "CODEX_HOST_CONCURRENCY_LIMIT",
+        );
+        let codex_host_concurrency_limit = parse(values, concurrency_key, "1")?;
         let codex_max_line_bytes = parse(values, "CODEX_MAX_LINE_BYTES", "1048576")?;
         let codex_max_stderr_bytes = parse(values, "CODEX_MAX_STDERR_BYTES", "262144")?;
         let codex_max_buffered_events = parse(values, "CODEX_MAX_BUFFERED_EVENTS", "64")?;
@@ -462,7 +470,7 @@ impl AppConfig {
         }
         if !(1..=16).contains(&codex_host_concurrency_limit) {
             return Err(ConfigError::Invalid {
-                key: format!("{PREFIX}CODEX_HOST_CONCURRENCY_LIMIT"),
+                key: format!("{PREFIX}{concurrency_key}"),
                 reason: "must be between 1 and 16".into(),
             });
         }
@@ -511,7 +519,7 @@ impl AppConfig {
             .is_err()
         {
             return Err(ConfigError::Invalid {
-                key: format!("{PREFIX}CODEX_HOME_ROOT"),
+                key: format!("{PREFIX}{home_root_key}"),
                 reason: format!("must be a folder inside {PREFIX}DATA_ROOT"),
             });
         }
@@ -1191,6 +1199,17 @@ fn required(values: &BTreeMap<String, String>, suffix: &str) -> Result<String, C
         .ok_or_else(|| ConfigError::Missing(format!("{PREFIX}{suffix}")))
 }
 
+/// The setting's name to read: `name`, or `old` (its name before A1.6)
+/// when only that one is set.
+fn aliased(values: &BTreeMap<String, String>, name: &'static str, old: &'static str) -> &'static str {
+    let set = |suffix: &str| {
+        values
+            .get(&format!("{PREFIX}{suffix}"))
+            .is_some_and(|value| !value.trim().is_empty())
+    };
+    if !set(name) && set(old) { old } else { name }
+}
+
 fn optional(values: &BTreeMap<String, String>, suffix: &str, default: &str) -> String {
     values
         .get(&format!("{PREFIX}{suffix}"))
@@ -1406,6 +1425,49 @@ mod tests {
         let error = AppConfig::from_values(&values).expect_err("keyring in a checkout");
         assert!(error.to_string().contains("Git work tree"), "{error}");
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn neutral_setting_names_win_and_old_ones_still_work() {
+        let mut values = base_values();
+        values.insert(format!("{PREFIX}DATA_ROOT"), "/srv/aw/data".to_owned());
+        values.insert(
+            format!("{PREFIX}CODEX_HOST_CONCURRENCY_LIMIT"),
+            "3".to_owned(),
+        );
+        values.insert(
+            format!("{PREFIX}CODEX_HOME_ROOT"),
+            "/srv/aw/data/old-homes".to_owned(),
+        );
+        let config = AppConfig::from_values(&values).expect("old names");
+        assert_eq!(config.codex_host_concurrency_limit, 3);
+        assert_eq!(
+            config.codex_home_root,
+            std::path::Path::new("/srv/aw/data/old-homes")
+        );
+        values.insert(
+            format!("{PREFIX}HARNESS_HOST_CONCURRENCY_LIMIT"),
+            "5".to_owned(),
+        );
+        values.insert(
+            format!("{PREFIX}PROVIDER_HOME_ROOT"),
+            "/srv/aw/data/homes".to_owned(),
+        );
+        let config = AppConfig::from_values(&values).expect("new names");
+        assert_eq!(config.codex_host_concurrency_limit, 5);
+        assert_eq!(
+            config.codex_home_root,
+            std::path::Path::new("/srv/aw/data/homes")
+        );
+        values.insert(
+            format!("{PREFIX}HARNESS_HOST_CONCURRENCY_LIMIT"),
+            "40".to_owned(),
+        );
+        let error = AppConfig::from_values(&values).expect_err("out of range");
+        assert!(
+            error.to_string().contains("HARNESS_HOST_CONCURRENCY_LIMIT"),
+            "{error}"
+        );
     }
 
     #[test]

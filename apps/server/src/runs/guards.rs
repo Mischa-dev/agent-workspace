@@ -15,49 +15,27 @@ use std::{collections::BTreeMap, path::Path};
 /// Files outside `src/runs/` with SQL on the run tables, and the slice
 /// that moves each into the run service.
 const LEGACY_RUN_SQL: &[(&str, &str)] = &[
-    ("account.rs", "A1.6"),
-    ("agent_profiles.rs", "A1.6"),
     ("api.rs", "A1.14"),
-    ("automations.rs", "A1.6"),
-    ("conversations.rs", "A1.6"),
-    ("events.rs", "A1.6"),
-    ("external_events.rs", "A1.6"),
+    ("conversations.rs", "A1.8"),
+    ("external_events.rs", "A1.8"),
     ("github.rs", "A1.19"),
-    ("home.rs", "A1.6"),
-    ("launch.rs", "A1.13"),
-    ("mcp.rs", "A1.6"),
+    ("mcp.rs", "A1.8"),
     ("mcp/approvals.rs", "A1.8"),
     ("mcp/code.rs", "A1.19"),
-    ("mcp/runs.rs", "A1.6"),
-    ("mcp/talk.rs", "A1.6"),
-    ("metrics.rs", "A1.6"),
-    ("notifications.rs", "A1.6"),
-    ("onboarding.rs", "A1.6"),
-    ("outbox.rs", "A1.6"),
+    ("notifications.rs", "A1.8"),
     ("provider.rs", "A1.17"),
     ("recovery.rs", "A1.17"),
-    ("retention.rs", "A1.6"),
     ("run_log.rs", "A1.14"),
-    ("run_views.rs", "A1.6"),
     ("scheduler.rs", "A1.17"),
     ("usage/history.rs", "A1.15"),
-    ("webhooks.rs", "A1.6"),
-    ("work_items.rs", "A1.6"),
 ];
 
 /// Files that still spell out the built-in host's active states, and the
 /// slice that replaces each list with `RunState`.
 const LEGACY_STATE_LISTS: &[(&str, &str)] = &[
-    ("account.rs", "A1.6"),
-    ("agent_profiles.rs", "A1.6"),
-    ("conversations.rs", "A1.6"),
     ("github.rs", "A1.19"),
-    ("home.rs", "A1.6"),
-    ("launch.rs", "A1.13"),
-    ("metrics.rs", "A1.6"),
     ("provider.rs", "A1.17"),
     ("recovery.rs", "A1.17"),
-    ("retention.rs", "A1.6"),
     ("scheduler.rs", "A1.17"),
 ];
 

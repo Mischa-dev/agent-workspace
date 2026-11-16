@@ -6,7 +6,6 @@
 use axum::{Json, Router, extract::State, routing::get};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use sqlx::FromRow;
 use uuid::Uuid;
 
 use crate::{AppState, auth::AuthenticatedActor, error::AppError};
@@ -61,89 +60,11 @@ pub struct Home {
     pub queued_launches: i64,
 }
 
-#[derive(FromRow)]
-struct RunRow {
-    id: Uuid,
-    state: String,
-    project_id: Uuid,
-    project_name: String,
-    thread_id: Uuid,
-    thread_name: String,
-    task_id: Option<Uuid>,
-    task_key: Option<String>,
-    task_title: Option<String>,
-    harness: Option<String>,
-    model: Option<String>,
-    started_by: Option<String>,
-    requesting_actor_id: Uuid,
-    approvals_waiting: i64,
-    created_at: DateTime<Utc>,
-    started_at: Option<DateTime<Utc>>,
-}
-
-const RUNS_FROM: &str = r#"
-    FROM agent_runs run
-    JOIN conversations thread ON thread.id = run.conversation_id
-    JOIN projects project ON project.id = thread.project_id
-"#;
-
-/// Active runs the reader can see: in threads `conversation_visible_to`
-/// shows them, in standard projects they can still open.
-const VISIBLE_ACTIVE: &str = r#"
-    WHERE run.state IN ('queued', 'starting', 'working', 'blocked', 'recovering')
-      AND project.archived_at IS NULL AND project.kind = 'standard'
-      AND conversation_visible_to(thread.id, $1)
-      AND actor_can_access_project($1, NULL, project.id)
-"#;
-
 pub async fn home_for(state: &AppState, viewer: Uuid) -> Result<Home, AppError> {
-    let rows = sqlx::query_as::<_, RunRow>(&format!(
-        r#"
-        SELECT run.id, run.state, project.id AS project_id, project.name AS project_name,
-               thread.id AS thread_id, thread.name AS thread_name,
-               item.id AS task_id,
-               CASE WHEN item.id IS NOT NULL
-                    THEN project.project_key || '-' || item.number::text END AS task_key,
-               item.title AS task_title,
-               COALESCE(run.config->>'harness', account.adapter_kind) AS harness,
-               run.config->>'model' AS model,
-               starter.display_name AS started_by, run.requesting_actor_id,
-               (SELECT count(*) FROM agent_approvals approval
-                 WHERE approval.agent_run_id = run.id AND approval.status = 'pending')
-                 AS approvals_waiting,
-               run.created_at, run.started_at
-        {RUNS_FROM}
-        LEFT JOIN LATERAL (
-            SELECT work_item.id, work_item.number, work_item.title
-            FROM launches launch
-            JOIN task_rows work_item
-              ON work_item.project_id = launch.project_id AND work_item.id = launch.work_item_id
-            WHERE launch.agent_run_id = run.id AND work_item.archived_at IS NULL
-              -- The task's key and title only where the reader sees tasks.
-              AND EXISTS (
-                  SELECT 1 FROM project_memberships sees_task
-                  WHERE sees_task.project_id = launch.project_id AND sees_task.actor_id = $1
-                    AND sees_task.enabled
-                    AND custom_role_allows(sees_task.role_id, 'tasks.view'))
-            LIMIT 1
-        ) item ON true
-        LEFT JOIN execution_profiles profile ON profile.id = run.execution_profile_id
-        LEFT JOIN provider_accounts account ON account.id = profile.provider_account_id
-        LEFT JOIN project_memberships starter
-          ON starter.project_id = project.id AND starter.actor_id = run.requesting_actor_id
-        {VISIBLE_ACTIVE}
-        ORDER BY run.created_at DESC, run.id
-        LIMIT {MAX_RUNS}
-        "#
-    ))
-    .bind(viewer)
-    .fetch_all(&state.pool)
-    .await?;
-    let working_total =
-        sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) {RUNS_FROM} {VISIBLE_ACTIVE}"))
-            .bind(viewer)
-            .fetch_one(&state.pool)
-            .await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    let (rows, working_total) =
+        crate::runs::reads::working_for(&mut transaction, viewer, MAX_RUNS).await?;
+    transaction.commit().await?;
     let queued_launches = sqlx::query_scalar::<_, i64>(
         r#"
         SELECT count(*) FROM launches launch

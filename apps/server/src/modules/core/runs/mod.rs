@@ -18,7 +18,7 @@ impl CoreModule for Module {
         module.routes(crate::environments::router);
         module.routes(crate::harnesses::router);
         module.routes(crate::launch::router);
-        module.routes(crate::run_views::router);
+        module.routes(crate::runs::views::router);
         module.operations(crate::runs::operations::register_ops);
     }
 }

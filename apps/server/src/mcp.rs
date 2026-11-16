@@ -3688,7 +3688,7 @@ impl McpServer {
     async fn standup_prompt(&self) -> Vec<PromptMessage> {
         vec![PromptMessage::new_text(
             Role::User,
-            "In Agent Workspace, write my standup. Use task_list (updatedSince: 24h) for what moved, run_list for Codex runs, pull_request_list (needsMe) for PRs waiting on me, and briefing for what needs me. Three short sections: Done, Next, Blocked. Keys and links only, no filler.",
+            "In Agent Workspace, write my standup. Use task_list (updatedSince: 24h) for what moved, run_list for agent runs, pull_request_list (needsMe) for PRs waiting on me, and briefing for what needs me. Three short sections: Done, Next, Blocked. Keys and links only, no filler.",
         )]
     }
 

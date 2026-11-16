@@ -28,7 +28,6 @@ use crate::{
 const MAX_STEPS: i64 = 2_000;
 /// The largest diff the run page shows inline.
 const MAX_PATCH_BYTES: usize = 768 * 1024;
-const MAX_LIST: i64 = 100;
 const MAX_USAGE_DAYS: i64 = 400;
 
 pub fn router() -> Router<AppState> {
@@ -141,129 +140,16 @@ fn named(state: &AppState, mut run: RunSummary) -> RunSummary {
 }
 
 // ---------------------------------------------------------------------------
-// Runs page
-
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RunListQuery {
-    pub organization_id: Option<Uuid>,
-    pub project_id: Option<Uuid>,
-    /// active, finished, failed or needs_you; all when left out.
-    pub status: Option<String>,
-    pub harness: Option<String>,
-    /// Only runs this person started.
-    pub mine: Option<bool>,
-    /// The `nextCursor` of the previous page.
-    pub cursor: Option<String>,
-    pub limit: Option<i64>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RunList {
-    pub runs: Vec<RunSummary>,
-    pub next_cursor: Option<String>,
-}
-
-fn status_states(status: Option<&str>) -> Result<Option<&'static [&'static str]>, AppError> {
-    Ok(match status {
-        None | Some("" | "all") => None,
-        Some("active") => Some(&[
-            "created",
-            "queued",
-            "starting",
-            "working",
-            "blocked",
-            "recovering",
-        ]),
-        Some("needs_you") => Some(&["blocked"]),
-        Some("finished") => Some(&["completed"]),
-        Some("failed") => Some(&["failed", "canceled", "interrupted"]),
-        Some(_) => return Err(AppError::Validation("status")),
-    })
-}
-
-fn decode_cursor(cursor: &str) -> Result<(DateTime<Utc>, Uuid), AppError> {
-    let (time, id) = cursor
-        .split_once('_')
-        .ok_or(AppError::Validation("cursor"))?;
-    let micros = time
-        .parse::<i64>()
-        .map_err(|_| AppError::Validation("cursor"))?;
-    let time = DateTime::from_timestamp_micros(micros).ok_or(AppError::Validation("cursor"))?;
-    let id = id.parse().map_err(|_| AppError::Validation("cursor"))?;
-    Ok((time, id))
-}
-
-fn encode_cursor(run: &RunSummary) -> String {
-    format!("{}_{}", run.created_at.timestamp_micros(), run.id)
-}
-
-/// Runs the viewer can see, newest first, across their projects (or one
-/// workspace's or project's).
-pub async fn list_runs(
-    state: &AppState,
-    viewer: Uuid,
-    query: &RunListQuery,
-) -> Result<RunList, AppError> {
-    let limit = query.limit.unwrap_or(50).clamp(1, MAX_LIST);
-    let states = status_states(query.status.as_deref())?.map(|states| {
-        states
-            .iter()
-            .map(|state| (*state).to_owned())
-            .collect::<Vec<_>>()
-    });
-    let cursor = query.cursor.as_deref().map(decode_cursor).transpose()?;
-    if query
-        .harness
-        .as_deref()
-        .is_some_and(|harness| harness.len() > 64)
-    {
-        return Err(AppError::Validation("harness"));
-    }
-    let rows = sqlx::query_as::<_, RunSummary>(&format!(
-        r#"{}
-        WHERE conversation_visible_to(run.conversation_id, $1)
-          AND actor_can_access_project($1, NULL, project.id)
-          AND ($2::uuid IS NULL OR project.organization_id = $2)
-          AND ($3::uuid IS NULL OR project.id = $3)
-          AND ($4::text[] IS NULL OR run.state = ANY($4))
-          AND ($5::text IS NULL OR run.config->>'harness' = $5)
-          AND (NOT $6 OR run.requesting_actor_id = $1)
-          AND ($7::timestamptz IS NULL OR (run.created_at, run.id) < ($7, $8))
-        ORDER BY run.created_at DESC, run.id DESC
-        LIMIT $9
-        "#,
-        summary_select()
-    ))
-    .bind(viewer)
-    .bind(query.organization_id)
-    .bind(query.project_id)
-    .bind(states)
-    .bind(query.harness.as_deref())
-    .bind(query.mine.unwrap_or(false))
-    .bind(cursor.map(|(time, _)| time))
-    .bind(cursor.map(|(_, id)| id))
-    .bind(limit + 1)
-    .fetch_all(&state.pool)
-    .await?;
-    let more = rows.len() > usize::try_from(limit).unwrap_or(0);
-    let mut runs = rows
-        .into_iter()
-        .take(usize::try_from(limit).unwrap_or(0))
-        .map(|run| named(state, run))
-        .collect::<Vec<_>>();
-    redact(state, viewer, &mut runs).await?;
-    let next_cursor = more.then(|| runs.last().map(encode_cursor)).flatten();
-    Ok(RunList { runs, next_cursor })
-}
+// Runs page: every run, read by `runs::pages` (A1.5).
 
 async fn list_http(
     State(state): State<AppState>,
     principal: AuthenticatedActor,
-    ApiQuery(query): ApiQuery<RunListQuery>,
-) -> Result<Json<RunList>, AppError> {
-    Ok(Json(list_runs(&state, principal.actor_id, &query).await?))
+    ApiQuery(query): ApiQuery<super::pages::RunListQuery>,
+) -> Result<Json<super::pages::RunList>, AppError> {
+    Ok(Json(
+        super::pages::list(&state, principal.actor_id, &query).await?,
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -324,16 +210,18 @@ async fn visible_run(
     viewer: Uuid,
     run_id: Uuid,
 ) -> Result<(RunSummary, bool), AppError> {
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let mut run = sqlx::query_as::<_, RunSummary>(&format!(
         "{} WHERE run.id = $1 AND conversation_visible_to(run.conversation_id, $2) AND actor_can_access_project($2, NULL, project.id)",
         summary_select()
     ))
     .bind(run_id)
     .bind(viewer)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&mut *transaction)
     .await?
     .map(|run| named(state, run))
     .ok_or(AppError::NotFound("agent_run"))?;
+    drop(transaction);
     let sees_code = redact(state, viewer, std::slice::from_mut(&mut run)).await?;
     let code = sees_code.contains(&run.project_id);
     Ok((run, code))
@@ -385,15 +273,16 @@ pub async fn run_detail(
     run_id: Uuid,
 ) -> Result<RunDetail, AppError> {
     let (run, code) = visible_run(state, viewer, run_id).await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let prompt = sqlx::query_scalar::<_, String>("SELECT prompt FROM agent_runs WHERE id = $1")
         .bind(run_id)
-        .fetch_one(&state.pool)
+        .fetch_one(&mut *transaction)
         .await?;
     let total = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM agent_run_events WHERE agent_run_id = $1",
     )
     .bind(run_id)
-    .fetch_one(&state.pool)
+    .fetch_one(&mut *transaction)
     .await?;
     let mut steps = sqlx::query_as::<_, RunStep>(
         r#"
@@ -405,7 +294,7 @@ pub async fn run_detail(
     )
     .bind(run_id)
     .bind(MAX_STEPS)
-    .fetch_all(&state.pool)
+    .fetch_all(&mut *transaction)
     .await?;
     steps.reverse();
     let tests = sqlx::query_as::<_, (i64, i64, i64, i64)>(
@@ -419,7 +308,7 @@ pub async fn run_detail(
         "#,
     )
     .bind(run_id)
-    .fetch_one(&state.pool)
+    .fetch_one(&mut *transaction)
     .await?;
     let last_failed = sqlx::query_scalar::<_, Option<i64>>(
         r#"
@@ -429,7 +318,7 @@ pub async fn run_detail(
         "#,
     )
     .bind(run_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&mut *transaction)
     .await?
     .flatten();
     let usage_by_model = sqlx::query_as::<_, ModelUsage>(
@@ -443,8 +332,9 @@ pub async fn run_detail(
         "#,
     )
     .bind(run_id)
-    .fetch_all(&state.pool)
+    .fetch_all(&mut *transaction)
     .await?;
+    drop(transaction);
     // Changed files are code: only for a viewer who sees it.
     let files = if !code {
         None
@@ -506,6 +396,7 @@ async fn read_diff(
     let Some(base) = run.base_commit.clone() else {
         return Ok(None);
     };
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let location = sqlx::query_as::<_, (Option<String>, String)>(
         r#"
         SELECT worktree.path, repository.mirror_path
@@ -518,8 +409,9 @@ async fn read_diff(
         "#,
     )
     .bind(run.id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&mut *transaction)
     .await?;
+    drop(transaction);
     let Some((worktree, mirror)) = location else {
         return Ok(None);
     };
@@ -650,6 +542,7 @@ pub async fn usage_report(
           AND ($4::uuid IS NULL OR usage.project_id = $4)
           AND NOT (usage.project_id = ANY($5))
     "#;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let rows = sqlx::query_as::<_, UsageRow>(&format!(
         r#"
         SELECT {key} AS key, COALESCE({label}, 'Unknown') AS label,
@@ -671,7 +564,7 @@ pub async fn usage_report(
     .bind(query.organization_id)
     .bind(query.project_id)
     .bind(&query.without_projects)
-    .fetch_all(&state.pool)
+    .fetch_all(&mut *transaction)
     .await?;
     let (runs, totals) = {
         #[derive(FromRow)]
@@ -688,7 +581,7 @@ pub async fn usage_report(
         .bind(query.organization_id)
         .bind(query.project_id)
         .bind(&query.without_projects)
-        .fetch_one(&state.pool)
+        .fetch_one(&mut *transaction)
         .await?;
         (total.runs, total.usage)
     };

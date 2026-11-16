@@ -422,16 +422,7 @@ async fn render(state: &AppState) -> Result<String, AppError> {
         queue.oldest_due_seconds
     );
 
-    let runs = sqlx::query_as::<_, (String, i64)>(
-        r#"
-        SELECT state, count(*) FROM agent_runs
-        WHERE state IN ('created','queued','starting','working','blocked','recovering')
-           OR updated_at > now() - interval '1 day'
-        GROUP BY state ORDER BY state
-        "#,
-    )
-    .fetch_all(&state.pool)
-    .await?;
+    let runs = crate::runs::reads::builtin_state_counts(&state.pool).await?;
     out.push_str("# HELP aw_agent_runs Runs that are live or changed in the last day, by state.\n");
     out.push_str("# TYPE aw_agent_runs gauge\n");
     for (run_state, count) in runs {

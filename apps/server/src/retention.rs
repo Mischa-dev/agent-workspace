@@ -197,7 +197,7 @@ pub async fn clean_worktrees(
 }
 
 async fn load_candidates(pool: &PgPool) -> Result<Vec<WorktreeCandidate>, AppError> {
-    Ok(sqlx::query_as::<_, WorktreeCandidate>(candidate_query())
+    Ok(sqlx::query_as::<_, WorktreeCandidate>(&candidate_query())
         .bind(WORKTREE_RETENTION_DAYS)
         .fetch_all(pool)
         .await?)
@@ -219,8 +219,9 @@ async fn candidate_is_current(
     .is_some())
 }
 
-fn candidate_query() -> &'static str {
-    r#"
+fn candidate_query() -> String {
+    format!(
+        r#"
     SELECT worktree.id AS worktree_id, workspace.id AS workspace_id,
            repository.id AS repository_id, repository.mirror_path,
            worktree.path AS worktree_path, workspace.branch_name, workspace.base_commit,
@@ -233,18 +234,16 @@ fn candidate_query() -> &'static str {
       AND workspace.state = 'retained'
       AND workspace.published_commit IS NOT NULL
       AND workspace.updated_at <= now() - make_interval(days => $1)
-      AND NOT EXISTS (
-        SELECT 1 FROM agent_runs run
-        WHERE run.repository_workspace_id = workspace.id
-          AND run.state IN ('created','queued','starting','working','blocked','recovering')
-      )
+      AND NOT {active_run}
       AND NOT EXISTS (
         SELECT 1 FROM provider_sessions session
         WHERE session.conversation_id = workspace.conversation_id
           AND session.repository_id = workspace.repository_id
           AND session.state IN ('new','active')
       )
-    "#
+    "#,
+        active_run = crate::runs::sql::workspace_has_active_run("workspace.id"),
+    )
 }
 
 fn candidate_paths_match(data_root: &Path, candidate: &WorktreeCandidate) -> bool {

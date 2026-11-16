@@ -4,6 +4,7 @@
 mod a1_host_protocol;
 mod a1_launch_paths;
 mod a1_requests;
+mod a1_run_reads;
 mod a1_run_reporting;
 mod a1_runs_record;
 mod access_compare;

@@ -1976,6 +1976,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "repository_list",
     "role_get",
     "role_list",
+    "run_activity_list",
+    "run_detail_get",
     "run_get",
     "run_list",
     "run_steps",
@@ -2516,6 +2518,19 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
                 json!({"runId": a.run.to_string()}),
                 json!({"runId": a.run.to_string(), "includeDiff": true}),
             ],
+            vec![json!({"runId": b.run.to_string()})],
+            vec![],
+        ),
+        // A1.5: the run view and its activities, for any run.
+        case(
+            "run_detail_get",
+            vec![json!({"runId": a.run.to_string()})],
+            vec![json!({"runId": b.run.to_string()})],
+            vec![],
+        ),
+        case(
+            "run_activity_list",
+            vec![json!({"runId": a.run.to_string(), "afterSeq": 0})],
             vec![json!({"runId": b.run.to_string()})],
             vec![],
         ),

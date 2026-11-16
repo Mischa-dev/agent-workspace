@@ -1,10 +1,11 @@
-//! Codex runs for people (docs/plans/mcp-tools.md, Phase 4): start one in a
-//! thread on your own Codex account, follow it, and see its pull request's
-//! checks. Agents keep `run_request`, which asks a person to approve.
+//! Runs through MCP (docs/plans/mcp-tools.md, Phase 4): start one in a
+//! thread on your own provider account, follow any run you can see (on the
+//! built-in host or reported by its own agent, read through
+//! `runs::brief`), and see its pull request's checks. Agents keep
+//! `run_request`, which asks a person to approve.
 
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
 use uuid::Uuid;
 
 use super::{
@@ -17,7 +18,7 @@ use crate::{
     error::AppError,
     idempotency::IdempotencyKey,
     policy::ActorKind,
-    runs::RunCaller,
+    runs::{RunCaller, brief},
 };
 
 const NOT_FOR_AGENTS: &str = "Agents ask a person to start a run with run_request; run_start spends a person's own provider account.";
@@ -60,8 +61,8 @@ pub(super) struct RunStartArguments {
     pub repository_id: Option<String>,
     /// A stable ID so a retry never starts a second run.
     pub client_request_id: Option<String>,
-    /// The harness to run on (for example `codex_app_server`), if the caller
-    /// has accounts on more than one. Defaults to their preferred account.
+    /// The harness to run on (its key, as the caller's provider accounts
+    /// list it), if the caller has accounts on more than one. Defaults to their preferred account.
     #[serde(default)]
     pub harness: Option<String>,
     /// A model from the harness's catalog. Defaults to the account's choice.
@@ -103,7 +104,7 @@ pub(super) struct RunListArguments {
     pub limit: Option<u16>,
 }
 
-#[derive(Clone, Debug, Serialize, schemars::JsonSchema, FromRow)]
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct PullRequestLine {
     pub number: i64,
@@ -120,15 +121,28 @@ pub(super) struct PullRequestLine {
 #[serde(rename_all = "camelCase")]
 pub(super) struct RunValue {
     pub id: String,
-    /// queued, working, waiting_for_approval, finished, failed, interrupted,
+    /// queued, working, not_responding, waiting_for_approval,
+    /// waiting_for_answer, stopping, finished, failed, interrupted,
     /// published, opening_pull_request, checks_pending, checks_passed, or
     /// checks_failed.
     pub stage: String,
-    /// The run's own state, as the web app shows it.
+    /// The run's state: queued, starting, start_uncertain, accepted,
+    /// working, waiting, cancel_requested, done, failed, cancelled, refused
+    /// or interrupted.
     pub state: String,
+    /// Whether whoever does the run is still reporting: ok, quiet or
+    /// not_responding.
+    pub liveness: String,
+    /// What the run was asked to do (its prompt, or the title its agent
+    /// gave it).
     pub prompt: String,
-    pub thread_id: String,
-    pub project_id: String,
+    /// What the run last said it was doing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status_line: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
     pub started_by: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub queue_position: Option<i64>,
@@ -138,7 +152,7 @@ pub(super) struct RunValue {
     pub failure: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pull_request: Option<PullRequestLine>,
-    /// Approvals this run is waiting on.
+    /// Approvals or other requests this run is waiting on.
     pub approvals_waiting: i64,
     /// What to do next, in words.
     pub next: String,
@@ -156,145 +170,13 @@ pub(super) struct RunListValue {
     pub runs: Vec<RunValue>,
 }
 
-#[derive(Debug, FromRow)]
-struct RunRow {
-    id: Uuid,
-    state: String,
-    prompt: String,
-    conversation_id: Uuid,
-    project_id: Uuid,
-    started_by: String,
-    queue_position: Option<i64>,
-    branch: Option<String>,
-    published: bool,
-    failure_reason: Option<String>,
-    pull_request_request_state: Option<String>,
-    pr_number: Option<i64>,
-    pr_url: Option<String>,
-    pr_title: Option<String>,
-    pr_state: Option<String>,
-    pr_checks: Option<String>,
-    pr_review: Option<String>,
-    approvals_waiting: i64,
-    created_at: String,
-    updated_at: String,
-    conversation_kind: String,
-    parent_conversation_id: Option<Uuid>,
-    parent_kind: Option<String>,
-}
-
-/// Runs the viewer can see: in a project they can reach, in a thread they can
-/// see. `$1` is the viewer, `$2` their agent connection.
-const RUN_SELECT: &str = r#"
-    SELECT run.id, run.state, run.prompt, run.conversation_id, thread.project_id,
-           COALESCE(starter.display_name, 'Someone') AS started_by,
-           CASE WHEN run.state = 'queued' THEN (
-               SELECT count(*) FROM agent_runs queued
-               WHERE queued.state = 'queued'
-                 AND (queued.created_at, queued.id) <= (run.created_at, run.id)
-           ) END AS queue_position,
-           workspace.branch_name AS branch,
-           workspace.published_at IS NOT NULL AS published,
-           run.failure_reason,
-           request.state AS pull_request_request_state,
-           pr.pull_request_number AS pr_number, pr.html_url AS pr_url, pr.title AS pr_title,
-           pr.state AS pr_state, pr.checks_state AS pr_checks, pr.review_state AS pr_review,
-           (SELECT count(*) FROM agent_approvals approval
-             WHERE approval.agent_run_id = run.id AND approval.status = 'pending') AS approvals_waiting,
-           run.created_at::text AS created_at, run.updated_at::text AS updated_at,
-           thread.kind AS conversation_kind,
-           thread.parent_channel_id AS parent_conversation_id,
-           parent.kind AS parent_kind
-    FROM agent_runs run
-    JOIN conversations thread ON thread.id = run.conversation_id
-    LEFT JOIN conversations parent ON parent.id = thread.parent_channel_id
-    LEFT JOIN project_memberships starter
-      ON starter.project_id = thread.project_id AND starter.actor_id = run.requesting_actor_id
-    LEFT JOIN repository_workspaces workspace ON workspace.id = run.repository_workspace_id
-    LEFT JOIN github_pull_request_requests request ON request.agent_run_id = run.id
-    LEFT JOIN github_pull_requests pr ON pr.id = request.github_pull_request_id
-    WHERE conversation_visible_to(thread.id, $1)
-      AND actor_can_access_project($1, $2, thread.project_id)
-"#;
-
-fn stage(row: &RunRow) -> (&'static str, String, Option<u32>) {
-    if let Some(checks) = row.pr_checks.as_deref().filter(|_| row.pr_number.is_some()) {
-        return match checks {
-            "passing" | "success" | "passed" => (
-                "checks_passed",
-                "The pull request's checks passed.".to_owned(),
-                None,
-            ),
-            "failing" | "failure" | "failed" => (
-                "checks_failed",
-                "The pull request's checks failed; open it to see which.".to_owned(),
-                None,
-            ),
-            _ => (
-                "checks_pending",
-                "Checks are running on the pull request; ask again shortly.".to_owned(),
-                Some(60),
-            ),
-        };
-    }
-    if row.pr_number.is_some() {
-        return (
-            "checks_pending",
-            "The pull request is open; its checks haven't reported yet.".to_owned(),
-            Some(60),
-        );
-    }
-    if row.pull_request_request_state.is_some() {
-        return (
-            "opening_pull_request",
-            "The pull request is being opened.".to_owned(),
-            Some(30),
-        );
-    }
-    match row.state.as_str() {
-        "created" | "queued" => (
-            "queued",
-            "Waiting for the harness to pick it up.".to_owned(),
-            Some(60),
-        ),
-        "blocked" if row.approvals_waiting > 0 => (
-            "waiting_for_approval",
-            "The run is waiting on an approval; answer it in the thread (approval_list shows it).".to_owned(),
-            Some(60),
-        ),
-        "starting" | "working" | "blocked" | "recovering" => (
-            "working",
-            "The run is working.".to_owned(),
-            Some(60),
-        ),
-        "failed" => (
-            "failed",
-            "The run failed; see failure. Fix the cause and start a new run.".to_owned(),
-            None,
-        ),
-        "interrupted" | "canceled" => (
-            "interrupted",
-            "The run was stopped.".to_owned(),
-            None,
-        ),
-        _ if row.published => (
-            "published",
-            "The run's branch is published. Open a pull request from the run in the web app."
-                .to_owned(),
-            None,
-        ),
-        _ => (
-            "finished",
-            "The run finished. Publish its branch and open a pull request from the run in the web app."
-                .to_owned(),
-            None,
-        ),
-    }
-}
-
-fn run_value(state: &AppState, row: RunRow) -> RunValue {
-    let url = public_url(state, &run_conversation_path(&row));
-    let (stage, next, poll_after_seconds) = stage(&row);
+fn run_value(state: &AppState, row: brief::BriefRow) -> RunValue {
+    let url = public_url(state, &run_path(&row));
+    let brief::Stage {
+        key: stage,
+        next,
+        poll_after_seconds,
+    } = brief::stage(&row);
     let pull_request = match (row.pr_number, row.pr_url.clone()) {
         (Some(number), Some(url)) => Some(PullRequestLine {
             number,
@@ -310,9 +192,11 @@ fn run_value(state: &AppState, row: RunRow) -> RunValue {
         id: row.id.to_string(),
         stage: stage.to_owned(),
         state: row.state,
+        liveness: row.liveness,
         prompt: snippet(&row.prompt, 600),
-        thread_id: row.conversation_id.to_string(),
-        project_id: row.project_id.to_string(),
+        status_line: row.status_line,
+        thread_id: row.conversation_id.map(|id| id.to_string()),
+        project_id: row.project_id.map(|id| id.to_string()),
         started_by: row.started_by,
         queue_position: row.queue_position,
         branch: row.branch,
@@ -327,26 +211,24 @@ fn run_value(state: &AppState, row: RunRow) -> RunValue {
     }
 }
 
-/// Where a run's conversation opens: DMs, groups and their threads live under
-/// Messages, everything else under its project.
-fn run_conversation_path(row: &RunRow) -> String {
+/// Where a run opens: its conversation (DMs, groups and their threads live
+/// under Messages, everything else under its project), or the run page for
+/// a run in no conversation.
+fn run_path(row: &brief::BriefRow) -> String {
+    let (Some(conversation_id), Some(project_id)) = (row.conversation_id, row.project_id) else {
+        return format!("/runs/{}", row.id);
+    };
     match (
-        row.conversation_kind.as_str(),
+        row.conversation_kind.as_deref().unwrap_or("thread"),
         row.parent_kind.as_deref(),
         row.parent_conversation_id,
     ) {
-        ("dm" | "group", _, _) => format!("/messages/{}", row.conversation_id),
+        ("dm" | "group", _, _) => format!("/messages/{conversation_id}"),
         ("thread", Some("dm" | "group"), Some(parent)) => {
-            format!("/messages/{parent}?thread={}", row.conversation_id)
+            format!("/messages/{parent}?thread={conversation_id}")
         }
-        ("channel", _, _) => format!(
-            "/projects/{}/channels/{}",
-            row.project_id, row.conversation_id
-        ),
-        _ => format!(
-            "/projects/{}/threads/{}",
-            row.project_id, row.conversation_id
-        ),
+        ("channel", _, _) => format!("/projects/{project_id}/channels/{conversation_id}"),
+        _ => format!("/projects/{project_id}/threads/{conversation_id}"),
     }
 }
 
@@ -355,12 +237,16 @@ pub(super) async fn load_run(
     principal: &McpPrincipal,
     run_id: Uuid,
 ) -> Result<Option<RunValue>, AppError> {
-    let row = sqlx::query_as::<_, RunRow>(&format!("{RUN_SELECT} AND run.id = $3"))
-        .bind(principal.actor_id)
-        .bind(principal.external_agent_connection_id)
-        .bind(run_id)
-        .fetch_optional(&state.pool)
-        .await?;
+    let row = crate::db::scoped_one(&state.pool, async |connection| {
+        brief::get(
+            connection,
+            principal.actor_id,
+            principal.external_agent_connection_id,
+            run_id,
+        )
+        .await
+    })
+    .await?;
     let rows =
         without_hidden_pull_requests(state, principal.actor_id, row.into_iter().collect()).await?;
     Ok(rows.into_iter().next().map(|row| run_value(state, row)))
@@ -369,12 +255,12 @@ pub(super) async fn load_run(
 /// Leaves out a run's code (its branch, and its pull request and request:
 /// number, link, title, state, checks, review) where the viewer's role, or an
 /// app's agent limit, leaves out "see code" in the run's project, as the
-/// run pages do (run_views::redact). The rest of the run stays.
+/// run pages do (runs::views::redact). The rest of the run stays.
 async fn without_hidden_pull_requests(
     state: &AppState,
     viewer: Uuid,
-    mut rows: Vec<RunRow>,
-) -> Result<Vec<RunRow>, AppError> {
+    mut rows: Vec<brief::BriefRow>,
+) -> Result<Vec<brief::BriefRow>, AppError> {
     let mut projects = rows
         .iter()
         .filter(|row| {
@@ -382,7 +268,7 @@ async fn without_hidden_pull_requests(
                 || row.branch.is_some()
                 || row.pull_request_request_state.is_some()
         })
-        .map(|row| row.project_id)
+        .filter_map(|row| row.project_id)
         .collect::<Vec<_>>();
     projects.sort_unstable();
     projects.dedup();
@@ -397,7 +283,10 @@ async fn without_hidden_pull_requests(
     )
     .await?;
     for row in &mut rows {
-        if !sees_code.contains(&row.project_id) {
+        if !row
+            .project_id
+            .is_some_and(|project| sees_code.contains(&project))
+        {
             row.branch = None;
             row.pull_request_request_state = None;
             row.pr_number = None;
@@ -620,24 +509,7 @@ pub(super) async fn run_dismiss_failure(
         }
         let mut transaction = state.pool.begin().await?;
         super::common::mark_via(&mut transaction, principal).await?;
-        let failure = sqlx::query_as::<_, (Uuid, Uuid, Uuid)>(
-            r#"
-            SELECT event.id, run.project_id, run.conversation_id
-              FROM agent_runs run
-              JOIN agent_run_events event ON event.agent_run_id = run.id
-              JOIN conversation_entries entry
-                ON entry.agent_run_event_id = event.id
-               AND entry.conversation_id = run.conversation_id
-             WHERE run.id = $1
-               AND run.state = 'failed'
-               AND event.kind = 'run_failed'
-             ORDER BY event.id DESC
-             LIMIT 1
-            "#,
-        )
-        .bind(run_id)
-        .fetch_optional(&mut *transaction)
-        .await?;
+        let failure = brief::failure_notice(&mut transaction, run_id).await?;
         let Some((event_id, project_id, conversation_id)) = failure else {
             return Err(AppError::Conflict(
                 "agent_run",
@@ -714,41 +586,34 @@ pub(super) async fn run_list(
         },
         None => None,
     };
-    let states: &[&str] = match arguments.state.as_deref().unwrap_or("active") {
-        "active" => &crate::runs::ACTIVE_RUN_STATES,
-        "finished" => &["completed"],
-        "failed" => &["failed"],
-        "all" => &[],
-        _ => {
-            return ToolResult::invalid("state", "Use active, finished, failed, or all.");
-        }
+    let Some(states) = brief::states_named(arguments.state.as_deref().unwrap_or("active")) else {
+        return ToolResult::invalid("state", "Use active, finished, failed, or all.");
     };
     let limit = i64::from(arguments.limit.unwrap_or(20).clamp(1, 100));
     let off = match projects_with_module_off(state, principal.actor_id, "runs").await {
         Ok(off) => off,
         Err(error) => return ToolResult::from_error(error, "run_list"),
     };
-    let result = sqlx::query_as::<_, RunRow>(&format!(
-        r#"{RUN_SELECT}
-          AND ($3::uuid IS NULL OR thread.project_id = $3)
-          AND NOT (thread.project_id = ANY($7))
-          AND (cardinality($4::text[]) = 0 OR run.state = ANY($4))
-          AND (NOT $5 OR run.requesting_actor_id = $1)
-        ORDER BY run.created_at DESC, run.id DESC
-        LIMIT $6"#
-    ))
-    .bind(principal.actor_id)
-    .bind(principal.external_agent_connection_id)
-    .bind(project)
-    .bind(states)
-    .bind(arguments.mine.unwrap_or(false))
-    .bind(limit)
-    .bind(&off)
-    .fetch_all(&state.pool)
+    let filter = brief::ListFilter {
+        project_id: project,
+        states,
+        mine: arguments.mine.unwrap_or(false),
+        without_projects: off,
+        limit,
+    };
+    let result = crate::db::scoped_one(&state.pool, async |connection| {
+        brief::list(
+            connection,
+            principal.actor_id,
+            principal.external_agent_connection_id,
+            &filter,
+        )
+        .await
+    })
     .await;
     let rows = match result {
         Ok(rows) => rows,
-        Err(error) => return ToolResult::from_error(error.into(), "run_list"),
+        Err(error) => return ToolResult::from_error(error, "run_list"),
     };
     match without_hidden_pull_requests(state, principal.actor_id, rows).await {
         Ok(rows) => ToolResult::ok(RunListValue {
@@ -762,13 +627,17 @@ pub(super) async fn run_list(
 mod tests {
     use super::*;
 
-    fn row(kind: &str, parent: Option<(Uuid, &str)>) -> RunRow {
-        RunRow {
+    fn row(kind: &str, parent: Option<(Uuid, &str)>) -> brief::BriefRow {
+        brief::BriefRow {
             id: Uuid::nil(),
-            state: "running".to_owned(),
+            state: "working".to_owned(),
+            detail_state: None,
+            liveness: "ok".to_owned(),
             prompt: String::new(),
-            conversation_id: Uuid::from_u128(2),
-            project_id: Uuid::from_u128(1),
+            status_line: None,
+            outcome_summary: None,
+            conversation_id: Some(Uuid::from_u128(2)),
+            project_id: Some(Uuid::from_u128(1)),
             started_by: String::new(),
             queue_position: None,
             branch: None,
@@ -784,7 +653,7 @@ mod tests {
             approvals_waiting: 0,
             created_at: String::new(),
             updated_at: String::new(),
-            conversation_kind: kind.to_owned(),
+            conversation_kind: Some(kind.to_owned()),
             parent_conversation_id: parent.map(|(id, _)| id),
             parent_kind: parent.map(|(_, kind)| kind.to_owned()),
         }
@@ -796,24 +665,27 @@ mod tests {
         let conversation = Uuid::from_u128(2);
         let parent = Uuid::from_u128(3);
         assert_eq!(
-            run_conversation_path(&row("thread", Some((parent, "channel")))),
+            run_path(&row("thread", Some((parent, "channel")))),
             format!("/projects/{project}/threads/{conversation}")
         );
         assert_eq!(
-            run_conversation_path(&row("thread", Some((parent, "dm")))),
+            run_path(&row("thread", Some((parent, "dm")))),
             format!("/messages/{parent}?thread={conversation}")
         );
         assert_eq!(
-            run_conversation_path(&row("thread", Some((parent, "group")))),
+            run_path(&row("thread", Some((parent, "group")))),
             format!("/messages/{parent}?thread={conversation}")
         );
         assert_eq!(
-            run_conversation_path(&row("dm", None)),
+            run_path(&row("dm", None)),
             format!("/messages/{conversation}")
         );
         assert_eq!(
-            run_conversation_path(&row("channel", None)),
+            run_path(&row("channel", None)),
             format!("/projects/{project}/channels/{conversation}")
         );
+        let mut alone = row("thread", None);
+        alone.conversation_id = None;
+        assert_eq!(run_path(&alone), format!("/runs/{}", Uuid::nil()));
     }
 }

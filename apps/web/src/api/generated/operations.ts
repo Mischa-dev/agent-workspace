@@ -18,6 +18,8 @@ export type Envelope<T> =
   | { outcome: 'ok'; value: T; requestId?: string; replayed?: boolean; replaySafe?: boolean; preview?: boolean }
   | OpError
 
+export type ActivityLine = { kind: string; occurredAt: string; parentRef?: string | null; payload: unknown; seq: number; stepRef?: string | null; summary: string }
+
 export type Content = { body?: Record<string, unknown> | null; key: string; kind: ContentKind; path?: string | null }
 
 export type ContentKind = "switches" | "layout" | "role" | "space" | "channels" | "module" | "collection" | "form" | "automation" | "page" | "skill" | "agent"
@@ -30,6 +32,8 @@ export type HostOwnerChoice = "person" | "workspace"
 
 export type HostView = { actions: unknown[]; agents: HostAgentView[]; builtin: boolean; canManage: boolean; capabilities: Record<string, unknown>; connection: string; createdAt: string; describedAgents: unknown[]; id: string; lastSeenAt?: string | null; moduleManifestUrl?: string | null; name: string; offers: unknown[]; owner: OwnerView; protocol: string; software?: string | null; softwareVersion?: string | null; status: string; version: number }
 
+export type ModelUsageLine = { cachedInputTokens: number; confidence: string; cost?: number | null; currency?: string | null; inputTokens: number; model: string; outputTokens: number }
+
 export type OwnerView = { id: string; kind: string; name: string }
 
 export type Package = { contents: Content[]; description?: string; digest?: string | null; format: string; id: string; name: string; needsAdmin?: string[]; publisher?: Publisher | null; requires?: Requires; target: PackageTarget; version: string }
@@ -39,6 +43,8 @@ export type PackageTarget = "space" | "workspace"
 export type Publisher = { name: string; url?: string | null }
 
 export type RaisedRequestOutput = { activityId: string; clientRequestId?: string | null; requestId: string }
+
+export type RequestLine = { answeredAt?: string | null; conversationId?: string | null; createdAt: string; id: string; kind: string; status: string; title: string }
 
 export type Requires = { contract?: string | null; modules?: string[] }
 
@@ -86,6 +92,10 @@ export type PackageExportInput = { includePages?: boolean; includeSkills?: boole
 
 export type PackageExportOutput = { digest: string; package: Package }
 
+export type RunActivityListInput = { afterSeq?: number | null; limit?: number | null; runId: string }
+
+export type RunActivityListOutput = { activities: ActivityLine[]; nextAfterSeq?: number | null }
+
 export type RunActivityReportInput = { activities: RunActivityInput[]; runId: string }
 
 export type RunActivityReportOutput = { accepted: number; duplicates: number; lastSeq: number; overLimit?: number; requests?: RaisedRequestOutput[]; state: string; version: number }
@@ -97,6 +107,10 @@ export type RunCancelOutput = { idempotentReplay?: boolean; run: RunRecord }
 export type RunCreateInput = { cause: RunCauseInput; clientRunId?: string | null; parentRunId?: string | null; reportIntervalSeconds?: number | null; settings?: unknown; spaceId: string; state?: string | null; title: string }
 
 export type RunCreateOutput = { created: boolean; run: RunRecord }
+
+export type RunDetailGetInput = { runId: string }
+
+export type RunDetailGetOutput = { activities: ActivityLine[]; agentActorId: string; agentName: string; backend?: string | null; branch?: string | null; builtin: boolean; cachedInputTokens: number; causeKind: string; causeRef?: string | null; conversationId?: string | null; cost?: number | null; costConfidence?: string | null; createdAt: string; currency?: string | null; externalUrl?: string | null; failureReason?: string | null; finishedAt?: string | null; gapCount: number; harness?: string | null; harnessName?: string | null; hiddenActivities: number; hostId?: string | null; hostName?: string | null; id: string; inputTokens: number; lastReportAt?: string | null; liveness: string; model?: string | null; organizationId: string; outcomeSummary?: string | null; outputTokens: number; plan?: unknown; projectId?: string | null; projectKey?: string | null; projectName?: string | null; pullRequestNumber?: number | null; pullRequestState?: string | null; pullRequestUrl?: string | null; requestedByActorId?: string | null; requestedByName?: string | null; requests: RequestLine[]; results: unknown[]; startedAt?: string | null; state: string; statusLine?: string | null; taskId?: string | null; taskKey?: string | null; taskTitle?: string | null; threadName?: string | null; title: string; updatedAt: string; usageByModel: ModelUsageLine[]; waitingOnRequestId?: string | null; waitingOnTitle?: string | null }
 
 export type RunMarkNotStartedInput = { runId: string }
 
@@ -124,9 +138,11 @@ export type Operations = {
   host_list: { input: HostListInput; output: HostListOutput }
   host_unlink: { input: HostUnlinkInput; output: HostUnlinkOutput }
   package_export: { input: PackageExportInput; output: PackageExportOutput }
+  run_activity_list: { input: RunActivityListInput; output: RunActivityListOutput }
   run_activity_report: { input: RunActivityReportInput; output: RunActivityReportOutput }
   run_cancel: { input: RunCancelInput; output: RunCancelOutput }
   run_create: { input: RunCreateInput; output: RunCreateOutput }
+  run_detail_get: { input: RunDetailGetInput; output: RunDetailGetOutput }
   run_mark_not_started: { input: RunMarkNotStartedInput; output: RunMarkNotStartedOutput }
   run_result_report: { input: RunResultReportInput; output: RunResultReportOutput }
   run_update: { input: RunUpdateInput; output: RunUpdateOutput }

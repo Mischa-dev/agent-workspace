@@ -1057,14 +1057,6 @@ async fn work_item_changes(
 }
 
 #[derive(FromRow)]
-struct RunRow {
-    project_id: Uuid,
-    conversation_id: Uuid,
-    requesting_actor_id: Uuid,
-    requester_reachable: bool,
-}
-
-#[derive(FromRow)]
 struct ApproverRow {
     approval_id: Uuid,
     actor_id: Uuid,
@@ -1081,20 +1073,7 @@ async fn run_notifications(
         RunState::Failed | RunState::Interrupted => kind::RUN_FAILED,
         _ => return Ok(Vec::new()),
     };
-    let Some(run) = sqlx::query_as::<_, RunRow>(
-        r#"
-        SELECT conversation.project_id, run.conversation_id, run.requesting_actor_id,
-               actor_can_access_project(run.requesting_actor_id, NULL, conversation.project_id)
-               AND conversation_visible_to(run.conversation_id, run.requesting_actor_id)
-                   AS requester_reachable
-        FROM agent_runs run
-        JOIN conversations conversation ON conversation.id = run.conversation_id
-        WHERE run.id = $1
-        "#,
-    )
-    .bind(run_id)
-    .fetch_optional(&mut **transaction)
-    .await?
+    let Some(run) = crate::runs::reads::notify_context(transaction, run_id).await?
     else {
         return Ok(Vec::new());
     };
@@ -1211,19 +1190,23 @@ async fn pull_request_notifications(
 ) -> Result<Vec<NewNotification>, AppError> {
     let rows = match source {
         PullRequestSource::Run(run_id) => {
+            let Some(owner) = crate::runs::reads::requester(&mut **transaction, run_id).await?
+            else {
+                return Ok(Vec::new());
+            };
             sqlx::query_as::<_, PullRequestRow>(
                 r#"
                 SELECT DISTINCT pr.id, pr.head_sha, pr.checks_state,
-                       run.requesting_actor_id AS owner_actor_id
+                       $3::uuid AS owner_actor_id
                 FROM github_pull_request_workspace_links link
                 JOIN github_pull_requests pr
                   ON pr.project_id = link.project_id AND pr.id = link.github_pull_request_id
-                JOIN agent_runs run ON run.id = link.agent_run_id
                 WHERE link.project_id = $1 AND link.agent_run_id = $2 AND pr.state = 'open'
                 "#,
             )
             .bind(project_id)
             .bind(run_id)
+            .bind(owner)
             .fetch_all(&mut **transaction)
             .await?
         }
@@ -1512,6 +1495,7 @@ struct NotificationRow {
 fn list_sql(view_condition: &str, extra: &str) -> String {
     // AWD-75: nothing from a module that's switched off.
     let switches = crate::modules::state::notification_switches_sql();
+    let run_join = crate::runs::sql::builtin_run_and_worker_join("n.agent_run_id");
     format!(
         r#"
         SELECT n.id, n.kind, n.subject_kind, n.subject_id, n.project_id,
@@ -1569,8 +1553,7 @@ fn list_sql(view_condition: &str, extra: &str) -> String {
          AND page_comment.id = (n.detail->>'pageCommentId')::uuid
          AND page_comment.deleted_at IS NULL
         LEFT JOIN task_rows item ON item.id = n.work_item_id
-        LEFT JOIN agent_runs run ON run.id = n.agent_run_id
-        LEFT JOIN execution_workers run_worker ON run_worker.id = run.execution_worker_id
+        {run_join}
         LEFT JOIN project_memberships run_agent
           ON run_agent.project_id = n.project_id AND run_agent.actor_id = run_worker.actor_id
         LEFT JOIN agent_approvals approval ON approval.id = n.approval_id
