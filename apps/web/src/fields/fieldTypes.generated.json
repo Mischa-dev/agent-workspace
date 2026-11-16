@@ -1,105 +1,126 @@
 [
   {
+    "readOnly": false,
     "stored": true,
     "system": false,
     "type": "text"
   },
   {
+    "readOnly": false,
     "stored": true,
     "system": false,
     "type": "long_text"
   },
   {
+    "readOnly": false,
     "stored": true,
     "system": false,
     "type": "number"
   },
   {
+    "readOnly": false,
     "stored": true,
     "system": false,
     "type": "date"
   },
   {
+    "readOnly": false,
     "stored": true,
     "system": false,
     "type": "single_choice"
   },
   {
+    "readOnly": false,
     "stored": true,
     "system": false,
     "type": "multiple_choice"
   },
   {
+    "readOnly": false,
     "stored": true,
     "system": false,
     "type": "status"
   },
   {
+    "readOnly": false,
     "stored": true,
     "system": false,
     "type": "person"
   },
   {
+    "readOnly": false,
     "stored": true,
     "system": false,
     "type": "url"
   },
   {
+    "readOnly": false,
     "stored": true,
     "system": false,
     "type": "email"
   },
   {
+    "readOnly": false,
     "stored": true,
     "system": false,
     "type": "phone"
   },
   {
+    "readOnly": false,
     "stored": true,
     "system": false,
     "type": "checkbox"
   },
   {
+    "readOnly": false,
     "stored": true,
     "system": false,
     "type": "link"
   },
   {
+    "readOnly": true,
     "stored": true,
     "system": true,
     "type": "created_time"
   },
   {
+    "readOnly": true,
     "stored": true,
     "system": true,
     "type": "edited_time"
   },
   {
+    "readOnly": true,
     "stored": true,
     "system": true,
     "type": "created_by"
   },
   {
+    "readOnly": true,
     "stored": true,
     "system": true,
     "type": "edited_by"
   },
   {
+    "readOnly": true,
     "stored": true,
     "system": true,
     "type": "auto_id"
   },
   {
+    "readOnly": true,
     "stored": true,
     "system": false,
     "type": "formula"
   },
   {
+    "readOnly": false,
     "stored": false,
     "system": false,
     "type": "people"
   },
   {
+    "readOnly": false,
     "stored": false,
     "system": false,
     "type": "labels"

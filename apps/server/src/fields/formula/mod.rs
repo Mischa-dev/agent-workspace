@@ -438,8 +438,9 @@ fn stored(value: V, result: ResultType) -> Option<Value> {
         ResultType::List => {
             let mut items = Vec::new();
             for item in value.items() {
+                // Items as text, as lists of names are: they filter and
+                // show alike.
                 match item {
-                    V::Num(number) => items.push(Value::from(number)),
                     V::Err(message) => return error(message),
                     other if other.is_blank() => {}
                     other => match other.to_text() {

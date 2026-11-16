@@ -1,4 +1,4 @@
-import { STATUS_CATEGORIES, canGroup, canGroupRecords, isEmpty, isSystemType, type FieldDefinition, type FieldOption, type FieldReference, type FieldType, type FieldValue, type FieldValues } from '../fields/fieldModel'
+import { STATUS_CATEGORIES, canGroup, canGroupRecords, isEmpty, isReadOnlyType, likeOf, type FieldDefinition, type FieldOption, type FieldReference, type FieldType, type FieldValue, type FieldValues } from '../fields/fieldModel'
 import { typeInfo } from '../fields/fieldTypes'
 import { formatDateLabel } from '../ui/dateModel'
 import type { CollectionRecord, GroupCount, SortRule, ViewConfig } from './api'
@@ -94,7 +94,7 @@ export function sortName(rule: SortRule, fields: readonly FieldDefinition[], tit
 /** "Severity, Z to A": a sort key's direction as people read it for its type. */
 export function sortText(rule: SortRule, fields: readonly FieldDefinition[], titleName: string) {
   const field = fields.find((entry) => entry.id === rule.field)
-  const type: FieldType = rule.field === 'number' ? 'number' : rule.field === 'updated' ? 'date' : (field?.type ?? 'text')
+  const type: FieldType = rule.field === 'number' ? 'number' : rule.field === 'updated' ? 'date' : field ? likeOf(field) : 'text'
   const directions = typeInfo(type).sort ?? { asc: 'A to Z', desc: 'Z to A' }
   const words = rule.direction === 'asc' ? directions.asc : directions.desc
   return `${sortName(rule, fields, titleName)}, ${words}`
@@ -102,7 +102,7 @@ export function sortText(rule: SortRule, fields: readonly FieldDefinition[], tit
 
 /** Fields a table or cards can group by: choices, a status, a person, a checkbox or a date. */
 export function groupableFields(fields: readonly FieldDefinition[]) {
-  return fields.filter((field) => !field.archived && canGroupRecords(field.type))
+  return fields.filter((field) => !field.archived && canGroupRecords(field))
 }
 
 /**
@@ -110,7 +110,7 @@ export function groupableFields(fields: readonly FieldDefinition[]) {
  * choice, a status, a person or a checkbox someone sets.
  */
 export function boardFields(fields: readonly FieldDefinition[]) {
-  return fields.filter((field) => !field.archived && canGroup(field.type) && !isSystemType(field.type))
+  return fields.filter((field) => !field.archived && canGroup(field) && !isReadOnlyType(field.type))
 }
 
 /** A status field's options by category, in workflow order, then in the field's order (as the server groups them). */

@@ -98,7 +98,7 @@ export function CollectionToolbar({
         { heading: 'Group by' },
         ...groupable.map((field) => ({ label: field.name, checked: config.groupBy === field.id, onSelect: () => onChange({ ...config, groupBy: field.id }) })),
         // A date groups by day, week or month.
-        ...(groupedBy && behavesAs(groupedBy.type) === 'date'
+        ...(groupedBy && behavesAs(groupedBy) === 'date'
           ? [
               { separator: true as const },
               { heading: `${groupedBy.name} by` },

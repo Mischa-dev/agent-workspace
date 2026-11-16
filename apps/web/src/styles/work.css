@@ -545,3 +545,30 @@
     animation: none;
   }
 }
+
+/* A formula's error for one record (T1.17): its message on hover and to screen readers. */
+.aw-prop__formula-error {
+  color: var(--danger);
+}
+
+/* A formula field's formula (T1.17): fields offered as it's typed, and a preview. */
+.aw-formula {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.aw-formula__source textarea {
+  font: var(--t-code);
+}
+
+.aw-formula__fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.aw-formula__preview {
+  margin: 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}

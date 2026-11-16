@@ -4,7 +4,7 @@ import { useProjectExperience } from '../experience/layout'
 
 import { FieldEditor } from '../fields/FieldEditor'
 import { FieldValueView } from '../fields/FieldValueView'
-import { displayText, isEmpty, isSystemType, type FieldDefinition, type FieldReference, type FieldType, type FieldValue } from '../fields/fieldModel'
+import { displayText, isEmpty, isReadOnlyType, type FieldDefinition, type FieldReference, type FieldType, type FieldValue } from '../fields/fieldModel'
 import { Banner, DocumentSkeleton, ErrorState, Icon, IconButton, Menu, TextArea, formatFullDate, formatRelative, showToast, type MenuEntry } from '../ui'
 import { useRecord, type CollectionBody, type HistoryEntry } from './api'
 import { historyValue, recordName, referenceKind } from './collectionModel'
@@ -133,7 +133,7 @@ export function RecordPanel({
           const value = current.values[field.id]
           const shown = displayText(field, value, references)
           let control
-          if (!editable || isSystemType(field.type)) {
+          if (!editable || isReadOnlyType(field.type)) {
             control = <FieldValueView empty="Empty" field={field} references={references} value={value} />
           } else if (field.type === 'checkbox') {
             control = (

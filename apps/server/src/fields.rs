@@ -352,6 +352,8 @@ pub fn web_type_list() -> Value {
                     "type": field_type.as_str(),
                     "stored": field_type.is_stored(),
                     "system": field_type.is_system(),
+                    // Nobody writes its values: system fields and formulas.
+                    "readOnly": field_type.is_read_only(),
                 })
             })
             .collect(),

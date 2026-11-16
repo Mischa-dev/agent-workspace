@@ -1,7 +1,7 @@
 import { useRef, useState, type KeyboardEvent, type RefObject } from 'react'
 
 import { FieldValueView } from '../fields/FieldValueView'
-import { displayText, isEmpty, isSystemType, type FieldDefinition, type FieldReference } from '../fields/fieldModel'
+import { displayText, isEmpty, isReadOnlyType, type FieldDefinition, type FieldReference } from '../fields/fieldModel'
 import { Icon, IconButton, TextField } from '../ui'
 import type { CollectionRecord } from './api'
 import { recordName } from './collectionModel'
@@ -92,7 +92,7 @@ export function ValueCell({
 }) {
   const value = record.values[field.id]
   // A system field shows the record's own: nobody edits it.
-  if (!editable || isSystemType(field.type)) {
+  if (!editable || isReadOnlyType(field.type)) {
     return (
       <span className="aw-records__value">
         <FieldValueView field={field} references={references} value={value} />

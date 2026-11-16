@@ -49,14 +49,27 @@ export type FieldDefinition = {
   target: LinkTarget | null
   /** Record links: the collection whose records they hold. */
   collection?: string | null
+  /** Formula fields: the formula as stored (fields as `{#<id>}`, the title as `{#title}`) and what it gives. */
+  formula?: FormulaSettings | null
   /** 1 is first. */
   position: number
   archived: boolean
   version: number
 }
 
-export type FieldValue = string | number | boolean | string[]
+/** What a formula gives, which decides how it filters, sorts and groups. */
+export type FormulaResult = 'number' | 'text' | 'boolean' | 'date' | 'list'
+export type FormulaSettings = { source: string; result: FormulaResult }
+
+/** A formula's error for one record ("Divide by zero"): shown in the cell, filtered as empty. */
+export type FormulaError = { error: string }
+
+export type FieldValue = string | number | boolean | string[] | FormulaError
 export type FieldValues = Record<string, FieldValue>
+
+export function isFormulaError(value: unknown): value is FormulaError {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value) && typeof (value as FormulaError).error === 'string'
+}
 
 export type LinkTarget = 'task' | 'page' | 'record'
 
@@ -78,9 +91,25 @@ export function isSystemType(type: FieldType) {
   return typeInfo(type).system
 }
 
+/** Whether nobody fills in a field of the type: a system field, or a formula the server works out. */
+export function isReadOnlyType(type: FieldType) {
+  return typeInfo(type).system || type === 'formula'
+}
+
+/** A field, or only its type. */
+export type TypeOrField = FieldType | Pick<FieldDefinition, 'type' | 'formula'>
+
+const RESULT_LIKE: Record<FormulaResult, FieldType> = { number: 'number', date: 'date', boolean: 'checkbox', text: 'text', list: 'text' }
+
+/** The type a field reads like: a formula's result's, any other field's own. */
+export function likeOf(of: TypeOrField): FieldType {
+  if (typeof of === 'string') return of
+  return of.type === 'formula' && of.formula ? RESULT_LIKE[of.formula.result] : of.type
+}
+
 /** The type it filters, sorts and groups like (the server's `behaves_as`). */
-export function behavesAs(type: FieldType): FieldType {
-  return typeInfo(type).behavesAs
+export function behavesAs(of: TypeOrField): FieldType {
+  return typeInfo(likeOf(of)).behavesAs
 }
 
 export function typeLabel(type: FieldType) {
@@ -118,19 +147,39 @@ export function normalizeField(value: unknown): FieldDefinition {
     }),
     target: field.target === 'page' || field.target === 'task' || field.target === 'record' ? field.target : null,
     collection: typeof field.collection === 'string' ? field.collection : null,
+    formula: formulaOf(field.formula),
     position: typeof field.position === 'number' ? field.position : 0,
     archived: field.archived === true,
     version: typeof field.version === 'number' ? field.version : 1,
   }
 }
 
-/** A record's values: only the shapes a field can hold. */
+/** A stored formula as people write it: `{#<id>}` by today's field name, `{#title}` by the title's. */
+export function formulaShown(source: string, fields: readonly FieldDefinition[], titleName: string) {
+  return source.replace(/\{#([^}]*)\}/g, (whole, id: string) => {
+    if (id === 'title') return `{${titleName}}`
+    const field = fields.find((entry) => entry.id === id)
+    return field && !/[{}]/.test(field.name) ? `{${field.name}}` : whole
+  })
+}
+
+const FORMULA_RESULTS: readonly FormulaResult[] = ['number', 'text', 'boolean', 'date', 'list']
+
+function formulaOf(value: unknown): FormulaSettings | null {
+  const formula = asRecord(value)
+  if (typeof formula.source !== 'string') return null
+  const result = FORMULA_RESULTS.includes(formula.result as FormulaResult) ? (formula.result as FormulaResult) : 'text'
+  return { source: formula.source, result }
+}
+
+/** A record's values: only the shapes a field can hold (a formula's error too). */
 export function normalizeValues(value: unknown): FieldValues {
   const values: FieldValues = {}
   for (const [key, raw] of Object.entries(asRecord(value))) {
     if (typeof raw === 'string' || typeof raw === 'boolean') values[key] = raw
     else if (typeof raw === 'number' && Number.isFinite(raw)) values[key] = raw
     else if (Array.isArray(raw)) values[key] = raw.filter((item): item is string => typeof item === 'string')
+    else if (isFormulaError(raw)) values[key] = { error: raw.error }
   }
   return values
 }
@@ -156,6 +205,22 @@ export function normalizeReferences(value: unknown): FieldReference[] {
 
 export function isEmpty(value: FieldValue | undefined | null) {
   return value === undefined || value === null || value === '' || value === false || (Array.isArray(value) && value.length === 0)
+}
+
+/** A formula's value as it reads: by what it gives. */
+function formulaText(field: FieldDefinition, value: FieldValue): string {
+  if (isFormulaError(value)) return `Error: ${value.error}`
+  if (Array.isArray(value)) return value.join(', ')
+  switch (likeOf(field)) {
+    case 'number':
+      return typeof value === 'number' ? formatNumber(value) : String(value)
+    case 'date':
+      return typeof value === 'string' ? formatFieldDate(value) : String(value)
+    case 'checkbox':
+      return value === true ? 'Yes' : ''
+    default:
+      return String(value)
+  }
 }
 
 /** The options a value names, in the field's order. */
@@ -202,6 +267,8 @@ export function displayText(
   references: readonly FieldReference[] = [],
 ): string {
   if (isEmpty(value)) return ''
+  if (field.type === 'formula') return formulaText(field, value!)
+  if (isFormulaError(value)) return ''
   switch (field.type) {
     case 'number':
       return typeof value === 'number' ? formatNumber(value) : String(value)
@@ -251,8 +318,8 @@ const OP_LABELS: Record<FieldOp, string> = {
   categoryIsNot: 'is not in category',
 }
 
-export function opLabel(op: FieldOp, type?: FieldType) {
-  type = type ? behavesAs(type) : type
+export function opLabel(op: FieldOp, of?: TypeOrField) {
+  const type = of ? behavesAs(of) : undefined
   if (type === 'date') return { gt: 'is after', gte: 'is on or after', lt: 'is before', lte: 'is on or before' }[op as 'gt'] ?? OP_LABELS[op]
   if (type === 'number') return { gt: 'is above', gte: 'is at least', lt: 'is below', lte: 'is at most' }[op as 'gt'] ?? OP_LABELS[op]
   if (type === 'checkbox' && op === 'is') return 'is checked'
@@ -261,8 +328,8 @@ export function opLabel(op: FieldOp, type?: FieldType) {
 }
 
 /** The filter operations a type offers, as the server accepts them (the registry's). */
-export function opsFor(type: FieldType): FieldOp[] {
-  return [...typeInfo(type).ops]
+export function opsFor(of: TypeOrField): FieldOp[] {
+  return [...typeInfo(likeOf(of)).ops]
 }
 
 export function opTakesValues(op: FieldOp) {
@@ -270,16 +337,16 @@ export function opTakesValues(op: FieldOp) {
 }
 
 /** Whether a task list groups by a field of the type: one group per task. */
-export function canGroup(type: FieldType) {
-  return typeInfo(type).grouping === 'one'
+export function canGroup(of: TypeOrField) {
+  return typeInfo(likeOf(of)).grouping === 'one'
 }
 
 /**
  * Whether a collection's views group by a field of the type: also several
  * choices (a record in each of its groups) and dates (by day, week or month).
  */
-export function canGroupRecords(type: FieldType) {
-  return typeInfo(type).grouping !== null
+export function canGroupRecords(of: TypeOrField) {
+  return typeInfo(likeOf(of)).grouping !== null
 }
 
 /** How a view grouped by a date puts records together. */
@@ -363,13 +430,13 @@ export function clauseText(clause: FieldClause, field: FieldDefinition | undefin
     if (field.type === 'single_choice' || field.type === 'multiple_choice' || field.type === 'status') {
       return field.options.find((option) => option.id === value)?.name ?? 'an old option'
     }
-    const like = behavesAs(field.type)
+    const like = behavesAs(field)
     if (like === 'person' || like === 'link') return references.find((entry) => entry.id === value)?.label ?? 'someone'
     if (like === 'date') return formatFieldDate(value)
     if (field.type === 'checkbox') return ''
     return value
   })
-  const words = [field.name, opLabel(clause.op, field.type), values.filter(Boolean).join(', ')].filter(Boolean)
+  const words = [field.name, opLabel(clause.op, field), values.filter(Boolean).join(', ')].filter(Boolean)
   return words.join(' ')
 }
 

@@ -191,7 +191,7 @@ export function FilterBar({
             </option>
           ))}
           {customFields
-            .filter((field) => canGroup(field.type))
+            .filter((field) => canGroup(field))
             .map((field) => (
               <option key={fieldKey(field.id)} value={fieldKey(field.id)}>
                 By {field.name}

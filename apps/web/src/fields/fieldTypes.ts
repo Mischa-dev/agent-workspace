@@ -24,6 +24,7 @@ export const FIELD_TYPE_LIST = [
   'phone',
   'checkbox',
   'link',
+  'formula',
   'created_time',
   'edited_time',
   'created_by',
@@ -50,7 +51,7 @@ export type FieldTypeInfo = {
   /** It shows the record's own columns: nobody fills it in. */
   system: boolean
   /** The type it filters, sorts and groups like. */
-  behavesAs: Exclude<FieldType, 'created_time' | 'edited_time' | 'created_by' | 'edited_by' | 'auto_id'>
+  behavesAs: Exclude<FieldType, 'created_time' | 'edited_time' | 'created_by' | 'edited_by' | 'auto_id' | 'formula'>
   /** The filter operations the web offers for it, in the order the menu lists them. */
   ops: readonly FieldOp[]
   /** A sort's directions in words, or null when it doesn't sort. */
@@ -101,6 +102,8 @@ export const FIELD_TYPE_INFO: Record<FieldType, FieldTypeInfo> = {
   phone: info({ label: 'Phone', hint: 'A phone number', behavesAs: 'phone', ops: TEXT_OPS, sort: A_TO_Z, grouping: null, width: 160 }),
   checkbox: info({ label: 'Checkbox', hint: 'Yes or no', behavesAs: 'checkbox', ops: ['is', 'empty'], sort: { asc: 'checked first', desc: 'unchecked first' }, grouping: 'one', width: 104 }),
   link: info({ label: 'Task, page or record', hint: 'A task, a page or a collection’s record in the project', behavesAs: 'link', ops: ['notEmpty', 'empty'], sort: A_TO_Z, grouping: null, width: 220 }),
+  // What a formula filters, sorts and groups like comes from its result (`fieldModel`'s `likeOf`).
+  formula: info({ label: 'Formula', hint: 'Worked out from the record’s other fields', tasks: false, behavesAs: 'text', ops: ['empty', 'notEmpty'], sort: A_TO_Z, grouping: null, width: 160 }),
   created_time: system({ label: 'Created time', hint: 'When the record was made', behavesAs: 'date', ops: RANGE_OPS, sort: OLDEST, grouping: 'records', width: 170 }),
   edited_time: system({ label: 'Edited time', hint: 'When the record last changed', behavesAs: 'date', ops: RANGE_OPS, sort: OLDEST, grouping: 'records', width: 170 }),
   created_by: system({ label: 'Created by', hint: 'Who made the record', behavesAs: 'person', ops: ID_OPS, sort: A_TO_Z, grouping: 'one', width: 180 }),

@@ -1,5 +1,5 @@
 import { Icon } from '../ui'
-import { chosenOptions, displayText, type FieldDefinition, type FieldReference, type FieldValue } from './fieldModel'
+import { chosenOptions, displayText, isFormulaError, type FieldDefinition, type FieldReference, type FieldValue } from './fieldModel'
 import '../styles/work.css'
 
 /**
@@ -86,5 +86,18 @@ export function LongTextRenderer({ field, references, value }: RendererProps) {
 
 /** Anything else: the value as one line of text (a number, a date, a person or a linked task, page or record by name). */
 export function TextRenderer({ field, references, value }: RendererProps) {
+  return <span className="aw-prop__text">{displayText(field, value, references)}</span>
+}
+
+/** A formula's result, by what it gives; an error for this record says so, with its message. */
+export function FormulaRenderer({ field, references, value }: RendererProps) {
+  if (isFormulaError(value)) {
+    return (
+      <span className="aw-prop__text aw-prop__formula-error" title={value.error}>
+        Error<span className="aw-sr-only">: {value.error}</span>
+      </span>
+    )
+  }
+  if (field.formula?.result === 'boolean' && value === true) return <CheckRenderer />
   return <span className="aw-prop__text">{displayText(field, value, references)}</span>
 }

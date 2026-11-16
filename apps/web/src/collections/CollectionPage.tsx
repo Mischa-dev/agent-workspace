@@ -437,6 +437,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
       {dialog?.kind === 'field' ? (
         <FieldDialog
           field={dialog.field}
+          formulas={body.collection.actsLikeTask || body.collection.builtin ? undefined : { collectionId, fields: body.fields, titleName: body.collection.titleName }}
           linkable={(collections.data?.collections ?? []).filter((entry) => !entry.archived && !entry.builtin)}
           onClose={() => setDialog(null)}
           records="records"

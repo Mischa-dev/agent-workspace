@@ -19,7 +19,7 @@
   "external-agents/sponsoredExecutionApi.ts": 2,
   "external-agents/WorkOsAgentSettings.tsx": 3,
   "fields/api.ts": 3,
-  "fields/FieldEditor.tsx": 1,
+  "fields/editors.tsx": 1,
   "files/api.ts": 3,
   "github/api.ts": 8,
   "inbox/api.ts": 5,

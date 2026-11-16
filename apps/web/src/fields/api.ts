@@ -28,7 +28,7 @@ export type OptionInput = { id?: string; name: string; color?: string; category?
 
 export async function createField(
   scope: FieldScope,
-  input: { name: string; type: string; description?: string; options?: OptionInput[]; target?: string; idempotencyKey: string },
+  input: { name: string; type: string; description?: string; options?: OptionInput[]; target?: string; formula?: string; idempotencyKey: string },
 ) {
   const { idempotencyKey, ...json } = input
   return normalizeField(await requestJson<unknown>(scopePath(scope), { method: 'POST', idempotencyKey, json }))
@@ -44,6 +44,8 @@ export async function updateField(
     options?: OptionInput[]
     position?: number
     archived?: boolean
+    /** A formula field's new formula, fields by name. */
+    formula?: string
     idempotencyKey: string
   },
 ) {

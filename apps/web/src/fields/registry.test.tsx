@@ -52,6 +52,7 @@ function fieldOf(type: FieldType, extra: Partial<FieldDefinition> = {}): FieldDe
     type,
     options: type === 'single_choice' || type === 'multiple_choice' || type === 'status' ? options : [],
     target: type === 'link' ? 'task' : null,
+    formula: type === 'formula' ? { source: '{#title}', result: 'number' } : null,
     position: 1,
     archived: false,
     version: 1,
@@ -81,6 +82,7 @@ const SAMPLES: Record<FieldType, FieldValue> = {
   auto_id: 7,
   people: ['Ana Lee'],
   labels: ['Bug'],
+  formula: 42,
 }
 
 /** How to change a value of each type in its editor, and what that sets. */
@@ -155,8 +157,8 @@ describe('the field registry', () => {
     for (const entry of serverTypes) {
       const spec = fieldSpec(entry.type)
       expect(spec.system, entry.type).toBe(entry.system)
-      // Types nobody fills in have no editor; stored, non-system types do.
-      expect(spec.Editor === null, entry.type).toBe(entry.system || !entry.stored)
+      // Types nobody fills in have no editor; stored, writable types do.
+      expect(spec.Editor === null, entry.type).toBe(entry.readOnly || !entry.stored)
     }
   })
 
