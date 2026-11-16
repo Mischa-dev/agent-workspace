@@ -573,6 +573,30 @@ fn options() -> &'static usvg::Options<'static> {
 /// Draws SVG as a PNG, scaled by `scale` but never wider or taller than
 /// `MAX_PNG_SIDE`. Returns the PNG and its pixel size.
 pub fn png(svg: &str, scale: f64) -> Result<(Vec<u8>, u32, u32), &'static str> {
+    let pixmap = draw(svg, scale)?;
+    let (width, height) = (pixmap.width(), pixmap.height());
+    let png = pixmap
+        .encode_png()
+        .map_err(|_| "the board couldn't be encoded")?;
+    Ok((png, width, height))
+}
+
+/// Draws SVG as straight (not premultiplied) RGBA pixels, row by row, for
+/// a document that embeds the picture itself (a page's PDF, C1.23).
+pub fn pixels(svg: &str, scale: f64) -> Result<(Vec<u8>, u32, u32), &'static str> {
+    let pixmap = draw(svg, scale)?;
+    let rgba = pixmap
+        .pixels()
+        .iter()
+        .flat_map(|pixel| {
+            let color = pixel.demultiply();
+            [color.red(), color.green(), color.blue(), color.alpha()]
+        })
+        .collect();
+    Ok((rgba, pixmap.width(), pixmap.height()))
+}
+
+fn draw(svg: &str, scale: f64) -> Result<tiny_skia::Pixmap, &'static str> {
     let tree = usvg::Tree::from_str(svg, options()).map_err(|_| "the board couldn't be drawn")?;
     let size = tree.size();
     let largest = f64::from(size.width().max(size.height())).max(1.0);
@@ -585,10 +609,7 @@ pub fn png(svg: &str, scale: f64) -> Result<(Vec<u8>, u32, u32), &'static str> {
         tiny_skia::Transform::from_scale(scale as f32, scale as f32),
         &mut pixmap.as_mut(),
     );
-    let png = pixmap
-        .encode_png()
-        .map_err(|_| "the board couldn't be encoded")?;
-    Ok((png, width, height))
+    Ok(pixmap)
 }
 
 #[cfg(test)]
