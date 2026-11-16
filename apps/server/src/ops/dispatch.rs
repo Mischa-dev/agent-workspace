@@ -316,6 +316,7 @@ async fn pipeline<O: Operation>(
         tx: None,
         audit: None,
         replayed: false,
+        keyed: false,
     };
     let mut reservation = None;
     if let Some(key) = key.as_ref()
@@ -351,7 +352,12 @@ async fn pipeline<O: Operation>(
         request_id: ctx.request_id.clone(),
         replayed: call.replayed,
         // A write without a request id ran once; a retry would run again.
-        replay_safe: writes.then_some(ctx.request_id.is_some()),
+        // A command that keeps its own idempotency is retry-safe only when
+        // it says it deduplicated this call.
+        replay_safe: writes.then_some(match O::IDEMPOTENCY {
+            Idempotency::Dispatcher => ctx.request_id.is_some(),
+            Idempotency::Command | Idempotency::None => call.keyed,
+        }),
         preview: request.preview,
     }
     .to_json();

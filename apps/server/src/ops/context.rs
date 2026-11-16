@@ -104,6 +104,9 @@ pub struct OpCall<'a> {
     pub(super) tx: Option<Transaction<'static, Postgres>>,
     pub(super) audit: Option<AuditFacts>,
     pub(super) replayed: bool,
+    /// An `Idempotency::Command` operation made this call retry-safe
+    /// (`key_honoured`).
+    pub(super) keyed: bool,
 }
 
 /// What the audit row says the write was about, when not the target.
@@ -133,6 +136,15 @@ impl OpCall<'_> {
     /// the answer was a replay.
     pub fn mark_replayed(&mut self, replayed: bool) {
         self.replayed |= replayed;
+    }
+
+    /// For commands that keep their own idempotency (`Idempotency::Command`):
+    /// a retry of this call changes nothing more, because the command
+    /// deduplicated it (on the caller's request id, or on a key in the
+    /// input such as `clientRunId`). Only then does the answer say
+    /// `replaySafe: true` (ruling R52).
+    pub fn key_honoured(&mut self) {
+        self.keyed = true;
     }
 
     /// The account the call acts as.

@@ -541,3 +541,59 @@ async fn a_replay_rechecks_the_conversation_its_run_is_in() {
     .await;
     assert_eq!(step["outcome"], "not_found", "{step}");
 }
+
+/// AWD-185: `run_create` keeps its own idempotency, so the dispatcher
+/// leaves the request id to it. A retry with the same `clientRequestId`
+/// and no `clientRunId` is the same run, and `replaySafe` is true only
+/// when the call was really deduplicated.
+#[tokio::test]
+async fn a_retried_create_with_only_a_request_id_is_one_run() {
+    let Some(setup) = setup("a1_run_request_id").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (fixer_id, fixer_token) = create_agent(app, &setup.browser, &work, "Fixer", "fixer").await;
+    let fixer = initialize(app, &fixer_token).await.expect("Fixer MCP");
+    let open = json!({"projectId": "WORK", "title": "Nightly sweep",
+                      "cause": {"kind": "manual"}, "clientRequestId": "sweep-1"});
+    let first = tool(app, &fixer_token, &fixer, "run_create", open.clone()).await;
+    assert_eq!(first["outcome"], "ok", "{first}");
+    assert_eq!(first["replaySafe"], true, "{first}");
+    let run_id = first["value"]["run"]["runId"].clone();
+    let retried = tool(app, &fixer_token, &fixer, "run_create", open).await;
+    assert_eq!(retried["outcome"], "ok", "{retried}");
+    assert_eq!(retried["value"]["run"]["runId"], run_id, "{retried}");
+    assert_eq!(retried["replayed"], true, "{retried}");
+
+    // The same id with other input is a conflict, not a second run.
+    let other = tool(
+        app,
+        &fixer_token,
+        &fixer,
+        "run_create",
+        json!({"projectId": "WORK", "title": "Something else",
+               "cause": {"kind": "manual"}, "clientRequestId": "sweep-1"}),
+    )
+    .await;
+    assert_eq!(other["outcome"], "conflict", "{other}");
+
+    // Without any key the run opens once and the answer says a retry
+    // would open another.
+    let unkeyed = json!({"projectId": "WORK", "title": "Unkeyed",
+                         "cause": {"kind": "manual"}});
+    let once = tool(app, &fixer_token, &fixer, "run_create", unkeyed.clone()).await;
+    assert_eq!(once["outcome"], "ok", "{once}");
+    assert_eq!(once["replaySafe"], false, "{once}");
+    let twice = tool(app, &fixer_token, &fixer, "run_create", unkeyed).await;
+    assert_ne!(
+        twice["value"]["run"]["runId"], once["value"]["run"]["runId"],
+        "{twice}"
+    );
+    let runs = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM runs WHERE account_id = $1")
+        .bind(fixer_id)
+        .fetch_one(&setup.pool)
+        .await
+        .expect("runs");
+    assert_eq!(runs, 3, "one keyed run and two unkeyed ones");
+}
