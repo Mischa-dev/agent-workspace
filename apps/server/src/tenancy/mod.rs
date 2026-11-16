@@ -20,6 +20,7 @@
 //! scoped transaction begun with no scope at all is logged once per call
 //! site (target `agent_workspace::tenancy`) and counted in metrics.
 
+pub mod backfill;
 #[cfg(test)]
 mod ratchet;
 pub mod tables;
