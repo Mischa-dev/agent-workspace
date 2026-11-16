@@ -253,6 +253,7 @@ pub(super) async fn change_dependencies(
     let reader = Reader {
         actor_id: principal.actor_id,
         connection_id: None,
+        addresses: crate::addresses::Addresses::of(&state),
     };
     let references = request
         .blocked_by
@@ -363,6 +364,7 @@ pub(super) async fn change_relation(
     let reader = Reader {
         actor_id: principal.actor_id,
         connection_id: None,
+        addresses: crate::addresses::Addresses::of(&state),
     };
     let Some((other, _)) =
         planning::resolve_reference(&mut write.transaction, reader, project_id, &request.target)

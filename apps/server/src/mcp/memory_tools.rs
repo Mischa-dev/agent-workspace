@@ -169,6 +169,7 @@ pub(super) async fn search_tool(
         };
         let hits = search::search(
             &state.pool,
+            crate::addresses::Addresses::of(state),
             principal.actor_id,
             &projects,
             &query,

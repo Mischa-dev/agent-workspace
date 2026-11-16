@@ -159,7 +159,7 @@ pub(super) async fn ai_suggestions_list(
         let mut connection = crate::db::scoped_tx(&state.pool).await?;
         let page = suggestions::list(
             &mut connection,
-            reader(principal),
+            reader(state, principal),
             principal.project_id,
             &Filter {
                 status: arguments.status,
@@ -216,13 +216,13 @@ pub(super) async fn ai_suggestion_decide(
             suggestions::accept(
                 &mut transaction,
                 &actor,
-                reader(principal),
+                reader(state, principal),
                 suggestion_id,
                 "accepted",
             )
             .await?
         } else {
-            suggestions::dismiss(&mut transaction, &actor, reader(principal), suggestion_id).await?
+            suggestions::dismiss(&mut transaction, &actor, reader(state, principal), suggestion_id).await?
         };
         if let Err(refusal) = outcome {
             transaction.rollback().await?;
@@ -236,7 +236,7 @@ pub(super) async fn ai_suggestion_decide(
         let mut connection = crate::db::scoped_tx(&state.pool).await?;
         let view = suggestions::get(
             &mut connection,
-            reader(principal),
+            reader(state, principal),
             principal.project_id,
             suggestion_id,
         )
@@ -343,7 +343,7 @@ pub(super) async fn ai_analyze(
                         let mut connection = crate::db::scoped_tx(&state.pool).await?;
                         let view = suggestions::get(
                             &mut connection,
-                            reader(principal),
+                            reader(state, principal),
                             principal.project_id,
                             id,
                         )
@@ -414,7 +414,7 @@ pub(super) async fn task_ready_list(
             };
             let readiness = ready::readiness_of(
                 &state.pool,
-                reader(principal),
+                reader(state, principal),
                 principal.project_id,
                 task_id,
             )
@@ -439,7 +439,7 @@ pub(super) async fn task_ready_list(
         };
         let ranking = ready::rank(
             &state.pool,
-            reader(principal),
+            reader(state, principal),
             principal.project_id,
             &RankFilter {
                 scope,
@@ -486,7 +486,7 @@ pub(super) async fn dependency_graph(
         };
         let graph = ready::graph(
             &state.pool,
-            reader(principal),
+            reader(state, principal),
             principal.project_id,
             &GraphFilter {
                 milestone_id,

@@ -433,7 +433,10 @@ pub async fn create(
         notification.actor_id = Some(author.actor_id);
         notification.detail = serde_json::json!({
             "pageSuggestionId": id,
-            "href": format!("/projects/{}/pages/{page_id}#suggestion-{id}", page.project_id),
+            "href": format!(
+                "{}#suggestion-{id}",
+                crate::addresses::Target::page(page.project_id, page_id).legacy_path()
+            ),
         });
         notify(transaction, &notification).await?;
     }

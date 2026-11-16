@@ -59,6 +59,7 @@ variable that is set still wins.
 | --- | --- | --- |
 | `AGENT_WORKSPACE_JOB_CONCURRENCY` | `4` | Background jobs run at once in this process (1 to 64). |
 | `AGENT_WORKSPACE_LINK_PREVIEWS` | `true` | Whether this server fetches previews of links people post. Off, no workspace gets them, whatever its own setting says. |
+| `AGENT_WORKSPACE_WORKSPACE_ADDRESSES` | `false` | Whether the links this server writes (notifications, mail, push, search, tool results) name their workspace (`/w/<slug>/...`). Leave it off until the web app serves those addresses. |
 | `AGENT_WORKSPACE_ALLOW_PRIVATE_ADDRESSES` | `false` | Lets workspaces point their model provider and mail server at private, loopback and tailnet addresses, and mail at any port. Turn it on only for a local model or mail relay. |
 | `AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS` | none | Comma-separated exact origins (such as `http://wake.internal:8732` for a listener on a private network) that agent wakeups and webhooks may reach over http or on a private address. Every other webhook must be public https. |
 | `AGENT_WORKSPACE_PUSH_CONTACT` | the public origin when https, else a mailto at its host | Who push services contact about this server's web push: a `mailto:` or `https:` URL. |

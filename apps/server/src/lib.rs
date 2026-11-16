@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod access;
+pub mod addresses;
 pub mod account;
 pub mod account_security;
 pub mod accounts;
@@ -197,6 +198,7 @@ pub fn router(state: AppState) -> Router {
         .merge(mail::http::router())
         .merge(workspace::router())
         .merge(workspace::slug::router())
+        .merge(addresses::resolve::router())
         .merge(roles::router())
         .merge(workspace_templates::router())
         .merge(server_status::router())

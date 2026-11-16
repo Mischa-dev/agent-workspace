@@ -149,6 +149,10 @@ pub struct AppConfig {
     /// (`AGENT_WORKSPACE_LINK_PREVIEWS`). Off, no workspace gets them,
     /// whatever its own setting says.
     pub link_previews: bool,
+    /// Whether the links this server writes name their workspace
+    /// (`/w/<slug>/...`, `AGENT_WORKSPACE_WORKSPACE_ADDRESSES`, K4.18). Off
+    /// until the web serves those addresses (K4.19); see `addresses`.
+    pub workspace_addresses: bool,
     /// Set when `AGENT_WORKSPACE_SECRETS_KEY_PATH` names a file that doesn't
     /// exist yet in a safe place: the server creates the keyring there when
     /// it starts (`secrets::ensure_keyring`).
@@ -563,6 +567,7 @@ impl AppConfig {
         let allow_private_addresses = parse(values, "ALLOW_PRIVATE_ADDRESSES", "false")?;
         let operator_logins = operator_logins(values)?;
         let link_previews = parse(values, "LINK_PREVIEWS", "true")?;
+        let workspace_addresses = parse(values, "WORKSPACE_ADDRESSES", "false")?;
         if profile == Profile::Hosted {
             // A shared server's network is not any one workspace's to reach.
             for (refused, set) in [
@@ -621,6 +626,7 @@ impl AppConfig {
             operator_logins,
             profile,
             link_previews,
+            workspace_addresses,
             secrets_key_missing,
             client_address_header,
             access_modes,

@@ -20,6 +20,7 @@ use super::{
 };
 use crate::{
     AppState,
+    addresses::Addresses,
     error::AppError,
     later::{self, ChangeRequest, ListView, SaveRequest, SavedItemView, Saver},
     message_content::MessageContent,
@@ -190,6 +191,7 @@ pub(super) async fn later_list(
             "open" | "done" => {
                 let page = later::list(
                     &state.pool,
+                    Addresses::of(state),
                     principal.actor_id,
                     if view == "done" {
                         ListView::Done
@@ -203,7 +205,10 @@ pub(super) async fn later_list(
             }
             "scheduled" => (
                 Vec::new(),
-                scheduled_messages::list(&state.pool, principal.actor_id, None, within.as_deref())
+                scheduled_messages::list(
+                    &state.pool,
+                    Addresses::of(state),
+                    principal.actor_id, None, within.as_deref())
                     .await?,
             ),
             _ => {
@@ -401,7 +406,7 @@ pub(super) async fn later_update(
     };
     let result = async {
         // Only items this connection can read.
-        let item = match later::get_item(&state.pool, principal.actor_id, id).await {
+        let item = match later::get_item(&state.pool, Addresses::of(state), principal.actor_id, id).await {
             Ok(item) => item,
             Err(AppError::NotFound(_)) => return Ok(ToolResult::not_found("That item")),
             Err(error) => return Err(error),
@@ -573,7 +578,7 @@ pub(super) async fn message_schedule(
     // Read back as the author: only while they still see the conversation.
     let read = match scheduled {
         Ok((id, replayed)) => {
-            scheduled_messages::get_scheduled(&state.pool, principal.actor_id, id)
+            scheduled_messages::get_scheduled(&state.pool, Addresses::of(state), principal.actor_id, id)
                 .await
                 .map(|message| (message, replayed))
         }
@@ -628,7 +633,7 @@ pub(super) async fn scheduled_message_update(
     };
     let result = async {
         let existing =
-            match scheduled_messages::get_scheduled(&state.pool, principal.actor_id, id).await {
+            match scheduled_messages::get_scheduled(&state.pool, Addresses::of(state), principal.actor_id, id).await {
                 Ok(existing) => existing,
                 Err(AppError::NotFound(_)) => {
                     return Ok(ToolResult::not_found("That scheduled message"));

@@ -204,6 +204,22 @@ pub async fn space_of_visible(
     .flatten())
 }
 
+/// The workspace of a run the viewer can see.
+pub async fn workspace_of_visible(
+    executor: impl sqlx::PgExecutor<'_>,
+    viewer: Uuid,
+    run_id: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(sqlx::query_scalar::<_, Uuid>(&format!(
+        "SELECT run.workspace_id FROM runs run WHERE run.id = $2 AND {}",
+        visible(1)
+    ))
+    .bind(viewer)
+    .bind(run_id)
+    .fetch_optional(executor)
+    .await?)
+}
+
 /// The runs in a project the viewer can see, newest first.
 pub async fn visible_in_space(
     executor: impl sqlx::PgExecutor<'_>,

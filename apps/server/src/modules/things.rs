@@ -23,7 +23,10 @@ use super::{
     manifest,
     state::ProjectModules,
 };
-use crate::error::AppError;
+use crate::{
+    addresses::{Addresses, Linker, Target},
+    error::AppError,
+};
 
 /// The most links one thing shows.
 const MAX_LINKS: usize = 200;
@@ -46,6 +49,8 @@ pub struct Viewer<'a> {
     /// Whether things across a workspace (boards with no project) can show:
     /// not for a credential confined to one project.
     pub workspace_boards: bool,
+    /// How the server writes the things' links.
+    pub addresses: Addresses,
 }
 
 /// The kinds this server can open as things.
@@ -97,17 +102,42 @@ fn href(kind: &str, id: Uuid, project_id: Option<Uuid>, parent_id: Option<Uuid>)
 }
 
 impl ThingRow {
-    fn into_thing(self) -> Thing {
-        let module = manifest::of_thing(&self.kind).map_or_else(String::new, |m| m.id.clone());
-        Thing {
+    /// The thing's path in today's shape.
+    fn legacy_href(&self) -> String {
+        match self.parent_id {
             // AWD-75: a DM or group's thread opens beside its conversation,
             // as talk::thread_path links it, not under Channels.
-            href: match self.parent_id {
-                Some(parent) if self.kind == "thread" && self.direct => {
-                    format!("/messages/{parent}?thread={}", self.id)
-                }
-                _ => href(&self.kind, self.id, self.project_id, self.parent_id),
-            },
+            Some(parent) if self.kind == "thread" && self.direct => Target::Direct {
+                id: parent,
+                thread: Some(self.id),
+            }
+            .legacy_path(),
+            _ => href(&self.kind, self.id, self.project_id, self.parent_id),
+        }
+    }
+
+    /// The thing's path as this server writes links.
+    async fn href(
+        &self,
+        connection: &mut PgConnection,
+        linker: &mut Linker,
+    ) -> Result<String, AppError> {
+        let legacy = self.legacy_href();
+        match (self.project_id, self.organization_id) {
+            (Some(space), _) => linker.legacy_in_space(connection, space, &legacy).await,
+            (None, Some(workspace)) if self.kind == "whiteboard" => {
+                linker
+                    .path_in(connection, workspace, &Target::Whiteboard(self.id))
+                    .await
+            }
+            _ => Ok(legacy),
+        }
+    }
+
+    fn into_thing(self, href: String) -> Thing {
+        let module = manifest::of_thing(&self.kind).map_or_else(String::new, |m| m.id.clone());
+        Thing {
+            href,
             id: self.id,
             module,
             kind: self.kind,
@@ -348,14 +378,19 @@ async fn resolve(
         query = query.bind(viewer.workspace_boards);
     }
     let rows = query.fetch_all(&mut *connection).await?;
-    Ok(rows
+    let mut linker = Linker::new(viewer.addresses);
+    let mut things = Vec::with_capacity(rows.len());
+    for row in rows
         .into_iter()
         // A conversation id can come back as any conversation kind; keep
         // the kind asked for, except that "conversation" asks for any.
         .filter(|row| kind == "conversation" || row.kind == kind)
         .filter(|row| shown(viewer, row))
-        .map(ThingRow::into_thing)
-        .collect())
+    {
+        let href = row.href(connection, &mut linker).await?;
+        things.push(row.into_thing(href));
+    }
+    Ok(things)
 }
 
 /// One thing, if the viewer can see it.
@@ -572,6 +607,7 @@ pub async fn links(
         modules: ModuleSet::all(),
         workspaces: viewer.workspaces,
         workspace_boards: viewer.workspace_boards,
+        addresses: viewer.addresses,
     };
     let mut others = Vec::new();
     for kind in KINDS {
