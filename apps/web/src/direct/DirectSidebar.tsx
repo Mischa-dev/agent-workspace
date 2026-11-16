@@ -39,6 +39,7 @@ export function DirectSidebar({ mobileOpen, onNavigate }: { mobileOpen: boolean;
                   ? { name: other.displayName, kind: actorKind(other.kind), seed: other.id }
                   : undefined
               }
+              badge={!conversation.muted && conversation.unreadMessages > 0 ? conversation.unreadMessages : undefined}
               icon={conversation.kind === 'group' ? 'users' : 'message'}
               keep={conversation.unread}
               key={conversation.id}
@@ -46,7 +47,7 @@ export function DirectSidebar({ mobileOpen, onNavigate }: { mobileOpen: boolean;
               meta={conversation.kind === 'group' ? String(conversation.members.length) : undefined}
               onNavigate={onNavigate}
               to={`/messages/${encodeURIComponent(conversation.id)}`}
-              unread={conversation.unread}
+              unread={conversation.unread && !conversation.muted}
             />
           )
         })}

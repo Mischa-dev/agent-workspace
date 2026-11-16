@@ -219,7 +219,11 @@ pub(super) struct ConversationSummary {
     pub status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outcome: Option<String>,
+    /// Others' messages you haven't read, at most 99.
     pub unread_count: i64,
+    /// You set it to tell you nothing: still unread, never counted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub muted: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_message: Option<LastMessage>,
     pub url: String,
@@ -249,13 +253,14 @@ pub(super) struct ConversationRow {
     parent_kind: Option<String>,
     thread_status: String,
     thread_outcome: Option<String>,
-    highest_sequence: i64,
-    last_read_sequence: i64,
     last_activity_at: String,
     last_author: Option<String>,
     last_text: Option<String>,
     last_removed: Option<bool>,
     member_names: Option<String>,
+    /// From `read_state::unread_summary` (C2.3), filled after the query.
+    #[sqlx(skip)]
+    unread: Option<crate::read_state::UnreadRow>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -610,15 +615,14 @@ pub(super) async fn list_rows(
     offset: i64,
     limit: i64,
 ) -> Result<Vec<ConversationRow>, AppError> {
-    Ok(sqlx::query_as::<_, ConversationRow>(
+    let filter_unread_only = filter.unread_only;
+    let rows = sqlx::query_as::<_, ConversationRow>(
         r#"
         SELECT conversation.id, conversation.kind, conversation.name,
                conversation.project_id, project.name AS project_name,
                project.kind = 'direct' AS direct,
                parent.id AS parent_id, parent.name AS parent_name, parent.kind AS parent_kind,
                conversation.thread_status, conversation.thread_outcome,
-               conversation.next_entry_sequence - 1 AS highest_sequence,
-               COALESCE(read_state.highest_seen_sequence, 0) AS last_read_sequence,
                COALESCE(last_entry.created_at, conversation.created_at)::text AS last_activity_at,
                last_author.display_name AS last_author,
                CASE WHEN last_message.removed_at IS NOT NULL THEN 'Message removed'
@@ -667,7 +671,7 @@ pub(super) async fn list_rows(
                         CASE WHEN parent.kind IN ('dm', 'group') THEN parent.id END,
                         conversation.id)
                   AND member.actor_id = $4))
-          AND (NOT $5 OR conversation.next_entry_sequence - 1
+          AND (NOT $5 OR conversation.last_message_sequence
                           > COALESCE(read_state.highest_seen_sequence, 0))
           AND ($6::text IS NULL OR (conversation.kind = 'thread'
                                     AND lower(conversation.thread_status) = lower($6)))
@@ -696,7 +700,31 @@ pub(super) async fn list_rows(
     .bind(offset)
     .bind(limit)
     .fetch_all(&state.pool)
-    .await?)
+    .await?;
+    let ids = rows.iter().map(|row| row.id).collect::<Vec<_>>();
+    let summary = crate::db::scoped_one(&state.pool, async |connection| {
+        crate::read_state::unread_by_conversation(
+            connection,
+            viewer,
+            crate::read_state::UnreadScope::Conversations(ids),
+        )
+        .await
+    })
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|mut row| {
+            row.unread = summary.get(&row.id).copied();
+            row
+        })
+        // An unread-only list follows R1 to R7: others' messages, unmuted.
+        .filter(|row| {
+            !filter_unread_only
+                || row
+                    .unread
+                    .is_some_and(|unread| unread.unread && !unread.muted)
+        })
+        .collect())
 }
 
 pub(super) fn summary(
@@ -737,7 +765,8 @@ pub(super) fn summary(
         },
         status: is_thread.then(|| row.thread_status.clone()),
         outcome: if is_thread { row.thread_outcome } else { None },
-        unread_count: (row.highest_sequence - row.last_read_sequence).max(0),
+        unread_count: row.unread.map_or(0, |unread| unread.unread_messages),
+        muted: row.unread.is_some_and(|unread| unread.muted),
         last_message: match (row.last_author, row.last_text) {
             (Some(author), Some(text)) => Some(LastMessage {
                 author,
@@ -894,6 +923,7 @@ pub(super) async fn conversation_open(
             thread_lists(state, conversation.id, principal.actor_id).await?
         };
         let hint = thread_hint(&conversation, highest);
+        let unread_count = unread_count_of(state, principal.actor_id, conversation.id).await?;
         if arguments.mark_read.unwrap_or(false) && principal.can_write() {
             mark(state, principal, &conversation, highest).await?;
         }
@@ -902,7 +932,7 @@ pub(super) async fn conversation_open(
             pinned,
             highest_sequence: highest,
             last_read_sequence: last_read,
-            unread_count: (highest - last_read).max(0),
+            unread_count,
             has_older: from > 1,
             messages,
             open_threads,
@@ -1444,7 +1474,7 @@ pub(super) async fn mark_read(
         Ok::<_, AppError>(ToolResult::ok(ReadMark {
             conversation_id: conversation.id.to_string(),
             last_read_sequence: last_read,
-            unread_count: (highest - last_read).max(0),
+            unread_count: unread_count_of(state, principal.actor_id, conversation.id).await?,
         }))
     }
     .await;
@@ -1501,8 +1531,27 @@ async fn mark_unread(
     Ok(ToolResult::ok(ReadMark {
         conversation_id: conversation.id.to_string(),
         last_read_sequence: change.highest_seen_sequence,
-        unread_count: (change.highest_sequence - change.highest_seen_sequence).max(0),
+        unread_count: unread_count_of(state, principal.actor_id, conversation.id).await?,
     }))
+}
+
+/// Others' unread messages in one conversation (C2.3), as every list
+/// counts them: `read_state::unread_summary`.
+async fn unread_count_of(
+    state: &AppState,
+    viewer: Uuid,
+    conversation_id: Uuid,
+) -> Result<i64, AppError> {
+    let summary = crate::db::scoped_one(&state.pool, async |connection| {
+        crate::read_state::unread_summary(
+            connection,
+            viewer,
+            crate::read_state::UnreadScope::Conversations(vec![conversation_id]),
+        )
+        .await
+    })
+    .await?;
+    Ok(summary.first().map_or(0, |row| row.unread_messages))
 }
 
 // ---------------------------------------------------------------------------

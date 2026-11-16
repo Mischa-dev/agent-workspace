@@ -12,6 +12,11 @@ export type DirectConversation = {
   members: ConversationActor[]
   highestSequence: number
   unread: boolean
+  /** Others' unread messages, at most 99: a DM row shows the number (C2.3). */
+  unreadMessages: number
+  mentions: number
+  /** Set to tell you nothing: still unread, but never bold or counted. */
+  muted: boolean
   lastActivityAt: string
 }
 
@@ -59,6 +64,9 @@ function normalizeConversation(value: unknown): DirectConversation | null {
     highestSequence:
       typeof record.highestSequence === 'number' ? record.highestSequence : 0,
     unread: record.unread === true,
+    unreadMessages: typeof record.unreadMessages === 'number' ? Math.max(0, record.unreadMessages) : 0,
+    mentions: typeof record.mentions === 'number' ? Math.max(0, record.mentions) : 0,
+    muted: record.muted === true,
     lastActivityAt:
       typeof record.lastActivityAt === 'string' ? record.lastActivityAt : '',
   }

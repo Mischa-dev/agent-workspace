@@ -103,6 +103,9 @@ struct DirectConversationItem {
     highest_sequence: i64,
     read_state: ReadStateView,
     unread: bool,
+    /// The number a DM row shows, its mentions, and whether it's muted.
+    #[serde(flatten)]
+    counts: crate::conversations::UnreadCounts,
     last_activity_at: String,
 }
 
@@ -220,9 +223,16 @@ async fn direct_overview(
     .bind(MAX_LISTED_CONVERSATIONS)
     .fetch_all(&mut *transaction)
     .await?;
+    let summary = crate::read_state::unread_by_conversation(
+        &mut *transaction,
+        principal.actor_id,
+        crate::read_state::UnreadScope::Space(space.project_id),
+    )
+    .await?;
     let conversations = rows
         .into_iter()
         .map(|row| {
+            let (unread, counts) = crate::conversations::UnreadCounts::of(&summary, row.id);
             let read_state = ReadStateView {
                 highest_seen_sequence: row.highest_seen_sequence,
                 version: row.read_version,
@@ -244,7 +254,8 @@ async fn direct_overview(
                 members: serde_json::from_value(row.members)
                     .map_err(|_| AppError::Internal("direct conversation members"))?,
                 highest_sequence: row.highest_sequence,
-                unread: row.highest_sequence > read_state.highest_seen_sequence,
+                unread,
+                counts,
                 read_state,
                 last_activity_at: row.last_activity_at,
             })

@@ -481,6 +481,39 @@ struct ChannelListItem {
     highest_sequence: i64,
     read_state: ReadStateView,
     unread: bool,
+    #[serde(flatten)]
+    counts: UnreadCounts,
+}
+
+/// What a list row says about unread beyond the flag (C2.3): DMs and groups
+/// show the number, channels a number only for mentions; a muted row is
+/// never bold or counted.
+#[derive(Clone, Copy, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UnreadCounts {
+    pub unread_messages: i64,
+    pub mentions: i64,
+    pub muted: bool,
+}
+
+impl UnreadCounts {
+    /// The row's flag and counts; a conversation missing from the summary
+    /// (archived, or no longer readable) is read.
+    pub(crate) fn of(
+        summary: &std::collections::HashMap<Uuid, crate::read_state::UnreadRow>,
+        id: Uuid,
+    ) -> (bool, Self) {
+        summary.get(&id).map_or((false, Self::default()), |row| {
+            (
+                row.unread,
+                Self {
+                    unread_messages: row.unread_messages,
+                    mentions: row.mentions,
+                    muted: row.muted,
+                },
+            )
+        })
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -710,6 +743,8 @@ struct SidebarThreadRow {
     parent_archived_at: Option<String>,
     version: i64,
     highest_sequence: i64,
+    /// The newest message (R1): only messages make a thread unread.
+    last_message_sequence: i64,
     highest_seen_sequence: i64,
     latest_activity_sequence: i64,
     latest_run_state: Option<String>,
@@ -742,6 +777,8 @@ struct SidebarChannelView {
     highest_sequence: i64,
     highest_seen_sequence: i64,
     unread: bool,
+    #[serde(flatten)]
+    counts: UnreadCounts,
     threads: Vec<SidebarThreadView>,
     hidden_thread_count: usize,
     has_more_threads: bool,
@@ -829,10 +866,20 @@ async fn list_channels(
     .bind(MAX_CHANNELS_PER_PROJECT)
     .fetch_all(&state.pool)
     .await?;
+    let summary = crate::db::scoped_one(&state.pool, async |connection| {
+        crate::read_state::unread_by_conversation(
+            connection,
+            principal.actor_id,
+            crate::read_state::UnreadScope::Space(project_id),
+        )
+        .await
+    })
+    .await?;
     let channels = rows
         .into_iter()
         .map(|row| {
             let highest_sequence = row.highest_sequence;
+            let (unread, counts) = UnreadCounts::of(&summary, row.id);
             let read_state = ReadStateView {
                 highest_seen_sequence: row.highest_seen_sequence,
                 version: row.read_version,
@@ -852,8 +899,9 @@ async fn list_channels(
                     parent_kind: None,
                 },
                 highest_sequence,
-                unread: highest_sequence > read_state.highest_seen_sequence,
+                unread,
                 read_state,
+                counts,
             }
         })
         .collect();
@@ -1181,7 +1229,7 @@ pub(crate) async fn thread_summaries(
         SELECT thread.id, thread.name, thread.thread_status AS status,
                thread.thread_outcome AS outcome, thread.origin_message_id,
                thread.next_entry_sequence - 1 AS message_count,
-               thread.next_entry_sequence - 1 > COALESCE(read_state.highest_seen_sequence, 0)
+               thread.last_message_sequence > COALESCE(read_state.highest_seen_sequence, 0)
                    AS unread,
                thread.archived_at IS NOT NULL AS archived,
                COALESCE(last_entry.created_at, thread.created_at)::text AS last_activity_at,
@@ -1821,6 +1869,30 @@ pub(crate) async fn append_message_command_with(
     .bind(message_id)
     .execute(&mut *transaction)
     .await?;
+    // R2: your own message never makes the conversation unread, on every
+    // path that sends (web, agent tools, apps, push reply, scheduled,
+    // forward).
+    crate::read_state::mark_seen(
+        &mut transaction,
+        conversation.project_id,
+        conversation.id,
+        actor.actor_id,
+        sequence,
+    )
+    .await?;
+    // C2.5: posting in a thread, or being mentioned in it, follows it.
+    if conversation.kind == "thread" {
+        let followers = std::iter::once(actor.actor_id)
+            .chain(mentioned_actor_ids.iter().copied())
+            .collect::<Vec<_>>();
+        crate::notification_settings::follow_automatically(
+            &mut transaction,
+            conversation.project_id,
+            conversation.id,
+            &followers,
+        )
+        .await?;
+    }
     if conversation.kind == "thread" {
         refresh_auto_thread_names(
             &mut transaction,
@@ -2763,8 +2835,6 @@ pub(crate) enum UnreadFrom {
 pub(crate) struct ReadMarkChange {
     pub highest_seen_sequence: i64,
     pub version: i64,
-    /// The conversation's newest entry.
-    pub highest_sequence: i64,
 }
 
 /// Make `from` and everything after it unread for this actor, to come back to
@@ -2792,7 +2862,6 @@ pub(crate) async fn mark_unread_from(
         true,
     )
     .await?;
-    let highest_sequence = conversation.next_entry_sequence - 1;
     let first_unread = match from {
         // The newest message, not the newest entry: a run's or worker's
         // event after it would otherwise leave every message read.
@@ -2843,7 +2912,6 @@ pub(crate) async fn mark_unread_from(
                     .as_ref()
                     .map_or(0, |row| row.highest_seen_sequence),
                 version: unchanged.as_ref().map_or(0, |row| row.version),
-                highest_sequence,
             });
         }
     };
@@ -2884,7 +2952,6 @@ pub(crate) async fn mark_unread_from(
     Ok(ReadMarkChange {
         highest_seen_sequence: row.highest_seen_sequence,
         version: row.version,
-        highest_sequence,
     })
 }
 
@@ -3378,6 +3445,7 @@ async fn project_conversation_sidebar(
             parent.archived_at::text AS parent_archived_at,
             thread.version,
             thread.next_entry_sequence - 1 AS highest_sequence,
+            thread.last_message_sequence,
             COALESCE(read_state.highest_seen_sequence, 0) AS highest_seen_sequence,
             COALESCE(
                 (extract(epoch FROM latest_entry.created_at) * 1000000)::bigint,
@@ -3449,6 +3517,15 @@ async fn project_conversation_sidebar(
     .fetch_all(&state.pool)
     .await?;
 
+    let summary = crate::db::scoped_one(&state.pool, async |connection| {
+        crate::read_state::unread_by_conversation(
+            connection,
+            principal.actor_id,
+            crate::read_state::UnreadScope::Space(project_id),
+        )
+        .await
+    })
+    .await?;
     let expanded_channel_id = query.expanded_channel_id;
     let selected_channel_id = query.selected_channel_id;
     let thread_views = project_sidebar_threads(
@@ -3462,6 +3539,7 @@ async fn project_conversation_sidebar(
         .map(|channel| {
             let (threads, hidden_thread_count) =
                 thread_views.get(&channel.id).cloned().unwrap_or_default();
+            let (unread, counts) = UnreadCounts::of(&summary, channel.id);
             SidebarChannelView {
                 id: channel.id,
                 name: channel.name,
@@ -3469,7 +3547,8 @@ async fn project_conversation_sidebar(
                 version: channel.version,
                 highest_sequence: channel.highest_sequence,
                 highest_seen_sequence: channel.highest_seen_sequence,
-                unread: channel.highest_sequence > channel.highest_seen_sequence,
+                unread,
+                counts,
                 threads,
                 hidden_thread_count,
                 has_more_threads: hidden_thread_count > 0,
@@ -3597,7 +3676,7 @@ fn thread_attention(row: &SidebarThreadRow) -> ThreadAttention {
                 label: "Run completed",
             }
         }
-        _ if row.highest_sequence > row.highest_seen_sequence => ThreadAttention {
+        _ if row.last_message_sequence > row.highest_seen_sequence => ThreadAttention {
             kind: "unread",
             label: "Unread Messages",
         },
@@ -5107,6 +5186,7 @@ mod tests {
             parent_archived_at: None,
             version: 1,
             highest_sequence: 8,
+            last_message_sequence: 8,
             highest_seen_sequence: 4,
             latest_activity_sequence: 8,
             latest_run_state: state.map(str::to_owned),

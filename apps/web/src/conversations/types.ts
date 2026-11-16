@@ -266,6 +266,12 @@ export type SidebarChannel = {
   highestSequence: number
   highestSeenSequence: number
   unread: boolean
+  /** Others' unread messages, at most 99 (C2.3). */
+  unreadMessages: number
+  /** Unread mentions of you; a channel shows only this number. */
+  mentions: number
+  /** Set to tell you nothing: still unread, but never bold or counted. */
+  muted: boolean
   threads: SidebarThread[]
   hasMoreThreads: boolean
   /** Threads under the channel that the sidebar leaves out; with threads.length, the exact count. Always set by the API. */

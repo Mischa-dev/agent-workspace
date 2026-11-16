@@ -6,10 +6,16 @@ import type { Project } from '../projects/types'
 /**
  * What needs you, for the tab title and the app badge: the inbox's unread
  * count (which covers every project, DMs and reminders) plus DMs and groups
- * with unread messages.
+ * with unread messages that aren't muted.
  */
-export function unreadCount(inboxUnread: number, conversations: Pick<DirectConversation, 'unread'>[]) {
-  return Math.max(0, inboxUnread) + conversations.filter((conversation) => conversation.unread).length
+export function unreadCount(
+  inboxUnread: number,
+  conversations: (Pick<DirectConversation, 'unread'> & Partial<Pick<DirectConversation, 'muted'>>)[],
+) {
+  return (
+    Math.max(0, inboxUnread) +
+    conversations.filter((conversation) => conversation.unread && !conversation.muted).length
+  )
 }
 
 let override: string | null = null

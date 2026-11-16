@@ -3,6 +3,11 @@
 //! count drops and a push queued for it sends nothing. "Mark all read" goes
 //! through the same path, and never reads (or leaves a mark in) a
 //! conversation the caller can't read.
+//!
+//! C2.3: the unread rules (C2 plan 3.3). Only messages count, your own never
+//! unread a conversation, removal reads it again, muted stays unread but
+//! uncounted, archived never counts, DM counts cap at 99, and an agent's or
+//! app's briefing says what the web says.
 
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -226,6 +231,231 @@ async fn mark_all_read_reads_only_what_you_may_read() {
     )
     .await;
     assert_eq!(again["value"]["marked"], 0, "{again}");
+
+    world.finish().await;
+}
+
+#[tokio::test]
+async fn unread_follows_the_rules() {
+    let Some(world) = WorldBuilder::default()
+        .project("UN")
+        .person("lena", "member")
+        .person("mara", "member")
+        .dm("lena", "mara")
+        .build("c2_3_unread")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let pool = world.pool();
+    let project = world.project("UN").to_owned();
+    let lena = &world.people["lena"];
+    let mara = &world.people["mara"];
+    let dm = world.conversations["lena+mara"].clone();
+    let post = |browser: &Browser, conversation: &str, key: String, text: &str| {
+        let request = browser.request(
+            "POST",
+            &format!("/api/v1/conversations/{conversation}/messages"),
+            Some(&key),
+            json!({"content": words(text)}),
+        );
+        async move {
+            let (status, sent) = send(app, request).await;
+            assert!(status.is_success(), "{key}: {sent}");
+            sent["message"]["id"]
+                .as_str()
+                .or_else(|| sent["id"].as_str())
+                .expect("message id")
+                .to_owned()
+        }
+    };
+    let get = |browser: &Browser, path: String| {
+        let request = browser.request("GET", &path, None, Value::Null);
+        async move {
+            let (status, body) = send(app, request).await;
+            assert!(status.is_success(), "{path}: {body}");
+            body
+        }
+    };
+    let find = |list: &Value, id: &str| {
+        list.as_array()
+            .expect("list")
+            .iter()
+            .find(|item| item["id"] == id)
+            .cloned()
+            .unwrap_or_else(|| panic!("{id} not in {list}"))
+    };
+    let channel_of = |browser: &'static str, id: String| {
+        let who = &world.people[browser];
+        let path = format!("/api/v1/projects/{project}/channels");
+        async move { find(&get(&who.browser, path).await["channels"], &id) }
+    };
+    let dm_of = |browser: &'static str| {
+        let who = &world.people[browser];
+        let dm = dm.clone();
+        async move {
+            find(
+                &get(&who.browser, "/api/v1/direct".to_owned()).await["conversations"],
+                &dm,
+            )
+        }
+    };
+
+    let (status, created) = send(
+        app,
+        world.owner.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{project}/channels"),
+            Some("unread-general"),
+            json!({"name": "general"}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{created}");
+    let general = created["conversation"]["id"]
+        .as_str()
+        .or_else(|| created["id"].as_str())
+        .expect("channel")
+        .to_owned();
+
+    // R1: an entry that isn't a message (a worker's or the system's) never
+    // makes it unread.
+    sqlx::query(
+        r#"
+        WITH next AS (
+            UPDATE conversations SET next_entry_sequence = next_entry_sequence + 1
+            WHERE id = $1 RETURNING next_entry_sequence - 1 AS sequence
+        )
+        INSERT INTO conversation_entries (id, conversation_id, sequence, kind)
+        SELECT $2, $1, sequence, 'system' FROM next
+        "#,
+    )
+    .bind(Uuid::parse_str(&general).expect("id"))
+    .bind(Uuid::now_v7())
+    .execute(pool)
+    .await
+    .expect("system entry");
+    let item = channel_of("mara", general.clone()).await;
+    assert_eq!(item["unread"], false, "{item}");
+
+    // Someone else's message does, and counts.
+    let only = post(&lena.browser, &general, "unread-1".into(), "Hello").await;
+    let item = channel_of("mara", general.clone()).await;
+    assert_eq!(item["unread"], true, "{item}");
+    assert_eq!(item["unreadMessages"], 1, "{item}");
+    assert_eq!(item["muted"], false, "{item}");
+
+    // R4: removing the only unread message reads it.
+    let (status, removed) = send(
+        app,
+        lena.browser.request(
+            "DELETE",
+            &format!("/api/v1/conversations/{general}/messages/{only}"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{removed}");
+    let item = channel_of("mara", general.clone()).await;
+    assert_eq!(item["unread"], false, "{item}");
+    assert_eq!(item["unreadMessages"], 0, "{item}");
+
+    // R2: her own message, sent by her app, leaves it read, and so does a
+    // forward.
+    let token = connect_app(app, &mara.browser, "Mara's app", "full").await;
+    let session = initialize(app, &token).await.expect("app MCP");
+    let original = post(&lena.browser, &general, "unread-2".into(), "Worth sharing").await;
+    let sent = tool(
+        app,
+        &token,
+        &session,
+        "message_send",
+        json!({"conversationId": general, "text": "Seen it", "clientRequestId": "unread-own"}),
+    )
+    .await;
+    assert_eq!(sent["outcome"], "ok", "{sent}");
+    let item = channel_of("mara", general.clone()).await;
+    assert_eq!(item["unread"], false, "{item}");
+    let forwarded = tool(
+        app,
+        &token,
+        &session,
+        "message_forward",
+        json!({"messageId": original, "conversationId": dm, "clientRequestId": "unread-fwd"}),
+    )
+    .await;
+    assert_eq!(forwarded["outcome"], "ok", "{forwarded}");
+    let mine = dm_of("mara").await;
+    assert_eq!(mine["unread"], false, "{mine}");
+    let hers = dm_of("lena").await;
+    assert_eq!(hers["unread"], true, "{hers}");
+    assert_eq!(hers["unreadMessages"], 1, "{hers}");
+
+    // A DM shows its number: 3 after 3 messages, and never more than 99.
+    for index in 0..3 {
+        post(&lena.browser, &dm, format!("unread-dm-{index}"), "Ping").await;
+    }
+    assert_eq!(dm_of("mara").await["unreadMessages"], 3);
+    for index in 3..101 {
+        post(&lena.browser, &dm, format!("unread-dm-{index}"), "Ping").await;
+    }
+    let mine = dm_of("mara").await;
+    assert_eq!(mine["unread"], true, "{mine}");
+    assert_eq!(mine["unreadMessages"], 99, "{mine}");
+
+    // R5: muted stays unread but says so; an app's briefing leaves it out.
+    let (status, level) = send(
+        app,
+        mara.browser.request(
+            "PUT",
+            &format!("/api/v1/conversations/{general}/notification-level"),
+            Some("unread-mute"),
+            json!({"level": "nothing"}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{level}");
+    post(&lena.browser, &general, "unread-3".into(), "Quietly").await;
+    let item = channel_of("mara", general.clone()).await;
+    assert_eq!(item["unread"], true, "{item}");
+    assert_eq!(item["muted"], true, "{item}");
+
+    // R10: the briefing agrees with the web, conversation by conversation.
+    let briefing = tool(app, &token, &session, "briefing", json!({})).await;
+    assert_eq!(briefing["outcome"], "ok", "{briefing}");
+    let unread = briefing["value"]["unread"].as_array().expect("unread");
+    assert!(
+        unread.iter().all(|item| item["id"] != general.as_str()),
+        "a muted channel isn't in the briefing: {briefing}"
+    );
+    let in_briefing = unread
+        .iter()
+        .find(|item| item["id"] == dm.as_str())
+        .unwrap_or_else(|| panic!("the DM is unread: {briefing}"));
+    assert_eq!(in_briefing["unreadCount"], 99, "{briefing}");
+
+    // R7: an archived conversation never counts.
+    let (status, archived) = send(
+        app,
+        world.owner.browser.request(
+            "POST",
+            &format!("/api/v1/channels/{general}/archive"),
+            None,
+            json!({"expectedVersion": created["conversation"]["version"].as_i64().unwrap_or(1)}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{archived}");
+    let sidebar = get(
+        &mara.browser,
+        format!("/api/v1/projects/{project}/conversation-sidebar?includeArchived=true"),
+    )
+    .await;
+    let item = find(&sidebar["channels"], &general);
+    assert_eq!(item["unread"], false, "{item}");
+    assert_eq!(item["unreadMessages"], 0, "{item}");
 
     world.finish().await;
 }
