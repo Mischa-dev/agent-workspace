@@ -58,29 +58,27 @@ pub fn scoped_snapshot(
     )
 }
 
-fn begin_scoped<'p>(
-    pool: &'p PgPool,
+async fn begin_scoped(
+    pool: &PgPool,
     caller: &'static Location<'static>,
     mode: &'static str,
-) -> impl Future<Output = Result<Transaction<'static, Postgres>, sqlx::Error>> + 'p {
-    async move {
-        let tenancy = tenancy::resolved(pool).await?;
-        crate::metrics::tenancy_transaction(tenancy.as_ref().map_or("unscoped", Tenancy::kind));
-        match tenancy {
-            Some(tenancy) => {
-                pool.begin_with(format!(
-                    "BEGIN{mode}; SELECT set_config('app.tenancy', '{}', true)",
-                    tenancy.setting()
-                ))
-                .await
-            }
-            None => {
-                observe_unscoped(caller);
-                if mode.is_empty() {
-                    pool.begin().await
-                } else {
-                    pool.begin_with(format!("BEGIN{mode}")).await
-                }
+) -> Result<Transaction<'static, Postgres>, sqlx::Error> {
+    let tenancy = tenancy::resolved(pool).await?;
+    crate::metrics::tenancy_transaction(tenancy.as_ref().map_or("unscoped", Tenancy::kind));
+    match tenancy {
+        Some(tenancy) => {
+            pool.begin_with(format!(
+                "BEGIN{mode}; SELECT set_config('app.tenancy', '{}', true)",
+                tenancy.setting()
+            ))
+            .await
+        }
+        None => {
+            observe_unscoped(caller);
+            if mode.is_empty() {
+                pool.begin().await
+            } else {
+                pool.begin_with(format!("BEGIN{mode}")).await
             }
         }
     }
