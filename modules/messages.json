@@ -30,6 +30,9 @@
     "scheduled_message_update": "change",
     "mark_read": "change",
     "conversations_mark_read": "change",
+    "comment_create": "create",
+    "comment_list": "query",
+    "comment_thread_update": "change",
     "pin_set": "change",
     "inbox_list": "query",
     "reply_claim": "change",
@@ -68,7 +71,7 @@
   "web": { "folder": "direct" },
   "slots": {
     "pages": ["/messages", "/messages/:conversationId"],
-    "parts": ["talk.slash_commands", "talk.scheduling", "talk.replies"],
+    "parts": ["talk.slash_commands", "talk.scheduling", "talk.replies", "thing.comments"],
     "sidebar": ["rail.messages"],
     "home": [],
     "settings": [],

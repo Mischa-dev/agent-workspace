@@ -24,6 +24,8 @@ pub enum OutboxConversationKind {
     Thread,
     Dm,
     Group,
+    /// A thing's comments (C1.3).
+    Comments,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

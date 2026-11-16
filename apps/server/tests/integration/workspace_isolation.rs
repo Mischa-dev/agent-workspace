@@ -1963,6 +1963,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "message_history",
     "message_draft_list",
     "custom_emoji_list",
+    "comment_list",
+    "whiteboard_template_list",
     "milestone_list",
     "module_list",
     "my_permissions",
@@ -2186,6 +2188,16 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             "custom_emoji_list",
             vec![json!({}), json!({"includeRetired": true})],
             vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        // C1.3: B's things' discussions never list in A.
+        case(
+            "comment_list",
+            vec![json!({"thing": {"kind": "sheet", "id": a.sheet}})],
+            vec![
+                json!({"thing": {"kind": "sheet", "id": b.sheet}}),
+                json!({"thing": {"kind": "whiteboard", "id": b.whiteboard}}),
+            ],
             vec![],
         ),
         // C2.28: B's drafts never show in A, by conversation or listed.

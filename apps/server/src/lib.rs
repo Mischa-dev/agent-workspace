@@ -27,6 +27,7 @@ pub mod conversations;
 pub mod custom_emoji;
 pub mod db;
 pub mod direct;
+pub mod discussion;
 pub mod domain;
 pub mod drafts;
 pub mod environments;

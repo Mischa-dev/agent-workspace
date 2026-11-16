@@ -112,6 +112,7 @@ mod sheet_tools;
 mod talk;
 mod task_batch;
 mod workspace_template_tools;
+pub(crate) use common::content_from_text;
 pub(crate) use task_batch::{ImportTask, create_for_import};
 mod task_drafts;
 mod task_move;

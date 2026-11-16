@@ -53,6 +53,9 @@ pub(crate) struct ThreadSpec {
     pub link_task: Option<Uuid>,
     /// Extra audit metadata (a reply request, a launch). Ids only.
     pub audit: serde_json::Value,
+    /// Where on a thing the thread is about (C1.3), already checked by
+    /// `discussion::anchors`. Only under a comments conversation.
+    pub anchor: Option<serde_json::Value>,
 }
 
 impl ThreadSpec {
@@ -63,7 +66,13 @@ impl ThreadSpec {
             reuse_for_origin: false,
             link_task: None,
             audit: serde_json::json!({}),
+            anchor: None,
         }
+    }
+
+    pub(crate) fn anchored(mut self, anchor: Option<serde_json::Value>) -> Self {
+        self.anchor = anchor;
+        self
     }
 
     pub(crate) fn from_message(mut self, origin_message_id: Option<Uuid>) -> Self {
@@ -222,11 +231,21 @@ pub(crate) async fn create(
     {
         return Err(AppError::NotFound("conversation"));
     }
-    if !matches!(parent.kind.as_str(), "channel" | "dm" | "group") {
+    if !matches!(
+        parent.kind.as_str(),
+        "channel" | "dm" | "group" | "comments"
+    ) {
         return Err(NOT_A_THREAD_PARENT);
+    }
+    if spec.anchor.is_some() && parent.kind != "comments" {
+        return Err(AppError::Refused {
+            field: "anchor",
+            message: "Only a thread in a thing's comments is anchored to a place in it.",
+        });
     }
 
     let mut origin_text = None;
+    let mut origin_author = None;
     if let Some(origin_id) = spec.origin_message_id {
         // Whether it was removed comes first: a removed message's text is
         // never read.
@@ -293,21 +312,21 @@ pub(crate) async fn create(
     };
 
     let thread_id = Uuid::now_v7();
-    let inserted = sqlx::query(
-        r#"
-        INSERT INTO conversations (
-            id, project_id, kind, parent_channel_id, origin_message_id, name, auto_named
-        )
-        VALUES ($1, $2, 'thread', $3, $4, $5, $6)
-        "#,
+    let inserted = insert(
+        transaction,
+        NewConversation {
+            id: thread_id,
+            project_id: parent.project_id,
+            kind: "thread",
+            parent_id: Some(parent.id),
+            origin_message_id: spec.origin_message_id,
+            name: &name,
+            auto_named,
+            visibility: "project",
+            subject: None,
+            anchor: spec.anchor.as_ref(),
+        },
     )
-    .bind(thread_id)
-    .bind(parent.project_id)
-    .bind(parent.id)
-    .bind(spec.origin_message_id)
-    .bind(&name)
-    .bind(auto_named)
-    .execute(&mut **transaction)
     .await;
     map_conversation_insert(inserted)?;
     sqlx::query(
@@ -355,7 +374,15 @@ pub(crate) async fn create(
     if let Some(work_item_id) = spec.link_task {
         metadata["work_item_id"] = work_item_id.to_string().into();
     }
-    audit(transaction, creator, parent.project_id, thread_id, metadata).await?;
+    audit(
+        transaction,
+        creator,
+        "conversation.thread_created",
+        parent.project_id,
+        thread_id,
+        metadata,
+    )
+    .await?;
     Ok(CreatedThread {
         id: thread_id,
         name,
@@ -407,6 +434,7 @@ pub(crate) async fn unique_name(
 async fn audit(
     transaction: &mut Transaction<'_, Postgres>,
     creator: &ThreadCreator,
+    action: &str,
     project_id: Uuid,
     thread_id: Uuid,
     metadata: serde_json::Value,
@@ -420,7 +448,7 @@ async fn audit(
             external_agent_connection_id
         )
         VALUES (
-            $1, $2, $3, $4, $5, 'conversation.thread_created', 'conversation', $6,
+            $1, $2, $3, $4, $5, $14, 'conversation', $6,
             'succeeded', $7, $8, $9, $10, $11, $12, $13
         )
         "#,
@@ -438,7 +466,137 @@ async fn audit(
     .bind(creator.mcp_credential_id)
     .bind(creator.mcp_oauth_grant_id)
     .bind(creator.external_agent_connection_id)
+    .bind(action)
     .execute(&mut **transaction)
     .await?;
     Ok(())
+}
+
+/// A conversation row to insert: a thread here, or a thing's comments
+/// conversation (`open_comments`). The one `INSERT INTO conversations` for
+/// both, so every made conversation passes the same constraints.
+struct NewConversation<'a> {
+    id: Uuid,
+    project_id: Uuid,
+    kind: &'static str,
+    parent_id: Option<Uuid>,
+    origin_message_id: Option<Uuid>,
+    name: &'a str,
+    auto_named: bool,
+    visibility: &'static str,
+    subject: Option<(&'a str, Uuid)>,
+    anchor: Option<&'a serde_json::Value>,
+}
+
+/// Inserts the row; a second comments conversation for the same thing
+/// inserts nothing (`rows_affected` is 0) and the caller reads the first.
+async fn insert(
+    transaction: &mut Transaction<'_, Postgres>,
+    row: NewConversation<'_>,
+) -> Result<sqlx::postgres::PgQueryResult, sqlx::Error> {
+    sqlx::query(
+        r#"
+        INSERT INTO conversations (
+            id, project_id, kind, parent_channel_id, origin_message_id, name, auto_named,
+            visibility, subject_kind, subject_id, anchor
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        ON CONFLICT (subject_kind, subject_id) WHERE kind = 'comments' DO NOTHING
+        "#,
+    )
+    .bind(row.id)
+    .bind(row.project_id)
+    .bind(row.kind)
+    .bind(row.parent_id)
+    .bind(row.origin_message_id)
+    .bind(row.name)
+    .bind(row.auto_named)
+    .bind(row.visibility)
+    .bind(row.subject.map(|(kind, _)| kind))
+    .bind(row.subject.map(|(_, id)| id))
+    .bind(row.anchor)
+    .execute(&mut **transaction)
+    .await
+}
+
+/// The name every comments conversation has; the thing names the place.
+pub(crate) const COMMENTS_NAME: &str = "Comments";
+
+/// A thing's comments conversation in `project_id`, made if it doesn't exist
+/// yet (C1.3). Two first comments race safely: the unique index lets one
+/// insert, and the other reads it. The caller has checked the creator may
+/// see and comment on the thing (`discussion::open_for`). Returns the id and
+/// whether this call made it.
+pub(crate) async fn open_comments(
+    transaction: &mut Transaction<'_, Postgres>,
+    creator: &ThreadCreator,
+    project_id: Uuid,
+    subject_kind: &str,
+    subject_id: Uuid,
+) -> Result<(Uuid, bool), AppError> {
+    if let Some(id) = comments_of(transaction, subject_kind, subject_id).await? {
+        return Ok((id, false));
+    }
+    let id = Uuid::now_v7();
+    let inserted = insert(
+        transaction,
+        NewConversation {
+            id,
+            project_id,
+            kind: "comments",
+            parent_id: None,
+            origin_message_id: None,
+            name: COMMENTS_NAME,
+            auto_named: false,
+            visibility: "subject",
+            subject: Some((subject_kind, subject_id)),
+            anchor: None,
+        },
+    )
+    .await?;
+    if inserted.rows_affected() == 0 {
+        return comments_of(transaction, subject_kind, subject_id)
+            .await?
+            .map(|id| (id, false))
+            .ok_or(AppError::Internal("comments conversation vanished"));
+    }
+    enqueue_event(
+        transaction,
+        project_id,
+        OutboxEventPayload::ConversationCreated(ConversationCreatedPayload {
+            conversation_id: id,
+            kind: OutboxConversationKind::Comments,
+            version: 1,
+        }),
+    )
+    .await?;
+    audit(
+        transaction,
+        creator,
+        "conversation.comments_opened",
+        project_id,
+        id,
+        serde_json::json!({ "subject_kind": subject_kind, "subject_id": subject_id }),
+    )
+    .await?;
+    Ok((id, true))
+}
+
+/// The thing's comments conversation, if it has one.
+pub(crate) async fn comments_of(
+    connection: &mut sqlx::PgConnection,
+    subject_kind: &str,
+    subject_id: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(sqlx::query_scalar::<_, Uuid>(
+        r#"
+        -- visibility: callers check the subject, which is the rule here
+        SELECT id FROM conversations
+        WHERE kind = 'comments' AND subject_kind = $1 AND subject_id = $2
+        "#,
+    )
+    .bind(subject_kind)
+    .bind(subject_id)
+    .fetch_optional(&mut *connection)
+    .await?)
 }

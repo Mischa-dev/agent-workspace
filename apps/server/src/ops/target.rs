@@ -101,6 +101,31 @@ const KINDS: &[(&str, &str)] = &[
     ),
     // A1.3: the run service keeps its SQL (guard G1).
     ("run", crate::runs::store::LOCATE_SQL),
+    // C1.3: things with a discussion, by the same rule their comments follow.
+    // A board outside any project has no space.
+    (
+        "page",
+        "SELECT project.organization_id, project.id FROM project_pages page \
+         JOIN projects project ON project.id = page.project_id \
+         WHERE page.id = $1 AND subject_visible_to('page', page.id, $2)",
+    ),
+    (
+        "sheet",
+        "SELECT project.organization_id, project.id FROM sheets sheet \
+         JOIN projects project ON project.id = sheet.project_id \
+         WHERE sheet.id = $1 AND subject_visible_to('sheet', sheet.id, $2)",
+    ),
+    (
+        "whiteboard",
+        "SELECT board.organization_id, board.project_id FROM whiteboards board \
+         WHERE board.id = $1 AND subject_visible_to('whiteboard', board.id, $2)",
+    ),
+    (
+        "record",
+        "SELECT project.organization_id, project.id FROM collection_records record \
+         JOIN projects project ON project.id = record.project_id \
+         WHERE record.id = $1 AND subject_visible_to('record', record.id, $2)",
+    ),
 ];
 
 /// The kinds `locate` knows; a test checks every operation's thing kind is
@@ -167,7 +192,7 @@ async fn thing(
     let Some((_, sql)) = KINDS.iter().find(|(known, _)| *known == kind) else {
         return Err(OpError::Unavailable);
     };
-    let row = sqlx::query_as::<_, (Uuid, Uuid)>(sql)
+    let row = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(sql)
         .bind(id)
         .bind(viewer)
         .fetch_optional(&mut *connection)
@@ -176,7 +201,7 @@ async fn thing(
     let (workspace_id, space_id) = row.ok_or(OpError::not_found(what_of(kind)))?;
     Ok(Located {
         workspace_id,
-        space_id: Some(space_id),
+        space_id,
     })
 }
 
@@ -196,6 +221,10 @@ fn what_of(kind: &str) -> &'static str {
         "decision" => "That decision",
         "task" => "That task",
         "run" => "That run",
+        "page" => "That page",
+        "sheet" => "That sheet",
+        "whiteboard" => "That whiteboard",
+        "record" => "That record",
         _ => "That",
     }
 }

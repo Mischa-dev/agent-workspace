@@ -38,6 +38,7 @@ export const PART_IDS = [
   'talk.agent_mentions',
   'talk.threads',
   'talk.replies',
+  'thing.comments',
   'page.live_editing',
   'page.comments',
   'page.import_export',

@@ -39,6 +39,7 @@ mod bug_sweep;
 mod compat_clients;
 mod conversation_privacy;
 mod direct_conversations;
+mod discussion;
 mod drafts;
 mod emoji;
 mod export_declarations;

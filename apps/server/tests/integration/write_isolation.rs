@@ -487,6 +487,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "conversations_mark_read",
     "custom_emoji_create",
     "custom_emoji_update",
+    "comment_create",
+    "comment_thread_update",
     "message_delete",
     "message_draft_set",
     "message_edit",
@@ -1287,6 +1289,8 @@ struct Targets {
     reported_runs: [Uuid; 3],
     /// The workspace's own emoji (C2.19).
     custom_emoji: Uuid,
+    /// A thread in the sheet's comments (C1.3).
+    comment_thread: Uuid,
 }
 
 /// The smallest PNG header a custom emoji passes with (C2.19).
@@ -1727,10 +1731,37 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
     .execute(pool)
     .await
     .expect("custom emoji");
+    // C1.3: the sheet's comments and a thread in them, to resolve.
+    let (comments, comment_thread) = (Uuid::now_v7(), Uuid::now_v7());
+    for (id, kind, parent, visibility, subject) in [
+        (comments, "comments", None, "subject", Some(world.sheet)),
+        (comment_thread, "thread", Some(comments), "project", None),
+    ] {
+        sqlx::query(
+            r#"
+            INSERT INTO conversations (
+                id, project_id, kind, parent_channel_id, name, visibility, subject_kind, subject_id
+            )
+            SELECT $1, sheet.project_id, $2, $3, 'Net comments', $4,
+                   CASE WHEN $5::uuid IS NULL THEN NULL ELSE 'sheet' END, $5
+            FROM sheets sheet WHERE sheet.id = $6
+            "#,
+        )
+        .bind(id)
+        .bind(kind)
+        .bind(parent)
+        .bind(visibility)
+        .bind(subject)
+        .bind(world.sheet)
+        .execute(pool)
+        .await
+        .expect("comments");
+    }
     let in_project = |sql: &'static str| scalar(pool, sql, project);
     let in_organization = |sql: &'static str| scalar(pool, sql, organization);
     Targets {
         custom_emoji,
+        comment_thread,
         hosts,
         questions,
         reported_runs,
@@ -6241,6 +6272,21 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "conversations_mark_read",
             json!({"spaceId": a.project}),
             vec![json!({"spaceId": b.project})],
+        ),
+        mcp_case(
+            "comment_create",
+            json!({"thing": {"kind": "sheet", "id": a.sheet}, "text": "Net comment"}),
+            vec![
+                json!({"thing": {"kind": "sheet", "id": b.sheet}, "text": "Net comment"}),
+                json!({"thing": {"kind": "whiteboard", "id": b.whiteboard}, "text": "Net"}),
+                json!({"thing": {"kind": "sheet", "id": a.sheet}, "text": "Net",
+                       "threadId": bx.comment_thread}),
+            ],
+        ),
+        mcp_case(
+            "comment_thread_update",
+            json!({"threadId": ax.comment_thread, "status": "Resolved"}),
+            vec![json!({"threadId": bx.comment_thread, "status": "Resolved"})],
         ),
         mcp_case(
             "notification_update",

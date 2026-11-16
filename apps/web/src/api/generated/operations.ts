@@ -18,6 +18,8 @@ export type Envelope<T> =
   | { outcome: 'ok'; value: T; requestId?: string; replayed?: boolean; preview?: boolean }
   | OpError
 
+export type CommentThreadView = { anchor?: unknown; createdAt: string; id: string; messageCount: number; name: string; outcome?: string | null; status: string; unread: boolean }
+
 export type Content = { body?: Record<string, unknown> | null; key: string; kind: ContentKind; path?: string | null }
 
 export type ContentKind = "switches" | "layout" | "role" | "space" | "channels" | "module" | "collection" | "form" | "automation" | "page" | "skill" | "agent"
@@ -40,6 +42,8 @@ export type Package = { contents: Content[]; description?: string; digest?: stri
 
 export type PackageTarget = "space" | "workspace"
 
+export type PageTemplateView = { builtIn: boolean; excerpt: string; id: string; projectName?: string | null; title: string }
+
 export type Publisher = { name: string; url?: string | null }
 
 export type RaisedRequestOutput = { activityId: string; clientRequestId?: string | null; requestId: string }
@@ -56,9 +60,27 @@ export type RunResultInput = { branch?: string | null; id?: string | null; kind:
 
 export type StatusView = { accountId: string; awayUntil?: string | null; clearAt?: string | null; emoji?: string | null; state?: string | null; text?: string | null; updatedAt: string; workspaceOnly: boolean }
 
+export type SubjectKind = "page" | "sheet" | "whiteboard" | "record" | "task"
+
+export type ThingInput = { id: string; kind: SubjectKind }
+
+export type WhiteboardTemplateView = { builtIn: boolean; id: string; projectName?: string | null; title: string }
+
 export type AgentManagersSetInput = { add?: string[]; agent: string; remove?: string[] }
 
 export type AgentManagersSetOutput = { agent: string; managers: string[] }
+
+export type CommentCreateInput = { anchor?: unknown; attachmentIds?: string[]; content?: unknown; newThread?: boolean; replyToMessageId?: string | null; text?: string | null; thing: ThingInput; threadId?: string | null }
+
+export type CommentCreateOutput = { conversationId: string; href?: string | null; messageId: string; threadId?: string | null }
+
+export type CommentListInput = { status?: string | null; thing: ThingInput }
+
+export type CommentListOutput = { acceptsComments: boolean; conversationId?: string | null; messageCount: number; spaceId?: string | null; threads: CommentThreadView[]; unread: boolean }
+
+export type CommentThreadUpdateInput = { outcome?: string | null; status: string; threadId: string }
+
+export type CommentThreadUpdateOutput = { outcome?: string | null; status: string; threadId: string }
 
 export type ConversationsMarkReadInput = { spaceId?: string | null }
 
@@ -116,6 +138,10 @@ export type PackageExportInput = { includePages?: boolean; includeSkills?: boole
 
 export type PackageExportOutput = { digest: string; package: Package }
 
+export type PageTemplateListInput = { spaceId: string }
+
+export type PageTemplateListOutput = { templates: PageTemplateView[] }
+
 export type RunActivityReportInput = { activities: RunActivityInput[]; runId: string }
 
 export type RunActivityReportOutput = { accepted: number; duplicates: number; lastSeq: number; overLimit?: number; requests?: RaisedRequestOutput[]; state: string; version: number }
@@ -156,8 +182,15 @@ export type StatusSetInput = { account?: string | null; awayUntil?: string | nul
 
 export type StatusSetOutput = { accountId: string; awayUntil?: string | null; clearAt?: string | null; emoji?: string | null; state?: string | null; text?: string | null; updatedAt: string; workspaceOnly: boolean }
 
+export type WhiteboardTemplateListInput = { spaceId?: string | null }
+
+export type WhiteboardTemplateListOutput = { templates: WhiteboardTemplateView[] }
+
 export type Operations = {
   agent_managers_set: { input: AgentManagersSetInput; output: AgentManagersSetOutput }
+  comment_create: { input: CommentCreateInput; output: CommentCreateOutput }
+  comment_list: { input: CommentListInput; output: CommentListOutput }
+  comment_thread_update: { input: CommentThreadUpdateInput; output: CommentThreadUpdateOutput }
   conversations_mark_read: { input: ConversationsMarkReadInput; output: ConversationsMarkReadOutput }
   custom_emoji_create: { input: CustomEmojiCreateInput; output: CustomEmojiCreateOutput }
   custom_emoji_list: { input: CustomEmojiListInput; output: CustomEmojiListOutput }
@@ -172,6 +205,7 @@ export type Operations = {
   message_draft_list: { input: MessageDraftListInput; output: MessageDraftListOutput }
   message_draft_set: { input: MessageDraftSetInput; output: MessageDraftSetOutput }
   package_export: { input: PackageExportInput; output: PackageExportOutput }
+  page_template_list: { input: PageTemplateListInput; output: PageTemplateListOutput }
   run_activity_report: { input: RunActivityReportInput; output: RunActivityReportOutput }
   run_cancel: { input: RunCancelInput; output: RunCancelOutput }
   run_create: { input: RunCreateInput; output: RunCreateOutput }
@@ -182,6 +216,7 @@ export type Operations = {
   status_delete: { input: StatusDeleteInput; output: StatusDeleteOutput }
   status_list: { input: StatusListInput; output: StatusListOutput }
   status_set: { input: StatusSetInput; output: StatusSetOutput }
+  whiteboard_template_list: { input: WhiteboardTemplateListInput; output: WhiteboardTemplateListOutput }
 }
 
 export type OpName = keyof Operations

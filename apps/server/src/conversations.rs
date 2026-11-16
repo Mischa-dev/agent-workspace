@@ -128,9 +128,13 @@ pub(crate) struct ConversationAccessRow {
 impl ConversationAccessRow {
     /// The kind whose reply rules and members apply: a thread under a DM or
     /// group behaves like its parent.
+    /// A thing's comments (and threads in them) follow a thread's reply
+    /// rules (C1.3): a person's mention asks the agent, and agents already
+    /// working there are asked about follow-ups.
     pub(crate) fn effective_kind(&self) -> &str {
         match (self.kind.as_str(), self.parent_kind.as_deref()) {
             ("thread", Some(parent @ ("dm" | "group"))) => parent,
+            ("comments", _) => "thread",
             (kind, _) => kind,
         }
     }
@@ -2341,6 +2345,14 @@ pub(crate) async fn enqueue_external_message_events(
         "channel" => "channels",
         _ => "messages",
     };
+    // A comment opens on its thing (C1.3).
+    let subject_href = if conversation.kind == "comments"
+        || conversation.parent_kind.as_deref() == Some("comments")
+    {
+        crate::discussion::href_of_conversation(transaction, conversation.id).await?
+    } else {
+        None
+    };
     for (connection_id, _) in connections {
         enqueue_external_event(
             transaction,
@@ -2350,7 +2362,9 @@ pub(crate) async fn enqueue_external_message_events(
             "You were mentioned in a Message",
             "message",
             message_id,
-            &if kind == "messages" {
+            &if let Some(href) = &subject_href {
+                href.clone()
+            } else if kind == "messages" {
                 format!("/messages/{}", conversation.id)
             } else {
                 format!(
@@ -3908,7 +3922,7 @@ pub(crate) async fn lock_conversation_for(
             r#"
             SELECT archived_at IS NULL
             FROM conversations
-            WHERE id = $1 AND project_id = $2 AND kind IN ('channel', 'dm', 'group')
+            WHERE id = $1 AND project_id = $2 AND kind IN ('channel', 'dm', 'group', 'comments')
             FOR SHARE
             "#,
         )

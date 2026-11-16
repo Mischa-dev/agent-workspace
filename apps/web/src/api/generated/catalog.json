@@ -19,6 +19,52 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "message.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "messages",
+    "name": "comment_create",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Comment"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "messages",
+    "name": "comment_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List comments"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "conversation.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "messages",
+    "name": "comment_thread_update",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Resolve comment thread"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "conversation.read_state.updated"
     ],
     "idempotent": true,
@@ -230,6 +276,20 @@
     "title": "Export package"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "pages",
+    "name": "page_template_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List page templates"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -386,5 +446,19 @@
     "preview": false,
     "proposable": false,
     "title": "Set status"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "whiteboards",
+    "name": "whiteboard_template_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List whiteboard templates"
   }
 ]

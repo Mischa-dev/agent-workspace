@@ -79,6 +79,22 @@ pub mod kind {
     /// Someone commented on a page you made, or in a page thread you're in
     /// (AWD-53).
     pub const PAGE_COMMENT: &str = "page_comment";
+    /// Someone commented on a thing you follow: one you made, or one whose
+    /// discussion you're in (C1.3).
+    pub const THING_COMMENT: &str = "thing_comment";
+    /// A message in a DM or group you're in, by someone else (C2.5): one
+    /// row per conversation that counts up.
+    pub const DIRECT_MESSAGE: &str = "direct_message";
+    /// A reply in a thread you follow, by someone else (C2.5).
+    pub const THREAD_REPLY: &str = "thread_reply";
+    /// A2: an agent or app you manage lost its connection or credential.
+    pub const CONNECTION_PROBLEM: &str = "connection_problem";
+    /// A2: an agent you manage or asked is marked "not responding".
+    pub const AGENT_UNRESPONSIVE: &str = "agent_unresponsive";
+    /// A2/H1: a budget you own reached its warning or its limit.
+    pub const BUDGET_WARNING: &str = "budget_warning";
+    /// A2's follows: a thing you follow changed.
+    pub const THING_UPDATE: &str = "thing_update";
 }
 
 /// Groups of kinds people filter the inbox by.
@@ -407,6 +423,8 @@ pub async fn fan_out(
         OutboxEventPayload::MessageCreated(created) => {
             let mut found = message_mentions(transaction, created.message_id).await?;
             found.extend(followed_messages(transaction, created.message_id).await?);
+            found.extend(direct_messages(transaction, created.message_id).await?);
+            found.extend(thing_comments(transaction, created.message_id).await?);
             found
         }
         OutboxEventPayload::MessageUpdated(updated) if updated.removed => {
@@ -669,6 +687,104 @@ async fn followed_messages(
             notification.actor_id = Some(row.author_actor_id);
             notification.conversation_id = Some(row.conversation_id);
             notification.message_id = Some(message_id);
+            notification
+        })
+        .collect())
+}
+
+/// A comment on a thing tells its followers (C1.3): the thing's maker (a
+/// task's assignee and watchers) and anyone who commented there before,
+/// each only while they may see it. A mention is told as a mention instead,
+/// and nobody is told of their own comment.
+async fn thing_comments(
+    transaction: &mut Transaction<'_, Postgres>,
+    message_id: Uuid,
+) -> Result<Vec<NewNotification>, AppError> {
+    let Some((project_id, conversation_id, comments_id, author, subject_kind, subject_id, href)) =
+        sqlx::query_as::<_, (Uuid, Uuid, Uuid, Uuid, String, Uuid, Option<String>)>(
+            r#"
+            -- visibility: a worker reading the message it was told of; recipients are
+            -- filtered by conversation_visible_to below
+            SELECT message.project_id, message.conversation_id,
+                   COALESCE(parent.id, conversation.id), message.author_actor_id,
+                   COALESCE(parent.subject_kind, conversation.subject_kind),
+                   COALESCE(parent.subject_id, conversation.subject_id),
+                   subject_href(COALESCE(parent.subject_kind, conversation.subject_kind),
+                                COALESCE(parent.subject_id, conversation.subject_id))
+            FROM messages message
+            JOIN conversations conversation ON conversation.id = message.conversation_id
+            LEFT JOIN conversations parent ON parent.id = conversation.parent_channel_id
+            WHERE message.id = $1 AND message.removed_at IS NULL
+              AND COALESCE(parent.kind, conversation.kind) = 'comments'
+            "#,
+        )
+        .bind(message_id)
+        .fetch_optional(&mut **transaction)
+        .await?
+    else {
+        return Ok(Vec::new());
+    };
+    let Some(thing_kind) = crate::discussion::SubjectKind::parse(&subject_kind) else {
+        return Ok(Vec::new());
+    };
+    let followers = thing_kind
+        .subject()
+        .followers(transaction, subject_id)
+        .await?;
+    let recipients = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        WITH candidate AS (
+            SELECT unnest($1::uuid[]) AS actor_id
+            UNION
+            -- visibility: authors only, of the discussion this message is in
+            SELECT DISTINCT earlier.author_actor_id
+            FROM messages earlier
+            JOIN conversations place ON place.id = earlier.conversation_id
+            WHERE (place.id = $2 OR place.parent_channel_id = $2)
+              AND earlier.removed_at IS NULL AND earlier.id <> $4
+        )
+        SELECT candidate.actor_id
+        FROM candidate
+        -- An inbox row is how people are told; agents are asked by mention.
+        JOIN actors actor ON actor.id = candidate.actor_id AND actor.kind = 'human' -- // kind-check: mechanical (how a follower is told)
+        WHERE candidate.actor_id <> $3
+          AND actor_can_access_project(candidate.actor_id, NULL, $5)
+          AND conversation_visible_to($6, candidate.actor_id)
+          AND NOT EXISTS (
+              SELECT 1 FROM message_mentions mention
+              WHERE mention.message_id = $4 AND mention.actor_id = candidate.actor_id
+          )
+        ORDER BY candidate.actor_id
+        "#,
+    )
+    .bind(&followers)
+    .bind(comments_id)
+    .bind(author)
+    .bind(message_id)
+    .bind(project_id)
+    .bind(conversation_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    Ok(recipients
+        .into_iter()
+        .map(|recipient| {
+            let mut notification = NewNotification::new(
+                project_id,
+                recipient,
+                kind::THING_COMMENT,
+                "conversation",
+                conversation_id,
+                format!("comments:{comments_id}"),
+                format!("message:{message_id}"),
+            );
+            notification.actor_id = Some(author);
+            notification.conversation_id = Some(conversation_id);
+            notification.message_id = Some(message_id);
+            notification.detail = serde_json::json!({
+                "subjectKind": thing_kind.as_str(),
+                "subjectId": subject_id,
+                "href": href,
+            });
             notification
         })
         .collect())
@@ -1481,6 +1597,8 @@ struct NotificationRow {
     conversation_kind: Option<String>,
     conversation_name: Option<String>,
     parent_conversation_id: Option<Uuid>,
+    /// Where a comment's thing opens, for a comments conversation (C1.3).
+    subject_href: Option<String>,
     message_id: Option<Uuid>,
     message_preview: Option<String>,
     comment_preview: Option<String>,
@@ -1533,6 +1651,11 @@ fn list_sql(view_condition: &str, extra: &str) -> String {
                n.conversation_id, conversation.kind AS conversation_kind,
                conversation.name AS conversation_name,
                conversation.parent_channel_id AS parent_conversation_id,
+               CASE WHEN COALESCE(comments_parent.kind, conversation.kind) = 'comments'
+                    THEN subject_href(
+                        COALESCE(comments_parent.subject_kind, conversation.subject_kind),
+                        COALESCE(comments_parent.subject_id, conversation.subject_id))
+               END AS subject_href,
                n.message_id,
                CASE WHEN message.removed_at IS NULL
                     THEN left(message.plain_text, {PREVIEW_CHARACTERS}) END AS message_preview,
@@ -1561,6 +1684,8 @@ fn list_sql(view_condition: &str, extra: &str) -> String {
           ON actor_member.project_id = n.project_id AND actor_member.actor_id = n.actor_id
         LEFT JOIN actors actor ON actor.id = n.actor_id
         LEFT JOIN conversations conversation ON conversation.id = n.conversation_id
+        LEFT JOIN conversations comments_parent
+          ON comments_parent.id = conversation.parent_channel_id
         LEFT JOIN messages message ON message.id = n.message_id
         LEFT JOIN work_item_comments comment ON comment.id = n.comment_id
         LEFT JOIN project_pages page ON n.subject_kind = 'page' AND page.id = n.subject_id
@@ -1758,6 +1883,10 @@ fn conversation_label(row: &NotificationRow) -> String {
 
 fn conversation_href(row: &NotificationRow) -> Option<String> {
     let conversation_id = row.conversation_id?;
+    // A comment opens on its thing (C1.3).
+    if let Some(href) = &row.subject_href {
+        return Some(href.clone());
+    }
     if row.direct_space {
         let id = row.parent_conversation_id.unwrap_or(conversation_id);
         return Some(format!("/messages/{id}"));
@@ -1806,6 +1935,7 @@ fn view(row: NotificationRow) -> NotificationView {
             row.message_preview.clone(),
         ),
         kind::CONVERSATION_MESSAGE => (format!("{who} in {place}"), row.message_preview.clone()),
+        kind::THING_COMMENT => (format!("{who} commented"), row.message_preview.clone()),
         kind::REMINDER => {
             let note = row
                 .detail
@@ -1943,7 +2073,10 @@ fn view(row: NotificationRow) -> NotificationView {
             Some(message_id)
                 if matches!(
                     row.kind.as_str(),
-                    kind::MENTION | kind::CONVERSATION_MESSAGE | kind::REMINDER
+                    kind::MENTION
+                        | kind::CONVERSATION_MESSAGE
+                        | kind::REMINDER
+                        | kind::THING_COMMENT
                 ) && row.message_preview.is_some() =>
             {
                 format!("{href}#message-{message_id}")
