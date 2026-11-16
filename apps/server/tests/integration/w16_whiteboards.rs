@@ -759,7 +759,7 @@ async fn agents_draw_read_render_and_restore_boards_through_mcp_alone() {
     let after_edit = edited["value"]["sceneSeq"].as_i64().expect("seq");
     assert!(after_edit > seq);
     let audited = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM audit_events WHERE action = 'whiteboard.edited' AND actor_id = $1",
+        "SELECT count(*) FROM audit_events WHERE action = 'whiteboard_update_elements' AND actor_id = $1",
     )
     .bind(rook)
     .fetch_one(&setup.pool)

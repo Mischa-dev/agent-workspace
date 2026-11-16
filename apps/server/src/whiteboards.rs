@@ -16,6 +16,7 @@ pub mod edit;
 pub mod elements;
 pub mod fractional;
 mod http;
+pub mod ops;
 pub mod render;
 pub mod scene;
 pub mod store;

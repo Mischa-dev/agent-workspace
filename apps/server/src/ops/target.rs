@@ -130,6 +130,13 @@ const KINDS: &[(&str, &str)] = &[
         "module",
         "SELECT workspace_id, space_id FROM modules WHERE id = $1 AND $2::uuid IS NOT NULL",
     ),
+    // K2.12: a whiteboard, in its space or (space NULL) the workspace; one
+    // in the trash too, so it can be restored. Its own rules (a space
+    // board for the space's members) are checked again by `access`.
+    (
+        "whiteboard",
+        "SELECT organization_id, project_id FROM whiteboards WHERE id = $1 AND $2::uuid IS NOT NULL",
+    ),
     // M1.9: a package install, in its space or the workspace.
     (
         "package_install",
@@ -235,6 +242,7 @@ fn what_of(kind: &str) -> &'static str {
         "run" => "That run",
         "module" => "That module",
         "package_install" => "That install",
+        "whiteboard" => "That whiteboard",
         _ => "That",
     }
 }
