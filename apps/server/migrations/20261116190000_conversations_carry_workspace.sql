@@ -70,7 +70,9 @@ CREATE INDEX conversations_workspace_kind_idx ON conversations (workspace_id, ki
 -- project_id is NULL, so it holds before and after K4.17. The space check is
 -- space_readable_by written out in place: a SQL function holding EXISTS is
 -- never inlined, and calling one per row from inside another cost ten times
--- the old rule in message search. Keep the two in step.
+-- the old rule in message search. Keep the two in step. It differs in one
+-- place, on purpose: a run's own worker account, which has a space
+-- membership and no workspace membership, still reads its space's channels.
 CREATE FUNCTION conversation_member_visible(target UUID, viewer UUID)
 RETURNS BOOLEAN
 LANGUAGE sql
@@ -97,19 +99,28 @@ AS $$
               -- Channels and their threads: readers of the space (its
               -- members, everyone in the workspace for the workspace's own
               -- space and open spaces, never an archived one); private
-              -- channels, their members only.
+              -- channels, their members only. An account whose workspace
+              -- membership is disabled reads none; one that never had a
+              -- workspace membership (a run's own worker account, until K1.8
+              -- makes those accounts) reads by its space membership alone.
               ELSE EXISTS (
                   SELECT 1 FROM projects s
-                  JOIN organization_memberships w
-                    ON w.organization_id = s.organization_id
-                   AND w.actor_id = viewer AND w.enabled
                   WHERE s.id = c.project_id AND s.archived_at IS NULL
-                    AND (s.kind = 'workspace'
-                         OR (s.visibility = 'workspace' AND s.kind IN ('team', 'standard'))
-                         OR EXISTS (
+                    AND (
+                        (EXISTS (
                              SELECT 1 FROM project_memberships p
                              WHERE p.project_id = s.id AND p.actor_id = viewer
-                               AND p.enabled)))
+                               AND p.enabled)
+                         AND NOT EXISTS (
+                             SELECT 1 FROM organization_memberships w
+                             WHERE w.organization_id = s.organization_id
+                               AND w.actor_id = viewer AND NOT w.enabled))
+                        OR ((s.kind = 'workspace'
+                             OR (s.visibility = 'workspace' AND s.kind IN ('team', 'standard')))
+                            AND EXISTS (
+                                SELECT 1 FROM organization_memberships w
+                                WHERE w.organization_id = s.organization_id
+                                  AND w.actor_id = viewer AND w.enabled))))
                   AND (COALESCE(parent.visibility, c.visibility) = 'project'
                        OR EXISTS (
                            SELECT 1 FROM conversation_members m

@@ -217,10 +217,12 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
     .fetch_one(&mut *transaction)
     .await?;
 
+    // The seed runs against older schemas in the upgrade tests, so it
+    // leaves conversations.workspace_id to its fill trigger (K4.4).
     let channel_id = sqlx::query_scalar::<_, Uuid>(
         r#"
-        INSERT INTO conversations (id, project_id, workspace_id, kind, name)
-        VALUES ($1, $2, (SELECT organization_id FROM projects WHERE id = $2), 'channel', 'implementation')
+        INSERT INTO conversations (id, project_id, kind, name)
+        VALUES ($1, $2, 'channel', 'implementation')
         ON CONFLICT (project_id, lower(name))
             WHERE kind = 'channel' AND archived_at IS NULL
         DO UPDATE SET updated_at = now()
@@ -254,9 +256,9 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
     let thread_id = sqlx::query_scalar::<_, Uuid>(&format!(
         r#"
         INSERT INTO conversations (
-            id, project_id, workspace_id, kind, parent_channel_id, repository_id, name
+            id, project_id, kind, parent_channel_id, repository_id, name
         )
-        VALUES ($1, $2, (SELECT organization_id FROM projects WHERE id = $2), 'thread', $3, $4, 'M0 walking skeleton')
+        VALUES ($1, $2, 'thread', $3, $4, 'M0 walking skeleton')
         ON CONFLICT (parent_channel_id, lower(name)) WHERE {named_threads}
         DO UPDATE SET repository_id = EXCLUDED.repository_id, updated_at = now()
         RETURNING id

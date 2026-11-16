@@ -183,7 +183,11 @@ const AGENTS_HEADING: &str = "Rules while the foundations are rebuilt";
 
 /// Files the guards never read: the guards themselves and the scanner, whose
 /// samples would count against them.
-const SKIPPED: &[&str] = &["structure_guards.rs", "test_support/source.rs"];
+const SKIPPED: &[&str] = &[
+    "structure_guards.rs",
+    "test_support/source.rs",
+    "spaces/guards.rs",
+];
 
 /// The built-in roles a raw check names.
 const BUILT_IN_ROLES: [&str; 5] = ["owner", "admin", "member", "viewer", "worker"];

@@ -2467,8 +2467,17 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
         .await
         .expect("remove approver from seed project");
     assert_eq!(removed.status(), StatusCode::OK);
-    let denied = mcp_request(&application,&approver_token,Some(&approver_session),json!({"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"approval_respond","arguments":{"approvalId":approval_id.to_string(),"expectedVersion":1,"answer":"main","clientRequestId":"cross-project-denied"}}})).await;
-    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    // K1.6: leaving a project no longer signs the agent out; the request in
+    // that project is refused, as anything there is.
+    let denied = call_mcp_tool(
+        &application,
+        &approver_token,
+        &approver_session,
+        "approval_respond",
+        json!({"approvalId":approval_id.to_string(),"expectedVersion":1,"answer":"main","clientRequestId":"cross-project-denied"}),
+    )
+    .await;
+    assert_ne!(denied["outcome"], "applied", "{denied}");
     let rejoined = application
         .clone()
         .oneshot(write_request_with_idempotency(
