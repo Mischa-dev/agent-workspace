@@ -1113,8 +1113,8 @@
     overflow: visible !important;
     height: auto !important;
     max-width: none !important;
-    background: #fff !important;
-    color: #111 !important;
+    background: #fff !important; /* design-exception: paper, whatever the theme */
+    color: #111 !important; /* design-exception: ink on paper, whatever the theme */
   }
 
   .aw-page pre,
