@@ -50,7 +50,10 @@ fn assert_refused(result: &Value, field: &str, says: &str) {
     assert_eq!(result["outcome"], "invalid_request", "{result}");
     assert_eq!(result["field"], field, "{result}");
     assert!(
-        matches!(result["retryCategory"].as_str(), Some("correct_input" | "fix_input")),
+        matches!(
+            result["retryCategory"].as_str(),
+            Some("correct_input" | "fix_input")
+        ),
         "{result}"
     );
     assert!(message(result).contains(says), "{result}");
@@ -188,7 +191,11 @@ async fn an_agent_lays_out_a_plan_and_reorganizes_the_board() {
     assert_eq!(created["value"]["version"], 1);
     assert_eq!(created["value"]["key"], "WORK-4");
     assert_eq!(created["value"]["changedFields"], json!(["work_item"]));
-    assert_eq!(created["value"]["labels"], json!(["Mobile", "Sync"]), "{created}");
+    assert_eq!(
+        created["value"]["labels"],
+        json!(["Mobile", "Sync"]),
+        "{created}"
+    );
     let offline = id(&created["value"]["workItemId"]);
     assert!(
         created["value"]["url"]
@@ -347,7 +354,11 @@ async fn an_agent_lays_out_a_plan_and_reorganizes_the_board() {
         json!({"taskId": "WORK-1", "expectedVersion": 1, "beforeTaskId": "WORK-4"}),
     )
     .await;
-    assert_eq!(moved["value"]["changedFields"], json!(["position"]), "{moved}");
+    assert_eq!(
+        moved["value"]["changedFields"],
+        json!(["position"]),
+        "{moved}"
+    );
     assert_eq!(
         column(app, &codex, &session, "Ready").await,
         ["WORK-2", "WORK-1", "WORK-4", "WORK-6"]
@@ -656,7 +667,11 @@ async fn reparenting_refuses_cycles_and_never_names_projects_out_of_reach() {
         json!({"taskId": "WORK-3", "expectedVersion": 2, "parentId": "WORK-1"}),
     )
     .await;
-    assert_eq!(moved["value"]["changedFields"], json!(["parent"]), "{moved}");
+    assert_eq!(
+        moved["value"]["changedFields"],
+        json!(["parent"]),
+        "{moved}"
+    );
     assert_eq!(parent(&setup, c).await, Some(a));
 
     // The database refuses a cycle from any writer, not only through MCP.
@@ -738,7 +753,11 @@ async fn reparenting_refuses_cycles_and_never_names_projects_out_of_reach() {
     )
     .await;
     assert_eq!(renamed["outcome"], "ok", "{renamed}");
-    assert_eq!(renamed["value"]["changedFields"], json!(["title"]), "{renamed}");
+    assert_eq!(
+        renamed["value"]["changedFields"],
+        json!(["title"]),
+        "{renamed}"
+    );
 }
 
 #[tokio::test]

@@ -161,6 +161,7 @@ pub async fn is_on(connection: &mut PgConnection, module: &ModuleRow) -> Result<
 }
 
 /// A new module row. Refuses a key a live module has.
+#[allow(clippy::too_many_arguments)]
 pub async fn insert(
     connection: &mut PgConnection,
     workspace_id: Uuid,

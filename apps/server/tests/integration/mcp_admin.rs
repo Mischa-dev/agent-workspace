@@ -607,7 +607,10 @@ async fn moved_tasks_carry_over_and_old_keys_follow_them() {
     )
     .await;
     assert_eq!(created["outcome"], "ok", "{created}");
-    let task = created["value"]["workItemId"].as_str().expect("task").to_owned();
+    let task = created["value"]["workItemId"]
+        .as_str()
+        .expect("task")
+        .to_owned();
     let subtask = tool(
         app,
         &codex,
