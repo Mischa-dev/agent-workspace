@@ -32,6 +32,7 @@ export const PERMISSION_KEYS = [
   'code.publish',
   'code.manage',
   'agents.manage',
+  'agents.manage_any',
   'hosts.manage',
   'members.view',
   'directory.view',

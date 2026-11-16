@@ -96,6 +96,21 @@ async fn make_admin(setup: &Setup, actor: Uuid) {
     .expect("make admin");
 }
 
+/// K1.4: an admin manages an agent only when named as its manager (the
+/// owner holds `agents.manage_any`).
+async fn name_manager(setup: &Setup, agent: Uuid, manager: Uuid) {
+    sqlx::query(
+        "INSERT INTO account_managers (account_id, manager_account_id, workspace_id) \
+         VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+    )
+    .bind(agent)
+    .bind(manager)
+    .bind(setup.organization_id)
+    .execute(&setup.pool)
+    .await
+    .expect("name a manager");
+}
+
 fn keys(value: &Value) -> Vec<String> {
     value
         .as_array()
@@ -639,7 +654,7 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
 
     // The limit holds inside tools that check access themselves, too.
     let made_title = sqlx::query_scalar::<_, String>(
-        "SELECT id::text FROM work_items WHERE project_id = $1 AND title = 'Made in the browser'",
+        "SELECT id::text FROM task_rows WHERE project_id = $1 AND title = 'Made in the browser'",
     )
     .bind(work.parse::<Uuid>().expect("project"))
     .fetch_one(&setup.pool)
@@ -681,7 +696,7 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
         "{status}: {refused}"
     );
     let scripted = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM work_items WHERE title IN ('Made by the app', 'Made by a script', 'Renamed by the app')",
+        "SELECT count(*) FROM task_rows WHERE title IN ('Made by the app', 'Made by a script', 'Renamed by the app')",
     )
     .fetch_one(&setup.pool)
     .await
@@ -1065,7 +1080,7 @@ async fn creating_from_a_template_needs_create_tasks_in_that_project() {
     .await;
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
     let in_beta = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM work_items WHERE project_id = $1 AND title = 'From the template'",
+        "SELECT count(*) FROM task_rows WHERE project_id = $1 AND title = 'From the template'",
     )
     .bind(beta.parse::<Uuid>().expect("project"))
     .fetch_one(&setup.pool)
@@ -2636,6 +2651,7 @@ async fn connecting_an_app_as_an_agent_stays_within_the_project_role() {
         }
     };
     let (mara, _) = create_agent(&setup.app, &setup.browser, &work, "Mara", "mara").await;
+    name_manager(&setup, mara, alex).await;
     let (connection, _, _) = agent_connection(&setup, mara).await;
 
     set_alex(Some(
@@ -3009,7 +3025,7 @@ async fn a_write_token_follows_any_write_permission() {
     .await;
     assert_ne!(refused["outcome"], "applied", "{refused}");
     let renamed = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM work_items WHERE title = 'Renamed by the token'",
+        "SELECT count(*) FROM task_rows WHERE title = 'Renamed by the token'",
     )
     .fetch_one(&setup.pool)
     .await
@@ -3661,6 +3677,8 @@ async fn rotating_an_agent_checks_the_role_it_holds() {
     // Mara holds a custom role without "edit tasks"; Rook holds Member.
     let (mara, _) = create_agent(app, &setup.browser, &work, "Mara", "mara").await;
     let (rook, _) = create_agent(app, &setup.browser, &work, "Rook", "rook").await;
+    name_manager(&setup, mara, alex).await;
+    name_manager(&setup, rook, alex).await;
     let (status, quiet) = create_role(
         &setup,
         &setup.browser,
@@ -3765,6 +3783,8 @@ async fn agents_are_given_only_what_the_giver_holds_in_the_project() {
     // The owner's agents: Rook holds Member, Mara a role within Alex's.
     let (rook, _) = create_agent(app, &setup.browser, &work, "Rook", "rook").await;
     let (mara, _) = create_agent(app, &setup.browser, &work, "Mara", "mara").await;
+    name_manager(&setup, rook, alex).await;
+    name_manager(&setup, mara, alex).await;
     let (status, readers) = create_role(
         &setup,
         &setup.browser,
@@ -4598,7 +4618,7 @@ async fn a_repeated_move_shows_the_title_only_where_tasks_are_seen() {
         .expect("destination")
         .parse::<Uuid>()
         .expect("destination id");
-    sqlx::query("UPDATE work_items SET title = 'Renamed where it went' WHERE id = $1")
+    sqlx::query("UPDATE collection_records SET title = 'Renamed where it went' WHERE id = $1")
         .bind(destination)
         .execute(&setup.pool)
         .await
@@ -5291,7 +5311,7 @@ async fn moving_a_task_needs_its_contents_and_code_to_be_seen() {
         async move {
             sqlx::query_scalar::<_, i64>(
                 r#"
-                SELECT count(*) FROM work_items item
+                SELECT count(*) FROM task_rows item
                 LEFT JOIN work_item_comments comment ON comment.work_item_id = item.id
                 WHERE item.project_id = $1
                   AND (strpos(item.description, $2) > 0 OR strpos(comment.content::text, $2) > 0)
@@ -5641,4 +5661,115 @@ async fn task_version(setup: &Setup, project: Uuid, task: Uuid) -> i64 {
         .fetch_one(&setup.pool)
         .await
         .expect("version")
+}
+
+/// K1.3: the catalogue SQL reads is the one in `policy::PERMISSIONS`, key
+/// for key, and `role_allows` answers as the built-in roles and custom
+/// roles do in Rust: a viewer or a worker never edits tasks, whatever a
+/// custom role lists.
+#[tokio::test]
+async fn catalogue_matches_sql_and_role_allows_holds_to_the_role() {
+    use agent_workspace_server::policy::{MembershipRole, PERMISSIONS, PermissionScope, RoleGrant};
+    let Some(setup) = setup("k13_catalogue").await else {
+        return;
+    };
+    let rows = sqlx::query_as::<_, (String, String, String, bool, Vec<String>)>(
+        "SELECT key, module, scope, required, default_for FROM permission_catalogue ORDER BY key",
+    )
+    .fetch_all(&setup.pool)
+    .await
+    .expect("catalogue rows");
+    let mut expected = PERMISSIONS
+        .iter()
+        .map(|info| {
+            let default_for = ["owner", "admin", "member", "viewer"]
+                .into_iter()
+                .zip(info.built_in)
+                .filter(|(_, held)| *held)
+                .map(|(role, _)| role.to_owned())
+                .collect::<Vec<_>>();
+            let scope = match info.scope {
+                PermissionScope::Project => "space",
+                PermissionScope::Workspace => "workspace",
+                PermissionScope::Both => "both",
+            };
+            (
+                info.key.to_owned(),
+                info.module.to_owned(),
+                scope.to_owned(),
+                info.required,
+                default_for,
+            )
+        })
+        .collect::<Vec<_>>();
+    expected.sort();
+    assert_eq!(
+        rows, expected,
+        "permission_catalogue drifted from policy::PERMISSIONS"
+    );
+
+    let allows = |role: &'static str, role_id: Option<Uuid>, key: &'static str| {
+        let pool = setup.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, bool>("SELECT role_allows($1, $2, $3)")
+                .bind(role)
+                .bind(role_id)
+                .bind(key)
+                .fetch_one(&pool)
+                .await
+                .expect("role_allows")
+        }
+    };
+    for role in MembershipRole::ALL {
+        for info in PERMISSIONS {
+            assert_eq!(
+                allows(role.key(), None, info.key).await,
+                RoleGrant::built_in(role)
+                    .permissions()
+                    .contains(info.permission)
+                    && role != MembershipRole::Worker,
+                "{} {}",
+                role.key(),
+                info.key
+            );
+        }
+    }
+    assert!(!allows("viewer", None, "tasks.edit").await);
+    assert!(!allows("worker", None, "tasks.edit").await);
+    assert!(!allows("member", None, "no.such_key").await);
+
+    // A custom role: its list, within its base, plus what every role holds.
+    let (status, body) = send(
+        &setup.app,
+        setup.browser.request(
+            "POST",
+            &roles_path(&setup),
+            None,
+            json!({"name": "Reader", "baseRole": "viewer", "permissions": ["tasks.view"]}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{body}");
+    let reader = body["role"]["id"]
+        .as_str()
+        .or_else(|| body["id"].as_str())
+        .and_then(|id| Uuid::parse_str(id).ok())
+        .expect("role id");
+    assert!(allows("viewer", Some(reader), "tasks.view").await);
+    assert!(
+        allows("viewer", Some(reader), "projects.view").await,
+        "required"
+    );
+    assert!(!allows("viewer", Some(reader), "code.view").await);
+    sqlx::query(
+        "UPDATE workspace_roles SET permissions = permissions || '{tasks.edit}' WHERE id = $1",
+    )
+    .bind(reader)
+    .execute(&setup.pool)
+    .await
+    .expect("plant a key beyond the base");
+    assert!(
+        !allows("viewer", Some(reader), "tasks.edit").await,
+        "a custom role never holds more than its base"
+    );
 }

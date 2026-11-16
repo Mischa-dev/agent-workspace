@@ -143,7 +143,7 @@ mod tests {
 
     #[test]
     fn the_database_domain_has_the_same_grammar() {
-        let migration = include_str!("../../migrations/20261114190000_event_log.sql");
+        let migration = include_str!("../../migrations/20261114190800_event_log.sql");
         assert!(
             migration.contains(&format!("CHECK (VALUE ~ '{NAME_PATTERN}')")),
             "thing_kind_name and NAME_PATTERN must match"

@@ -19,8 +19,8 @@
 -- a write during the backfill never fails on the deferred foreign key; the
 -- backfill sets the rest when a source finishes.
 --
--- Tasks as records (T1.3's stopgap, 20261114010000): a task's record has the
--- task's id. The work_items source claims the row as kind `task` whichever
+-- Tasks as records (T1.3): a task's record has the task's id and is written
+-- first. The work_items source claims the row as kind `task` whichever
 -- is written first; the collection_records source never overwrites a row of
 -- another kind.
 
@@ -120,12 +120,15 @@ JOIN projects project ON project.id = conversation.project_id;
 CREATE VIEW thing_source_work_items AS
 SELECT item.id, 'task'::text AS kind, project.organization_id AS workspace_id,
        item.project_id AS space_id, thing_if_registered(item.parent_work_item_id) AS parent_id,
-       NULL::uuid AS access_parent_id, left(item.title, 300) AS title,
+       NULL::uuid AS access_parent_id, left(record.title, 300) AS title,
        status.semantic_category AS status,
        item.assignee_actor_id AS owner_account_id, item.created_by_actor_id AS created_by_account_id,
        NULL::uuid AS updated_by_account_id, item.version,
-       item.created_at, item.updated_at, item.archived_at, NULL::timestamptz AS deleted_at
+       item.created_at, item.updated_at, record.archived_at, NULL::timestamptz AS deleted_at
 FROM work_items item
+-- The title and archive state are the task's record's (T1.3); every change
+-- to them also advances work_items.version, so this table's trigger hears it.
+JOIN collection_records record ON record.id = item.id AND record.project_id = item.project_id
 JOIN projects project ON project.id = item.project_id
 JOIN work_item_statuses status ON status.id = item.status_id;
 
@@ -253,8 +256,7 @@ CREATE TRIGGER things_sync AFTER INSERT OR DELETE OR UPDATE OF
     ON conversations FOR EACH ROW
     EXECUTE FUNCTION things_sync('thing_source_conversations', '{channel,thread,conversation}');
 CREATE TRIGGER things_sync AFTER INSERT OR DELETE OR UPDATE OF
-    project_id, parent_work_item_id, title, status_id, assignee_actor_id, version, updated_at,
-    archived_at
+    project_id, parent_work_item_id, status_id, assignee_actor_id, version, updated_at
     ON work_items FOR EACH ROW EXECUTE FUNCTION things_sync('thing_source_work_items', '{task}');
 CREATE TRIGGER things_sync AFTER INSERT OR DELETE OR UPDATE OF
     project_id, title, updated_by_actor_id, version, updated_at, archived_at

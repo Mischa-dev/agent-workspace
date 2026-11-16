@@ -166,6 +166,15 @@ pub async fn mirror(
             None,
             None,
         ),
+        P::AccountManagersChanged(p) => (
+            &catalog::ACCOUNT_MANAGERS_CHANGED,
+            "account",
+            p.account_id,
+            None,
+            Audience::Account(p.actor_id),
+            None,
+            None,
+        ),
         // A workspace board has no project of its own: whoever can see the
         // board hears it, checked per event (as realtime does today).
         P::WhiteboardUpdated(p) => (

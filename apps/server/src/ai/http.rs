@@ -608,7 +608,7 @@ async fn task_in_project(
     task_id: Uuid,
 ) -> Result<bool, AppError> {
     Ok(sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (SELECT 1 FROM work_items WHERE project_id = $1 AND id = $2 AND archived_at IS NULL)",
+        "SELECT EXISTS (SELECT 1 FROM task_rows WHERE project_id = $1 AND id = $2 AND archived_at IS NULL)",
     )
     .bind(project_id)
     .bind(task_id)
@@ -666,7 +666,7 @@ pub(crate) async fn draft_criteria(
             r#"
             SELECT project.project_key || '-' || item.number, item.title,
                    left(item.description, 6000), kind.name
-            FROM work_items item
+            FROM task_rows item
             JOIN projects project ON project.id = item.project_id
             JOIN work_item_types kind ON kind.project_id = item.project_id AND kind.id = item.type_id
             WHERE item.project_id = $1 AND item.id = $2 AND item.archived_at IS NULL

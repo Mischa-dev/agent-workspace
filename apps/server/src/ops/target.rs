@@ -95,7 +95,7 @@ const KINDS: &[(&str, &str)] = &[
     ),
     (
         "task",
-        "SELECT project.organization_id, project.id FROM work_items item \
+        "SELECT project.organization_id, project.id FROM task_rows item \
          JOIN projects project ON project.id = item.project_id \
          WHERE item.id = $1 AND $2::uuid IS NOT NULL",
     ),

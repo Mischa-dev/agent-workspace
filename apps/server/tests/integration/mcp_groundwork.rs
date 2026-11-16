@@ -257,7 +257,7 @@ async fn a_task_whose_status_changes_goes_to_the_bottom_of_its_new_column() {
         r#"
         SELECT activity.payload
         FROM work_item_activity activity
-        JOIN work_items item ON item.id = activity.work_item_id
+        JOIN task_rows item ON item.id = activity.work_item_id
         WHERE item.number = 1 AND activity.kind = 'work_item_updated'
         ORDER BY activity.created_at DESC
         LIMIT 1
@@ -404,7 +404,7 @@ async fn archiving_releases_claims_and_moved_originals_stay_archived() {
     assert_eq!(status, StatusCode::CONFLICT, "{refused}");
     assert_eq!(refused["error"]["code"], "conflict", "{refused}");
     let still_archived = sqlx::query_scalar::<_, bool>(
-        "SELECT archived_at IS NOT NULL FROM work_items WHERE id = $1",
+        "SELECT archived_at IS NOT NULL FROM task_rows WHERE id = $1",
     )
     .bind(task.parse::<Uuid>().expect("task UUID"))
     .fetch_one(&setup.pool)

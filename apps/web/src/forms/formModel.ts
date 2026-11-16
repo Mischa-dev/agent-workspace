@@ -5,7 +5,7 @@
  * record, made as the person who shared the form.
  */
 
-export type PublicFieldType = 'text' | 'number' | 'date' | 'single_choice' | 'multiple_choice' | 'url' | 'checkbox'
+export type PublicFieldType = 'text' | 'long_text' | 'number' | 'date' | 'single_choice' | 'multiple_choice' | 'status' | 'url' | 'email' | 'phone' | 'checkbox'
 
 export type PublicField = {
   id: string
@@ -31,7 +31,7 @@ export type Answers = Record<string, string | string[] | boolean>
 type Wire = Record<string, unknown>
 const asRecord = (value: unknown): Wire => (value && typeof value === 'object' && !Array.isArray(value) ? (value as Wire) : {})
 const asString = (value: unknown) => (typeof value === 'string' ? value : '')
-const TYPES: readonly PublicFieldType[] = ['text', 'number', 'date', 'single_choice', 'multiple_choice', 'url', 'checkbox']
+const TYPES: readonly PublicFieldType[] = ['text', 'long_text', 'number', 'date', 'single_choice', 'multiple_choice', 'status', 'url', 'email', 'phone', 'checkbox']
 
 export function normalizeForm(value: unknown): PublicForm {
   const raw = asRecord(value)

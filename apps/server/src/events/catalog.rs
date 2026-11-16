@@ -405,6 +405,13 @@ pub static NOTIFICATION_CHANGED: EventType = signal(
     "Someone's notifications changed",
 )
 .legacy(&["notifications.updated"]);
+pub static ACCOUNT_MANAGERS_CHANGED: EventType = signal(
+    "account.managers_changed",
+    "agents",
+    None,
+    "Who manages an agent or app changed",
+)
+.legacy(&["account.managers.changed"]);
 pub static QUESTION_ASKED: EventType = fact(
     "question.asked",
     "inbox",
@@ -466,6 +473,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &FILE_ATTACHED,
         &FILE_REMOVED,
         &NOTIFICATION_CHANGED,
+        &ACCOUNT_MANAGERS_CHANGED,
         &QUESTION_ASKED,
         &QUESTION_ANSWERED,
     ];

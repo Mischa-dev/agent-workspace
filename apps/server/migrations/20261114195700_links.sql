@@ -357,29 +357,29 @@ BEGIN
     ) value;
 END $$;
 
-CREATE FUNCTION links_sync_record_fields(r collection_records) RETURNS void
-LANGUAGE sql AS $$
-    SELECT links_sync_fields(r.id, r.field_values, r.updated_by_actor_id, ARRAY(
-        SELECT id FROM field_definitions
-        WHERE project_id = r.project_id AND collection_id = r.collection_id
-          AND field_type = 'link'))
+-- A task's field values are its record's (T1.3), so a record of a
+-- collection that acts like a task also has the project's task fields.
+CREATE FUNCTION links_record_field_ids(r collection_records) RETURNS UUID[]
+LANGUAGE sql STABLE AS $$
+    SELECT ARRAY(
+        SELECT definition.id FROM field_definitions definition
+        WHERE definition.project_id = r.project_id AND definition.field_type = 'link'
+          AND (definition.collection_id = r.collection_id
+               OR (definition.record_kind = 'task' AND definition.collection_id IS NULL
+                   AND EXISTS (SELECT 1 FROM collections collection
+                               WHERE collection.id = r.collection_id
+                                 AND collection.acts_like_task))))
 $$;
 
-CREATE FUNCTION links_sync_task_fields(r work_items) RETURNS void
+CREATE FUNCTION links_sync_record_fields(r collection_records) RETURNS void
 LANGUAGE sql AS $$
-    SELECT links_sync_fields(r.id, r.field_values, NULL, ARRAY(
-        SELECT id FROM field_definitions
-        WHERE project_id = r.project_id AND record_kind = 'task' AND collection_id IS NULL
-          AND field_type = 'link'))
+    SELECT links_sync_fields(r.id, r.field_values, r.updated_by_actor_id,
+                             links_record_field_ids(r))
 $$;
 
 CREATE FUNCTION links_from_fields() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    IF TG_TABLE_NAME = 'collection_records' THEN
-        PERFORM links_sync_record_fields(NEW);
-    ELSE
-        PERFORM links_sync_task_fields(NEW);
-    END IF;
+    PERFORM links_sync_record_fields(NEW);
     RETURN NULL;
 END $$;
 
@@ -387,12 +387,6 @@ CREATE TRIGGER things_sync_links AFTER INSERT ON collection_records
     FOR EACH ROW WHEN (NEW.field_values IS NOT NULL AND NEW.field_values <> '{}'::jsonb)
     EXECUTE FUNCTION links_from_fields();
 CREATE TRIGGER things_sync_links_update AFTER UPDATE OF field_values ON collection_records
-    FOR EACH ROW WHEN (OLD.field_values IS DISTINCT FROM NEW.field_values)
-    EXECUTE FUNCTION links_from_fields();
-CREATE TRIGGER things_sync_links AFTER INSERT ON work_items
-    FOR EACH ROW WHEN (NEW.field_values IS NOT NULL AND NEW.field_values <> '{}'::jsonb)
-    EXECUTE FUNCTION links_from_fields();
-CREATE TRIGGER things_sync_links_update AFTER UPDATE OF field_values ON work_items
     FOR EACH ROW WHEN (OLD.field_values IS DISTINCT FROM NEW.field_values)
     EXECUTE FUNCTION links_from_fields();
 
@@ -421,14 +415,8 @@ BEGIN
         WHERE r.source_message_id IS NOT NULL OR r.source_conversation_id IS NOT NULL;
     PERFORM links_put_row(link_of(r)) FROM whiteboards r WHERE r.duplicated_from_id IS NOT NULL;
     PERFORM links_sync_record_fields(r) FROM collection_records r
-        WHERE r.field_values <> '{}'::jsonb AND EXISTS (
-            SELECT 1 FROM field_definitions definition
-            WHERE definition.collection_id = r.collection_id AND definition.field_type = 'link');
-    PERFORM links_sync_task_fields(r) FROM work_items r
-        WHERE r.field_values <> '{}'::jsonb AND EXISTS (
-            SELECT 1 FROM field_definitions definition
-            WHERE definition.project_id = r.project_id AND definition.record_kind = 'task'
-              AND definition.collection_id IS NULL AND definition.field_type = 'link');
+        WHERE r.field_values <> '{}'::jsonb
+          AND cardinality(links_record_field_ids(r)) > 0;
     RETURN (SELECT count(*) FROM links) - before;
 END $$;
 

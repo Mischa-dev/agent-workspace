@@ -35,6 +35,7 @@ pub enum OutboxResourceKind {
     AgentRun,
     WorkItem,
     Notification,
+    Account,
     Whiteboard,
     Page,
     Collection,
@@ -48,6 +49,7 @@ impl OutboxResourceKind {
             Self::Conversation => "conversation",
             Self::Message => "message",
             Self::ReadState => "read_state",
+            Self::Account => "account",
             Self::AgentRun => "agent_run",
             Self::WorkItem => "work_item",
             Self::Notification => "notification",
@@ -214,6 +216,21 @@ pub struct ProjectMembershipUpdatedPayload {
     pub version: i64,
 }
 
+/// Who manages an agent or app account changed (K1.4): delivered to the
+/// manager named or un-named (`actorId`), whose screens refetch what they
+/// may manage. Ids only.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AccountManagersChangedPayload {
+    /// The manager whose rights changed.
+    pub actor_id: Uuid,
+    /// The agent or app account.
+    pub account_id: Uuid,
+    pub workspace_id: Uuid,
+    /// Whether they are a manager now.
+    pub managing: bool,
+}
+
 /// Someone's notifications changed (one was added or came back unread). The
 /// recipient's ID only: delivered to them alone, and browsers refetch the
 /// inbox over HTTP.
@@ -297,6 +314,7 @@ pub const LEGACY_EVENT_TYPES: &[&str] = &[
     "work_item.updated",
     "project.membership.updated",
     "notifications.updated",
+    "account.managers.changed",
     "whiteboard.updated",
     "page.updated",
     "page.discussion.updated",
@@ -320,6 +338,7 @@ pub enum OutboxEventPayload {
     WorkItemUpdated(WorkItemUpdatedPayload),
     ProjectMembershipUpdated(ProjectMembershipUpdatedPayload),
     NotificationsUpdated(NotificationsUpdatedPayload),
+    AccountManagersChanged(AccountManagersChangedPayload),
     WhiteboardUpdated(WhiteboardUpdatedPayload),
     PageUpdated(PageUpdatedPayload),
     PageDiscussionUpdated(PageDiscussionUpdatedPayload),
@@ -344,6 +363,7 @@ impl OutboxEventPayload {
             Self::WorkItemUpdated(_) => "work_item.updated",
             Self::ProjectMembershipUpdated(_) => "project.membership.updated",
             Self::NotificationsUpdated(_) => "notifications.updated",
+            Self::AccountManagersChanged(_) => "account.managers.changed",
             Self::WhiteboardUpdated(_) => "whiteboard.updated",
             Self::PageUpdated(_) => "page.updated",
             Self::PageDiscussionUpdated(_) => "page.discussion.updated",
@@ -371,6 +391,7 @@ impl OutboxEventPayload {
             | Self::WorkItemUpdated(_)
             | Self::ProjectMembershipUpdated(_)
             | Self::NotificationsUpdated(_)
+            | Self::AccountManagersChanged(_)
             | Self::WhiteboardUpdated(_)
             | Self::PageUpdated(_)
             | Self::PageDiscussionUpdated(_)
@@ -387,6 +408,7 @@ impl OutboxEventPayload {
             Self::ReadStateUpdated(payload) => Some(payload.actor_id),
             Self::ConversationMemberRemoved(payload) => Some(payload.actor_id),
             Self::NotificationsUpdated(payload) => Some(payload.actor_id),
+            Self::AccountManagersChanged(payload) => Some(payload.actor_id),
             _ => None,
         }
     }
@@ -406,6 +428,7 @@ impl OutboxEventPayload {
             Self::WorkItemUpdated(_) => OutboxResourceKind::WorkItem,
             Self::ProjectMembershipUpdated(_) => OutboxResourceKind::Project,
             Self::NotificationsUpdated(_) => OutboxResourceKind::Notification,
+            Self::AccountManagersChanged(_) => OutboxResourceKind::Account,
             Self::WhiteboardUpdated(_) => OutboxResourceKind::Whiteboard,
             Self::PageUpdated(_) => OutboxResourceKind::Page,
             Self::PageDiscussionUpdated(_) => OutboxResourceKind::Page,
@@ -433,6 +456,7 @@ impl OutboxEventPayload {
             Self::ProjectMembershipUpdated(payload) => payload.project_id,
             // Keyed by recipient, like read state.
             Self::NotificationsUpdated(payload) => payload.actor_id,
+            Self::AccountManagersChanged(payload) => payload.account_id,
             Self::WhiteboardUpdated(payload) => payload.whiteboard_id,
             Self::PageUpdated(payload) => payload.page_id,
             Self::PageDiscussionUpdated(payload) => payload.page_id,
@@ -529,6 +553,7 @@ impl OutboxEventPayload {
             Self::WorkItemUpdated(payload) => serde_json::to_value(payload),
             Self::ProjectMembershipUpdated(payload) => serde_json::to_value(payload),
             Self::NotificationsUpdated(payload) => serde_json::to_value(payload),
+            Self::AccountManagersChanged(payload) => serde_json::to_value(payload),
             Self::WhiteboardUpdated(payload) => serde_json::to_value(payload),
             Self::PageUpdated(payload) => serde_json::to_value(payload),
             Self::PageDiscussionUpdated(payload) => serde_json::to_value(payload),
@@ -586,6 +611,9 @@ impl OutboxEventPayload {
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "notifications.updated" => Self::NotificationsUpdated(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "account.managers.changed" => Self::AccountManagersChanged(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "whiteboard.updated" => Self::WhiteboardUpdated(
@@ -855,7 +883,7 @@ pub async fn enqueue_work_item_updated(
             item.status_id,
             item.archived_at IS NOT NULL AS archived,
             (
-                SELECT previous.id FROM work_items previous
+                SELECT previous.id FROM task_rows previous
                 WHERE previous.project_id = item.project_id
                   AND previous.status_id = item.status_id
                   AND (previous.archived_at IS NULL) = (item.archived_at IS NULL)
@@ -864,7 +892,7 @@ pub async fn enqueue_work_item_updated(
                 LIMIT 1
             ) AS after_id,
             (
-                SELECT following.id FROM work_items following
+                SELECT following.id FROM task_rows following
                 WHERE following.project_id = item.project_id
                   AND following.status_id = item.status_id
                   AND (following.archived_at IS NULL) = (item.archived_at IS NULL)
@@ -872,7 +900,7 @@ pub async fn enqueue_work_item_updated(
                 ORDER BY following.board_rank, following.id
                 LIMIT 1
             ) AS before_id
-        FROM work_items item
+        FROM task_rows item
         WHERE item.project_id = $1 AND item.id = $2
         "#,
     )

@@ -24,7 +24,7 @@ use uuid::Uuid;
 use super::Collection;
 use crate::{
     error::AppError,
-    fields::{self, FieldDefinition, LinkTarget, Normalized},
+    fields::{self, FieldDefinition, FieldType, LinkTarget, Normalized},
     work_item_fields::{self, FieldValueChange, FieldValueChanges, ValueReference, Writer},
     work_item_labels::echo,
 };
@@ -110,6 +110,29 @@ pub struct Record {
     pub updated_at: String,
 }
 
+impl Record {
+    /// Its values as they read: the stored ones, and what its system fields
+    /// (`FieldType::is_system`) read from its own columns. Never written
+    /// back: system values aren't stored.
+    pub fn shown_values(&self, definitions: &[FieldDefinition]) -> Value {
+        let mut values = self.field_values.as_object().cloned().unwrap_or_default();
+        for field in definitions
+            .iter()
+            .filter(|field| field.field_type.is_system())
+        {
+            let value = match field.field_type {
+                FieldType::CreatedTime => Value::String(self.created_at.clone()),
+                FieldType::EditedTime => Value::String(self.updated_at.clone()),
+                FieldType::CreatedBy => Value::String(self.created_by_actor_id.to_string()),
+                FieldType::EditedBy => Value::String(self.updated_by_actor_id.to_string()),
+                _ => Value::from(self.number),
+            };
+            values.insert(field.id.to_string(), value);
+        }
+        Value::Object(values)
+    }
+}
+
 /// The tables a record is read from, aliased `record`: the collection's
 /// records, or the project's tasks for the built-in Tasks collection.
 pub(super) fn record_from(tasks: bool) -> String {
@@ -135,8 +158,9 @@ pub(super) const RECORD_COLUMNS: &str = "record.id, record.collection_id, record
      record_editor.display_name AS updated_by_name, record.archived_at IS NOT NULL AS archived, \
      record.version, record.created_at::text AS created_at, record.updated_at::text AS updated_at";
 
-/// Records of a collection by ID, in the order of `ids`. IDs that aren't
-/// the collection's are left out.
+/// Records of a collection by ID, in the order of `ids`, each once (an ID
+/// named twice, as a record in two groups is, comes back the first time).
+/// IDs that aren't the collection's are left out.
 pub async fn by_ids(
     executor: impl sqlx::PgExecutor<'_>,
     project_id: Uuid,
@@ -289,7 +313,8 @@ pub struct RecordView {
 
 impl RecordView {
     pub fn of(record: &Record, definitions: &[FieldDefinition]) -> Self {
-        let stored = record.field_values.as_object();
+        let shown = record.shown_values(definitions);
+        let stored = shown.as_object();
         let values = definitions
             .iter()
             .filter(|field| !field.archived)
@@ -332,7 +357,11 @@ pub async fn references(
         connection,
         project_id,
         definitions,
-        records.iter().map(|record| &record.field_values),
+        records
+            .iter()
+            .map(|record| record.shown_values(definitions))
+            .collect::<Vec<_>>()
+            .iter(),
     )
     .await?;
     let mut references = found.into_values().collect::<Vec<_>>();
@@ -372,11 +401,15 @@ impl RecordLine {
         references: &HashMap<Uuid, ValueReference>,
         only: Option<&HashSet<Uuid>>,
     ) -> Self {
-        let fields = work_item_fields::named_values(definitions, &record.field_values, references)
-            .into_iter()
-            .filter(|(field, _)| only.is_none_or(|only| only.contains(&field.id)))
-            .map(|(field, value)| (field.name, value))
-            .collect();
+        let fields = work_item_fields::named_values(
+            definitions,
+            &record.shown_values(definitions),
+            references,
+        )
+        .into_iter()
+        .filter(|(field, _)| only.is_none_or(|only| only.contains(&field.id)))
+        .map(|(field, value)| (field.name, value))
+        .collect();
         Self {
             number: record.number,
             id: record.id.to_string(),

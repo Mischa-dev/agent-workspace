@@ -54,6 +54,10 @@ export type RunRecord = { activityCount: number; cancelRequestedAt?: string | nu
 
 export type RunResultInput = { branch?: string | null; id?: string | null; kind: string; number?: number | null; thingKind?: string | null; title?: string | null; url?: string | null }
 
+export type AgentManagersSetInput = { add?: string[]; agent: string; remove?: string[] }
+
+export type AgentManagersSetOutput = { agent: string; managers: string[] }
+
 export type DecisionListInput = { includeSuperseded?: boolean; limit?: number | null; spaceId: string }
 
 export type DecisionListOutput = { decisions: DecisionView[] }
@@ -127,6 +131,7 @@ export type RunUsageReportInput = { cachedInputTokens?: number | null; cost?: nu
 export type RunUsageReportOutput = { duplicate: boolean; reportId: string; runId?: string | null }
 
 export type Operations = {
+  agent_managers_set: { input: AgentManagersSetInput; output: AgentManagersSetOutput }
   decision_list: { input: DecisionListInput; output: DecisionListOutput }
   decision_record: { input: DecisionRecordInput; output: DecisionRecordOutput }
   history_list: { input: HistoryListInput; output: HistoryListOutput }
